@@ -60,6 +60,7 @@ import {
 } from './facets'
 import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjection'
 import {
+  addedPropertyDefinitionNames,
   changedPropertyDefinitions,
   type PropertyDefinitionChange,
 } from './internals/propertyDefinitionMigrations'
@@ -119,6 +120,13 @@ export interface FacetBridgeTarget {
   schedulePropertyDefinitionMigrations(
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
+  ): void
+  /** Defer a targeted `[[name]]` re-derive for definitions newly ADDED in
+   *  this swap (PR #288 §9 arrival-order repair — rows referencing a schema
+   *  by name before its definition existed derived to NULL). */
+  scheduleReferenceTargetNameRederive(
+    workspaceId: string,
+    names: readonly string[],
   ): void
 }
 
@@ -386,6 +394,18 @@ export class FacetBridge {
           if (definitionChanges.length > 0 && propertyDefinitions) {
             target.schedulePropertyDefinitionMigrations(
               propertyDefinitions.workspaceId, definitionChanges,
+            )
+          }
+          // Newly-added definitions repair pre-existing `[[name]]` rows that
+          // derived to NULL before the definition existed (§9 arrival-order
+          // hole): local addSchema and synced-in definitions both land here
+          // via the projector rebuild.
+          const addedNames = addedPropertyDefinitionNames(
+            previousPropertyDefinitions, propertyDefinitions,
+          )
+          if (addedNames.length > 0 && propertyDefinitions) {
+            target.scheduleReferenceTargetNameRederive(
+              propertyDefinitions.workspaceId, addedNames,
             )
           }
           // Notify React subscribers (usePropertySchemas) so panels

@@ -6,6 +6,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { keysBetween } from './orderKey'
+import { encodedPropertyValueToChildContent } from './propertyChildren'
 import { mergeProperties } from './mergeProperties'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
@@ -100,35 +101,60 @@ export const mergeBlocksInTx = async (
     }
   }
 
-  // Preserve user-authored descendants of `from`'s VALUE children before the
-  // subtree delete below (PR #288 §9 preservation rule): a comment thread
-  // under a value child is user content — a bare subtree-delete would
-  // silently tombstone it with the machinery rows. Re-home them under `into`
-  // (the merged bag re-materializes `into`'s own field/value rows in this
-  // same tx, but their ids aren't knowable here, so `into` itself is the
-  // stable visible destination).
+  // Preserve user-visible property state before the subtree delete below
+  // (PR #288 §9 preservation rule, tightened per adversarial review). Two
+  // classes of `from`-side value text exist ONLY in the tree — the merged
+  // bag cannot resurrect them: (a) unparseable value text (projection
+  // removed the key but kept the row "visible/fixable in the tree"), and
+  // (b) shadowed/orphan field rows (recognized but never projected). And
+  // even a parseable value is lost when the bag-level merge picks `into`'s
+  // value for the key. Rule: a value child whose content the merged bag
+  // will NOT regenerate relocates VISIBLY under `into` (whole subtree —
+  // comments ride along); values the bag regenerates just donate their
+  // user-authored descendants and are deleted (into's re-materialization
+  // recreates them).
+  const mergedProperties = mergeProps(into.properties, from.properties)
   const fromPropertyChildren = (await tx.childrenOf(
     from.id, undefined, {includePropertyChildren: true},
   )).filter(child => !fromChildren.some(visible => visible.id === child.id))
+  let relocateAnchor = (await tx.childrenOf(into.id)).at(-1)?.orderKey ?? null
+  const relocateUnderInto = async (id: string): Promise<void> => {
+    const [key] = keysBetween(relocateAnchor, null, 1)
+    await tx.move(id, {parentId: into.id, orderKey: key})
+    relocateAnchor = key
+  }
   for (const fieldRow of fromPropertyChildren) {
+    const fieldId = fieldRow.referenceTargetId ?? null
+    const schema = fieldId !== null
+      ? tx.resolvePropertyFieldSchema(from.workspaceId, fieldId)
+      : null
+    const mergedValueContent = schema
+      && Object.prototype.hasOwnProperty.call(mergedProperties, schema.name)
+      ? encodedPropertyValueToChildContent(schema, mergedProperties[schema.name])
+      : null
     const values = await tx.childrenOf(fieldRow.id, undefined, {includePropertyChildren: true})
     for (const value of values) {
-      const valueDescendants = await tx.childrenOf(
-        value.id, undefined, {includePropertyChildren: true},
-      )
-      if (valueDescendants.length === 0) continue
-      const anchor = (await tx.childrenOf(into.id)).at(-1)?.orderKey ?? null
-      const keys = keysBetween(anchor, null, valueDescendants.length)
-      for (let i = 0; i < valueDescendants.length; i++) {
-        await tx.move(valueDescendants[i].id, {parentId: into.id, orderKey: keys[i]})
+      if (mergedValueContent !== null && value.content === mergedValueContent) {
+        // The bag regenerates this value on `into` — keep only its
+        // user-authored descendants.
+        const valueDescendants = await tx.childrenOf(
+          value.id, undefined, {includePropertyChildren: true},
+        )
+        for (const descendant of valueDescendants) {
+          await relocateUnderInto(descendant.id)
+        }
+      } else {
+        // Tree-only value text (unparseable / shadowed / merge-losing):
+        // deleting it would be silent data loss in effect — surface it.
+        await relocateUnderInto(value.id)
       }
     }
   }
 
-  // Drop `from`'s remaining (property-field) children — including their
-  // value children — so no live rows dangle under the tombstone once `from`
-  // is deleted (fixed in the spike at f4d0b447: a bare delete had orphaned
-  // value rows).
+  // Drop `from`'s remaining (property-field) children — including any
+  // still-attached value children — so no live rows dangle under the
+  // tombstone once `from` is deleted (fixed in the spike at f4d0b447: a
+  // bare delete had orphaned value rows).
   for (const child of fromPropertyChildren) {
     await deleteSubtreeInTx(tx, child.id)
   }
@@ -139,7 +165,7 @@ export const mergeBlocksInTx = async (
 
   await tx.update(into.id, {
     content: computeMergedContent(into.content, from.content, contentStrategy),
-    properties: mergeProps(into.properties, from.properties),
+    properties: mergedProperties,
   })
 
   tx.emitEvent(CORE_BLOCK_MERGED_EVENT, {

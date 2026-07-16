@@ -26,6 +26,7 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySchema,
   BlockData,
   BlockDataPatch,
   Mutator,
@@ -359,6 +360,14 @@ export class TxImpl implements Tx {
       schema,
       this.propertySchemaResolverFor(row.workspaceId),
     )
+  }
+
+  resolvePropertyFieldSchema(
+    workspaceId: string,
+    fieldId: string,
+  ): AnyPropertySchema | null {
+    const resolution = this.propertySchemaResolverFor(workspaceId).resolveField(fieldId)
+    return resolution.status === 'resolved' ? resolution.schema : null
   }
 
   async isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean> {

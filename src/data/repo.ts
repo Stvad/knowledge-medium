@@ -842,6 +842,9 @@ export class Repo {
       schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
         this.schedulePropertyDefinitionMigrations(workspaceId, changes)
       },
+      scheduleReferenceTargetNameRederive: (workspaceId, names) => {
+        this.scheduleReferenceTargetNameRederive(workspaceId, names)
+      },
     })
     this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
     // Identity stability for query handles is provided by the
@@ -894,20 +897,7 @@ export class Repo {
         // the `block_aliases` index read on the open write tx (so
         // same-window alias/definition arrivals resolve).
         referenceTargetLookups: policyDeps.referenceTargetLookups
-          ?? (tx => ({
-            resolveSchemaFieldId: (workspaceId, name) => {
-              const resolution = this.propertySchemaResolverFor(workspaceId).resolve(name)
-              return resolution.status === 'resolved' ? resolution.schema.fieldId : null
-            },
-            aliasTargetId: async (alias, workspaceId) => {
-              if (alias === '' || workspaceId === '') return null
-              const row = await tx.getOptional<{id: string}>(
-                SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
-                [workspaceId, alias],
-              )
-              return row?.id ?? null
-            },
-          })),
+          ?? (tx => this.referenceTargetLookupsVia(tx)),
       },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
@@ -2439,9 +2429,10 @@ export class Repo {
     // tombstone restored later arrives content-unchanged, so nothing would
     // re-derive it. `reference_target_id IS NULL` keeps the pass strictly
     // additive — it never second-guesses a processor- or arrival-derived
-    // value.
-    const candidates = await this.db.getAll<BlockRow>(
-      `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks
+    // value. Lean scan (id + content): the write phase re-reads fresh rows
+    // in-tx, so full rows here would only feed stale snapshots.
+    const candidates = await this.db.getAll<{id: string; content: string}>(
+      `SELECT id, content FROM blocks
         WHERE workspace_id = ?
           AND reference_target_id IS NULL
           AND (
@@ -2451,55 +2442,94 @@ export class Repo {
       [workspaceId],
     )
 
-    const lookups: ReferenceTargetLookups = {
-      resolveSchemaFieldId: (rowWorkspaceId, name) => {
-        const resolution = this.propertySchemaResolverFor(rowWorkspaceId).resolve(name)
-        return resolution.status === 'resolved' ? resolution.schema.fieldId : null
-      },
-      aliasTargetId: async (alias, aliasWorkspaceId) => {
-        if (alias === '' || aliasWorkspaceId === '') return null
-        const row = await this.db.getOptional<{id: string}>(
-          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
-          [aliasWorkspaceId, alias],
-        )
-        return row?.id ?? null
-      },
-    }
+    const lookups = this.referenceTargetLookupsVia()
 
-    const updates: {row: BlockRow; targetId: string}[] = []
+    const updates: {id: string; scannedContent: string; targetId: string}[] = []
     for (const row of candidates) {
       const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
       // Column is already NULL, so unresolved (`undefined`) and non-reference
       // (`null`) alike mean "nothing to write".
-      if (typeof derived === 'string') updates.push({row, targetId: derived})
+      if (typeof derived === 'string') {
+        updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+      }
     }
 
-    // Chunked raw writes, materializer-style: source-NULL (upload triggers
-    // skip; row_events tags 'sync'), no repo.tx — a tx would advance
-    // `updated_at` (the LWW row-version) for a purely local derivation.
+    await this.stampReferenceTargets(updates)
+
+    await this.referenceTargetDeriveMarkers.set(markerSuffix)
+  }
+
+  /** The one construction site for reference-target resolution outside a
+   *  repo.tx (PR #288 slice A): schema-name winner map first (live
+   *  resolver), then the `block_aliases` index read on `reader` — the open
+   *  sync-arrival write tx, or the auto-commit connection for the idle
+   *  passes. Mirrors `core.deriveReferenceTarget`'s tx-bound tiers; the two
+   *  must resolve identically or the column diverges across write paths. */
+  private referenceTargetLookupsVia(
+    reader: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>} = this.db,
+  ): ReferenceTargetLookups {
+    return {
+      resolveSchemaFieldId: (workspaceId, name) => {
+        const resolution = this.propertySchemaResolverFor(workspaceId).resolve(name)
+        return resolution.status === 'resolved' ? resolution.schema.fieldId : null
+      },
+      aliasTargetId: async (alias, workspaceId) => {
+        if (alias === '' || workspaceId === '') return null
+        const row = await reader.getOptional<{id: string}>(
+          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+          [workspaceId, alias],
+        )
+        return row?.id ?? null
+      },
+    }
+  }
+
+  /** Chunked raw column stamps, materializer-style: source-NULL (upload
+   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
+   *  `updated_at` (the LWW row-version) for a purely local derivation.
+   *
+   *  Compare-and-set per row (adversarial-review fix): callers scan/derive
+   *  outside the write lock, so a concurrent local edit or sync arrival can
+   *  change content (the processor/arrival owns the column from then on). A
+   *  bare UPDATE would stamp a stale target that nothing ever repairs — the
+   *  row would misclassify as a field row post-flip. Only rows still at
+   *  (scanned content, NULL column) are written, and snapshots come from the
+   *  in-tx fresh rows, never scan-time state. */
+  private async stampReferenceTargets(
+    updates: readonly {id: string; scannedContent: string; targetId: string}[],
+  ): Promise<void> {
     const CHUNK = 200
     for (let i = 0; i < updates.length; i += CHUNK) {
       const chunk = updates.slice(i, i + CHUNK)
+      const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
       await this.db.writeTransaction(async tx => {
         await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
-        for (const {row, targetId} of chunk) {
+        for (const {id, scannedContent, targetId} of chunk) {
+          const freshRow = await tx.getOptional<BlockRow>(
+            `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
+            [id],
+          )
+          if (
+            freshRow === null
+            || (freshRow.reference_target_id ?? null) !== null
+            || freshRow.content !== scannedContent
+          ) continue
           await tx.execute(
             'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
-            [targetId, row.id],
+            [targetId, id],
           )
+          const before = parseBlockRow(freshRow)
+          snapshots.set(id, {before, after: {...before, referenceTargetId: targetId}})
         }
       })
+      if (snapshots.size === 0) continue
       // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
       // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
       // reject the repair and row-version-driven invalidation sees nothing.
       // Refresh already-cached snapshots directly (never populate cold rows)
       // and notify handles.
-      const snapshots = new Map(chunk.map(({row, targetId}) => {
-        const before = parseBlockRow(row)
-        return [row.id, {before, after: {...before, referenceTargetId: targetId}}] as const
-      }))
       for (const {after} of snapshots.values()) {
-        if (after && this.cache.getSnapshot(after.id) !== undefined) {
+        if (this.cache.getSnapshot(after.id) !== undefined) {
           this.cache.setSnapshot(after)
         }
       }
@@ -2507,8 +2537,48 @@ export class Repo {
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
     }
+  }
 
-    await this.referenceTargetDeriveMarkers.set(markerSuffix)
+  /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
+   *  arrival-order repair, adversarial-review fix): `[[name]]` rows written
+   *  or synced BEFORE their definition existed derived to NULL, and nothing
+   *  content-driven ever revisits them — the definition's later
+   *  arrival/creation must enqueue this pass. Scheduled by the facet bridge
+   *  when a registry rebuild shows a fieldId with no previous entry (the
+   *  boot-time first snapshot diffs against null and is deliberately
+   *  skipped — the once-per-workspace catch-up pass covers it, running
+   *  after registry readiness). Not flip-gated: the column is slice-A
+   *  machinery, maintained everywhere. */
+  scheduleReferenceTargetNameRederive(
+    workspaceId: string,
+    names: readonly string[],
+  ): void {
+    if (!workspaceId || names.length === 0) return
+    this.referenceTargetDeriveJobs.schedule(async () => {
+      try {
+        const lookups = this.referenceTargetLookupsVia()
+        const updates: {id: string; scannedContent: string; targetId: string}[] = []
+        for (const name of names) {
+          const rows = await this.db.getAll<{id: string; content: string}>(
+            `SELECT id, content FROM blocks
+              WHERE workspace_id = ?
+                AND reference_target_id IS NULL
+                AND TRIM(content) = ?`,
+            [workspaceId, `[[${name}]]`],
+          )
+          for (const row of rows) {
+            const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
+            if (typeof derived === 'string') {
+              updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+            }
+          }
+        }
+        await this.stampReferenceTargets(updates)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
+      }
+    })
   }
 
   /**
@@ -2639,7 +2709,7 @@ export class Repo {
           // re-derive-by-content path.
           const expectedContent = propertyFieldContent(schema)
           if (fieldRow.content !== expectedContent) {
-            await tx.update(fieldRow.id, {content: expectedContent})
+            await tx.update(fieldRow.id, {content: expectedContent}, {skipMetadata: true})
           }
 
           // Re-encode + re-key once per parent (a parent's projection reads
@@ -2668,7 +2738,7 @@ export class Repo {
                 // write.
                 const canonical = encodedPropertyValueToChildContent(schema, encoded)
                 if (value.content !== canonical) {
-                  await tx.update(value.id, {content: canonical})
+                  await tx.update(value.id, {content: canonical}, {skipMetadata: true})
                 }
               } catch {
                 unconvertible += 1
@@ -2688,7 +2758,15 @@ export class Repo {
           }
         }
       }, {
-        scope: ChangeScope.BlockDefault,
+        // References, not BlockDefault (adversarial-review blocker): a
+        // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
+        // thousands of field rows would flood/evict their history, clear
+        // redo, and a stray undo would revert a migration chunk with no
+        // re-run path (the pass is change-driven, no marker). References is
+        // the maintenance bucket the ref-reprojection pass already uses:
+        // uploads normally, never exposed to cmd-Z. Writes are
+        // skipMetadata — machinery, not "last edited".
+        scope: ChangeScope.References,
         description: `migrate property definition ${change.oldName} -> ${schema.name}`,
       })
     }

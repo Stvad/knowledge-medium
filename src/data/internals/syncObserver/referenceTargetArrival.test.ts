@@ -138,6 +138,35 @@ describe('derive-at-arrival (sync materializer)', () => {
     expect(await readColumn('ref')).toBe('target')
   })
 
+  it('repairs earlier-window NULL columns when their alias target arrives later', async () => {
+    // §9 arrival-order hole: the referrer arrives BEFORE its target and
+    // derives to NULL; later content-unchanged deliveries preserve NULL.
+    // The target's arrival (gaining the alias) must re-derive it.
+    const withAlias = h.start({
+      getMaterializability: () => 'copy',
+      referenceTargetLookups: tx => ({
+        resolveSchemaFieldId: () => null,
+        aliasTargetId: async (alias) => {
+          const row = await tx.getOptional<{block_id: string}>(
+            'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+            [WS, alias],
+          )
+          return row?.block_id ?? null
+        },
+      }),
+    })
+
+    await h.stageRow(block({id: 'ref', content: '[[Inbox]]', orderKey: 'a1'}))
+    await withAlias.observer.flush()
+    expect(await readColumn('ref')).toBeNull()
+
+    await h.stageRow(block({
+      id: 'target', content: 'Inbox page', properties: {alias: ['Inbox']},
+    }))
+    await withAlias.observer.flush()
+    expect(await readColumn('ref')).toBe('target')
+  })
+
   it('skips derivation entirely when the lookups dep is absent', async () => {
     const {observer} = h.start({getMaterializability: () => 'copy'})
     await h.stageRow(block({id: 'b1', content: '((remote-target))'}))

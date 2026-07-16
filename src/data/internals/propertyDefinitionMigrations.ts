@@ -64,3 +64,22 @@ export const changedPropertyDefinitions = (
   }
   return changes
 }
+
+/** Definitions PRESENT in `next` with no previous entry — new schemas whose
+ *  name may already appear as `[[name]]` rows that derived to NULL before
+ *  the definition existed (PR #288 §9's arrival-order hole). A null
+ *  `previous` (boot's first snapshot) is deliberately not "everything added"
+ *  — the once-per-workspace catch-up pass covers boot, running after
+ *  registry readiness. */
+export const addedPropertyDefinitionNames = (
+  previous: PropertyDefinitionRegistrySnapshot | null | undefined,
+  next: PropertyDefinitionRegistrySnapshot | null | undefined,
+): string[] => {
+  if (!previous || !next) return []
+  if (previous.workspaceId !== next.workspaceId) return []
+  const names: string[] = []
+  for (const [fieldId, metadata] of next.definitionsByFieldId) {
+    if (!previous.definitionsByFieldId.has(fieldId)) names.push(metadata.name)
+  }
+  return names
+}

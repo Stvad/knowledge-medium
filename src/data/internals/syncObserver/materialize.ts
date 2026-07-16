@@ -435,6 +435,61 @@ export const materializeStagingRows = async (
           after: {...snap.after, referenceTargetId: derived},
         })
       }
+
+      // §9 arrival-order repair, alias half (adversarial-review fix): a
+      // `[[alias]]` row that arrived BEFORE its target derived to NULL, and
+      // later content-unchanged deliveries preserve that NULL forever. When
+      // an arrival GAINS an alias, re-derive the workspace's NULL-column
+      // rows whose whole content is that wikilink — same tx, so the alias
+      // index rows the upserts just wrote are visible. (Schema-NAME targets
+      // ride the registry-rebuild re-derive instead — definitions aren't
+      // alias-indexed.) Known limitation, accepted for slice A: the
+      // repaired rows' snapshots carry an unchanged `updated_at`, so the
+      // cache's LWW gate may skip their notify — SQL readers see the repair
+      // immediately; cached handles catch up on their next hydrate.
+      const addedAliasesByWorkspace = new Map<string, Set<string>>()
+      const aliasStrings = (properties: Record<string, unknown> | undefined): string[] => {
+        const raw = properties?.alias
+        return Array.isArray(raw) ? raw.filter((a): a is string => typeof a === 'string') : []
+      }
+      for (const id of applied) {
+        const snap = snapshots.get(id)
+        if (!snap?.after || snap.after.deleted) continue
+        const beforeAliases = new Set(aliasStrings(snap.before?.properties))
+        for (const alias of aliasStrings(snap.after.properties)) {
+          if (beforeAliases.has(alias) || alias === '') continue
+          const bucket = addedAliasesByWorkspace.get(snap.after.workspaceId) ?? new Set<string>()
+          bucket.add(alias)
+          addedAliasesByWorkspace.set(snap.after.workspaceId, bucket)
+        }
+      }
+      for (const [workspaceId, aliases] of addedAliasesByWorkspace) {
+        for (const alias of aliases) {
+          const stale = await tx.getAll<BlockRow>(
+            `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks
+              WHERE workspace_id = ?
+                AND reference_target_id IS NULL
+                AND TRIM(content) = ?`,
+            [workspaceId, `[[${alias}]]`],
+          )
+          for (const staleRow of stale) {
+            if (snapshots.has(staleRow.id)) continue
+            const derived = await deriveReferenceTargetId(
+              staleRow.content, workspaceId, lookups,
+            )
+            if (typeof derived !== 'string') continue
+            await tx.execute(
+              'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
+              [derived, staleRow.id],
+            )
+            const before = parseBlockRow(staleRow)
+            snapshots.set(staleRow.id, {
+              before,
+              after: {...before, referenceTargetId: derived},
+            })
+          }
+        }
+      }
     }
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)

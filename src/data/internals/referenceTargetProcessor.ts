@@ -82,7 +82,10 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
     const lookups = txLookups(ctx.tx, ctx.resolvePropertySchemaName)
     for (const changed of event.changedRows) {
       const row = changed.after
-      if (row === null || row.deleted) continue
+      // Tombstoned rows derive too (matches the arrival path): a content
+      // edit while deleted would otherwise leave a stale column that a
+      // later content-unchanged restore never repairs.
+      if (row === null) continue
       const derivedTargetId = await deriveReferenceTargetId(
         row.content,
         row.workspaceId,

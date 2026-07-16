@@ -445,6 +445,22 @@ describe('delete cascade (machinery traversal, §9)', () => {
   })
 })
 
+describe('flip predicate / SQL gate lock (§6)', () => {
+  it('the SQL IN-list matches the TS at-or-past-children predicate exactly', async () => {
+    // The TS predicate and the SQL literal must move together: a future
+    // state added to one but not the other would silently un-recognize (or
+    // over-recognize) every field row on one read surface.
+    const {isChildBackedPropertiesWorkspace} = await import('@/types')
+    const {VISIBLE_CHILDREN_SQL} = await import('./internals/treeQueries')
+    const states = ['cell', 'children', 'cell-off'] as const
+    const flipped = states.filter(isChildBackedPropertiesWorkspace)
+    expect(flipped).toEqual(['children', 'cell-off'])
+    expect(VISIBLE_CHILDREN_SQL).toContain(
+      `properties_migration IN (${flipped.map(s => `'${s}'`).join(', ')})`,
+    )
+  })
+})
+
 describe('query-layer twin (core.childIds / core.children)', () => {
   it('excludes field rows in a flipped workspace; opts in for machinery', async () => {
     await seedWorkspace('children')

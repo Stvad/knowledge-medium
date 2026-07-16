@@ -4,7 +4,7 @@ import type {
   NewBlockData,
 } from './blockData'
 import type { ChangeScope, TxSource } from './changeScope'
-import type { PropertySchema } from './propertySchema'
+import type { AnyPropertySchema, PropertySchema } from './propertySchema'
 import type { User } from './user'
 
 /** Per-write opt: skip the engine's automatic `updatedAt`/`updatedBy` bump
@@ -173,6 +173,17 @@ export interface Tx {
   /** `getProperty`: reads SQL/cache and applies `codec.decode`. Returns
    *  the schema's `defaultValue` if the property is absent. */
   getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T>
+
+  /** Resolve a durable fieldId (definition block id) to its WINNING schema
+   *  against `workspaceId`'s registry snapshot — the §9 recognition/
+   *  projection primitive at tx level. Returns null for shadowed losers,
+   *  orphans, and foreign workspaces (their field rows keep classifying at
+   *  read sites but never project, so machinery that folds values into
+   *  cells treats null as "this value exists only in the tree"). */
+  resolvePropertyFieldSchema(
+    workspaceId: string,
+    fieldId: string,
+  ): AnyPropertySchema | null
 
   /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`

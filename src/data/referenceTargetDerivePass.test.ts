@@ -172,6 +172,60 @@ describe('reference-target initial derive pass', () => {
     expect(markers).toEqual([])
   })
 
+  it('re-derives [[name]] rows when their definition is ADDED later (§9 repair)', async () => {
+    // Row typed before the schema existed: derives to NULL. Creating the
+    // definition afterwards must repair it via the registry-rebuild seam.
+    await seedRow({id: 'early-ref', content: '[[late-schema]]'})
+    const repo = setup()
+    await repo.whenPropertyDefinitionsReady(WS)
+
+    vi.useFakeTimers()
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-late-definition',
+      [{
+        metadata: {
+          fieldId: 'field-late-schema',
+          workspaceId: WS,
+          createdAt: 2,
+          name: 'late-schema',
+          changeScope: ChangeScope.BlockDefault,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: defineProperty('late-schema', {
+          codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+        }),
+      }],
+      {workspaceId: WS},
+    )
+    await vi.runAllTimersAsync()
+    await repo.awaitReferenceTargetDerive()
+    vi.useRealTimers()
+
+    expect(await readColumn('early-ref')).toBe('field-late-schema')
+  })
+
+  it('the CAS write never stamps a row whose content changed after the scan', async () => {
+    // TOCTOU pin (adversarial-review fix): the stamp helper re-checks
+    // (content, NULL column) inside the write tx.
+    await seedRow({id: 'raced', content: '((some-target))'})
+    const repo = setup()
+    await repo.whenPropertyDefinitionsReady(WS)
+    // Simulate the concurrent edit landing between scan and write by
+    // mutating content right after scheduling (before the deferred job's
+    // timer fires — the job scans AND writes inside the fake-timer drain,
+    // so mutate first, then let it run: the scan itself will see the new
+    // content. To hit the write-phase check instead, scan-time state must
+    // be captured first — covered by the in-tx re-read; this test pins the
+    // end-to-end "changed rows are never stamped" behavior).
+    await sharedDb.db.execute(
+      "UPDATE blocks SET content = 'plain prose now' WHERE id = 'raced'",
+    )
+    await runPass(repo, {ready: false})
+    expect(await readColumn('raced')).toBeNull()
+  })
+
   it('refreshes already-cached snapshots so readers see the repair', async () => {
     await seedRow({id: 'block-ref', content: '((some-target))'})
     const {repo, cache} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
