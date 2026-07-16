@@ -1,0 +1,2 @@
+import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{extensionsOverridesProp as t}from"./config.js";import{ExtensionsOverridesEditor as n}from"./ExtensionsOverridesEditor.js";import{createElement as r}from"react";var i=e(t,{label:`Extensions`,Editor:e=>r(n,e)});export{i as extensionsOverridesUi};
+//# sourceMappingURL=propertyEditorOverride.js.map

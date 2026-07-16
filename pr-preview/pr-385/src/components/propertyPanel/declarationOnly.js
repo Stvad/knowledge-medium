@@ -1,0 +1,2 @@
+var e=(e,t)=>{if(!t?.schemas.has(e))return t?.definitionsByName.get(e)?.[0]},t=e=>e.origin.startsWith(`plugin:`)?`Provided by ${e.origin.slice(7).split(`:`).at(-1)??e.origin.slice(7)} — not installed/disabled`:e.origin===`kernel`?`Kernel definition — behavior unavailable`:`User-created definition — behavior unavailable`;export{e as declarationOnlyDefinitionForName,t as declarationOnlyStatusText};
+//# sourceMappingURL=declarationOnly.js.map
