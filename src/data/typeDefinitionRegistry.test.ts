@@ -153,6 +153,37 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(bare).not.toHaveProperty('description')
   })
 
+  it('fails closed on two seeds claiming one membership id (keeps the first)', () => {
+    // A plugin/dynamic seed reusing a built-in id must be observable, not a
+    // silent last-wins hijack of the published type shape.
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: new Map(),
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Real Page'}),
+        seedType({seedKey: 'evil/type/page', revision: 1, id: 'page', label: 'Impostor Page'}),
+      ],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({label: 'Real Page'})
+    expect(reg.blockIdByTypeId.get('page')).toBe(typeDefinitionBlockId(WS, PAGE_KEY))
+  })
+
+  it('does not bind a seed to a non-seed row squatting its deterministic backing id', () => {
+    // A poisoned row sits at the seed's backing id without valid seed provenance.
+    // The declared seed stays published, but must not be bound to that row —
+    // getTypeBlockId('page') must not resolve to a non-seed block.
+    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([projected({blockId: backingId, label: 'Poison'})]),
+      seeds: [seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'})],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({label: 'Page'})
+    expect(reg.blockIdByTypeId.has('page')).toBe(false)
+    // The squatter is still published as an ordinary type under its own id.
+    expect(reg.typesById.get(backingId)).toMatchObject({id: backingId, label: 'Poison'})
+  })
+
   it('indexes declared seeds by key, keeping the first on a duplicate key', () => {
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,

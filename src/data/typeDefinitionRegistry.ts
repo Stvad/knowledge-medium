@@ -101,7 +101,12 @@ const indexSeedsByKey = (
  * rows carry fresh uuid ids (`typeId === blockId`), no two published entries
  * ever contend for one `typeId` — the §7 earliest-`createdAt` winner-resolution
  * the property registry needs for name collisions has no analog here once claims
- * are bound to declarations. */
+ * are bound to declarations. Two remaining seed-authoring/corruption hazards are
+ * failed closed: two seeds claiming one membership `id` (keep the first, warn —
+ * `typeSeedsFacet` is a list so the collision stays observable rather than a
+ * silent last-wins hijack), and a non-seed row squatting a seed's deterministic
+ * backing id (leave the seed backing-block-less so `getTypeBlockId` never hands
+ * a repair consumer a poisoned row). */
 export const buildTypeDefinitionRegistry = (
   args: BuildTypeDefinitionRegistryArgs,
 ): TypeDefinitionRegistrySnapshot => {
@@ -111,9 +116,34 @@ export const buildTypeDefinitionRegistry = (
   const blockIdByTypeId = new Map<string, string>()
 
   // 1. Declared seeds — authoritative, present even without a backing row.
+  const seedKeyById = new Map<string, string>()
   for (const seed of seedsByKey.values()) {
+    const priorKey = seedKeyById.get(seed.id)
+    if (priorKey !== undefined) {
+      console.warn(
+        `[buildTypeDefinitionRegistry] duplicate type seed id ${seed.id} ` +
+        `(keys ${priorKey} + ${seed.seedKey}); keeping first`,
+      )
+      continue
+    }
+    seedKeyById.set(seed.id, seed.seedKey)
     typesById.set(seed.id, seedContribution(seed))
-    blockIdByTypeId.set(seed.id, typeDefinitionBlockId(args.workspaceId, seed.seedKey))
+
+    // Bind the deterministic backing id only when it is free (not yet
+    // materialized) or already holds a valid mirror of THIS seed. A non-seed
+    // ("poisoned") occupant — one whose validated /type/ provenance is absent or
+    // for another key — leaves the seed backing-block-less rather than pointing
+    // `getTypeBlockId` at a row that failed seeded identity.
+    const backingId = typeDefinitionBlockId(args.workspaceId, seed.seedKey)
+    const occupant = args.projectedDefinitions.get(backingId)
+    if (!occupant || occupant.metadata.seedKey === seed.seedKey) {
+      blockIdByTypeId.set(seed.id, backingId)
+    } else {
+      console.warn(
+        `[buildTypeDefinitionRegistry] seed ${seed.id} backing block ${backingId} ` +
+        `is occupied by a non-seed row; leaving the seed backing-block-less`,
+      )
+    }
   }
 
   // 2. Projected block rows.
@@ -124,18 +154,19 @@ export const buildTypeDefinitionRegistry = (
     const declaredSeed = def.metadata.seedKey !== undefined
       ? seedsByKey.get(def.metadata.seedKey)
       : undefined
-    if (declaredSeed) {
-      // Materialized mirror of a declared seed: bind the DECLARED id to this
-      // block's actual location; the declared contribution (step 1) stays
-      // authoritative, and the row is retained above for provenance.
+    // Treat as a seed mirror only when it backs the ACTIVE seed for that id (not
+    // a dropped id-duplicate). Bind the declared id to this block's location; the
+    // declared contribution (step 1) stays authoritative, and the row is
+    // retained above for provenance.
+    if (declaredSeed && seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey) {
       blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
       continue
     }
 
-    // A user row (or a row whose seed key isn't a current declaration): publish
-    // under its own block id, never a stored claim. A declared seed already
-    // owning this id always wins (a user block id is a fresh uuid, so this guard
-    // only fires for a pathological forged/duplicate id).
+    // A user row (or a row whose seed key isn't a current active declaration):
+    // publish under its own block id, never a stored claim. A declared seed
+    // already owning this id always wins (a user block id is a fresh uuid, so
+    // this guard only fires for a pathological forged/duplicate id).
     if (typesById.has(def.metadata.blockId)) continue
     typesById.set(def.metadata.blockId, contributionFromProjection(def))
     blockIdByTypeId.set(def.metadata.blockId, def.metadata.blockId)
