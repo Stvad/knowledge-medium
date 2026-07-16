@@ -1751,4 +1751,37 @@ describe('parseReferences — property field rows are machinery, not alias sourc
     expect(field).not.toBeNull()
     expect(JSON.parse(field!.references_json)).toEqual([])
   })
+
+  it('a ROOT row with content [[status]] is parsed as a normal wikilink, not suppressed as property machinery', async () => {
+    // Twin of the test above, root position instead of child position: a
+    // workspace-root row (parentId === null) is never a field row no matter
+    // what its reference_target_id stamp resolves to (§9 root half in
+    // isPropertyMachineryRow). Its `[[status]]` content is ordinary user
+    // content, so — unlike the non-root field row above — a normal alias
+    // target IS minted and the row DOES get a normal alias backlink.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await env.repo.tx(
+      tx => tx.create({id: 'root-status', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[status]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // A normal alias-target page named "status" WAS created — root position
+    // exempts the row from isPropertyMachineryRow's suppression even though
+    // "status" is a property schema name in this flipped workspace.
+    const target = await env.read(aliasId('status'))
+    expect(target).not.toBeNull()
+    expect(target!.deleted).toBe(0)
+    const aliases = JSON.parse(target!.properties_json).alias as string[]
+    expect(aliases).toEqual(['status'])
+
+    // ...and the root row carries a normal alias backlink/reference to it.
+    const refs = JSON.parse((await env.read('root-status'))!.references_json)
+    expect(refs).toEqual([{id: aliasId('status'), alias: 'status'}])
+  })
 })

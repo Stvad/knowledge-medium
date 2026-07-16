@@ -121,7 +121,7 @@ import {
   type Materializability,
 } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
-import { BLOCK_STORAGE_COLUMNS, blockToRowParams } from '@/data/blockSchema.js'
+import { BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema.js'
 import { drainStagingWindowOnce, setupObserverTestDb, stagingCiphertextParams } from './harness.js'
 import type { BlockData } from '@/data/api'
 
@@ -152,7 +152,11 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
   ...overrides,
 })
 
-const BLOCKS_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+// Storage + local columns: this is a LOCAL `blocks` write (not staging), and
+// `blockToRowParams` produces params for the full set including the local
+// `reference_target_id` (PR #288 slice A). Building the INSERT from the
+// storage-only set would under-count the placeholders vs. the 14 params.
+const BLOCKS_COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const INSERT_OR_REPLACE_BLOCKS_SQL =
   `INSERT OR REPLACE INTO blocks (${BLOCKS_COLUMN_NAMES.join(', ')}) ` +
   `VALUES (${BLOCKS_COLUMN_NAMES.map(() => '?').join(', ')})`

@@ -399,13 +399,23 @@ export class FacetBridge {
           // Newly-added definitions repair pre-existing `[[name]]` rows that
           // derived to NULL before the definition existed (§9 arrival-order
           // hole): local addSchema and synced-in definitions both land here
-          // via the projector rebuild.
-          const addedNames = addedPropertyDefinitionNames(
-            previousPropertyDefinitions, propertyDefinitions,
+          // via the projector rebuild. A RENAME shifts the winner both ways —
+          // `[[newName]]` rows that were alias-stamped (or NULL) must reclaim
+          // to the schema fieldId, and `[[oldName]]` rows whose name no longer
+          // wins must fall back to the alias tier — so enqueue both names of
+          // every rename alongside the adds (PR #386 review wave 2). The
+          // rederive is a pure content re-derivation (CAS-guarded), so a name
+          // that resolves the same is a no-op.
+          const renameNames = definitionChanges.flatMap(
+            c => (c.oldName === c.newName ? [] : [c.oldName, c.newName]),
           )
-          if (addedNames.length > 0 && propertyDefinitions) {
+          const rederiveNames = [...new Set([
+            ...addedPropertyDefinitionNames(previousPropertyDefinitions, propertyDefinitions),
+            ...renameNames,
+          ])]
+          if (rederiveNames.length > 0 && propertyDefinitions) {
             target.scheduleReferenceTargetNameRederive(
-              propertyDefinitions.workspaceId, addedNames,
+              propertyDefinitions.workspaceId, rederiveNames,
             )
           }
           // Notify React subscribers (usePropertySchemas) so panels

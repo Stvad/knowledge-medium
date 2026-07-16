@@ -317,4 +317,76 @@ describe('reference-target initial derive pass', () => {
     expect(afterPass?.content).toBe('newer local text')
     expect(afterPass?.updatedAt).toBe(current!.updatedAt + 5000)
   })
+
+  it('a schema RENAME reclaims a pre-existing exact-reference row alias-stamped under the new name (PR #386 review wave 2)', async () => {
+    // No definition named 'newname' exists yet — only 'oldname'. Seed an
+    // alias-target page named 'newname' and a row citing [[newname]]: with
+    // no 'newname' schema, that row must resolve through the alias tier.
+    await seedRow({id: 'newname-alias-target', content: 'New name page', properties: {alias: ['newname']}})
+    await seedRow({id: 'newname-ref', content: '[[newname]]'})
+
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    const RENAME_FIELD_ID = 'field-oldname'
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-rename-definition',
+      [{
+        metadata: {
+          fieldId: RENAME_FIELD_ID,
+          workspaceId: WS,
+          createdAt: 1,
+          name: 'oldname',
+          changeScope: ChangeScope.BlockDefault,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: defineProperty('oldname', {
+          codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+        }),
+      }],
+      {workspaceId: WS},
+    )
+    await runPass(repo)
+
+    // No definition named 'newname' exists yet: the alias tier resolves.
+    expect(await readColumn('newname-ref')).toBe('newname-alias-target')
+
+    // Rename 'oldname' -> 'newname' — SAME fieldId, SAME contribution key,
+    // only the name changes. This is what a definition rename looks like at
+    // the registry level (facetBridge's registry rebuild diffs by fieldId).
+    vi.useFakeTimers()
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-rename-definition',
+      [{
+        metadata: {
+          fieldId: RENAME_FIELD_ID,
+          workspaceId: WS,
+          createdAt: 1,
+          name: 'newname',
+          changeScope: ChangeScope.BlockDefault,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: defineProperty('newname', {
+          codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+        }),
+      }],
+      {workspaceId: WS},
+    )
+    await vi.runAllTimersAsync()
+    await repo.awaitReferenceTargetDerive()
+    vi.useRealTimers()
+
+    // The rename enqueues a reference-target name-rederive for BOTH 'oldname'
+    // and 'newname' (facetBridge.ts renameNames). Without enqueueing the NEW
+    // name, this pre-existing [[newname]] row — alias-stamped before the
+    // schema existed — would never reclaim to the schema's fieldId: nothing
+    // else re-visits it (its content didn't change, and the sweep already
+    // ran). The schema tier wins deterministically over the stale alias
+    // stamp via the CAS in stampReferenceTargets, which drops the IS-NULL
+    // filter for name-rederive drains.
+    expect(await readColumn('newname-ref')).toBe(RENAME_FIELD_ID)
+  })
 })

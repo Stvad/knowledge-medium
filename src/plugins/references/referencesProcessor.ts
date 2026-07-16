@@ -163,6 +163,11 @@ const isPropertyMachineryRow = async (
 ): Promise<boolean> => {
   const targetId = source.referenceTargetId ?? null
   if (targetId === null) return false
+  // §9 root half: a workspace-root row is never a field row no matter what
+  // its stamp resolves to — it's ordinary user content, and its `[[status]]`
+  // must keep normal wikilink/backlink behavior (PR #386 review wave 2).
+  // Twin of the parentId exemption in `isPropertyFieldInstance` + the SQL.
+  if (source.parentId === null) return false
   let flipped = flipCache.get(source.workspaceId)
   if (flipped === undefined) {
     flipped = await readIsChildBackedWorkspace(ctx.db, source.workspaceId)

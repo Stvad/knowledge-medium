@@ -32,6 +32,8 @@ const schemaWith = (name: string, codec = codecs.string as typeof codecs.string 
 const statusString = schemaWith('status')
 const statusNumber = schemaWith('status', codecs.number)
 const stateString = schemaWith('state')
+// Rename AND codec change in the SAME republish (status/string -> state2/number).
+const state2Number = schemaWith('state2', codecs.number)
 
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -234,6 +236,48 @@ describe('codec-change migration', () => {
     expect(values.map(v => v.id)).toContain(valueRowId)
     // The cell still carries the stale key/value (not unset).
     expect(await cell('p')).toEqual({status: 'not a number'})
+  })
+
+  it('rename + all-unconvertible: value ROWS stay live, cell unsets per §9 (no data loss)', async () => {
+    // Combines both migration triggers in one republish: `status` (string)
+    // becomes `state2` (number), and the existing value doesn't convert.
+    //
+    // The DATA guarantee is that the value ROWS survive — they do (field row
+    // retitled to `[[state2]]`, value child keeps `not a number`, both live).
+    // The CELL, however, ends UNSET: the retitle fires the same-tx PROJECT
+    // pass, which reprojects the cell from the (unconvertible) children and
+    // applies §9's default-value rule (no parseable child ⇒ key unset). That
+    // unset overrides anything the migration writes to the cell, so trying to
+    // re-home the stale value under the new name is futile (PR #386 review
+    // wave 2 — the reviewer's "preserve the stale key" suggestion conflicts
+    // with §9's cell-derives-from-children rule). No tombstone: MATERIALIZE
+    // runs before PROJECT and skips the removed old key (it no longer resolves
+    // post-rename), so the rows are never soft-deleted.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'not a number')
+    const errors: ProcessorRejection[] = []
+    repo.onUserError(err => { errors.push(err) })
+
+    await republish(repo, state2Number)
+
+    // Cell reads unset (§9 default-value rule) — NOT left under the old name.
+    expect(await cell('p')).toEqual({})
+    // The raw value is preserved as a live row (this is the real guarantee),
+    // and the unconvertible count is surfaced to the user.
+    expect(await rowContent(valueRowId)).toBe('not a number')
+    expect(await rowContent(fieldRowId)).toBe('[[state2]]')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
+    expect(errors[0]!.meta).toMatchObject({count: 1})
+
+    // The field row and its value child stay live — never tombstoned.
+    for (const id of [fieldRowId, valueRowId]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted, `${id} deleted`).toBe(0)
+    }
   })
 })
 

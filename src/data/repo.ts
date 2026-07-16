@@ -2841,12 +2841,25 @@ export class Repo {
           } else if (parentUnconvertible === 0) {
             delete nextProperties[schema.name]
           }
-          // else: every value under this field was unconvertible — KEEP the
-          // stale cell key. Deleting it would make the same-tx materialize
-          // processor read the key removal as delete-intent and tombstone
-          // the very rows the user was told stay "fixable in the outline"
-          // (PR #386 review). A stale cell under the new codec is the §5
-          // pending-reprojection state; the next valid value edit heals it.
+          // else (all-unconvertible): leave the cell as-is here. What the
+          // parent ULTIMATELY commits with depends on whether the field-row
+          // retitle above fired the same-tx PROJECT pass:
+          //   - rename: retitle fired PROJECT, which reprojects the cell from
+          //     the (unconvertible) children → §9 default-value rule unsets
+          //     the key. The old key was already deleted above; MATERIALIZE
+          //     ran first and skips the removed old key (it no longer resolves
+          //     post-rename), so it never tombstones — the value ROWS stay
+          //     live. Re-keying the stale value to the new name here is futile
+          //     (PROJECT overwrites it) and would violate §9 (cell derives
+          //     from children), so we don't (PR #386 review wave 2).
+          //   - no rename: no retitle, so PROJECT never fires and the stale
+          //     cell key rides untouched. Deleting it would make MATERIALIZE
+          //     read the removal as delete-intent and tombstone the "fixable"
+          //     rows (PR #386 review) — so we keep it; the next valid value
+          //     edit reprojects and heals it (§5 pending-reprojection).
+          // Either way the value rows stay live and the unconvertible COUNT is
+          // surfaced below; the cell reading unset for unparseable values is
+          // §9's contract, not data loss.
           if (!propertiesEqual(parent.properties, nextProperties)) {
             await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
           }
