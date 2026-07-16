@@ -264,6 +264,55 @@ found one more within its first minute:
   aliases key in the same restore UPDATE; the domain callback re-writes
   the correct one.
 
+Batch 3 (PR #384: two-repo convergence + observer materialization +
+binding oracle + an 11-suite discovery sweep) found six more:
+
+- The two-repo convergence fuzzer's FIRST deep run found a server-side
+  protocol bug (issue #381): `blocks_clamp_updated_at`'s +1 bump only
+  clears the OLD row's stamp, not the patch AUTHOR's proposed stamp, so
+  a merge onto a drifted base can land server-content ≠ author-content
+  at the author's own stamp — the author's echo equal-stamp-skips
+  (reconcile I1) and that device permanently misses the merged-under
+  edit. The property is left strict, so the convergence deep tier is
+  KNOWN RED until the server fix ships (the nightly report calls this
+  out; a different failing file or fingerprint is a new bug).
+- The binding-oracle sweep found that a long-form date literal bound to
+  its resolved target was never CLAIMED by it — any later block could
+  legitimately claim the spelling and existing bindings stayed silently
+  pointing at the old target forever (nothing watches "an unclaimed
+  literal was just claimed"). `claimLiteralDateAliases` now claims each
+  literal on the resolved target. The same sweep surfaced the
+  release-reclaim residual as a design gap (issue #383): bindings whose
+  bound target is a tombstone are deliberately unpoliced.
+- `isInsideUnclosedWikilink` pair-counted `[[`/`]]` while the
+  autocomplete it guards uses an anchored regex — `']] [[ #tag'`
+  divergence; rewritten to mirror the regex.
+- `applyKeybindingOverrides`' collision-strip map compared raw chord
+  strings, so an override spelled `Cmd+K` failed to strip a default
+  spelled `$mod+k`; now keyed by `canonicalizeChord`, which (follow-up
+  finds, one from review + one from Codex) also folds final-key case
+  for `event.key`-dispatched tokens but preserves it for
+  `event.code`-only tokens (`Digit1`, `Period`, …), which tinykeys
+  matches exact-case. Layer-disagreement residual: issue #388.
+- SRS scheduling ×2: `addDays`' local calendar math could land a
+  reschedule up to an hour BEFORE `now` in a DST fall-back hour (the
+  review round then caught that the pure-ms replacement shifted stored
+  DATES across DST — final shape is calendar math + a monotonicity
+  clamp, with the fuzz suite pinned to a DST-observing TZ so the
+  property isn't vacuous on UTC runners); and a corrupted/imported
+  negative interval survived every grade except AGAIN, scheduling into
+  the past — floored at 0, with the multiplicative base rescued so 0
+  isn't an absorbing state.
+
+The adversarial-review round over Batch 3 also found one product bug
+outside any fuzzer's reach (fixed + pinned): the new literal claim
+re-inserts ALL of the target's aliases through the uniqueness trigger,
+so a LATENT cross-client duplicate on a pre-existing alias (sync-apply
+skips the trigger; V1 leaves those merges latent) aborted the WHOLE
+parse batch, permanently — `claimLiteralDateAliases` now swallows
+exactly the typed alias-collision abort and degrades to the pre-claim
+first-writer behavior for that target.
+
 ## Adding a suite
 
 1. Create `<target>.fuzz.test.ts` next to the existing tests, line 1
