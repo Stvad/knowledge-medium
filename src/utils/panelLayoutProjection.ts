@@ -44,6 +44,21 @@ interface ReconciliationPlan {
 export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
   hasBlockType(row, PANEL_STACK_TYPE)
 
+/** Soft-delete a layout row and every descendant, INCLUDING materialized
+ *  property field/value children (machinery traversal — PR #288 §9). */
+const deleteLayoutRowSubtreeInTx = async (tx: Tx, id: string): Promise<void> => {
+  const stack = [id]
+  const seen = new Set<string>()
+  while (stack.length > 0) {
+    const current = stack.pop()!
+    if (seen.has(current)) continue
+    seen.add(current)
+    const children = await tx.childrenOf(current, undefined, {includePropertyChildren: true})
+    for (const child of children) stack.push(child.id)
+    await tx.delete(current)
+  }
+}
+
 export const panelBlockId = (row: BlockData): string | undefined => {
   const stored = row.properties[topLevelBlockIdProp.name]
   if (stored === undefined) return undefined
@@ -661,9 +676,13 @@ export const deletePanelRow = async (
     const nextActivePanelId = deletingActivePanel
       ? nextActivePanelAfterClose(row, parent, rowsBeforeDelete)
       : undefined
-    await tx.delete(panelId)
+    // Subtree deletes (PR #288 §9): panel rows are UiState property hosts —
+    // in a flipped workspace their bags materialize as hidden field/value
+    // children, and a bare tx.delete would strand those live under the
+    // tombstone (still indexed/uploaded).
+    await deleteLayoutRowSubtreeInTx(tx, panelId)
     for (const stackId of stackIdsToDelete) {
-      await tx.delete(stackId)
+      await deleteLayoutRowSubtreeInTx(tx, stackId)
     }
     if (deletingActivePanel && layoutSession) {
       await tx.setProperty(layoutSession.id, activePanelIdProp, nextActivePanelId)

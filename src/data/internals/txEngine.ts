@@ -90,6 +90,7 @@ import {
   propertyValueToChildContent,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
+import { collapseDuplicateValueChild } from './propertyChildrenProcessor'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -1162,6 +1163,12 @@ export class TxImpl implements Tx {
       const [primary, ...duplicates] = values
       if (primary) {
         if (primary.content !== content) await this.update(primary.id, {content}, opts)
+        // §9 dedup — unified relocate-then-subtree-delete semantics (shared
+        // with the materialize processor): the loser's user-authored
+        // sub-children survive under the primary.
+        for (const duplicate of duplicates) {
+          await collapseDuplicateValueChild(this, primary.id, duplicate)
+        }
       } else {
         await this.create({
           workspaceId: parent.workspaceId,
@@ -1169,9 +1176,6 @@ export class TxImpl implements Tx {
           orderKey: keyAtStart(null),
           content,
         }, opts)
-      }
-      for (const duplicate of duplicates) {
-        await this.delete(duplicate.id)
       }
       return
     }

@@ -67,7 +67,8 @@ import { isRetainableAbsentRef, projectPropertyReferences } from './referencePro
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -567,13 +568,31 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     // Write phase — soft-delete the orphans. Single tx so the deletes
     // are atomic and produce one command_events row.
     await ctx.repo.tx(async tx => {
-      for (const id of orphans) {
-        // No block references it — orphan. Soft-delete (the §7 cleanup
-        // is leaf-only by construction; the alias target was created
-        // empty so it has no children to cascade). tx.delete on the raw
-        // primitive is leaf-aware enough for v1; if a future processor
-        // wants subtree-cleanup it would call repo.mutate.delete instead.
+      // The seat was created empty, but in a child-backed workspace its OWN
+      // generated properties (alias / types) materialize as hidden field
+      // rows (PR #288 §9) — delete those alongside the seat or they dangle
+      // live under the tombstone. Only machinery-generated field rows go;
+      // user content under a seat (there should be none) is left alone.
+      const generatedFieldIds = new Set([
+        propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+        propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+      ])
+      const deleteSubtreeInTx = async (id: string): Promise<void> => {
+        const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+        for (const child of children) await deleteSubtreeInTx(child.id)
         await tx.delete(id)
+      }
+      for (const id of orphans) {
+        // No block references it — orphan. Soft-delete the seat, then its
+        // generated field rows (with their value children).
+        await tx.delete(id)
+        const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+        for (const child of children) {
+          const target = child.referenceTargetId ?? null
+          if (target !== null && generatedFieldIds.has(target)) {
+            await deleteSubtreeInTx(child.id)
+          }
+        }
       }
     }, {
       scope: ChangeScope.References,

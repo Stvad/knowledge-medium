@@ -37,6 +37,19 @@ export const computeMergedContent = (
   return intoContent + strategy.separator + fromContent
 }
 
+/** Recursively soft-delete a block and every descendant (property-field
+ *  rows AND their value children). `tx.delete` only tombstones the row
+ *  passed to it, so a bare delete of a materialized field row would leave
+ *  its value children live-but-orphaned under a tombstone (still
+ *  indexed/uploaded). */
+const deleteSubtreeInTx = async (tx: Tx, id: string): Promise<void> => {
+  const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+  for (const child of children) {
+    await deleteSubtreeInTx(tx, child.id)
+  }
+  await tx.delete(id)
+}
+
 export const mergeBlocksInTx = async (
   tx: Tx,
   {
@@ -73,6 +86,11 @@ export const mergeBlocksInTx = async (
     throw new MergeIntoDescendantError(into.id, from.id)
   }
 
+  // Re-parent only `from`'s regular (visible, non property-field) children
+  // under `into` — childrenOf's flip-gated default. Property-field children
+  // are derived from the property bag and must NOT be carried over: the
+  // merged bag written to `into` below re-materializes the correct
+  // field/value children for `into` (PR #288 §9).
   const intoChildren = await tx.childrenOf(into.id)
   const fromChildren = await tx.childrenOf(from.id)
   if (fromChildren.length > 0) {
@@ -80,6 +98,39 @@ export const mergeBlocksInTx = async (
     for (let i = 0; i < fromChildren.length; i++) {
       await tx.move(fromChildren[i].id, {parentId: into.id, orderKey: keys[i]})
     }
+  }
+
+  // Preserve user-authored descendants of `from`'s VALUE children before the
+  // subtree delete below (PR #288 §9 preservation rule): a comment thread
+  // under a value child is user content — a bare subtree-delete would
+  // silently tombstone it with the machinery rows. Re-home them under `into`
+  // (the merged bag re-materializes `into`'s own field/value rows in this
+  // same tx, but their ids aren't knowable here, so `into` itself is the
+  // stable visible destination).
+  const fromPropertyChildren = (await tx.childrenOf(
+    from.id, undefined, {includePropertyChildren: true},
+  )).filter(child => !fromChildren.some(visible => visible.id === child.id))
+  for (const fieldRow of fromPropertyChildren) {
+    const values = await tx.childrenOf(fieldRow.id, undefined, {includePropertyChildren: true})
+    for (const value of values) {
+      const valueDescendants = await tx.childrenOf(
+        value.id, undefined, {includePropertyChildren: true},
+      )
+      if (valueDescendants.length === 0) continue
+      const anchor = (await tx.childrenOf(into.id)).at(-1)?.orderKey ?? null
+      const keys = keysBetween(anchor, null, valueDescendants.length)
+      for (let i = 0; i < valueDescendants.length; i++) {
+        await tx.move(valueDescendants[i].id, {parentId: into.id, orderKey: keys[i]})
+      }
+    }
+  }
+
+  // Drop `from`'s remaining (property-field) children — including their
+  // value children — so no live rows dangle under the tombstone once `from`
+  // is deleted (fixed in the spike at f4d0b447: a bare delete had orphaned
+  // value rows).
+  for (const child of fromPropertyChildren) {
+    await deleteSubtreeInTx(tx, child.id)
   }
 
   // Delete before merging properties so aliases held by `from` are

@@ -233,7 +233,10 @@ const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
     const block = stack.pop()!
     if (seen.has(block.id)) continue
     seen.add(block.id)
-    const children = await tx.childrenOf(block.id)
+    // Delete-cascade is MACHINERY (PR #288 §9): it must see property
+    // field/value rows — under the visible-children default a delete would
+    // strand live field rows beneath the tombstoned parent.
+    const children = await tx.childrenOf(block.id, undefined, {includePropertyChildren: true})
     for (const c of children) stack.push(c)
     await tx.delete(block.id)
     if (!block.deleted) {

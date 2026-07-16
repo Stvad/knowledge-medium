@@ -11,6 +11,7 @@ import { ChangeScope, codecs, defineProperty, type BlockData } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
 
 const WS = 'ws-prop-children'
@@ -302,6 +303,145 @@ describe('childrenOf visible-children exclusion (§9)', () => {
       const visible = await tx.childrenOf('p')
       expect(visible.map(c => c.id)).toEqual(['ref-child'])
     }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
+describe('merge integration (§9, slice B3)', () => {
+  it('re-materializes the merged bag; source field rows tombstone with their values', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('into')).toBe('from-status')
+    // `into` re-materialized its own field/value rows from the merged bag…
+    const intoFields = await liveFieldRows('into')
+    expect(intoFields).toHaveLength(1)
+    // …and `from`'s field row + value child are tombstoned, not carried or
+    // stranded live under the tombstone.
+    const fromFieldRow = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [fromField!.id],
+    )
+    expect(fromFieldRow.deleted).toBe(1)
+    const strandedLive = await sharedDb.db.getAll<{id: string}>(
+      `SELECT b.id FROM blocks b JOIN blocks p ON p.id = b.parent_id
+        WHERE p.deleted = 1 AND b.deleted = 0 AND b.workspace_id = ?`,
+      [WS],
+    )
+    expect(strandedLive).toEqual([])
+  })
+
+  it('preserves user-authored descendants of the source value child', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'comment', workspaceId: WS, parentId: fromValue!.id, orderKey: 'a',
+        content: 'a comment on the value',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'],
+    )
+    expect(comment.deleted).toBe(0)
+    expect(comment.parent_id).toBe('into')
+  })
+})
+
+describe('duplicate collapse preservation (§9, slice B3)', () => {
+  it('relocates a divergent losing value and its comments instead of silently deleting', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    // Two concurrent-dual-write-shaped field rows for the same schema, with
+    // DIVERGENT values, one carrying a user comment — the §5 duplicate case.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'field-a', workspaceId: WS, parentId: 'p', orderKey: 'a',
+        content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
+      })
+      await tx.create({
+        id: 'value-a', workspaceId: WS, parentId: 'field-a', orderKey: 'a', content: 'alpha',
+      })
+      await tx.create({
+        id: 'field-b', workspaceId: WS, parentId: 'p', orderKey: 'b',
+        content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
+      })
+      await tx.create({
+        id: 'value-b', workspaceId: WS, parentId: 'field-b', orderKey: 'a', content: 'beta',
+      })
+      await tx.create({
+        id: 'comment-b', workspaceId: WS, parentId: 'value-b', orderKey: 'a',
+        content: 'note on beta',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // A REAL cell change triggers materialize, which dedups field rows at
+    // 'p' (an equal-value setProperty short-circuits before any write).
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'gamma'),
+      {scope: ChangeScope.BlockDefault})
+
+    // Survivor (order_key,id) = field-a; field-b subtree-deleted…
+    expect((await liveFieldRows('p')).map(f => f.id)).toEqual(['field-a'])
+    const fieldB = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['field-b'],
+    )
+    expect(fieldB.deleted).toBe(1)
+    // …but the DIVERGENT losing value survives visibly under the surviving
+    // value child, with its comment thread intact beneath it.
+    const valueB = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['value-b'],
+    )
+    expect(valueB.deleted).toBe(0)
+    expect(valueB.parent_id).toBe('value-a')
+    const commentB = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment-b'],
+    )
+    expect(commentB.deleted).toBe(0)
+    expect(commentB.parent_id).toBe('value-b')
+  })
+})
+
+describe('delete cascade (machinery traversal, §9)', () => {
+  it('softDeleteSubtree tombstones hidden field/value rows with the parent', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+    await repo.mutate.delete({id: 'p'})
+
+    for (const id of ['p', field!.id, value!.id]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted).toBe(1)
+    }
   })
 })
 
