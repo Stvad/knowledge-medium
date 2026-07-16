@@ -176,7 +176,16 @@ export const normalizeChord = (chord: string): string =>
  */
 export const canonicalizeChord = (raw: string, phase?: ChordPhase): string => {
   const canonical = splitSequence(raw)
-    .map(press => formatPress(parsePress(press)))
+    // Fold the final key's CASE too, unlike `normalizeChord`: tinykeys
+    // dispatch compares `key.toUpperCase() === event.key.toUpperCase()`,
+    // so '$mod+K' and '$mod+k' are the same binding at dispatch and must
+    // land in the same bucket here (strip map, conflict detection).
+    // `normalizeChord` stays case-preserving — the settings UI stores and
+    // round-trips the user's spelling.
+    .map(press => {
+      const {mods, key} = parsePress(press)
+      return formatPress({mods, key: key.toLowerCase()})
+    })
     .join(' ')
   return phase ? `${phase}:${canonical}` : canonical
 }

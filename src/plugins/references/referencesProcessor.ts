@@ -65,6 +65,7 @@ import {
 } from './referenceParser.ts'
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
+import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import { aliasesProp } from '@/data/properties'
 import {
@@ -305,7 +306,22 @@ const buildSourcePlan = async (
  *  exclusive, and removing it triggers the rename ladder which rewrites
  *  the sources properly. Callers run this AFTER the per-literal
  *  `tx.aliasLookup` recheck, so within this tx the literal is known
- *  unclaimed — the uniqueness trigger is the cross-writer backstop. */
+ *  unclaimed — the uniqueness trigger backstops same-device racers.
+ *
+ *  Documented residuals (adversarial review, PR #384):
+ *  - The claim outlives the referencing edit: undo of the source (or a
+ *    later removal of the ISO alias from a user-page target) leaves the
+ *    auto-claimed literal in place — orphan cleanup exempts dates
+ *    (§7.6) and the rename ladder only rewrites sources bound under the
+ *    REMOVED string, so a page can keep resolving a spelling the user
+ *    never claimed. Rare, needs a lifecycle design (see issue #383's
+ *    release/reclaim discussion) rather than a spot fix.
+ *  - Concurrent claims of two spellings on two devices merge via
+ *    whole-column properties LWW server-side: one device's append can be
+ *    silently dropped, reverting that literal to bound-but-unclaimed
+ *    (the pre-claim state). Nothing re-fires the claim — same blind spot
+ *    this docblock's first paragraph describes. Small-fleet-rare;
+ *    accepted. */
 const claimLiteralDateAliases = async (
   tx: Tx,
   targetId: string,
@@ -335,7 +351,25 @@ const claimLiteralDateAliases = async (
   // write in applySourcePlan — advances updatedAt for sync but must not
   // stamp userUpdatedAt/updatedBy, or a background re-parse of some
   // unrelated source makes the target look freshly user-edited.
-  await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
+  try {
+    await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
+  } catch (err) {
+    // Swallow ONLY alias-collision aborts. The alias-update trigger
+    // deletes and re-inserts ALL of the target's aliases, re-checking
+    // each against the uniqueness trigger — so a LATENT duplicate on a
+    // pre-existing alias (cross-client dupes sync in trigger-free; V1
+    // leaves their merge latent, see clientSchema.ts) would abort here
+    // even though the newly claimed literals are fine. Letting that
+    // propagate would roll back the WHOLE parse batch — references for
+    // every other changed row — and recur on every re-edit: a silent,
+    // permanent recompute outage keyed to someone else's dupe. RAISE
+    // (ABORT) backs out only this statement (tx stays open) and
+    // setProperty records bookkeeping only after a successful execute,
+    // so skipping is clean: the claim degrades to the pre-claim
+    // first-writer behavior for this target only (adversarial review
+    // on PR #384).
+    if (parseAliasCollisionError(err) === null) throw err
+  }
 }
 
 const applySourcePlan = async (

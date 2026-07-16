@@ -21,7 +21,16 @@ describe('canonicalizeChord', () => {
   it('canonicalises each press of a sequence instead of mangling on "+"', () => {
     // A naive '+' split would shatter 'Cmd+K Cmd+S' into ['Cmd', 'K Cmd',
     // 'S']; splitting on space first keeps each press intact.
-    expect(canonicalizeChord('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(canonicalizeChord('Cmd+K Cmd+S')).toBe('$mod+k $mod+s')
+  })
+
+  it('folds final-key case: $mod+K and $mod+k are one binding at dispatch', () => {
+    // tinykeys compares key.toUpperCase() on both sides, so case-variant
+    // spellings dispatch identically and must share a canonical bucket
+    // (strip map, conflict detection). normalizeChord deliberately keeps
+    // case — the settings UI round-trips the user's spelling.
+    expect(canonicalizeChord('$mod+K')).toBe(canonicalizeChord('$mod+k'))
+    expect(canonicalizeChord('Cmd+K')).toBe(canonicalizeChord('$mod+k'))
   })
 
   it('treats alias- and order-equivalent chords as the same key', () => {

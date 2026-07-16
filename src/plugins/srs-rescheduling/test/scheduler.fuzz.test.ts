@@ -56,20 +56,25 @@
  *    `getDate()`/`setDate()` calendar math, so in a "fall back" DST hour
  *    `addDays(now, 0)` landed up to 1h BEFORE `now` (deep-tier seed
  *    1261623029; only reproduced under a DST-observing local timezone —
- *    a UTC-pinned runner never saw it). addDays is now pure day-length
- *    ms arithmetic (scheduler.ts), making this property hold in every
- *    timezone.
+ *    a UTC-pinned runner never saw it). addDays now keeps calendar math
+ *    (consumers collapse to a local DATE, and day-length-ms arithmetic
+ *    shifts that date across DST boundaries) but clamps the result to
+ *    `>= date`, so this property holds in every timezone. This FILE pins
+ *    `process.env.TZ` to a DST-observing zone below — on a UTC CI runner
+ *    the pre-fix bug was invisible, so without the pin this regression
+ *    pin was decorative (adversarial review on PR #384).
  * 2b. FIXED (was a fuzz find of this suite, red at the smoke seed): a
  *    NEGATIVE starting interval — codec-legal, concretely reachable via
  *    the Roam-memo importer's unchecked parseFloat — survived every
  *    signal except AGAIN and produced `nextReviewDate < now`.
- *    `enforceLimits` now floors the interval at 0 alongside its
- *    MAX_INTERVAL cap; the property below pins the fix.
+ *    `enforceLimits` floors the interval at 0 alongside its MAX_INTERVAL
+ *    cap, and `rebuildBase` rescues the multiplication base so 0 is not
+ *    an absorbing state; the property below pins the fix.
  * 3. Determinism: identical `(params, signal, now, random)` produce
  *    identical output — no hidden nondeterminism beyond the injected
  *    clock/PRNG.
  */
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import {
@@ -78,6 +83,20 @@ import {
   srsSignals,
   SrsSignal,
 } from '../scheduler.ts'
+
+// DST-observing zone pin (see docblock §2a): the addDays monotonicity
+// property is vacuous under UTC — GitHub runners never cross a DST
+// transition, so the pre-fix bug ran green there. Set before any Date is
+// constructed in this module (nowArb below); Node re-reads TZ per
+// localtime conversion on Linux/macOS. Restored in afterAll because
+// vitest reuses worker processes across test FILES — leaking the zone
+// into whatever file runs next in this worker is a flake vector.
+const originalTz = process.env.TZ
+process.env.TZ = 'America/New_York'
+afterAll(() => {
+  if (originalTz === undefined) delete process.env.TZ
+  else process.env.TZ = originalTz
+})
 
 // Not exported from scheduler.ts; mirrored here with a line citation.
 // scheduler.test.ts's pinned examples ("caps the interval at the 50-year

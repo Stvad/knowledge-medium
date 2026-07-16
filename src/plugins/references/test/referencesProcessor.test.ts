@@ -1279,6 +1279,48 @@ describe('parseReferences — alias claimed between plan build and apply (write-
       'undecodable alias list left untouched — ISO claim preserved',
     ).toEqual(['2026-06-11', 1])
   })
+
+  it('a latent duplicate alias on the target must not abort the parse batch via the claim', async () => {
+    // Cross-client dupes are a standing V1 condition: sync-apply skips
+    // the uniqueness trigger (tx_context.source IS NULL), so two devices
+    // claiming the same alias offline both keep it. The claim write
+    // re-inserts ALL of the target's aliases (blocks_alias_update
+    // deletes+re-inserts), so the PRE-EXISTING duped alias would RAISE —
+    // pre-fix that rolled back the whole parse tx: references for the
+    // source were permanently dropped and re-aborted on every re-edit
+    // (adversarial review on PR #384).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'older', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'O'})
+      await tx.setProperty('older', aliasesProp, ['2026-06-12'])
+      await tx.create({id: 'newer', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'N'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    // Plant the dupe the way sync-apply would: raw write outside a repo
+    // tx, so tx_context.source is NULL and the uniqueness trigger skips.
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.alias', json('["2026-06-12"]')) WHERE id = ?`,
+      ['newer'],
+    )
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'see [[June 12th, 2026]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The batch survived: the source's references landed (bound to the
+    // oldest claimant per lookup semantics)...
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'June 12th, 2026' && ref.id === 'older'),
+      `references written despite the latent dupe (refs: ${JSON.stringify(refs)})`,
+    ).toBe(true)
+    // ...and the claim itself was skipped, leaving the target untouched.
+    expect(
+      JSON.parse((await env.read('older'))!.properties_json)[aliasesProp.name],
+      'claim skipped on the dupe-carrying target',
+    ).toEqual(['2026-06-12'])
+  })
 })
 
 describe('parseReferences — idempotent comparison', () => {
