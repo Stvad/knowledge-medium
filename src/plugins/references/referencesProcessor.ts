@@ -442,6 +442,14 @@ const applySourcePlan = async (
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
     if (ensured.inserted) newlyInserted.push(ensured.id)
     retarget(predicted, ensured.id, alias)
+    // §9 arrival-order repair, LOCAL half (adversarial-review round 2): a
+    // whole-block `[[alias]]` row written before this seat existed derived
+    // its local reference_target_id to NULL, and nothing content-driven
+    // revisits it — the seat's creation is the trigger. Deferred + batched
+    // on Repo; no-op pre-sweep (the per-open sweep covers those).
+    if (ensured.inserted) {
+      ctx.repo.scheduleReferenceTargetNameRederive(plan.workspaceId, [alias])
+    }
   }
   // Retargeting invalidates the read phase's referencesChanged verdict —
   // recompute it the same canonical-to-canonical way buildSourcePlan does
@@ -574,6 +582,11 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
       // rows (PR #288 §9) — delete those alongside the seat or they dangle
       // live under the tombstone. Only machinery-generated field rows go;
       // user content under a seat (there should be none) is left alone.
+      // Flip-gated (§9): generated field rows exist only in child-backed
+      // workspaces. In an un-flipped workspace a column match under a seat
+      // is by construction user-authored content — never machinery's to
+      // delete.
+      const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
       const generatedFieldIds = new Set([
         propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
         propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
@@ -582,6 +595,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
         // No block references it — orphan. Soft-delete the seat, then its
         // generated field rows (with their value children).
         await tx.delete(id)
+        if (!sweepGeneratedFieldRows) continue
         const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
         for (const child of children) {
           const target = child.referenceTargetId ?? null

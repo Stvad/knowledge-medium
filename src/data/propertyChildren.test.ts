@@ -452,8 +452,8 @@ describe('flip predicate / SQL gate lock (§6)', () => {
     // over-recognize) every field row on one read surface.
     const {isChildBackedPropertiesWorkspace} = await import('@/types')
     const {VISIBLE_CHILDREN_SQL} = await import('./internals/treeQueries')
-    const states = ['cell', 'children', 'cell-off'] as const
-    const flipped = states.filter(isChildBackedPropertiesWorkspace)
+    const {PROPERTIES_MIGRATION_STATES} = await import('./workspaceSchema')
+    const flipped = PROPERTIES_MIGRATION_STATES.filter(isChildBackedPropertiesWorkspace)
     expect(flipped).toEqual(['children', 'cell-off'])
     expect(VISIBLE_CHILDREN_SQL).toContain(
       `properties_migration IN (${flipped.map(s => `'${s}'`).join(', ')})`,

@@ -138,33 +138,35 @@ describe('derive-at-arrival (sync materializer)', () => {
     expect(await readColumn('ref')).toBe('target')
   })
 
-  it('repairs earlier-window NULL columns when their alias target arrives later', async () => {
-    // §9 arrival-order hole: the referrer arrives BEFORE its target and
-    // derives to NULL; later content-unchanged deliveries preserve NULL.
-    // The target's arrival (gaining the alias) must re-derive it.
-    const withAlias = h.start({
+  it('reports alias-gaining arrivals to the deferred repair hook (§9 arrival-order hole)', async () => {
+    // The referrer arrives BEFORE its target and derives to NULL; the
+    // target's later arrival must hand its aliases to the repair executor
+    // (a DEFERRED batched re-derive on Repo — never an in-tx scan: on a
+    // fresh device every page arrival gains aliases). End-to-end repair is
+    // pinned at the repo level (referenceTargetDerivePass.test.ts).
+    const added: {workspaceId: string; aliases: readonly string[]}[] = []
+    const withHook = h.start({
       getMaterializability: () => 'copy',
-      referenceTargetLookups: tx => ({
-        resolveSchemaFieldId: () => null,
-        aliasTargetId: async (alias) => {
-          const row = await tx.getOptional<{block_id: string}>(
-            'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
-            [WS, alias],
-          )
-          return row?.block_id ?? null
-        },
-      }),
+      referenceTargetLookups: () => lookups,
+      onAliasTargetsAdded: (workspaceId, aliases) => { added.push({workspaceId, aliases}) },
     })
 
     await h.stageRow(block({id: 'ref', content: '[[Inbox]]', orderKey: 'a1'}))
-    await withAlias.observer.flush()
+    await withHook.observer.flush()
     expect(await readColumn('ref')).toBeNull()
 
     await h.stageRow(block({
       id: 'target', content: 'Inbox page', properties: {alias: ['Inbox']},
     }))
-    await withAlias.observer.flush()
-    expect(await readColumn('ref')).toBe('target')
+    await withHook.observer.flush()
+    expect(added).toContainEqual({workspaceId: WS, aliases: ['Inbox']})
+    // Re-delivery with the SAME aliases (content tweak) reports nothing new.
+    added.length = 0
+    await h.stageRow(block({
+      id: 'target', content: 'Inbox page v2', properties: {alias: ['Inbox']}, updatedAt: 2000,
+    }))
+    await withHook.observer.flush()
+    expect(added).toEqual([])
   })
 
   it('skips derivation entirely when the lookups dep is absent', async () => {

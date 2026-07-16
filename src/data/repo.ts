@@ -103,14 +103,12 @@ import {
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
-  REFERENCE_TARGET_DERIVE_MARKER_PREFIX,
-  SELECT_REFERENCE_TARGET_DERIVE_MARKERS_SQL,
-  RECORD_REFERENCE_TARGET_DERIVE_MARKER_SQL,
 } from './internals/clientSchema'
 import {
   deriveReferenceTargetId,
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
+import { parseExactReferenceBlockContent } from './referenceBlock'
 import type { PropertyDefinitionChange } from './internals/propertyDefinitionMigrations'
 import {
   encodedPropertyValueToChildContent,
@@ -521,10 +519,20 @@ export class Repo {
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
-  /** Lazy marker mirror for the one-time LOCAL `reference_target_id` derive
-   *  pass (rows keyed `reference_target_derive:<ws>:v1`) — constructor-built
-   *  like its siblings. */
-  private readonly referenceTargetDeriveMarkers: MarkerStore
+  /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
+   *  (adversarial-review round 2: a durable once-ever marker permanently
+   *  missed definitions/aliases that arrived while the app was closed or
+   *  the workspace inactive — the sweep is cheap after its first run, since
+   *  it only visits NULL-column reference-shaped rows, so it runs once per
+   *  workspace open instead). */
+  private readonly referenceTargetSweepDone = new Set<string>()
+  /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
+   *  in ONE batched scan per drain (never one scan per name). Names only
+   *  accumulate after the workspace's sweep ran (pre-sweep, the sweep
+   *  covers them); a drain that finds the registry pointed elsewhere leaves
+   *  the set intact and re-arms when that workspace's registry primes. */
+  private readonly pendingNameRederives = new Map<string, Set<string>>()
+  private readonly nameRederiveDrainScheduled = new Set<string>()
   /** In-flight reference-target derive passes — drained by
    *  `awaitReferenceTargetDerive()`, same pattern. */
   private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
@@ -756,12 +764,6 @@ export class Repo {
       SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
       RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
     )
-    this.referenceTargetDeriveMarkers = new MarkerStore(
-      this.db,
-      REFERENCE_TARGET_DERIVE_MARKER_PREFIX,
-      SELECT_REFERENCE_TARGET_DERIVE_MARKERS_SQL,
-      RECORD_REFERENCE_TARGET_DERIVE_MARKER_SQL,
-    )
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this.user = opts.user
@@ -834,6 +836,17 @@ export class Repo {
         if (seedKeysChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
+        // Re-arm name-rederive drains parked while this workspace's registry
+        // wasn't primed (drainNameRederives leaves the pending set intact in
+        // that case).
+        if (
+          incomingWorkspaceId !== null
+          && (this.pendingNameRederives.get(incomingWorkspaceId)?.size ?? 0) > 0
+          && !this.nameRederiveDrainScheduled.has(incomingWorkspaceId)
+        ) {
+          this.nameRederiveDrainScheduled.add(incomingWorkspaceId)
+          this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(incomingWorkspaceId))
+        }
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
@@ -899,6 +912,9 @@ export class Repo {
         // same-window alias/definition arrivals resolve).
         referenceTargetLookups: policyDeps.referenceTargetLookups
           ?? (tx => this.referenceTargetLookupsVia(tx)),
+        onAliasTargetsAdded: policyDeps.onAliasTargetsAdded
+          ?? ((workspaceId, aliases) =>
+            this.scheduleReferenceTargetNameRederive(workspaceId, aliases)),
       },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
@@ -2416,8 +2432,7 @@ export class Repo {
   }
 
   private async runReferenceTargetDerivePass(workspaceId: string): Promise<void> {
-    const markerSuffix = `${workspaceId}:v1`
-    if (await this.referenceTargetDeriveMarkers.has(markerSuffix)) return
+    if (this.referenceTargetSweepDone.has(workspaceId)) return
     // The name tier needs the workspace's faithful registry snapshot; if the
     // user switched away before the deferred job ran, skip WITHOUT the marker
     // so the next open retries.
@@ -2457,7 +2472,9 @@ export class Repo {
 
     await this.stampReferenceTargets(updates)
 
-    await this.referenceTargetDeriveMarkers.set(markerSuffix)
+    this.referenceTargetSweepDone.add(workspaceId)
+    // Anything queued while the sweep was pending is covered by it.
+    this.pendingNameRederives.delete(workspaceId)
   }
 
   /** The one construction site for reference-target resolution outside a
@@ -2555,31 +2572,61 @@ export class Repo {
     names: readonly string[],
   ): void {
     if (!workspaceId || names.length === 0) return
-    this.referenceTargetDeriveJobs.schedule(async () => {
-      try {
-        const lookups = this.referenceTargetLookupsVia()
-        const updates: {id: string; scannedContent: string; targetId: string}[] = []
-        for (const name of names) {
-          const rows = await this.db.getAll<{id: string; content: string}>(
-            `SELECT id, content FROM blocks
-              WHERE workspace_id = ?
-                AND reference_target_id IS NULL
-                AND TRIM(content) = ?`,
-            [workspaceId, `[[${name}]]`],
-          )
-          for (const row of rows) {
-            const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-            if (typeof derived === 'string') {
-              updates.push({id: row.id, scannedContent: row.content, targetId: derived})
-            }
-          }
+    // Pre-sweep, the per-open sweep covers every name — don't accumulate
+    // (on a fresh device EVERY page arrival gains aliases; queuing them all
+    // would just re-run the sweep's own scan).
+    if (!this.referenceTargetSweepDone.has(workspaceId)) return
+    const pending = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
+    for (const name of names) if (name !== '') pending.add(name)
+    this.pendingNameRederives.set(workspaceId, pending)
+    if (this.nameRederiveDrainScheduled.has(workspaceId)) return
+    this.nameRederiveDrainScheduled.add(workspaceId)
+    this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
+  }
+
+  /** ONE batched candidate scan per drain (the LIKE prefilter the sweep
+   *  uses, workspace-scoped, NULL-column only), matched in JS against the
+   *  pending name set via the real grammar (which tolerates inner padding a
+   *  SQL equality can't). A drain whose workspace registry isn't primed
+   *  leaves the set intact — `applyTypesAndSchemas` re-arms it when that
+   *  workspace's registry lands. */
+  private async drainNameRederives(workspaceId: string): Promise<void> {
+    this.nameRederiveDrainScheduled.delete(workspaceId)
+    const pending = this.pendingNameRederives.get(workspaceId)
+    if (!pending || pending.size === 0) return
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+    this.pendingNameRederives.delete(workspaceId)
+    try {
+      const candidates = await this.db.getAll<{id: string; content: string}>(
+        `SELECT id, content FROM blocks
+          WHERE workspace_id = ?
+            AND reference_target_id IS NULL
+            AND (
+              (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+              OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+            )`,
+        [workspaceId],
+      )
+      const lookups = this.referenceTargetLookupsVia()
+      const updates: {id: string; scannedContent: string; targetId: string}[] = []
+      for (const row of candidates) {
+        const exact = parseExactReferenceBlockContent(row.content)
+        if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
+        const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
+        if (typeof derived === 'string') {
+          updates.push({id: row.id, scannedContent: row.content, targetId: derived})
         }
-        await this.stampReferenceTargets(updates)
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err)
-        console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
       }
-    })
+      await this.stampReferenceTargets(updates)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
+      // Re-queue so the repair isn't consumed by a transient failure.
+      const requeued = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
+      for (const name of pending) requeued.add(name)
+      this.pendingNameRederives.set(workspaceId, requeued)
+    }
   }
 
   /**
@@ -2657,6 +2704,10 @@ export class Repo {
     if (candidates.length === 0) return
 
     let unconvertible = 0
+    // Across ALL chunks: a parent whose field rows span a chunk boundary
+    // must not re-iterate its values (double-counting unconvertibles in the
+    // user-facing report).
+    const reprojectedParents = new Set<string>()
     const CHUNK = 100
     for (let i = 0; i < candidates.length; i += CHUNK) {
       const chunk = candidates.slice(i, i + CHUNK)
@@ -2676,7 +2727,6 @@ export class Repo {
             || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
         }
 
-        const reprojectedParents = new Set<string>()
         for (const candidate of chunk) {
           const fieldRow = await tx.get(candidate.id)
           if (fieldRow === null || fieldRow.deleted) continue

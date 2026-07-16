@@ -674,6 +674,12 @@ export class TxImpl implements Tx {
     if (
       isResolvedPropertySchema(resolvedSchema)
       && await this.isPropertyChildBackedWorkspace(before.workspaceId)
+      // §9 positional rule (write side): field rows and property-subtree
+      // interiors never grow nested field rows — their bag writes stay
+      // cell-only (recognition could never reclaim the nested rows).
+      && !(await this.isInsidePropertySubtree(
+        id, this.isFieldDefinitionCheckerFor(before.workspaceId),
+      ))
     ) {
       await this.writePropertyValueChild(before, resolvedSchema, value, opts)
     }

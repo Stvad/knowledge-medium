@@ -1129,24 +1129,6 @@ export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
   VALUES (?, strftime('%s', 'now') * 1000)
 `
 
-/** One-time-per-workspace markers for the LOCAL `reference_target_id`
- *  derive pass (PR #288 slice A): the column is derived per device, so a
- *  device whose `blocks` rows predate it (upgrade, or rows synced before
- *  this code shipped) runs one catch-up scan per workspace — the same-tx
- *  processor and the materializer's derive-at-arrival maintain the column
- *  incrementally from then on. Keyed
- *  `reference_target_derive:<workspaceId>:v1`. Local, never synced. */
-export const REFERENCE_TARGET_DERIVE_MARKER_PREFIX = 'reference_target_derive:'
-
-export const SELECT_REFERENCE_TARGET_DERIVE_MARKERS_SQL = `
-  SELECT key FROM client_schema_state WHERE key LIKE '${REFERENCE_TARGET_DERIVE_MARKER_PREFIX}%'
-`
-
-export const RECORD_REFERENCE_TARGET_DERIVE_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
 /** One-time post-upgrade marker: this client has re-scanned a workspace's
  *  staged `blocks_synced` rows under the relaxed reconcile gate, to heal
  *  deterministic-id shadows the old gate skip-staled (and whose change-queue

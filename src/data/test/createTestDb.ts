@@ -47,7 +47,6 @@ import {
 import {
   CLIENT_SCHEMA_STATEMENTS,
   RECONCILE_RESCAN_MARKER_PREFIX,
-  REFERENCE_TARGET_DERIVE_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
@@ -320,9 +319,6 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
-      )
-      await tx.execute(
-        `DELETE FROM client_schema_state WHERE key LIKE '${REFERENCE_TARGET_DERIVE_MARKER_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id

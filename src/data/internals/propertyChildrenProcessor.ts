@@ -28,6 +28,13 @@
  *   2. DETERMINISTIC DUPLICATE RESOLUTION — survivors are picked by
  *      `ORDER BY order_key, id`, so every replica collapses duplicates to
  *      the same rows.
+ * KNOWN single-pass wrinkle (accepted): within ONE tx, `setProperty` then a
+ * raw bag write that removes the same key nets to "no cell change" for
+ * MATERIALIZE (net-diff semantics), so the dual-write's children survive
+ * and PROJECT restores the key over the raw writer's final bag — mixed
+ * setProperty+raw shapes in one tx are order-blind. Split the writes across
+ * txs for last-write-wins semantics.
+ *
  * Also load-bearing (§5): a cell key with NO child rows at all is pending
  * materialization for the projection direction — reprojection only rebuilds
  * keys whose (parent, fieldId) was actually touched by a child change, and
@@ -47,6 +54,7 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   encodedPropertyValueToChildContent,
   getPropertyFieldTargetId,
+  isInsidePropertySubtreeWalk,
   propertiesEqual,
   propertyFieldContent,
   propertyChildContentToEncodedValue,
@@ -67,20 +75,36 @@ type ResolveNameSchema = (name: string) => (AnyPropertySchema & {fieldId: string
 interface PropertyChildrenLookups {
   resolveFieldSchema: ResolveFieldSchema
   resolveNameSchema: ResolveNameSchema
+  /** §9 positional rule for the WRITE side (adversarial-review round 2):
+   *  does this block's chain (self included) pass through a field row?
+   *  Field-row-ness here counts shadowed losers (they classify at read
+   *  sites), matching the tx-layer checker. Memoized per processor apply. */
+  isInsidePropertySubtree: (id: string | null) => Promise<boolean>
 }
 
-const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
-  resolveFieldSchema: (fieldId) => {
+const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => {
+  const isFieldDefinition = (fieldId: string): boolean => {
     const resolution = ctx.resolvePropertySchemaField(workspaceId, fieldId)
-    return resolution.status === 'resolved' ? resolution.schema : undefined
-  },
-  resolveNameSchema: (name) => {
-    const resolution = ctx.resolvePropertySchemaName(workspaceId, name)
     return resolution.status === 'resolved'
-      ? resolution.schema as ResolvedPropertySchema<unknown>
-      : undefined
-  },
-})
+      || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
+  }
+  const subtreeMemo = new Map<string, boolean>()
+  return {
+    resolveFieldSchema: (fieldId) => {
+      const resolution = ctx.resolvePropertySchemaField(workspaceId, fieldId)
+      return resolution.status === 'resolved' ? resolution.schema : undefined
+    },
+    resolveNameSchema: (name) => {
+      const resolution = ctx.resolvePropertySchemaName(workspaceId, name)
+      return resolution.status === 'resolved'
+        ? resolution.schema as ResolvedPropertySchema<unknown>
+        : undefined
+    },
+    isInsidePropertySubtree: (id) => isInsidePropertySubtreeWalk(
+      id, (rowId) => ctx.tx.get(rowId), isFieldDefinition, subtreeMemo,
+    ),
+  }
+}
 
 // ─── children → cell (project) ───────────────────────────────────────────
 
@@ -166,6 +190,11 @@ const reprojectParentField = async (
 
   const parent = await tx.get(affected.parentId)
   if (parent === null || parent.deleted) return
+  // §9 positional rule: only CONTENT blocks host field rows. A ref-typed
+  // VALUE child pointing at a definition looks exactly like a field row of
+  // its (interior) parent — projecting there would parse its comments as
+  // property values and write a junk key into a synced cell.
+  if (await lookups.isInsidePropertySubtree(parent.id)) return
 
   const children = await tx.childrenOf(affected.parentId, undefined, {includePropertyChildren: true})
   const fieldRows = fieldRowsForSchema(children, affected.fieldId)
@@ -297,6 +326,11 @@ const materializePropertiesForChangedRow = async (
   lookups: PropertyChildrenLookups,
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
+  // §9 positional rule: field rows and property-subtree interiors never
+  // grow NESTED field rows — a bag write on a field/value row (e.g. a
+  // UiState prop like system:collapsed once §6 migrates every scope) stays
+  // cell-only there; recognition could never reclaim the nested rows.
+  if (await lookups.isInsidePropertySubtree(row.after.id)) return
   const changedNames = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
   await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changedNames)
 }

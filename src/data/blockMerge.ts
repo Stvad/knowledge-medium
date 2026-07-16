@@ -134,6 +134,16 @@ export const mergeBlocksInTx = async (
       } else {
         // Tree-only value text (unparseable / shadowed / merge-losing):
         // deleting it would be silent data loss in effect — surface it.
+        // Clear the derived column FIRST (adversarial-review round 2): a
+        // ref-typed/wikilink value carries a definition-shaped
+        // reference_target_id, and relocated under ordinary content it
+        // would classify as a field row of `into` — hidden by the outline
+        // predicate and re-projected over the merged bag in this very tx.
+        // The column is derived state; the next content edit re-derives it
+        // under the row's new (ordinary-content) role.
+        if ((value.referenceTargetId ?? null) !== null) {
+          await tx.update(value.id, {referenceTargetId: null}, {skipMetadata: true})
+        }
         await relocateUnderInto(value.id)
       }
     }

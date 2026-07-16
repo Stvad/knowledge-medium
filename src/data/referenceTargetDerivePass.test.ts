@@ -138,22 +138,23 @@ describe('reference-target initial derive pass', () => {
     expect(crud).toEqual([])
   })
 
-  it('runs once per workspace (marker-gated) and never overwrites a derived value', async () => {
+  it('runs once per workspace PER SESSION; a fresh open sweeps again', async () => {
     await seedRow({id: 'block-ref', content: '((some-target))'})
     const repo = setup()
     await runPass(repo)
     expect(await readColumn('block-ref')).toBe('some-target')
 
-    const markers = await sharedDb.db.getAll<{key: string}>(
-      "SELECT key FROM client_schema_state WHERE key LIKE 'reference_target_derive:%'",
-    )
-    expect(markers).toEqual([{key: `reference_target_derive:${WS}:v1`}])
-
-    // A later row with the same shape stays untouched by a re-schedule (the
-    // marker short-circuits; incremental paths own it from here).
+    // Same session: a re-schedule is a no-op (incremental paths own it).
     await seedRow({id: 'late-row', content: '((late-target))', updatedAt: 2000})
     await runPass(repo)
     expect(await readColumn('late-row')).toBeNull()
+
+    // A new open (new Repo) sweeps again — definitions/aliases that arrived
+    // while the app was closed are repaired at the next open (adversarial-
+    // review round 2: a durable once-ever marker missed them forever).
+    const repo2 = setup()
+    await runPass(repo2)
+    expect(await readColumn('late-row')).toBe('late-target')
   })
 
   it('skips without a marker when the registry is not this workspace (retries next open)', async () => {
@@ -175,9 +176,12 @@ describe('reference-target initial derive pass', () => {
   it('re-derives [[name]] rows when their definition is ADDED later (§9 repair)', async () => {
     // Row typed before the schema existed: derives to NULL. Creating the
     // definition afterwards must repair it via the registry-rebuild seam.
+    // The repair only accumulates AFTER the per-open sweep ran (pre-sweep,
+    // the sweep itself covers every name), so run the sweep first.
     await seedRow({id: 'early-ref', content: '[[late-schema]]'})
     const repo = setup()
-    await repo.whenPropertyDefinitionsReady(WS)
+    await runPass(repo)
+    expect(await readColumn('early-ref')).toBeNull()
 
     vi.useFakeTimers()
     repo.setRuntimeContributions(

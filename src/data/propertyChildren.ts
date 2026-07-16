@@ -168,14 +168,22 @@ export const isInsidePropertySubtreeWalk = async (
   memo: Map<string, boolean>,
 ): Promise<boolean> => {
   const walked: string[] = []
+  const onPath = new Set<string>()
   let currentId: string | null = startId
   let result: boolean | undefined
   while (currentId !== null) {
+    // Sync-introduced parent_id cycles are an accepted-reachable DB state
+    // (detection-only telemetry, issue #183); every sibling walker guards
+    // (SUBTREE_SQL's INSTR check, replayApplicationOrder's onPath set, the
+    // SQL twin's depth cap). Treat a revisit — or pathological depth — as
+    // "not inside" and stop, mirroring the SQL predicate's depth < 100.
+    if (onPath.has(currentId) || walked.length >= 100) { result = false; break }
     const cached = memo.get(currentId)
     if (cached !== undefined) { result = cached; break }
     const row = await getRow(currentId)
     if (row === null) { result = false; break }
     walked.push(currentId)
+    onPath.add(currentId)
     if (isPropertyFieldInstance(row, isFieldDefinition)) {
       result = true
       break

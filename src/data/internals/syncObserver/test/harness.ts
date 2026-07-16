@@ -112,6 +112,8 @@ export interface StartObserverOpts {
   /** Derive-at-arrival lookups (PR #288 slice A). Omitted by default so
    *  storage-focused tests skip derivation, mirroring the prod-optional dep. */
   referenceTargetLookups?: MaterializeDeps['referenceTargetLookups']
+  /** §9 alias-repair hook passthrough (deferred executor lives on Repo). */
+  onAliasTargetsAdded?: MaterializeDeps['onAliasTargetsAdded']
 }
 
 export interface StartedObserver {
@@ -152,6 +154,7 @@ export const setupObserverTestDb = () => {
         getMaterializability: opts.getMaterializability,
         getCek: opts.getCek ?? noKey,
         referenceTargetLookups: opts.referenceTargetLookups,
+        onAliasTargetsAdded: opts.onAliasTargetsAdded,
       },
       onCycleDetected: opts.onCycleDetected,
       throttleMs: opts.throttleMs ?? 5,

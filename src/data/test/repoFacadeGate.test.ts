@@ -129,6 +129,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runWorkspaceSeedMaterialization: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runSubquery: 'private read',
   runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
@@ -211,7 +212,9 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   workspaceBackfillMarkers: 'shared object',
   referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
-  referenceTargetDeriveMarkers: 'shared object',
+  referenceTargetSweepDone: 'shared Set (session bookkeeping)',
+  pendingNameRederives: 'shared Map (session bookkeeping)',
+  nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
   propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
 }
 

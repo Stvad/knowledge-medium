@@ -124,7 +124,7 @@ export const WORKSPACES_RAW_TABLE = {
   },
 } satisfies RawTableType
 
-const PROPERTIES_MIGRATION_STATES: readonly PropertiesMigrationState[] =
+export const PROPERTIES_MIGRATION_STATES: readonly PropertiesMigrationState[] =
   ['cell', 'children', 'cell-off']
 
 /** Absent (old sync rules / pre-migration rows) and unrecognized values
