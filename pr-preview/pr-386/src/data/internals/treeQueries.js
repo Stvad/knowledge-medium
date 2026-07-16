@@ -99,5 +99,48 @@ var e=`
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
-`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql};
+`,s=`
+   AND (
+     blocks.reference_target_id IS NULL
+     OR NOT EXISTS (
+       SELECT 1 FROM workspaces w
+        WHERE w.id = blocks.workspace_id
+          AND w.properties_migration IN ('children', 'cell-off')
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM block_types bt
+        WHERE bt.block_id = blocks.reference_target_id
+          AND bt.type = 'property-schema'
+     )
+     OR EXISTS (
+       WITH RECURSIVE up(id, reference_target_id, parent_id, depth) AS (
+         SELECT id, reference_target_id, parent_id, 0
+           FROM blocks WHERE id = ?
+         UNION ALL
+         SELECT b.id, b.reference_target_id, b.parent_id, up.depth + 1
+           FROM blocks AS b
+           JOIN up ON b.id = up.parent_id
+          WHERE up.depth < 100
+       )
+       SELECT 1 FROM up
+        WHERE up.reference_target_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM block_types bt2
+             WHERE bt2.block_id = up.reference_target_id
+               AND bt2.type = 'property-schema'
+          )
+        LIMIT 1
+     )
+   )
+`,c=`
+  SELECT * FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${s}
+   ORDER BY order_key, id
+`,l=`
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${s}
+   ORDER BY order_key, id
+`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,l as VISIBLE_CHILDREN_IDS_SQL,c as VISIBLE_CHILDREN_SQL,i as cycleScanSql,n as manyAncestorsSql};
 //# sourceMappingURL=treeQueries.js.map
