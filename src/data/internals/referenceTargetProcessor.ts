@@ -37,6 +37,18 @@ export interface ReferenceTargetLookups {
   /** Generic alias fallback (`block_aliases` index): target block id, or
    *  null when nothing claims the alias. */
   aliasTargetId(alias: string, workspaceId: string): Promise<string | null>
+  /** Whether the schema-name tier can actually SEE this workspace's
+   *  definitions right now. The registry is scoped to the active/previous
+   *  workspace, so for a background workspace `resolveSchemaFieldId` fails
+   *  CLOSED — and stamping the alias fallback then would bind `[[status]]`
+   *  to a page even though a definition named "status" exists; nothing
+   *  later corrects it (the per-open sweep scans NULL columns only).
+   *  Callers on paths with no same-tx registry guarantee (derive-at-arrival)
+   *  must skip `[[alias]]` derivation entirely when this returns false and
+   *  leave the column NULL for the per-open sweep. Optional: seams that
+   *  guarantee a primed registry (the same-tx processor — `repo.tx` awaits
+   *  `whenPropertyDefinitionsReady`) omit it. */
+  schemaTierReady?(workspaceId: string): boolean
 }
 
 /** Derive the target for `content`, or:
@@ -53,6 +65,13 @@ export const deriveReferenceTargetId = async (
   if (!exact) return null
   if (exact.kind === 'blockRef') return exact.id
 
+  // Blind schema tier → the whole `[[alias]]` derivation defers (returns
+  // "unresolvable"), INCLUDING the DB-backed alias fallback: stamping the
+  // alias now would lose the winner race against a definition this client
+  // just can't see yet, and non-NULL stamps are never revisited. NULL is
+  // repaired by the per-open sweep once the registry primes.
+  if (lookups.schemaTierReady?.(workspaceId) === false) return undefined
+
   const fieldId = lookups.resolveSchemaFieldId(workspaceId, exact.alias)
   if (fieldId !== null) return fieldId
 
@@ -60,7 +79,16 @@ export const deriveReferenceTargetId = async (
   return aliasTarget ?? undefined
 }
 
-const txLookups = (
+/** Build the `ReferenceTargetLookups` for a same-tx processor: schema-name
+ *  resolution from the tx-start-snapshotted registry (`ctx.resolvePropertySchemaName`),
+ *  alias fallback from `tx.aliasLookup`. Shared by the derive processor
+ *  itself and by plugin same-tx processors that rewrite `content` AFTER
+ *  derivation already ran (merge retarget, deleted-block inlining) and so
+ *  must recompute the column inline rather than leave it describing
+ *  pre-rewrite content. No `schemaTierReady` gate: same-tx processors run
+ *  after `repo.tx` awaits `whenPropertyDefinitionsReady`, so the registry is
+ *  always primed here. */
+export const sameTxReferenceTargetLookups = (
   tx: Tx,
   resolvePropertySchemaName: (
     workspaceId: string,
@@ -79,7 +107,7 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
   name: DERIVE_REFERENCE_TARGET_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['content']},
   apply: async (event, ctx) => {
-    const lookups = txLookups(ctx.tx, ctx.resolvePropertySchemaName)
+    const lookups = sameTxReferenceTargetLookups(ctx.tx, ctx.resolvePropertySchemaName)
     for (const changed of event.changedRows) {
       const row = changed.after
       // Tombstoned rows derive too (matches the arrival path): a content

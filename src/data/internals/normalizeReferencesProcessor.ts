@@ -62,20 +62,25 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
   },
 })
 
-// Single pass, registration order (PR #285 spike order, kept deliberately):
-// materialize (cell→children) runs first so a raw cell write's fresh
-// field/value rows are visible to the derive + project passes in the same
-// tx; derive stamps `reference_target_id` next so the projection's
-// changed-row scan sees the final column; project (children→cell) runs
-// after both so a tree-side edit reprojects from settled children. Each
-// write is idempotent, so a dual-write round-trip through the trio no-ops.
+// Single pass, registration order. Block-type typeify runs FIRST: its bag
+// amendments (page type, label, aliases) are raw/setProperty cell writes,
+// and in a child-backed workspace those must still be ahead of materialize
+// or the value children go stale until an unrelated edit (PR #386 review).
+// The residual trade: a transition-into-block-type written by PROJECT
+// itself (hand-editing a hidden `types` VALUE row) no longer re-fires
+// typeify this tx — machinery-row surgery, self-heals on the next bag
+// write. Then the §5 trio: materialize (cell→children) before derive so a
+// raw cell write's fresh field/value rows get their column stamped in the
+// same tx; project (children→cell) after both so a tree-side edit
+// reprojects from settled children. Each write is idempotent, so a
+// dual-write round-trip through the trio no-ops. Typeify still precedes
+// the alias plugin's content<->alias sync (kernel before plugins), so a
+// freshly-tagged block-type block claims its label alias before any
+// reconciliation.
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
+  ...BLOCK_TYPE_KERNEL_PROCESSORS,
   MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   DERIVE_REFERENCE_TARGET_PROCESSOR,
   PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
-  // Runs ahead of the alias plugin's content<->alias sync (kernel
-  // processors precede plugin ones), so a freshly-tagged block-type
-  // block claims its label alias before any reconciliation.
-  ...BLOCK_TYPE_KERNEL_PROCESSORS,
 ]

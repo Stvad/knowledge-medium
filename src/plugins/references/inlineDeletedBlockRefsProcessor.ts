@@ -35,8 +35,12 @@ import {
   type BlockData,
   type BlockReference,
   type CoreBlockDeletedEvent,
-  type Tx,
+  type SameTxCtx,
 } from '@/data/api'
+import {
+  deriveReferenceTargetId,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
 import { inlineBlockRefs } from './referenceParser.ts'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
@@ -90,11 +94,12 @@ const resolveInlineContent = (
 }
 
 const inlineSource = async (
-  tx: Tx,
+  ctx: SameTxCtx,
   sourceId: string,
   deletedId: string,
   inlineContent: string,
 ): Promise<void> => {
+  const tx = ctx.tx
   // Re-read staged state: the source may itself have been deleted earlier
   // in this same tx (subtree delete). It's then excluded by the SQL's
   // `source.deleted = 0` filter too, but a referrer queued from an earlier
@@ -108,8 +113,24 @@ const inlineSource = async (
     current.references.filter(ref => !isContentBlockRefTo(ref, deletedId)),
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'references'>> = {}
-  if (nextContent !== current.content) patch.content = nextContent
+  const patch: Partial<Pick<BlockData, 'content' | 'references' | 'referenceTargetId'>> = {}
+  if (nextContent !== current.content) {
+    patch.content = nextContent
+    // `core.deriveReferenceTarget` already ran earlier in this same tx pass
+    // and stamped the column from the PRE-inline content. A whole-block
+    // `((deletedId))` row would otherwise keep `referenceTargetId:
+    // deletedId` even though content is now plain inlined text (or,
+    // rarely, itself an exact reference) — recompute from the rewritten
+    // content so the column and content never disagree.
+    const lookups = sameTxReferenceTargetLookups(tx, ctx.resolvePropertySchemaName)
+    const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
+    // Always an update of an existing row (never a create): an
+    // unresolvable alias (`undefined`) clears the column.
+    const nextTargetId = derived ?? null
+    if ((current.referenceTargetId ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+  }
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
   }
@@ -146,7 +167,7 @@ export const inlineDeletedBlockRefsProcessor = defineSameTxProcessor({
         blockId, deletedContent, memo, new Set(),
       )
       for (const {id} of sourceRows) {
-        await inlineSource(ctx.tx, id, blockId, inlineContent)
+        await inlineSource(ctx, id, blockId, inlineContent)
       }
     }
   },

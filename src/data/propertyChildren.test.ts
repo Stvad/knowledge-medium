@@ -13,6 +13,14 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { mergeBlocksInTx } from './blockMerge'
 import type { Repo } from './repo'
+import {
+  encodedPropertyValueToChildContent,
+  propertyChildContentToEncodedValue,
+  propertyValueToChildContent,
+} from './propertyChildren'
+import { propertyDefinitionBlockId } from './definitionSeeds'
+import { addBlockTypeToProperties, aliasesProp, blockTypeLabelProp, typesProp } from './properties'
+import { BLOCK_TYPE_TYPE } from './blockTypes'
 
 const WS = 'ws-prop-children'
 const STATUS_FIELD_ID = 'field-status-children'
@@ -599,5 +607,247 @@ describe('query-layer twin (core.childIds / core.children)', () => {
 
     const ids = await repo.runQuery('core.childIds', {id: 'p'})
     expect(ids).toEqual(['ref-child'])
+  })
+})
+
+describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)', () => {
+  const setupFlippedWithDefinition = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await createBlock(repo, 'p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'content-child', workspaceId: WS, parentId: 'p', orderKey: 'm', content: 'note',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    return repo
+  }
+
+  it('default excludes the field row and its value child; machinery opts in', async () => {
+    const repo = await setupFlippedWithDefinition()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+    const visible = await repo.query.subtree({id: 'p'}).load()
+    expect(visible.map(r => r.id).sort()).toEqual(['content-child', 'p'])
+
+    const all = await repo.query.subtree({id: 'p', includePropertyChildren: true}).load()
+    expect(all).toHaveLength(4)
+    expect(all.map(r => r.id)).toEqual(expect.arrayContaining([field!.id, value!.id]))
+  })
+
+  it('un-flipped workspace: subtree unchanged, including a row with a stamped reference_target_id (dormancy)', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await seedDefinitionBlock(repo)
+    await createBlock(repo, 'p')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'ref-child', workspaceId: WS, parentId: 'p', orderKey: 'a',
+        content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const rows = await repo.query.subtree({id: 'p'}).load()
+    expect(rows.map(r => r.id).sort()).toEqual(['p', 'ref-child'])
+  })
+
+  it('subtree rooted AT the field row returns the field row + its value child (root exemption)', async () => {
+    const repo = await setupFlippedWithDefinition()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+
+    const rows = await repo.query.subtree({id: field!.id}).load()
+    expect(rows.map(r => r.id).sort()).toEqual([field!.id, value!.id].sort())
+  })
+
+  it('subtree rooted at the VALUE child returns it plus comment children, including a ref-typed comment (interior root exemption)', async () => {
+    const repo = await setupFlippedWithDefinition()
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    // A comment beneath the value child, itself ref-typed at the definition
+    // block — the exact "stamped ref-typed VALUE row further down" shape
+    // §9 says must never be pruned once the root is interior.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'comment', workspaceId: WS, parentId: value!.id, orderKey: 'a',
+        content: `((${STATUS_FIELD_ID}))`, referenceTargetId: STATUS_FIELD_ID,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const rows = await repo.query.subtree({id: value!.id}).load()
+    expect(rows.map(r => r.id).sort()).toEqual(['comment', value!.id].sort())
+  })
+})
+
+describe('content <-> value codecs: "null"-collision escaping (PR #386 review fix)', () => {
+  // string-typed, null-accepting codec — the shape that exposed the bug:
+  // an unescaped literal 'null' child content is ambiguous with the
+  // encoded-null sentinel.
+  const nullableStringSchema = defineProperty<string | undefined>('nullable-status', {
+    codec: codecs.optionalString,
+    defaultValue: undefined,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('the string value "null" is escaped to content, and round-trips back to the string', () => {
+    const content = propertyValueToChildContent(nullableStringSchema, 'null')
+    expect(content).toBe(JSON.stringify('null'))
+    expect(content).not.toBe('null')
+    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe('null')
+  })
+
+  it('the string value " null " (trims to the token) round-trips', () => {
+    const content = propertyValueToChildContent(nullableStringSchema, ' null ')
+    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe(' null ')
+  })
+
+  it('the string value \'"null"\' (a quoted-null literal) round-trips', () => {
+    const content = propertyValueToChildContent(nullableStringSchema, '"null"')
+    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBe('"null"')
+  })
+
+  it('encoded null still materializes as content "null" and parses back to encoded null', () => {
+    const content = encodedPropertyValueToChildContent(nullableStringSchema, null)
+    expect(content).toBe('null')
+    expect(propertyChildContentToEncodedValue(nullableStringSchema, content)).toBeNull()
+  })
+
+  it('ordinary strings are stored verbatim, unchanged', () => {
+    expect(propertyValueToChildContent(nullableStringSchema, 'hello')).toBe('hello')
+    expect(propertyChildContentToEncodedValue(nullableStringSchema, 'hello')).toBe('hello')
+
+    const withQuotes = 'say "hi"'
+    expect(propertyValueToChildContent(nullableStringSchema, withQuotes)).toBe(withQuotes)
+    expect(propertyChildContentToEncodedValue(nullableStringSchema, withQuotes)).toBe(withQuotes)
+  })
+
+  it('a non-null-accepting string schema stores "null" verbatim — no escaping needed', () => {
+    // statusSchema (codecs.string) throws on decode(null), so the sentinel
+    // never applies to it and there's nothing to escape.
+    const content = propertyValueToChildContent(statusSchema, 'null')
+    expect(content).toBe('null')
+    expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('root rows are never filtered (§9 root exemption, WRITE-side)', () => {
+  it('a root block whose content is [[status]] still appears in tx.childrenOf(null, ws)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'root-status', workspaceId: WS, parentId: null, orderKey: 'r0',
+        content: '[[status]]',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The derive processor stamped this root row's reference_target_id to
+    // the registered `status` schema's fieldId in the same tx — it looks
+    // exactly like a field row by column, but a root row is positionally
+    // user content, never a field row (nothing OWNS it).
+    const stamped = await sharedDb.db.get<{reference_target_id: string | null}>(
+      'SELECT reference_target_id FROM blocks WHERE id = ?', ['root-status'],
+    )
+    expect(stamped.reference_target_id).toBe(STATUS_FIELD_ID)
+
+    await repo.tx(async tx => {
+      const roots = await tx.childrenOf(null, WS)
+      expect(roots.map(r => r.id)).toContain('root-status')
+    }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
+describe('same-tx content flip to [[schema]] stays cell-only (prospective-field-row gate, PR #386 review)', () => {
+  it('update(content → [[status]]) then setProperty in ONE tx nests no machinery under the flipping block', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'host')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'p', workspaceId: WS, parentId: 'host', orderKey: 'a', content: 'ordinary',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Both writes in the SAME tx: the content flip makes `p` a prospective
+    // field row (its stored reference_target_id is still stale — derive
+    // runs after the user fn AND after materialize), so both the
+    // setProperty dual-write and the materialize processor must recognize
+    // it from CONTENT and keep the property write cell-only. Pre-fix,
+    // machinery nested a `[[status]]` field row under a row about to
+    // become a field row itself — unreclaimable.
+    await repo.tx(async tx => {
+      await tx.update('p', {content: '[[status]]'})
+      await tx.setProperty('p', statusSchema, 'v')
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The flip landed (derive stamped the column from the new content)…
+    const row = await sharedDb.db.get<{reference_target_id: string | null}>(
+      'SELECT reference_target_id FROM blocks WHERE id = ?', ['p'],
+    )
+    expect(row.reference_target_id).toBe(STATUS_FIELD_ID)
+    // …the cell carries the property…
+    expect(await cellValue('p')).toBe('v')
+    // …and NO field/value machinery was nested under the block.
+    expect(await childrenRows('p')).toEqual([])
+  })
+
+  it('root exemption: a ROOT block with content [[status]] still materializes its bag (root rows are never field rows)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'root-p', '[[status]]')
+
+    // A root row is positionally user content — the prospective-field-row
+    // gate must NOT suppress its materialization: the setProperty
+    // dual-write still creates the backing field row + value child.
+    await repo.tx(tx => tx.setProperty('root-p', statusSchema, 'v'),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('root-p')).toBe('v')
+    const fields = await liveFieldRows('root-p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.content).toBe('[[status]]')
+    const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
+    expect(values.map(v => v.content)).toEqual(['v'])
+  })
+})
+
+describe('block-type typeify amendments materialize in the same tx (§5/§9 processor-order fix)', () => {
+  it('types, block-type:label, and alias each get a backing field row + value child', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    // Tag a fresh block block-type — the same-tx typeify processor (registered
+    // FIRST in KERNEL_SAME_TX_PROCESSORS) amends its bag with PAGE_TYPE (raw
+    // `types` write), a label, and an alias — all bag writes that, in a
+    // flipped workspace, the materialize processor (registered right after
+    // typeify, ahead of derive) must dual-write into field/value children in
+    // this SAME tx rather than leaving them pending until the next edit.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'book', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Book',
+        properties: addBlockTypeToProperties({}, BLOCK_TYPE_TYPE),
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The seeded kernel property definitions (types / alias / block-type
+    // label) resolve by code-owned identity — no DB materialization of the
+    // definition blocks themselves is required for `setProperty` /
+    // `tx.update({properties})` to dual-write against their fieldId.
+    const fieldIds: Record<string, string> = {
+      types: propertyDefinitionBlockId(WS, typesProp.seedKey),
+      alias: propertyDefinitionBlockId(WS, aliasesProp.seedKey),
+      'block-type:label': propertyDefinitionBlockId(WS, blockTypeLabelProp.seedKey),
+    }
+    for (const [name, fieldId] of Object.entries(fieldIds)) {
+      const fields = (await childrenRows('book')).filter(
+        c => c.deleted === 0 && c.reference_target_id === fieldId,
+      )
+      expect(fields, `${name} field row`).toHaveLength(1)
+      const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
+      expect(values.length, `${name} value child`).toBeGreaterThan(0)
+    }
   })
 })

@@ -100,6 +100,69 @@ describe('references.retargetMergedBlockReferences', () => {
     ]))
   })
 
+  // Regression (PR #386 review): `core.deriveReferenceTarget` runs earlier
+  // in the same-tx processor pass (kernel processors precede plugin ones)
+  // and stamps `referenceTargetId` from the PRE-retarget content. Without
+  // recomputing it here, a whole-block `((old))` row would keep
+  // `referenceTargetId: old` even after its content became `((new))`.
+  describe('referenceTargetId', () => {
+    it('recomputes referenceTargetId when retargeting stamps a whole-block reference', async () => {
+      const intoId = '44444444-4444-4444-8444-444444444444'
+      const fromId = '55555555-5555-4555-8555-555555555555'
+      const wholeRefId = '66666666-6666-4666-8666-666666666666'
+
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'p2', workspaceId: WS, parentId: null, orderKey: 'b0'})
+        await tx.create({id: intoId, workspaceId: WS, parentId: 'p2', orderKey: 'b0', content: 'Target'})
+        await tx.create({id: fromId, workspaceId: WS, parentId: 'p2', orderKey: 'b1', content: 'Source'})
+        await tx.create({
+          id: wholeRefId,
+          workspaceId: WS,
+          parentId: 'p2',
+          orderKey: 'b2',
+          content: `((${fromId}))`,
+          references: [{id: fromId, alias: fromId}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+
+      expect(env.read(wholeRefId)!.referenceTargetId).toBe(fromId)
+
+      await env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'})
+
+      expect(env.read(wholeRefId)!.content).toBe(`((${intoId}))`)
+      expect(env.read(wholeRefId)!.referenceTargetId).toBe(intoId)
+    })
+
+    it('leaves referenceTargetId null for a partial-content occurrence retargeted by a merge', async () => {
+      const intoId = '77777777-7777-4777-8777-777777777777'
+      const fromId = '88888888-8888-4888-8888-888888888888'
+      const partialRefId = '99999999-9999-4999-8999-999999999999'
+
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'p3', workspaceId: WS, parentId: null, orderKey: 'c0'})
+        await tx.create({id: intoId, workspaceId: WS, parentId: 'p3', orderKey: 'c0', content: 'Target'})
+        await tx.create({id: fromId, workspaceId: WS, parentId: 'p3', orderKey: 'c1', content: 'Source'})
+        await tx.create({
+          id: partialRefId,
+          workspaceId: WS,
+          parentId: 'p3',
+          orderKey: 'c2',
+          content: `see ((${fromId})) here`,
+          references: [{id: fromId, alias: fromId}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+
+      expect(env.read(partialRefId)!.referenceTargetId).toBeNull()
+
+      await env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'})
+
+      expect(env.read(partialRefId)!.content).toBe(`see ((${intoId})) here`)
+      expect(env.read(partialRefId)!.referenceTargetId).toBeNull()
+    })
+  })
+
   it('uses alias rewrite metadata from alias-collision merges', async () => {
     await env.repo.tx(async tx => {
       await tx.create({

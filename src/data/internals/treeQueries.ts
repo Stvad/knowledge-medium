@@ -283,6 +283,10 @@ const VISIBLE_CHILD_PREDICATE_SQL = `
        )
        SELECT 1 FROM up
         WHERE up.reference_target_id IS NOT NULL
+          -- §9 root half: a workspace-root row is never a field row, so it
+          -- never makes its descendants "interior" (twin of the parentId
+          -- check in isPropertyFieldInstance).
+          AND up.parent_id IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM block_types bt2
              WHERE bt2.block_id = up.reference_target_id
@@ -309,4 +313,103 @@ export const VISIBLE_CHILDREN_IDS_SQL = `
    WHERE parent_id = ? AND deleted = 0
 ${VISIBLE_CHILD_PREDICATE_SQL}
    ORDER BY order_key, id
+`
+
+/**
+ * VISIBLE-subtree form of {@link SUBTREE_SQL} (PR #288 §9, slice C gap fix):
+ * a flipped workspace's hidden property field/value machinery must not leak
+ * into subtree consumers (panels, copy, navigation, shortcuts) any more than
+ * it leaks into the outline. The recursive descent refuses to step INTO a
+ * recognized field-row child — same recognition predicate as
+ * {@link VISIBLE_CHILD_PREDICATE_SQL} (flip probe on the child's workspace +
+ * a workspace-scoped `block_types = 'property-schema'` probe on the child's
+ * `reference_target_id`). Pruning happens AT the field row, so its entire
+ * subtree (value child, comments, everything) is excluded in one step —
+ * no per-descendant interior re-check is needed once a branch is pruned.
+ *
+ * Root exemptions, evaluated ONCE for the root id via `root_exempt` (a
+ * scalar CTE wrapping the same `up`-ancestry-walk pattern
+ * VISIBLE_CHILD_PREDICATE_SQL uses, just seeded at the root instead of a
+ * parent): if the ROOT itself is a recognized field row, or the root is
+ * interior (some strict ancestor of the root is a recognized field row),
+ * the raw subtree is returned unfiltered. Both cases are "the caller
+ * explicitly asked for property-subtree content" — §9 guarantees nothing
+ * below a field row is ever itself another field row, so a stamped
+ * ref-typed VALUE row further down a property subtree must never be
+ * pruned. `root_exempt` is OR'd into the recursive descend condition so it
+ * short-circuits the rest of the predicate once true.
+ *
+ * Bind `[rootId, rootId]` — one for the `root_exempt` ancestry seed, one
+ * for the `subtree` seed (same convention as `[parentId, parentId]` on the
+ * VISIBLE_CHILDREN_* pair above). Same selected columns + depth semantics
+ * as SUBTREE_SQL; the `INDEXED BY` planner-pin note there applies here too.
+ *
+ * An un-flipped workspace short-circuits on the `workspaces` probe exactly
+ * like VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).
+ */
+export const VISIBLE_SUBTREE_SQL = `
+  WITH RECURSIVE
+  root_exempt(v) AS (
+    SELECT CASE WHEN EXISTS (
+      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
+        SELECT id, reference_target_id, parent_id, workspace_id, 0
+          FROM blocks WHERE id = ?
+        UNION ALL
+        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+          FROM blocks AS b
+          JOIN up ON b.id = up.parent_id
+         WHERE up.depth < 100
+      )
+      SELECT 1 FROM up
+       WHERE up.reference_target_id IS NOT NULL
+         -- §9 root half: a workspace-root row is never a field row (twin
+         -- of the parentId check in isPropertyFieldInstance).
+         AND up.parent_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM workspaces w
+            WHERE w.id = up.workspace_id
+              AND w.properties_migration IN ('children', 'cell-off')
+         )
+         AND EXISTS (
+           SELECT 1 FROM block_types bt
+            WHERE bt.block_id = up.reference_target_id
+              AND bt.type = 'property-schema'
+              AND bt.workspace_id = up.workspace_id
+         )
+       LIMIT 1
+    ) THEN 1 ELSE 0 END
+  ),
+  subtree AS (
+    SELECT *,
+           '!' || hex(id) || '/' AS path,
+           0 AS depth
+      FROM blocks
+     WHERE id = ? AND deleted = 0
+    UNION ALL
+    SELECT child.*,
+           subtree.path || child.order_key || '!' || hex(child.id) || '/',
+           subtree.depth + 1
+      FROM subtree
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
+     WHERE child.deleted = 0
+       AND subtree.depth < 100
+       AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
+       AND (
+         (SELECT v FROM root_exempt) = 1
+         OR child.reference_target_id IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM workspaces w
+            WHERE w.id = child.workspace_id
+              AND w.properties_migration IN ('children', 'cell-off')
+         )
+         OR NOT EXISTS (
+           SELECT 1 FROM block_types bt
+            WHERE bt.block_id = child.reference_target_id
+              AND bt.type = 'property-schema'
+              AND bt.workspace_id = child.workspace_id
+         )
+       )
+  )
+  SELECT * FROM subtree ORDER BY path
 `

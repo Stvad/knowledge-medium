@@ -547,11 +547,14 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
   // would reset encryption_mode/wk_canary to their column defaults
   // (none/null) — nulling a synced canary in the RPC-before-sync window and
   // making an E2EE workspace look plaintext on a fresh create until sync
-  // catches up (§7).
+  // catches up (§7). Same reasoning for properties_migration: dropping it
+  // would locally reset a flipped workspace to 'cell', silently routing
+  // property writes down the cell-only path until PowerSync replays the row.
   await repo.db.execute(
     `INSERT OR REPLACE INTO workspaces
-       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+        properties_migration)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       workspace.id,
       workspace.name,
@@ -560,6 +563,7 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
       workspace.updateTime,
       workspace.encryptionMode,
       workspace.wkCanary,
+      workspace.propertiesMigration,
     ],
   )
 }

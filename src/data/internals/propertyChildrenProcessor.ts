@@ -59,6 +59,7 @@ import {
   propertyFieldContent,
   propertyChildContentToEncodedValue,
 } from '@/data/propertyChildren'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import { jsonValuesEqual } from './jsonCanonical'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
@@ -80,6 +81,14 @@ interface PropertyChildrenLookups {
    *  Field-row-ness here counts shadowed losers (they classify at read
    *  sites), matching the tx-layer checker. Memoized per processor apply. */
   isInsidePropertySubtree: (id: string | null) => Promise<boolean>
+  /** Will `core.deriveReferenceTarget` stamp this row as a field row at
+   *  commit? Content-based twin of the stored-column recognition — this
+   *  processor runs BEFORE derive in the same-tx chain, so a row whose
+   *  content was just rewritten to `[[schema]]` still carries a stale
+   *  column that `isInsidePropertySubtree`'s first step would misread
+   *  (PR #386 review; mirrors `TxImpl.isProspectiveFieldRow`, including
+   *  the root exemption — root rows are never field rows). */
+  isProspectiveFieldRow: (row: Pick<BlockData, 'content' | 'parentId'>) => boolean
 }
 
 const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => {
@@ -103,6 +112,14 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
     isInsidePropertySubtree: (id) => isInsidePropertySubtreeWalk(
       id, (rowId) => ctx.tx.get(rowId), isFieldDefinition, subtreeMemo,
     ),
+    isProspectiveFieldRow: (row) => {
+      if (row.parentId === null) return false
+      const exact = parseExactReferenceBlockContent(row.content)
+      if (!exact) return false
+      if (exact.kind === 'blockRef') return isFieldDefinition(exact.id)
+      const resolution = ctx.resolvePropertySchemaName(workspaceId, exact.alias)
+      return resolution.status === 'resolved'
+    },
   }
 }
 
@@ -331,6 +348,12 @@ const materializePropertiesForChangedRow = async (
   // UiState prop like system:collapsed once §6 migrates every scope) stays
   // cell-only there; recognition could never reclaim the nested rows.
   if (await lookups.isInsidePropertySubtree(row.after.id)) return
+  // The walk above reads the STORED column — stale for a row whose content
+  // was rewritten to `[[schema]]` earlier in this tx (this processor runs
+  // BEFORE derive). Content-based twin of the same gate in tx.setProperty
+  // (PR #386 review): a row about to be stamped as a field row must stay
+  // cell-only, or we'd nest machinery it can never reclaim.
+  if (lookups.isProspectiveFieldRow(row.after)) return
   const changedNames = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
   await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changedNames)
 }

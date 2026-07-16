@@ -39,9 +39,18 @@ export type IsPropertyFieldDefinition = (fieldId: string) => boolean
  *  gate and the ancestry rule (positional; traversals know it from
  *  context). */
 export const isPropertyFieldInstance = (
-  data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
+  data: Pick<BlockData, 'referenceTargetId' | 'parentId'> | null | undefined,
   isFieldDefinition: IsPropertyFieldDefinition,
 ): boolean => {
+  // §9 positional rule, root half: a field row is a CHILD of the block
+  // that owns the property — a workspace-root row is user content no
+  // matter what its column resolves to (its stamp is just content
+  // recognition). Without this, a stamped root `[[status]]` row classifies
+  // as machinery, the write-side walks call it "inside a property
+  // subtree", and its own bag can never materialize children (PR #386
+  // review follow-up). The SQL twins carry the same `parent_id IS NOT
+  // NULL` clause.
+  if (data?.parentId === null) return false
   const fieldId = getPropertyFieldTargetId(data)
   return fieldId !== undefined && isFieldDefinition(fieldId)
 }
@@ -79,6 +88,31 @@ const codecAcceptsNull = (schema: AnyPropertySchema): boolean => {
   }
 }
 
+/** Is `s` the literal encoded-null sentinel, or a quoted string that would
+ *  collide with it one escaping level down (recursive, so `"null"` itself
+ *  round-trips through an extra layer of `JSON.stringify`)? Only meaningful
+ *  when the codec actually treats bare `'null'` content as the null
+ *  sentinel (`codecAcceptsNull`) — otherwise there's no collision to guard
+ *  against and the string should stay verbatim. Verbatim string-family
+ *  codecs (`string` | `url` | `ref`) store values as raw content, so a
+ *  legitimate string value equal to the sentinel — or to a JSON string
+ *  literal that itself needs escaping — must be escaped via
+ *  `JSON.stringify` instead of written through untouched. */
+const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
+  if (!codecAcceptsNull(schema)) return false
+  const trimmed = s.trim()
+  if (trimmed === 'null') return true
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (typeof parsed === 'string') return needsEscape(schema, parsed)
+    } catch {
+      // not valid JSON — falls through to "no escaping needed"
+    }
+  }
+  return false
+}
+
 const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): string => {
   if (encoded === undefined) return ''
   if (encoded === null) return codecAcceptsNull(schema) ? 'null' : ''
@@ -86,8 +120,11 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     schema.codec.type === 'string'
     || schema.codec.type === 'url'
     || schema.codec.type === 'ref'
-    || schema.codec.type === 'date'
   ) {
+    if (typeof encoded !== 'string') return JSON.stringify(encoded)
+    return needsEscape(schema, encoded) ? JSON.stringify(encoded) : encoded
+  }
+  if (schema.codec.type === 'date') {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
     return encoded
   }
@@ -99,6 +136,17 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
 }
 
 const contentToEncodedValue = (schema: AnyPropertySchema, content: string): unknown => {
+  if (
+    (schema.codec.type === 'string' || schema.codec.type === 'url' || schema.codec.type === 'ref')
+    && content.trim().startsWith('"') && content.trim().endsWith('"')
+  ) {
+    try {
+      const parsed: unknown = JSON.parse(content.trim())
+      if (typeof parsed === 'string' && needsEscape(schema, parsed)) return parsed
+    } catch {
+      // not valid JSON — falls through to the sentinel/default handling below
+    }
+  }
   if (content.trim() === 'null' && codecAcceptsNull(schema)) {
     return schema.codec.encode(schema.codec.decode(null))
   }

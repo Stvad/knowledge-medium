@@ -188,7 +188,7 @@ describe('codec-change migration', () => {
     expect(await rowContent(valueRowId)).toBe('42')
   })
 
-  it('reports unconvertible values and unsets the key, leaving rows in the tree', async () => {
+  it('reports unconvertible values and KEEPS the stale cell key, leaving rows in the tree', async () => {
     await seedWorkspace('children')
     const repo = setup()
     const {valueRowId} = await seedProperty(repo, 'p', 'not a number')
@@ -197,11 +197,43 @@ describe('codec-change migration', () => {
 
     await republish(repo, statusNumber)
 
-    expect(await cell('p')).toEqual({})
+    // All-unconvertible must NOT delete the cell key — deleting it would
+    // read as delete-intent to the same-tx materialize processor and
+    // tombstone the very rows the user was told stay "fixable in the
+    // outline" (see runPropertyDefinitionMigration's comment in repo.ts).
+    // The stale (pre-migration, old-codec) value is what's left in place.
+    expect(await cell('p')).toEqual({status: 'not a number'})
     expect(await rowContent(valueRowId)).toBe('not a number')
     expect(errors).toHaveLength(1)
     expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
     expect(errors[0]!.meta).toMatchObject({count: 1})
+  })
+
+  it('all-unconvertible: the field row and value child stay live (deleted = 0), never tombstoned', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'not a number')
+
+    await republish(repo, statusNumber)
+
+    // Neither the field row nor its value child was tombstoned by the
+    // cell-key-deletion → materialize-delete-intent path — a bare
+    // `deleted` probe (not `includePropertyChildren`) is the direct check
+    // that the migration itself never called delete/deleteSubtree on them.
+    for (const id of [fieldRowId, valueRowId]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted, `${id} deleted`).toBe(0)
+    }
+    // Also visible through the ordinary property-children read surface.
+    const values = await repo.tx(
+      tx => tx.childrenOf(fieldRowId, undefined, {includePropertyChildren: true}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(values.map(v => v.id)).toContain(valueRowId)
+    // The cell still carries the stale key/value (not unset).
+    expect(await cell('p')).toEqual({status: 'not a number'})
   })
 })
 

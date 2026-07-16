@@ -11,8 +11,11 @@ import {
   type BlockReference,
   type CoreBlockMergedEvent,
   type SameTxCtx,
-  type Tx,
 } from '@/data/api'
+import {
+  deriveReferenceTargetId,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
 import {
   parseReferences,
   renderAliasedBlockref,
@@ -112,12 +115,13 @@ const retargetReferenceContent = (
 }
 
 const retargetSource = async (
-  tx: Tx,
+  ctx: SameTxCtx,
   sourceId: string,
   event: CoreBlockMergedEvent,
   aliasRewrites: ReadonlyMap<string, string>,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): Promise<void> => {
+  const tx = ctx.tx
   const current = await tx.get(sourceId)
   if (current === null || current.deleted) return
 
@@ -190,8 +194,26 @@ const retargetSource = async (
     aliasRewrites,
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references'>> = {}
-  if (nextContent !== current.content) patch.content = nextContent
+  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId'>> = {}
+  if (nextContent !== current.content) {
+    patch.content = nextContent
+    // `core.deriveReferenceTarget` already ran earlier in this same tx pass
+    // (kernel processors precede plugin ones) and stamped the column from
+    // the PRE-retarget content. A whole-block `((old))` row would otherwise
+    // keep `referenceTargetId: old` even though content now reads
+    // `((new))` — recompute from the rewritten content so the column and
+    // content never disagree.
+    const lookups = sameTxReferenceTargetLookups(tx, ctx.resolvePropertySchemaName)
+    const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
+    // This is always an update of an existing row (never a create), so an
+    // unresolvable alias (`undefined`) clears the column rather than
+    // preserving a caller-provided id the way the derive processor's
+    // create path does.
+    const nextTargetId = derived ?? null
+    if ((current.referenceTargetId ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+  }
   // This write (including the properties bag) runs under the merge tx's
   // BlockDefault scope, so if a canonical seed bag ever gains a ref/
   // refList-typed field, merging a block referenced BY a seed definition
@@ -228,7 +250,7 @@ const retargetMergedBlockReferences = async (
     event.aliasRewrites.map(({fromAlias, toAlias}) => [fromAlias, toAlias]),
   )
   for (const id of sourceIds) {
-    await retargetSource(ctx.tx, id, event, aliasRewrites, ctx.propertySchemas)
+    await retargetSource(ctx, id, event, aliasRewrites, ctx.propertySchemas)
   }
 }
 

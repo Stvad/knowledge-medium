@@ -22,7 +22,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, type BlockReference } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -31,7 +31,7 @@ import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { definitionSeedsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -1674,5 +1674,81 @@ describe('parseReferences — workspace-switch reprojection', () => {
     expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([
       {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
     ])
+  })
+})
+
+describe('parseReferences — property field rows are machinery, not alias sources (§9, PR #386 review)', () => {
+  // A flipped (child-backed) workspace: `setProperty` dual-writes a
+  // `[[status]]` field row alongside the cell. Its content is a RECOGNITION
+  // token, not a wikilink — the references processor must suppress content
+  // marks on it (isPropertyMachineryRow) so it never mints a user-visible
+  // alias page named "status" or backlinks from the hidden row.
+  const FIELD_ID = 'field-status-refs'
+  const statusSchema = defineProperty('status', {
+    codec: codecs.string,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  beforeEach(async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS],
+    )
+    env.repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-status-definition',
+      [{
+        metadata: {
+          fieldId: FIELD_ID,
+          workspaceId: WS,
+          createdAt: 1,
+          name: statusSchema.name,
+          changeScope: statusSchema.changeScope,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: statusSchema,
+      }],
+      {workspaceId: WS},
+    )
+  })
+
+  it('setProperty creates a [[status]] field row; no alias target is minted and the field row stays reference-free', async () => {
+    // The suppression this test targets (isPropertyMachineryRow) must run
+    // to completion rather than be short-circuited by an unrelated
+    // processor crash — spy on console.error so a swallowed
+    // `[processorRunner] processor "..." failed` makes this test fail
+    // loudly instead of vacuously "passing" because nothing ran.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'host', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'host'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(
+      tx => tx.setProperty('host', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // No alias-target page named "status" was created — the field row's
+    // `[[status]]` content never reached the alias parser.
+    expect(await env.read(aliasId('status'))).toBeNull()
+
+    // The field row itself carries no derived references (content marks
+    // suppressed) and is not itself referenced by anything.
+    const field = await env.h.db.getOptional<{id: string; references_json: string}>(
+      `SELECT id, references_json FROM blocks
+        WHERE parent_id = 'host' AND reference_target_id = ? AND deleted = 0`,
+      [FIELD_ID],
+    )
+    expect(field).not.toBeNull()
+    expect(JSON.parse(field!.references_json)).toEqual([])
   })
 })

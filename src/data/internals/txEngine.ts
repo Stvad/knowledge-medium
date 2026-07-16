@@ -81,6 +81,7 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import { keyAtStart } from '@/data/orderKey'
 import {
   isInsidePropertySubtreeWalk,
@@ -377,6 +378,24 @@ export class TxImpl implements Tx {
       return resolution.status === 'resolved'
         || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
     }
+  }
+
+  /** Will `core.deriveReferenceTarget`'s stamp make this row a property
+   *  field row at commit? Content-based twin of the stored-column
+   *  recognition, for gates that run BEFORE the derive processor in the
+   *  same tx (the setProperty dual-write, the materialize processor's
+   *  mirror in propertyChildrenProcessor). Root rows are never field rows
+   *  (§9 positional — a field row is a child of the owning block), so
+   *  their bag writes must keep materializing normally. Direct-target
+   *  check only — it deliberately doesn't re-walk ancestors' content. */
+  private isProspectiveFieldRow(row: BlockData): boolean {
+    if (row.parentId === null) return false
+    const checker = this.isFieldDefinitionCheckerFor(row.workspaceId)
+    const exact = parseExactReferenceBlockContent(row.content)
+    if (!exact) return false
+    if (exact.kind === 'blockRef') return checker(exact.id)
+    const resolution = this.propertySchemaResolverFor(row.workspaceId).resolve(exact.alias)
+    return resolution.status === 'resolved'
   }
 
   /** §9 ancestry rule: role is positional and inherits — everything beneath
@@ -680,6 +699,13 @@ export class TxImpl implements Tx {
       && !(await this.isInsidePropertySubtree(
         id, this.isFieldDefinitionCheckerFor(before.workspaceId),
       ))
+      // The walk above reads the STORED column, which lags a content write
+      // made earlier in this same tx (the derive processor runs after the
+      // user fn). Recognize the target's prospective field-row-ness from
+      // its CURRENT content so "set content to `[[schema]]`, then set a
+      // property on it" stays cell-only instead of nesting machinery under
+      // a row that is about to become a field row (PR #386 review).
+      && !this.isProspectiveFieldRow(before)
     ) {
       await this.writePropertyValueChild(before, resolvedSchema, value, opts)
     }
@@ -771,6 +797,11 @@ export class TxImpl implements Tx {
     // with no stamped rows pay only the (per-tx-cached) flip read; the §9
     // ancestry rule then exempts property-subtree interiors so ref-typed
     // VALUES pointing at definitions are never misread as nested fields.
+    // Root listings are exempt outright: a field row is positionally a
+    // child of the block that OWNS the property — a workspace-root row
+    // whose content happens to be `[[some property]]` is user content, and
+    // filtering it would corrupt root sibling enumeration (PR #386 review).
+    if (parentId === null) return data
     if (options?.includePropertyChildren === true || data.length === 0) return data
     if (!(await this.isPropertyChildBackedWorkspace(data[0]!.workspaceId))) return data
     const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)

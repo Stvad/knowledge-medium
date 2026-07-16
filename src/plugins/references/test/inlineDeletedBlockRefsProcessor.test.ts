@@ -76,6 +76,30 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read('s')!.references).toEqual([])
   })
 
+  // Regression (PR #386 review): `core.deriveReferenceTarget` runs earlier
+  // in the same-tx processor pass and stamps `referenceTargetId` from the
+  // PRE-inline content. Without recomputing it here, a whole-block
+  // `((deletedId))` row would keep `referenceTargetId: deletedId` even
+  // though its content is now plain inlined text.
+  it('recomputes referenceTargetId when inlining rewrites a whole-block reference', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'deleted body'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    expect(env.read('s')!.referenceTargetId).toBe(D)
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe('deleted body')
+    expect(env.read('s')!.referenceTargetId).toBeNull()
+  })
+
   it('inlines plain and embed marks as content but keeps an aliased mark\'s label', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'BODY'})

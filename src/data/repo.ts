@@ -347,6 +347,19 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
+/** One CAS-guarded `reference_target_id` write for `stampReferenceTargets`.
+ *  `expectedTargetId` is the column value the scan saw: NULL for the
+ *  strictly-additive per-open sweep; the added-definition rederive passes
+ *  the scanned value so a definition can reclaim rows the alias tier
+ *  stamped before it existed (§9 winner determinism) — without ever racing
+ *  a concurrent write that moved the column since the scan. */
+interface ReferenceTargetStamp {
+  id: string
+  scannedContent: string
+  targetId: string
+  expectedTargetId: string | null
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -2462,13 +2475,15 @@ export class Repo {
 
     const lookups = this.referenceTargetLookupsVia()
 
-    const updates: {id: string; scannedContent: string; targetId: string}[] = []
+    const updates: ReferenceTargetStamp[] = []
     for (const row of candidates) {
       const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
       // Column is already NULL, so unresolved (`undefined`) and non-reference
       // (`null`) alike mean "nothing to write".
       if (typeof derived === 'string') {
-        updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+        updates.push({
+          id: row.id, scannedContent: row.content, targetId: derived, expectedTargetId: null,
+        })
       }
     }
 
@@ -2504,6 +2519,18 @@ export class Repo {
         )
         return row?.id ?? null
       },
+      // Derive-at-arrival defers `[[alias]]` derivation for workspaces whose
+      // definitions this client hasn't loaded (background arrivals / the
+      // pre-prime boot window): the resolver above fails CLOSED there, and
+      // an alias-tier stamp would silently lose to a definition of the same
+      // name (non-NULL stamps are never re-swept). NULL + per-open sweep is
+      // the §9 repair path.
+      schemaTierReady: (workspaceId) =>
+        registryForWorkspace(
+          this._propertyDefinitionRegistry,
+          this._previousPropertyDefinitionRegistry,
+          workspaceId,
+        ) !== null,
     }
   }
 
@@ -2519,7 +2546,7 @@ export class Repo {
    *  (scanned content, NULL column) are written, and snapshots come from the
    *  in-tx fresh rows, never scan-time state. */
   private async stampReferenceTargets(
-    updates: readonly {id: string; scannedContent: string; targetId: string}[],
+    updates: readonly ReferenceTargetStamp[],
   ): Promise<void> {
     const CHUNK = 200
     for (let i = 0; i < updates.length; i += CHUNK) {
@@ -2527,14 +2554,14 @@ export class Repo {
       const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
       await this.db.writeTransaction(async tx => {
         await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
-        for (const {id, scannedContent, targetId} of chunk) {
+        for (const {id, scannedContent, targetId, expectedTargetId} of chunk) {
           const freshRow = await tx.getOptional<BlockRow>(
             `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
             [id],
           )
           if (
             freshRow === null
-            || (freshRow.reference_target_id ?? null) !== null
+            || (freshRow.reference_target_id ?? null) !== expectedTargetId
             || freshRow.content !== scannedContent
           ) continue
           await tx.execute(
@@ -2550,9 +2577,13 @@ export class Repo {
       // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
       // reject the repair and row-version-driven invalidation sees nothing.
       // Refresh already-cached snapshots directly (never populate cold rows)
-      // and notify handles.
+      // and notify handles. NEVER regress a newer cached row: in the sync
+      // ack-to-echo window the cache can legitimately be AHEAD of disk, and
+      // the LWW gate this bypasses exists precisely to protect that — only
+      // replace a snapshot the stamped disk row is at least as new as.
       for (const {after} of snapshots.values()) {
-        if (this.cache.getSnapshot(after.id) !== undefined) {
+        const cached = this.cache.getSnapshot(after.id)
+        if (cached !== undefined && cached.updatedAt <= after.updatedAt) {
           this.cache.setSnapshot(after)
         }
       }
@@ -2603,10 +2634,17 @@ export class Repo {
     if (!registry || registry.workspaceId !== workspaceId) return
     this.pendingNameRederives.delete(workspaceId)
     try {
-      const candidates = await this.db.getAll<{id: string; content: string}>(
-        `SELECT id, content FROM blocks
+      // NO `reference_target_id IS NULL` filter (unlike the sweep): a
+      // definition ADDED after rows were legitimately alias-stamped must
+      // reclaim them — §9's winner rule is a pure function of content, so
+      // two rows with identical content must never stay bound to different
+      // targets. Re-derivation is idempotent for rows the winner didn't
+      // change (`derived === current` skips below).
+      const candidates = await this.db.getAll<
+        {id: string; content: string; reference_target_id: string | null}
+      >(
+        `SELECT id, content, reference_target_id FROM blocks
           WHERE workspace_id = ?
-            AND reference_target_id IS NULL
             AND (
               (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
               OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
@@ -2614,13 +2652,16 @@ export class Repo {
         [workspaceId],
       )
       const lookups = this.referenceTargetLookupsVia()
-      const updates: {id: string; scannedContent: string; targetId: string}[] = []
+      const updates: ReferenceTargetStamp[] = []
       for (const row of candidates) {
         const exact = parseExactReferenceBlockContent(row.content)
         if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
+        const current = row.reference_target_id ?? null
         const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-        if (typeof derived === 'string') {
-          updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+        if (typeof derived === 'string' && derived !== current) {
+          updates.push({
+            id: row.id, scannedContent: row.content, targetId: derived, expectedTargetId: current,
+          })
         }
       }
       await this.stampReferenceTargets(updates)
@@ -2707,9 +2748,13 @@ export class Repo {
     if (resolution.status !== 'resolved') return
     const schema = resolution.schema
 
+    // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
+    // is user content (never a field row); retitling it would rewrite the
+    // user's text.
     const candidates = await this.db.getAll<{id: string; parent_id: string | null}>(
       `SELECT id, parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id = ? AND deleted = 0`,
+        WHERE workspace_id = ? AND reference_target_id = ? AND deleted = 0
+          AND parent_id IS NOT NULL`,
       [workspaceId, change.fieldId],
     )
     if (candidates.length === 0) return
@@ -2764,6 +2809,7 @@ export class Repo {
           const siblings = await tx.childrenOf(parentId, undefined, {includePropertyChildren: true})
           let projected: unknown
           let hasProjection = false
+          let parentUnconvertible = 0
           for (const sibling of siblings) {
             if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
             const values = await tx.childrenOf(sibling.id, undefined, {includePropertyChildren: true})
@@ -2782,18 +2828,25 @@ export class Repo {
                   await tx.update(value.id, {content: canonical}, {skipMetadata: true})
                 }
               } catch {
-                unconvertible += 1
+                parentUnconvertible += 1
               }
             }
           }
+          unconvertible += parentUnconvertible
 
           const nextProperties = {...parent.properties}
           if (change.oldName !== schema.name) delete nextProperties[change.oldName]
           if (hasProjection) {
             nextProperties[schema.name] = projected
-          } else {
+          } else if (parentUnconvertible === 0) {
             delete nextProperties[schema.name]
           }
+          // else: every value under this field was unconvertible — KEEP the
+          // stale cell key. Deleting it would make the same-tx materialize
+          // processor read the key removal as delete-intent and tombstone
+          // the very rows the user was told stay "fixable in the outline"
+          // (PR #386 review). A stale cell under the new codec is the §5
+          // pending-reprojection state; the next valid value edit heals it.
           if (!propertiesEqual(parent.properties, nextProperties)) {
             await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
           }

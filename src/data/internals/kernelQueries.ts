@@ -40,6 +40,7 @@ import {
   SUBTREE_SQL,
   VISIBLE_CHILDREN_IDS_SQL,
   VISIBLE_CHILDREN_SQL,
+  VISIBLE_SUBTREE_SQL,
 } from './treeQueries'
 import {
   assertAncestorWalkBounded,
@@ -508,19 +509,33 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
  *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
  *  dispatcher's handle-store key. Dep declaration mirrors the legacy
- *  `repo.subtree(id)` factory in `repo.ts`. */
-export const subtreeQuery = defineQuery<{id: string}, SubtreeRow[]>({
+ *  `repo.subtree(id)` factory in `repo.ts`.
+ *
+ *  Default EXCLUDES recognized property field/value machinery in a
+ *  child-backed workspace (PR #288 §9 — same visible/machinery split as
+ *  `core.children`; dormant no-op while the workspace is un-flipped, and
+ *  a no-op if the root itself sits inside property-subtree content, see
+ *  {@link VISIBLE_SUBTREE_SQL}). UI consumers (panels, copy, navigation,
+ *  shortcuts) get the filtered view by default; machinery callers that
+ *  must see the field/value rows opt in with `includePropertyChildren:
+ *  true` — the same option `core.children` / `tx.childrenOf` take. */
+export const subtreeQuery = defineQuery<
+  {id: string; includePropertyChildren?: boolean},
+  SubtreeRow[]
+>({
   name: 'core.subtree',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({id: z.string(), includePropertyChildren: z.boolean().optional()}),
   resultSchema: subtreeRowArraySchema,
-  resolve: async ({id}, ctx) => {
+  resolve: async ({id, includePropertyChildren = false}, ctx) => {
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
     // something to match against. Re-declared per-row below; HandleStore
     // tolerates duplicates.
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+    const rows = includePropertyChildren
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+      : await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
     // hydrateBlocks preserves row order, so `out[i]` ↔ `rows[i]`. depth is

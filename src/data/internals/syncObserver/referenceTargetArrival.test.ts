@@ -169,6 +169,60 @@ describe('derive-at-arrival (sync materializer)', () => {
     expect(added).toEqual([])
   })
 
+  it('reports aliases on a tombstoned-then-restored arrival (restore makes the alias newly visible)', async () => {
+    // The alias index is `WHERE deleted = 0`, so a target's aliases are
+    // invisible while tombstoned — a restore is exactly when stale
+    // `[[alias]]` NULL rows become repairable, so the SECOND (restoring)
+    // arrival must report the aliases even though the properties never
+    // changed across the two deliveries.
+    const added: {workspaceId: string; aliases: readonly string[]}[] = []
+    const withHook = h.start({
+      getMaterializability: () => 'copy',
+      referenceTargetLookups: () => lookups,
+      onAliasTargetsAdded: (workspaceId, aliases) => { added.push({workspaceId, aliases}) },
+    })
+
+    await h.stageRow(block({
+      id: 'target', content: 'Inbox page', properties: {alias: ['Inbox']}, deleted: true, updatedAt: 1000,
+    }))
+    await withHook.observer.flush()
+    // Tombstoned arrivals contribute no aliases (materialize.ts skips
+    // `snap.after.deleted` rows before diffing).
+    expect(added).toEqual([])
+
+    await h.stageRow(block({
+      id: 'target', content: 'Inbox page', properties: {alias: ['Inbox']}, deleted: false, updatedAt: 2000,
+    }))
+    await withHook.observer.flush()
+    expect(added).toContainEqual({workspaceId: WS, aliases: ['Inbox']})
+  })
+
+  it('defers [[alias]] derivation when schemaTierReady is false, but still stamps ((blockRef)) arrivals', async () => {
+    const blindLookups: ReferenceTargetLookups = {
+      resolveSchemaFieldId: () => null,
+      // Would resolve if reached — proves the defer happens BEFORE the
+      // DB-backed alias fallback, not because nothing resolves it.
+      aliasTargetId: async () => 'alias-target-would-resolve',
+      schemaTierReady: () => false,
+    }
+    const {observer} = h.start({
+      getMaterializability: () => 'copy',
+      referenceTargetLookups: () => blindLookups,
+    })
+
+    await h.stageRow(block({id: 'alias-ref', content: '[[Inbox]]'}))
+    await h.stageRow(block({id: 'blockref-ref', content: '((some-uuid))', orderKey: 'a1'}))
+    await observer.flush()
+
+    // Blind schema tier: the whole `[[alias]]` derivation defers (a
+    // definition this client can't see yet must still be able to win the
+    // race later) — the column stays NULL for the per-open sweep to repair.
+    expect(await readColumn('alias-ref')).toBeNull()
+    // `((uuid))` resolves textually — no lookup, so the defer gate never
+    // applies to it.
+    expect(await readColumn('blockref-ref')).toBe('some-uuid')
+  })
+
   it('skips derivation entirely when the lookups dep is absent', async () => {
     const {observer} = h.start({getMaterializability: () => 'copy'})
     await h.stageRow(block({id: 'b1', content: '((remote-target))'}))

@@ -210,6 +210,51 @@ describe('reference-target initial derive pass', () => {
     expect(await readColumn('early-ref')).toBe('field-late-schema')
   })
 
+  it('a definition added later reclaims a row already alias-stamped (schema tier wins deterministically)', async () => {
+    // Unlike `setup()`, deliberately register NO 'status' definition yet —
+    // the row must resolve through the alias tier first.
+    await seedRow({id: 'alias-target', content: 'Status page', properties: {alias: ['status']}})
+    await seedRow({id: 'status-ref', content: '[[status]]'})
+
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    await runPass(repo)
+
+    // No definition named 'status' exists yet: the alias tier resolves.
+    expect(await readColumn('status-ref')).toBe('alias-target')
+
+    // Register the definition after the sweep — the added-definition
+    // rederive (drainNameRederives) must reclaim the row even though its
+    // column is already non-NULL from the alias tier.
+    vi.useFakeTimers()
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-status-definition',
+      [{
+        metadata: {
+          fieldId: STATUS_FIELD_ID,
+          workspaceId: WS,
+          createdAt: 2,
+          name: 'status',
+          changeScope: ChangeScope.BlockDefault,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: statusSchema,
+      }],
+      {workspaceId: WS},
+    )
+    await vi.runAllTimersAsync()
+    await repo.awaitReferenceTargetDerive()
+    vi.useRealTimers()
+
+    // The schema tier wins deterministically over the existing non-NULL
+    // alias stamp: drainNameRederives drops the sweep's IS-NULL filter, and
+    // stampReferenceTargets' expectedTargetId CAS matches the scanned
+    // alias-stamp value (not NULL) so the write goes through.
+    expect(await readColumn('status-ref')).toBe(STATUS_FIELD_ID)
+  })
+
   it('the CAS write never stamps a row whose content changed after the scan', async () => {
     // TOCTOU pin (adversarial-review fix): the stamp helper re-checks
     // (content, NULL column) inside the write tx.
@@ -242,5 +287,34 @@ describe('reference-target initial derive pass', () => {
     await runPass(repo)
 
     expect(cache.getSnapshot('block-ref')?.referenceTargetId).toBe('some-target')
+  })
+
+  it('never regresses a cache snapshot that is newer than the disk row it stamps (ack-to-echo window)', async () => {
+    await seedRow({id: 'cached-ahead-ref', content: '((some-target))'})
+    const {repo, cache} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    // Hydrate the row into the cache pre-pass (stale: column null).
+    const preloaded = await repo.load('cached-ahead-ref')
+    expect(preloaded?.referenceTargetId).toBeNull()
+    const current = cache.getSnapshot('cached-ahead-ref')
+    expect(current).toBeDefined()
+
+    // Simulate the sync ack-to-echo window: a local edit lands in the cache
+    // (newer updatedAt) after hydration but before the repair pass runs —
+    // disk still holds the pre-edit content/version.
+    const newer = {...current!, content: 'newer local text', updatedAt: current!.updatedAt + 5000}
+    cache.setSnapshot(newer)
+
+    await runPass(repo)
+
+    // Disk stamps: the CAS matched the (unchanged) disk row's (content,
+    // NULL column) pair.
+    expect(await readColumn('cached-ahead-ref')).toBe('some-target')
+    // The cache must never be regressed by the older disk row's stamp — the
+    // fan-out's `cached.updatedAt <= after.updatedAt` guard skips writing
+    // back into a cache entry that is already newer than the stamped row.
+    const afterPass = cache.getSnapshot('cached-ahead-ref')
+    expect(afterPass?.content).toBe('newer local text')
+    expect(afterPass?.updatedAt).toBe(current!.updatedAt + 5000)
   })
 })

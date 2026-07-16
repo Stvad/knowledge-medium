@@ -486,7 +486,12 @@ export const materializeStagingRows = async (
     for (const id of applied) {
       const snap = snapshots.get(id)
       if (!snap?.after || snap.after.deleted) continue
-      const beforeAliases = new Set(aliasStrings(snap.before?.properties))
+      // A tombstoned `before` contributes NO aliases: the index is
+      // `WHERE deleted = 0`, so its aliases were invisible while deleted —
+      // a restore is exactly when stale `[[alias]]` NULL rows need repair.
+      const beforeAliases = new Set(
+        snap.before && !snap.before.deleted ? aliasStrings(snap.before.properties) : [],
+      )
       for (const alias of aliasStrings(snap.after.properties)) {
         if (beforeAliases.has(alias) || alias === '') continue
         const bucket = addedAliasesByWorkspace.get(snap.after.workspaceId) ?? new Set<string>()
