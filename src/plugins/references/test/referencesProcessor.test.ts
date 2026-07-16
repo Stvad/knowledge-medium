@@ -22,15 +22,16 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, defineBlockType, defineProperty, type BlockReference } from '@/data/api'
+import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
+import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -192,23 +193,31 @@ describe('parseReferences — basic alias creation', () => {
 })
 
 describe('parseReferences — ref-typed properties', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
+  const reviewerProp = seedProperty({
+    seedKey: 'test:references/property/reviewer',
+    revision: 1,
+    name: 'reviewer',
+    preset: 'ref',
     changeScope: ChangeScope.BlockDefault,
   })
-  const relatedProp = defineProperty<readonly string[]>('related', {
-    codec: codecs.refList(),
-    defaultValue: [],
+  const relatedProp = seedProperty({
+    seedKey: 'test:references/property/related',
+    revision: 1,
+    name: 'related',
+    preset: 'refList',
     changeScope: ChangeScope.BlockDefault,
   })
-  const malformedProp = defineProperty<readonly string[]>('malformed-ref-list', {
-    codec: codecs.refList(),
-    defaultValue: [],
+  const malformedProp = seedProperty({
+    seedKey: 'test:references/property/malformed-ref-list',
+    revision: 1,
+    name: 'malformed-ref-list',
+    preset: 'refList',
     changeScope: ChangeScope.BlockDefault,
   })
   const refSchemaExtension = [
-    typesFacet.of(defineBlockType({id: 'test:ref-schemas', properties: [reviewerProp, relatedProp, malformedProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+    definitionSeedsFacet.of(relatedProp, {source: 'test'}),
+    definitionSeedsFacet.of(malformedProp, {source: 'test'}),
   ]
 
   beforeEach(async () => {
@@ -276,42 +285,50 @@ describe('parseReferences — ref-typed properties', () => {
 })
 
 describe('parseReferences — schema-swap reprojection', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
+  const reviewerProp = seedProperty({
+    seedKey: 'test:references/property/reviewer',
+    revision: 1,
+    name: 'reviewer',
+    preset: 'ref',
     changeScope: ChangeScope.BlockDefault,
   })
-  const approverProp = defineProperty<string>('approver', {
-    codec: codecs.ref(),
-    defaultValue: '',
+  const approverProp = seedProperty({
+    seedKey: 'test:references/property/approver',
+    revision: 1,
+    name: 'approver',
+    preset: 'ref',
     changeScope: ChangeScope.BlockDefault,
   })
-  // `reviewer` redefined with a NON-ref codec — the real "stopped being
+  // `reviewer` redefined with a NON-ref preset — the real "stopped being
   // ref-typed" transition (e.g. a user changes the property's preset from a
   // ref type to text). Distinct from `runtimeWithoutReviewer`, where the
-  // schema is *absent* (a load-transient that must NOT strip refs).
-  const reviewerStringProp = defineProperty<string>('reviewer', {
-    codec: codecs.string,
-    defaultValue: '',
+  // schema is *absent* (a load-transient that must NOT strip refs). A distinct
+  // seedKey under the same name models a genuinely different definition.
+  const reviewerStringProp = seedProperty({
+    seedKey: 'test:references/property/reviewer-string',
+    revision: 1,
+    name: 'reviewer',
+    preset: 'string',
     changeScope: ChangeScope.BlockDefault,
   })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    typesFacet.of(defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    typesFacet.of(defineBlockType({id: 'test:ref-reviewer-string', properties: [reviewerStringProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerStringProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    typesFacet.of(defineBlockType({id: 'test:ref-reviewer-approver', properties: [reviewerProp, approverProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+    definitionSeedsFacet.of(approverProp, {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -1529,17 +1546,20 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
 })
 
 describe('parseReferences — workspace-switch reprojection', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
+  const reviewerProp = seedProperty({
+    seedKey: 'test:references/property/reviewer',
+    revision: 1,
+    name: 'reviewer',
+    preset: 'ref',
     changeScope: ChangeScope.BlockDefault,
   })
 
   beforeEach(async () => {
     await env.h.cleanup()
-    // `reviewer` is an unscoped static schema → ref-typed in EVERY workspace,
-    // so switching between two workspaces produces an empty ref-ness diff.
-    env = await setup([typesFacet.of(defineBlockType({id: 'test:ref-reviewer-ws-switch', properties: [reviewerProp]}), {source: 'test'})])
+    // `reviewer` is a seed contributed to the runtime → ref-typed in EVERY
+    // workspace, so switching between two workspaces produces an empty
+    // ref-ness diff.
+    env = await setup([definitionSeedsFacet.of(reviewerProp, {source: 'test'})])
   })
 
   it('backfills a newly-opened workspace sharing a ref-typed name with the prior one', async () => {
