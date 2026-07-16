@@ -207,7 +207,7 @@
     <li><a href="#s11">11 PR #288 contract</a></li>
     <li><a href="#s12">12 Arithmetic</a></li>
     <li><a href="#s13">13 Slices</a></li>
-    <li><a href="#invariants">Invariants</a></li>
+    <li><a href="#invariants">14 Invariants</a></li>
     <li><a href="#s15">15 Rejected</a></li>
     <li><a href="#s16">16 Open</a></li>
   </ol>
@@ -226,7 +226,9 @@
   (re-stamped in this PR). Direction fixed by the user: history is <em>kept</em>,
   never pruned; events shrink. Two format decisions revised 2026-07-15 per user
   calls: sync events kept for every workspace (§6, former O1), and invertible
-  patches + sampled anchors adopted over the deterministic probe (§4, O5).
+  patches + sampled anchors adopted over the deterministic probe (§4, O5);
+  two same-day policy calls followed — UiState history bounded rather than
+  skipped (§5.3, O6), and the stock migration backup-prompted (§8.2).
   §12's arithmetic was re-grounded 2026-07-15 against live measurements of two
   client instances of the same workspace via the agent bridge (a 63-day dev
   profile, 1.94M events, and a 23-day prod profile, 401k events); measured
@@ -240,7 +242,8 @@
     The load-bearing core is <a href="#s3">§3</a>–<a href="#s4">§4</a> (the event
     format and the anchor/reconstruction machinery) and <a href="#s8">§8</a> (the
     migration of existing history). <a href="#s5">§5</a> and <a href="#s6">§6</a>
-    resolve the two policy questions (derived-write logging, sync-source logging).
+    resolve the three policy questions (derived-write logging, UI-state
+    retention, sync-source logging).
     If you are implementing, start from your slice in <a href="#s13">§13</a> and
     the <a href="#invariants">invariants index</a>. If you are PR #288, read
     <a href="#s11">§11</a> — it is the contract your slice C consumes.
@@ -268,9 +271,9 @@
       <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
       column-keyed; hard deletes never skip (§5). UI-state churn — measured at
       roughly half of a working device's update events — is logged but
-      <strong>hard-bounded</strong>: a retention sweeper keeps only the newest
-      K versions per block, pruning oldest-side only (user call,
-      <a href="#s16">O6</a>/§5.3).</li>
+      <strong>hard-bounded</strong>: a retention sweeper prunes to the newest
+      K versions per block, cutting only all-local-ui block prefixes (rule
+      R1; user call, <a href="#s16">O6</a>/§5.3).</li>
     <li><strong>Sync-applied events are kept, compact, for every workspace</strong>
       (user call 2026-07-15, superseding an earlier per-workspace-mode drop):
       local history stays self-sufficient instead of leaning on a server read
@@ -493,11 +496,21 @@ trigger-recreation ordering):
       <td><code>scope TEXT</code></td>
       <td>The writing tx's <code>ChangeScope</code>, copied from
         <code>tx_context.scope</code> (already populated per tx,
-        <code>commitPipeline.ts:263-264</code>; NULL for sync-applied and raw
-        writes, and on all v1 rows). Costs nothing — the trigger already
+        <code>commitPipeline.ts:263-264</code>) — <strong>through the same
+        source-gated projection the existing ctx columns use</strong>
+        (<code>triggerCtxColumnSql</code>, <code>clientSchema.ts:404-418</code>:
+        <code>CASE WHEN (SELECT source …) IS NULL THEN NULL</code>), so it is
+        NULL for sync-applied and raw writes <em>even if</em> a raw writer
+        left <code>tx_context.scope</code> poisoned — per the code's own
+        comment, the trigger gate, not the TS clear, is the load-bearing
+        check. NULL on all v1 rows. Costs nothing — the trigger already
         probes <code>tx_context</code> — and buys per-event provenance for
-        forensics plus the key the §5.3 UiState retention sweeper prunes
-        by.</td>
+        forensics plus the key the §5.3 UiState retention sweeper prunes by.
+        The gate is mandatory, not hygiene: an event mislabeled
+        <code>'local-ui'</code> becomes sweeper-prunable, i.e. deletable
+        content history. Slice B pins it: a raw/sync write while
+        <code>tx_context.scope</code> is artificially non-NULL still stamps
+        <code>scope = NULL</code>.</td>
     </tr>
   </tbody>
 </table>
@@ -539,11 +552,18 @@ OLD.updated_at) IS NOT coalesce(NEW.user_updated_at, NEW.updated_at)</code>
 and emits the coalesced value (the shared column spec carries an optional
 domain-projection expression used for both the diff and the emit). The
 projection still accepts that a (never-occurring today) explicit clear is not
-distinguishable.
+distinguishable. One column the upload predicate's list omits must be in the
+row_events spec regardless: <code>id</code>
+(<code>BLOCK_UPLOAD_COLUMNS</code> excludes it — a key is never patched). A
+raw <code>UPDATE … SET id</code> (the §2.1 unguarded path, which §6.2
+promises is always logged) would otherwise diff as all-identical and vanish
+under the no-op skip, where v1 recorded the move; the v2 spec includes
+<code>id</code> in the diff and forces <code>full = 1</code> when it changed,
+keeping both eras' terminators intact (slice-B raw-write test).
 </p>
 
 <p>Index changes — <strong>none on the write path</strong>: the v2 trigger
-reads nothing (§4.1), so slice A ships no index work at all. Slice C adds
+reads no history (§4.1/I6), so slice A ships no index work at all. Slice C adds
 <code>(block_id, id)</code> for reader walks and the §8 rewriter —
 <code>id</code> is AUTOINCREMENT-monotonic and is the authoritative per-block
 order (same-millisecond events in one tx tie on <code>created_at</code>). The
@@ -581,8 +601,9 @@ superseding the deterministic predecessor-probe design — its record is in
     update the trigger flips one coin (<code>random()</code>, p = 1/64 —
     argued in <a href="#s4-4">§4.4</a>); a hit writes the event full (complete
     before + after, <code>full = 1</code>) instead of compact. No probe, no
-    counter, <em>no reads of any kind on the write path</em> (invariant
-    <a href="#invariants">I6</a>). Creates and hard deletes are full by
+    counter, <em>no history reads on the write path</em> — only the 1-row
+    <code>tx_context</code> probes invariant
+    <a href="#invariants">I6</a> permits. Creates and hard deletes are full by
     nature.</li>
 </ul>
 
@@ -627,6 +648,11 @@ needed:</p>
   once and reference it — e.g. <code>INSERT INTO row_events ... SELECT ...
   FROM (SELECT (abs(random()) % 64) = 0 AS anchor)</code>. Pin with a shape
   test: both payload sides of every event agree on key set / fullness.
+  (Verified empirically on SQLite 3.51: the shape is valid in an AFTER
+  UPDATE body alongside NEW/OLD, and the coin is not re-evaluated per
+  reference site. Porting trap: in a multi-row <code>INSERT … SELECT</code>
+  cross-joined against the coin subquery, SQLite freezes ONE coin for the
+  whole statement — never reuse this shape for batch rewrites.)
 </div>
 
 <h3>4.2 Anchor content — decision</h3>
@@ -702,8 +728,8 @@ the classic checkpoint-interval tradeoff:
     a compact event (~2&nbsp;KB full pair vs ~0.4&nbsp;KB patch pair).
     Per-update overhead = p·Δ: ~64&nbsp;B (+16%) at 1/25, ~25&nbsp;B (+6%) at
     1/64, ~13&nbsp;B (+3%) at 1/128. (Measured full pairs run 1.4–2.4&nbsp;KB
-    — §12 — so Δ and the amortized cost land up to ~30% lower; the conclusion
-    only strengthens.)</li>
+    — §12 — so Δ spans ~1.0–2.0&nbsp;KB and the amortized cost
+    ~16–31&nbsp;B/update at 1/64; noise either way.)</li>
   <li><strong>Read latency does not bind.</strong> Expected point-lookup walk
     ~1/(2p) events at microseconds each; even 1/p in the several hundreds
     keeps far-past lookups sub-millisecond, and the common recent-history
@@ -796,9 +822,10 @@ Add a nullable <code>history_mode TEXT</code> column to <code>tx_context</code>
 optional <code>RepoTxOptions.historyMode</code> (<code>tx.ts:269-277</code>) in
 step 1 (<code>commitPipeline.ts:261-265</code>) and cleared with the rest in
 step 5 (<code>:375-383</code>, rollback-safe inside the tx). One value:
-<code>'skip'</code>. The row_events triggers add
+<code>'skip'</code>. The <em>create and update</em> row_events triggers add
 <code>COALESCE((SELECT history_mode FROM tx_context WHERE id = 1), 'full') != 'skip'</code>
-to their WHEN clause. NULL/absent means full logging — the default cannot
+to their WHEN clause — the delete trigger carries no <code>history_mode</code>
+gate at all (§5.2 / I2's corollary). NULL/absent means full logging — the default cannot
 silently drop history (invariant <a href="#invariants">I3</a>), sync-applied
 writes (which never set it) are unaffected, and only a caller that explicitly
 opts in is exempt (invariant <a href="#invariants">I4</a>: exemption by
@@ -880,9 +907,11 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
   ago"), while bounding is what actually matters — the class's cost is
   unbounded <em>accumulation</em>, not per-event size. Default K = 8
   (boot-tunable like p; the value is having <em>a</em> recent record, not
-  depth), which caps a panel block's local history at ~K &times;
+  depth), which caps a single-writer panel block's local history at ~K &times;
   1.4&nbsp;KB ≈ 11&nbsp;KB regardless of write rate — versus 35&nbsp;MB
-  measured on the hottest prod panel in three weeks.
+  measured on the hottest prod panel in three weeks. (Single-writer is the
+  measured common case; mixed-writer blocks wait on the phase-2 sync bound —
+  caveats below.)
 </div>
 
 <p>Mechanism and the rule that makes pruning sound:</p>
@@ -893,8 +922,10 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
     new reads (I6 intact), and the sweeper's selection key. Exemption stays
     provenance-keyed (I4).</li>
   <li><strong>A deep-idle retention sweeper</strong> (same
-    <code>PendingIdleJobs</code> machinery as §8) deletes, per block, the
-    <code>scope = 'local-ui'</code> events older than that block's newest K.
+    <code>PendingIdleJobs</code> machinery as §8) prunes, per block, from the
+    block's <em>oldest contiguous all-local-ui prefix only</em>: delete
+    local-ui events with <code>id &lt; min(id of the K-th-newest local-ui
+    event, id of the block's oldest surviving non-local-ui event)</code>.
     Not in-trigger: pruning from the trigger would put a read+DELETE on the
     hottest write path (rejected, §15). The bound is eventual, enforced at
     idle — bursts between sweeps are small and compact.</li>
@@ -904,8 +935,17 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
     and would silently splice older states, while an oldest-side cut is
     indistinguishable from "the log started later" — the same gap class §4.3
     already handles, with every surviving state still exact via the newer-side
-    walk. "Keep newest K, delete everything older" satisfies R1 by
-    construction; the fuzz suite pins it (§13).</li>
+    walk. This is why the naive predicate — "delete all local-ui events older
+    than the newest K" — is <em>wrong</em>: on a block whose chain interleaves
+    sync-arrived events with local-ui ones (the multi-device case the caveat
+    below guarantees), it deletes local-ui events <em>above</em> surviving
+    older sync events, punching exactly the forbidden middle. The prefix cut
+    above satisfies R1 by construction. It is also delete-safe: a
+    <code>kind='delete'</code> event can only be pruned together with
+    everything older than it (it sits inside the deleted prefix), so no
+    surviving event ever loses its newer-side terminator (I2). The fuzz suite
+    pins R1 with user/sync/UiState writers interleaved on the same blocks
+    (§13).</li>
   <li><strong>I7 amended:</strong> the sweeper joins the §8 one-time rewrite
     as the second sanctioned <code>row_events</code> mutation — narrowly:
     scope-stamped rows, R1 order, never anchors-of-record for other
@@ -913,10 +953,19 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
   <li><strong>Caveats owned:</strong> scope does not travel over sync, so
     other devices' UI-state churn still logs unbounded on arrival (compact
     properties-pair patches; the identical-echo share is absorbed by the
-    no-op skip). If measurement shows the sync side matters, phase 2 bounds
-    sync-source <em>update</em> events of blocks that carry local-ui-stamped
-    events — flagged, not designed here. And pruned bytes return only at
-    VACUUM (§9) — the point is bounding growth, not reclaiming it.</li>
+    no-op skip) — and, under the prefix cut, a sync event <em>freezes</em>
+    the block's prune point at itself, so mixed-writer panels retain more
+    than K until a phase-2 sync-side bound exists. That makes phase 2 the
+    <em>load-bearing complement</em> for multi-writer panels, not an optional
+    extra: it would bound sync-source update events of blocks that carry
+    local-ui-stamped events — deferred to measurement, since single-writer
+    panels are the measured common case (a device's own uploads do not echo
+    back as local sync events, so a panel written by one device stays
+    all-local-ui and prunes fully). Stock v1 churn is reached via the §8
+    rewriter's scope backfill (§8.1), so the bound covers the measured
+    35&nbsp;MB panel after slice C, not just future traffic. And pruned bytes
+    return only at VACUUM (§9) — the point is bounding growth, not reclaiming
+    it.</li>
 </ul>
 
 <h2 id="s6">6. Sync-source logging: kept for every workspace (revised)</h2>
@@ -1017,8 +1066,13 @@ distinguishes sync-apply from the <em>other</em> NULL-source writers (the raw
 path, §2.1) — now purely for truthful attribution, no longer load-bearing for
 any gate: the materializer's Phase-2 bracket, which today sets
 <code>source = NULL</code> (<code>materialize.ts:344</code>), additionally sets
-a new nullable <code>tx_context.apply_kind = 'sync'</code>, cleared with the
-bracket. The upload and workspace-invariant trigger gates key on
+a new nullable <code>tx_context.apply_kind = 'sync'</code>. Unlike today's
+bracket — which only <em>opens</em> (it asserts <code>source = NULL</code> and
+relies on NULL being the resting state) — the clear must be explicit: reset
+<code>apply_kind = NULL</code> as the last statement of the same write
+transaction, so a rollback restores it for free and a crash cannot leave a
+sticky <code>'sync'</code> mislabeling later raw writes (I3's labeling test
+pins this). The upload and workspace-invariant trigger gates key on
 <code>source</code> and are untouched (they must keep skipping sync-apply);
 only the row_events triggers' <em>label projection</em> reads
 <code>apply_kind</code>: the v1 <code>COALESCE(source, 'sync')</code>
@@ -1064,7 +1118,7 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
     <tr><td>Coverage</td><td><strong>Catch-all</strong>: every writer including raw paths and any future one; a write cannot dodge history silently — and "who wrote this without going through the API" is itself the forensic question</td><td>Two parallel writers to build and keep in lockstep (tx engine + observer); raw paths uncovered; a forgotten future path = silent gap</td></tr>
     <tr><td>Diff verbosity</td><td>Per-column CASE — <strong>already proven in-tree</strong>: the upload PATCH trigger builds changed-columns-only JSON in pure SQLite (<code>blockUploadPatchJsonSql</code>, <code>clientSchema.ts:552-563</code>, <code>json_set</code>/CASE/<code>json_remove('$.__noop')</code>)</td><td>Simpler TS diff, easier unit tests</td></tr>
     <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1170-1175</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
-    <tr><td>Anchor sampling</td><td>One in-trigger <code>random()</code> — zero reads</td><td>Same coin from JS</td></tr>
+    <tr><td>Anchor sampling</td><td>One in-trigger <code>random()</code> — no history reads</td><td>Same coin from JS</td></tr>
   </tbody>
 </table>
 </div>
@@ -1080,10 +1134,12 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
   extended in lockstep (its §11 slice A, "history/undo seam").
   Per-write cost of v2: the same JSON build machinery as today minus one full
   snapshot side per non-anchor update (changed-field patches on both sides
-  instead of two full snapshots), plus one <code>random()</code> — zero reads
-  on the write path —
-  strictly less work than v1 for every non-anchor update (invariant
-  <a href="#invariants">I6</a>).
+  instead of two full snapshots), plus one <code>random()</code> — no history
+  reads, only the 1-row <code>tx_context</code> probes. For every non-anchor
+  update the bytes built and written strictly drop; the per-column
+  comparisons match what v1's upload trigger already pays. I6's framing —
+  write-tx tail latency no worse than v1, no history reads — is the
+  enforceable claim (invariant <a href="#invariants">I6</a>).
 </div>
 
 <h2 id="s8">8. Migrating the existing ~1.9M events</h2>
@@ -1135,6 +1191,13 @@ block with any <code>v IS NULL</code> event:
     all-fields-identical v1 update (the v1 trigger logged no-ops) becomes an
     empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
     timing.</li>
+  <li>Stamp <code>scope</code> while rewriting: v1 user-source events
+    backfill it via the <code>tx_id → command_events.scope</code> join
+    (<code>command_events</code> records scope per tx,
+    <code>commitPipeline.ts:348-368</code>; sync-source events correctly stay
+    NULL). This is what lets the §5.3 retention bound reach the measured
+    stock churn — the 14.7k-event panel — rather than only future
+    traffic.</li>
   <li>Mark the batch done by the rewrite itself: <code>v</code> flips 2.</li>
 </ol>
 
@@ -1183,17 +1246,28 @@ block with any <code>v IS NULL</code> event:
     events never reference predecessors at all (§4.1), so the rewriter may
     compact any v1 event without coordination — and I5 preserves
     <code>stateAt</code> for every event, so a reader walking across the v1/v2
-    boundary mid-migration stays sound. Within a block, all v1 events predate
-    all v2 events (v1 stops being written the moment slice A deploys).</li>
+    boundary mid-migration stays sound. Do <em>not</em> assume v1 events stop
+    at slice A: trigger bodies are shared DB state recreated at every boot
+    from the booting code's constants (<code>clientSchema.ts:1170-1175</code>),
+    so a stale tab on old code that re-boots reinstalls v1 bodies until the
+    next new-code boot — v1 and v2 events can interleave within a block. The
+    mechanism doesn't care (each v1 event rewrites from its own before/after
+    and the discontinuity rule anchors across any interleave), but two
+    consequences are owned: the completion marker means "work queue observed
+    empty once", not "no v1 rows can exist" (stragglers stay
+    v-NULL = readable-as-full, merely uncompacted, and a later sweep may
+    re-run the rewriter); and during a downgrade window the v1 bodies carry
+    no <code>history_mode</code> gate, no identical-update skip, and no
+    scope stamp — see the G1 caveat in §11.</li>
   <li><strong>Ordering with the ALTERs:</strong> the column adds run in
     <code>initializePowerSyncDb</code> before the <code>CLIENT_SCHEMA_STATEMENTS</code>
     loop recreates triggers referencing them — same constraint and same slot as
     <code>ensureUndoGroupIdColumns</code> (<code>repoProvider.ts:352-357</code>
     area; documented footgun at <code>clientSchema.ts:1384-1391</code>).</li>
   <li><strong>One explicit <code>ANALYZE</code> after the rewrite
-    completes</strong> (the <code>(block_id, id)</code> add happened in slice
-    A; <code>(block_id, created_at DESC)</code> is retained per §3 — any
-    measurement-driven revisit also lands here): the automatic drift check
+    completes</strong> (the <code>(block_id, id)</code> add lands in this
+    same slice — §3/§13; <code>(block_id, created_at DESC)</code> is retained
+    per §3 — any measurement-driven revisit also lands here): the automatic drift check
     keys on <code>blocks</code> counts only (<code>analyzeIsWarranted</code>,
     <code>clientSchema.ts:1438-1455</code>) and would never notice
     row_events index changes.</li>
@@ -1337,7 +1411,12 @@ costs more moving parts, bounds memory, never touches the live file.
   <li><strong>G1 — authoring device:</strong> the backfill runs its
     <code>repo.tx</code> batches with <code>historyMode: 'skip'</code> → ~650k
     creates write <em>zero</em> row_events rows (vs ~230&nbsp;MB + index churn).
-    <code>command_events</code> still records every backfill tx.</li>
+    <code>command_events</code> still records every backfill tx. One caveat
+    (§8.2): a stale tab re-boot can reinstall v1 trigger bodies, which have no
+    <code>history_mode</code> gate — a backfill batch running in that window
+    logs its full creates despite the skip. Cheap guard: the backfill probes
+    the installed trigger body (<code>sqlite_master</code>) before its first
+    batch.</li>
   <li><strong>G2 — receiving devices (renegotiated with the §6 revision):</strong>
     backfilled rows arrive as sync-applied creates and now <em>log</em> —
     ~650k full creates ≈ ~230&nbsp;MB one-time per receiving device. This
@@ -1429,7 +1508,7 @@ share the file.
     <tr><td>Fresh device, first sync (345k blocks — measured on prod)</td><td>~205&nbsp;MB</td><td>~205&nbsp;MB (kept — §6; creates are full in v2 too)</td></tr>
     <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
     <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB unless #288 adds an arrival exemption (§11 G2)</td></tr>
-    <tr><td>Ongoing: one organic content edit (measured mean full pair)</td><td>~2.1&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
+    <tr><td>Ongoing: one organic content edit (dev user-source update mean: 510&nbsp;MB / 256k events ≈ 2.1&nbsp;KB)</td><td>~2.1&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
     <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB, forever</td><td>~1.4&nbsp;KB as a patch — and the block's whole local-write history plateaus at ~K &times; 1.4&nbsp;KB ≈ <strong>11&nbsp;KB</strong> under O6 retention (§5.3)</td></tr>
   </tbody>
 </table>
@@ -1520,8 +1599,10 @@ compact path are exercised on every seed. Slice B adds fuzzed interleavings
 of user / sync-applied / raw / <code>'skip'</code> writers (oracle: exactly
 the skip-tx create/update events are absent, delete events always present,
 labels truthful — I3/I4), and randomized §5.3 retention sweeps interleaved
-with UiState writes (oracle: pruning is oldest-side-only per block — R1 —
-and <code>stateAt</code> stays exact for every surviving event). Slice C's I5 equivalence suite is the same
+with UiState, user, AND sync-applied writers hitting the same blocks
+(oracle: pruning removes only an all-local-ui block prefix — R1 — and
+<code>stateAt</code> stays exact for every surviving event; the mixed
+interleaving is what catches a middle-punching sweeper). Slice C's I5 equivalence suite is the same
 generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
 under random interruption/resume points.
@@ -1729,7 +1810,8 @@ under random interruption/resume points.
     terminating (live row / delete event / anchor), and anchors demote to
     sampled read-acceleration + corruption bounding. Costs accepted: ~2&times;
     compact-update bytes (~400&nbsp;B vs ~200&nbsp;B; stock updates ~180 →
-    ~330&nbsp;MB — still ~10&times; under v1) and probabilistic instead of
+    ~330&nbsp;MB on the then-assumed stock — still ~10&times; smaller per
+    event than v1's ~4&nbsp;KB pairs) and probabilistic instead of
     deterministic walk bounds. Wins: zero write-path reads, no
     <code>chain_pos</code>/promotion machinery, no slice-A index dependency,
     undo befores stored directly, unconditional soundness under every gap
