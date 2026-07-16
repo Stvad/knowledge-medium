@@ -16,7 +16,6 @@ import {
   type AnyPropertySchema,
   type AnyValuePresetCore,
   type BlockData,
-  type PropertySchema,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
@@ -26,6 +25,7 @@ import {
 } from '@/data/propertyDefinitionMetadata'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
 import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
+import {peekRowProperty} from '@/data/rowProperty'
 import {
   presetConfigProp,
   presetIdProp,
@@ -42,17 +42,6 @@ import {createChild as createChildMutator} from '@/data/mutators'
 export const USER_SCHEMAS_PROJECTOR_ID = 'user-schemas'
 
 const USER_DATA_SOURCE_ID = 'user-data'
-
-/** Decode a single property straight off a raw row — same logic as
- *  `Block.peekProperty`, minus the cache-backed facade. The block
- *  subscription already hands us the authoritative `BlockData`, so
- *  reading it directly avoids the hydration race where `repo.block(id)`
- *  could transiently read an un-hydrated facade (peekProperty → undefined)
- *  and drop a freshly-created schema from the rebuild. */
-const peekRowProperty = <T>(row: BlockData, schema: PropertySchema<T>): T | undefined => {
-  const stored = row.properties[schema.name]
-  return stored === undefined ? undefined : schema.codec.decode(stored)
-}
 
 const rawPresetConfig = (
   preset: AnyValuePresetCore,
