@@ -22,18 +22,20 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, defineBlockType, defineProperty, type BlockReference } from '@/data/api'
+import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
+import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { refTestSeed } from './refTestSeeds.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
@@ -192,24 +194,11 @@ describe('parseReferences — basic alias creation', () => {
 })
 
 describe('parseReferences — ref-typed properties', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const relatedProp = defineProperty<readonly string[]>('related', {
-    codec: codecs.refList(),
-    defaultValue: [],
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const malformedProp = defineProperty<readonly string[]>('malformed-ref-list', {
-    codec: codecs.refList(),
-    defaultValue: [],
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const refSchemaExtension = [
-    typesFacet.of(defineBlockType({id: 'test:ref-schemas', properties: [reviewerProp, relatedProp, malformedProp]}), {source: 'test'}),
-  ]
+  const reviewerProp = refTestSeed('reviewer', 'ref')
+  const relatedProp = refTestSeed('related', 'refList')
+  const malformedProp = refTestSeed('malformed-ref-list', 'refList')
+  const refSchemaExtension = [reviewerProp, relatedProp, malformedProp].map(p =>
+    definitionSeedsFacet.of(p, {source: 'test'}))
 
   beforeEach(async () => {
     await env.h.cleanup()
@@ -226,7 +215,12 @@ describe('parseReferences — ref-typed properties', () => {
         properties: {
           reviewer: 'target-a',
           related: ['target-b', 'target-a', ''],
-          'malformed-ref-list': [42],
+          // A well-formed id alongside a malformed (non-string) element: the
+          // refList codec drops `42` element-wise (#189) and projects the
+          // survivor, proving the field is recognised as ref-typed end-to-end
+          // (an absent schema would project neither — the assertion would then
+          // simply lack the `malformed-ref-list` entry).
+          'malformed-ref-list': ['target-d', 42],
         },
       }),
       {scope: ChangeScope.BlockDefault},
@@ -235,16 +229,18 @@ describe('parseReferences — ref-typed properties', () => {
 
     const refs = JSON.parse((await env.read('src'))!.references_json)
     // tx.update normalises references_json on write — sorted by
-    // (sourceField, id, alias) with duplicates collapsed. The input
-    // `properties` here happens to produce three distinct triples; the
-    // assertion lists them in canonical-sorted order.
+    // (sourceField, id, alias) with duplicates collapsed. The assertion lists
+    // the four surviving triples in canonical-sorted order (sourceField first,
+    // so `malformed-ref-list` leads).
     expect(refs).toEqual([
+      {id: 'target-d', alias: 'target-d', sourceField: 'malformed-ref-list'},
       {id: 'target-a', alias: 'target-a', sourceField: 'related'},
       {id: 'target-b', alias: 'target-b', sourceField: 'related'},
       {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
     ])
     expect(await env.read('target-a')).toBeNull()
     expect(await env.read('target-b')).toBeNull()
+    expect(await env.read('target-d')).toBeNull()
   })
 
   it('reprojects when only properties change', async () => {
@@ -276,42 +272,39 @@ describe('parseReferences — ref-typed properties', () => {
 })
 
 describe('parseReferences — schema-swap reprojection', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
-  const approverProp = defineProperty<string>('approver', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
-  // `reviewer` redefined with a NON-ref codec — the real "stopped being
+  const reviewerProp = refTestSeed('reviewer', 'ref')
+  const approverProp = refTestSeed('approver', 'ref')
+  // `reviewer` redefined with a NON-ref preset — the real "stopped being
   // ref-typed" transition (e.g. a user changes the property's preset from a
   // ref type to text). Distinct from `runtimeWithoutReviewer`, where the
-  // schema is *absent* (a load-transient that must NOT strip refs).
-  const reviewerStringProp = defineProperty<string>('reviewer', {
-    codec: codecs.string,
-    defaultValue: '',
+  // schema is *absent* (a load-transient that must NOT strip refs). A distinct
+  // seedKey under the same name models a genuinely different definition, so this
+  // one stays an explicit seedProperty (refTestSeed derives the key from name).
+  const reviewerStringProp = seedProperty({
+    seedKey: 'test:references/property/reviewer-string',
+    revision: 1,
+    name: 'reviewer',
+    preset: 'string',
     changeScope: ChangeScope.BlockDefault,
   })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    typesFacet.of(defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    typesFacet.of(defineBlockType({id: 'test:ref-reviewer-string', properties: [reviewerStringProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerStringProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    typesFacet.of(defineBlockType({id: 'test:ref-reviewer-approver', properties: [reviewerProp, approverProp]}), {source: 'test'}),
+    definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+    definitionSeedsFacet.of(approverProp, {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -1529,17 +1522,14 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
 })
 
 describe('parseReferences — workspace-switch reprojection', () => {
-  const reviewerProp = defineProperty<string>('reviewer', {
-    codec: codecs.ref(),
-    defaultValue: '',
-    changeScope: ChangeScope.BlockDefault,
-  })
+  const reviewerProp = refTestSeed('reviewer', 'ref')
 
   beforeEach(async () => {
     await env.h.cleanup()
-    // `reviewer` is an unscoped static schema → ref-typed in EVERY workspace,
-    // so switching between two workspaces produces an empty ref-ness diff.
-    env = await setup([typesFacet.of(defineBlockType({id: 'test:ref-reviewer-ws-switch', properties: [reviewerProp]}), {source: 'test'})])
+    // `reviewer` is a seed contributed to the runtime → ref-typed in EVERY
+    // workspace, so switching between two workspaces produces an empty
+    // ref-ness diff.
+    env = await setup([definitionSeedsFacet.of(reviewerProp, {source: 'test'})])
   })
 
   it('backfills a newly-opened workspace sharing a ref-typed name with the prior one', async () => {
