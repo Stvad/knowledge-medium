@@ -2,6 +2,7 @@ import {ChangeScope, isChangeScope, type BlockData, type PropertySchemaOrigin} f
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {seededDefinitionKey} from '@/data/definitionSeeds'
 import {isPropertySeedKey} from '@/data/propertySeeds'
+import {decodeRowProperty} from '@/data/rowProperty'
 import {
   hasBlockType,
   propertyChangeScopeProp,
@@ -23,14 +24,6 @@ export interface PropertyDefinitionMetadata {
   readonly seedKey?: string
 }
 
-const decodePresentOrDefault = <T>(
-  row: Pick<BlockData, 'properties'>,
-  property: {readonly name: string; readonly codec: {decode(value: unknown): T}; readonly defaultValue: T},
-): T => {
-  const raw = row.properties[property.name]
-  return raw === undefined ? property.defaultValue : property.codec.decode(raw)
-}
-
 export const propertySchemaOriginForSeedKey = (seedKey: string): PropertySchemaOrigin => {
   const owner = seedKey.slice(0, seedKey.indexOf('/property/'))
   return owner === 'system:kernel-data' ? 'kernel' : `plugin:${owner}`
@@ -48,13 +41,13 @@ export const parsePropertyDefinitionMetadata = (
 
   try {
     if (!hasBlockType(row, PROPERTY_SCHEMA_TYPE)) return null
-    const name = decodePresentOrDefault(row, propertyNameProp)
+    const name = decodeRowProperty(row, propertyNameProp)
     if (name.length === 0) return null
-    const changeScope = decodePresentOrDefault(row, propertyChangeScopeProp)
+    const changeScope = decodeRowProperty(row, propertyChangeScopeProp)
     // Enum decode is deliberately membership-lenient for historical stored
     // strings; definition metadata still requires one of the real tx scopes.
     if (!isChangeScope(changeScope)) return null
-    const hidden = decodePresentOrDefault(row, propertyHiddenProp)
+    const hidden = decodeRowProperty(row, propertyHiddenProp)
 
     // Require PROPERTY provenance. `seededDefinitionKey` now also validates
     // `/type/` rows (a `block-type` block can be a valid seeded definition), so a

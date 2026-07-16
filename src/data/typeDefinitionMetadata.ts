@@ -2,6 +2,7 @@ import type {BlockData} from '@/data/api'
 import {BLOCK_TYPE_TYPE} from '@/data/blockTypes'
 import {seededDefinitionKey} from '@/data/definitionSeeds'
 import {isTypeSeedKey} from '@/data/typeSeeds'
+import {safeDecodeRowProperty} from '@/data/rowProperty'
 import {
   blockTypeColorProp,
   blockTypeDescriptionProp,
@@ -36,24 +37,6 @@ export interface TypeDefinitionMetadata {
   // `seedKey.indexOf('/property/')` returns -1 for a /type/ key, so slice(0, -1)
   // silently truncates the owner (even 'system:kernel-data' → 'system:kernel-dat')
   // instead of failing. Factor a grammar-aware owner split shared by both kinds.
-}
-
-/** Decode a display-only field, degrading a malformed stored value to the
- * field's default instead of throwing. Mirrors `UserTypesService.tryBuildType`'s
- * `safeDisplayProp`: a bad color / hide-flag / optional type-id claim from a raw
- * import, sync, or bridge write must not drop an otherwise-valid type from the
- * registry and pickers — only an absent/empty label rejects the row. */
-const safeDecode = <T>(
-  row: Pick<BlockData, 'properties'>,
-  property: {readonly name: string; readonly codec: {decode(value: unknown): T}; readonly defaultValue: T},
-): T => {
-  const raw = row.properties[property.name]
-  if (raw === undefined) return property.defaultValue
-  try {
-    return property.codec.decode(raw)
-  } catch {
-    return property.defaultValue
-  }
 }
 
 /** The row's own code-seed key IFF it proves TYPE provenance: a valid seeded
@@ -93,15 +76,15 @@ export const parseTypeDefinitionMetadata = (
   if (row.deleted) return null
   try {
     if (!hasBlockType(row, BLOCK_TYPE_TYPE)) return null
-    const label = safeDecode(row, blockTypeLabelProp)
+    const label = safeDecodeRowProperty(row, blockTypeLabelProp)
     if (label.length === 0) return null
-    const description = safeDecode(row, blockTypeDescriptionProp)
-    const color = safeDecode(row, blockTypeColorProp).trim()
-    const hideFromBlockDisplay = safeDecode(row, blockTypeHideFromBlockDisplayProp)
-    const hideFromCompletion = safeDecode(row, blockTypeHideFromCompletionProp)
+    const description = safeDecodeRowProperty(row, blockTypeDescriptionProp)
+    const color = safeDecodeRowProperty(row, blockTypeColorProp).trim()
+    const hideFromBlockDisplay = safeDecodeRowProperty(row, blockTypeHideFromBlockDisplayProp)
+    const hideFromCompletion = safeDecodeRowProperty(row, blockTypeHideFromCompletionProp)
 
     const seedKey = typeSeedKeyForRow(row)
-    const claimedTypeId = safeDecode(row, blockTypeTypeIdProp)
+    const claimedTypeId = safeDecodeRowProperty(row, blockTypeTypeIdProp)
     const typeId = claimedTypeId.length > 0 && claimedTypeId !== row.id && seedKey !== undefined
       ? claimedTypeId
       : row.id
