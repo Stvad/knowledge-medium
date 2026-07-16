@@ -37,11 +37,16 @@ const SOONER_FACTOR = 0.75
 const JITTER_PERCENTAGE = 0.05
 const FACTOR_MODIFIER = 0.15
 
-const addDays = (date: Date, days: number): Date => {
-  const next = new Date(date)
-  next.setDate(date.getDate() + days)
-  return next
-}
+// Pure day-length ms arithmetic, NOT local setDate() calendar math: in a
+// local "fall back" DST hour, setDate-based addDays(now, 0) lands up to an
+// hour BEFORE `now`, so a zero-interval reschedule could be due in the
+// past (found by scheduler.fuzz.test.ts). The wall-clock time of the
+// result drifting ±1h across a DST boundary is immaterial next to the
+// ±5% interval jitter; monotonicity (addDays(now, n>=0) >= now) is the
+// contract the review queue relies on.
+const DAY_MS = 86_400_000
+const addDays = (date: Date, days: number): Date =>
+  new Date(date.getTime() + days * DAY_MS)
 
 const randomFromInterval = (
   min: number,
@@ -49,8 +54,14 @@ const randomFromInterval = (
   random: () => number,
 ): number => random() * (max - min) + min
 
+// Interval is floored at 0 as well as capped: the stored value rides the
+// plain finite-number codec (any sign), and a corrupted/imported negative
+// interval survives every signal except AGAIN — multiplying through to a
+// nextReviewDate in the PAST (found by scheduler.fuzz.test.ts; concretely
+// reachable via the Roam-memo importer's unchecked parseFloat). A floored
+// 0 means "due now" until a real grade rebuilds the interval.
 const enforceLimits = ({interval, factor}: SrsParams): SrsParams => ({
-  interval: Math.min(interval, MAX_INTERVAL),
+  interval: Math.min(Math.max(interval, 0), MAX_INTERVAL),
   factor: Math.max(factor, MIN_FACTOR),
 })
 
