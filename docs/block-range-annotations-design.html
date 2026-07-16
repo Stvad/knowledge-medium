@@ -339,7 +339,7 @@ children: first visible comment block, then reply blocks</code></pre>
   <p>The container reuses the existing system-page machinery, not a hand-rolled get-or-create:</p>
   <ul>
     <li><strong>Mechanism:</strong> register an ensure through <code>systemPagesFacet</code>, minting at the deterministic <code>uuidv5(workspaceId, namespace)</code> id the way <code>getOrCreateKernelPage</code> does (see <a href="../src/data/kernelPage.ts">kernelPage.ts</a>) — <code>systemMint</code> pristine rows plus PUT/PATCH fusion make two offline clients converge on one container.</li>
-    <li><strong>Delta from kernel pages — invisible:</strong> the container gets <em>no alias and no page type</em>, keeping it out of page autocomplete and alias listings. Its marker type is self-description only; lookups key on the deterministic id.</li>
+    <li><strong>Delta from kernel pages — invisible:</strong> the container gets <em>no alias and no page type</em>, keeping it out of page autocomplete and alias listings. Its annotation-container marker type is self-description only; lookups key on the deterministic id.</li>
     <li><strong>Delta from kernel pages — tombstone-proof:</strong> the ensure must restore a soft-deleted container the way <code>getOrCreateKernelPage</code> does — plain <code>tx.createOrGet</code> throws on a tombstone, and a permanently deleted container must never brick comment creation.</li>
     <li><strong>Timing:</strong> facet registration means an eager pristine row minted on the workspace-open path in every workspace (<code>repo.ensureSystemPages</code>); v1 accepts that for uniformity — lazy ensure-at-first-comment is the fallback if boot-path writes become a concern.</li>
   </ul>
@@ -363,7 +363,7 @@ children: first visible comment block, then reply blocks</code></pre>
     </tr>
     <tr>
       <td>Target deletion</td>
-      <td>Do not cascade-delete threads automatically. If all target blocks are deleted, hide the thread from normal annotation surfaces and expose it through a workspace-level orphaned/resolved-comments affordance that scans annotation threads by type instead of starting from a live target block (position-independent, like the merge lookup). Restoring a target un-orphans the thread naturally: property-derived refs are preserved on target deletion, so discovery is liveness-at-read-time.</td>
+      <td>Do not cascade-delete threads automatically. If all target blocks are deleted, hide the thread from normal annotation surfaces and expose it through a workspace-level orphaned/resolved-comments affordance that scans annotation threads by type instead of starting from a live target block (position-independent, like the merge-processor lookup in Block merges). Restoring a target un-orphans the thread naturally: property-derived refs are preserved on target deletion, so discovery is liveness-at-read-time.</td>
     </tr>
     <tr>
       <td>Thread deletion</td>
@@ -439,11 +439,11 @@ children: first visible comment block, then reply blocks</code></pre>
   <p>Resolved ranges feed decorations. Stale anchors still keep the thread attached to their target blocks, but no text highlight is shown for the stale segment until it is repaired.</p>
 
   <h2>Anchor Maintenance</h2>
-  <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user explicitly repairs a stale anchor. A later pass can add automatic remapping on block content edits. Persisting a repair must be snapshot-atomic and intent-validating: inside the persisting transaction, re-locate the user-confirmed <code>exact</code> text in the in-transaction content and compute offsets from that one snapshot; if the confirmed text no longer matches uniquely, abort or mark the segment stale rather than storing whatever now sits at the old offsets. An internally consistent offsets/<code>exact</code> pair is not enough — it must be the text the user actually confirmed.</p>
+  <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user explicitly repairs a stale anchor. Persisting a repair must be snapshot-atomic and intent-validating: inside the persisting transaction, re-locate the user-confirmed <code>exact</code> text in the in-transaction content and compute offsets from that one snapshot; if the confirmed text no longer matches uniquely, abort or mark the segment stale rather than storing whatever now sits at the old offsets. An internally consistent offsets/<code>exact</code> pair is not enough — it must be the text the user actually confirmed.</p>
 
   <p>V1 resolution state should be derived: resolving an anchor returns <code>resolved</code> or <code>stale</code>, but the app persists only explicit user actions such as repair, resolve, reopen, accept, or reject. Do not persist routine stale resolver output as thread state unless a later design introduces an explicit invalidation field with clear write rules.</p>
 
-  <p>If automatic remapping is needed, prefer a bounded same-transaction processor. Same-tx processors run inside the user's write transaction and can amend writes atomically, so an undo step can cover both the content edit and anchor update. See <a href="../src/data/api/sameTxProcessor.ts">sameTxProcessor.ts</a>.</p>
+  <p>A later pass can add automatic remapping on block content edits; if it is, prefer a bounded same-transaction processor. Same-tx processors run inside the user's write transaction and can amend writes atomically, so an undo step can cover both the content edit and anchor update. See <a href="../src/data/api/sameTxProcessor.ts">sameTxProcessor.ts</a>.</p>
 
   <div class="warn">
     <strong>Latency guard:</strong> automatic remapping must stay bounded. If a block has too many annotation segments, or repair is ambiguous, the processor should stop early and leave affected segments resolving as stale rather than making content saves feel slow.
@@ -569,7 +569,7 @@ children: first visible comment block, then reply blocks</code></pre>
   </table>
 
   <h2>Implementation Slices</h2>
-  <p>Annotation code lives in a new plugin (e.g. <code>src/plugins/annotations/</code>), following the references/backlinks pattern. The hiding seam needs kernel hooks only for the non-typed-query surfaces (FTS search, recents); typed-query surfaces can use the existing ancestor-scope <code>exclude</code> predicate.</p>
+  <p>Annotation code lives in a new plugin (e.g. <code>src/plugins/annotations/</code>), following the references/backlinks pattern. The hiding seam needs kernel hooks only for the non-typed-query surfaces (FTS search, recents); typed-query surfaces can use the existing ancestor-scope <code>exclude</code> predicate, and breadcrumbs/backlink group context filter at render level through the shared helper.</p>
   <h3>V1 comments</h3>
   <ol>
     <li>Define annotation schemas (<code>defineProperty</code> + <code>codecs.refList()</code>, as existing plugins do): thread type, annotation container type, target <code>refList</code> property, anchor payload property, status/kind properties.</li>
