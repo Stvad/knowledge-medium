@@ -258,7 +258,7 @@
       an update event stores the changed domain fields' <em>before and after</em>
       values (equal key sets); identical updates are not logged (§3).</li>
     <li><strong>Anchors are sampled — one in-trigger coin flip at p = 1/64, no
-      write-path reads</strong> (adopted per <a href="#s16">O5</a>, superseding
+      write-path history reads</strong> (adopted per <a href="#s16">O5</a>, superseding
       a deterministic probe + counter design, §15). Anchors carry full
       before+after and are pure read-acceleration + corruption-bounding: no
       correctness property depends on them (§4).</li>
@@ -558,12 +558,22 @@ row_events spec regardless: <code>id</code>
 raw <code>UPDATE … SET id</code> (the §2.1 unguarded path, which §6.2
 promises is always logged) would otherwise diff as all-identical and vanish
 under the no-op skip, where v1 recorded the move; the v2 spec includes
-<code>id</code> in the diff and forces <code>full = 1</code> when it changed,
-keeping both eras' terminators intact (slice-B raw-write test).
+<code>id</code> in the diff and forces <code>full = 1</code> when it changed
+— recorded under the NEW id (the trigger stamps
+<code>block_id = NEW.id</code>). That preserves v1 parity and bounds the
+damage, no more: the old id's newer-side terminator is broken by the raw key
+rewrite itself (v1 alike — that chain reconstructs only via its older-side
+full, and a skip-created row genuinely breaks), so §4.3's "ChainBroken ⇒
+corruption" carries this one raw-write asterisk (slice-B raw-write test).
 </p>
 
-<p>Index changes — <strong>none on the write path</strong>: the v2 trigger
-reads no history (§4.1/I6), so slice A ships no index work at all. Slice C adds
+<p>Index changes — <strong>nothing the v2 triggers need</strong>: the v2
+trigger reads no history (§4.1/I6), so slice A ships no index work at all.
+Slice B adds one small partial index for the §5.3 sweeper's recurring
+candidate scan — <code>row_events(block_id, id) WHERE scope = 'local-ui'</code>
+— tiny by construction (it holds only the class being bounded) at the cost of
+one index insert per UiState event; without it every deep-idle sweep scans the
+multi-GB table. Slice C adds
 <code>(block_id, id)</code> for reader walks and the §8 rewriter —
 <code>id</code> is AUTOINCREMENT-monotonic and is the authoritative per-block
 order (same-millisecond events in one tx tie on <code>created_at</code>). The
@@ -643,7 +653,11 @@ needed:</p>
   <code>full</code> column); three separate <code>random()</code> calls would
   disagree (e.g. a full before paired with a compact after). Compute the flip
   once and reference it — e.g. <code>INSERT INTO row_events ... SELECT ...
-  FROM (SELECT (abs(random()) % 64) = 0 AS anchor)</code>. Pin with a shape
+  FROM (SELECT (random() % 64) = 0 AS anchor)</code>. No <code>abs()</code>:
+  <code>abs(random())</code> raises an integer-overflow error on −2⁶³
+  (p = 2⁻⁶⁴) and aborts the user's whole tx from inside the trigger; plain
+  <code>random() % 64</code> hits 0 at exactly 1/64 (negative multiples of 64
+  included). Pin with a shape
   test: both payload sides of every event agree on key set / fullness.
   (Verified empirically on SQLite 3.51: the shape is valid in an AFTER
   UPDATE body alongside NEW/OLD, and the coin is not re-evaluated per
@@ -904,11 +918,11 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
   ago"), while bounding is what actually matters — the class's cost is
   unbounded <em>accumulation</em>, not per-event size. Default K = 8
   (boot-tunable like p; the value is having <em>a</em> recent record, not
-  depth), which caps a single-writer panel block's local history at ~K &times;
+  depth), which caps an all-local-ui panel block's local history at ~K &times;
   1.4&nbsp;KB ≈ 11&nbsp;KB regardless of write rate — versus 35&nbsp;MB
-  measured on the hottest prod panel in three weeks. (Single-writer is the
-  measured common case; mixed-writer blocks wait on the phase-2 sync bound —
-  caveats below.)
+  measured on the hottest prod panel in three weeks. (All-local-ui chains are
+  the common case today; any surviving non-local-ui event — a sync echo, a
+  legacy row — freezes the cut until phase 2. Caveats below.)
 </div>
 
 <p>Mechanism and the rule that makes pruning sound:</p>
@@ -922,7 +936,11 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
     <code>PendingIdleJobs</code> machinery as §8) prunes, per block, from the
     block's <em>oldest contiguous all-local-ui prefix only</em>: delete
     local-ui events with <code>id &lt; min(id of the K-th-newest local-ui
-    event, id of the block's oldest surviving non-local-ui event)</code>.
+    event, id of the block's oldest surviving non-local-ui event)</code> —
+    where a missing second operand (an all-local-ui block, the common case)
+    means +∞, <em>not</em> SQL's <code>min(x, NULL) = NULL</code>: the naive
+    transcription silently no-ops on exactly the blocks the sweeper exists
+    for (the §6.2 NULL-safety review rule applies to this predicate too).
     Not in-trigger: pruning from the trigger would put a read+DELETE on the
     hottest write path (rejected, §15). The bound is eventual, enforced at
     idle — bursts between sweeps are small and compact.</li>
@@ -947,22 +965,36 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
     as the second sanctioned <code>row_events</code> mutation — narrowly:
     scope-stamped rows, R1 order, never anchors-of-record for other
     scopes.</li>
-  <li><strong>Caveats owned:</strong> scope does not travel over sync, so
-    other devices' UI-state churn still logs unbounded on arrival (compact
-    properties-pair patches; the identical-echo share is absorbed by the
-    no-op skip) — and, under the prefix cut, a sync event <em>freezes</em>
-    the block's prune point at itself, so mixed-writer panels retain more
-    than K until a phase-2 sync-side bound exists. That makes phase 2 the
-    <em>load-bearing complement</em> for multi-writer panels, not an optional
-    extra: it would bound sync-source update events of blocks that carry
-    local-ui-stamped events — deferred to measurement, since single-writer
-    panels are the measured common case (a device's own uploads do not echo
-    back as local sync events, so a panel written by one device stays
-    all-local-ui and prunes fully). Stock v1 churn is reached via the §8
-    rewriter's scope backfill (§8.1), so the bound covers the measured
-    35&nbsp;MB panel after slice C, not just future traffic. And pruned bytes
-    return only at VACUUM (§9) — the point is bounding growth, not reclaiming
-    it.</li>
+  <li><strong>Caveats owned — the freeze class is "any non-local-ui event",
+    and it is broader than it first looks.</strong> Scope does not travel
+    over sync, so other devices' UI-state churn still logs unbounded on
+    arrival (compact properties-pair patches; the identical-echo share is
+    absorbed by the no-op skip) — and, under the prefix cut, <em>any</em>
+    surviving non-local-ui event freezes the block's prune point at itself:
+    a sync arrival, a raw write, an automation/references touch, an
+    un-backfilled legacy row. Two freeze sources need naming honestly:
+    <em>(a) own-write echoes are possible</em> — the observer's dedup skips
+    only equal-stamp re-deliveries (<code>reconcile.ts:88-123</code>), and
+    the server's monotonicity clamp
+    (<code>supabase/migrations/20260612…monotonic_clamp.sql</code>) rewrites
+    stamps in routine cases (fast local clock; same-ms bursts), so a
+    stamp-different echo of the device's <em>own</em> panel write
+    materializes and logs as a sync event — one such echo in 14.7k writes
+    freezes the cut forever; <em>(b) panel blocks that predate a device's
+    first sync</em> open with a sync create — frozen at position 1 on that
+    device. So the 11&nbsp;KB cap holds only for chains that stay
+    all-local-ui below the cut (named assumption: panel blocks are written
+    under <code>ChangeScope.UiState</code> only — true in code today,
+    creation included: <code>panelLayoutProjection.ts</code>,
+    <code>workspaceBootstrap.ts:208</code>), and <strong>phase 2 — bounding
+    non-local-ui events of blocks that carry local-ui-stamped events — is the
+    load-bearing complement for every echo-frozen or sync-created panel, not
+    just multi-writer ones</strong>. Before slice B, one bridge query per
+    instance (per-panel <code>source</code>/<code>scope</code> mix of the hot
+    blocks) settles how often the freeze actually bites and whether phase 2
+    ships with slice B or later. Stock v1 churn is reached via the §8
+    rewriter's scope backfill (§8.1). And pruned bytes return only at VACUUM
+    (§9) — the point is bounding growth, not reclaiming it.</li>
 </ul>
 
 <h2 id="s6">6. Sync-source logging: kept for every workspace (revised)</h2>
@@ -1188,13 +1220,21 @@ block with any <code>v IS NULL</code> event:
     all-fields-identical v1 update (the v1 trigger logged no-ops) becomes an
     empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
     timing.</li>
-  <li>Stamp <code>scope</code> while rewriting: v1 user-source events
-    backfill it via the <code>tx_id → command_events.scope</code> join
-    (<code>command_events</code> records scope per tx,
-    <code>commitPipeline.ts:348-368</code>; sync-source events correctly stay
-    NULL). This is what lets the §5.3 retention bound reach the measured
-    stock churn — the 14.7k-event panel — rather than only future
-    traffic.</li>
+  <li>Stamp <code>scope</code> while rewriting: any v1 event whose
+    <code>tx_id</code> joins <code>command_events</code> backfills scope from
+    it (<code>command_events</code> has carried <code>scope</code> NOT NULL
+    keyed by tx_id since before both measured instances' DBs;
+    <code>commitPipeline.ts:348-368</code>; no delete path exists). Key on
+    the join, <em>not</em> on <code>source = 'user'</code> — v1 source labels
+    are an open set, and the ~11k legacy <code>'local-ephemeral'</code> rows
+    (§6.2) are precisely old UI-state churn that must not become §5.3 freeze
+    points. Sync-applied events carry no <code>tx_id</code> and correctly
+    stay NULL. This is what lets the §5.3 retention bound reach the measured
+    stock churn — the 14.7k-event panel — rather than only future traffic
+    (subject to the §5.3 freeze caveats). One count to run at
+    implementation: v1 tx-carrying events with no <code>command_events</code>
+    row would indicate a decoupled era and quantify the backfill's
+    misses.</li>
   <li>Mark the batch done by the rewrite itself: <code>v</code> flips 2.</li>
 </ol>
 
@@ -1252,8 +1292,9 @@ block with any <code>v IS NULL</code> event:
     and the discontinuity rule anchors across any interleave), but two
     consequences are owned: the completion marker means "work queue observed
     empty once", not "no v1 rows can exist" (stragglers stay
-    v-NULL = readable-as-full, merely uncompacted, and a later sweep may
-    re-run the rewriter); and during a downgrade window the v1 bodies carry
+    v-NULL = readable-as-full, merely uncompacted — permanently, unless the
+    job is deliberately re-armed; the marker-gated one-shot does not re-scan
+    on its own); and during a downgrade window the v1 bodies carry
     no <code>history_mode</code> gate, no identical-update skip, and no
     scope stamp — see the G1 caveat in §11.</li>
   <li><strong>Ordering with the ALTERs:</strong> the column adds run in
@@ -1322,6 +1363,16 @@ this VFS: <code>VACUUM INTO</code> a staging OPFS file + swap at next boot —
 the swap machinery already exists for DB import/recovery
 (<code>src/utils/exportSqliteDb.ts</code>, <code>localDbRecovery.ts</code>);
 costs more moving parts, bounds memory, never touches the live file.
+<strong>Non-negotiable freshness fence (review finding — data loss as
+previously worded):</strong> <code>VACUUM INTO</code> is a point-in-time
+snapshot taken at deep idle, and the recovery-swap machinery replaces the DB
+<em>by design</em>, with no freshness check — a naive next-boot swap would
+silently discard every write made after the snapshot (blocks, the
+<code>ps_crud</code> upload queue, row_events). The fallback must record a
+write fence at <code>INTO</code> time (e.g. <code>MAX(row_events.id)</code>
+plus <code>ps_crud</code> emptiness, or the SQLite file change counter) and
+the boot-time swap must verify the live file has not advanced past it —
+discarding the <em>staging</em> file otherwise, never the live one.
 </p>
 
 <h2 id="s10">10. What each future reader needs from the format</h2>
@@ -1407,10 +1458,14 @@ costs more moving parts, bounds memory, never touches the live file.
     creates write <em>zero</em> row_events rows (vs ~230&nbsp;MB + index churn).
     <code>command_events</code> still records every backfill tx. One caveat
     (§8.2): a stale tab re-boot can reinstall v1 trigger bodies, which have no
-    <code>history_mode</code> gate — a backfill batch running in that window
-    logs its full creates despite the skip. Cheap guard: the backfill probes
-    the installed trigger body (<code>sqlite_master</code>) before its first
-    batch.</li>
+    <code>history_mode</code> gate — and the backfill runs 5–10 minutes
+    chunked across many txs, so a mid-run downgrade would silently log the
+    remaining creates. Guard: probe the installed trigger body
+    (<code>SELECT sql FROM sqlite_master</code>, one row) <em>inside each
+    chunk's write transaction</em> — serialized against any stale tab's DDL,
+    negligible cost — and abort/wait if the body lacks the gate. Even that
+    closes the window per-batch, not per-run; the residue is one batch's
+    creates, not ~230&nbsp;MB.</li>
   <li><strong>G2 — receiving devices (renegotiated with the §6 revision):</strong>
     backfilled rows arrive as sync-applied creates and now <em>log</em> —
     ~650k full creates ≈ ~230&nbsp;MB one-time per receiving device. This
@@ -1502,8 +1557,8 @@ share the file.
     <tr><td>Fresh device, first sync (345k blocks — measured on prod)</td><td>~205&nbsp;MB</td><td>~205&nbsp;MB (kept — §6; creates are full in v2 too)</td></tr>
     <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
     <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB unless #288 adds an arrival exemption (§11 G2)</td></tr>
-    <tr><td>Ongoing: one organic content edit (dev user-source update mean: 510&nbsp;MB / 256k events ≈ 2.1&nbsp;KB)</td><td>~2.1&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
-    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB, forever</td><td>~1.4&nbsp;KB as a patch — and the block's whole local-write history plateaus at ~K &times; 1.4&nbsp;KB ≈ <strong>11&nbsp;KB</strong> under O6 retention (§5.3)</td></tr>
+    <tr><td>Ongoing: one organic content edit (dev user-source update mean: 510&nbsp;MB / 256k events ≈ 2.0&nbsp;KB)</td><td>~2.0&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
+    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB, forever</td><td>~1.4&nbsp;KB as a patch — and an all-local-ui block's whole local-write history plateaus at ~K &times; 1.4&nbsp;KB ≈ <strong>11&nbsp;KB</strong> under O6 retention (§5.3 freeze caveats apply)</td></tr>
   </tbody>
 </table>
 </div>
@@ -1545,7 +1600,8 @@ into is smaller).
         <code>tx_context.apply_kind</code> sync marker + the truthful three-way
         <code>source</code> tag (§6.2 — labeling only; the policy table and
         drop gates left with the §6 revision); the §5.3 UiState retention
-        sweeper (newest K per block, rule R1); tests pinning
+        sweeper (newest K per block, rule R1) + its partial candidate index
+        (§3); tests pinning
         I1-under-exemption, I3 (incl. raw-write labeling + logging), and
         delete-always-logs — plus the fuzzed writer-interleaving suite (note
         below).</td>
@@ -1594,9 +1650,12 @@ of user / sync-applied / raw / <code>'skip'</code> writers (oracle: exactly
 the skip-tx create/update events are absent, delete events always present,
 labels truthful — I3/I4), and randomized §5.3 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same blocks
-(oracle: pruning removes only an all-local-ui block prefix — R1 — and
+(safety oracle: pruning removes only an all-local-ui block prefix — R1 — and
 <code>stateAt</code> stays exact for every surviving event; the mixed
-interleaving is what catches a middle-punching sweeper). Slice C's I5 equivalence suite is the same
+interleaving is what catches a middle-punching sweeper. Plus a
+<em>progress</em> oracle, because a never-prunes sweeper passes every safety
+property trivially: a block with &gt; K local-ui events and no non-local-ui
+event below the K-th-newest ends the sweep with exactly K). Slice C's I5 equivalence suite is the same
 generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
 under random interruption/resume points.
@@ -1649,7 +1708,8 @@ under random interruption/resume points.
       <td>Trigger WHEN gates</td>
       <td>Test: a sync-applied write produces a <code>'sync'</code>-labeled
         event; a raw (no-tx, no-marker) write produces a <code>'raw'</code>
-        event.</td>
+        event — including immediately after an interrupted sync bracket
+        (crash before the §6.2 <code>apply_kind</code> clear).</td>
     </tr>
     <tr>
       <td>I4</td>
@@ -1679,7 +1739,7 @@ under random interruption/resume points.
         work = v1 minus the full snapshot sides, plus changed-field patches and
         one <code>random()</code> — <em>no trigger body may read
         <code>row_events</code> or scan history on the write path</em> (the
-        only reads are the existing 1-row <code>tx_context</code> probes).</td>
+        only reads are 1-row <code>tx_context</code> probes).</td>
       <td><a href="#s7">§7</a></td>
       <td>v2 trigger</td>
       <td>Bench note in slice A (write-tx tail latency before/after); review
@@ -1806,7 +1866,7 @@ under random interruption/resume points.
     compact-update bytes (~400&nbsp;B vs ~200&nbsp;B; stock updates ~180 →
     ~330&nbsp;MB on the then-assumed stock — still ~10&times; smaller per
     event than v1's ~4&nbsp;KB pairs) and probabilistic instead of
-    deterministic walk bounds. Wins: zero write-path reads, no
+    deterministic walk bounds. Wins: no write-path history reads, no
     <code>chain_pos</code>/promotion machinery, no slice-A index dependency,
     undo befores stored directly, unconditional soundness under every gap
     class. Sampling probability: O3 → §4.4 (default p = 1/64, rarer than the
