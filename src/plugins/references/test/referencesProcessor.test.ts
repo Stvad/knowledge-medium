@@ -1208,6 +1208,77 @@ describe('parseReferences — alias claimed between plan build and apply (write-
       'date mark binds to the ISO claimant via the ensure',
     ).toBe(true)
   })
+
+  it('claiming a long-form literal on the target is a bookkeeping write (no user-edit stamp)', async () => {
+    // claimLiteralDateAliases appends the literal spelling to the
+    // target's alias list from a background re-parse of some OTHER
+    // block. That write must ride skipMetadata like the processor's
+    // references write: bumping userUpdatedAt/updatedBy here would make
+    // the target page float to the top of last-edited views because a
+    // different block mentioned it (Codex review on PR #384).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'C'})
+      await tx.setProperty('iso-claimant', aliasesProp, ['2026-06-10'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    const before = await env.h.db.getOptional<{user_updated_at: number | null; updated_by: string | null}>(
+      'SELECT user_updated_at, updated_by FROM blocks WHERE id = ?', ['iso-claimant'],
+    )
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[June 10th, 2026]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const claimant = await env.read('iso-claimant')
+    expect(
+      JSON.parse(claimant!.properties_json)[aliasesProp.name],
+      'literal spelling claimed alongside the ISO',
+    ).toEqual(['2026-06-10', 'June 10th, 2026'])
+    const after = await env.h.db.getOptional<{user_updated_at: number | null; updated_by: string | null}>(
+      'SELECT user_updated_at, updated_by FROM blocks WHERE id = ?', ['iso-claimant'],
+    )
+    expect(after, 'claim write must not stamp user-edit metadata').toEqual(before)
+  })
+
+  it('skips the literal claim when the target alias property cannot be decoded', async () => {
+    // Legacy/raw data can hold a malformed alias array (e.g.
+    // ["2026-06-11", 1]) whose STRING entries the block_aliases trigger
+    // still indexes — so the ISO keeps resolving to this block. The
+    // claim's append is decode→rewrite; on decode failure it must skip
+    // rather than replace the list with just the literal, which would
+    // un-claim the ISO and re-point future [[2026-06-11]] links (Codex
+    // review on PR #384).
+    await env.repo.tx(
+      tx => tx.create({id: 'legacy', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'L'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    // Malformed shape can't be written through the codec — plant it raw.
+    // The UPDATE fires blocks_alias_update, which indexes the string
+    // entry and skips the number (typeof(je.value) = 'text' guard).
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = json_set(properties_json, '$.alias', json('["2026-06-11", 1]')) WHERE id = ?`,
+      ['legacy'],
+    )
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[June 11th, 2026]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'June 11th, 2026' && ref.id === 'legacy'),
+      'long-form still binds to the indexed ISO claimant',
+    ).toBe(true)
+    expect(
+      JSON.parse((await env.read('legacy'))!.properties_json)[aliasesProp.name],
+      'undecodable alias list left untouched — ISO claim preserved',
+    ).toEqual(['2026-06-11', 1])
+  })
 })
 
 describe('parseReferences — idempotent comparison', () => {

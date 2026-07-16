@@ -321,11 +321,21 @@ const claimLiteralDateAliases = async (
     const encoded = target.properties[aliasesProp.name]
     existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
   } catch {
-    existing = []
+    // Malformed alias property (e.g. legacy `["2026-01-05", 1]`): the
+    // append below would REPLACE the whole list, dropping entries the
+    // block_aliases trigger still indexes — parsing a long-form date
+    // must never un-claim the target's ISO. Losing a live binding is
+    // worse than leaving the literal unclaimed, so skip the claim for
+    // this target; it degrades to the pre-claim first-writer behavior.
+    return
   }
   const missing = literals.filter(literal => !existing.includes(literal))
   if (missing.length === 0) return
-  await tx.setProperty(targetId, aliasesProp, [...existing, ...missing])
+  // skipMetadata: derived bookkeeping, same as the source-references
+  // write in applySourcePlan — advances updatedAt for sync but must not
+  // stamp userUpdatedAt/updatedBy, or a background re-parse of some
+  // unrelated source makes the target look freshly user-edited.
+  await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
 }
 
 const applySourcePlan = async (
