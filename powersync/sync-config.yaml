@@ -44,7 +44,8 @@ streams:
           workspaces.create_time,
           workspaces.update_time,
           workspaces.encryption_mode,
-          workspaces.wk_canary
+          workspaces.wk_canary,
+          workspaces.properties_migration
         FROM public.workspaces
         WHERE workspaces.id IN user_workspaces
       - |

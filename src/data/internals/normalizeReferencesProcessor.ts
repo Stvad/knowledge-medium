@@ -29,6 +29,10 @@ import {
 } from '@/data/api'
 import { BLOCK_TYPE_KERNEL_PROCESSORS } from './blockTypeTypeifyProcessor'
 import { DERIVE_REFERENCE_TARGET_PROCESSOR } from './referenceTargetProcessor'
+import {
+  MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
+  PROJECT_PROPERTY_CHILDREN_PROCESSOR,
+} from './propertyChildrenProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -58,11 +62,17 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
   },
 })
 
+// Single pass, registration order (PR #285 spike order, kept deliberately):
+// materialize (cell→children) runs first so a raw cell write's fresh
+// field/value rows are visible to the derive + project passes in the same
+// tx; derive stamps `reference_target_id` next so the projection's
+// changed-row scan sees the final column; project (children→cell) runs
+// after both so a tree-side edit reprojects from settled children. Each
+// write is idempotent, so a dual-write round-trip through the trio no-ops.
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
-  // Derives the local `reference_target_id` column from content. First so
-  // later processors in the same pass (slice B's property-children
-  // projection watches `referenceTargetId`) see the stamped column.
+  MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
   DERIVE_REFERENCE_TARGET_PROCESSOR,
+  PROJECT_PROPERTY_CHILDREN_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
   // Runs ahead of the alias plugin's content<->alias sync (kernel
   // processors precede plugin ones), so a freshly-tagged block-type

@@ -22,7 +22,7 @@ export type PropertyBoundaryResolution<T> =
 const isPropertyHandle = <T>(schema: PropertySchema<T>): schema is PropertyHandle<T> =>
   typeof (schema as Partial<PropertyHandle<T>>).seedKey === 'string'
 
-const isResolvedPropertySchema = <T>(
+export const isResolvedPropertySchema = <T>(
   schema: PropertySchema<T>,
 ): schema is ResolvedPropertySchema<T> => {
   const candidate = schema as Partial<ResolvedPropertySchema<T>>

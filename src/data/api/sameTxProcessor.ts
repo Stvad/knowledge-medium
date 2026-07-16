@@ -139,6 +139,16 @@ export interface SameTxCtx {
     workspaceId: string,
     name: string,
   ): PropertySchemaResolution<unknown>
+  /** Resolve a durable fieldId (definition block id) against the same
+   *  snapshot — the recognition primitive for field rows
+   *  (`reference_target_id` → schema). Shadowed definitions resolve as
+   *  `identity-unavailable` with reason 'shadowed' (their field rows keep
+   *  classifying at read sites, but they are excluded from the name map
+   *  and cell projection — unification §7). */
+  resolvePropertySchemaField(
+    workspaceId: string,
+    fieldId: string,
+  ): PropertySchemaResolution<unknown>
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The

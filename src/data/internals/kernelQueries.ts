@@ -32,7 +32,15 @@ import {
   type TypedBlockQueryReferenceFilter,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
-import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
+import {
+  ANCESTORS_SQL,
+  CHILDREN_IDS_SQL,
+  CHILDREN_SQL,
+  manyAncestorsSql,
+  SUBTREE_SQL,
+  VISIBLE_CHILDREN_IDS_SQL,
+  VISIBLE_CHILDREN_SQL,
+} from './treeQueries'
 import {
   assertAncestorWalkBounded,
   buildCandidatesCte,
@@ -594,32 +602,55 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-/** Direct children of `id`, ordered `(order_key, id)`. */
-export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
+/** Direct children of `id`, ordered `(order_key, id)`. Default EXCLUDES
+ *  recognized property field rows in a child-backed workspace (PR #288 §9
+ *  — the outline must see only visible children; dormant no-op while the
+ *  workspace is un-flipped). Machinery callers that must see the
+ *  field/value rows (copy, export, integrity scans) opt in with
+ *  `includePropertyChildren: true` — the same option `tx.childrenOf`
+ *  takes. */
+export const childrenQuery = defineQuery<
+  {id: string; includePropertyChildren?: boolean},
+  BlockData[]
+>({
   name: 'core.children',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({id: z.string(), includePropertyChildren: z.boolean().optional()}),
   resultSchema: blockDataArraySchema,
-  resolve: async ({id}, ctx) => {
+  resolve: async ({id, includePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = includePropertyChildren
+      ? await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+      : await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
 
 /** Child-id list of `id` (lean shape). With `hydrate: true`, also runs
  *  the full row SELECT and primes the cache — the consumer-facing
- *  variant the React hooks use to avoid N+1 row loads on mount. */
-export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string[]>({
+ *  variant the React hooks use to avoid N+1 row loads on mount. Same
+ *  visible-children default as `core.children`. */
+export const childIdsQuery = defineQuery<
+  {id: string; hydrate?: boolean; includePropertyChildren?: boolean},
+  string[]
+>({
   name: 'core.childIds',
-  argsSchema: z.object({id: z.string(), hydrate: z.boolean().optional()}),
+  argsSchema: z.object({
+    id: z.string(),
+    hydrate: z.boolean().optional(),
+    includePropertyChildren: z.boolean().optional(),
+  }),
   resultSchema: z.array(z.string()),
-  resolve: async ({id, hydrate = false}, ctx) => {
+  resolve: async ({id, hydrate = false, includePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const rows = await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+      const rows = includePropertyChildren
+        ? await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+        : await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, id])
       return rows.map(r => r.id)
     }
-    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = includePropertyChildren
+      ? await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+      : await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the
     // id set. Hydration here is pure cache priming for the React hooks

@@ -174,6 +174,14 @@ export interface Tx {
    *  the schema's `defaultValue` if the property is absent. */
   getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T>
 
+  /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
+   *  flipped to child-backed properties (`workspaces.properties_migration`
+   *  at or past 'children' — never an equality test)? Shared by
+   *  recognition, the dual-write, and the projection processors; cached
+   *  per tx. Reads the local synced `workspaces` row; a missing row/column
+   *  reads as un-flipped ('cell'). */
+  isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean>
+
   // ──── Composition ────
 
   /** Compose another mutator. Sub-mutator's writes go through immediately;
@@ -185,6 +193,17 @@ export interface Tx {
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
    *  `deleted = 0`. Reads SQL via the writeTransaction.
+   *
+   *  In a child-backed workspace (PR #288 §9) the default EXCLUDES
+   *  property field rows: structural/outline callers (sibling lists,
+   *  moves, paste, panel layout) must see only visible children — a
+   *  materialized hidden field sorted before the content children would
+   *  corrupt sibling-position math. The property-children machinery —
+   *  and copy/export/import/delete-cascade traversals, which must carry
+   *  the field/value rows — opts IN with `{includePropertyChildren:
+   *  true}`. In an un-flipped workspace nothing is recognized, so the
+   *  default is a no-op (dormant).
+   *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
    *  one of three sources, in priority order:
@@ -197,7 +216,11 @@ export interface Tx {
    *       computation.
    *  When `parentId !== null`, `workspaceId` is ignored — the parent
    *  row already constrains the query. */
-  childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
+  childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {includePropertyChildren?: boolean},
+  ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by
    *  default (`SELECT 1 … WHERE parent_id = ? AND deleted = 0 LIMIT 1`,

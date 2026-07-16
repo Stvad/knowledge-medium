@@ -209,7 +209,9 @@ export const cycleScanSql = (idCount: number): string => {
 }
 
 /** Direct children of a parent, ordered `(order_key, id)`, filtered
- *  `deleted = 0`. */
+ *  `deleted = 0`. Machinery form: property field rows INCLUDED — copy,
+ *  export, delete-cascade, and the property-children processors must see
+ *  them (PR #288 §9). */
 export const CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -218,9 +220,89 @@ export const CHILDREN_SQL = `
 
 /** Same as CHILDREN_SQL but returns only `id` — for the child-id-only
  *  handle (`repo.childIds`) which doesn't need to hydrate the full row
- *  and only declares structural deps (`parent-edge`). */
+ *  and only declares structural deps (`parent-edge`). Machinery form:
+ *  field rows included. */
 export const CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
+   ORDER BY order_key, id
+`
+
+/**
+ * VISIBLE-children predicate (PR #288 §9, slice B1): in a child-backed
+ * workspace the outline's default child listing excludes recognized
+ * property field rows — a child whose local `reference_target_id` names a
+ * definition block, when the workspace's `properties_migration` is at or
+ * past 'children' (never an equality test) and the PARENT itself is
+ * ordinary content (role is positional: everything beneath a field row is
+ * property-subtree interior — values, comments — so listings there never
+ * filter; a ref-typed VALUE pointing at a definition block would otherwise
+ * be misread as a nested field).
+ *
+ * The row template binds nothing; the recursion template consumes ONE `?`
+ * (the parent id) for the §9 ancestry rule. Callers therefore bind
+ * `[parentId, parentId]` for the visible variants below.
+ *
+ * Definition-ness binds to the `block_types` side index (`type =
+ * 'property-schema'`): every definition block — user-authored and
+ * materialized seed alike — carries that type. DIVERGENCE from the
+ * tx-layer checker (which asks the registry and so recognizes a seeded
+ * definition with zero rows): a not-yet-materialized seed's field rows are
+ * invisible to this SQL — acceptable because the slice-C flip runbook
+ * materializes seeds before any workspace flips, and un-flipped workspaces
+ * never reach the predicate at all.
+ *
+ * An un-flipped workspace short-circuits on the `workspaces` probe
+ * (dormant: today's behavior, zero rows filtered).
+ */
+const VISIBLE_CHILD_PREDICATE_SQL = `
+   AND (
+     blocks.reference_target_id IS NULL
+     OR NOT EXISTS (
+       SELECT 1 FROM workspaces w
+        WHERE w.id = blocks.workspace_id
+          AND w.properties_migration IN ('children', 'cell-off')
+     )
+     OR NOT EXISTS (
+       SELECT 1 FROM block_types bt
+        WHERE bt.block_id = blocks.reference_target_id
+          AND bt.type = 'property-schema'
+     )
+     OR EXISTS (
+       WITH RECURSIVE up(id, reference_target_id, parent_id, depth) AS (
+         SELECT id, reference_target_id, parent_id, 0
+           FROM blocks WHERE id = ?
+         UNION ALL
+         SELECT b.id, b.reference_target_id, b.parent_id, up.depth + 1
+           FROM blocks AS b
+           JOIN up ON b.id = up.parent_id
+          WHERE up.depth < 100
+       )
+       SELECT 1 FROM up
+        WHERE up.reference_target_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM block_types bt2
+             WHERE bt2.block_id = up.reference_target_id
+               AND bt2.type = 'property-schema'
+          )
+        LIMIT 1
+     )
+   )
+`
+
+/** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows in
+ *  a flipped workspace. Bind `[parentId, parentId]`. */
+export const VISIBLE_CHILDREN_SQL = `
+  SELECT * FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${VISIBLE_CHILD_PREDICATE_SQL}
+   ORDER BY order_key, id
+`
+
+/** Outline form of {@link CHILDREN_IDS_SQL}. Bind `[parentId, parentId]`. */
+export const VISIBLE_CHILDREN_IDS_SQL = `
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+${VISIBLE_CHILD_PREDICATE_SQL}
    ORDER BY order_key, id
 `

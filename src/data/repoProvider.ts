@@ -50,6 +50,7 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
   ensureWorkspaceE2eeColumns,
+  ensureWorkspacePropertiesMigrationColumn,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -380,6 +381,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
   // above is a no-op when the table already exists). §7 / e2ee-design.
   await ensureWorkspaceE2eeColumns(powerSyncDb)
+  // Properties-as-blocks rollout lever (PR #288 §6) — nullable; absence
+  // reads as 'cell' (dormant) via parseWorkspaceRow.
+  await ensureWorkspacePropertiesMigrationColumn(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 

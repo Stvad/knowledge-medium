@@ -9,6 +9,7 @@ import type {
 } from '@/types'
 import type { Repo } from './repo'
 import {
+  parsePropertiesMigration,
   parseWorkspaceMemberRow,
   parseWorkspaceRow,
   type WorkspaceMemberRow,
@@ -41,6 +42,10 @@ type RpcWorkspaceRow = {
   // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
+  // Properties-as-blocks rollout lever (PR #288 §6). Optional: RPCs
+  // deployed before the column exist return rows without it; absence
+  // parses as 'cell' (dormant).
+  properties_migration?: string | null
 }
 
 const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
@@ -51,6 +56,7 @@ const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
   updateTime: toNumber(row.update_time),
   encryptionMode: row.encryption_mode,
   wkCanary: row.wk_canary,
+  propertiesMigration: parsePropertiesMigration(row.properties_migration),
 })
 
 // @projects: workspace_members
@@ -636,6 +642,7 @@ export const ensureLocalPersonalWorkspace = async (
     // Local-only personal workspace is always plaintext.
     encryptionMode: 'none',
     wkCanary: null,
+    propertiesMigration: 'cell',
   }
   const member: WorkspaceMembership = {
     id: memberId,

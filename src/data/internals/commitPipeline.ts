@@ -138,6 +138,23 @@ const sameTxFieldChanged = (
   return a === b ? false : JSON.stringify(a) !== JSON.stringify(b)
 }
 
+/** Per-same-tx-processor timing sample for one tx (PR #288 §12: the
+ *  property-children processors add write amplification at parents —
+ *  this is the counter that watches it). Collected only for processors
+ *  that matched rows (or whose collect scan itself cost ≥1ms). */
+export interface SameTxProcessorTiming {
+  readonly name: string
+  readonly changedRows: number
+  readonly collectMs: number
+  readonly applyMs: number
+}
+
+export interface TxTimingDiagnostics {
+  sameTxMs: number
+  sameTxChangedRows: number
+  sameTxProcessorRuns: SameTxProcessorTiming[]
+}
+
 export interface RunTxParams<R> {
   db: PowerSyncDb
   cache: BlockCache
@@ -219,6 +236,10 @@ export interface TxResult<R> {
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
   /** Merged property-schema registry snapshot paired with `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Same-tx step timings for diagnostics (write-amplification watch —
+   *  PR #288 §12). Internal callers attribute slow writeTransactions
+   *  without changing tx semantics. */
+  timing: Readonly<TxTimingDiagnostics>
 }
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
@@ -252,17 +273,26 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // the list at commit time into command_events.mutator_calls.
   const mutatorCalls: MutatorCallRecord[] = []
   const meta = newTxMeta({txId, scope, source, user, description})
+  const timing: TxTimingDiagnostics = {
+    sameTxMs: 0,
+    sameTxChangedRows: 0,
+    sameTxProcessorRuns: [],
+  }
   // Workspace-bound schema-name resolution for same-tx processors — the same
   // tx-start-captured identity primitive TxImpl resolves through (its private
   // `propertySchemaResolverFor`), rebuilt here from the identical inputs so
   // both surfaces see one registry snapshot per tx.
-  const resolvePropertySchemaName = (workspaceId: string, name: string) =>
+  const resolverFor = (workspaceId: string) =>
     propertySchemaResolverForWorkspace(
       propertyDefinitionRegistryForWorkspace(workspaceId),
       workspaceId,
       propertySeedNameCounts,
       propertySchemaWorkspaceId === null || workspaceId === propertySchemaWorkspaceId,
-    ).resolve(name)
+    )
+  const resolvePropertySchemaName = (workspaceId: string, name: string) =>
+    resolverFor(workspaceId).resolve(name)
+  const resolvePropertySchemaField = (workspaceId: string, fieldId: string) =>
+    resolverFor(workspaceId).resolveField(fieldId)
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
@@ -321,16 +351,27 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // re-deriving here would override the restore. See the `isReplay`
     // doc on RunTxParams.
     if (!isReplay && sameTxProcessors.size > 0 && (snapshots.size > 0 || sameTxEvents.length > 0)) {
+      const sameTxStartedAt = performance.now()
       for (const processor of sameTxProcessors.values()) {
+        const collectStartedAt = performance.now()
         const changedRows = collectSameTxFieldMatches(processor, snapshots)
+        const collectMs = performance.now() - collectStartedAt
         const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
-        if (changedRows.length === 0 && emittedEvents.length === 0) continue
+        if (changedRows.length === 0 && emittedEvents.length === 0) {
+          if (collectMs >= 1) {
+            timing.sameTxProcessorRuns.push(
+              {name: processor.name, changedRows: 0, collectMs, applyMs: 0},
+            )
+          }
+          continue
+        }
         // workspaceId is guaranteed here: field matches require a
         // snapshot-producing write, and tx.emitEvent refuses to run
         // before the tx has pinned a workspace.
         if (meta.workspaceId === null) {
           throw new Error('same-tx processor matched without a pinned workspace')
         }
+        const applyStartedAt = performance.now()
         await processor.apply(
           {
             txId,
@@ -340,9 +381,20 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
             changedRows,
             emittedEvents,
           },
-          {tx, db: txDb, propertySchemas, resolvePropertySchemaName},
+          {
+            tx, db: txDb, propertySchemas,
+            resolvePropertySchemaName, resolvePropertySchemaField,
+          },
         )
+        timing.sameTxChangedRows += changedRows.length
+        timing.sameTxProcessorRuns.push({
+          name: processor.name,
+          changedRows: changedRows.length,
+          collectMs,
+          applyMs: performance.now() - applyStartedAt,
+        })
       }
+      timing.sameTxMs = performance.now() - sameTxStartedAt
     }
 
     // Step 3.6: seed-definition write guard — one choke point over
@@ -422,6 +474,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     user,
     processors,
     propertySchemas,
+    timing: Object.freeze({
+      ...timing,
+      sameTxProcessorRuns: timing.sameTxProcessorRuns.slice(),
+    }),
   }
 }
 
