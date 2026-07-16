@@ -1,7 +1,8 @@
 import {describe, expect, it} from 'vitest'
 import type {AnyPropertySchema} from '@/data/api'
+import {typeDefinitionBlockId} from '@/data/definitionSeeds'
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
-import type {TypeSeedDeclaration} from '@/data/typeSeeds'
+import {seedType} from '@/data/typeSeeds'
 import {
   buildTypeDefinitionRegistry,
   type ProjectedTypeDefinition,
@@ -31,8 +32,10 @@ const projected = (
 const asMap = (defs: readonly ProjectedTypeDefinition[]) =>
   new Map(defs.map(d => [d.metadata.blockId, d]))
 
+const PAGE_KEY = 'system:kernel-data/type/page'
+
 describe('buildTypeDefinitionRegistry', () => {
-  it('publishes each user row under its own type id (typeId == blockId)', () => {
+  it('publishes each user row under its own block id (typeId == blockId)', () => {
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: asMap([
@@ -41,54 +44,73 @@ describe('buildTypeDefinitionRegistry', () => {
       ]),
       seeds: [],
     })
-
     expect(reg.typesById.get('a')).toMatchObject({id: 'a', label: 'Alpha'})
-    expect(reg.typesById.get('b')).toMatchObject({id: 'b', label: 'Beta'})
-    expect(reg.blockIdByTypeId.get('a')).toBe('a')
-    expect(reg.definitionsByBlockId.get('a')?.label).toBe('Alpha')
+    expect(reg.blockIdByTypeId.get('b')).toBe('b')
     expect(reg.definitionsByBlockId.size).toBe(2)
   })
 
-  it('resolves competing claims for one type id to the earliest createdAt', () => {
-    // Two rows both claim 'page' (a real seed + a later import). The early one
-    // wins; the late import must not hijack the id.
+  it('synthesizes a declared seed even with no materialized row', () => {
+    // A fresh/read-only client has the code declaration but no backing block yet;
+    // the built-in type must still be present, at its deterministic backing id.
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: new Map(),
+      seeds: [seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'})],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({id: 'page', label: 'Page'})
+    expect(reg.blockIdByTypeId.get('page')).toBe(typeDefinitionBlockId(WS, PAGE_KEY))
+  })
+
+  it('binds a materialized seed mirror to its declared id, ignoring a drifted stored claim', () => {
+    // The row is a valid seed mirror (its seedKey is a live declaration) but its
+    // stored block-type:type-id drifted to 'stale' (stale/tampered sync). The
+    // declaration owns the membership id; the row only supplies its blockId.
+    const blockId = typeDefinitionBlockId(WS, PAGE_KEY)
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: asMap([
-        projected({blockId: 'late', typeId: 'page', label: 'Impostor', createdAt: 300}),
-        projected({blockId: 'early', typeId: 'page', label: 'Real Page', createdAt: 100}),
+        projected({blockId, typeId: 'stale', seedKey: PAGE_KEY, label: 'Stale mirror'}),
       ]),
-      seeds: [],
+      seeds: [seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'})],
     })
-
-    expect(reg.typesById.get('page')).toMatchObject({id: 'page', label: 'Real Page'})
-    expect(reg.blockIdByTypeId.get('page')).toBe('early')
-    // The loser is still retained by its durable block id (for provenance /
-    // read-only gates), just not published as the winner.
-    expect(reg.definitionsByBlockId.get('late')?.label).toBe('Impostor')
-    expect(reg.definitionsByBlockId.size).toBe(2)
+    expect(reg.typesById.get('page')).toMatchObject({id: 'page', label: 'Page'})
+    expect(reg.typesById.has('stale')).toBe(false)
+    expect(reg.blockIdByTypeId.get('page')).toBe(blockId)
+    // The row is still retained by its durable id for provenance / read-only gates.
+    expect(reg.definitionsByBlockId.get(blockId)?.seedKey).toBe(PAGE_KEY)
   })
 
-  it('breaks a createdAt tie deterministically by block id (never insertion order)', () => {
-    const winner = buildTypeDefinitionRegistry({
+  it('publishes the DECLARED contribution for a seed, not the (stale) block mirror', () => {
+    // The block mirror is stale (hideFromCompletion cleared, wrong label); a
+    // deploy that changed the declaration must win so downstream validation uses
+    // the current type shape.
+    const blockId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: asMap([
-        projected({blockId: 'zzz', typeId: 'dup', label: 'Z', createdAt: 100}),
-        projected({blockId: 'aaa', typeId: 'dup', label: 'A', createdAt: 100}),
+        projected({blockId, seedKey: PAGE_KEY, label: 'Old Label', hideFromCompletion: false}),
+      ]),
+      seeds: [seedType({seedKey: PAGE_KEY, revision: 2, id: 'page', label: 'Page', hideFromCompletion: true})],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({label: 'Page', hideFromCompletion: true})
+  })
+
+  it('refuses a claim whose seed key is not a current declaration (forged/foreign)', () => {
+    // A forged row sits at the deterministic id for an invented /type/ key and
+    // claims 'page'. Its key isn't declared, so it is demoted to its block id —
+    // it must not hijack 'page'.
+    const forgedKey = 'evil/type/x'
+    const blockId = typeDefinitionBlockId(WS, forgedKey)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId, typeId: 'page', seedKey: forgedKey, label: 'Impostor'}),
       ]),
       seeds: [],
     })
-    expect(winner.blockIdByTypeId.get('dup')).toBe('aaa')
-    // Insertion-order-independent: reversing input gives the same winner.
-    const reversed = buildTypeDefinitionRegistry({
-      workspaceId: WS,
-      projectedDefinitions: asMap([
-        projected({blockId: 'aaa', typeId: 'dup', label: 'A', createdAt: 100}),
-        projected({blockId: 'zzz', typeId: 'dup', label: 'Z', createdAt: 100}),
-      ]),
-      seeds: [],
-    })
-    expect(reversed.blockIdByTypeId.get('dup')).toBe('aaa')
+    expect(reg.typesById.has('page')).toBe(false)
+    expect(reg.typesById.get(blockId)).toMatchObject({id: blockId, label: 'Impostor'})
+    expect(reg.blockIdByTypeId.get(blockId)).toBe(blockId)
   })
 
   it('excludes rows from a foreign workspace', () => {
@@ -105,7 +127,7 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.has('there')).toBe(false)
   })
 
-  it('carries display fields and resolved properties onto the contribution, omitting falsy ones', () => {
+  it('carries display fields and resolved properties onto a user contribution, omitting falsy ones', () => {
     const schema = {name: 'due'} as unknown as AnyPropertySchema
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
@@ -126,30 +148,23 @@ describe('buildTypeDefinitionRegistry', () => {
       hideFromCompletion: true,
       properties: [schema],
     })
-    // Falsy display fields are omitted, not stored as undefined/false.
     const bare = reg.typesById.get('bare')!
     expect(bare).toEqual({id: 'bare', label: 'Bare', properties: []})
     expect(bare).not.toHaveProperty('description')
-    expect(bare).not.toHaveProperty('hideFromCompletion')
   })
 
   it('indexes declared seeds by key, keeping the first on a duplicate key', () => {
-    const seed = (over: Partial<TypeSeedDeclaration> & {seedKey: string; id: string}): TypeSeedDeclaration => ({
-      id: over.id,
-      label: over.label ?? over.id,
-      seedKey: over.seedKey,
-      revision: over.revision ?? 1,
-    })
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: new Map(),
       seeds: [
-        seed({seedKey: 'system:kernel-data/type/page', id: 'page', label: 'Page'}),
-        seed({seedKey: 'system:kernel-data/type/todo', id: 'todo', label: 'Todo'}),
-        seed({seedKey: 'system:kernel-data/type/page', id: 'page', label: 'Duplicate'}),
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'}),
+        seedType({seedKey: 'system:kernel-data/type/todo', revision: 1, id: 'todo', label: 'Todo'}),
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Duplicate'}),
       ],
     })
     expect(reg.seedsByKey.size).toBe(2)
-    expect(reg.seedsByKey.get('system:kernel-data/type/page')?.label).toBe('Page')
+    expect(reg.seedsByKey.get(PAGE_KEY)?.label).toBe('Page')
+    expect(reg.typesById.get('page')).toMatchObject({label: 'Page'})
   })
 })

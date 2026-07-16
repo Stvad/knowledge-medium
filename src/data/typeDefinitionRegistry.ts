@@ -1,15 +1,16 @@
 import type {AnyPropertySchema, TypeContribution} from '@/data/api'
+import {typeDefinitionBlockId} from '@/data/definitionSeeds'
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
 import type {TypeSeedDeclaration} from '@/data/typeSeeds'
 
 /** A block-built type entry kept beside its durable block identity. The public
  * types map is `typeId`-keyed (the membership token written into `typesProp`);
- * this internal form preserves the `blockId`→row link the §9 id-claim /
- * winner-resolution layer needs — the type-side analog of
- * `ProjectedPropertyDefinition`. The parser (`parseTypeDefinitionMetadata`)
- * supplies the codec-less identity/display facts; `properties` carries the
- * behavior it deliberately omits — the resolved `block-type:properties`
- * schemas, which only the stateful projector can produce. */
+ * this internal form preserves the `blockId`→row link the §9 id-claim layer
+ * needs — the type-side analog of `ProjectedPropertyDefinition`. The parser
+ * (`parseTypeDefinitionMetadata`) supplies the codec-less identity/display
+ * facts; `properties` carries the behavior it deliberately omits — the resolved
+ * `block-type:properties` schemas, which only the stateful projector can
+ * produce. */
 export interface ProjectedTypeDefinition {
   readonly metadata: TypeDefinitionMetadata
   readonly properties: readonly AnyPropertySchema[]
@@ -17,8 +18,8 @@ export interface ProjectedTypeDefinition {
 
 /** The workspace-scoped type-definition registry — the id-keyed twin of
  * `PropertyDefinitionRegistrySnapshot`. `typesById` is the winner-resolved,
- * publishable contribution map; `definitionsByBlockId` retains every usable
- * row by its durable id (seed-provenance read-only gates + diagnostics);
+ * publishable contribution map; `definitionsByBlockId` retains every usable row
+ * by its durable id (seed-provenance read-only gates + diagnostics);
  * `blockIdByTypeId` makes `getTypeBlockId` total for block-backed types. */
 export interface TypeDefinitionRegistrySnapshot {
   readonly workspaceId: string
@@ -35,14 +36,28 @@ export interface BuildTypeDefinitionRegistryArgs {
   readonly seeds: readonly TypeSeedDeclaration[]
 }
 
-/** Reconstruct the publishable `TypeContribution` from a projected row: the
- * parser's identity/display facts + the projector's resolved property schemas.
- * Absent display fields are omitted (not stored as `undefined`) so the result
- * matches a hand-written `defineBlockType({…})` for the same fields. */
+/** A declared type seed IS a `TypeContribution` (its `id` is the membership
+ * token) plus the `seedKey`/`revision` provenance keys. Rebuild the pure,
+ * authoritative contribution without those two keys, so `typesById` holds clean
+ * contributions (a downstream structural compare must not diverge on provenance
+ * a bare `defineBlockType` never carries). */
+const seedContribution = (seed: TypeSeedDeclaration): TypeContribution => ({
+  id: seed.id,
+  label: seed.label,
+  ...(seed.description !== undefined ? {description: seed.description} : {}),
+  ...(seed.color !== undefined ? {color: seed.color} : {}),
+  ...(seed.hideFromCompletion !== undefined ? {hideFromCompletion: seed.hideFromCompletion} : {}),
+  ...(seed.hideFromBlockDisplay !== undefined ? {hideFromBlockDisplay: seed.hideFromBlockDisplay} : {}),
+  ...(seed.properties !== undefined ? {properties: seed.properties} : {}),
+})
+
+/** Reconstruct a user row's `TypeContribution` from its projected metadata +
+ * resolved property schemas. Absent display fields are omitted (not stored as
+ * `undefined`) so the result matches a hand-written `defineBlockType({…})`. */
 const contributionFromProjection = (def: ProjectedTypeDefinition): TypeContribution => {
   const m = def.metadata
   return {
-    id: m.typeId,
+    id: m.blockId,
     label: m.label,
     ...(m.description ? {description: m.description} : {}),
     ...(m.hideFromBlockDisplay ? {hideFromBlockDisplay: m.hideFromBlockDisplay} : {}),
@@ -54,11 +69,11 @@ const contributionFromProjection = (def: ProjectedTypeDefinition): TypeContribut
 
 /** Index the declared type seeds by key. Duplicate keys are a code-owned
  * invariant violation (the deterministic-id namespace assumes unique keys); we
- * keep the first and warn rather than throw, because this runs on every
- * facet rebuild and one malformed dynamic contribution must not abort the pass. */
+ * keep the first and warn rather than throw, because this runs on every facet
+ * rebuild and one malformed dynamic contribution must not abort the pass. */
 const indexSeedsByKey = (
   seeds: readonly TypeSeedDeclaration[],
-): ReadonlyMap<string, TypeSeedDeclaration> => {
+): Map<string, TypeSeedDeclaration> => {
   const byKey = new Map<string, TypeSeedDeclaration>()
   for (const seed of seeds) {
     if (byKey.has(seed.seedKey)) {
@@ -73,55 +88,57 @@ const indexSeedsByKey = (
 /** Build the workspace's type-definition registry from projected user rows +
  * declared seeds.
  *
- * §9 type-id claim / §7 winner resolution: `parseTypeDefinitionMetadata` has
- * already resolved each row's effective `typeId` (a differing
- * `block-type:type-id` claim is honored only for a self-consistent `/type/`
- * seed row, else demoted to the block id). Two rows can therefore land on the
- * same `typeId` only via that claim (a real seed + an imported/forged
- * competitor, or two workspaces' materialized copies). We bound that here with
- * the same rule the property registry uses for name collisions: the earliest
- * `createdAt` wins (stable `blockId` tiebreak), so the early real seed beats a
- * late import. Bare last-wins (today's `typesFacet`) is NOT acceptable — it
- * lets a late forgery win nondeterministically.
+ * Seeds are code-owned: the DECLARATION — not the materialized/synced block
+ * mirror — is authoritative. So a declared seed is synthesized directly into
+ * `typesById` (present on a fresh/read-only client before any row materializes,
+ * and safe across a `typesFacet.of → seedType` conversion), and a projected row
+ * that mirrors a declared seed contributes only its `blockId`/provenance, never
+ * its (possibly stale/tampered) contribution or stored `block-type:type-id`
+ * claim. A projected row whose `/type/` seed key is NOT a current declaration
+ * (foreign / forged / retired) is refused and published under its own block id.
  *
- * NOTE (§9 residual, per flags-for-user): this is the *as-written* stance —
- * winner-resolution only. It does not additionally reject a claim whose key is
- * absent from `seeds` (a forged `/type/` key with a real deterministic id); the
- * declared-seed set is carried in `seedsByKey` so a future tightening can gate
- * on it without a shape change. */
+ * Because seed backing blocks have deterministic ids (one per key) and user
+ * rows carry fresh uuid ids (`typeId === blockId`), no two published entries
+ * ever contend for one `typeId` — the §7 earliest-`createdAt` winner-resolution
+ * the property registry needs for name collisions has no analog here once claims
+ * are bound to declarations. */
 export const buildTypeDefinitionRegistry = (
   args: BuildTypeDefinitionRegistryArgs,
 ): TypeDefinitionRegistrySnapshot => {
   const seedsByKey = indexSeedsByKey(args.seeds)
   const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
-  const claimantsByTypeId = new Map<string, ProjectedTypeDefinition[]>()
+  const typesById = new Map<string, TypeContribution>()
+  const blockIdByTypeId = new Map<string, string>()
 
+  // 1. Declared seeds — authoritative, present even without a backing row.
+  for (const seed of seedsByKey.values()) {
+    typesById.set(seed.id, seedContribution(seed))
+    blockIdByTypeId.set(seed.id, typeDefinitionBlockId(args.workspaceId, seed.seedKey))
+  }
+
+  // 2. Projected block rows.
   for (const def of args.projectedDefinitions.values()) {
     if (def.metadata.workspaceId !== args.workspaceId) continue
     definitionsByBlockId.set(def.metadata.blockId, def.metadata)
-    const bucket = claimantsByTypeId.get(def.metadata.typeId)
-    if (bucket) bucket.push(def)
-    else claimantsByTypeId.set(def.metadata.typeId, [def])
-  }
 
-  const typesById = new Map<string, TypeContribution>()
-  const blockIdByTypeId = new Map<string, string>()
-  for (const [typeId, claimants] of claimantsByTypeId) {
-    // Earliest createdAt wins; blockId is the deterministic tiebreak (never
-    // insertion order — that would be nondeterministic across rebuilds).
-    claimants.sort((a, b) => {
-      if (a.metadata.createdAt !== b.metadata.createdAt) {
-        return a.metadata.createdAt - b.metadata.createdAt
-      }
-      return a.metadata.blockId < b.metadata.blockId
-        ? -1
-        : a.metadata.blockId > b.metadata.blockId
-          ? 1
-          : 0
-    })
-    const winner = claimants[0]!
-    typesById.set(typeId, contributionFromProjection(winner))
-    blockIdByTypeId.set(typeId, winner.metadata.blockId)
+    const declaredSeed = def.metadata.seedKey !== undefined
+      ? seedsByKey.get(def.metadata.seedKey)
+      : undefined
+    if (declaredSeed) {
+      // Materialized mirror of a declared seed: bind the DECLARED id to this
+      // block's actual location; the declared contribution (step 1) stays
+      // authoritative, and the row is retained above for provenance.
+      blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
+      continue
+    }
+
+    // A user row (or a row whose seed key isn't a current declaration): publish
+    // under its own block id, never a stored claim. A declared seed already
+    // owning this id always wins (a user block id is a fresh uuid, so this guard
+    // only fires for a pathological forged/duplicate id).
+    if (typesById.has(def.metadata.blockId)) continue
+    typesById.set(def.metadata.blockId, contributionFromProjection(def))
+    blockIdByTypeId.set(def.metadata.blockId, def.metadata.blockId)
   }
 
   return {
