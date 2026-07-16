@@ -75,17 +75,15 @@ import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import {
   isResolvedPropertySchema,
-  propertySchemaResolverForWorkspace,
   requireWritablePropertySchema,
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
-import { parsePropertiesMigration } from '@/data/workspaceSchema'
-import { isChildBackedPropertiesWorkspace } from '@/types'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { keyAtStart } from '@/data/orderKey'
 import {
+  isInsidePropertySubtreeWalk,
   isPropertyFieldInstance,
   propertyFieldContent,
   propertyValueToChildContent,
@@ -227,14 +225,12 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
-  /** Tx-start-captured registry factory. The row workspace selects a snapshot
-   * without consulting the live active-workspace runtime. */
-  propertyDefinitionRegistryForWorkspace: (
-    workspaceId: string,
-  ) => PropertyDefinitionRegistrySnapshot | null
-  propertySchemaWorkspaceId: string | null
-  /** Original declaration-name multiplicity captured with the registry. */
-  propertySeedNameCounts: ReadonlyMap<string, number>
+  /** Tx-start-captured resolver factory — mirrors the commit pipeline's own
+   *  `resolverFor` closure (built from the same registry-factory /
+   *  workspaceId / seed-name-counts triple) so both surfaces resolve
+   *  property schemas against one registry snapshot per tx, without this
+   *  context re-deriving that closure itself. */
+  propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -342,14 +338,7 @@ export class TxImpl implements Tx {
   }
 
   private propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
-    const snapshot = this.ctx.propertyDefinitionRegistryForWorkspace(workspaceId)
-    return propertySchemaResolverForWorkspace(
-      snapshot,
-      workspaceId,
-      this.ctx.propertySeedNameCounts,
-      this.ctx.propertySchemaWorkspaceId === null ||
-        workspaceId === this.ctx.propertySchemaWorkspaceId,
-    )
+    return this.ctx.propertySchemaResolverFor(workspaceId)
   }
 
   private resolvePropertySchemaForRow<T>(
@@ -373,13 +362,7 @@ export class TxImpl implements Tx {
   async isPropertyChildBackedWorkspace(workspaceId: string): Promise<boolean> {
     const cached = this.childBackedWorkspaceCache.get(workspaceId)
     if (cached !== undefined) return cached
-    const row = await this.ctx.txDb.getOptional<{properties_migration: string | null}>(
-      'SELECT properties_migration FROM workspaces WHERE id = ?',
-      [workspaceId],
-    )
-    const flipped = isChildBackedPropertiesWorkspace(
-      parsePropertiesMigration(row?.properties_migration),
-    )
+    const flipped = await readIsChildBackedWorkspace(this.ctx.txDb, workspaceId)
     this.childBackedWorkspaceCache.set(workspaceId, flipped)
     return flipped
   }
@@ -405,25 +388,15 @@ export class TxImpl implements Tx {
     id: string,
     isFieldDefinition: IsPropertyFieldDefinition,
   ): Promise<boolean> {
-    const walked: string[] = []
-    let currentId: string | null = id
-    let result: boolean | undefined
-    while (currentId !== null) {
-      const memo = this.propertySubtreeCache.get(currentId)
-      if (memo !== undefined) { result = memo; break }
-      const row: BlockRow | null =
-        await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [currentId])
-      if (row === null) { result = false; break }
-      walked.push(currentId)
-      if (isPropertyFieldInstance(parseBlockRow(row), isFieldDefinition)) {
-        result = true
-        break
-      }
-      currentId = row.parent_id
-    }
-    const resolved = result ?? false
-    for (const walkedId of walked) this.propertySubtreeCache.set(walkedId, resolved)
-    return resolved
+    return isInsidePropertySubtreeWalk(
+      id,
+      async (rowId) => {
+        const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [rowId])
+        return row === null ? null : parseBlockRow(row)
+      },
+      isFieldDefinition,
+      this.propertySubtreeCache,
+    )
   }
 
   // ──── Reads ────

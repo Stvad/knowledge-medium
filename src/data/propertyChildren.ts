@@ -23,6 +23,7 @@ import {
   type PropertySchema,
 } from '@/data/api'
 import { referenceBlockContentForLabel } from '@/data/referenceBlock'
+import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 
 export const getPropertyFieldTargetId = (
   data: Pick<BlockData, 'referenceTargetId'> | null | undefined,
@@ -144,10 +145,44 @@ export const propertyChildContentToEncodedValue = (
   return schema.codec.encode(schema.codec.decode(encoded))
 }
 
-const sameJson = (a: unknown, b: unknown): boolean =>
-  a === b || JSON.stringify(a) === JSON.stringify(b)
-
 export const propertiesEqual = (
   a: Record<string, unknown>,
   b: Record<string, unknown>,
-): boolean => sameJson(a, b)
+): boolean => jsonValuesEqual(a, b)
+
+/** §9 ancestry rule, shared walk: does `startId`'s parent chain pass through
+ *  a field row? Role is positional and inherits — everything beneath a
+ *  field row is property-subtree interior (values, comments, ordinary
+ *  content), so listings there never filter "field rows" out (a ref-typed
+ *  VALUE pointing at a definition block would otherwise vanish).
+ *
+ *  `getRow` and `memo` are caller-owned: the tx engine walks live SQL rows
+ *  through its per-tx cache; the migration pass walks via `tx.get` through a
+ *  per-tx Map built fresh per chunk. Either way the memo is filled for every
+ *  id visited on the walk (not just the terminal one), backfilling shared
+ *  prefixes across repeated calls within the same tx. */
+export const isInsidePropertySubtreeWalk = async (
+  startId: string | null,
+  getRow: (id: string) => Promise<Pick<BlockData, 'referenceTargetId' | 'parentId'> | null>,
+  isFieldDefinition: IsPropertyFieldDefinition,
+  memo: Map<string, boolean>,
+): Promise<boolean> => {
+  const walked: string[] = []
+  let currentId: string | null = startId
+  let result: boolean | undefined
+  while (currentId !== null) {
+    const cached = memo.get(currentId)
+    if (cached !== undefined) { result = cached; break }
+    const row = await getRow(currentId)
+    if (row === null) { result = false; break }
+    walked.push(currentId)
+    if (isPropertyFieldInstance(row, isFieldDefinition)) {
+      result = true
+      break
+    }
+    currentId = row.parentId
+  }
+  const resolved = result ?? false
+  for (const walkedId of walked) memo.set(walkedId, resolved)
+  return resolved
+}

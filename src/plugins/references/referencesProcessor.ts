@@ -69,6 +69,7 @@ import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -577,11 +578,6 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
         propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
         propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
       ])
-      const deleteSubtreeInTx = async (id: string): Promise<void> => {
-        const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
-        for (const child of children) await deleteSubtreeInTx(child.id)
-        await tx.delete(id)
-      }
       for (const id of orphans) {
         // No block references it — orphan. Soft-delete the seat, then its
         // generated field rows (with their value children).
@@ -590,7 +586,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
         for (const child of children) {
           const target = child.referenceTargetId ?? null
           if (target !== null && generatedFieldIds.has(target)) {
-            await deleteSubtreeInTx(child.id)
+            await deleteSubtreeInTx(tx, child.id)
           }
         }
       }

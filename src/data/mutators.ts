@@ -44,6 +44,7 @@ import {
   mergeBlocksInTx,
   type ContentStrategy,
 } from './blockMerge'
+import { deleteSubtreeInTx } from './subtreeDelete'
 
 // ──── Common helpers ────
 
@@ -207,45 +208,31 @@ export const setProperty = defineMutator<
 
 // ──── delete (subtree-aware soft-delete) ────
 
-/** DFS walk via tx.childrenOf, calling tx.delete on each visited block.
- *  Iterative + explicit stack to avoid blowing the JS recursion limit
- *  on deep trees.
+/** Subtree-aware soft-delete via the shared `deleteSubtreeInTx` walk
+ *  (property field/value rows included — PR #288 §9).
  *
  *  Each freshly soft-deleted block emits `CORE_BLOCK_DELETED_EVENT` so
  *  same-tx consumers can react atomically with the delete — the
  *  references plugin uses it to inline a deleted block's content into the
  *  blocks that referenced it (`((id))`), keeping those referrers readable
- *  instead of leaving dangling block-refs. We carry the `BlockData` from
- *  `childrenOf` (and one `tx.get` for the root) so the walk doesn't pay an
- *  extra per-node read just to recover `workspaceId`; the `!deleted` guard
- *  only ever skips an already-tombstoned root (children come back live). */
+ *  instead of leaving dangling block-refs. The `!block.deleted` guard only
+ *  ever skips an already-tombstoned root (children come back live from
+ *  `childrenOf`, which is always live-only). */
 const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
-  const root = await tx.get(rootId)
   // Preserve the primitive's contract for a missing root: let tx.delete
   // surface BlockNotFoundError rather than silently no-op here.
-  if (root === null) {
+  if ((await tx.get(rootId)) === null) {
     await tx.delete(rootId)
     return
   }
-  const stack: BlockData[] = [root]
-  const seen = new Set<string>()
-  while (stack.length > 0) {
-    const block = stack.pop()!
-    if (seen.has(block.id)) continue
-    seen.add(block.id)
-    // Delete-cascade is MACHINERY (PR #288 §9): it must see property
-    // field/value rows — under the visible-children default a delete would
-    // strand live field rows beneath the tombstoned parent.
-    const children = await tx.childrenOf(block.id, undefined, {includePropertyChildren: true})
-    for (const c of children) stack.push(c)
-    await tx.delete(block.id)
+  await deleteSubtreeInTx(tx, rootId, (block: BlockData) => {
     if (!block.deleted) {
       tx.emitEvent(CORE_BLOCK_DELETED_EVENT, {
         workspaceId: block.workspaceId,
         blockId: block.id,
       })
     }
-  }
+  })
 }
 
 export const deleteBlock = defineMutator<{id: string}, void>({

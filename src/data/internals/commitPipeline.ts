@@ -280,8 +280,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   }
   // Workspace-bound schema-name resolution for same-tx processors — the same
   // tx-start-captured identity primitive TxImpl resolves through (its private
-  // `propertySchemaResolverFor`), rebuilt here from the identical inputs so
-  // both surfaces see one registry snapshot per tx.
+  // `propertySchemaResolverFor` delegates to this very closure, passed into
+  // TxImplContext below), built once here so both surfaces see one registry
+  // snapshot per tx.
   const resolverFor = (workspaceId: string) =>
     propertySchemaResolverForWorkspace(
       propertyDefinitionRegistryForWorkspace(workspaceId),
@@ -316,9 +317,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutatorCalls,
       mutators,
       processors,
-      propertyDefinitionRegistryForWorkspace,
-      propertySchemaWorkspaceId,
-      propertySeedNameCounts,
+      propertySchemaResolverFor: resolverFor,
       sameTxEvents,
       now,
       newId,

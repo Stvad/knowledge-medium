@@ -26,6 +26,7 @@ import {
 import { panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
+import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -43,21 +44,6 @@ interface ReconciliationPlan {
 
 export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
   hasBlockType(row, PANEL_STACK_TYPE)
-
-/** Soft-delete a layout row and every descendant, INCLUDING materialized
- *  property field/value children (machinery traversal — PR #288 §9). */
-const deleteLayoutRowSubtreeInTx = async (tx: Tx, id: string): Promise<void> => {
-  const stack = [id]
-  const seen = new Set<string>()
-  while (stack.length > 0) {
-    const current = stack.pop()!
-    if (seen.has(current)) continue
-    seen.add(current)
-    const children = await tx.childrenOf(current, undefined, {includePropertyChildren: true})
-    for (const child of children) stack.push(child.id)
-    await tx.delete(current)
-  }
-}
 
 export const panelBlockId = (row: BlockData): string | undefined => {
   const stored = row.properties[topLevelBlockIdProp.name]

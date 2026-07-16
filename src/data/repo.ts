@@ -114,12 +114,13 @@ import {
 import type { PropertyDefinitionChange } from './internals/propertyDefinitionMigrations'
 import {
   encodedPropertyValueToChildContent,
+  isInsidePropertySubtreeWalk,
   propertiesEqual,
   propertyChildContentToEncodedValue,
   propertyFieldContent,
+  type IsPropertyFieldDefinition,
 } from './propertyChildren'
-import { parsePropertiesMigration } from '@/data/workspaceSchema'
-import { isChildBackedPropertiesWorkspace } from '@/types'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
   parseAliasCollisionError,
@@ -2625,12 +2626,7 @@ export class Repo {
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
   ): Promise<void> {
-    const workspaceRow = await this.db.getOptional<{properties_migration: string | null}>(
-      'SELECT properties_migration FROM workspaces WHERE id = ?', [workspaceId],
-    )
-    if (!isChildBackedPropertiesWorkspace(
-      parsePropertiesMigration(workspaceRow?.properties_migration),
-    )) return
+    if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     for (const change of changes) {
       try {
         await this.runPropertyDefinitionMigration(workspaceId, change)
@@ -2668,41 +2664,25 @@ export class Repo {
         // §9 ancestry rule, memoized per tx: a candidate whose parent chain
         // passes through a field row is a VALUE/comment (e.g. a ref-typed
         // value pointing at this very definition), not a field row — never
-        // retitle or re-key those.
+        // retitle or re-key those. Checker built ONCE per chunk (rather than
+        // re-resolving the registry snapshot on every walked row) — the
+        // registry is a tx-start-captured snapshot, so it can't change
+        // mid-chunk anyway.
         const subtreeMemo = new Map<string, boolean>()
-        const insidePropertySubtree = async (id: string | null): Promise<boolean> => {
-          const chain: string[] = []
-          let cursor = id
-          let verdict: boolean | undefined
-          while (cursor !== null) {
-            const memo = subtreeMemo.get(cursor)
-            if (memo !== undefined) { verdict = memo; break }
-            const row = await tx.get(cursor)
-            if (row === null) { verdict = false; break }
-            chain.push(cursor)
-            const rowTarget = row.referenceTargetId ?? null
-            if (rowTarget !== null) {
-              const rowResolution =
-                this.propertySchemaResolverFor(workspaceId).resolveField(rowTarget)
-              if (rowResolution.status === 'resolved'
-                || (rowResolution.status === 'identity-unavailable'
-                  && rowResolution.reason === 'shadowed')) {
-                verdict = true
-                break
-              }
-            }
-            cursor = row.parentId
-          }
-          const resolved = verdict ?? false
-          for (const walked of chain) subtreeMemo.set(walked, resolved)
-          return resolved
+        const resolverForChunk = this.propertySchemaResolverFor(workspaceId)
+        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
+          const rowResolution = resolverForChunk.resolveField(fieldId)
+          return rowResolution.status === 'resolved'
+            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
         }
 
         const reprojectedParents = new Set<string>()
         for (const candidate of chunk) {
           const fieldRow = await tx.get(candidate.id)
           if (fieldRow === null || fieldRow.deleted) continue
-          if (await insidePropertySubtree(fieldRow.parentId)) continue
+          if (await isInsidePropertySubtreeWalk(
+            fieldRow.parentId, (id) => tx.get(id), isFieldDefinition, subtreeMemo,
+          )) continue
 
           // Retitle: field-row content tracks the schema name in lock-step
           // (§7) — a stale `[[old]]` binds the dead name on every

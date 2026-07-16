@@ -8,6 +8,7 @@ import {
 import { keysBetween } from './orderKey'
 import { encodedPropertyValueToChildContent } from './propertyChildren'
 import { mergeProperties } from './mergeProperties'
+import { deleteSubtreeInTx } from './subtreeDelete'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -36,19 +37,6 @@ export const computeMergedContent = (
     return intoContent.length > 0 ? intoContent : fromContent
   }
   return intoContent + strategy.separator + fromContent
-}
-
-/** Recursively soft-delete a block and every descendant (property-field
- *  rows AND their value children). `tx.delete` only tombstones the row
- *  passed to it, so a bare delete of a materialized field row would leave
- *  its value children live-but-orphaned under a tombstone (still
- *  indexed/uploaded). */
-const deleteSubtreeInTx = async (tx: Tx, id: string): Promise<void> => {
-  const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
-  for (const child of children) {
-    await deleteSubtreeInTx(tx, child.id)
-  }
-  await tx.delete(id)
 }
 
 export const mergeBlocksInTx = async (

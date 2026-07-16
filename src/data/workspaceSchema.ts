@@ -5,6 +5,7 @@ import type {
   WorkspaceMembership,
   WorkspaceRole,
 } from '@/types'
+import { isChildBackedPropertiesWorkspace } from '@/types'
 
 // These tables are sync-only from the client's perspective: rows arrive via
 // PowerSync streams (powersync/sync-config.yaml) and outgoing changes go
@@ -135,6 +136,23 @@ export const parsePropertiesMigration = (
   PROPERTIES_MIGRATION_STATES.includes(value as PropertiesMigrationState)
     ? value as PropertiesMigrationState
     : 'cell'
+
+/** Shared flip-check (PR #288 §6): reads `properties_migration` for
+ *  `workspaceId` and reports whether the workspace is at or past the
+ *  children-backed state. `db` is the minimal read surface both the tx
+ *  engine (`TxDb`) and `Repo` (`PowerSyncDb`) already satisfy — callers own
+ *  any per-tx / per-call caching (see `TxImpl.isPropertyChildBackedWorkspace`'s
+ *  `childBackedWorkspaceCache`). */
+export const readIsChildBackedWorkspace = async (
+  db: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>},
+  workspaceId: string,
+): Promise<boolean> => {
+  const row = await db.getOptional<{properties_migration: string | null}>(
+    'SELECT properties_migration FROM workspaces WHERE id = ?',
+    [workspaceId],
+  )
+  return isChildBackedPropertiesWorkspace(parsePropertiesMigration(row?.properties_migration))
+}
 
 export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   id: row.id,
