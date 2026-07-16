@@ -1,12 +1,15 @@
 // @vitest-environment node
+import {v5 as uuidv5} from 'uuid'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {ChangeScope, seedProperty, SeededDefinitionWriteError} from '@/data/api'
 import {
   canonicalPropertySeedProperties,
   awaitPropertySeedMaterializationAccess,
+  DEFINITION_SEED_NS,
   isValidSeededDefinition,
   materializePropertySeeds,
   propertyDefinitionBlockId,
+  typeDefinitionBlockId,
 } from '@/data/definitionSeeds'
 import {
   propertyDefaultProp,
@@ -75,11 +78,40 @@ describe('property definition identity and payload', () => {
       workspaceId: WS,
       properties: {[seedKeyProp.name]: seed.seedKey},
     })).toBe(false)
+    // A row whose id DOES satisfy the deterministic formula for its stored key,
+    // yet the key isn't valid seed grammar — must still be rejected on the
+    // grammar gate, not the id-equation. `propertyDefinitionBlockId` now throws
+    // on a non-`/property/` key, so compute the formula id directly to stand in
+    // for such a row arriving via sync/corruption.
     expect(isValidSeededDefinition({
-      id: propertyDefinitionBlockId(WS, 'malformed-key'),
+      id: uuidv5(`${WS}:malformed-key`, DEFINITION_SEED_NS),
       workspaceId: WS,
       properties: {[seedKeyProp.name]: 'malformed-key'},
     })).toBe(false)
+  })
+
+  it('validates a /type/-grammar seed row by the same equation, and rejects one at the wrong id', () => {
+    const typeSeedKey = 'system:kernel-data/type/page'
+    const id = typeDefinitionBlockId(WS, typeSeedKey)
+    expect(isValidSeededDefinition({
+      id,
+      workspaceId: WS,
+      properties: {[seedKeyProp.name]: typeSeedKey},
+    })).toBe(true)
+    expect(isValidSeededDefinition({
+      id: 'wrong-id',
+      workspaceId: WS,
+      properties: {[seedKeyProp.name]: typeSeedKey},
+    })).toBe(false)
+  })
+
+  it('throws on a non-property seed key (grammar invariant enforced at the call site)', () => {
+    // The formula is shared with typeDefinitionBlockId under one namespace; the
+    // guard makes a wrong-kind key fail loud instead of silently minting a
+    // colliding id.
+    expect(() => propertyDefinitionBlockId(WS, 'system:kernel-data/type/page'))
+      .toThrow(/not a property seed key/)
+    expect(() => propertyDefinitionBlockId(WS, 'malformed-key')).toThrow(/not a property seed key/)
   })
 
   it('canonically includes explicit defaults and omits absent defaults', () => {

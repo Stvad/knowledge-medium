@@ -31,6 +31,7 @@ import {
   blockTypeColorProp,
   blockTypeDescriptionProp,
   blockTypeHideFromBlockDisplayProp,
+  blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
 } from '@/data/properties'
@@ -78,6 +79,7 @@ const tryBuildType = (
   // type from every picker and re-offer "Create type" duplicates.
   // Degrade to the default instead.
   const hideFromBlockDisplay = safeDisplayProp(block, blockTypeHideFromBlockDisplayProp, false)
+  const hideFromCompletion = safeDisplayProp(block, blockTypeHideFromCompletionProp, false)
   const color = safeDisplayProp(block, blockTypeColorProp, '').trim()
   const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
   const properties: AnyPropertySchema[] = []
@@ -92,6 +94,7 @@ const tryBuildType = (
     label,
     ...(description ? {description} : {}),
     ...(hideFromBlockDisplay ? {hideFromBlockDisplay} : {}),
+    ...(hideFromCompletion ? {hideFromCompletion} : {}),
     ...(color ? {color} : {}),
     properties,
   }
@@ -113,6 +116,7 @@ const contributionsEqual = (
     const bc = b[i]
     if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false
     if (ac.hideFromBlockDisplay !== bc.hideFromBlockDisplay || ac.color !== bc.color) return false
+    if (ac.hideFromCompletion !== bc.hideFromCompletion) return false
     const ap = ac.properties ?? []
     const bp = bc.properties ?? []
     if (ap.length !== bp.length) return false

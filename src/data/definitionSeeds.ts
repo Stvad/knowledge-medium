@@ -1,6 +1,7 @@
 import {v5 as uuidv5} from 'uuid'
 import {ChangeScope, type BlockData} from '@/data/api'
 import {isPropertySeedKey, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
+import {isTypeSeedKey} from '@/data/typeSeeds'
 import {
   presetConfigProp,
   presetIdProp,
@@ -17,12 +18,41 @@ import {propertiesPageBlockId} from '@/data/propertiesPage'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
 
-/** Namespace for every deterministic code-owned definition block. Identity is
- * always workspace-scoped: uuidv5(`${workspaceId}:${seedKey}`, namespace). */
+/** Namespace for every deterministic code-owned definition block — property
+ * AND type seeds. Identity is always workspace-scoped:
+ * uuidv5(`${workspaceId}:${seedKey}`, namespace). Property (`/property/`) and
+ * type (`/type/`) seed keys share this namespace safely: their key grammars are
+ * disjoint, so `${workspaceId}:${seedKey}` can never collide across kinds — and
+ * the two public id functions below ENFORCE that grammar (throwing on a
+ * wrong-kind key) so the disjointness is a checked invariant, not just a
+ * convention a caller could break by passing the wrong-kind key to the wrong
+ * function. (The non-collision proof also assumes `workspaceId` never contains
+ * `:`, so the delimiter can't shift between the two interpolated fields — true
+ * for the UUID workspace ids this codebase mints.) */
 export const DEFINITION_SEED_NS = '737c2e9d-f3e9-4c99-94ef-e1cbec920e30'
 
-export const propertyDefinitionBlockId = (workspaceId: string, seedKey: string): string =>
+/** The raw deterministic formula, shared by both kinds. Private and unguarded:
+ * the grammar checks live in the two public entry points so there is exactly one
+ * hash expression to keep in sync. */
+const definitionBlockId = (workspaceId: string, seedKey: string): string =>
   uuidv5(`${workspaceId}:${seedKey}`, DEFINITION_SEED_NS)
+
+export const propertyDefinitionBlockId = (workspaceId: string, seedKey: string): string => {
+  if (!isPropertySeedKey(seedKey)) {
+    throw new Error(`[propertyDefinitionBlockId] not a property seed key: ${JSON.stringify(seedKey)}`)
+  }
+  return definitionBlockId(workspaceId, seedKey)
+}
+
+/** Deterministic per-workspace backing-block id for a code-owned block type.
+ * The type analog of `propertyDefinitionBlockId`; this is what a total
+ * `getTypeBlockId` returns for a code type (Slice C). */
+export const typeDefinitionBlockId = (workspaceId: string, seedKey: string): string => {
+  if (!isTypeSeedKey(seedKey)) {
+    throw new Error(`[typeDefinitionBlockId] not a type seed key: ${JSON.stringify(seedKey)}`)
+  }
+  return definitionBlockId(workspaceId, seedKey)
+}
 
 type SeedIdentityRow = Pick<BlockData, 'id' | 'workspaceId' | 'properties'>
 
@@ -34,16 +64,24 @@ const validSeedKeyForRow = (row: SeedIdentityRow): string | undefined => {
   } catch {
     return undefined
   }
-  return isPropertySeedKey(seedKey) && row.id === propertyDefinitionBlockId(row.workspaceId, seedKey)
-    ? seedKey
-    : undefined
+  // Code-seeded under EITHER grammar (property or type). Both kinds hash the
+  // same formula into one shared namespace, so a matching deterministic id for
+  // the row's own workspace is the proof; a key of neither grammar isn't seeded.
+  if (!isPropertySeedKey(seedKey) && !isTypeSeedKey(seedKey)) return undefined
+  return row.id === definitionBlockId(row.workspaceId, seedKey) ? seedKey : undefined
 }
 
 /** A seed:key property alone proves nothing. A row is code-seeded only when
- * the key has declaration grammar and its id satisfies the deterministic
- * equation for that row's own workspace. */
+ * the key has property- OR type-declaration grammar and its id satisfies the
+ * deterministic equation for that row's own workspace. `seededDefinitionKey`
+ * returns that validated key so a caller can distinguish PROPERTY from TYPE
+ * provenance by its grammar (`isPropertySeedKey`/`isTypeSeedKey`);
+ * `isValidSeededDefinition` is the boolean form. */
+export const seededDefinitionKey = (row: SeedIdentityRow): string | undefined =>
+  validSeedKeyForRow(row)
+
 export const isValidSeededDefinition = (row: SeedIdentityRow): boolean =>
-  validSeedKeyForRow(row) !== undefined
+  seededDefinitionKey(row) !== undefined
 
 /** The one canonical block-property bag for a property seed. All values pass
  * through their metadata schema codecs; a per-schema default key is omitted

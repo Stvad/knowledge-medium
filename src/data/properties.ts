@@ -382,6 +382,33 @@ export const blockTypeColorProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** The stable type id written into `typesProp` — the string membership token
+ *  for this type. Absent (or equal to the block's own id) → the block id,
+ *  preserving the block-id = type-id rule for user-defined types. Seeded
+ *  kernel/plugin types set it to their constant (`'page'`, `'todo'`, …). A value
+ *  DIFFERING from the block's own id is honored only when the row passes the
+ *  deterministic seeded-id check (`isValidSeededDefinition`); on any other block
+ *  the claim is ignored and the type projects under its block id
+ *  (schema-unification §9 type-id claim rule). */
+export const blockTypeTypeIdProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-type-id',
+  revision: 1,
+  name: 'block-type:type-id',
+  preset: 'string',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Never offer this type in the `#` autocomplete (nor prefer it on a label
+ *  collision); makes the on-block chip read-only. The on-block form of
+ *  `TypeContribution.hideFromCompletion`, until now code-only (blockType.ts). */
+export const blockTypeHideFromCompletionProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-hide-from-completion',
+  revision: 1,
+  name: 'block-type:hide-from-completion',
+  preset: 'boolean',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── user page kernel fields ────
 
 /** Opaque user id (the value stored in `created_by` / `updated_by`) on a
@@ -668,6 +695,8 @@ export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   blockTypePropertiesProp,
   blockTypeHideFromBlockDisplayProp,
   blockTypeColorProp,
+  blockTypeTypeIdProp,
+  blockTypeHideFromCompletionProp,
   // user page fields
   userIdProp,
 ]
