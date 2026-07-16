@@ -12,6 +12,7 @@ import {
   blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  blockTypeTypeIdProp,
   propertyNameProp,
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
@@ -79,12 +80,17 @@ const createBlockTypeBlock = async (
     hideFromBlockDisplay?: boolean
     hideFromCompletion?: boolean
     color?: string
+    /** Raw `block-type:type-id` claim to stamp on the row (§9). */
+    typeId?: string
   },
 ): Promise<string> => {
   const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
   await repo.tx(async tx => {
     await repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {})
     await tx.setProperty(id, blockTypeLabelProp, args.label)
+    if (args.typeId !== undefined) {
+      await tx.setProperty(id, blockTypeTypeIdProp, args.typeId)
+    }
     if (args.description !== undefined) {
       await tx.setProperty(id, blockTypeDescriptionProp, args.description)
     }
@@ -114,6 +120,22 @@ describe('UserTypesService subscription', () => {
     expect(contribution!.label).toBe('Person')
     expect(contribution!.id).toBe(id)
     expect(env.service.getTypeBlockId(id)).toBe(id)
+  })
+
+  it('demotes a block-type:type-id claim on an unseeded user row to the block id (§9)', async () => {
+    env = await setup()
+    // A user-authored row has no valid /type/ seed provenance, so its
+    // block-type:type-id claim — even for a real seed constant like 'page' —
+    // is ignored and the type projects under its own block id. The creation
+    // helper waits for registration UNDER `id`; an honored 'page' claim would
+    // key the contribution under 'page' instead and time out. Guards the §9
+    // claim rule now that the live projector reads type-id via
+    // parseTypeDefinitionMetadata.
+    const id = await createBlockTypeBlock(env.repo, {label: 'Squatter', typeId: 'page'})
+    expect(env.repo.types.get(id)!.id).toBe(id)
+    expect(env.service.getTypeBlockId(id)).toBe(id)
+    // The real kernel 'page' type is not hijacked to point at this block.
+    expect(env.service.getTypeBlockId('page')).not.toBe(id)
   })
 
   it('lifts hide-from-completion onto the contribution and republishes on change', async () => {
