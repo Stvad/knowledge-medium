@@ -79,9 +79,14 @@ const typeSeedKeyForRow = (row: BlockData): string | undefined => {
  * cross-workspace paste whose `workspace_id` was rewritten, §12). It does NOT
  * prove the key is a real code declaration, so a fully self-consistent forged
  * type seed (correct uuid for an invented `/type/` key) can still emit a
- * competing claim — §9's stated small-fleet residual, bounded not here but by the
- * registry's §7 earliest-`createdAt` winner resolution (C2b: a late forgery loses
- * to the early real seed) and remediable via §12's enumeration query. */
+ * competing claim — §9's stated small-fleet residual. That residual is bounded
+ * only once the C3 id-keyed registry applies §7 earliest-`createdAt` winner
+ * resolution (the early real seed beats a late forgery), and is remediable via
+ * §12's enumeration query. Until that registry lands NO consumer honors a
+ * differing `typeId` claim: the transitional `UserTypesService` projector keys
+ * published contributions by BLOCK id, because the last-wins `typesFacet` has no
+ * winner resolution — processed in `created_at ASC` order, a late import would
+ * otherwise WIN and hijack a kernel/plugin id (see `userTypesService.ts`). */
 export const parseTypeDefinitionMetadata = (
   row: BlockData,
 ): TypeDefinitionMetadata | null => {

@@ -18,7 +18,6 @@
 
 import {
   type AnyPropertySchema,
-  type PropertySchema,
   type TypeContribution,
 } from '@/data/api'
 import type { Block } from '@/data/block'
@@ -27,15 +26,9 @@ import type {
   DefinitionBlockProjector,
   ProjectorHandle,
 } from '@/data/projectorRuntime'
-import {
-  blockTypeColorProp,
-  blockTypeDescriptionProp,
-  blockTypeHideFromBlockDisplayProp,
-  blockTypeHideFromCompletionProp,
-  blockTypeLabelProp,
-  blockTypePropertiesProp,
-} from '@/data/properties'
+import { blockTypePropertiesProp } from '@/data/properties'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
+import { parseTypeDefinitionMetadata } from '@/data/typeDefinitionMetadata'
 import { typesFacet } from '@/data/facets'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
@@ -47,40 +40,32 @@ export const USER_TYPES_PROJECTOR_ID = 'user-types'
 
 const USER_DATA_SOURCE_ID = 'user-data'
 
-const safeDisplayProp = <T,>(block: Block, prop: PropertySchema<T>, fallback: T): T => {
-  try {
-    return block.peekProperty(prop) ?? fallback
-  } catch (err) {
-    console.warn(`[UserTypesService] block ${block.id}: malformed ${prop.name}; using default`, err)
-    return fallback
-  }
-}
-
 /** Build a TypeContribution from a user-authored block-type block.
- *  Returns null with a logged diagnostic when the label is empty;
- *  silently drops refList entries that don't resolve to the selected
- *  workspace definition and locally available behavior (those fill in on
- *  the next `onPropertySchemasChange` tick when the missing behavior
- *  publishes). */
+ *  Delegates label/description/display extraction to the shared
+ *  `parseTypeDefinitionMetadata` (the codec-less type-definition parser),
+ *  which degrades malformed display fields to defaults and rejects only a
+ *  label-less row. This transitional projector deliberately keys the
+ *  published contribution by the BLOCK id, ignoring the parser's resolved
+ *  §9 `block-type:type-id` claim: honoring the claim is safe only once the
+ *  C3 id-keyed registry + §7 earliest-`createdAt` winner resolution can
+ *  bound a colliding (synced/imported/forged) claim from hijacking a
+ *  kernel/plugin type through the last-wins `typesFacet` (see the return
+ *  site). This file keeps only the behavioral part the parser deliberately
+ *  omits: resolving `block-type:properties` refs through the schema
+ *  projector's handle + the workspace-bound central resolver. Silently
+ *  drops refList entries that don't resolve to the selected workspace
+ *  definition and locally available behavior (those fill in on the next
+ *  `onPropertySchemasChange` tick when the missing behavior publishes). */
 const tryBuildType = (
   block: Block,
   schemas: ProjectorHandle<ProjectedPropertyDefinition> | undefined,
   resolver: PropertySchemaResolver,
 ): TypeContribution | null => {
-  const label = block.peekProperty(blockTypeLabelProp) ?? ''
-  if (!label) {
-    console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
+  const metadata = parseTypeDefinitionMetadata(block.data)
+  if (!metadata) {
+    console.warn(`[UserTypesService] block ${block.id} has no usable label; skipping`)
     return null
   }
-  const description = block.peekProperty(blockTypeDescriptionProp) ?? ''
-  // Display-only props must not gate registration: a malformed value
-  // (a raw bridge/import write of e.g. "true" into the boolean) decodes
-  // with a CodecError, and letting that skip the row would drop the
-  // type from every picker and re-offer "Create type" duplicates.
-  // Degrade to the default instead.
-  const hideFromBlockDisplay = safeDisplayProp(block, blockTypeHideFromBlockDisplayProp, false)
-  const hideFromCompletion = safeDisplayProp(block, blockTypeHideFromCompletionProp, false)
-  const color = safeDisplayProp(block, blockTypeColorProp, '').trim()
   const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
   const properties: AnyPropertySchema[] = []
   for (const refId of refIds) {
@@ -90,12 +75,21 @@ const tryBuildType = (
     if (schema) properties.push(schema)
   }
   return {
+    // Key by the BLOCK id, NOT metadata.typeId. The parser resolves the §9
+    // type-id claim, but honoring it here is unsafe until C3: `typesFacet` is a
+    // last-wins keyed map and user-data contributions are appended AFTER the
+    // static kernel/plugin registrations, so a synced/imported block-type row
+    // sitting at a `/type/` seed's deterministic id and claiming an existing id
+    // (e.g. 'page') would REPLACE the built-in type. The id-keyed registry +
+    // earliest-`createdAt` winner resolution that bounds that (§7) lands with
+    // the C3 materializer; until then a user-data row only ever publishes under
+    // its own block id.
     id: block.id,
-    label,
-    ...(description ? {description} : {}),
-    ...(hideFromBlockDisplay ? {hideFromBlockDisplay} : {}),
-    ...(hideFromCompletion ? {hideFromCompletion} : {}),
-    ...(color ? {color} : {}),
+    label: metadata.label,
+    ...(metadata.description ? {description: metadata.description} : {}),
+    ...(metadata.hideFromBlockDisplay ? {hideFromBlockDisplay: metadata.hideFromBlockDisplay} : {}),
+    ...(metadata.hideFromCompletion ? {hideFromCompletion: metadata.hideFromCompletion} : {}),
+    ...(metadata.color ? {color: metadata.color} : {}),
     properties,
   }
 }
