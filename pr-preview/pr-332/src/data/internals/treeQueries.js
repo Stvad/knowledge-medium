@@ -10,7 +10,8 @@ var e=`
            subtree.path || child.order_key || '!' || hex(child.id) || '/',
            subtree.depth + 1
       FROM subtree
-      JOIN blocks AS child ON child.parent_id = subtree.id
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
      WHERE child.deleted = 0
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
