@@ -71,10 +71,11 @@ import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzK
 import {
   ChangeScope,
   codecs,
+  defineBlockType,
   defineProperty,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { typesFacet } from '@/data/facets.js'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
@@ -98,8 +99,10 @@ const relatedProp = defineProperty<readonly string[]>('related', {
   changeScope: ChangeScope.BlockDefault,
 })
 const refSchemaExtension = [
-  propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-  propertySchemasFacet.of(relatedProp, {source: 'test'}),
+  typesFacet.of(
+    defineBlockType({id: 'test:ref-schemas', properties: [reviewerProp, relatedProp]}),
+    {source: 'test'},
+  ),
 ]
 
 // ──── op + content generators ────
