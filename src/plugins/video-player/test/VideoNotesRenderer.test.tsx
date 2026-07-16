@@ -47,7 +47,7 @@ vi.mock('@/data/globalState.ts', async () => {
 import { VideoNotesLayout, VideoNotesRenderer, videoNotesLayoutContribution } from '../VideoNotesRenderer.tsx'
 import { VideoPlayerContentRenderer, VideoPlayerRenderer } from '../VideoPlayerRenderer.tsx'
 import { VIDEO_NOTES_VIEW_MODE } from '../view.ts'
-import { focusedBlockLocationProp, panelViewModeProp, topLevelBlockIdProp } from '@/data/properties'
+import { editorFocusRequestProp, focusedBlockLocationProp, panelViewModeProp, topLevelBlockIdProp } from '@/data/properties'
 import { panelRenderScopeId } from '@/utils/renderScope'
 
 const WS = 'ws-1'
@@ -243,11 +243,22 @@ describe('VideoNotesLayout', () => {
     await vi.waitFor(async () => {
       expect(await videoBlockChildCount()).toBe(1)
     })
-    // Let the post-click focus tx land before teardown (it writes the panel's
-    // focus location); returning earlier leaks it past cleanup.
+    // The click fire-and-forgets the full focus chain onto the panel:
+    // focusBlock (focusedBlockLocationProp) → editorSelection →
+    // requestEditorFocus (editorFocusRequestProp). We must fence on the LAST
+    // write, not the first: focusedBlockLocationProp lands well before the
+    // trailing two, and requestEditorFocus is an un-awaited `void set` that is
+    // pending even after the chain's own promise resolves. Returning while any
+    // of these is in-flight leaks a panel write past teardown — the next test's
+    // resetTestDb wipes panel-1, the write lands on the missing block, and the
+    // unhandled BlockNotFoundError { id: 'panel-1' } fails the run (flaky,
+    // misattributed to whichever test is mid-flight). editorFocusRequestProp is
+    // the chain's tail, so once it's visible every panel write has committed.
     await vi.waitFor(async () => {
       const childIds = await repo.block(VIDEO).childIds.load()
-      expect(repo.block(PANEL).peekProperty(focusedBlockLocationProp)?.blockId).toBe(childIds[0])
+      const panel = repo.block(PANEL)
+      expect(panel.peekProperty(focusedBlockLocationProp)?.blockId).toBe(childIds[0])
+      expect(panel.peekProperty(editorFocusRequestProp)).toBeGreaterThanOrEqual(1)
     })
   })
 
