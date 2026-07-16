@@ -719,7 +719,9 @@ than itself, back to the next-older full state.
 <p>
 <strong>Failure bound.</strong> Corruption severing the log confines damage to
 states older than the break, back to the next-older full state — expected
-~1/p events, p99 ≈ 4.6/p. Everything at or newer than the break reconstructs
+~1/p events, p99 ≈ 4.6/p. (One non-corruption cause of a broken newer side
+exists: a raw <code>id</code> rewrite orphans the old id's chain — §3's
+asterisk.) Everything at or newer than the break reconstructs
 from the live side, and the <em>current</em> state is never at risk (it lives
 in <code>blocks</code>). Anchor before-sides double as integrity checkpoints:
 replaying the span between two full states must reproduce the newer one's
@@ -1369,10 +1371,22 @@ snapshot taken at deep idle, and the recovery-swap machinery replaces the DB
 <em>by design</em>, with no freshness check — a naive next-boot swap would
 silently discard every write made after the snapshot (blocks, the
 <code>ps_crud</code> upload queue, row_events). The fallback must record a
-write fence at <code>INTO</code> time (e.g. <code>MAX(row_events.id)</code>
-plus <code>ps_crud</code> emptiness, or the SQLite file change counter) and
-the boot-time swap must verify the live file has not advanced past it —
-discarding the <em>staging</em> file otherwise, never the live one.
+write fence at <code>INTO</code> time and the boot-time swap must verify the
+live file has not advanced past it — discarding the <em>staging</em> file
+otherwise, never the live one. The fence must be the SQLite file change
+counter (or an equivalent any-committed-write signal): a
+<code>MAX(row_events.id)</code>-plus-<code>ps_crud</code>-emptiness fence
+looks natural but is defeated by this doc's own §5 mechanism — a
+<code>history_mode = 'skip'</code> burst (the #288 backfill runs at exactly
+this kind of idle) writes zero row_events rows and its uploads drain, so the
+swap would pass and silently discard the burst's <code>command_events</code>
+record and completion markers, then re-pay the ~230&nbsp;MB arrival logging
+G1 exists to prevent. Cost owned: with a correct fence, the staging file
+survives only a write-free session tail — any user return invalidates it
+(interaction writes panel state, §5.3) and re-pays a multi-GB staging write
+on exactly the quota-tight device this route serves. If retries prove
+wasteful, swap immediately after <code>INTO</code> under a quiesced writer
+(close/reopen) instead of at next boot.
 </p>
 
 <h2 id="s10">10. What each future reader needs from the format</h2>
@@ -1601,7 +1615,8 @@ into is smaller).
         <code>source</code> tag (§6.2 — labeling only; the policy table and
         drop gates left with the §6 revision); the §5.3 UiState retention
         sweeper (newest K per block, rule R1) + its partial candidate index
-        (§3); tests pinning
+        (§3), with the §5.3 pre-slice source-mix probe deciding whether the
+        phase-2 bound ships here or later; tests pinning
         I1-under-exemption, I3 (incl. raw-write labeling + logging), and
         delete-always-logs — plus the fuzzed writer-interleaving suite (note
         below).</td>
@@ -1685,7 +1700,9 @@ under random interruption/resume points.
       <td>I2</td>
       <td><strong>A newer-side full state always exists.</strong> Every
         reconstruction walk terminates: at the live <code>blocks</code> row, a
-        hard-delete event (full before), or an anchor. Readers never assume a
+        hard-delete event (full before), or an anchor (one raw-write
+        asterisk: an <code>id</code> rewrite orphans the old id's chain —
+        §3). Readers never assume a
         cadence — only the <code>full</code> flag; anchors bound the expected
         walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.
         Corollary (§5.2): hard deletes are never
@@ -1800,8 +1817,8 @@ under random interruption/resume points.
   <li><strong>In-trigger retention pruning</strong> — enforcing the UiState
     bound from the trigger itself would put an indexed read + DELETE on the
     hottest write path in the system (violates I6, and the §4 design just
-    removed the last write-path read); the deep-idle sweeper enforces the
-    same bound eventually.</li>
+    removed the last write-path history read); the deep-idle sweeper enforces
+    the same bound eventually.</li>
   <li><strong>Column-keyed exemptions</strong> (e.g. never log
     <code>properties_json</code>) — violates I4; loses the only history for
     cell-primary keys and the whole pre-flip period (PR #288 §12).</li>
@@ -1875,8 +1892,11 @@ under random interruption/resume points.
     but hard-bounded, not skipped</strong> — newest K = 8 per block via the
     scope-stamped deep-idle sweeper, prefix-safe rule R1. Mechanism, caveats,
     and the measured trigger are §5.3's; skip-entirely is recorded in §15.
-    Open remainder, deferred to measurement: whether phase 2 also bounds the
-    sync-arrived echo (load-bearing for multi-writer panels — §5.3).</li>
+    Open remainder: <em>when</em> phase 2 (bounding non-local-ui events of
+    local-ui-bearing blocks) ships — it is the load-bearing complement for
+    every echo-frozen or sync-created panel, not just multi-writer ones
+    (§5.3); the pre-slice-B per-panel source-mix probe decides whether it
+    lands with slice B or later.</li>
 </ol>
 
 <hr>
