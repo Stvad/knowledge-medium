@@ -35,7 +35,7 @@ import {
   type KeybindingOverride,
   type KeyOverrideBound,
 } from './keybindingOverrides.ts'
-import { toChordArray } from './canonicalizeChord.ts'
+import { canonicalizeChord, toChordArray } from './canonicalizeChord.ts'
 
 const fromChordArray = (chords: readonly string[]): KeyCombination | readonly KeyCombination[] =>
   chords.length === 1 ? chords[0]! : chords
@@ -81,17 +81,23 @@ export const applyKeybindingOverrides = (
   }
 
   // Index of "chord → effective contexts claimed by some override."
-  // Used for the collision-strip pass over default bindings.
+  // Used for the collision-strip pass over default bindings. Keyed by
+  // the CANONICAL chord — the same notion of "the same chord"
+  // keybindingConflicts.ts buckets by — so an override spelled
+  // `Cmd+K` still strips a default spelled `$mod+k` (raw-string keys
+  // left alias-equivalent spellings both live; found by
+  // keybindingOverrides.fuzz.test.ts).
   const claimedByChord = new Map<string, Set<ActionContextType>>()
   for (const override of overrides) {
     if (isKeyOverrideUnbound(override.binding)) continue
     const ctx = effectiveContextFor(override, actionContextById)
     if (ctx === null) continue
     for (const chord of toChordArray((override.binding as KeyOverrideBound).keys)) {
-      let set = claimedByChord.get(chord)
+      const key = canonicalizeChord(chord)
+      let set = claimedByChord.get(key)
       if (!set) {
         set = new Set()
-        claimedByChord.set(chord, set)
+        claimedByChord.set(key, set)
       }
       set.add(ctx)
     }
@@ -135,7 +141,7 @@ const applyToAction = (
 
   const defaultChords = toChordArray(action.defaultBinding.keys)
   const survivors = defaultChords.filter(chord => {
-    const claimingContexts = claimedByChord.get(chord)
+    const claimingContexts = claimedByChord.get(canonicalizeChord(chord))
     if (!claimingContexts) return true
     for (const otherCtx of claimingContexts) {
       if (contextsOverlap(otherCtx, action.context)) return false
