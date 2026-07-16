@@ -316,8 +316,7 @@ properties: {
         "to": 31,
         "exact": "selected text",
         "prefix": "short text before",
-        "suffix": "short text after",
-        "contentHash": "sha256:..."
+        "suffix": "short text after"
       }
     ]
   }
@@ -332,10 +331,6 @@ children: first visible comment block, then reply blocks</code></pre>
 
   <div class="warn">
     <strong>Projection requirement:</strong> <code>block_references</code> indexes <code>references_json</code>, not raw property values. The annotation schema must register <code>annotation:targetBlocks</code> as a <code>refList</code>, and creation code should either write matching <code>references</code> in the same transaction for immediate discovery or rely on the references processor before querying through <code>block_references</code>. Tests that bypass processors must account for this explicitly.
-  </div>
-
-  <div class="decision">
-    <strong>Architectural decision:</strong> the backlink edge and the text anchor are separate concepts. The backlink edge answers "which blocks does this thread relate to?" The anchor answers "which editor-document ranges of those block contents should be decorated?"
   </div>
 
   <h2>Thread Placement And Lifecycle</h2>
@@ -407,12 +402,9 @@ children: first visible comment block, then reply blocks</code></pre>
       <td>Short surrounding context.</td>
       <td>Disambiguates repeated text within a small block.</td>
     </tr>
-    <tr>
-      <td><code>contentHash</code></td>
-      <td>Hash of the block content at anchor creation or last repair.</td>
-      <td>Fast trust path for unchanged content.</td>
-    </tr>
   </table>
+
+  <p class="caption">A <code>contentHash</code> leg was considered and dropped: whenever the hash would match, the offset check below necessarily also passes, and a range-length substring compare is cheaper than hashing the whole content — which is also async under WebCrypto and would force an otherwise synchronous resolver.</p>
 
   <p>A future multi-block selection should store one segment per selected block. The UI can group those segments as one thread, but resolution stays per block. V1 creation should stay single-block until there is a block-range selection model that can turn a cross-block selection into ordered block-local raw offsets.</p>
 
@@ -421,23 +413,19 @@ children: first visible comment block, then reply blocks</code></pre>
 
   <div class="flow">
     <div class="step">
-      <strong>1. Hash match</strong>
-      <span class="caption">If the content hash matches, trust <code>from/to</code>.</span>
-    </div>
-    <div class="step">
-      <strong>2. Offset check</strong>
+      <strong>1. Offset check</strong>
       <span class="caption">If <code>content.slice(from, to) === exact</code>, keep the stored offsets.</span>
     </div>
     <div class="step">
-      <strong>3. Exact search</strong>
+      <strong>2. Exact search</strong>
       <span class="caption">Search for <code>exact</code> inside the same block.</span>
     </div>
     <div class="step">
-      <strong>4. Context tie-break</strong>
+      <strong>3. Context tie-break</strong>
       <span class="caption">If multiple matches exist, rank by prefix and suffix match.</span>
     </div>
     <div class="step">
-      <strong>5. Stale fallback</strong>
+      <strong>4. Stale fallback</strong>
       <span class="caption">If no unique match exists, return the segment as stale.</span>
     </div>
   </div>
@@ -445,7 +433,7 @@ children: first visible comment block, then reply blocks</code></pre>
   <p>Resolved ranges feed decorations. Stale anchors still keep the thread attached to their target blocks, but no text highlight is shown for the stale segment until it is repaired.</p>
 
   <h2>Anchor Maintenance</h2>
-  <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user explicitly repairs a stale anchor. A later pass can add automatic remapping on block content edits. Persisting a repair must be snapshot-atomic: read the target block's content inside the persisting transaction and compute offsets, <code>exact</code>, and <code>contentHash</code> from that one snapshot. Persisting render-time offsets against content re-read at write time can produce a hash-valid anchor with wrong offsets — which step 1 of resolution would then trust indefinitely.</p>
+  <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user explicitly repairs a stale anchor. A later pass can add automatic remapping on block content edits. Persisting a repair must be snapshot-atomic: read the target block's content inside the persisting transaction and compute offsets and <code>exact</code> from that one snapshot, so the stored pair is internally consistent — never persist render-time offsets against content re-read at write time.</p>
 
   <p>V1 resolution state should be derived: resolving an anchor returns <code>resolved</code> or <code>stale</code>, but the app persists only explicit user actions such as repair, resolve, reopen, accept, or reject. Do not persist routine stale resolver output as thread state unless a later design introduces an explicit invalidation field with clear write rules.</p>
 
@@ -476,7 +464,7 @@ children: first visible comment block, then reply blocks</code></pre>
     </tr>
     <tr>
       <td>Creation</td>
-      <td>V1 creation should start from a non-collapsed edit-mode selection, where CodeMirror already gives raw block offsets. Range anchors require <code>from &lt; to</code> and a non-empty <code>exact</code>. Read-mode creation should wait for a reliable rendered-selection to raw-offset mapping. Caret or block-level comments should use an explicit block-level anchor kind later.</td>
+      <td>V1 creation should start from a non-collapsed edit-mode selection, where CodeMirror already gives raw block offsets. Range anchors require <code>from &lt; to</code> and a non-empty <code>exact</code>. Read-mode creation should wait for a reliable rendered-selection to raw-offset mapping. Caret or block-level comments wait for the explicit block-level anchor kind (see the data model).</td>
     </tr>
     <tr>
       <td>Read mode</td>
@@ -488,7 +476,7 @@ children: first visible comment block, then reply blocks</code></pre>
     </tr>
     <tr>
       <td>Thread panel</td>
-      <td>Clicking a highlight or marker opens a side panel or popover showing the thread root and reply children.</td>
+      <td>Clicking a highlight or marker opens a side panel or popover showing the thread root and reply children — via the repo's UI channels: <code>openDialog</code> from <code>@/utils/dialogs</code> for a one-shot popover, or a <code>createToggleStore</code> module store for a persistent panel.</td>
     </tr>
     <tr>
       <td>Backlinks view</td>
@@ -562,7 +550,7 @@ children: first visible comment block, then reply blocks</code></pre>
   <h2>Implementation Slices</h2>
   <h3>V1 comments</h3>
   <ol>
-    <li>Define annotation schemas: thread type, annotation container type, target <code>refList</code> property, anchor payload property, status/kind properties.</li>
+    <li>Define annotation schemas (<code>defineProperty</code> + <code>codecs.refList()</code>, as existing plugins do): thread type, annotation container type, target <code>refList</code> property, anchor payload property, status/kind properties.</li>
     <li>Add the annotation container lifecycle (<code>systemPagesFacet</code> ensure, kernel-page-style deterministic id, no alias, no page type) plus the shared hiding seam, and route outline rendering, search, recents, and copy flows through it.</li>
     <li>Add annotation UI lifecycle rules for first/last visible comment child deletion.</li>
     <li>Add creation writes that keep target refs discoverable immediately or explicitly wait for reference projection convergence.</li>
@@ -585,7 +573,7 @@ children: first visible comment block, then reply blocks</code></pre>
   <ul>
     <li>Unit-test anchor creation and resolution with unchanged text, shifted text, repeated text, and missing text.</li>
     <li>Unit-test non-ASCII content so offsets are validated as CodeMirror/JavaScript string positions, not UTF-8 byte offsets.</li>
-    <li>Unit-test target-block invariants: <code>annotation:targetBlocks</code> mirrors segment block ids unless an explicit block-level anchor kind is introduced.</li>
+    <li>Unit-test the targetBlocks-mirrors-segments invariant from the data model.</li>
     <li>Unit-test anchor creation rejects collapsed selections and empty <code>exact</code> text.</li>
     <li>Unit-test structural edit policy: moves preserve block-local anchors; splits resolve affected segments as stale; the merge processor retargets property, projected refs, and segment <code>blockId</code>s together.</li>
     <li>Unit-test multi-block segment utilities later, when there is a block-range selection model that does not require a rendered browser selection.</li>
@@ -593,7 +581,6 @@ children: first visible comment block, then reply blocks</code></pre>
     <li>Data tests should cover deleting and restoring the last target block, including workspace-level orphan discovery through the annotation container.</li>
     <li>Lifecycle tests should cover deleting the first comment child, the last-comment-deletes-thread rule, and tolerance of externally-produced zero-children threads.</li>
     <li>Backlink tests should verify default flat/grouped backlinks and inline counts exclude annotation threads while the annotation query includes them by <code>sourceField</code>.</li>
-    <li>Data tests should share one DB per file and reset between tests, matching the project testing convention.</li>
     <li>Component tests should cover create-comment from a selected range, highlight rendering, thread opening, and stale fallback.</li>
     <li>Suggestion tests should verify accept rejects stale or mismatched text instead of applying a blind replacement, handles active edit-mode buffers without stale debounced overwrites, keeps the editor document and persisted content aligned, updates suggestion status, produces one undo step, and flags an accepted suggestion whose expected post-accept content no longer matches.</li>
   </ul>
