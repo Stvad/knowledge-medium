@@ -51,21 +51,15 @@ const MAX_QUERY_WORDS = 6
 
 /** True when `beforePos` sits after an unclosed `[[` — wikilink spans
  *  belong to the wikilink autocomplete, so char triggers inside them
- *  must not fire. */
-const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean => {
-  let opens = 0
-  let closes = 0
-  for (let i = 0; i < beforePos - 1; i++) {
-    if (text[i] === '[' && text[i + 1] === '[') {
-      opens += 1
-      i += 1
-    } else if (text[i] === ']' && text[i + 1] === ']') {
-      closes += 1
-      i += 1
-    }
-  }
-  return opens > closes
-}
+ *  must not fire. Mirrors backlinkAutocomplete's own matcher exactly
+ *  (`/\[\[([^\]]*?)$/`): the span is a `[[` with no `]` between it and
+ *  the position. Pair-counting `[[`/`]]` here is WRONG the same way the
+ *  blockref comment below explains: a stray leading `]]` numerically
+ *  cancels a later, genuinely-unclosed `[[` (found by
+ *  triggerMatch.fuzz.test.ts — `']] [[ #tag'` fired both the wikilink
+ *  and the `#` dropdown at once). */
+const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean =>
+  /\[\[[^\]]*$/.test(text.slice(0, beforePos))
 
 /** Pure trigger-detection helper. Callers export thin per-char
  *  wrappers (`matchAtTrigger`, `matchHashTrigger`) for their
