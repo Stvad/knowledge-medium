@@ -59,6 +59,10 @@ import {
   type WorkspaceBackfill,
 } from './facets'
 import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjection'
+import {
+  changedPropertyDefinitions,
+  type PropertyDefinitionChange,
+} from './internals/propertyDefinitionMigrations'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
@@ -106,6 +110,15 @@ export interface FacetBridgeTarget {
   scheduleReprojection(
     names: readonly string[],
     schemas: ReadonlyMap<string, AnyPropertySchema>,
+  ): void
+  /** Current property-definition registry snapshot — the "before" side of
+   *  the per-fieldId rename/codec diff (PR #288 §7, slice B2). */
+  getPropertyDefinitions(): PropertyDefinitionRegistrySnapshot | null
+  /** Defer the rename-reproject / codec re-encode migration pass for
+   *  definitions whose identity-stable metadata changed in this swap. */
+  schedulePropertyDefinitionMigrations(
+    workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
   ): void
 }
 
@@ -324,6 +337,7 @@ export class FacetBridge {
         workspaceScoped: true,
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
+          const previousPropertyDefinitions = target.getPropertyDefinitions()
           const types = rt.read(typesFacet)
           const legacySchemas = liftTypeSchemas(types)
           const seeds = rt.read(definitionSeedsFacet)
@@ -360,6 +374,19 @@ export class FacetBridge {
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
+          }
+          // Rename / codec-change migrations (PR #288 §7/§9, slice B2): diff
+          // the registry snapshots by durable fieldId. Every rename source —
+          // panel edit, outline edit, synced-in definition change — funnels
+          // through this rebuild, so this is the single trigger seam. Same
+          // workspace only (the helper refuses cross-workspace diffs).
+          const definitionChanges = changedPropertyDefinitions(
+            previousPropertyDefinitions, propertyDefinitions,
+          )
+          if (definitionChanges.length > 0 && propertyDefinitions) {
+            target.schedulePropertyDefinitionMigrations(
+              propertyDefinitions.workspaceId, definitionChanges,
+            )
           }
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.

@@ -33,6 +33,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
@@ -218,6 +219,16 @@ export class UserSchemasService {
   async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
     const name = args.name.trim()
     if (!name) throw new Error('[addSchema] name is required')
+    // Properties-as-blocks (PR #288 §7): field-row content is `[[name]]`,
+    // so a schema name must survive the wikilink round trip — `]]` renders
+    // lossy and every re-derive-by-content path would bind the wrong
+    // schema or none.
+    if (!isRoundTrippableReferenceLabel(name)) {
+      throw new Error(
+        `[addSchema] name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]] `
+        + '(property field rows store the name as reference content); rename without "]]"',
+      )
+    }
 
     // Capture the generation before the first await. Creation is a
     // definition-identity write: synthesis is available synchronously, but

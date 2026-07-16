@@ -92,6 +92,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitReconcileRescans: 'drains a shared job object',
   awaitReprojections: 'drains a shared job object',
   awaitSeedMaterialization: 'drains a shared job object',
+  awaitPropertyDefinitionMigrations: 'drains a shared job object',
   awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
   drainSyncWorkspace: 'reads this.syncObserver through the chain; never assigns it',
@@ -130,6 +131,9 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
+  schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
+  runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
+  runPropertyDefinitionMigration: 'private; jobs are enqueued via the facetBridge-bound schedule',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──
@@ -205,6 +209,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   workspaceBackfillMarkers: 'shared object',
   referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   referenceTargetDeriveMarkers: 'shared object',
+  propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
 }
 
 let sharedDb: TestDb

@@ -28,3 +28,15 @@ export const parseExactReferenceBlockContent = (
 
 export const referenceBlockContentForLabel = (label: string): string =>
   `[[${label.replace(/]]/g, '] ]')}]]`
+
+/** Does `label` survive the wikilink round trip intact? Property-schema
+ *  names must (PR #288 §7): field-row content is `[[name]]`, and every
+ *  re-derive-by-content path (cross-workspace copy, markdown round-trip)
+ *  resolves that text back to a schema — a name containing `]]` renders
+ *  lossy (`foo]]bar` → `foo] ]bar`) and would bind the wrong schema or
+ *  none. `addSchema` and the rename flow reject non-round-trippable
+ *  names. */
+export const isRoundTrippableReferenceLabel = (label: string): boolean => {
+  const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
+  return parsed !== null && parsed.kind === 'alias' && parsed.alias === label
+}

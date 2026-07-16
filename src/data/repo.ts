@@ -111,6 +111,15 @@ import {
   deriveReferenceTargetId,
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
+import type { PropertyDefinitionChange } from './internals/propertyDefinitionMigrations'
+import {
+  encodedPropertyValueToChildContent,
+  propertiesEqual,
+  propertyChildContentToEncodedValue,
+  propertyFieldContent,
+} from './propertyChildren'
+import { parsePropertiesMigration } from '@/data/workspaceSchema'
+import { isChildBackedPropertiesWorkspace } from '@/types'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
   parseAliasCollisionError,
@@ -518,6 +527,10 @@ export class Repo {
   /** In-flight reference-target derive passes — drained by
    *  `awaitReferenceTargetDerive()`, same pattern. */
   private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** In-flight rename-reproject / codec re-encode migration passes
+   *  (PR #288 §7/§9, slice B2) — drained by
+   *  `awaitPropertyDefinitionMigrations()`, same pattern. */
+  private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -825,6 +838,10 @@ export class Repo {
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
+      getPropertyDefinitions: () => this._propertyDefinitionRegistry,
+      schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
+        this.schedulePropertyDefinitionMigrations(workspaceId, changes)
+      },
     })
     this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
     // Identity stability for query handles is provided by the
@@ -2492,6 +2509,203 @@ export class Repo {
     }
 
     await this.referenceTargetDeriveMarkers.set(markerSuffix)
+  }
+
+  /**
+   * Rename-reproject + codec re-encode migration pass (PR #288 §7/§9, slice
+   * B2). Scheduled by the facet bridge when a registry rebuild shows a
+   * definition's NAME or codec TYPE changed under its durable fieldId —
+   * renames break silently without it: children survive untouched (the
+   * column, not the label, is authoritative) but the cell stays keyed by the
+   * dead name and every schema-aware reader falls back to `defaultValue`.
+   *
+   * Per change, one child-indexed sweep (the `reference_target_id` partial
+   * index): retitle stale field-row content (`[[old]]` → `[[new]]` — markdown
+   * export and cross-workspace re-derive-by-content bind the name), re-encode
+   * value children to the new codec's canonical content where they convert,
+   * and re-key each consuming parent's cell (drop the old key; project the
+   * new one from the first parseable value). Writes ride ordinary repo.tx —
+   * field-row content and cells are synced state, and the flip-gated
+   * processors' idempotence makes the overlap free.
+   *
+   * Values that can't convert under a codec change are REPORTED (§9: "N
+   * values can't convert" must be user-visible, not a silent unset) via the
+   * user-error toast channel; the rows stay visible/fixable in the tree.
+   *
+   * Flip-gated: an un-flipped workspace has no recognized field rows and its
+   * renames keep today's semantics; skipped entirely (no marker — this pass
+   * is change-driven, not once-per-workspace).
+   */
+  schedulePropertyDefinitionMigrations(
+    workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
+  ): void {
+    if (this.isReadOnly || !workspaceId || changes.length === 0) return
+    this.propertyDefinitionMigrationJobs.schedule(() =>
+      this.runPropertyDefinitionMigrations(workspaceId, changes),
+    )
+  }
+
+  /** Test helper — drains migration passes whose deferral timer has fired. */
+  async awaitPropertyDefinitionMigrations(): Promise<void> {
+    await this.propertyDefinitionMigrationJobs.drain()
+  }
+
+  private async runPropertyDefinitionMigrations(
+    workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
+  ): Promise<void> {
+    const workspaceRow = await this.db.getOptional<{properties_migration: string | null}>(
+      'SELECT properties_migration FROM workspaces WHERE id = ?', [workspaceId],
+    )
+    if (!isChildBackedPropertiesWorkspace(
+      parsePropertiesMigration(workspaceRow?.properties_migration),
+    )) return
+    for (const change of changes) {
+      try {
+        await this.runPropertyDefinitionMigration(workspaceId, change)
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[propertyDefinitionMigrations] "${change.newName}" (${change.fieldId}) failed: ${reason}`,
+        )
+      }
+    }
+  }
+
+  private async runPropertyDefinitionMigration(
+    workspaceId: string,
+    change: PropertyDefinitionChange,
+  ): Promise<void> {
+    const resolution = this.propertySchemaResolverFor(workspaceId).resolveField(change.fieldId)
+    // Shadowed/unavailable definitions are excluded from the name map and
+    // the cell projection (§6) — nothing to re-key for them.
+    if (resolution.status !== 'resolved') return
+    const schema = resolution.schema
+
+    const candidates = await this.db.getAll<{id: string; parent_id: string | null}>(
+      `SELECT id, parent_id FROM blocks
+        WHERE workspace_id = ? AND reference_target_id = ? AND deleted = 0`,
+      [workspaceId, change.fieldId],
+    )
+    if (candidates.length === 0) return
+
+    let unconvertible = 0
+    const CHUNK = 100
+    for (let i = 0; i < candidates.length; i += CHUNK) {
+      const chunk = candidates.slice(i, i + CHUNK)
+      await this.tx(async tx => {
+        // §9 ancestry rule, memoized per tx: a candidate whose parent chain
+        // passes through a field row is a VALUE/comment (e.g. a ref-typed
+        // value pointing at this very definition), not a field row — never
+        // retitle or re-key those.
+        const subtreeMemo = new Map<string, boolean>()
+        const insidePropertySubtree = async (id: string | null): Promise<boolean> => {
+          const chain: string[] = []
+          let cursor = id
+          let verdict: boolean | undefined
+          while (cursor !== null) {
+            const memo = subtreeMemo.get(cursor)
+            if (memo !== undefined) { verdict = memo; break }
+            const row = await tx.get(cursor)
+            if (row === null) { verdict = false; break }
+            chain.push(cursor)
+            const rowTarget = row.referenceTargetId ?? null
+            if (rowTarget !== null) {
+              const rowResolution =
+                this.propertySchemaResolverFor(workspaceId).resolveField(rowTarget)
+              if (rowResolution.status === 'resolved'
+                || (rowResolution.status === 'identity-unavailable'
+                  && rowResolution.reason === 'shadowed')) {
+                verdict = true
+                break
+              }
+            }
+            cursor = row.parentId
+          }
+          const resolved = verdict ?? false
+          for (const walked of chain) subtreeMemo.set(walked, resolved)
+          return resolved
+        }
+
+        const reprojectedParents = new Set<string>()
+        for (const candidate of chunk) {
+          const fieldRow = await tx.get(candidate.id)
+          if (fieldRow === null || fieldRow.deleted) continue
+          if (await insidePropertySubtree(fieldRow.parentId)) continue
+
+          // Retitle: field-row content tracks the schema name in lock-step
+          // (§7) — a stale `[[old]]` binds the dead name on every
+          // re-derive-by-content path.
+          const expectedContent = propertyFieldContent(schema)
+          if (fieldRow.content !== expectedContent) {
+            await tx.update(fieldRow.id, {content: expectedContent})
+          }
+
+          // Re-encode + re-key once per parent (a parent's projection reads
+          // ALL its field rows for this schema in deterministic order).
+          const parentId = fieldRow.parentId
+          if (parentId === null || reprojectedParents.has(parentId)) continue
+          reprojectedParents.add(parentId)
+          const parent = await tx.get(parentId)
+          if (parent === null || parent.deleted) continue
+
+          const siblings = await tx.childrenOf(parentId, undefined, {includePropertyChildren: true})
+          let projected: unknown
+          let hasProjection = false
+          for (const sibling of siblings) {
+            if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
+            const values = await tx.childrenOf(sibling.id, undefined, {includePropertyChildren: true})
+            for (const value of values) {
+              try {
+                const encoded = propertyChildContentToEncodedValue(schema, value.content)
+                if (!hasProjection) {
+                  projected = encoded
+                  hasProjection = true
+                }
+                // Canonicalize the child content under the (possibly new)
+                // codec so the stored text matches what setProperty would
+                // write.
+                const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                if (value.content !== canonical) {
+                  await tx.update(value.id, {content: canonical})
+                }
+              } catch {
+                unconvertible += 1
+              }
+            }
+          }
+
+          const nextProperties = {...parent.properties}
+          if (change.oldName !== schema.name) delete nextProperties[change.oldName]
+          if (hasProjection) {
+            nextProperties[schema.name] = projected
+          } else {
+            delete nextProperties[schema.name]
+          }
+          if (!propertiesEqual(parent.properties, nextProperties)) {
+            await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
+          }
+        }
+      }, {
+        scope: ChangeScope.BlockDefault,
+        description: `migrate property definition ${change.oldName} -> ${schema.name}`,
+      })
+    }
+
+    if (unconvertible > 0) {
+      // §9: a codec change that strands values must be user-visible, never a
+      // silent unset. The rows stay in the tree, fixable by hand.
+      const message =
+        `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
+        + `"${schema.name}" could not convert to the new type; they remain in `
+        + `the outline unchanged`
+      console.warn(`[propertyDefinitionMigrations] ${message}`)
+      this.userErrorListeners.notify(new ProcessorRejection(
+        message, 'property.codec-change.unconvertible',
+        {fieldId: change.fieldId, name: schema.name, count: unconvertible},
+      ))
+    }
   }
 
   /**
