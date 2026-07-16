@@ -3,15 +3,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
   normalizeReferences,
   type BlockData,
 } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
-import { typesFacet } from '@/data/facets.js'
+import { seedProperty } from '@/data/propertySeeds'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
@@ -156,14 +154,18 @@ describe('references.retargetMergedBlockReferences', () => {
   // without rewriting the value left a projection anomaly that the next
   // re-parse silently reverted.
   describe('property-derived refs', () => {
-    const reviewerProp = defineProperty<string>('reviewer', {
-      codec: codecs.ref(),
-      defaultValue: '',
+    const reviewerProp = seedProperty({
+      seedKey: 'test:references/property/reviewer',
+      revision: 1,
+      name: 'reviewer',
+      preset: 'ref',
       changeScope: ChangeScope.BlockDefault,
     })
-    const relatedProp = defineProperty<readonly string[]>('related', {
-      codec: codecs.refList(),
-      defaultValue: [],
+    const relatedProp = seedProperty({
+      seedKey: 'test:references/property/related',
+      revision: 1,
+      name: 'related',
+      preset: 'refList',
       changeScope: ChangeScope.BlockDefault,
     })
 
@@ -195,12 +197,11 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          typesFacet.of(
-            defineBlockType({id: 'test:ref-reviewer-related', properties: [reviewerProp, relatedProp]}),
-            {source: 'test'},
-          ),
+          definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+          definitionSeedsFacet.of(relatedProp, {source: 'test'}),
         ],
       })
+      repo.setActiveWorkspaceId(WS)
       await seed(repo)
 
       await repo.mutate.merge({intoId: 'into', fromId: 'from'})
@@ -226,12 +227,11 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          typesFacet.of(
-            defineBlockType({id: 'test:ref-reviewer-related', properties: [reviewerProp, relatedProp]}),
-            {source: 'test'},
-          ),
+          definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+          definitionSeedsFacet.of(relatedProp, {source: 'test'}),
         ],
       })
+      seeder.repo.setActiveWorkspaceId(WS)
       await seed(seeder.repo)
 
       // Distinct generators — two Repos over one db otherwise mint
@@ -275,12 +275,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          typesFacet.of(
-            defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}),
-            {source: 'test'},
-          ),
+          definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
         ],
       })
+      repo.setActiveWorkspaceId(WS)
       await repo.tx(async tx => {
         await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
         await tx.create({
@@ -320,12 +318,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          typesFacet.of(
-            defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}),
-            {source: 'test'},
-          ),
+          definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
         ],
       })
+      repo.setActiveWorkspaceId(WS)
       await repo.tx(async tx => {
         await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
         await tx.create({id: 'from', workspaceId: WS, parentId: null, orderKey: 'a1'})
@@ -367,9 +363,11 @@ describe('references.retargetMergedBlockReferences', () => {
       // entirely (value AND entry, like the absent-schema branch), not
       // silently mutated inside an undoable document merge (Codex
       // review on PR #371).
-      const pinnedProp = defineProperty<string>('pinned-view', {
-        codec: codecs.ref(),
-        defaultValue: '',
+      const pinnedProp = seedProperty({
+        seedKey: 'test:references/property/pinned-view',
+        revision: 1,
+        name: 'pinned-view',
+        preset: 'ref',
         changeScope: ChangeScope.UiState,
       })
       await resetTestDb(sharedDb.db)
@@ -379,12 +377,11 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          typesFacet.of(
-            defineBlockType({id: 'test:ref-reviewer-pinned', properties: [reviewerProp, pinnedProp]}),
-            {source: 'test'},
-          ),
+          definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+          definitionSeedsFacet.of(pinnedProp, {source: 'test'}),
         ],
       })
+      repo.setActiveWorkspaceId(WS)
       await repo.tx(async tx => {
         await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
         await tx.create({id: 'from', workspaceId: WS, parentId: null, orderKey: 'a1'})

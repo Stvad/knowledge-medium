@@ -68,14 +68,10 @@ import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzKernelHarness'
-import {
-  ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
-} from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { typesFacet } from '@/data/facets.js'
+import { seedProperty } from '@/data/propertySeeds'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
@@ -88,21 +84,23 @@ const ROOT = '00000000-0000-4000-8000-000000000000'
 
 // ──── property schemas under test ────
 
-const reviewerProp = defineProperty<string>('reviewer', {
-  codec: codecs.ref(),
-  defaultValue: '',
+const reviewerProp = seedProperty({
+  seedKey: 'test:references/property/reviewer',
+  revision: 1,
+  name: 'reviewer',
+  preset: 'ref',
   changeScope: ChangeScope.BlockDefault,
 })
-const relatedProp = defineProperty<readonly string[]>('related', {
-  codec: codecs.refList(),
-  defaultValue: [],
+const relatedProp = seedProperty({
+  seedKey: 'test:references/property/related',
+  revision: 1,
+  name: 'related',
+  preset: 'refList',
   changeScope: ChangeScope.BlockDefault,
 })
 const refSchemaExtension = [
-  typesFacet.of(
-    defineBlockType({id: 'test:ref-schemas', properties: [reviewerProp, relatedProp]}),
-    {source: 'test'},
-  ),
+  definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+  definitionSeedsFacet.of(relatedProp, {source: 'test'}),
 ]
 
 // ──── op + content generators ────
