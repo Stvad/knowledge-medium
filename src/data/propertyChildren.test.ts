@@ -445,6 +445,107 @@ describe('delete cascade (machinery traversal, §9)', () => {
   })
 })
 
+describe('§9 positional rule on the WRITE side (round-2 review fixes)', () => {
+  const setupWithProperty = async (): Promise<{repo: Repo; fieldRowId: string; valueRowId: string}> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    return {repo, fieldRowId: field!.id, valueRowId: value!.id}
+  }
+
+  it('a comment under a ref-typed value never projects junk into the owning cell', async () => {
+    const {repo, valueRowId} = await setupWithProperty()
+    // Make the VALUE ref-typed at the definition itself — its column stamps
+    // to a definition id, the §9 parent-guard shape.
+    await repo.tx(tx => tx.update(valueRowId, {content: `((${STATUS_FIELD_ID}))`}),
+      {scope: ChangeScope.BlockDefault})
+    const cellAfterValueEdit = await cellValue('p')
+
+    // Editing a comment under that value must not treat the value as a
+    // nested field row of the FIELD ROW and parse the comment as its value.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'comment', workspaceId: WS, parentId: valueRowId, orderKey: 'a',
+        content: 'just a note',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.update('comment', {content: 'edited note'}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toEqual(cellAfterValueEdit)
+    const fieldRowCell = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?',
+      [(await liveFieldRows('p'))[0]!.id],
+    )
+    expect(JSON.parse(fieldRowCell.properties_json)).toEqual({})
+  })
+
+  it('a bag write on a field row stays cell-only (no nested field rows)', async () => {
+    const {repo, fieldRowId} = await setupWithProperty()
+    await repo.tx(tx => tx.update(fieldRowId, {properties: {[statusSchema.name]: 'nested'}}),
+      {scope: ChangeScope.BlockDefault})
+    // No nested [[status]] row under the field row: its only live child is
+    // the value child.
+    const children = (await childrenRows(fieldRowId)).filter(c => c.deleted === 0)
+    expect(children.filter(c => c.reference_target_id === STATUS_FIELD_ID)).toEqual([])
+  })
+
+  it('setProperty on a property-subtree interior row skips the dual-write', async () => {
+    const {repo, valueRowId} = await setupWithProperty()
+    await repo.tx(tx => tx.setProperty(valueRowId, statusSchema, 'meta'),
+      {scope: ChangeScope.BlockDefault})
+    // The cell write lands; no field row is minted under the value child.
+    const children = (await childrenRows(valueRowId)).filter(c => c.deleted === 0)
+    expect(children.filter(c => c.reference_target_id === STATUS_FIELD_ID)).toEqual([])
+  })
+})
+
+describe('merge relocate-visibly with a ref-typed value (round-2 fix)', () => {
+  it('clears the derived column so the relocated value stays visible, bag intact', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    // into wins the key; from's DIVERGENT value is ref-typed at the
+    // definition block — the exact hidden-fake-field-row shape.
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'kept'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'x'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
+    await repo.tx(tx => tx.update(fromValue!.id, {content: `((${STATUS_FIELD_ID}))`}),
+      {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!, mergeProperties: intoProps => intoProps})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The merged bag keeps into's value…
+    expect(await cellValue('into')).toBe('kept')
+    // …and the relocated value row is LIVE under into with a CLEARED
+    // column (visible ordinary content, not a hidden fake field row).
+    const relocated = await sharedDb.db.get<{deleted: number; parent_id: string; reference_target_id: string | null}>(
+      'SELECT deleted, parent_id, reference_target_id FROM blocks WHERE id = ?',
+      [fromValue!.id],
+    )
+    expect(relocated.deleted).toBe(0)
+    expect(relocated.parent_id).toBe('into')
+    expect(relocated.reference_target_id).toBeNull()
+    // Visible to the outline default:
+    await repo.tx(async tx => {
+      const visible = await tx.childrenOf('into')
+      expect(visible.map(c => c.id)).toContain(fromValue!.id)
+    }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
 describe('flip predicate / SQL gate lock (§6)', () => {
   it('the SQL IN-list matches the TS at-or-past-children predicate exactly', async () => {
     // The TS predicate and the SQL literal must move together: a future

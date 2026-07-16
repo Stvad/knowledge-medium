@@ -522,9 +522,11 @@ export class Repo {
   /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
    *  (adversarial-review round 2: a durable once-ever marker permanently
    *  missed definitions/aliases that arrived while the app was closed or
-   *  the workspace inactive — the sweep is cheap after its first run, since
-   *  it only visits NULL-column reference-shaped rows, so it runs once per
-   *  workspace open instead). */
+   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
+   *  the first run, but the LIKE prefilter itself is an O(table) scan on
+   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
+   *  deep idle, once per workspace open; a partial expression index on the
+   *  content-shape predicate is the escape hatch if it ever matters. */
   private readonly referenceTargetSweepDone = new Set<string>()
   /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
    *  in ONE batched scan per drain (never one scan per name). Names only
@@ -2473,7 +2475,10 @@ export class Repo {
     await this.stampReferenceTargets(updates)
 
     this.referenceTargetSweepDone.add(workspaceId)
-    // Anything queued while the sweep was pending is covered by it.
+    // Defense only — pre-sweep scheduling never accumulates. Note the
+    // narrow accepted window: an alias/definition arriving between this
+    // sweep's candidate SELECT and this line is dropped for the session
+    // and healed by the NEXT open's sweep.
     this.pendingNameRederives.delete(workspaceId)
   }
 
@@ -2622,10 +2627,16 @@ export class Repo {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
-      // Re-queue so the repair isn't consumed by a transient failure.
+      // Re-queue AND re-arm so the repair isn't consumed by a transient
+      // failure (without the re-arm the names would sit until the next
+      // alias event / registry rebuild / app open).
       const requeued = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
       for (const name of pending) requeued.add(name)
       this.pendingNameRederives.set(workspaceId, requeued)
+      if (!this.nameRederiveDrainScheduled.has(workspaceId)) {
+        this.nameRederiveDrainScheduled.add(workspaceId)
+        this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
+      }
     }
   }
 
