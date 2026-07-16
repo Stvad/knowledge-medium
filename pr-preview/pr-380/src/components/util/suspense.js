@@ -1,2 +1,0 @@
-import{c as e}from"react/compiler-runtime";import{jsx as t}from"react/jsx-runtime";var n=()=>{let n=e(1),r;return n[0]===Symbol.for(`react.memo_cache_sentinel`)?(r=t(`div`,{children:`Loading...`}),n[0]=r):r=n[0],r};export{n as SuspenseFallback};
-//# sourceMappingURL=suspense.js.map
