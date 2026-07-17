@@ -1567,8 +1567,21 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         <em>splits</em> the group rather than letting undo reorder history —
         leaving two stack entries that share one <code>group_id</code>. A reader
         that took every event <code>WHERE group_id = ?</code> would re-merge
-        across that split and swallow the interloper's neighbours into one undo;
-        stop the fold at the first foreign <code>tx_id</code>.
+        across that split and swallow the interloper's neighbours into one undo.
+        But <em>foreign</em> is much narrower than "a different
+        <code>tx_id</code>", and the difference is not cosmetic: the stacks are
+        <strong>per scope</strong> (<code>peekUndo(entry.scope)</code>), and a tx
+        is recorded at all only if its scope is undoable and it actually wrote
+        (<code>undoManager.ts:103-104</code>). So a <code>UiState</code> or
+        <code>UserPrefs</code> tx (<code>undoable: false</code>,
+        <code>changeScope.ts:61-75</code>), a sync-applied or raw event, a
+        zero-write tx, or an undoable tx on a <em>different</em> scope's stack
+        all interleave without splitting anything. A reader that stopped at any
+        foreign <code>tx_id</code> would shatter a grouped action that today
+        takes one undo — and panel churn landing between two grouped edits is the
+        everyday case, not a corner. The boundary is an <strong>undoable,
+        writing tx on the same scope's stack carrying a different
+        <code>group_id</code></strong>.
         Two per-kind carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
         (soft-delete/tombstone), with redo re-applying <strong>the folded final
@@ -1780,10 +1793,16 @@ into is smaller).
     </tr>
     <tr>
       <td><strong>D — reclaim</strong></td>
-      <td>§9 VACUUM: deep-idle one-shot (marker + space-check gated,
-        temp_store bracket) + manual db-maintenance command; measure and record
-        before/after bytes on the dev instance.</td>
-      <td>Requires C.</td>
+      <td>§9 VACUUM: the <strong>manual db-maintenance command</strong>, plus
+        measure and record before/after bytes on the dev instance. The
+        <em>deep-idle one-shot</em> (marker + space-check gated, temp_store
+        bracket) is specified in §9 but <strong>does not ship in this slice</strong>
+        — it is gated on <a href="#s16">O2</a>, whose lean is to enable it a
+        release later once the manual path has telemetry. Slice D therefore has a
+        single gate; shipping both here would enable the riskiest UX path in the
+        design (a minutes-long single-worker stall fired by a heuristic) ahead of
+        the decision that governs it.</td>
+      <td>Requires C. Auto-VACUUM gated on O2.</td>
     </tr>
   </tbody>
 </table>
@@ -1815,18 +1834,9 @@ compact path are exercised on every seed. Slice B adds fuzzed interleavings
 of user / sync-applied / raw / derived / bulk writers (oracle: every write of
 every class <em>that changes a row</em> produces its event — no <em>class of
 writer</em> is exempt — labels are truthful, and each block reconstructs forward
-from its create with the <code>blocks</code> table ignored entirely: I3/I8).
-That qualifier is load-bearing rather than a hedge: an identical no-op update
-writes nothing by design (§4.1's identical-update skip — the measured 339,923
-no-op updates on the dev instance are why it exists), so an oracle demanding an
-event per <em>statement</em> would fail on the generator's own no-op case. I8
-is a claim about provenance classes — no writer is privileged — not about SQL
-statements; a write that changes no state leaves no state to reconstruct, so
-skipping it costs the log nothing. (The asymmetry with §8 is deliberate and
-worth naming: the rewriter <em>keeps</em> v1's logged no-ops as empty compact
-events because deleting history rows is the worse sin (I7), not because
-"an UPDATE happened" timing is a value this design upholds going forward — v2
-does not record it.) and randomized §5.1 retention sweeps interleaved
+from its create with the <code>blocks</code> table ignored entirely: I3/I8,
+excepting the raw <code>UPDATE&nbsp;…&nbsp;SET&nbsp;id</code> case below),
+and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same blocks
 (safety oracle: every pruned event was a full local-ui event, no block with a
 non-local-ui compact event older than the cut is touched, and
@@ -1839,6 +1849,37 @@ generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
 under random interruption/resume points.
 </p>
+
+<p>
+<strong>Two qualifiers on slice B's first oracle are load-bearing rather than
+hedges</strong> — an oracle stated without them fails on the suite's own
+generator, which is how both were found.
+</p>
+<ul>
+  <li><strong>Writes that change nothing produce nothing.</strong> An identical
+    no-op update writes no event by design (§4.1's identical-update skip — the
+    measured 339,923 no-op updates on the dev instance are why it exists), so an
+    oracle demanding an event per <em>statement</em> fails on the generator's own
+    no-op case. I8 is a claim about provenance classes — no writer is privileged
+    — not about SQL statements; a write that changes no state leaves no state to
+    reconstruct, so skipping it costs the log nothing. (The asymmetry with §8 is
+    deliberate and worth naming: the rewriter <em>keeps</em> v1's logged no-ops
+    as empty compact events because deleting history rows is the worse sin (I7),
+    not because "an UPDATE happened" timing is a value this design upholds going
+    forward — v2 does not record it.)</li>
+  <li><strong>A raw <code>UPDATE&nbsp;…&nbsp;SET&nbsp;id</code> is a rename
+    boundary, not a create.</strong> The §2.1 unguarded path is recorded under
+    <code>NEW.id</code> with <code>full = 1</code> (§3), so the new id has no
+    <code>create</code> event and the old id's newer-side terminator is broken by
+    the key rewrite itself — v1 alike. "Every block reconstructs forward from its
+    create" is therefore impossible here <em>by construction</em>, and an oracle
+    that insisted would either fail on a documented case or push the
+    implementation to hide it. The suite models it as what it is: the pre-rewrite
+    chain reconstructs via its older-side full, the post-rewrite id opens at the
+    <code>full=1</code> rename event, and the two are asserted as a rename pair
+    rather than one continuous history. This is the same raw-write asterisk §4.3
+    already carries on "ChainBroken ⇒ corruption".</li>
+</ul>
 
 <h2 id="invariants">14. Invariants index</h2>
 
@@ -1920,15 +1961,28 @@ under random interruption/resume points.
     </tr>
     <tr>
       <td>I6</td>
-      <td><strong>The log never gets slower than today.</strong> v2 per-write
+      <td><strong>The log never gets slower than today</strong> — <em>no trigger
+        body may read <code>row_events</code> or scan history on the write
+        path</em> (the only reads are 1-row <code>tx_context</code> probes). That
+        half is absolute. The <em>cost</em> half is per-class and must be stated
+        honestly rather than as one formula: for compact updates, v2 per-write
         work = v1 minus the full snapshot sides, plus changed-field patches and
-        one <code>random()</code> — <em>no trigger body may read
-        <code>row_events</code> or scan history on the write path</em> (the
-        only reads are 1-row <code>tx_context</code> probes).</td>
+        one <code>random()</code> — a clear win. <strong>For the
+        <code>UiState</code> class after slice B it is not a win by
+        construction</strong>: §5.1 writes those events <code>full</code>, so
+        nothing is subtracted, and they additionally pay the new columns (§3) and
+        the partial <code>scope='local-ui'</code> candidate index. That is the
+        hottest measured class (~half of prod updates, §12), so a bench that
+        averaged over a generic workload could pass while UI-state write latency
+        regressed. The claim is therefore scoped: never slower for compact
+        non-local updates, and <em>separately benched</em>, not assumed, for
+        local-ui — with the retention bound (§5.1) as the thing that has to pay
+        for any regression there.</td>
       <td><a href="#s7">§7</a></td>
-      <td>v2 trigger</td>
-      <td>Bench note in slice A (write-tx tail latency before/after); review
-        rule for trigger SQL.</td>
+      <td>v2 trigger; §5.1 full local-ui writes</td>
+      <td>Bench note in slice A (write-tx tail latency before/after) <em>and a
+        separate slice B bench for the local-ui write path specifically</em>;
+        review rule for trigger SQL.</td>
     </tr>
     <tr>
       <td>I7</td>
