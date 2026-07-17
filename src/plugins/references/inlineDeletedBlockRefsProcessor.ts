@@ -122,7 +122,7 @@ const inlineSource = async (
     // deletedId` even though content is now plain inlined text (or,
     // rarely, itself an exact reference) — recompute from the rewritten
     // content so the column and content never disagree.
-    const lookups = sameTxReferenceTargetLookups(tx, ctx.resolvePropertySchemaName)
+    const lookups = sameTxReferenceTargetLookups(tx)
     const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
     // Always an update of an existing row (never a create): an
     // unresolvable alias (`undefined`) clears the column.

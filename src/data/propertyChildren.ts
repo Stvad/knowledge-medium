@@ -1,9 +1,12 @@
 /**
  * Pure helpers for properties-as-blocks field/value children (PR #288 §5/§9,
  * extracted from the PR #285 spike). A property on a block is a FIELD ROW —
- * a child whose content is `[[Schema Name]]` with the schema's fieldId
- * (definition block id) in the local `reference_target_id` column — whose
- * own child holds the value (scalar-first: one primary value child).
+ * a child whose content is `((fieldId))`, an id block-ref to the definition
+ * block, mirrored into the local `reference_target_id` column — whose own
+ * child holds the value (scalar-first: one primary value child). Addressing
+ * is BY ID: `reference_target_id` derives textually from the `((fieldId))`
+ * content (no name→schema tier, no deferred resolution), and the name is
+ * recovered by resolving the id → definition wherever it's needed.
  *
  * Recognition (§9) is a column read plus two context bits, never a content
  * parse: `reference_target_id` resolves a definition (fieldId-keyed lookup),
@@ -22,7 +25,7 @@ import {
   type BlockData,
   type PropertySchema,
 } from '@/data/api'
-import { referenceBlockContentForLabel } from '@/data/referenceBlock'
+import { referenceBlockContentForId } from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 
 export const getPropertyFieldTargetId = (
@@ -55,8 +58,12 @@ export const isPropertyFieldInstance = (
   return fieldId !== undefined && isFieldDefinition(fieldId)
 }
 
-export const propertyFieldContent = (schema: AnyPropertySchema): string =>
-  referenceBlockContentForLabel(schema.name)
+/** Field-row content: a block-ref to the definition BY ID (`((fieldId))`, PR
+ *  #288 §7). Rename-stable — the name lives only on the definition and is
+ *  resolved via the id wherever it's actually needed (materialize's cell key,
+ *  rendering). No name→schema resolution tier, no deferred/rename re-derive. */
+export const propertyFieldContent = (fieldId: string): string =>
+  referenceBlockContentForId(fieldId)
 
 const finiteNumberFromContent = (content: string): number => {
   const value = Number(content.trim())

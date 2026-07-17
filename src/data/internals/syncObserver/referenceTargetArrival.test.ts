@@ -14,11 +14,13 @@ import { setupObserverTestDb } from './test/harness'
 
 const WS = 'ws-arrival'
 const STATUS_FIELD_ID = 'field-status-arrival'
+// Property field rows address their definition BY ID (`((fieldId))`, §7), so
+// they resolve on the textual block-ref branch — no name→schema tier.
+const STATUS_REF = `((${STATUS_FIELD_ID}))`
 
 const h = setupObserverTestDb()
 
 const lookups: ReferenceTargetLookups = {
-  resolveSchemaFieldId: (_ws, name) => (name === 'status' ? STATUS_FIELD_ID : null),
   aliasTargetId: async () => null,
 }
 
@@ -52,7 +54,7 @@ const startWithLookups = () =>
 describe('derive-at-arrival (sync materializer)', () => {
   it('stamps a fresh arrival whose content is an exact reference', async () => {
     const {observer, cache} = startWithLookups()
-    await h.stageRow(block({id: 'b1', content: '[[status]]'}))
+    await h.stageRow(block({id: 'b1', content: STATUS_REF}))
     await observer.flush()
 
     expect(await readColumn('b1')).toBe(STATUS_FIELD_ID)
@@ -71,13 +73,13 @@ describe('derive-at-arrival (sync materializer)', () => {
 
   it('preserves the column on a content-unchanged arrival (metadata-only update)', async () => {
     const {observer, cache} = startWithLookups()
-    await h.stageRow(block({id: 'b1', content: '[[status]]', updatedAt: 1000}))
+    await h.stageRow(block({id: 'b1', content: STATUS_REF, updatedAt: 1000}))
     await observer.flush()
     expect(await readColumn('b1')).toBe(STATUS_FIELD_ID)
 
     // Re-delivery with newer stamp, same content, different properties.
     await h.stageRow(block({
-      id: 'b1', content: '[[status]]', properties: {x: 1}, updatedAt: 2000,
+      id: 'b1', content: STATUS_REF, properties: {x: 1}, updatedAt: 2000,
     }))
     await observer.flush()
     expect(await readColumn('b1')).toBe(STATUS_FIELD_ID)
@@ -86,7 +88,7 @@ describe('derive-at-arrival (sync materializer)', () => {
 
   it('clears the column when arriving content stops being a reference', async () => {
     const {observer, cache} = startWithLookups()
-    await h.stageRow(block({id: 'b1', content: '[[status]]', updatedAt: 1000}))
+    await h.stageRow(block({id: 'b1', content: STATUS_REF, updatedAt: 1000}))
     await observer.flush()
     expect(await readColumn('b1')).toBe(STATUS_FIELD_ID)
 
@@ -115,7 +117,6 @@ describe('derive-at-arrival (sync materializer)', () => {
     const withAlias = h.start({
       getMaterializability: () => 'copy',
       referenceTargetLookups: tx => ({
-        resolveSchemaFieldId: () => null,
         aliasTargetId: async (alias) => {
           const row = await tx.getOptional<{block_id: string}>(
             'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
@@ -197,32 +198,6 @@ describe('derive-at-arrival (sync materializer)', () => {
     expect(added).toContainEqual({workspaceId: WS, aliases: ['Inbox']})
   })
 
-  it('defers [[alias]] derivation when schemaTierReady is false, but still stamps ((blockRef)) arrivals', async () => {
-    const blindLookups: ReferenceTargetLookups = {
-      resolveSchemaFieldId: () => null,
-      // Would resolve if reached — proves the defer happens BEFORE the
-      // DB-backed alias fallback, not because nothing resolves it.
-      aliasTargetId: async () => 'alias-target-would-resolve',
-      schemaTierReady: () => false,
-    }
-    const {observer} = h.start({
-      getMaterializability: () => 'copy',
-      referenceTargetLookups: () => blindLookups,
-    })
-
-    await h.stageRow(block({id: 'alias-ref', content: '[[Inbox]]'}))
-    await h.stageRow(block({id: 'blockref-ref', content: '((some-uuid))', orderKey: 'a1'}))
-    await observer.flush()
-
-    // Blind schema tier: the whole `[[alias]]` derivation defers (a
-    // definition this client can't see yet must still be able to win the
-    // race later) — the column stays NULL for the per-open sweep to repair.
-    expect(await readColumn('alias-ref')).toBeNull()
-    // `((uuid))` resolves textually — no lookup, so the defer gate never
-    // applies to it.
-    expect(await readColumn('blockref-ref')).toBe('some-uuid')
-  })
-
   it('skips derivation entirely when the lookups dep is absent', async () => {
     const {observer} = h.start({getMaterializability: () => 'copy'})
     await h.stageRow(block({id: 'b1', content: '((remote-target))'}))
@@ -237,10 +212,10 @@ describe('derive-at-arrival (sync materializer)', () => {
     // survive even though the staged row knows nothing about it.
     const {observer} = startWithLookups()
     await h.seedLocalBlock(block({
-      id: 'b1', content: '[[status]]', referenceTargetId: STATUS_FIELD_ID, updatedAt: 1000,
+      id: 'b1', content: STATUS_REF, referenceTargetId: STATUS_FIELD_ID, updatedAt: 1000,
     }))
     await h.stageRow(block({
-      id: 'b1', content: '[[status]]', properties: {touched: true}, updatedAt: 2000,
+      id: 'b1', content: STATUS_REF, properties: {touched: true}, updatedAt: 2000,
     }))
     await observer.flush()
     await vi.waitFor(async () => {

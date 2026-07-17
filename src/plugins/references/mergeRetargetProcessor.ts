@@ -203,7 +203,7 @@ const retargetSource = async (
     // keep `referenceTargetId: old` even though content now reads
     // `((new))` — recompute from the rewritten content so the column and
     // content never disagree.
-    const lookups = sameTxReferenceTargetLookups(tx, ctx.resolvePropertySchemaName)
+    const lookups = sameTxReferenceTargetLookups(tx)
     const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
     // This is always an update of an existing row (never a create), so an
     // unresolvable alias (`undefined`) clears the column rather than

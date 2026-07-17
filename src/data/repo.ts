@@ -115,7 +115,6 @@ import {
   isInsidePropertySubtreeWalk,
   propertiesEqual,
   propertyChildContentToEncodedValue,
-  propertyFieldContent,
   type IsPropertyFieldDefinition,
 } from './propertyChildren'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
@@ -870,9 +869,6 @@ export class Repo {
       getPropertyDefinitions: () => this._propertyDefinitionRegistry,
       schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
         this.schedulePropertyDefinitionMigrations(workspaceId, changes)
-      },
-      scheduleReferenceTargetNameRederive: (workspaceId, names) => {
-        this.scheduleReferenceTargetNameRederive(workspaceId, names)
       },
     })
     this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
@@ -2426,12 +2422,13 @@ export class Repo {
    * maintain it incrementally.
    *
    * Deferred off the workspace-open critical path (`scheduleDeepIdle`, same
-   * scheme as its sibling passes) and marker-gated once per workspace.
-   * Call after `whenPropertyDefinitionsReady` — the `[[name]]` tier resolves
-   * against the workspace's name-winner map, so deriving before the registry
-   * primes would mis-derive schema names as plain aliases. NOT gated on
-   * writability: the writes are local bookkeeping (source-NULL raw UPDATEs of
-   * a never-uploaded column), safe in a read-only workspace.
+   * scheme as its sibling passes) and marker-gated once per workspace. Derives
+   * textually (`((id))`) or through the alias index (`[[alias]]`) — no schema
+   * registry needed for resolution — but still scheduled after
+   * `whenPropertyDefinitionsReady` so the sweep runs against the pinned active
+   * workspace (its once-per-session gate below). NOT gated on writability: the
+   * writes are local bookkeeping (source-NULL raw UPDATEs of a never-uploaded
+   * column), safe in a read-only workspace.
    */
   scheduleReferenceTargetDerivePass(workspaceId: string): void {
     if (!workspaceId) return
@@ -2448,9 +2445,10 @@ export class Repo {
 
   private async runReferenceTargetDerivePass(workspaceId: string): Promise<void> {
     if (this.referenceTargetSweepDone.has(workspaceId)) return
-    // The name tier needs the workspace's faithful registry snapshot; if the
-    // user switched away before the deferred job ran, skip WITHOUT the marker
-    // so the next open retries.
+    // Run only while this workspace is the pinned/active one — if the user
+    // switched away before the deferred job fired, skip WITHOUT the marker so
+    // the next open retries. (Resolution itself no longer needs the registry:
+    // `((id))` derives textually and `[[alias]]` through the alias index.)
     const registry = this._propertyDefinitionRegistry
     if (!registry || registry.workspaceId !== workspaceId) return
 
@@ -2498,19 +2496,15 @@ export class Repo {
   }
 
   /** The one construction site for reference-target resolution outside a
-   *  repo.tx (PR #288 slice A): schema-name winner map first (live
-   *  resolver), then the `block_aliases` index read on `reader` — the open
-   *  sync-arrival write tx, or the auto-commit connection for the idle
-   *  passes. Mirrors `core.deriveReferenceTarget`'s tx-bound tiers; the two
-   *  must resolve identically or the column diverges across write paths. */
+   *  repo.tx (PR #288 slice A): the `block_aliases` index read on `reader` —
+   *  the open sync-arrival write tx, or the auto-commit connection for the
+   *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
+   *  resolves textually, `[[alias]]` through this lookup); the two must
+   *  resolve identically or the column diverges across write paths. */
   private referenceTargetLookupsVia(
     reader: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>} = this.db,
   ): ReferenceTargetLookups {
     return {
-      resolveSchemaFieldId: (workspaceId, name) => {
-        const resolution = this.propertySchemaResolverFor(workspaceId).resolve(name)
-        return resolution.status === 'resolved' ? resolution.schema.fieldId : null
-      },
       aliasTargetId: async (alias, workspaceId) => {
         if (alias === '' || workspaceId === '') return null
         const row = await reader.getOptional<{id: string}>(
@@ -2519,18 +2513,6 @@ export class Repo {
         )
         return row?.id ?? null
       },
-      // Derive-at-arrival defers `[[alias]]` derivation for workspaces whose
-      // definitions this client hasn't loaded (background arrivals / the
-      // pre-prime boot window): the resolver above fails CLOSED there, and
-      // an alias-tier stamp would silently lose to a definition of the same
-      // name (non-NULL stamps are never re-swept). NULL + per-open sweep is
-      // the §9 repair path.
-      schemaTierReady: (workspaceId) =>
-        registryForWorkspace(
-          this._propertyDefinitionRegistry,
-          this._previousPropertyDefinitionRegistry,
-          workspaceId,
-        ) !== null,
     }
   }
 
@@ -2790,13 +2772,12 @@ export class Repo {
             fieldRow.parentId, (id) => tx.get(id), isFieldDefinition, subtreeMemo,
           )) continue
 
-          // Retitle: field-row content tracks the schema name in lock-step
-          // (§7) — a stale `[[old]]` binds the dead name on every
-          // re-derive-by-content path.
-          const expectedContent = propertyFieldContent(schema)
-          if (fieldRow.content !== expectedContent) {
-            await tx.update(fieldRow.id, {content: expectedContent}, {skipMetadata: true})
-          }
+          // Field-row content is `((fieldId))` — id-addressed and
+          // rename-stable (§7), so there is nothing to retitle here: the row
+          // already carries `reference_target_id = change.fieldId` precisely
+          // because its content is that id-ref. A rename thus fires NEITHER
+          // MATERIALIZE nor PROJECT (no content changed), which makes this
+          // pass the sole actor that re-keys the name-keyed cell below.
 
           // Re-encode + re-key once per parent (a parent's projection reads
           // ALL its field rows for this schema in deterministic order).
@@ -2841,25 +2822,19 @@ export class Repo {
           } else if (parentUnconvertible === 0) {
             delete nextProperties[schema.name]
           }
-          // else (all-unconvertible): leave the cell as-is here. What the
-          // parent ULTIMATELY commits with depends on whether the field-row
-          // retitle above fired the same-tx PROJECT pass:
-          //   - rename: retitle fired PROJECT, which reprojects the cell from
-          //     the (unconvertible) children → §9 default-value rule unsets
-          //     the key. The old key was already deleted above; MATERIALIZE
-          //     ran first and skips the removed old key (it no longer resolves
-          //     post-rename), so it never tombstones — the value ROWS stay
-          //     live. Re-keying the stale value to the new name here is futile
-          //     (PROJECT overwrites it) and would violate §9 (cell derives
-          //     from children), so we don't (PR #386 review wave 2).
-          //   - no rename: no retitle, so PROJECT never fires and the stale
-          //     cell key rides untouched. Deleting it would make MATERIALIZE
-          //     read the removal as delete-intent and tombstone the "fixable"
-          //     rows (PR #386 review) — so we keep it; the next valid value
+          // else (all-unconvertible): leave the new key unset. Because
+          // field-row content is id-addressed and rename-stable, this pass is
+          // the SOLE cell writer (no MATERIALIZE/PROJECT fires), so the cell
+          // is exactly what we write here — no downstream pass to defer to:
+          //   - rename: the old key was deleted above and the new key stays
+          //     absent → the cell shows unset for the unparseable values, §9's
+          //     contract. Re-keying the stale value under the new name would
+          //     violate §9 (cell derives from children), so we don't.
+          //   - no rename: the existing key rides untouched (we don't delete
+          //     it) so a stale-but-fixable value stays visible; the next valid
           //     edit reprojects and heals it (§5 pending-reprojection).
-          // Either way the value rows stay live and the unconvertible COUNT is
-          // surfaced below; the cell reading unset for unparseable values is
-          // §9's contract, not data loss.
+          // This pass NEVER deletes value rows, so they stay live
+          // unconditionally and the unconvertible COUNT is surfaced below.
           if (!propertiesEqual(parent.properties, nextProperties)) {
             await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
           }

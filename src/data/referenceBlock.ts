@@ -29,13 +29,21 @@ export const parseExactReferenceBlockContent = (
 export const referenceBlockContentForLabel = (label: string): string =>
   `[[${label.replace(/]]/g, '] ]')}]]`
 
-/** Does `label` survive the wikilink round trip intact? Property-schema
- *  names must (PR #288 §7): field-row content is `[[name]]`, and every
- *  re-derive-by-content path (cross-workspace copy, markdown round-trip)
- *  resolves that text back to a schema — a name containing `]]` renders
- *  lossy (`foo]]bar` → `foo] ]bar`) and would bind the wrong schema or
- *  none. `addSchema` and the rename flow reject non-round-trippable
- *  names. */
+/** Block-ref content addressing a block by id (`((id))`). Property field rows
+ *  (PR #288 §7) point at their definition BY ID, not by name: the row's whole
+ *  content is `((fieldId))`, so `reference_target_id` derives purely textually
+ *  (no name→schema tier, no deferred resolution) and the human-readable name is
+ *  recovered by resolving the id → definition (which owns the name). Rendering
+ *  is unaffected — a definition block's own `content` is its name, and a
+ *  block-ref renders the target's label. */
+export const referenceBlockContentForId = (id: string): string => `((${id}))`
+
+/** Does `label` survive the wikilink round trip intact? A name containing
+ *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`) so it can't be written as a
+ *  clean `[[name]]` reference. `addSchema` and the rename flow reject
+ *  non-round-trippable property names as name hygiene — field rows themselves
+ *  are id-addressed (`((fieldId))`, PR #288 §7) and no longer embed the
+ *  name. */
 export const isRoundTrippableReferenceLabel = (label: string): boolean => {
   const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
   return parsed !== null && parsed.kind === 'alias' && parsed.alias === label

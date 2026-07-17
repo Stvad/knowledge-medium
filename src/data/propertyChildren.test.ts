@@ -147,7 +147,8 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await cellValue('p')).toBe('done')
     const fields = await liveFieldRows('p')
     expect(fields).toHaveLength(1)
-    expect(fields[0]!.content).toBe('[[status]]')
+    // Field rows address their definition BY ID (`((fieldId))`, §7).
+    expect(fields[0]!.content).toBe(`((${STATUS_FIELD_ID}))`)
     const values = await childrenRows(fields[0]!.id)
     expect(values.filter(v => v.deleted === 0)).toHaveLength(1)
     expect(values[0]!.content).toBe('done')
@@ -735,20 +736,20 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
 })
 
 describe('root rows are never filtered (§9 root exemption, WRITE-side)', () => {
-  it('a root block whose content is [[status]] still appears in tx.childrenOf(null, ws)', async () => {
+  it('a root block whose content is ((fieldId)) still appears in tx.childrenOf(null, ws)', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await repo.tx(async tx => {
       await tx.create({
         id: 'root-status', workspaceId: WS, parentId: null, orderKey: 'r0',
-        content: '[[status]]',
+        content: `((${STATUS_FIELD_ID}))`,
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // The derive processor stamped this root row's reference_target_id to
-    // the registered `status` schema's fieldId in the same tx — it looks
-    // exactly like a field row by column, but a root row is positionally
-    // user content, never a field row (nothing OWNS it).
+    // The derive processor stamped this root row's reference_target_id from
+    // its id-addressed content in the same tx — it looks exactly like a
+    // field row by column, but a root row is positionally user content,
+    // never a field row (nothing OWNS it).
     const stamped = await sharedDb.db.get<{reference_target_id: string | null}>(
       'SELECT reference_target_id FROM blocks WHERE id = ?', ['root-status'],
     )
@@ -761,8 +762,8 @@ describe('root rows are never filtered (§9 root exemption, WRITE-side)', () => 
   })
 })
 
-describe('same-tx content flip to [[schema]] stays cell-only (prospective-field-row gate, PR #386 review)', () => {
-  it('update(content → [[status]]) then setProperty in ONE tx nests no machinery under the flipping block', async () => {
+describe('same-tx content flip to ((fieldId)) stays cell-only (prospective-field-row gate, PR #386 review)', () => {
+  it('update(content → ((fieldId))) then setProperty in ONE tx nests no machinery under the flipping block', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'host')
@@ -777,10 +778,10 @@ describe('same-tx content flip to [[schema]] stays cell-only (prospective-field-
     // runs after the user fn AND after materialize), so both the
     // setProperty dual-write and the materialize processor must recognize
     // it from CONTENT and keep the property write cell-only. Pre-fix,
-    // machinery nested a `[[status]]` field row under a row about to
-    // become a field row itself — unreclaimable.
+    // machinery nested a field row under a row about to become a field row
+    // itself — unreclaimable.
     await repo.tx(async tx => {
-      await tx.update('p', {content: '[[status]]'})
+      await tx.update('p', {content: `((${STATUS_FIELD_ID}))`})
       await tx.setProperty('p', statusSchema, 'v')
     }, {scope: ChangeScope.BlockDefault})
 
@@ -795,10 +796,10 @@ describe('same-tx content flip to [[schema]] stays cell-only (prospective-field-
     expect(await childrenRows('p')).toEqual([])
   })
 
-  it('root exemption: a ROOT block with content [[status]] still materializes its bag (root rows are never field rows)', async () => {
+  it('root exemption: a ROOT block with content ((fieldId)) still materializes its bag (root rows are never field rows)', async () => {
     await seedWorkspace('children')
     const repo = setup()
-    await createBlock(repo, 'root-p', '[[status]]')
+    await createBlock(repo, 'root-p', `((${STATUS_FIELD_ID}))`)
 
     // A root row is positionally user content — the prospective-field-row
     // gate must NOT suppress its materialization: the setProperty
@@ -809,7 +810,7 @@ describe('same-tx content flip to [[schema]] stays cell-only (prospective-field-
     expect(await cellValue('root-p')).toBe('v')
     const fields = await liveFieldRows('root-p')
     expect(fields).toHaveLength(1)
-    expect(fields[0]!.content).toBe('[[status]]')
+    expect(fields[0]!.content).toBe(`((${STATUS_FIELD_ID}))`)
     const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
     expect(values.map(v => v.content)).toEqual(['v'])
   })

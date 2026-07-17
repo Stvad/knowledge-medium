@@ -30,10 +30,11 @@ beforeEach(async () => { await resetTestDb(sharedDb.db) })
 afterEach(() => { vi.useRealTimers() })
 
 /** Mirror production ordering: `workspaceBootstrap` awaits
- *  `whenPropertyDefinitionsReady` (which primes the registry the `[[name]]`
- *  tier resolves against) before scheduling the pass. Fake timers scope to
- *  the deep-idle deferral only — the pass is deferred 10s, so the drain
- *  helper needs the timer advanced first (same pattern as backfill.test.ts). */
+ *  `whenPropertyDefinitionsReady` (which pins the workspace's registry) before
+ *  scheduling the pass; the sweep gates on that registry being for this
+ *  workspace. Fake timers scope to the deep-idle deferral only — the pass is
+ *  deferred 10s, so the drain helper needs the timer advanced first (same
+ *  pattern as backfill.test.ts). */
 const runPass = async (
   repo: Repo,
   {ready = true}: {ready?: boolean} = {},
@@ -101,8 +102,10 @@ const readColumn = async (id: string): Promise<string | null> => {
 }
 
 describe('reference-target initial derive pass', () => {
-  it('stamps pre-existing rows across all three resolution tiers, prose untouched', async () => {
-    await seedRow({id: 'schema-ref', content: '[[status]]'})
+  it('stamps pre-existing rows across both resolution paths, prose untouched', async () => {
+    // A property field row addresses its definition BY ID (`((fieldId))`, §7),
+    // so it stamps textually on the block-ref path — no name→schema tier.
+    await seedRow({id: 'field-ref', content: `((${STATUS_FIELD_ID}))`})
     await seedRow({id: 'block-ref', content: '((some-target))'})
     await seedRow({id: 'alias-target', content: 'Inbox', properties: {alias: ['Inbox']}})
     await seedRow({id: 'alias-ref', content: '[[Inbox]]'})
@@ -112,7 +115,7 @@ describe('reference-target initial derive pass', () => {
     const repo = setup()
     await runPass(repo)
 
-    expect(await readColumn('schema-ref')).toBe(STATUS_FIELD_ID)
+    expect(await readColumn('field-ref')).toBe(STATUS_FIELD_ID)
     expect(await readColumn('block-ref')).toBe('some-target')
     expect(await readColumn('alias-ref')).toBe('alias-target')
     expect(await readColumn('prose')).toBeNull()
@@ -171,88 +174,6 @@ describe('reference-target initial derive pass', () => {
       "SELECT key FROM client_schema_state WHERE key LIKE 'reference_target_derive:%'",
     )
     expect(markers).toEqual([])
-  })
-
-  it('re-derives [[name]] rows when their definition is ADDED later (§9 repair)', async () => {
-    // Row typed before the schema existed: derives to NULL. Creating the
-    // definition afterwards must repair it via the registry-rebuild seam.
-    // The repair only accumulates AFTER the per-open sweep ran (pre-sweep,
-    // the sweep itself covers every name), so run the sweep first.
-    await seedRow({id: 'early-ref', content: '[[late-schema]]'})
-    const repo = setup()
-    await runPass(repo)
-    expect(await readColumn('early-ref')).toBeNull()
-
-    vi.useFakeTimers()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-late-definition',
-      [{
-        metadata: {
-          fieldId: 'field-late-schema',
-          workspaceId: WS,
-          createdAt: 2,
-          name: 'late-schema',
-          changeScope: ChangeScope.BlockDefault,
-          hidden: false,
-          origin: 'user' as const,
-        },
-        schema: defineProperty('late-schema', {
-          codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
-        }),
-      }],
-      {workspaceId: WS},
-    )
-    await vi.runAllTimersAsync()
-    await repo.awaitReferenceTargetDerive()
-    vi.useRealTimers()
-
-    expect(await readColumn('early-ref')).toBe('field-late-schema')
-  })
-
-  it('a definition added later reclaims a row already alias-stamped (schema tier wins deterministically)', async () => {
-    // Unlike `setup()`, deliberately register NO 'status' definition yet —
-    // the row must resolve through the alias tier first.
-    await seedRow({id: 'alias-target', content: 'Status page', properties: {alias: ['status']}})
-    await seedRow({id: 'status-ref', content: '[[status]]'})
-
-    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-    repo.setActiveWorkspaceId(WS)
-    await runPass(repo)
-
-    // No definition named 'status' exists yet: the alias tier resolves.
-    expect(await readColumn('status-ref')).toBe('alias-target')
-
-    // Register the definition after the sweep — the added-definition
-    // rederive (drainNameRederives) must reclaim the row even though its
-    // column is already non-NULL from the alias tier.
-    vi.useFakeTimers()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-status-definition',
-      [{
-        metadata: {
-          fieldId: STATUS_FIELD_ID,
-          workspaceId: WS,
-          createdAt: 2,
-          name: 'status',
-          changeScope: ChangeScope.BlockDefault,
-          hidden: false,
-          origin: 'user' as const,
-        },
-        schema: statusSchema,
-      }],
-      {workspaceId: WS},
-    )
-    await vi.runAllTimersAsync()
-    await repo.awaitReferenceTargetDerive()
-    vi.useRealTimers()
-
-    // The schema tier wins deterministically over the existing non-NULL
-    // alias stamp: drainNameRederives drops the sweep's IS-NULL filter, and
-    // stampReferenceTargets' expectedTargetId CAS matches the scanned
-    // alias-stamp value (not NULL) so the write goes through.
-    expect(await readColumn('status-ref')).toBe(STATUS_FIELD_ID)
   })
 
   it('the CAS write never stamps a row whose content changed after the scan', async () => {
@@ -316,77 +237,5 @@ describe('reference-target initial derive pass', () => {
     const afterPass = cache.getSnapshot('cached-ahead-ref')
     expect(afterPass?.content).toBe('newer local text')
     expect(afterPass?.updatedAt).toBe(current!.updatedAt + 5000)
-  })
-
-  it('a schema RENAME reclaims a pre-existing exact-reference row alias-stamped under the new name (PR #386 review wave 2)', async () => {
-    // No definition named 'newname' exists yet — only 'oldname'. Seed an
-    // alias-target page named 'newname' and a row citing [[newname]]: with
-    // no 'newname' schema, that row must resolve through the alias tier.
-    await seedRow({id: 'newname-alias-target', content: 'New name page', properties: {alias: ['newname']}})
-    await seedRow({id: 'newname-ref', content: '[[newname]]'})
-
-    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-    repo.setActiveWorkspaceId(WS)
-    const RENAME_FIELD_ID = 'field-oldname'
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-rename-definition',
-      [{
-        metadata: {
-          fieldId: RENAME_FIELD_ID,
-          workspaceId: WS,
-          createdAt: 1,
-          name: 'oldname',
-          changeScope: ChangeScope.BlockDefault,
-          hidden: false,
-          origin: 'user' as const,
-        },
-        schema: defineProperty('oldname', {
-          codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
-        }),
-      }],
-      {workspaceId: WS},
-    )
-    await runPass(repo)
-
-    // No definition named 'newname' exists yet: the alias tier resolves.
-    expect(await readColumn('newname-ref')).toBe('newname-alias-target')
-
-    // Rename 'oldname' -> 'newname' — SAME fieldId, SAME contribution key,
-    // only the name changes. This is what a definition rename looks like at
-    // the registry level (facetBridge's registry rebuild diffs by fieldId).
-    vi.useFakeTimers()
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-rename-definition',
-      [{
-        metadata: {
-          fieldId: RENAME_FIELD_ID,
-          workspaceId: WS,
-          createdAt: 1,
-          name: 'newname',
-          changeScope: ChangeScope.BlockDefault,
-          hidden: false,
-          origin: 'user' as const,
-        },
-        schema: defineProperty('newname', {
-          codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
-        }),
-      }],
-      {workspaceId: WS},
-    )
-    await vi.runAllTimersAsync()
-    await repo.awaitReferenceTargetDerive()
-    vi.useRealTimers()
-
-    // The rename enqueues a reference-target name-rederive for BOTH 'oldname'
-    // and 'newname' (facetBridge.ts renameNames). Without enqueueing the NEW
-    // name, this pre-existing [[newname]] row — alias-stamped before the
-    // schema existed — would never reclaim to the schema's fieldId: nothing
-    // else re-visits it (its content didn't change, and the sweep already
-    // ran). The schema tier wins deterministically over the stale alias
-    // stamp via the CAS in stampReferenceTargets, which drops the IS-NULL
-    // filter for name-rederive drains.
-    expect(await readColumn('newname-ref')).toBe(RENAME_FIELD_ID)
   })
 })

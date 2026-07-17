@@ -114,11 +114,12 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
     ),
     isProspectiveFieldRow: (row) => {
       if (row.parentId === null) return false
+      // Field rows address their definition BY ID (`((fieldId))`, §7). A
+      // `[[name]]` row is plain page content and never becomes a field row,
+      // so only an id block-ref to a definition is prospective here.
       const exact = parseExactReferenceBlockContent(row.content)
-      if (!exact) return false
-      if (exact.kind === 'blockRef') return isFieldDefinition(exact.id)
-      const resolution = ctx.resolvePropertySchemaName(workspaceId, exact.alias)
-      return resolution.status === 'resolved'
+      if (exact?.kind !== 'blockRef') return false
+      return isFieldDefinition(exact.id)
     },
   }
 }
@@ -294,7 +295,7 @@ export const materializePropertyChildrenForExistingRow = async (
     const content = encodedPropertyValueToChildContent(schema, encoded)
     const [primary, ...duplicates] = matchingChildren
     if (primary) {
-      const fieldContent = propertyFieldContent(schema)
+      const fieldContent = propertyFieldContent(schema.fieldId)
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
@@ -321,7 +322,7 @@ export const materializePropertyChildrenForExistingRow = async (
         parentId: row.id,
         referenceTargetId: schema.fieldId,
         orderKey: keyAtStart(null),
-        content: propertyFieldContent(schema),
+        content: propertyFieldContent(schema.fieldId),
       })
       await tx.create({
         workspaceId: row.workspaceId,

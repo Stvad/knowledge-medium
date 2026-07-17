@@ -60,7 +60,6 @@ import {
 } from './facets'
 import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjection'
 import {
-  addedPropertyDefinitionNames,
   changedPropertyDefinitions,
   type PropertyDefinitionChange,
 } from './internals/propertyDefinitionMigrations'
@@ -120,13 +119,6 @@ export interface FacetBridgeTarget {
   schedulePropertyDefinitionMigrations(
     workspaceId: string,
     changes: readonly PropertyDefinitionChange[],
-  ): void
-  /** Defer a targeted `[[name]]` re-derive for definitions newly ADDED in
-   *  this swap (PR #288 §9 arrival-order repair — rows referencing a schema
-   *  by name before its definition existed derived to NULL). */
-  scheduleReferenceTargetNameRederive(
-    workspaceId: string,
-    names: readonly string[],
   ): void
 }
 
@@ -396,28 +388,13 @@ export class FacetBridge {
               propertyDefinitions.workspaceId, definitionChanges,
             )
           }
-          // Newly-added definitions repair pre-existing `[[name]]` rows that
-          // derived to NULL before the definition existed (§9 arrival-order
-          // hole): local addSchema and synced-in definitions both land here
-          // via the projector rebuild. A RENAME shifts the winner both ways —
-          // `[[newName]]` rows that were alias-stamped (or NULL) must reclaim
-          // to the schema fieldId, and `[[oldName]]` rows whose name no longer
-          // wins must fall back to the alias tier — so enqueue both names of
-          // every rename alongside the adds (PR #386 review wave 2). The
-          // rederive is a pure content re-derivation (CAS-guarded), so a name
-          // that resolves the same is a no-op.
-          const renameNames = definitionChanges.flatMap(
-            c => (c.oldName === c.newName ? [] : [c.oldName, c.newName]),
-          )
-          const rederiveNames = [...new Set([
-            ...addedPropertyDefinitionNames(previousPropertyDefinitions, propertyDefinitions),
-            ...renameNames,
-          ])]
-          if (rederiveNames.length > 0 && propertyDefinitions) {
-            target.scheduleReferenceTargetNameRederive(
-              propertyDefinitions.workspaceId, rederiveNames,
-            )
-          }
+          // No property-name → reference-target rederive here: field rows
+          // address their definition BY ID (`((fieldId))`, §7), so a
+          // definition add/rename never changes what any `[[name]]` row
+          // resolves to. `[[status]]` is plain page resolution and is not
+          // special-cased for properties. Generic alias late-binding (a
+          // `[[Foo]]` row reclaiming when page Foo is later created) is still
+          // handled where aliases are actually minted (referencesProcessor).
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
           this.propertySchemasListeners.notify()

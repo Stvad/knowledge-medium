@@ -2,11 +2,11 @@
 /**
  * `core.deriveReferenceTarget` — same-tx derivation of the LOCAL
  * `reference_target_id` column (PR #288 slice A), exercised end-to-end
- * through `repo.tx`. Pins the two-tier resolution (schema-name winner map
- * first, generic alias lookup second), the clear-on-content-change rule, the
- * create-preserve semantics for unresolvable aliases, and the undo seam
- * (same-tx processors are skipped on replay, so snapshots must restore the
- * column).
+ * through `repo.tx`. Pins the resolution (a `((id))` block-ref textually, an
+ * `[[alias]]` through the generic alias lookup — no property-name tier), the
+ * clear-on-content-change rule, the create-preserve semantics for
+ * unresolvable aliases, and the undo seam (same-tx processors are skipped on
+ * replay, so snapshots must restore the column).
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -33,7 +33,8 @@ beforeEach(async () => { await resetTestDb(sharedDb.db) })
 const setup = (): Repo => {
   const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
   repo.setActiveWorkspaceId(WS)
-  // Project a user definition for `status` so the name-winner tier resolves.
+  // Project a user definition for `status` — used to prove `[[status]]` does
+  // NOT bind to it (id-addressing only, no name tier).
   repo.setRuntimeContributions(
     projectedPropertyDefinitionsFacet,
     'test-status-definition',
@@ -88,10 +89,13 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
     expect(await readColumn('a')).toBe('custom-target-id')
   })
 
-  it('resolves [[name]] through the schema name-winner map to the fieldId', async () => {
+  it('does NOT special-case [[name]] matching a property definition (id-addressing only)', async () => {
     const repo = setup()
+    // A definition named `status` exists, but `[[status]]` is plain page
+    // resolution — it must NOT bind to the definition. Field rows address
+    // their definition by id (`((fieldId))`), covered above.
     await createBlock(repo, 'a', '[[status]]')
-    expect(await readColumn('a')).toBe(STATUS_FIELD_ID)
+    expect(await readColumn('a')).toBeNull()
   })
 
   it('falls back to the generic alias lookup for non-schema [[alias]]', async () => {
@@ -111,7 +115,7 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
 
   it('clears the column when content stops being an exact reference', async () => {
     const repo = setup()
-    await createBlock(repo, 'a', '[[status]]')
+    await createBlock(repo, 'a', `((${STATUS_FIELD_ID}))`)
     expect(await readColumn('a')).toBe(STATUS_FIELD_ID)
     await repo.tx(tx => tx.update('a', {content: 'plain text now'}),
       {scope: ChangeScope.BlockDefault})
@@ -120,7 +124,7 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
 
   it('re-derives when content changes to a different reference', async () => {
     const repo = setup()
-    await createBlock(repo, 'a', '[[status]]')
+    await createBlock(repo, 'a', '((old-id))')
     await repo.tx(tx => tx.update('a', {content: '((custom-id))'}),
       {scope: ChangeScope.BlockDefault})
     expect(await readColumn('a')).toBe('custom-id')
@@ -168,7 +172,7 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
     expect(await readColumn('a')).toBeNull()
 
     // Edit into a reference: processor stamps in the same tx.
-    await repo.tx(tx => tx.update('a', {content: '[[status]]'}),
+    await repo.tx(tx => tx.update('a', {content: `((${STATUS_FIELD_ID}))`}),
       {scope: ChangeScope.BlockDefault})
     expect(await readColumn('a')).toBe(STATUS_FIELD_ID)
 

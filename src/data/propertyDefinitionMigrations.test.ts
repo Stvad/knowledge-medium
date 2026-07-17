@@ -147,7 +147,7 @@ describe('changedPropertyDefinitions (diff)', () => {
 })
 
 describe('rename migration (flipped workspace)', () => {
-  it('retitles field rows and re-keys consuming cells', async () => {
+  it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
     const repo = setup()
     const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'done')
@@ -155,7 +155,9 @@ describe('rename migration (flipped workspace)', () => {
 
     await republish(repo, stateString)
 
-    expect(await rowContent(fieldRowId)).toBe('[[state]]')
+    // Field rows address the definition BY ID (`((fieldId))`, §7), so a rename
+    // never retitles their content — only the name-keyed cell re-keys.
+    expect(await rowContent(fieldRowId)).toBe(`((${FIELD_ID}))`)
     expect(await cell('p')).toEqual({state: 'done'})
     expect(await rowContent(valueRowId)).toBe('done')
   })
@@ -242,17 +244,14 @@ describe('codec-change migration', () => {
     // Combines both migration triggers in one republish: `status` (string)
     // becomes `state2` (number), and the existing value doesn't convert.
     //
-    // The DATA guarantee is that the value ROWS survive — they do (field row
-    // retitled to `[[state2]]`, value child keeps `not a number`, both live).
-    // The CELL, however, ends UNSET: the retitle fires the same-tx PROJECT
-    // pass, which reprojects the cell from the (unconvertible) children and
-    // applies §9's default-value rule (no parseable child ⇒ key unset). That
-    // unset overrides anything the migration writes to the cell, so trying to
-    // re-home the stale value under the new name is futile (PR #386 review
-    // wave 2 — the reviewer's "preserve the stale key" suggestion conflicts
-    // with §9's cell-derives-from-children rule). No tombstone: MATERIALIZE
-    // runs before PROJECT and skips the removed old key (it no longer resolves
-    // post-rename), so the rows are never soft-deleted.
+    // The DATA guarantee is that the value ROWS survive — they do: the field
+    // row's content is id-addressed (`((fieldId))`) and rename-stable, and the
+    // value child keeps `not a number`, both live. The CELL, however, ends
+    // UNSET: because the content is rename-stable, NO MATERIALIZE/PROJECT
+    // fires, so the migration pass is the sole cell writer — it drops the old
+    // key and leaves the new one absent (nothing parseable to project, §9's
+    // default-value rule). The pass never deletes value rows, so they stay
+    // live unconditionally.
     await seedWorkspace('children')
     const repo = setup()
     const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'not a number')
@@ -266,7 +265,7 @@ describe('codec-change migration', () => {
     // The raw value is preserved as a live row (this is the real guarantee),
     // and the unconvertible count is surfaced to the user.
     expect(await rowContent(valueRowId)).toBe('not a number')
-    expect(await rowContent(fieldRowId)).toBe('[[state2]]')
+    expect(await rowContent(fieldRowId)).toBe(`((${FIELD_ID}))`)
     expect(errors).toHaveLength(1)
     expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
     expect(errors[0]!.meta).toMatchObject({count: 1})

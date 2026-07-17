@@ -390,12 +390,12 @@ export class TxImpl implements Tx {
    *  check only — it deliberately doesn't re-walk ancestors' content. */
   private isProspectiveFieldRow(row: BlockData): boolean {
     if (row.parentId === null) return false
-    const checker = this.isFieldDefinitionCheckerFor(row.workspaceId)
+    // Field rows address their definition BY ID (`((fieldId))`, §7). A
+    // `[[name]]` row is plain page content and never becomes a field row, so
+    // only an id block-ref to a definition is prospective here.
     const exact = parseExactReferenceBlockContent(row.content)
-    if (!exact) return false
-    if (exact.kind === 'blockRef') return checker(exact.id)
-    const resolution = this.propertySchemaResolverFor(row.workspaceId).resolve(exact.alias)
-    return resolution.status === 'resolved'
+    if (exact?.kind !== 'blockRef') return false
+    return this.isFieldDefinitionCheckerFor(row.workspaceId)(exact.id)
   }
 
   /** §9 ancestry rule: role is positional and inherits — everything beneath
@@ -1175,8 +1175,8 @@ export class TxImpl implements Tx {
     const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
 
     if (existing) {
-      if (existing.content !== propertyFieldContent(schema)) {
-        await this.update(existing.id, {content: propertyFieldContent(schema)}, opts)
+      if (existing.content !== propertyFieldContent(schema.fieldId)) {
+        await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)}, opts)
       }
       const values = await this.childrenOf(existing.id, undefined, {includePropertyChildren: true})
       const [primary, ...duplicates] = values
@@ -1207,7 +1207,7 @@ export class TxImpl implements Tx {
       parentId: parent.id,
       referenceTargetId: schema.fieldId,
       orderKey: keyAtStart(null),
-      content: propertyFieldContent(schema),
+      content: propertyFieldContent(schema.fieldId),
     }, opts)
     await this.create({
       workspaceId: parent.workspaceId,
