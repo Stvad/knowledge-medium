@@ -1796,13 +1796,13 @@ into is smaller).
       <td>§9 VACUUM: the <strong>manual db-maintenance command</strong>, plus
         measure and record before/after bytes on the dev instance. The
         <em>deep-idle one-shot</em> (marker + space-check gated, temp_store
-        bracket) is specified in §9 but <strong>does not ship in this slice</strong>
-        — it is gated on <a href="#s16">O2</a>, whose lean is to enable it a
-        release later once the manual path has telemetry. Slice D therefore has a
-        single gate; shipping both here would enable the riskiest UX path in the
-        design (a minutes-long single-worker stall fired by a heuristic) ahead of
-        the decision that governs it.</td>
-      <td>Requires C. Auto-VACUUM gated on O2.</td>
+        bracket) is specified in §9 but <strong>does not ship in this
+        slice</strong> — <a href="#s16">O2</a> is resolved manual-first, so it is
+        deferred to a later release, enabled only once the manual path has
+        telemetry. Slice D therefore has a single gate; shipping both here would
+        enable the riskiest UX path in the design (a minutes-long single-worker
+        stall fired by a heuristic) ahead of the evidence that governs it.</td>
+      <td>Requires C. Auto-VACUUM deferred (O2).</td>
     </tr>
   </tbody>
 </table>
@@ -2143,10 +2143,13 @@ generator, which is how both were found.
     instinct later retired the <code>'skip'</code> exemption outright (§5
     revised 2026-07-17, I8) — O1 was its first application, not its only
     one.</li>
-  <li><strong>O2 — auto-VACUUM at deep idle vs manual-first.</strong> A
+  <li><strong>O2 — RESOLVED (2026-07-17, user): manual-first.</strong> A
     minutes-long single-worker stall triggered by a heuristic is the riskiest UX
-    moment in this design. Lean: ship the manual command in slice D, enable the
-    deep-idle one-shot a release later once the manual path has telemetry.</li>
+    moment in this design, so slice D ships the manual db-maintenance command
+    only. The deep-idle one-shot stays specified (§9) but does not ship with this
+    work; it is deferred to a later release, to be enabled once the manual path
+    has real-world telemetry — a fresh decision then, against measured stall
+    duration and frequency, not a scheduled follow-on.</li>
   <li><strong>O3 — RESOLVED with O5:</strong> W is gone. The sampling
     probability p defaults to 1/64; §4.4 has the principled derivation
     (p ≈ 4.6/L for a target p99 loss window L) — non-load-bearing,
