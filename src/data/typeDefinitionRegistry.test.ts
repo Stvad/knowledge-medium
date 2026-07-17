@@ -206,18 +206,24 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.get(backingId)).toMatchObject({id: backingId, label: 'Poison'})
   })
 
-  it('indexes declared seeds by key, keeping the first on a duplicate key', () => {
+  it('indexes declared seeds by key, keeping the first on a duplicate key and recording it as contested', () => {
+    const TODO_KEY = 'system:kernel-data/type/todo'
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: new Map(),
       seeds: [
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'}),
-        seedType({seedKey: 'system:kernel-data/type/todo', revision: 1, id: 'todo', label: 'Todo'}),
+        seedType({seedKey: TODO_KEY, revision: 1, id: 'todo', label: 'Todo'}),
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Duplicate'}),
       ],
     })
     expect(reg.seedsByKey.size).toBe(2)
     expect(reg.seedsByKey.get(PAGE_KEY)?.label).toBe('Page')
+    // In-memory resolution keeps the first (transient, rebuilt each load)...
     expect(reg.typesById.get('page')).toMatchObject({label: 'Page'})
+    // ...but the contested key is flagged so the create/restore-only materializer
+    // withholds its order-dependent backing row; the uncontested key is not.
+    expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
+    expect(reg.contestedSeedKeys.has(TODO_KEY)).toBe(false)
   })
 })

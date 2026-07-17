@@ -26,6 +26,13 @@ export interface TypeDefinitionRegistrySnapshot {
   readonly definitionsByBlockId: ReadonlyMap<string, TypeDefinitionMetadata>
   readonly blockIdByTypeId: ReadonlyMap<string, string>
   readonly seedsByKey: ReadonlyMap<string, TypeSeedDeclaration>
+  /** Seed keys contributed more than once this rebuild. The keep-first winner
+   *  still publishes in-memory (see `indexSeedsByKey`), but a contested key must
+   *  be withheld from MATERIALIZATION: its winner is contribution-order-dependent
+   *  and the backing pass is create/restore-only, so persisting one would strand a
+   *  stale mirror on a later reorder. `getTypeBlockId` stays undefined until the
+   *  duplicate is resolved — the same fail-closed stance as a contested id. */
+  readonly contestedSeedKeys: ReadonlySet<string>
 }
 
 export interface BuildTypeDefinitionRegistryArgs {
@@ -69,19 +76,28 @@ const contributionFromProjection = (def: ProjectedTypeDefinition): TypeContribut
 /** Index the declared type seeds by key. Duplicate keys are a code-owned
  * invariant violation (the deterministic-id namespace assumes unique keys); we
  * keep the first and warn rather than throw, because this runs on every facet
- * rebuild and one malformed dynamic contribution must not abort the pass. */
+ * rebuild and one malformed dynamic contribution must not abort the pass. Every
+ * key seen more than once is recorded in `contestedSeedKeys` so the materializer
+ * can withhold it: the keep-first winner publishes in-memory (transient, rebuilt
+ * each load) but must NOT become a create/restore-only backing row, whose winner
+ * would be frozen contribution-order-dependent and stranded on a later reorder. */
 const indexSeedsByKey = (
   seeds: readonly TypeSeedDeclaration[],
-): Map<string, TypeSeedDeclaration> => {
-  const byKey = new Map<string, TypeSeedDeclaration>()
+): {seedsByKey: Map<string, TypeSeedDeclaration>; contestedSeedKeys: Set<string>} => {
+  const seedsByKey = new Map<string, TypeSeedDeclaration>()
+  const contestedSeedKeys = new Set<string>()
   for (const seed of seeds) {
-    if (byKey.has(seed.seedKey)) {
-      console.warn(`[buildTypeDefinitionRegistry] duplicate type seed key ${seed.seedKey}; keeping first`)
+    if (seedsByKey.has(seed.seedKey)) {
+      console.warn(
+        `[buildTypeDefinitionRegistry] duplicate type seed key ${seed.seedKey}; ` +
+        'keeping first (withheld from materialization until deduped)',
+      )
+      contestedSeedKeys.add(seed.seedKey)
       continue
     }
-    byKey.set(seed.seedKey, seed)
+    seedsByKey.set(seed.seedKey, seed)
   }
-  return byKey
+  return {seedsByKey, contestedSeedKeys}
 }
 
 /** Build the workspace's type-definition registry from projected user rows +
@@ -113,7 +129,7 @@ const indexSeedsByKey = (
 export const buildTypeDefinitionRegistry = (
   args: BuildTypeDefinitionRegistryArgs,
 ): TypeDefinitionRegistrySnapshot => {
-  const seedsByKey = indexSeedsByKey(args.seeds)
+  const {seedsByKey, contestedSeedKeys} = indexSeedsByKey(args.seeds)
   const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
   const typesById = new Map<string, TypeContribution>()
   const blockIdByTypeId = new Map<string, string>()
@@ -172,5 +188,6 @@ export const buildTypeDefinitionRegistry = (
     definitionsByBlockId,
     blockIdByTypeId,
     seedsByKey,
+    contestedSeedKeys,
   }
 }

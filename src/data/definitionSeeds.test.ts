@@ -602,6 +602,44 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(rowB?.deleted).toBe(0)
     })
   })
+
+  it('withholds a contested-KEY seed from materialization, then backs it once the key de-collides', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+
+    // Two contributions sharing a seed KEY (distinct ids). `indexSeedsByKey` keeps
+    // the first and flags the key contested; the registry collapses them, so the
+    // materializer's own `assertUniqueSeedKeys` never sees the duplicate. The
+    // scheduled pass must still withhold the order-dependent backing row.
+    const DUP_KEY = 'system:test/type/dup'
+    const first = seedType({seedKey: DUP_KEY, revision: 1, id: 'dup-first', label: 'First'})
+    const second = seedType({seedKey: DUP_KEY, revision: 1, id: 'dup-second', label: 'Second'})
+    const backingId = typeDefinitionBlockId(WS, DUP_KEY)
+    repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first, second])
+    await vi.waitFor(() => {
+      expect(repo.typeDefinitions?.seedsByKey.size).toBe(1)
+      expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(true)
+    })
+
+    // Force a pass while contested: nothing is written (the keep-first winner is
+    // withheld, not persisted), even though `seedsByKey` holds it.
+    repo.scheduleWorkspaceSeedMaterialization(WS, false)
+    await repo.awaitSeedMaterialization()
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [backingId])).toBeNull()
+
+    // De-collide by dropping the duplicate. `seedsByKey` is byte-identical (the
+    // survivor WAS the kept first), so only the contested-set diff can fire the
+    // reschedule — no explicit schedule here, this rides the applyTypesAndSchemas
+    // auto-reschedule under test.
+    repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first])
+    await vi.waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const row = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [backingId])
+      expect(row?.deleted).toBe(0)
+    })
+  })
 })
 
 describe('seed definition write guard (tx layer)', () => {

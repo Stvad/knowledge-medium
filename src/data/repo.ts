@@ -281,6 +281,26 @@ const sameTypeSeedIdentities = (
   b: ReadonlyMap<string, {id: string}> | undefined,
 ): boolean => sameKeyedMap(a, b, (x, y) => x.id === y.id)
 
+/** Equal iff two string sets carry the same members. Absent set = empty. Used to
+ *  reschedule type-seed materialization when the CONTESTED seed-key set changes:
+ *  `workspaceSeeds` withholds contested keys (`contestedSeedKeys`), and the
+ *  keep-first winner they leave in `seedsByKey` may be byte-identical across a
+ *  de-collision, so `sameTypeSeedIdentities` alone wouldn't see that a withheld
+ *  key became materializable. */
+const sameStringSet = (
+  a: ReadonlySet<string> | undefined,
+  b: ReadonlySet<string> | undefined,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const value of a) {
+    if (!b.has(value)) return false
+  }
+  return true
+}
+
 /** The one-deep "active-or-retained-previous" retain rule, expressed once.
  *  Serve `workspaceId` from the active snapshot, or the immediately-previous one
  *  still retained across a switch; any other (genuinely foreign) workspace
@@ -839,10 +859,15 @@ export class Repo {
         // on its own, with no property-seed change to piggyback the reschedule on.
         // The type diff is id-aware (`sameTypeSeedIdentities`): materializability
         // there also depends on membership-id collisions, so an id that de-collides
-        // without a key change must still reschedule.
+        // without a key change must still reschedule. It is also contested-key-aware
+        // (`sameStringSet` over `contestedSeedKeys`): a withheld duplicate-key seed
+        // leaves a byte-identical keep-first winner in `seedsByKey`, so a de-collision
+        // that makes it materializable again must reschedule even though the id diff
+        // sees no change.
         const seedsChanged =
           !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
-          !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey)
+          !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey) ||
+          !sameStringSet(this._typeDefinitionRegistry?.contestedSeedKeys, typeDefinitions?.contestedSeedKeys)
         this._propertyDefinitionRegistry = propertyDefinitions
         this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
@@ -2277,8 +2302,15 @@ export class Repo {
       propertySeeds: propertyRegistry?.workspaceId === workspaceId
         ? [...propertyRegistry.seedsByKey.values()]
         : [],
+      // Withhold a contested seed key from materialization: `seedsByKey` kept a
+      // contribution-order-dependent first-winner, but the backing pass is
+      // create/restore-only, so persisting one would strand a stale mirror on a
+      // later reorder (the type analog of the `uncontestedTypeSeeds` id filter).
+      // The type stays resolvable in-memory; only its backing block is deferred
+      // until the duplicate key is removed.
       typeSeeds: typeRegistry?.workspaceId === workspaceId
         ? [...typeRegistry.seedsByKey.values()]
+            .filter(seed => !typeRegistry.contestedSeedKeys.has(seed.seedKey))
         : [],
     }
   }
