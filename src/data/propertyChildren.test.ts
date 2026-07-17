@@ -294,6 +294,37 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     }, {scope: ChangeScope.BlockDefault})
   })
 
+  // The §9 ancestry answer is memoized per tx, and the walk memoizes EVERY id
+  // on the chain it walked — so a mid-tx re-parent (or re-stamp) can flip the
+  // answer for a whole subtree while the memo still describes the OLD tree.
+  // Here `x` starts as ordinary content (its `((fieldId))` child classifies as
+  // x's OWN field row and is filtered), then moves under a real field row,
+  // which makes it property-subtree interior — where §9 filters nothing,
+  // because the child is now a VALUE. A stale memo keeps hiding it.
+  it('re-walks ancestry after a same-tx move instead of trusting the memo', async () => {
+    const repo = await setupFlipped()
+    const [field] = await liveFieldRows('p')
+    await repo.tx(async tx => {
+      await tx.create({id: 'x', workspaceId: WS, parentId: null, orderKey: 'z', content: 'x'})
+      await tx.create({
+        id: 'x-kid', workspaceId: WS, parentId: 'x', orderKey: 'a',
+        content: `((${STATUS_FIELD_ID}))`,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      // Populates the memo for x's chain: x is ordinary, so its
+      // definition-resolving child reads as machinery and is filtered.
+      expect(await tx.childrenOf('x', undefined, {hidePropertyChildren: true})).toEqual([])
+
+      // x is now INSIDE a property subtree — the same child is a value.
+      await tx.move('x', {parentId: field!.id, orderKey: 'zz'})
+
+      const visible = await tx.childrenOf('x', undefined, {hidePropertyChildren: true})
+      expect(visible.map(c => c.id)).toEqual(['x-kid'])
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
   it('un-flipped workspaces filter nothing even with a stamped column', async () => {
     await seedWorkspace('cell')
     const repo = setup()

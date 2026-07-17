@@ -404,11 +404,40 @@ export class TxImpl implements Tx {
     return this.isFieldDefinitionCheckerFor(row.workspaceId)(exact.id)
   }
 
+  /** Record one row write's (before, after) into the tx snapshots — and keep
+   *  the §9 ancestry memo from outliving the tree it describes.
+   *
+   *  EVERY primitive funnels through here rather than calling `recordWrite`
+   *  directly, deliberately: `propertySubtreeCache` answers "does this chain
+   *  pass through a field row", derived from exactly `parentId` +
+   *  `referenceTargetId`, and BOTH change mid-tx — `move` re-parents,
+   *  `core.deriveReferenceTarget` stamps, merge relocates. A per-site
+   *  "remember to invalidate" would be one more thing to forget on the next
+   *  primitive; one choke point can't be.
+   *
+   *  Clearing wholesale is the right grain: the walk memoizes EVERY id on the
+   *  chain it walked, so one re-parent can flip the answer for a whole
+   *  subtree, not just the moved row — there is no cheap "which entries did
+   *  this invalidate". The memo only serves visible-view reads, so the cost of
+   *  dropping it is a re-walk on the next such read, while a stale entry
+   *  silently filters a row's values as machinery (or leaks machinery as
+   *  values). */
+  private record(id: string, before: BlockData | null, after: BlockData | null): void {
+    if (
+      (before?.parentId ?? null) !== (after?.parentId ?? null)
+      || (before?.referenceTargetId ?? null) !== (after?.referenceTargetId ?? null)
+    ) {
+      this.propertySubtreeCache.clear()
+    }
+    recordWrite(this.ctx.snapshots, id, before, after)
+  }
+
   /** §9 ancestry rule: role is positional and inherits — everything beneath
    *  a field row is property-subtree interior (values, comments, ordinary
    *  content), so listings there never filter "field rows" out (a ref-typed
    *  VALUE pointing at a definition block would otherwise vanish). Walks the
-   *  parent chain; memoized per tx. */
+   *  parent chain; memoized per tx — see `record` for how that memo is kept
+   *  honest across mid-tx moves and stamps. */
   private async isInsidePropertySubtree(
     id: string,
     isFieldDefinition: IsPropertyFieldDefinition,
@@ -452,7 +481,7 @@ export class TxImpl implements Tx {
     }
     this.markSystemMint(id, opts)
     this.pinWorkspace(data.workspaceId)
-    recordWrite(this.ctx.snapshots, id, null, row)
+    this.record(id, null, row)
     return id
   }
 
@@ -469,7 +498,7 @@ export class TxImpl implements Tx {
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
       this.markSystemMint(data.id, opts)
       this.pinWorkspace(data.workspaceId)
-      recordWrite(this.ctx.snapshots, data.id, null, row)
+      this.record(data.id, null, row)
       return {id: data.id, inserted: true}
     }
 
@@ -512,7 +541,7 @@ export class TxImpl implements Tx {
       [after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
   }
 
   async restore(id: string, patch?: BlockDataPatch, opts?: TxWriteOpts): Promise<void> {
@@ -549,7 +578,7 @@ export class TxImpl implements Tx {
       ],
     )
     this.pinWorkspace(beforeData.workspaceId)
-    recordWrite(this.ctx.snapshots, id, beforeData, after)
+    this.record(id, beforeData, after)
   }
 
   // ──── Data-field updates ────
@@ -583,7 +612,7 @@ export class TxImpl implements Tx {
       ],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
   }
 
   // ──── Tree moves ────
@@ -642,7 +671,7 @@ export class TxImpl implements Tx {
       [target.parentId, target.orderKey, after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
   }
 
   // ──── Typed property primitives — the codec boundary sites ────
@@ -726,7 +755,7 @@ export class TxImpl implements Tx {
       [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
     )
     this.pinWorkspace(before.workspaceId)
-    recordWrite(this.ctx.snapshots, id, before, after)
+    this.record(id, before, after)
   }
 
   async getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T> {
@@ -976,7 +1005,7 @@ export class TxImpl implements Tx {
         [after.updatedAt, now, userId, id],
       )
       this.pinWorkspace(beforeData.workspaceId)
-      recordWrite(this.ctx.snapshots, id, beforeData, after)
+      this.record(id, beforeData, after)
       return
     }
 
@@ -996,7 +1025,7 @@ export class TxImpl implements Tx {
       }
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(inserted))
       this.pinWorkspace(target.workspaceId)
-      recordWrite(this.ctx.snapshots, id, null, inserted)
+      this.record(id, null, inserted)
       return
     }
 
@@ -1035,7 +1064,7 @@ export class TxImpl implements Tx {
       ],
     )
     this.pinWorkspace(beforeData.workspaceId)
-    recordWrite(this.ctx.snapshots, id, beforeData, after)
+    this.record(id, beforeData, after)
   }
 
   // ──── Internal helpers ────
