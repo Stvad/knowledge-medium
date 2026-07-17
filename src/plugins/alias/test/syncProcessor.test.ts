@@ -79,6 +79,14 @@ const readAliases = async (id: string): Promise<string[]> => {
   return (JSON.parse(row.properties_json).alias ?? []) as string[]
 }
 
+/** The LOCAL derived column (PR #288 slice A) — not exposed by `env.read`. */
+const readReferenceTargetId = async (id: string): Promise<string | null> => {
+  const row = await sharedDb.db.get<{reference_target_id: string | null}>(
+    'SELECT reference_target_id FROM blocks WHERE id = ?', [id],
+  )
+  return row.reference_target_id
+}
+
 const createTarget = async (
   id: string,
   content: string,
@@ -135,6 +143,34 @@ describe('alias.sync — Case AR1 (alias rename, content matches removed alias)'
 
     expect((await env.read('t'))!.content).toBe('Bar')
     expect(await readAliases('t')).toEqual(['Bar'])
+  })
+
+  // AR1 rewrites `content` from a PLUGIN same-tx processor, i.e. after the
+  // kernel's `core.deriveReferenceTarget` already ran — and AR1's own
+  // precondition is that content did NOT change in this tx, so derive never
+  // fired for the row at all. Without an inline recompute the derived column
+  // is left describing pre-rewrite content. Reachable when the aliases being
+  // swapped are themselves spelled as references (PR #386 review).
+  it('re-derives reference_target_id for the content it rewrites', async () => {
+    await createTarget('page-foo', 'Foo page', ['Foo'])
+    await createTarget('page-bar', 'Bar page', ['Bar'])
+    // `t` is an exact `[[Foo]]` reference whose ALIAS is the literal
+    // string `[[Foo]]` — that string equality is what arms AR1.
+    await createTarget('t', '[[Foo]]', ['[[Foo]]'])
+    expect(await readReferenceTargetId('t')).toBe('page-foo')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['[[Bar]]']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // AR1 fired: content now names Bar...
+    expect((await env.read('t'))!.content).toBe('[[Bar]]')
+    // ...so the column must follow it, not keep pointing at Foo. A stale
+    // stamp here is what makes a row keep classifying as the WRONG property
+    // definition's field row in a child-backed workspace.
+    expect(await readReferenceTargetId('t')).toBe('page-bar')
   })
 })
 

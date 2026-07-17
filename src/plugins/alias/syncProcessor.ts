@@ -36,10 +36,15 @@ import {
   ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
+  type BlockData,
   type ChangedRow,
   type SameTxCtx,
   type SameTxEvent,
 } from '@/data/api'
+import {
+  deriveReferenceTargetId,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
 import { aliasesProp, getAliases } from '@/data/properties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
@@ -52,6 +57,9 @@ interface SyncPlan {
   contentNext: string | null
   aliasesNext: readonly string[] | null
   dropSourceAliasesOnCollision: readonly string[]
+  /** The row's derived `reference_target_id` as the tx already has it, so a
+   *  content rewrite can recompute the column without re-reading the row. */
+  referenceTargetIdBefore: string | null
 }
 
 
@@ -107,6 +115,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
         workspaceId: after.workspaceId,
         contentNext: null,
         aliasesNext: replaced,
+        referenceTargetIdBefore: after.referenceTargetId ?? null,
         dropSourceAliasesOnCollision: before.content === '' ? [] : [before.content],
       }
     }
@@ -118,6 +127,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       workspaceId: after.workspaceId,
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
+      referenceTargetIdBefore: after.referenceTargetId ?? null,
       dropSourceAliasesOnCollision: [],
     }
   }
@@ -136,6 +146,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       workspaceId: after.workspaceId,
       contentNext: added[0],
       aliasesNext: null,
+      referenceTargetIdBefore: after.referenceTargetId ?? null,
       dropSourceAliasesOnCollision: [],
     }
   }
@@ -176,7 +187,34 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
     await ctx.tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
   }
   if (plan.contentNext !== null) {
-    await ctx.tx.update(plan.id, {content: plan.contentNext}, {skipMetadata: true})
+    // AR1 rewrites content AFTER `core.deriveReferenceTarget` ran (kernel
+    // same-tx processors precede plugin ones), and AR1's own precondition is
+    // that content did NOT change in this tx — so derive never fired for this
+    // row at all and nothing will re-derive the column. Recompute it inline
+    // from the rewritten content, the same contract `mergeRetargetProcessor`
+    // and `inlineDeletedBlockRefsProcessor` follow.
+    //
+    // Reachable when the swapped alias is itself spelled as a reference
+    // (`[[Foo]]` as an alias STRING): the row's stamp would keep pointing at
+    // the removed alias's target while its content names the added one — and
+    // in a child-backed workspace a stamp resolving to a property definition
+    // is what makes a row a field row, so the row would stay hidden and
+    // projected under the wrong definition.
+    const patch: Partial<Pick<BlockData, 'content' | 'referenceTargetId'>> = {
+      content: plan.contentNext,
+    }
+    const derived = await deriveReferenceTargetId(
+      plan.contentNext,
+      plan.workspaceId,
+      sameTxReferenceTargetLookups(ctx.tx),
+    )
+    // Always an update of an existing row (never a create), so an
+    // unresolvable alias (`undefined`) clears rather than preserving an id.
+    const nextTargetId = derived ?? null
+    if ((plan.referenceTargetIdBefore ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+    await ctx.tx.update(plan.id, patch, {skipMetadata: true})
   }
 }
 
