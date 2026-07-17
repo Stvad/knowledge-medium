@@ -21,14 +21,18 @@ describe('loadOrCreateChannelSecret', () => {
     expect(await loadOrCreateChannelSecret()).toBe(first)
   })
 
-  it('two concurrent first-creates converge on ONE secret (daemon + MCP server race)', async () => {
+  it('concurrent first-creates converge on ONE secret (daemon + MCP server race)', async () => {
     await fs.rm(path.join(dir, 'agent-dispatch-channel.secret'), {force: true})
-    // Both pass the ENOENT read before either writes; without an atomic
-    // create the loser keeps a secret the file no longer contains and
-    // every channel delivery 401s until a restart.
-    const [a, b] = await Promise.all([loadOrCreateChannelSecret(), loadOrCreateChannelSecret()])
-    expect(a).toBe(b)
+    // Every caller passes the ENOENT read before any writes; without an atomic
+    // create the losers keep a secret the file no longer contains and every
+    // channel delivery 401s until a restart. Fanning out past two also exercises
+    // the create→fill window that a non-atomic writer would leave: a loser must
+    // never observe (and reclaim) a half-written file out from under the winner.
+    const results = await Promise.all(
+      Array.from({length: 12}, () => loadOrCreateChannelSecret()),
+    )
+    expect(new Set(results).size).toBe(1)
     const onDisk = (await fs.readFile(path.join(dir, 'agent-dispatch-channel.secret'), 'utf8')).trim()
-    expect(onDisk).toBe(a)
+    expect(onDisk).toBe(results[0])
   })
 })
