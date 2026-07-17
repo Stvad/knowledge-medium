@@ -855,4 +855,46 @@ describe('type definition materialization', () => {
     expect(repo.userTypes.getTypeBlockId(typeSeed.id)).toBe(blockId)
     expect(repo.typeDefinitions?.blockIdByTypeId.get(typeSeed.id)).toBe(blockId)
   })
+
+  it('drops a duplicate membership-id seed (keep-first), never persisting the phantom loser', async () => {
+    // Two seeds, different keys (→ different deterministic ids, so
+    // assertUniqueSeedKeys passes) but the SAME `id`. Without the id-dedup both
+    // would materialize a backing block claiming the same block-type:type-id;
+    // the registry drops one from the runtime map but the extra row would already
+    // be persisted under Types. Only the keep-first winner may materialize.
+    const twin = seedType({
+      seedKey: 'system:test/type/widget-twin',
+      revision: 1,
+      id: typeSeed.id,
+      label: 'Widget Twin',
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await materializeTypeSeeds(repo, WS, [typeSeed, twin]))
+        .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate type seed id'))
+    } finally {
+      warn.mockRestore()
+    }
+    expect(repo.block(typeDefinitionBlockId(WS, typeSeed.seedKey)).peek()).toBeTruthy()
+    expect(await sharedDb.db.getOptional(
+      'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, twin.seedKey)],
+    )).toBeNull()
+  })
+
+  it('rejects a user-scope create that forges a provenance-valid /type/ seed row (tx guard is grammar-agnostic)', async () => {
+    // The tx-layer seed-write guard (`assertNoSeedDefinitionWrites`) fires for
+    // BlockDefault-scope writes on any row transitioning into a valid seeded
+    // definition — property OR type grammar. This closes the loop the existing
+    // forge tests only cover for `/property/` keys.
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    await expect(repo.tx(tx => tx.create({
+      id,
+      workspaceId: WS,
+      parentId: repo.typesPageId!,
+      orderKey: 'a0',
+      content: typeSeed.label,
+      properties: canonicalTypeSeedProperties(typeSeed),
+    }), {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+  })
 })

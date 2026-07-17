@@ -124,10 +124,16 @@ export const canonicalPropertySeedProperties = (
  * page by the typeify same-tx processor), a code type was never a page. Forcing
  * PAGE_TYPE + an alias here would be a visible behavior change at the C4 cutover
  * and risk `alias.collision` on the real type labels; the typeify carve-out for
- * seed rows keeps this bare row bare. `block-type:properties` (the property refs)
- * is also omitted: materializing a ref needs each target's deterministic
- * property-definition id derived from a seeded property HANDLE, which lands with
- * C4 — no current type seed declares `properties`. */
+ * seed rows keeps this bare row bare. `block-type:properties` (the on-block
+ * property refs) is also omitted. This is NOT a functional gap for type
+ * resolution: a declared seed's `TypeContribution.properties` is synthesized
+ * straight from the code declaration (`seedContribution` in
+ * `typeDefinitionRegistry.ts`), never from the block's refList — so a C4 seed
+ * carrying `properties` resolves correctly through `repo.types` even with the
+ * refs absent from the row. Writing the on-block refs (which only feeds the
+ * definition block's own property-panel display) needs each target's
+ * deterministic id derived from a seeded property HANDLE and lands with C4; no
+ * current type seed declares `properties`. */
 export const canonicalTypeSeedProperties = (
   seed: TypeSeedDeclaration,
 ): Record<string, unknown> => {
@@ -161,7 +167,9 @@ interface SeedProbeRow {
   readonly deleted: number
 }
 
-export interface PropertySeedMaterializationResult {
+/** Result of a create/restore-only materialization pass. Shared by both the
+ * property and type materializers (their outcomes are structurally identical). */
+export interface SeedMaterializationResult {
   readonly created: number
   readonly restored: number
   readonly skippedReadOnly: boolean
@@ -300,7 +308,7 @@ export const materializePropertySeeds = async (
   repo: Repo,
   workspaceId: string,
   seeds: readonly AnyPropertySeedDeclaration[],
-): Promise<PropertySeedMaterializationResult> => {
+): Promise<SeedMaterializationResult> => {
   assertUniqueSeedKeys('materializePropertySeeds', seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
   if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
@@ -379,10 +387,33 @@ export const materializePropertySeeds = async (
   return {created, restored, skippedReadOnly: false}
 }
 
-export interface TypeSeedMaterializationResult {
-  readonly created: number
-  readonly restored: number
-  readonly skippedReadOnly: boolean
+/** Keep the first seed per membership `id`, warning on a collision. Two seeds
+ * with different keys but the same `id` are an authoring error: they hash to
+ * DIFFERENT deterministic block ids (unique keys), so `assertUniqueSeedKeys`
+ * doesn't catch them, yet both would materialize a backing block claiming the
+ * same `block-type:type-id` — a phantom loser row `buildTypeDefinitionRegistry`
+ * then drops from the runtime map (`seedsByKey` retains it; the id-dedup happens
+ * separately in `typesById` synthesis). Resolve to the registry's SAME keep-first
+ * winner here so the loser is never persisted. Drop-and-warn (not throw) so one
+ * malformed dynamic contribution can't abort the shared pass — matching the
+ * property registry's name-collision handling. */
+const dedupeTypeSeedsById = (
+  seeds: readonly TypeSeedDeclaration[],
+): readonly TypeSeedDeclaration[] => {
+  const byId = new Map<string, TypeSeedDeclaration>()
+  for (const seed of seeds) {
+    const prior = byId.get(seed.id)
+    if (prior) {
+      console.warn(
+        `[materializeTypeSeeds] duplicate type seed id ${JSON.stringify(seed.id)} ` +
+        `(keys ${JSON.stringify(prior.seedKey)} + ${JSON.stringify(seed.seedKey)}); ` +
+        'keeping first, not materializing the collider',
+      )
+      continue
+    }
+    byId.set(seed.id, seed)
+  }
+  return [...byId.values()]
 }
 
 /** Isolated create/restore-only TYPE seed pass — the exact structural mirror of
@@ -390,26 +421,30 @@ export interface TypeSeedMaterializationResult {
  * same probe → revalidate-under-lock → create/restore discipline (one poisoned
  * id aborts the whole batch; a tombstone restore preserves its bag; live stale
  * rows only log). Differences are only the kind's specifics: `typeDefinitionBlockId`
- * for identity, the Types page for the parent, and `canonicalTypeSeedProperties`
- * for the bag. `block-type` backing blocks would trip the typeify same-tx
- * processor into PAGE_TYPE + alias; the processor's seed carve-out (a valid
- * `/type/` seed row) keeps this write inert. */
+ * for identity, the Types page for the parent, `canonicalTypeSeedProperties` for
+ * the bag, and an id-dedup pass (`dedupeTypeSeedsById`) the property side folds
+ * into its name-collision handling upstream. `block-type` backing blocks would
+ * trip the typeify same-tx processor into PAGE_TYPE + alias; the processor's seed
+ * carve-out (a valid `/type/` seed row) keeps this write inert. */
 export const materializeTypeSeeds = async (
   repo: Repo,
   workspaceId: string,
   seeds: readonly TypeSeedDeclaration[],
-): Promise<TypeSeedMaterializationResult> => {
+): Promise<SeedMaterializationResult> => {
   assertUniqueSeedKeys('materializeTypeSeeds', seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
   if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
+  // Resolve membership-id collisions to keep-first winners BEFORE any write, so a
+  // dup-id loser never persists a phantom backing block (Codex P2).
+  const materializable = dedupeTypeSeedsById(seeds)
 
-  const ids = seeds.map(seed => typeDefinitionBlockId(workspaceId, seed.seedKey))
+  const ids = materializable.map(seed => typeDefinitionBlockId(workspaceId, seed.seedKey))
   const placeholders = ids.map(() => '?').join(', ')
   const rows = await repo.db.getAll<SeedProbeRow>(
     `SELECT id, workspace_id, properties_json, deleted FROM blocks WHERE id IN (${placeholders})`,
     ids,
   )
-  const seedsById = new Map(seeds.map(seed => [
+  const seedsById = new Map(materializable.map(seed => [
     typeDefinitionBlockId(workspaceId, seed.seedKey), seed,
   ] as const))
   const rowsById = new Map(rows.map(row => {
@@ -421,7 +456,7 @@ export const materializeTypeSeeds = async (
     return [row.id, {row, properties}] as const
   }))
 
-  const pending = seeds.filter((seed, index) => {
+  const pending = materializable.filter((seed, index) => {
     const probed = rowsById.get(ids[index]!)
     if (!probed || probed.row.deleted === 1) return true
     const storedRevision = revisionFromProperties(probed.properties)
@@ -442,7 +477,7 @@ export const materializeTypeSeeds = async (
     const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
     // Revalidate the complete declaration set under the same write lock before
     // the first mutation — the outside batch is only a fast no-work probe.
-    for (const seed of seeds) {
+    for (const seed of materializable) {
       const id = typeDefinitionBlockId(workspaceId, seed.seedKey)
       const current = await tx.get(id)
       if (current) {
@@ -451,7 +486,7 @@ export const materializeTypeSeeds = async (
       }
       currentById.set(id, current)
     }
-    for (const seed of seeds) {
+    for (const seed of materializable) {
       const id = typeDefinitionBlockId(workspaceId, seed.seedKey)
       const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
