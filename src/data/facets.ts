@@ -23,6 +23,7 @@ import type {
   TypeContribution,
 } from '@/data/api'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 import type { Repo } from './repo.ts'
@@ -159,6 +160,19 @@ export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedProperty
 )
 
 export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
+
+/** Block-built type definitions keyed by durable block id — the type-side
+ * twin of `projectedPropertyDefinitionsFacet`. The `userTypesProjector`
+ * publishes one `ProjectedTypeDefinition` (codec-less identity/display metadata
+ * + resolved `block-type:properties` schemas) per `'block-type'` block; the
+ * facet bridge derives the merged, §9-resolved `repo.types` from this bucket +
+ * `typeSeedsFacet` via `buildTypeDefinitionRegistry`. Keyed by block id (not the
+ * `block-type:type-id` claim) so the declaration-authoritative registry — not a
+ * last-wins facet fold — decides membership ids. */
+export const projectedTypeDefinitionsFacet = keyedMapFacet<ProjectedTypeDefinition>(
+  'data.projected-type-definitions',
+  definition => definition.metadata.blockId,
+)
 
 /** Code-owned block-type definitions. The declaration object is also the
  * `TypeContribution` returned by `seedType`. A list facet (not a last-wins map)

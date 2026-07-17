@@ -21,7 +21,6 @@ import {
   typedBlocksStructureKey,
 } from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
-import { typesFacet } from '@/data/facets.js'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -418,10 +417,10 @@ export const groupedBacklinksForBlockQuery = defineQuery<
 
     // User-defined types store the block-type block's id in `types[]`
     // (not its label string), so a raw `type_name` is a UUID we have
-    // to dereference for display. Use the in-memory `typesFacet`
-    // registry — it carries both kernel-contributed types and
-    // user-defined types materialized at runtime by
-    // `UserTypesService`. O(1) Map lookup, no DB roundtrip.
+    // to dereference for display. Use the in-memory merged `repo.types`
+    // registry — it carries both kernel/plugin code types and the
+    // block-built user types (materialized at runtime by `UserTypesService`
+    // through the type-definition registry). O(1) Map lookup, no DB roundtrip.
     //
     // A SQL-driven label lookup against `blocks` measured 4 seconds
     // for 4 ids in practice on a real-world DB (the planner couldn't
@@ -429,15 +428,13 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // left or the right). The in-memory path sidesteps that entirely.
     //
     // Eventual consistency: renaming a type block republishes the
-    // facet contribution but does not invalidate this query handle,
-    // so the panel keeps the previous label until any other dep
-    // wakes the resolver. Accepted in exchange for the perf win.
-    const typesRegistry = ctx.repo.facetRuntime?.read(typesFacet)
+    // registry but does not invalidate this query handle, so the panel
+    // keeps the previous label until any other dep wakes the resolver.
+    // Accepted in exchange for the perf win.
+    const typesRegistry = ctx.repo.types
     const typeLabelById = new Map<string, string>()
-    if (typesRegistry) {
-      for (const contribution of typesRegistry.values()) {
-        typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
-      }
+    for (const contribution of typesRegistry.values()) {
+      typeLabelById.set(contribution.id, contribution.label ?? contribution.id)
     }
 
     const groupRowsById = new Map<string, BlockRow>()
