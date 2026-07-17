@@ -77,6 +77,24 @@ export const fuzzParams = <T>(smokeRuns: number): fc.Parameters<T> => {
 }
 
 /**
+ * Fixed-seed, fixed-count parameters for a property QUARANTINED from the deep
+ * tier. Unlike `fuzzParams`, this ignores the deep-tier env
+ * (`FUZZ_RUNS`/`FUZZ_TIME_MS`/`FUZZ_SEED`) so the property runs the SAME
+ * bounded, deterministic sample in every tier — including the nightly deep run.
+ *
+ * Use this ONLY when a property trips an ENGINE-level bug (not a product bug and
+ * not a wrong oracle — diagnose first, per docs/fuzzing.md) whose every deep-tier
+ * hit would otherwise flip the nightly red on something we can't fix from here.
+ * The caller MUST cite the tracking issue and the un-quarantine condition. This
+ * is deliberately narrow: it trades a property's deep-tier exploration for a
+ * green signal, so it should be rare and always reversible.
+ */
+export const quarantinedFuzzParams = <T>(runs: number): fc.Parameters<T> => ({
+  numRuns: runs,
+  seed: SMOKE_SEED,
+})
+
+/**
  * Seeded-LCG pin over `Math.random`, try/finally restored. The only
  * nondeterminism most stateful suites' target code has (order-key jitter
  * via `fractional-indexing-jittered`) — pinning it makes fast-check's

@@ -1,6 +1,6 @@
 # Fuzzing
 
-> **Status:** current — last verified against code 2026-07-14
+> **Status:** current — last verified against code 2026-07-16
 
 Randomized testing for the parsing and data layers, in the Dan Luu
 spirit: cheap random inputs + invariant oracles find bugs that
@@ -53,6 +53,47 @@ a FAILURE when the time budget expires before even the first case
 finishes. That's a budget/perf signal, not a property failure — rerun
 with a larger `FUZZ_RUNS` or `FUZZ_TIME_MS`. It comes with a seed but no
 counterexample, so there's nothing to shrink or replay.
+
+### When the counterexample passes on replay
+
+If the `FUZZ_PATH` replay above *passes*, the shrunk counterexample is
+unsound — do not conclude "not reproducible / flake" and move on.
+Shrinking assumes the property is deterministic in its input; when it
+isn't, fast-check minimizes toward a value that doesn't actually fail.
+Two causes, in order of likelihood:
+
+1. **A hidden nondeterministic input** the property forgot to pin
+   (`Date.now`, `Math.random`, iteration order, shared mutable state).
+   Pin it (see the stateful-suite guarantees below) — that's a real
+   test bug and the usual case.
+2. **Engine-level nondeterminism** — rare, but real. A property can
+   depend on V8 execution state (JIT tier, string representation) that
+   the seed doesn't capture, so it reproduces in CI/vitest but not in a
+   fresh `node`, or vice-versa.
+
+Playbook when a replay won't reproduce:
+
+- **Regenerate from the seed instead of replaying the path.** Drop
+  `FUZZ_PATH` and run enough cases to reach the failure — the nightly
+  issue now prints this command directly
+  (`FUZZ_SEED=<seed> FUZZ_RUNS=<pathIndex+1> …`; `pathIndex` is the
+  path's first segment). This re-explores the real sequence rather than
+  the bogus minimized value.
+- **Dump raw code points, not the pretty-printed value** — fast-check's
+  stringify can render distinct characters identically. `[...k].map(c =>
+  c.codePointAt(0).toString(16))` on the differing key/value is decisive.
+- **Try `node --jitless` / a standalone `node` repro** to tell an engine
+  miscompile (behaviour changes with execution mode) from a logic bug
+  (stable across modes).
+
+Worked example: the `blockData.fuzz.test.ts`
+`blockToRowParams → parseBlockRow` round-trip went red nightly (seed
+`-915705129`, ~run 20420) with a `"` property key decoding to `\`. The
+functions are a pure `JSON.stringify`/`JSON.parse` round-trip — correct
+by construction; the reported counterexample passes in isolation. Root
+cause was a V8 `JSON.parse` miscompile for one specific ~486-char input,
+triggered only after the deep tier's heavy fast-check loop warms the
+engine (a same-shape hand-built string parses fine). Not a product bug.
 
 ## The suites
 
