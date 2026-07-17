@@ -798,9 +798,17 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
   #      E's own segment (or terminate: E predates all its logged state).
   #      This is the read-time check the "add gap metadata" rule buys — a
   #      full=1 sampled anchor may be crossed freely; a full=2 may not.
-  #   2. The newer-side walk from the live row is always gap-safe (it replays
-  #      trigger-recorded OLD values); prefer it. The §8 migration marks every
-  #      stock discontinuity full=2, so this check covers migrated gaps too.</code></pre>
+  #   2. The newer-side walk from the live row is gap-safe EXCEPT across a
+  #      terminal gap: a trigger-suspended backfill (e.g.
+  #      ensureBlockUserUpdatedAtColumn dropping blocks_row_event_update around
+  #      an UPDATE) can change the live row AFTER its last logged event, with no
+  #      later event to mark full=2. Detect it: the live row is a valid base only
+  #      if it equals the latest event's reconstructed `after`; if they differ, an
+  #      unlogged terminal write happened — the live row is the current truth but
+  #      NOT a base for the latest logged event, so fall to that event's own
+  #      state (or flag). The gap self-heals into a full=2 wall on the block's
+  #      next logged write (its before_json won't match runningState). The §8
+  #      migration marks every stock discontinuity full=2, covering migrated gaps.</code></pre>
 
 <p>
 Complexity: expected walk = distance to the nearest full state on either side
@@ -1064,8 +1072,16 @@ Retention keys on the type.
     can tie within a tx or step under wall-clock skew, a cut by timestamp could
     retain an earlier-<code>id</code> event while deleting a later one — holing a
     survivor's backward walk, the exact corruption this is meant to avoid. The cut
-    is <code>id &lt; (K-th largest id for the block)</code>, served by the
-    <code>(block_id, id)</code> index that slice B adds for this (§3). Because the key
+    is <code>id &lt; max(K-th largest id, latest full=2 wall id)</code>
+    — and that clamp on a wall (§3/§8.1) is load-bearing on upgraded DBs: a
+    discontinuity anchor sitting <em>among</em> the newest K would otherwise let
+    the prune delete the older create/anchor that a pre-wall survivor needs, while
+    §4.3 forbids the live-row walk from crossing the wall to reach it — leaving
+    that survivor unreconstructable. Clamping the cut at the latest wall keeps the
+    wall itself (full state) as the segment's reconstructable base and simply
+    retains fewer than K when a gap sits that recently: correctness over hitting
+    exactly K. Served by the <code>(block_id, id)</code> index slice B adds for
+    this (§3). Because the key
     is the block's <em>type</em> — read from the synced row, classified by code
     present on every device — a panel that synced in from another device is
     recognised identically to a locally-created one. That is exactly the blind
@@ -1697,7 +1713,30 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         patch, so restore and the drift check must diff it against
         <code>after_json</code> to recover the changed-field set — else untouched
         fields get clobbered or counted as drift. Drift check = my (changed)
-        after vs live <code>blocks</code> row.</td>
+        after vs live <code>blocks</code> row. Two more constraints a
+        row_events-backed undo must carry from the live engine, or it corrupts
+        (review findings): <strong>(1) engine metadata is excluded from the
+        un-apply and the drift check.</strong> A compact event's changed-field
+        set includes <code>updatedAt</code> / <code>userUpdatedAt</code> /
+        <code>updatedBy</code> because <code>metadataPatch</code> advances them on
+        every write (<code>txEngine.ts:906-927</code>), but replay deliberately
+        <em>stamps</em> replay-time metadata rather than restoring the old
+        author/time (<code>txEngine.ts:770-772</code>, <code>:846-854</code>).
+        Un-applying those <code>before</code> values verbatim would regress the
+        row version and attribution, and drift-checking them would report drift on
+        any block touched since — so the reader restores content/structure fields
+        and lets the existing replay-stamping own the metadata columns.
+        <strong>(2) Restores are applied parent-first, tombstones last.</strong>
+        <code>applyRaw</code> writes one row at a time and the row-level
+        <code>blocks_parent_not_deleted_check_update</code> trigger sees every
+        intermediate state, so a folded target spanning parent+child rows must
+        replay in <code>replayApplicationOrder</code> (live rows topologically
+        parent-before-child, tombstone/remove targets last —
+        <code>txSnapshots.ts:64-89</code>); id-order alone can restore a child
+        under a still-tombstoned parent and abort the undo (the
+        <code>core.merge</code> case that rule was written for). The reader folds
+        by <code>id</code> for the per-field before/after values, then applies in
+        <code>replayApplicationOrder</code>, not id order.</td>
     </tr>
     <tr>
       <td>Forensics / incident recovery (backlink-wipe class)</td>
@@ -1941,15 +1980,18 @@ from its create with the <code>blocks</code> table ignored entirely: I3/I8,
 excepting the raw <code>UPDATE&nbsp;…&nbsp;SET&nbsp;id</code> case below),
 and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same
-<code>ephemeralHistory</code>-typed blocks (safety oracle: after a sweep, a
-flagged block retains exactly its newest K events — <em>whatever their
-source</em> — no survivor is older than any pruned event, and
-<code>stateAt</code> stays exact for every survivor <em>including compact
-ones</em>, which is the property that proves oldest-prefix deletion is safe
-without full-writes; non-flagged blocks are never touched, and a flagged block
-with a foreign-typed sibling in the same tx does not drag it in. Plus a
-<em>progress</em> oracle, because a never-prunes sweeper passes safety trivially:
-a flagged block with &gt; K events ends the sweep with exactly K). Slice C's I5
+<code>ephemeralHistory</code>-typed blocks — <em>including generated
+<code>full=2</code> discontinuities among the newest K</em> (safety oracle: after
+a sweep, a flagged block retains its newest K events <em>whatever their
+source</em>, the cut never crosses the latest <code>full=2</code> wall (so a
+recent gap retains fewer than K rather than orphaning a pre-wall survivor), no
+survivor is older than any pruned event, and <code>stateAt</code> stays exact for
+every survivor <em>including compact ones</em> — the property that proves
+oldest-prefix deletion is safe without full-writes; non-flagged blocks are never
+touched, and a flagged block with a foreign-typed sibling in the same tx does not
+drag it in. Plus a <em>progress</em> oracle, because a never-prunes sweeper passes
+safety trivially: a flagged block with &gt; K events and no wall among them ends
+the sweep with exactly K). Slice C's I5
 equivalence suite is the same
 generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
