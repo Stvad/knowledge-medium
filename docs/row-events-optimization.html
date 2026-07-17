@@ -331,8 +331,12 @@ future deletion would not return OPFS bytes.
     measurement section; the spike took 5–10 minutes largely paying
     <code>row_events</code> + <code>ps_crud</code> envelopes), and those rows then
     sync down and append events <em>again on every receiving device</em>. Its §12
-    carries the constraint record: the optimization must land before its slice C
-    runs. <a href="#s11">§11</a> states the contract.</li>
+    carries a constraint record written against an earlier draft of this design
+    — that the optimization must land before its slice C runs. <strong>That gate
+    is gone</strong> (revised 2026-07-17): with the skip exemption deleted there
+    is nothing left to plumb, so the two projects are independent and may land in
+    either order. <a href="#s11">§11</a> is the current contract; what #288 gains
+    by waiting is the cheaper per-event encoding, not a prerequisite.</li>
   <li><strong>Every fresh device pays on first sync.</strong> The observer
     materializes each downloaded block into <code>blocks</code>
     (<code>materialize.ts:365</code>), firing the INSERT trigger once per block:
@@ -512,9 +516,19 @@ trigger-recreation ordering):
         to learn membership — and for a <em>hard-deleted</em> block there is no
         live <code>blocks</code> row left to join, so it would miss those rows
         entirely, i.e. exactly the forensics case §10 exists for. Costs one
-        indexed-width string per event and keeps the log queryable per
+        string per event and keeps the log queryable per
         workspace on its own (the "never touch unopened workspaces" rule the
-        rest of the system holds to).</td>
+        rest of the system holds to). <strong>Queryable, not indexed</strong> —
+        deliberately: there is no <code>(workspace_id, id)</code> index and this
+        claim is about <em>isolation</em> (a workspace-scoped read is expressible
+        without joining <code>blocks</code>), not speed. Such a read full-scans
+        the multi-GB table, which is the right trade while §10's readers are
+        forensic and manual — nothing reads <code>row_events</code> at runtime
+        (I6), and an index on the hottest write path in the system is real,
+        permanent write cost paid for a reader that does not exist yet. Revisit
+        when one ships; the server's history table indexes
+        <code>(workspace_id, event_time)</code> because it has actual query
+        traffic.</td>
     </tr>
     <tr>
       <td><code>scope TEXT</code></td>
@@ -1242,6 +1256,20 @@ block with any <code>v IS NULL</code> event:
     all-fields-identical v1 update (the v1 trigger logged no-ops) becomes an
     empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
     timing.</li>
+  <li><strong>Stamp <code>workspace_id</code> while rewriting</strong> — from
+    the v1 snapshot's own <code>workspaceId</code> key, which every v1 event
+    carries on both sides by construction (§3). This is not optional bookkeeping:
+    <code>ALTER TABLE … ADD COLUMN workspace_id</code> initialises the entire v1
+    stock to NULL, so without this step the column is populated for new events
+    only, and a workspace-scoped recovery over the pre-migration era — the exact
+    era most likely to need one — would find nothing, reintroducing the problem
+    the column exists to solve. The rewriter already holds the full snapshot in
+    hand, so the stamp is free; it must land <em>before</em> the row's
+    <code>v</code> flips to 2, since after the flip a compacted event may no
+    longer carry <code>workspaceId</code> in its payload to recover it from.
+    Rows the rewriter never reaches keep <code>workspace_id IS NULL</code>,
+    which readers treat as "unknown, fall back to the payload/join" rather than
+    as "no workspace".</li>
   <li>Stamp <code>scope</code> while rewriting: any v1 event whose
     <code>tx_id</code> joins <code>command_events</code> backfills scope from
     it (<code>command_events</code> has carried <code>scope</code> NOT NULL
@@ -1474,9 +1502,22 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         that does not touch <code>parentId</code>, so a parentId-transition-only
         builder would leave a deleted block enumerated forever — it keys on the
         <code>deleted</code> flag and create/hard-delete boundaries too. Every
-        block has a create event to open its interval from (§5 revised — with no
-        skip exemption the index is fully log-derivable and needs no live-
-        <code>blocks</code> crutch; <a href="#invariants">I8</a>). Per-member
+        block <em>written since the log era</em> has a create event to open its
+        interval from (§5 revised — with no skip exemption the index is fully
+        log-derivable for that stock and needs no live-<code>blocks</code>
+        crutch; <a href="#invariants">I8</a>). <strong>Upgraded DBs are the
+        exception, and the builder must not read the line above
+        literally:</strong> blocks predating <code>row_events</code>, or sitting
+        behind a historical gap, have no create event at all — §8.1's <em>no
+        <code>runningState</code></em> case. A builder that opened intervals only
+        on create/restore would drop those blocks from subtree-at-time results
+        until their first logged parent move, or forever if they never move. So
+        it opens an interval on <em>the first event of a block's surviving
+        history</em> — which §8.1 guarantees is full or discontinuity-anchored,
+        i.e. carries the parent edge outright. This is the second I8 exception
+        (historical gaps) showing up as a concrete reader rule, not a new
+        crutch: the boundary comes from the log, not from
+        <code>blocks</code>. Per-member
         state is §4.3 <code>stateAt</code>; deleted-at-T members reconstruct fine
         (delete events carry full before). Per-block time-seek: the retained
         <code>(block_id, created_at DESC)</code> index (§3), read
