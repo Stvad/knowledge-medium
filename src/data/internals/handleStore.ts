@@ -1099,8 +1099,8 @@ export const snapshotsToChangeNotification = (
     // the VISIBLE child set default-excludes recognized field rows
     // (PR #288 §9), so a row becoming/ceasing to be a field row changes
     // the parent's visible membership even though the tree edge didn't.
-    // Un-flipped workspaces get a rare spurious parent re-resolve
-    // (content edits to/from whole-block references) — harmless.
+    // Un-flipped workspaces get a rare spurious re-resolve (content edits
+    // to/from whole-block references) — harmless.
     else if (
       beforeLive
       && afterLive
@@ -1108,6 +1108,13 @@ export const snapshotsToChangeNotification = (
       && (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
     ) {
       parentIds.add(beforeParent)
+      // `children(id)` ALSO changes, not just the parent's: `id` flipping
+      // field-row-ness toggles whether its OWN children are property-subtree
+      // interior — a child that resolves to a definition is EXCLUDED from
+      // `children(id)` while `id` is a normal row but SHOWN as a value once
+      // `id` is a field row (§9 positional rule, PR #386 review). A handle
+      // already listing `children(id)` must re-resolve too.
+      parentIds.add(id)
     }
     // Pure field change with same parent_id and same liveness: rowId
     // alone covers it. No parent-edge entry — `repo.children(id)`

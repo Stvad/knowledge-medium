@@ -140,6 +140,20 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.parentIds!)).toEqual(['p'])
   })
 
+  it('field-row flip (referenceTargetId change): adds the parent AND the row itself', () => {
+    // Two handles must re-resolve: the PARENT's visible children (the row
+    // appears/disappears as a field row) and `children(row)` itself (the row's
+    // own children flip between property-subtree interior and visible) — §9.
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', workspaceId: 'w', referenceTargetId: null},
+        after: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1'},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
+  })
+
   it('pure content edit: row dep only, no parent-edge', () => {
     const map = new Map<string, ChangeSnapshot>([
       ['c', {
