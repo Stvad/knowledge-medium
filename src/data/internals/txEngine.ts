@@ -390,9 +390,15 @@ export class TxImpl implements Tx {
    *  check only — it deliberately doesn't re-walk ancestors' content. */
   private isProspectiveFieldRow(row: BlockData): boolean {
     if (row.parentId === null) return false
-    // Field rows address their definition BY ID (`((fieldId))`, §7). A
-    // `[[name]]` row is plain page content and never becomes a field row, so
-    // only an id block-ref to a definition is prospective here.
+    // A field row is any WHOLE-BLOCK reference that resolves to a definition
+    // — form-agnostic (§7). `((fieldId))` resolves textually here (machinery
+    // mints that form); a `[[name]]` whole-block ref ALSO becomes a field row
+    // once a definition is name-resolvable (auto-claim, a later change), but
+    // resolving `[[name]]` needs an async alias lookup this sync same-tx probe
+    // can't do — the one spot that slots in with auto-claim. Today nothing
+    // `[[name]]`-resolves to a definition, so `((id))`-only is complete;
+    // post-derive recognition (`isPropertyFieldInstance`) is already
+    // form-agnostic via the column.
     const exact = parseExactReferenceBlockContent(row.content)
     if (exact?.kind !== 'blockRef') return false
     return this.isFieldDefinitionCheckerFor(row.workspaceId)(exact.id)

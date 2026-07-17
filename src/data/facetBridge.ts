@@ -388,13 +388,15 @@ export class FacetBridge {
               propertyDefinitions.workspaceId, definitionChanges,
             )
           }
-          // No property-name → reference-target rederive here: field rows
-          // address their definition BY ID (`((fieldId))`, §7), so a
-          // definition add/rename never changes what any `[[name]]` row
-          // resolves to. `[[status]]` is plain page resolution and is not
-          // special-cased for properties. Generic alias late-binding (a
-          // `[[Foo]]` row reclaiming when page Foo is later created) is still
-          // handled where aliases are actually minted (referencesProcessor).
+          // No property-SPECIFIC reference-target rederive here. Recognition
+          // is form-agnostic (a whole-block reference that resolves to a
+          // definition, §7) and resolution uses the ONE normal alias policy,
+          // so a definition add/rename needs no bespoke property rederive. If
+          // auto-claim (a later change) makes a definition name-resolvable,
+          // that alias claim rides the normal alias-creation path, whose
+          // generic late-binding rederive (referencesProcessor) already
+          // repairs `[[name]]` rows — exactly like a `[[Foo]]` row reclaiming
+          // when page Foo is created.
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
           this.propertySchemasListeners.notify()

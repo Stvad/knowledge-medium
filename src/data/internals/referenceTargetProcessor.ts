@@ -10,10 +10,14 @@
  * same transaction (`skipMetadata`: bumps the sync clock, not "last edited").
  * Detection everywhere downstream is a column read, never a content parse.
  *
- * Property field rows address their definition BY ID (`((fieldId))`, §7), so
- * they resolve on the textual `blockRef` branch — there is no property-name
- * resolution tier and no deferred resolution. `[[alias]]` stays plain page
- * resolution; it is never special-cased for properties.
+ * Property field rows currently address their definition BY ID (`((fieldId))`,
+ * §7), resolving on the textual `blockRef` branch — no property-name tier, no
+ * deferred resolution. `[[alias]]` resolution is the ONE normal alias policy,
+ * never special-cased for properties: it resolves to whatever claims the alias
+ * — today a page; a definition too, once auto-claim (a later change) makes
+ * definitions name-resolvable. Recognition keys off the resolved TARGET, not
+ * the bracket form, so a whole-block `[[name]]` becomes a field row then with
+ * no change here.
  *
  * The column is local-only and derived per device: sync arrival re-derives
  * it in the materializer seam (`deriveReferenceTargetForArrival`), and undo
