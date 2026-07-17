@@ -690,8 +690,12 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
 
 <pre><code>stateAt(blockId, eventId):                # row state just after event E
   E = event(eventId)
+  if E.kind is 'delete':
+      return ABSENT                        # state just after a hard delete is a tombstone.
+                                           # E.before_json is NOT this state — it is only the
+                                           # newer-side base for reconstructing OLDER events.
   if E.v is NULL or E.full:
-      return per-kind full side           # create/anchor: after; delete: before
+      return E.after                       # create / anchor: the full after snapshot
 
   # nearest full state on EITHER side, whichever is closer:
   #   older side: newest event ≤ E with a full after (create, anchor)
@@ -702,7 +706,14 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
   #
   # The newer side ALWAYS terminates: a live block ends at its blocks row,
   # a purged block at its delete event (full before). ChainBroken can only
-  # mean corruption inside the log — see the failure bound.</code></pre>
+  # mean corruption inside the log — see the failure bound.
+  #
+  # Gap safety: a base is valid only if NO unlogged gap (a §5 skip, a
+  # trigger-suspended window) lies between it and E — crossing one splices
+  # stale values for fields changed inside the gap. The newer-side walk from
+  # the live row is always gap-safe; prefer it, and trust an older-side base
+  # only back to the nearest full state with no interposed gap. The §8
+  # migration guarantees this for stock by anchoring at every discontinuity.</code></pre>
 
 <p>
 Complexity: expected walk = distance to the nearest full state on either side
@@ -831,7 +842,15 @@ machinery misbehaves. Options considered:
 
 <p>
 Add a nullable <code>history_mode TEXT</code> column to <code>tx_context</code>
-(<code>clientSchema.ts:38-48</code>), set by the commit pipeline from a new
+(<code>clientSchema.ts:38-48</code>) — on an existing device this is an
+idempotent <code>ALTER TABLE</code> ensure-migration ordered before any writer
+touches it, <em>not</em> merely an edit to the <code>CREATE TABLE IF NOT
+EXISTS</code> body (which never runs once the table exists);
+<code>ensureUndoGroupIdColumns</code> already ALTERs <code>tx_context</code> for
+<code>group_id</code> and is the exact precedent (the same applies to
+<code>apply_kind</code>, §6.2 — both land in that one ensure-migration, or
+slice B's first <code>UPDATE tx_context SET history_mode = ?</code> hits
+<code>no such column</code>). Set by the commit pipeline from a new
 optional <code>RepoTxOptions.historyMode</code> (<code>tx.ts:269-277</code>) in
 step 1 (<code>commitPipeline.ts:261-265</code>) and cleared with the rest in
 step 5 (<code>:375-383</code>, rollback-safe inside the tx). One value:
@@ -938,11 +957,17 @@ populated per tx (<code>commitPipeline.ts:263-264</code>).
     <code>PendingIdleJobs</code> machinery as §8) prunes, per block, from the
     block's <em>oldest contiguous all-local-ui prefix only</em>: delete
     local-ui events with <code>id &lt; min(id of the K-th-newest local-ui
-    event, id of the block's oldest surviving non-local-ui event)</code> —
-    where a missing second operand (an all-local-ui block, the common case)
-    means +∞, <em>not</em> SQL's <code>min(x, NULL) = NULL</code>: the naive
-    transcription silently no-ops on exactly the blocks the sweeper exists
-    for (the §6.2 NULL-safety review rule applies to this predicate too).
+    event, id of the block's oldest surviving non-local-ui event)</code>. The
+    two absent-operand cases take <em>different</em> sentinels, and conflating
+    them is the trap: a missing <em>second</em> operand (an all-local-ui block,
+    the common case) means +∞ — <em>not</em> SQL's
+    <code>min(x, NULL) = NULL</code>, which would silently no-op on exactly the
+    blocks the sweeper exists for; a missing <em>first</em> operand (≤ K
+    local-ui events, so there is no K-th-newest — the block has not exceeded the
+    bound) means the cut is 0, i.e. delete nothing. Normalizing both to +∞ would
+    prune a short chain down to its oldest non-local-ui event before it ever
+    exceeded K. (The §6.2 NULL-safety review rule applies to this predicate; the
+    ≤ K boundary is an explicit fuzz case.)
     Not in-trigger: pruning from the trigger would put a read+DELETE on the
     hottest write path (rejected, §15). The bound is eventual, enforced at
     idle — bursts between sweeps are small and compact.</li>
@@ -1097,7 +1122,9 @@ distinguishes sync-apply from the <em>other</em> NULL-source writers (the raw
 path, §2.1) — now purely for truthful attribution, no longer load-bearing for
 any gate: the materializer's Phase-2 bracket, which today sets
 <code>source = NULL</code> (<code>materialize.ts:344</code>), additionally sets
-a new nullable <code>tx_context.apply_kind = 'sync'</code>. Unlike today's
+a new nullable <code>tx_context.apply_kind</code> column (added by the same
+idempotent ensure-ALTER as <code>history_mode</code>, §5.1), set to
+<code>'sync'</code>. Unlike today's
 bracket — which only <em>opens</em> (it asserts <code>source = NULL</code> and
 relies on NULL being the resting state) — the clear must be explicit: reset
 <code>apply_kind = NULL</code> as the last statement of the same write
@@ -1298,7 +1325,16 @@ block with any <code>v IS NULL</code> event:
     job is deliberately re-armed; the marker-gated one-shot does not re-scan
     on its own); and during a downgrade window the v1 bodies carry
     no <code>history_mode</code> gate, no identical-update skip, and no
-    scope stamp — see the G1 caveat in §11.</li>
+    scope stamp — see the G1 caveat in §11. G1's <code>sqlite_master</code>
+    probe guards only the #288 backfill's own batches; ordinary organic and
+    sync writes from a stale tab are <em>not</em> guarded and will log as
+    ungated <code>v IS NULL</code> full rows until that tab reboots on new
+    code. This is owned, not fixed: it stays sound (v-NULL reads as full and
+    reconstruction never assumes a cadence), the only cost is those rows miss
+    the skip/scope semantics until a later recompaction, and the small fleet
+    bounds the exposure. A trigger-body version guard — refuse to install
+    older bodies over newer, keyed on a schema-version marker — is the
+    hardening if this ever bites in practice.</li>
   <li><strong>Ordering with the ALTERs:</strong> the column adds run in
     <code>initializePowerSyncDb</code> before the <code>CLIENT_SCHEMA_STATEMENTS</code>
     loop recreates triggers referencing them — same constraint and same slot as
@@ -1423,15 +1459,29 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         there is no childIds column), so child-set-at-T is an inverse question
         the per-block log answers but cannot enumerate cheaply. The format
         keeps it answerable: every parentId transition is logged
-        column-granularly, and in v2 a parent move is a compact event whose key
-        set contains <code>parentId</code> — cheap to identify without parsing
-        full snapshots. Enumeration needs a derived <em>parent-edge index</em>
-        ((parent_id, block_id, event-id interval) — fully rebuildable from the
-        log, built lazily when the history UI ships; explicitly out of scope
-        for these slices). Per-member state is §4.3 <code>stateAt</code>;
-        deleted-at-T members reconstruct fine (delete events carry full
-        before). Per-block time-seek: the retained
-        <code>(block_id, created_at DESC)</code> index (§3 — bisecting
+        column-granularly. For a compact event (<code>full=0</code>) the key set
+        tells you cheaply whether <code>parentId</code> moved; for a
+        <code>full=1</code> event (sampled or migration anchor, create) both
+        sides are complete snapshots, so the builder must <em>diff</em>
+        <code>before_json.parentId</code> against <code>after_json.parentId</code>
+        rather than read key presence — otherwise every anchor reads as a move
+        and real moves that landed on an anchor are missed. Enumeration needs a
+        derived <em>parent-edge index</em> ((parent_id, block_id, event-id
+        interval) — fully rebuildable from the log, built lazily when the history
+        UI ships; explicitly out of scope for these slices). The interval must
+        also close on delete and reopen on create/restore: <code>tx.delete</code>
+        is a <code>deleted = 1</code> UPDATE (<code>kind='soft-delete'</code>)
+        that does not touch <code>parentId</code>, so a parentId-transition-only
+        builder would leave a deleted block enumerated forever — it keys on the
+        <code>deleted</code> flag and create/hard-delete boundaries too. A
+        <em>skip-created</em> block (§5 exemption) has no create event to open an
+        interval from; until its first logged move it is enumerated from the live
+        <code>blocks</code> table (which still holds it), not the log. Per-member
+        state is §4.3 <code>stateAt</code>; deleted-at-T members reconstruct fine
+        (delete events carry full before). Per-block time-seek: the retained
+        <code>(block_id, created_at DESC)</code> index (§3), read
+        <code>ORDER BY created_at DESC, id DESC</code> so same-millisecond
+        same-tx events resolve to the latest by <code>id</code> (bisecting
         <code>created_at</code> over the id index was considered and rejected:
         created_at is not reliably monotone in id under clock steps).</td>
     </tr>
@@ -1441,9 +1491,19 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
       <td>My tx's writes (<code>tx_id</code>, <code>group_id</code>); the state
         to restore to; detection that someone else changed the field since</td>
       <td>My tx's events carry their own before values (§4.1) — restore =
-        un-apply my events' <code>before_json</code> patches directly; no
+        un-apply, per block in the tx, that block's own events'
+        <code>before_json</code> (one restore per <code>block_id</code>, from its
+        own earliest event in the tx — not a single "tx's first event"); no
         reconstruction at all, including for the first edit after an unlogged
-        gap. Drift check = my after vs live <code>blocks</code> row.</td>
+        gap. Two per-kind carve-outs: a <code>create</code>
+        (<code>before_json = NULL</code>) undoes to <em>absence</em>
+        (soft-delete/tombstone), with redo re-applying <code>after_json</code>;
+        and when the anchor coin made an update <code>full=1</code>,
+        <code>before_json</code> is a full snapshot rather than a changed-field
+        patch, so restore and the drift check must diff it against
+        <code>after_json</code> to recover the changed-field set — else untouched
+        fields get clobbered or counted as drift. Drift check = my (changed)
+        after vs live <code>blocks</code> row.</td>
     </tr>
     <tr>
       <td>Forensics / incident recovery (backlink-wipe class)</td>
@@ -1510,10 +1570,13 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
 
 <p>
 Measured live 2026-07-15 via the agent bridge, on two client instances of the
-same ~345k-block workspace. Byte figures are payload bytes
-(<code>length(before_json)+length(after_json)</code>); files are bigger — row
-and index B-trees add ~15–20%, and <code>blocks</code>/<code>blocks_synced</code>
-share the file.
+same ~345k-block workspace. Byte figures are payload bytes —
+<code>coalesce(length(before_json),0)+coalesce(length(after_json),0)</code>; the
+bare <code>length(a)+length(b)</code> is NULL for creates and hard deletes
+(one NULL side each) and so silently drops exactly the full-by-nature rows that
+dominate the stock, so the <code>coalesce</code> is load-bearing in every
+sizing/verification query here. Files are bigger — row and index B-trees add
+~15–20%, and <code>blocks</code>/<code>blocks_synced</code> share the file.
 </p>
 
 <div class="table-scroll">
