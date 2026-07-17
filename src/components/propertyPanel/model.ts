@@ -17,6 +17,7 @@ import {
   resolveEditorOverride,
   type PropertyDefinitionRegistrySnapshot,
 } from '@/data/propertyDefinitionRegistry'
+import type { TypeDefinitionRegistrySnapshot } from '@/data/typeDefinitionRegistry'
 import {
   isPropertyPanelHiddenProperty,
   isPropertyPanelReadOnlyProperty,
@@ -228,6 +229,7 @@ export const buildPropertyPanelModel = (args: {
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
   propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
+  typeDefinitions: TypeDefinitionRegistrySnapshot | null
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   presets: ReadonlyMap<string, AnyJoinedValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
@@ -237,9 +239,13 @@ export const buildPropertyPanelModel = (args: {
   // A materialized seed definition block's whole bag is code-owned. The
   // registry already parsed this block's provenance (seedKey present iff it's
   // a valid seed), so lock every row of its panel — not just the provenance
-  // markers `isPropertyPanelReadOnlyProperty` catches by name.
+  // markers `isPropertyPanelReadOnlyProperty` catches by name. Check BOTH
+  // registries: property-seed backing blocks are keyed in the property registry
+  // by field id; type-seed (`block-type`) backing blocks are keyed in the type
+  // registry by block id.
   const blockIsSeededDefinition =
-    args.propertyDefinitions?.definitionsByFieldId.get(args.blockId)?.seedKey !== undefined
+    args.propertyDefinitions?.definitionsByFieldId.get(args.blockId)?.seedKey !== undefined ||
+    args.typeDefinitions?.definitionsByBlockId.get(args.blockId)?.seedKey !== undefined
   const {visibleProperties, hiddenProperties} = partitionProperties(
     args.properties,
     args.schemas,
