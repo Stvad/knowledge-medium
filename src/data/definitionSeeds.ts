@@ -387,33 +387,44 @@ export const materializePropertySeeds = async (
   return {created, restored, skippedReadOnly: false}
 }
 
-/** Keep the first seed per membership `id`, warning on a collision. Two seeds
- * with different keys but the same `id` are an authoring error: they hash to
- * DIFFERENT deterministic block ids (unique keys), so `assertUniqueSeedKeys`
- * doesn't catch them, yet both would materialize a backing block claiming the
- * same `block-type:type-id` — a phantom loser row `buildTypeDefinitionRegistry`
- * then drops from the runtime map (`seedsByKey` retains it; the id-dedup happens
- * separately in `typesById` synthesis). Resolve to the registry's SAME keep-first
- * winner here so the loser is never persisted. Drop-and-warn (not throw) so one
- * malformed dynamic contribution can't abort the shared pass — matching the
- * property registry's name-collision handling. */
-const dedupeTypeSeedsById = (
+/** Exclude EVERY seed whose membership `id` is claimed by more than one seed in
+ * the batch (returning the uncontested rest). Two seeds sharing an `id` are an
+ * authoring error that `assertUniqueSeedKeys` can't catch — they carry DIFFERENT
+ * keys, so they hash to different deterministic block ids — yet both would
+ * materialize a `block-type` block claiming the same `block-type:type-id`.
+ *
+ * Materializing even a keep-first "winner" is unsafe, because the winner is
+ * contribution-order-dependent: a reorder across runs (plugin load order, a
+ * dynamic-extension change) would materialize a DIFFERENT backing block, and
+ * this create/restore-only pass never deletes the old one. The orphaned row's
+ * `/type/` key is no longer the active winner, so `buildTypeDefinitionRegistry`
+ * republishes it as a phantom, user-selectable block-id type (the retired-key
+ * demotion branch). So we back NONE of a contested id: its `TypeContribution` is
+ * still synthesized from the declaration (the type isn't lost — only
+ * `getTypeBlockId` stays undefined until the collision is resolved), and no
+ * backing row is ever written to orphan. Skip-and-warn, not throw, so one bad
+ * dynamic contribution can't abort materialization of the other seeds. */
+const uncontestedTypeSeeds = (
   seeds: readonly TypeSeedDeclaration[],
 ): readonly TypeSeedDeclaration[] => {
-  const byId = new Map<string, TypeSeedDeclaration>()
+  const countById = new Map<string, number>()
+  for (const seed of seeds) countById.set(seed.id, (countById.get(seed.id) ?? 0) + 1)
+  const warned = new Set<string>()
+  const kept: TypeSeedDeclaration[] = []
   for (const seed of seeds) {
-    const prior = byId.get(seed.id)
-    if (prior) {
-      console.warn(
-        `[materializeTypeSeeds] duplicate type seed id ${JSON.stringify(seed.id)} ` +
-        `(keys ${JSON.stringify(prior.seedKey)} + ${JSON.stringify(seed.seedKey)}); ` +
-        'keeping first, not materializing the collider',
-      )
+    if ((countById.get(seed.id) ?? 0) > 1) {
+      if (!warned.has(seed.id)) {
+        console.warn(
+          `[materializeTypeSeeds] duplicate type seed id ${JSON.stringify(seed.id)}; ` +
+          'not materializing any of its declarations until the collision is resolved',
+        )
+        warned.add(seed.id)
+      }
       continue
     }
-    byId.set(seed.id, seed)
+    kept.push(seed)
   }
-  return [...byId.values()]
+  return kept
 }
 
 /** Isolated create/restore-only TYPE seed pass — the exact structural mirror of
@@ -434,9 +445,11 @@ export const materializeTypeSeeds = async (
   assertUniqueSeedKeys('materializeTypeSeeds', seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
   if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
-  // Resolve membership-id collisions to keep-first winners BEFORE any write, so a
-  // dup-id loser never persists a phantom backing block (Codex P2).
-  const materializable = dedupeTypeSeedsById(seeds)
+  // Never write a backing row for a contested membership id — materializing an
+  // order-dependent winner would orphan a phantom `/type/` row across a reorder
+  // or an authoring fix (Codex P2). Materialize only the uncontested seeds.
+  const materializable = uncontestedTypeSeeds(seeds)
+  if (materializable.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
 
   const ids = materializable.map(seed => typeDefinitionBlockId(workspaceId, seed.seedKey))
   const placeholders = ids.map(() => '?').join(', ')

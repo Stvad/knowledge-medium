@@ -856,30 +856,36 @@ describe('type definition materialization', () => {
     expect(repo.typeDefinitions?.blockIdByTypeId.get(typeSeed.id)).toBe(blockId)
   })
 
-  it('drops a duplicate membership-id seed (keep-first), never persisting the phantom loser', async () => {
-    // Two seeds, different keys (→ different deterministic ids, so
-    // assertUniqueSeedKeys passes) but the SAME `id`. Without the id-dedup both
-    // would materialize a backing block claiming the same block-type:type-id;
-    // the registry drops one from the runtime map but the extra row would already
-    // be persisted under Types. Only the keep-first winner may materialize.
+  it('materializes NO seed of a contested membership id, but still materializes the uncontested ones', async () => {
+    // typeSeed + twin share an `id` but carry different keys (→ different
+    // deterministic ids, so assertUniqueSeedKeys passes). Materializing an
+    // order-dependent keep-first winner would orphan a phantom `/type/` row on a
+    // reorder / authoring fix (this create/restore-only pass never deletes), so
+    // NEITHER contested declaration is backed. A third, uncontested seed in the
+    // same batch must still materialize — one bad contribution can't abort the pass.
     const twin = seedType({
-      seedKey: 'system:test/type/widget-twin',
-      revision: 1,
-      id: typeSeed.id,
-      label: 'Widget Twin',
+      seedKey: 'system:test/type/widget-twin', revision: 1, id: typeSeed.id, label: 'Widget Twin',
+    })
+    const other = seedType({
+      seedKey: 'system:test/type/gadget', revision: 1, id: 'test-gadget', label: 'Gadget',
     })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      expect(await materializeTypeSeeds(repo, WS, [typeSeed, twin]))
+      expect(await materializeTypeSeeds(repo, WS, [typeSeed, twin, other]))
         .toEqual({created: 1, restored: 0, skippedReadOnly: false})
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate type seed id'))
     } finally {
       warn.mockRestore()
     }
-    expect(repo.block(typeDefinitionBlockId(WS, typeSeed.seedKey)).peek()).toBeTruthy()
+    // No backing row for either contested declaration...
+    expect(await sharedDb.db.getOptional(
+      'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
+    )).toBeNull()
     expect(await sharedDb.db.getOptional(
       'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, twin.seedKey)],
     )).toBeNull()
+    // ...but the uncontested seed materialized.
+    expect(repo.block(typeDefinitionBlockId(WS, other.seedKey)).peek()).toBeTruthy()
   })
 
   it('rejects a user-scope create that forges a provenance-valid /type/ seed row (tx guard is grammar-agnostic)', async () => {
