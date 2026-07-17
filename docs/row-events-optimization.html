@@ -1540,10 +1540,11 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
     <tr>
       <td>Drift-tolerant undo (<code>undoManager.ts:26-28</code>,
         <code>user.ts:17-21</code>)</td>
-      <td>My tx's writes (<code>tx_id</code>, <code>group_id</code>); the state
-        to restore to; detection that someone else changed the field since</td>
-      <td>My tx's events carry their own before values (§4.1) — restore =
-        un-apply, per block in the tx, that block's own events'
+      <td>My action's writes (<code>tx_id</code>, plus <code>group_id</code> for
+        the contiguous grouped run); the state to restore to; detection that
+        someone else changed the field since</td>
+      <td>My events carry their own before values (§4.1) — restore =
+        un-apply, per block, that block's own events'
         <code>before_json</code>; no reconstruction at all, including for the
         first edit after an unlogged gap. <em>Fold, don't pick</em>: one tx can
         write the same block more than once and touch different fields each time
@@ -1553,11 +1554,33 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         statement's fields — restoring from it would leave the rest of the tx
         applied. Fold all of the block's events in <code>id</code> order, taking
         each field's <em>first</em> before and its <em>final</em> after; that
-        folded pair is the restore target and the drift baseline. Two per-kind
-        carve-outs: a <code>create</code>
+        folded pair is the restore target and the drift baseline.
+        <strong>The fold unit is the undo group, not the tx.</strong>
+        <code>repo.undoGroup</code> spans several <code>repo.tx</code> calls, and
+        the live manager already merges them into one entry by exactly this rule
+        — earliest before, latest after, per block
+        (<code>undoManager.ts:84-90</code>, issue #306) — so a tx-scoped fold
+        would split one user-perceived action into several undos. Collect via
+        <code>group_id</code>, <strong>but only the contiguous run</strong>:
+        merging targets the top-of-stack entry only
+        (<code>undoManager.ts:107</code>), so a foreign tx landing mid-group
+        <em>splits</em> the group rather than letting undo reorder history —
+        leaving two stack entries that share one <code>group_id</code>. A reader
+        that took every event <code>WHERE group_id = ?</code> would re-merge
+        across that split and swallow the interloper's neighbours into one undo;
+        stop the fold at the first foreign <code>tx_id</code>.
+        Two per-kind carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
-        (soft-delete/tombstone), with redo re-applying <code>after_json</code>;
-        and when the anchor coin made an update <code>full=1</code>,
+        (soft-delete/tombstone), with redo re-applying <strong>the folded final
+        after state — not the create's own <code>after_json</code></strong>: a tx
+        that creates a block and then writes it again (QuickFind's create-page
+        does <code>tx.create</code> then <code>repo.addTypeInTx</code>,
+        <code>QuickFind.tsx:534-543</code>) leaves the create's snapshot holding
+        only the bare row, so redoing from it would silently drop the type and
+        aliases the same action added — the fold rule above already yields the
+        right state, and the carve-out is only about <em>where undo stops</em>
+        (absence), never about which snapshot redo replays.
+        And when the anchor coin made an update <code>full=1</code>,
         <code>before_json</code> is a full snapshot rather than a changed-field
         patch, so restore and the drift check must diff it against
         <code>after_json</code> to recover the changed-field set — else untouched
