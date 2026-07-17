@@ -400,6 +400,25 @@
   visibility policy (§9); search/recents filtering joins the invisibility half (B1);
   the <code>workspaces</code> column ships with the local-ALTER + NULL-fallback
   treatment (B1).<br>
+  <strong>Re-grounded 2026-07-17 against the slices-A/B implementation
+  (PR #386)</strong> — the implementation deliberately diverged on load-bearing
+  points and this doc now reflects the as-built design: field rows address their
+  definition <strong>by id</strong> (<code>((fieldId))</code> content; the two-tier
+  name resolution, rename-retitle, derive-deferral, and name-validity-as-identity
+  are all deleted — §7); recognition is <em>form-agnostic</em> and
+  <code>[[name]]</code> is never property-special-cased (§9); traversal polarity is
+  inverted — everything-by-default, the visible view opts in via
+  <code>hidePropertyChildren</code> (§9, B1); renames are content-stable (cell
+  re-key only, B2); the flip trigger is forward-only for everyone and refuses e2ee
+  workspaces, with rollback as a deliberate trigger-drop migration (§6); the
+  cross-workspace paste rules are satisfied by construction (markdown-mediated) until
+  a structural move exists (§8, §9); the catch-up sweep is per-workspace-open;
+  <strong>auto-claim</strong> (definitions claim their name as an alias, the types
+  precedent) is a named follow-up slice carrying the relocated
+  retroactive-reinterpretation triage and the "copy resolves references" markdown
+  follow-up (§11); residual flip-gated gaps are tracked in issue #389. Slices A–B are
+  <em>implemented</em> (dormant at <code>'cell'</code>); code + tests on PR #386 are
+  authoritative over §5/§7/§9/§11 mechanism text.<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -415,9 +434,10 @@
   classifiability machinery is superseded by the workspace-level cutover, and the
   two-phase bootstrap's hard half dissolves into a pure computation. Types are <em>not</em> yet
   seeded (unification slice C pending) — nothing here depends on them.
-  <strong>Last verified against code:</strong> 2026-07-15 (initial rewrite 2026-07-01
+  <strong>Last verified against code:</strong> 2026-07-17 (initial rewrite 2026-07-01
   against <code>8a6f22cd</code>; spot-verifications through 07-09; unification
-  re-ground 07-15 against post-#364 master).
+  re-ground 07-15 against post-#364 master; implementation re-ground 07-17 against
+  PR #386 at <code>7e878b6e</code>).
 </aside>
 
 <aside class="reading-guide">
@@ -460,10 +480,11 @@
       category: partial migration would keep the column (and its sync/RPC/e2ee
       surface) alive forever. The flip lever is a per-workspace column, not a
       per-schema flag (<a href="#s6">§6</a>).</li>
-    <li>Field-row shape: <code>[[Schema Name]]</code> content + derived <em>local</em>
-      <code>reference_target_id</code> — never synced; every device derives it from
-      content + the synced name map, which also erases the column's e2ee fork
-      (<a href="#s7">§7</a>, <a href="#s8">§8</a>).</li>
+    <li>Field-row shape: <code>((fieldId))</code> content + derived <em>local</em>
+      <code>reference_target_id</code> — never synced, derived <em>purely
+      textually</em> on every device (no name-resolution tier), which also erases
+      the column's e2ee fork; <code>[[name]]</code> becomes a deferred affordance
+      via auto-claim (<a href="#s7">§7</a>, <a href="#s8">§8</a>).</li>
     <li><code>setProperty</code> dual-writes children and cell in one tx; the
       materialize/project processor pair is permanent convergence machinery
       (<a href="#s5">§5</a>).</li>
@@ -574,9 +595,12 @@ are themselves block references. Same primitive everywhere.
 
 <ul>
   <li>
-    <strong>Field-row content is <code>[[Schema Name]]</code>, not
-    <code>((schema-id))</code>.</strong> The spike made this call and it's the right one —
-    see §7 for the tradeoff. Detection never parses content at read sites; it reads the
+    <strong>Field-row content is <code>((fieldId))</code> — the definition addressed
+    by id.</strong> (The spike used <code>[[Schema Name]]</code>; the implementation
+    reversed that — §7 has the argument. Fig. 1's <code>[[priority]]</code> labels show
+    the <em>rendered</em> tree: a block-ref renders its target's label, so the display
+    is the name even though the stored content is the id.) Detection never parses
+    content at read sites; it reads the
     <code>reference_target_id</code> column, derived in the same transaction by a
     processor.
   </li>
@@ -786,28 +810,30 @@ The same-tx processor registry this relies on
 seam rev 1 hoped for.
 </p>
 
-<h2 id="s5">5. Mechanism — as built in the spike</h2>
+<h2 id="s5">5. Mechanism — as built</h2>
 
 <p>
-Three same-tx processors plus a dual-writing <code>tx.setProperty</code>. All of this
-exists on the spike branch with tests; names below are the real ones.
+Three same-tx processors plus a dual-writing <code>tx.setProperty</code>. Originally
+described from the spike branch; slices A–B landed this machinery on the implementation
+branch (PR #386, with the §7 id-content divergence folded in below) — code + tests
+there are authoritative.
 </p>
 
 <dl>
   <dt><strong><code>core.deriveReferenceTarget</code></strong> (permanent)</dt>
   <dd>
     Watches <code>content</code>. When a row's content trims to exactly one reference
-    token (<code>((uuid))</code> or <code>[[alias]]</code>), resolves it — schema-name
-    map first, then the tx-aware alias lookup — and writes the target id into
-    <code>reference_target_id</code> in the same transaction. The spike used
-    <code>skipMetadata</code> for that write; under the local-column design (§11 A)
-    that is no longer enough (PR-review P2): <code>skipMetadata</code> still bumps
-    <code>updated_at</code> and the upload trigger PATCHes it
-    (<code>txEngine.metadataPatch</code>, pinned by its test) — a metadata bump from
-    a never-synced column would enqueue no-op uploads and make untouched rows look
-    newer than later server snapshots. Every derive write — processor, arrival
-    stamp, initial-sync pass — is a <em>column-only raw update</em>, no metadata,
-    no upload; a derive riding a real content edit inherits that edit's metadata.
+    token, resolves it and writes the target id into
+    <code>reference_target_id</code> in the same transaction. As shipped (PR #386):
+    <code>((id))</code> resolves <em>purely textually</em> — the id is the content —
+    and <code>[[alias]]</code> resolves through the one tx-aware generic alias
+    lookup; there is no schema-name tier (§7). Write metadata splits by path
+    (PR-review P2, adapted to the as-built): the same-tx processor uses
+    <code>skipMetadata</code> — the row is already uploading with the content edit
+    that triggered it, at the cost of one extra <code>updated_at</code> in that PATCH
+    — while the bulk paths (the per-open catch-up sweep, derive-at-arrival) write the
+    column raw (CAS, no <code>updated_at</code> advance, no uploads), which is where
+    the no-op-upload / false-recency hazard actually lived.
     Detection everywhere downstream is a column read, never a content parse.
   </dd>
 
@@ -822,8 +848,8 @@ exists on the spike branch with tests; names below are the real ones.
     same-tx pass is single-pass in registration order, no fixpoint
     (<code>commitPipeline.ts</code>) — a later processor sees an earlier one's
     amendments, never the reverse — so <em>derive registers before project</em>, or
-    editing a field row's content (<code>[[status]]</code> → <code>[[priority]]</code>,
-    or to plain text) projects against the stale column: old key kept, new key missed
+    editing a field row's content (re-pointing it at a different definition, or back
+    to plain text) projects against the stale column: old key kept, new key missed
     until the next unrelated edit. Slice B pins the order with a test.
   </dd>
 
@@ -1016,7 +1042,7 @@ arrived row:
       remedy if the fleet ever outgrows coordination.</p></li>
     <li><strong>Duplicate field rows from concurrent dual-writes persist.</strong> Two
       devices offline-editing the same not-yet-materialized property each create their
-      own <code>[[status]]</code> row (the backfill itself no longer races — it is
+      own <code>((fieldId))</code> row (the backfill itself no longer races — it is
       operator-run-once per workspace, §11); after sync, the arrived rows are
       field/value rows whose <em>own</em> cells are
       empty, so the spike's row-targeted catch-up no-ops on them and never visits the
@@ -1151,18 +1177,21 @@ spike itself has since built the answers: hidden-field filtering in the outline
 (per-schema <code>hidden</code> + toggle — since schema unification a synced
 definition field, not a curated code list, though §10's outline-vs-panel question
 remains open for the slice-C flip),
-<code>tx.childrenOf</code> default-excluding
-field rows so structural callers see only visible siblings (<code>f4d0b447</code>), and
+the visible-view/structural-view split in the traversal primitives (as shipped the
+polarity is everything-by-default with the outline opting into
+<code>hidePropertyChildren</code> — §9), and
 panel-layout/orphan-alias special cases. One genuine residual to carry, eyes open —
 plus one that schema unification has since dissolved:
 </p>
 
 <ul>
-  <li><strong>Master's ~8 tree-shape tests need porting.</strong> Under
-    materialize-everything they assert a pre-feature tree shape that is now wrong by
-    design. Note the failure list predates the <code>childrenOf</code> default-exclude
-    flip — re-run the spike suite to get the true residual set before porting
-    (several of the 8 may already pass).</li>
+  <li><strong>Master's ~8 tree-shape tests need porting — at the flip, not
+    before.</strong> Under
+    materialize-everything they assert a pre-feature tree shape that is wrong by
+    design in a flipped workspace. The A/B landing (PR #386) confirmed the dormant
+    half: with every workspace at <code>'cell'</code>, master's suite passes
+    unmodified (mechanical param-count adaptations aside); the deliberate port
+    happens with slice C.</li>
   <li><strong>Resolved — synthetic fieldIds no longer exist.</strong> The spike's
     kernel/plugin <code>property:&lt;name&gt;</code> pseudo-ids would have leaked
     non-block ids into <code>references_json</code>, and slice B would have had to
@@ -1218,13 +1247,18 @@ lookup recognition uses) — the routing shim ships in slice B3.
   And "operator-written" is enforced server-side, not by convention (PR-review P2):
   the <code>workspaces</code> table is directly updatable by workspace writers — the
   e2ee migration added <code>workspaces_prevent_e2ee_field_change</code> for exactly
-  this exposure — so the column ships with the same trigger family: client writes
-  rejected, full stop. Direction discipline is the runbook's job, not the
-  trigger's (PR-review P2: a literal forward-only constraint would block the one
-  legitimate backward transition — slice B's rollback sets the workspace back to
-  <code>'cell'</code> after the drain-and-delete pass). Advancing it — or rolling it
-  back — is a service-role SQL write per
-  the supabase skill — the runbook is the gate (no attestation RPC; encoding the
+  this exposure — so the column ships with the same trigger family. As shipped
+  (PR #386's migration, stricter than an earlier revision of this paragraph): client
+  writes rejected (errcode <code>23514</code> so a stale client PATCH quarantines
+  instead of retrying forever), transitions <em>forward-only for everyone, service
+  role included</em>, and <strong>e2ee workspaces refused outright</strong> — §8's
+  gate is encoded, not left to the runbook ("one fat-fingered service-role UPDATE
+  away from a leak"; the check is stable because <code>encryption_mode</code> is
+  itself immutable). Slice B's rollback is still executable, as a <em>migration
+  rather than a column write</em>: the runbook drops the trigger for the duration of
+  the drain-and-delete pass — a deliberate, visible act where a bare backward UPDATE
+  would silently strand recognized field rows. Advancing is a service-role SQL write
+  per the supabase skill — the runbook is the gate (no attestation RPC; encoding the
   checklist in an RPC is armor for an operator this fleet doesn't have). The predicate every consumer shares — recognition (§9), dual-write,
   projection, reconcile — is <strong>child-backed = workspace flipped</strong>.
   Nothing else: no scope term (§6 migrates all scopes), no per-schema stamp, no
@@ -1310,68 +1344,80 @@ child rows are its synced source like any other prop, the index stays the query
 surface.
 </p>
 
-<h2 id="s7">7. Field-row content: <code>[[name]]</code> + derived column</h2>
+<h2 id="s7">7. Field-row content: <code>((fieldId))</code> + derived column</h2>
 
 <p>
-Rev 1 specified field-row content as <code>((schema-id))</code>. The spike ships
-<code>[[Schema Name]]</code> with the resolved <code>fieldId</code> in the
-<code>reference_target_id</code> column, derived same-tx from content (now a
-<em>local</em> column, derived on every device — §11 slice A). Keep the spike's
-shape:
+Rev 1 specified field-row content as <code>((schema-id))</code>; the spike switched to
+<code>[[Schema Name]]</code> with a two-tier resolution (schema-name winner map first,
+generic alias lookup second), and earlier revisions of this doc endorsed that. <strong>The
+A/B implementation (PR #386) went back to id-content, and that is the shipped
+shape</strong>: field-row content is <code>((fieldId))</code>
+(<code>referenceBlockContentForId</code>), the local <code>reference_target_id</code>
+derives <em>purely textually</em> (block-ref → id — no name lookup of any kind), and the
+human-readable name is recovered from the definition wherever it's needed: the cell key
+at projection time, the rendered label (a block-ref renders its target's label, and a
+definition block's own content <em>is</em> its name). Why the reversal stuck: the
+name-resolution tier only existed because properties weren't blocks. Post-unification,
+definitions <em>are</em> blocks, and blocks already have exactly one name mechanism —
+the alias index. Types are the standing precedent: a type block claims its label as an
+alias and <code>[[Person]]</code> resolves through the generic index with no
+"type-name tier". <code>[[name]]</code> therefore stops being the identity carrier and
+becomes a deferred <em>affordance</em> — the auto-claim step (§11).
 </p>
 
 <ul>
-  <li><strong>Markdown round-trip is a headline motivation</strong> — and
-    <code>[[priority]]</code> exports as meaningful markdown where
-    <code>((7f3a…))</code> doesn't. Copy-paste into another workspace can resolve by
-    name (§9); a uuid never resolves.</li>
-  <li><strong>Renames don't corrupt stored data — but rename support must land
-    <em>with</em> the write path, not after it.</strong> The column, not the label, is
-    authoritative, so children survive a rename untouched. The cell does not: it's
-    keyed by <code>name</code>, so after a rename every consuming block still carries
-    the old key, the registry no longer knows that key (materialize skips unknown
-    names — it cannot repair a key it no longer recognizes), and every schema-aware
-    reader falls back to <code>defaultValue</code> while the tree still shows the real
-    value. Mass silent unset. The rename-reproject pass
-    (<code>reprojectPropertyValueChildren</code>, built in the spike, currently
-    untriggered) is therefore part of slice B2, not polish — or renames must be blocked
-    until it lands. And it rewrites field-row <em>content</em> too (PR-review P2):
-    field rows store <code>[[Schema Name]]</code>, so the pass retitles
-    <code>[[old]]</code> → <code>[[new]]</code> across the schema's field rows
-    (indexed by <code>reference_target_id</code> — one targeted sweep); left stale,
-    markdown export and the §9 cross-workspace re-derive — which resolves by content —
-    would bind the dead name or a wrong same-named schema. One more surface rides the
-    same pass (PR-review P2): <code>references_json</code> keys property-derived
-    backlinks by <code>sourceField = schema.name</code>, so the reproject must run
-    through the processor pipeline (the references reprojection recomputes
-    <code>sourceField</code> from the re-keyed cell), not <code>applyRaw</code> —
-    otherwise renamed ref fields keep backlinks under the dead name and
-    referenced-by queries on the new name miss every existing value.</li>
-  <li><strong>Typing a field by hand works.</strong> A user (or an importer, or an
-    agent) can type <code>[[status]]</code> as a child and put a value under it; the
-    derive processor resolves the alias to the schema and the project processor folds it
-    into the cell. That's the "it's just blocks" promise made real.</li>
-  <li>The cost: name collisions need a resolution rule. The two-tier lookup stands —
-    schema-name map first, generic alias lookup second (implemented in the spike) —
-    but the schema-name map itself is now the unification's deterministic fleet-wide
-    winner map (§6), replacing the spike-era per-client "registered map wins by load
-    order". And the exact-reference grammar is scoped to
-    whole-block content so prose containing <code>((…))</code> never becomes a field
-    (implemented in <code>referenceBlock.ts</code>). A second cost surfaced late
-    (PR-review P2): schema names must <em>round-trip the wikilink grammar</em> — a
-    name containing <code>]]</code> renders lossy (<code>renderWikilink</code>
-    documents <code>foo]]bar</code> → <code>foo] ]bar</code>), and every
-    re-derive-by-content path (§9 cross-workspace copy, §8 de-structure, markdown
-    round-trip) then binds the wrong schema or none. Enforcement lives at the shared
-    write boundary, not per flow (PR-review P2): <code>addSchema</code> and the
-    rename flow are not the only name writers — the schema editor writes
-    <code>property-schema:name</code> directly
-    (<code>PropertySchemaBlockRenderer</code>), and agents/importers can too — so a
-    same-tx validator watching definition-name writes rejects non-round-trippable
-    names for everyone (<code>ProcessorRejection</code> rolls the tx back); existing
-    names get checked in the
-    slice-B preflight (one more entry alongside the unification's §7 name
-    preflight).</li>
+  <li><strong>What id-content deletes.</strong> The two-tier lookup and its
+    fleet-determinism obligations; the derive-at-arrival deferral
+    (<code>schemaTierReady</code>) and the definition-arrival <code>[[name]]</code>
+    re-derive/reclaim (the surviving re-derive is <em>strictly additive</em> generic
+    alias late-binding — <code>[[Foo]]</code> NULL→Foo when a page named Foo is
+    minted; the reclaim of already-bound rows was dead code until auto-claim and is
+    rebuilt <em>with</em> auto-claim, together with cell reprojection); the
+    rename-retitle pass and its content/name lock-step reasoning; and
+    name-validity-as-identity. <strong>Renames are content-stable</strong>: children
+    and field-row content survive a rename untouched, and only the name-keyed
+    <em>cell</em> re-keys — B2's migration pass, detected by a per-fieldId
+    registry-snapshot diff so every rename source (panel edit, outline edit of the
+    definition block, a synced-in rename) funnels through one seam.
+    <code>references_json</code> re-keys with it: <code>sourceField =
+    schema.name</code>, so the cell re-key runs through the processor pipeline (the
+    references reprojection recomputes <code>sourceField</code>), never
+    <code>applyRaw</code>. The offline-rename <em>race</em> — a bag written under the
+    old key before the rename arrived — is still slice C's fieldId-side reconcile;
+    the one-shot B2 pass can't reach it (verified in the B2 header comment).</li>
+  <li><strong>Markdown round-trip: same-workspace works today, readable/cross-workspace
+    is a named follow-up.</strong> Within a workspace, <code>((fieldId))</code> pastes
+    back and resolves — ids are workspace-valid, so the round-trip promise holds where
+    it's most used. What id-content defers is <em>readable</em> markdown and
+    cross-workspace transfer: the designed home is <strong>"copy resolves
+    references"</strong> — a generic copy-boundary mechanism (not property-specific)
+    that renders id refs as <code>[[name]]</code> on the way out, paired with
+    auto-claim on the import side so <code>[[name]]</code> resolves back to the
+    definition. Until both exist, a cross-workspace paste of property rows carries
+    uuid refs that degrade to honest unresolvable reference rows (§9's existing
+    rule). Follow-up, not a blocker (owner call).</li>
+  <li><strong>Typing a field by hand — deferred to auto-claim, free when it lands.</strong>
+    Recognition is form-agnostic (§9): any whole-block exact reference that resolves
+    to a definition is a field row, whatever the bracket form. So the moment
+    definitions claim their names as aliases (auto-claim — exactly what type blocks
+    do today), a hand-typed <code>[[status]]</code> row lights up as a field row with
+    <em>no recognition change</em>; one marked spot (the sync same-tx prospective
+    probe) gains its async <code>[[alias]]</code> branch then. Until auto-claim,
+    <code>[[status]]</code> resolves to a page or nothing — the "it's just blocks"
+    hand-authoring promise is sequenced, not dropped.</li>
+  <li><strong>Names are hygiene now, not identity.</strong> <code>addSchema</code> and
+    the rename flow reject <code>]]</code>-lossy names
+    (<code>isRoundTrippableReferenceLabel</code>, shipped) so names stay clean for
+    the future <code>[[name]]</code> affordance and for export — but an invalid name
+    can no longer corrupt field-row identity, so the same-tx definition-name
+    validator an earlier revision required (PR-review P2, rounds 22) is deleted;
+    hygiene at the two flows plus a preflight report over existing names suffices.
+    Name <em>collisions</em> ride the alias machinery's semantics at auto-claim; the
+    unification winner gate survives as the name→cell-key authority (projection and
+    <code>addSchema</code>'s structured <code>shadowed</code> rejection), not as an
+    identity-resolution tier. The exact-reference grammar stays scoped to whole-block
+    content so prose containing <code>((…))</code> never becomes a field
+    (<code>referenceBlock.ts</code>).</li>
 </ul>
 
 <h2 id="s8">8. E2EE workspaces — new constraint</h2>
@@ -1386,8 +1432,9 @@ leaked, per row: "this row is a field instance", "of this schema" (concretely re
 precompute), and for exact block-ref rows "this row points at that row" — precisely
 the edge metadata the current design encrypts. <strong>This analysis is what drove
 the column local for <em>every</em> workspace</strong> (owner decision, §11 slice A):
-derivation is a pure function of content + the synced name map, so nothing needed to
-cross the wire in the first place — the derive-at-arrival and first-sync derive pass
+derivation is deterministic on every device — under §7's id-content shape, purely
+textual — so nothing needed to
+cross the wire in the first place — the derive-at-arrival and catch-up derive pass
 that an e2ee-only fix would have required turned out to be the right universal
 design, and the e2ee fork for this column no longer exists. (Encrypting the column
 instead was considered and rejected: it would maintain a second synced copy of
@@ -1426,12 +1473,15 @@ decrypted content leaks nothing). Two edges survive, neither e2ee-specific in fo
 <ul>
   <li><strong>Pastes from a flipped workspace into an un-flipped one de-structure,
     not just strip</strong> (e2ee-at-<code>'cell'</code> is the standing case, but
-    the rule is general — PR-review P2, restated for the local column): the copied
-    <code>[[field]]</code>/value rows re-derive their column against the destination,
-    but recognition is flip-gated off there, so they would linger as ordinary visible
-    content while the destination cell is the property store. The move path projects
-    the subtree's field/value children into the destination cell, then soft-deletes
-    the de-structured rows. (Owner: slice B3's move/merge integration.)</li>
+    the rule is general — PR-review P2, restated for the local column): copied
+    field/value rows would linger as ordinary visible content in a workspace whose
+    cell is the property store, so the move path projects the subtree's field/value
+    children into the destination cell and soft-deletes the de-structured rows.
+    <em>Satisfied by construction on current master</em> (implementation finding,
+    PR #386): cross-workspace copy/paste is markdown-mediated — parse → fresh
+    creates — so no structural carrier exists to de-structure; this rule gets a code
+    path only when a structural cross-workspace move ships (it lands with that
+    feature, alongside §7's "copy resolves references" follow-up).</li>
   <li><strong>Encryption-mode transitions are the e2ee feature's problem, with one
     property-shaped constraint.</strong> Today <code>encryption_mode</code> is
     immutable by trigger (<code>workspaces_prevent_e2ee_field_change</code>). If a
@@ -1474,8 +1524,9 @@ supabase skill if it's kept.
     (<code>resolveField</code>) — <em>the workspace is flipped</em>
     (<code>properties_migration</code> at or past <code>'children'</code>, §6;
     PR-review P2: recognition off
-    the raw column alone activates the moment slice A/B starts stamping — an ordinary
-    whole-block <code>[[some property schema]]</code> link would be hidden and
+    the raw column alone activates the moment slice A starts stamping — a whole-block
+    exact ref that happens to target a definition (a hand-typed <code>((id))</code>,
+    a same-workspace pasted field-row line, a ref-typed value) would be hidden and
     reinterpreted even while the workspace is still cell-only, breaking the
     "machinery lands dormant" claim; the workspace column is synced and
     server-visible, so the gate is fleet-consistent) — <em>and P
@@ -1501,7 +1552,13 @@ supabase skill if it's kept.
     exactly as a field row would (<code>block-type:properties</code> values are the
     standing example — a refList whose targets are all property-schema blocks);
     without the guard, render/filter/projection would hide or reinterpret those
-    values as nested fields. Column read plus flag read, no content
+    values as nested fields. Recognition is <em>form-agnostic</em> (PR #386, §7): the
+    column encodes "this whole block is exactly this reference" for either bracket
+    form, and <code>[[name]]</code> is never property-special-cased — it resolves
+    through the one generic alias policy, which today yields a page or nothing, and a
+    definition once auto-claim makes definitions name-resolvable; hand-typed
+    <code>[[name]]</code> field rows then classify with no recognition change.
+    Column read plus flag read, no content
     parse. Classification
     needs
     the definition, not the owning plugin (an uninstalled plugin's definitions sync
@@ -1510,38 +1567,29 @@ supabase skill if it's kept.
     targets render as plain reference blocks — a pasted field from another workspace
     degrades to a visible, honest "unknown field" row.</dd>
 
-  <dt><strong>Cross-workspace copies re-derive the column, never carry it.</strong></dt>
-  <dd>Seeded fieldIds are workspace-scoped (unification §4.2), so <em>every</em> field
-    row copied or moved across workspaces — kernel schemas included — carries a
-    foreign <code>reference_target_id</code> (PR-review P2). The structural copy/move
-    path must clear the column and let <code>core.deriveReferenceTarget</code>
-    re-derive from the <code>[[name]]</code> content against the <em>destination's</em>
-    name-winner map, same tx — the seam where the unification already strips
-    <code>seed:*</code>/type-id props on paste (its §12). Without the strip, §7's
-    resolve-by-name promise silently fails: detection never parses content, so the
-    copied rows degrade to unresolvable reference blocks. The e2ee de-structure rule
-    (§8) covers encrypted destinations; this is the plaintext general case.
-    One arrival-order hole in the re-derive (PR-review P2): if the destination's
-    definition hasn't synced or been imported yet, the same-tx re-derive clears the
-    foreign id and resolves nothing — honest degradation to a plain reference row —
-    but <code>core.deriveReferenceTarget</code> watches <em>content</em>, so the
-    definition's later arrival never revisits the unchanged <code>[[name]]</code>
-    rows, and a no-cell copy's fields would stay unprojected forever. Two repairs,
-    both cheap: definition-block arrival/creation enqueues a targeted re-derive over
-    whole-block-wikilink rows matching the new name whose column is NULL <em>or bound
-    to a non-definition block</em> (PR-review P2: the derive's generic alias fallback
-    can have bound a pasted <code>[[status]]</code> row to an ordinary page of that
-    name before the schema arrived — a NULL-only repair would skip it forever); rows
-    already bound to a definition stay put. The §5
-    consistency sweep carries the same rule as the backstop. Matching by name is
-    sound because rename-retitle keeps field-row content in lock-step with schema
-    names (§7). The remaining sharp edge is the name-collision paste (PR-review P2):
-    the destination can own a same-named schema with an incompatible codec, so the
-    re-derived field's carried value children may not decode — the key then reads as
-    unset under the value-decoding rule below while the rows sit hidden. Not silent,
-    by the sweep extension below (a field row none of whose children decode is a
-    reported class), and fixed manually when it fires — a shipped remap/import step
-    is not built for an event this rare on this fleet.</dd>
+  <dt><strong>Cross-workspace copies — satisfied by construction today; the rules wake
+    with structural moves.</strong></dt>
+  <dd>Seeded fieldIds are workspace-scoped (unification §4.2), so a field row that
+    <em>structurally</em> crossed workspaces would carry a foreign
+    <code>reference_target_id</code> and must re-derive at the destination
+    (PR-review P2). Implementation finding (PR #386): on current master this entire
+    family has <em>no code path</em> — cross-workspace copy/paste is
+    markdown-mediated (parse → fresh creates), so nothing carries a column to clear
+    or strip; a pasted <code>((fieldId))</code> row simply fails to resolve at the
+    destination and degrades to an honest unresolvable reference block (§7's
+    markdown follow-up — "copy resolves references" + auto-claim — is what will make
+    these pastes meaningful). The clear-and-re-derive rule, the
+    <code>seed:*</code>-strip seam, and §8's de-structure rule all activate together
+    when a structural cross-workspace move ships. What survives <em>now</em> is
+    deliberately additive-only (PR #386, replacing an earlier
+    definition-arrival/reclaim design that was dead code until auto-claim): the
+    re-derive watches for generic alias late-binding — a <code>[[Foo]]</code> row
+    whose column is NULL binds when a page named Foo is minted or arrives — and the
+    reclaim of already-bound rows is rebuilt <em>with</em> auto-claim, together with
+    cell reprojection. An earlier revision's name-collision-paste edge (same-named
+    destination schema, incompatible codec) is likewise an auto-claim-era concern;
+    its general mitigation — the sweep reports a field row none of whose children
+    decode — ships regardless, because codec changes produce the same state.</dd>
 
   <dt><strong>Orphan keys — synthesized definitions, not a permanent bucket.</strong></dt>
   <dd>A cell key with no definition block of <em>any</em> origin (historic residue,
@@ -1553,13 +1601,16 @@ supabase skill if it's kept.
     inferred from <em>all</em> observed values of that key (all-boolean → boolean,
     all-number → number, ISO-date strings → date, else string; anything mixed or
     structured falls back to the raw-json preset — conservative on ambiguity),
-    <code>hidden</code> by default until triaged. Two rules the synthesis must apply
-    (PR-review P2 ×2): <em>names are validated</em> — a historical key that fails
-    §7's round-trip rule (empty, trim-changing, containing <code>]]</code>) cannot be
-    a <code>[[name]]</code> identity, so synthesis renames it deterministically and
-    records old → new in the flip log (projection then writes the new key; the old
-    cell key retires with the backfill), reporting any key too degenerate to rename
-    for operator triage instead of synthesizing blindly; and <em>ids are
+    <code>hidden</code> by default until triaged. Two rules the synthesis must apply,
+    the first now much weaker under §7's id-content shape (PR-review P2 ×2, revised):
+    <em>names are hygiene-checked, not rewritten</em> — field rows are
+    <code>((fieldId))</code>, so a historical key that fails the wikilink round-trip
+    (trim-changing, containing <code>]]</code>) can still be a definition name and
+    cell key verbatim; it merely can't gain the future <code>[[name]]</code>
+    affordance, so synthesis keeps <code>name = key</code> and <em>flags</em> such
+    keys in the flip report for optional cleanup (the earlier
+    deterministic-rename requirement is deleted; only a genuinely unusable key — the
+    empty string — is reported instead of synthesized); and <em>ids are
     deterministic</em> — <code>uuidv5(workspaceId, key)</code>, the seeded-definition
     pattern — so a re-run converges on the same blocks, and two devices independently
     running an e2ee option-2 flip mint the <em>same</em> definition instead of
@@ -1579,7 +1630,7 @@ supabase skill if it's kept.
     should not occur; if it does, the sweep detects a shadowed marker-carrying
     synthesized definition and <em>reports</em> it, and the operator runs the
     retarget manually — re-point the field rows to the seed's fieldId and retire the
-    synthesized block, reusing the §7 rename-reproject machinery <em>plus</em> the
+    synthesized block, reusing B2's rename re-key machinery <em>plus</em> the
     codec-change re-encode (PR-review P2: the seed's preset can differ from the
     synthesized definition's inferred codec, and a retarget without re-encoding
     leaves value children the real schema decodes as invalid — the migrated values
@@ -1684,28 +1735,27 @@ supabase skill if it's kept.
     descendants of the source's value children (comments, elaboration) under the
     merged result's corresponding value children — a bare subtree-delete silently
     tombstones them; orphan-alias cleanup deletes generated field rows under alias
-    seats; panel-layout projection ignores field rows; and <code>tx.childrenOf</code>
-    now <em>excludes</em> field rows by default (structural callers must see only
-    visible siblings — the machinery opts in with
-    <code>includePropertyChildren</code>). Copy, export, import, <em>and
-    delete/purge</em> traversals count
-    as machinery, not outline callers (PR-review P2 ×2): they opt in with
-    <code>includePropertyChildren</code> — markdown round-trip is a headline
-    motivation (§7), and a copied subtree missing its field/value rows silently
-    loses the properties wherever the destination path doesn't rebuild them from the
-    carried bag; and <code>softDeleteSubtree</code> discovers descendants via
-    <code>tx.childrenOf</code> (verified, <code>mutators.ts</code>), so under the
-    default exclusion a delete would strand live field/value rows attached beneath a
-    deleted parent. The opt-in splits by audience, though (PR-review P2):
-    delete/purge/backup include every property child unconditionally — completeness
-    is their correctness — but user-facing copy and markdown export apply the
-    outline's field-visibility policy, or every copied subtree serializes
-    hidden-by-default machine rows (<code>seed:*</code> config, machine-scoped
-    document props) into user-facing markdown and re-imports them as real
-    properties; hidden fields travel only when the surface shows them (Show Hidden
-    Fields). Under the §6 scoping these special cases
+    seats; panel-layout projection ignores field rows. <strong>Traversal polarity is
+    inverted from earlier revisions</strong> (PR #386, deliberate divergence): every
+    traversal primitive (<code>tx.childrenOf</code>,
+    <code>core.children</code>/<code>childIds</code>, <code>subtree</code>) returns
+    <em>everything</em> by default — the structural view — and the display-visible
+    view is opt-in via <code>hidePropertyChildren: true</code> (the outline hooks
+    pass it). The earlier hide-by-default polarity made the <em>dangerous</em>
+    mistake silent: a structural caller that forgot the include flag stranded
+    machinery rows under a delete (<code>softDeleteSubtree</code> discovers
+    descendants via <code>tx.childrenOf</code> — verified in
+    <code>mutators.ts</code>). Everything-by-default makes the forgotten flag merely
+    cosmetic — a display surface briefly showing hidden machinery rows — and is the
+    more coherent primitive. Delete/purge/backup are therefore correct with no
+    flag; the audience split survives on the display side (PR-review P2): user-facing
+    copy and markdown export are <em>display surfaces</em> — they opt into the
+    visible view, or every copied subtree serializes hidden-by-default machine rows
+    (<code>seed:*</code> config, machine-scoped document props) into user-facing
+    markdown and re-imports them as real properties; hidden fields travel only when
+    the surface shows them (Show Hidden Fields). Under the §6 scoping these rules
     apply <em>everywhere</em> — kernel props materialize too, so hidden field rows
-    exist on most blocks and the exclusion rules get more load-bearing, not less.
+    exist on most blocks and the display opt-ins get more load-bearing, not less.
     Field rows, user and kernel alike, must not be reparented as content.</dd>
 
   <dt><strong>Type-add field slots vs ghosts (decided: render-only ghosts).</strong></dt>
@@ -1804,49 +1854,71 @@ workspace-column write away from production. Either way, treat PR #285 as the <s
 implementation</strong> and keep it open until its content is fully accounted for.
 </p>
 
+<p>
+<strong>Status (2026-07-17): slices A and B are implemented — PR #386</strong>, extracted
+from the spike against post-unification master, hardened through three adversarial
+review rounds plus two Codex waves, and carrying the deliberate divergences this doc
+now reflects (§7 id-content, §9 form-agnostic recognition and traversal polarity, §6's
+as-shipped trigger). It lands dormant: every workspace reads
+<code>properties_migration = 'cell'</code>, and master's suite passes unmodified.
+<strong>Residual flip-gated gaps live in issue #389</strong> — reprojection on
+role-flip, machinery filtering in search/find-replace surfaces, merge
+relocate-stamps, divergent-value visibility, the prospective-duplicate guard, the §6
+scope-routing shim, children-handle refresh on flip arrival, and the B2 trigger for
+definition changes synced while a workspace was inactive — all dormant at
+<code>'cell'</code>, all landing with the flip enablement (slice C's checklist
+inherits that issue).
+</p>
+
 <div class="phases">
 
   <div class="phase">
     <div class="num">A</div>
     <div class="body">
-      <div class="name">Foundations: local derived column + derive processor</div>
+      <div class="name">Foundations: local derived column + derive processor
+        <em>— implemented, PR #386</em></div>
       <p>
         <code>reference_target_id</code> is a <strong>local derived column — never
         synced</strong> (owner decision, superseding the earlier synced-column
         design: nothing server-side consumes it, every consumer is a client, and
-        derivation is a pure function of content + the synced name-winner map — the
-        same determinism §7/§9's copy re-derive already relies on. This deletes the
+        derivation is deterministic on every device — under §7's id-content shape,
+        purely textual. This deletes the
         Supabase migration, both server RPC extensions, the sync-config change, the
         e2ee server trigger, and the connector strip that the synced design needed,
         and with them the last e2ee special-casing: e2ee devices derive identically
-        from decrypted content). What ships: the column on the local
-        <code>blocks</code> table only (an ALTER for existing installs; NOT in
-        <code>BLOCK_STORAGE_COLUMNS</code>, never staged in
-        <code>blocks_synced</code>, never uploaded). A <code>block_types</code>-style
+        from decrypted content). As shipped: the column on the local
+        <code>blocks</code> table only — <code>BLOCK_LOCAL_COLUMNS</code> keeps it
+        out of everything <code>BLOCK_STORAGE_COLUMNS</code> derives (sync-config
+        generation, <code>blocks_synced</code> staging, upload envelopes, the
+        materializer UPSERT, whose <code>ON CONFLICT DO UPDATE</code> therefore
+        preserves it on arrival), boot ALTER for existing installs, partial index.
+        A <code>block_types</code>-style
         side table is <em>not</em> an equivalent choice (PR-review P2): same-tx
         processors collect watched-field changes from <code>BlockData</code>
         snapshots — §5's projection watches <code>referenceTargetId</code> — and
         undo, queries, and invalidation ride the same snapshot; a side table would
         need parallel event/invalidation plumbing for no gain, so the column lives on
-        <code>blocks</code>. Its writes are column-only raw updates — never
-        <code>skipMetadata</code>, which still bumps the sync clock (§5). The rest of
-        the ship list: the
+        <code>blocks</code>. Write metadata splits by path (§5): the same-tx
+        processor rides the triggering edit's upload; the bulk paths write raw CAS,
+        no metadata, no uploads. The rest of the ship list: the
         <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>
-        for local writes, the partial index, and <strong>derive-at-arrival</strong>:
+        for local writes, and <strong>derive-at-arrival</strong>:
         the materializer stamps the column for arrived rows whose content changed,
         inside the same seam as the §5 cell repair (before invalidations fan out, so
-        recognition never lags reader visibility), plus a one-shot initial-sync
-        derive pass for fresh devices (reuses the backfill harness; until it sweeps a
-        block, unrecognized field rows are ordinary rows — visible-blocks
-        prioritization bounds the flash). The history/undo seam still applies
+        recognition never lags reader visibility; content-unchanged arrivals preserve
+        the column), plus a catch-up sweep that is
+        <strong>once-per-workspace-<em>open</em>, not once-ever</strong>
+        (implementation divergence: a durable done-marker would permanently miss
+        aliases that arrived while the app was closed; the sweep runs at deep idle
+        with CAS-per-row writes). The §9 additive re-derive — alias late-binding on
+        arrival and on local alias-seat minting — shipped here with slice A rather
+        than waiting for C's sweep. The history/undo seam still applies
         (PR-review P2, adapted): same-tx processors are skipped on undo replay
-        (§12), so either the <code>row_events</code> snapshot carries the column or
-        undo replay re-derives after restore — otherwise undoing a field-row edit
+        (§12), so the snapshots and replay SQL carry the column — pinned by test —
+        otherwise undoing a field-row edit
         back to plain text leaves a stale column and the row keeps classifying as a
-        field row. Decide <code>BlockData.referenceTargetId</code>'s optionality up
-        front (the spike made it required, which touches every <code>BlockData</code>
-        literal in the test suite; optional-in, normalized-to-null in
-        <code>parseBlockRow</code> avoids that churn). One future consequence,
+        field row. (<code>BlockData.referenceTargetId</code> landed optional-in,
+        normalized in <code>parseBlockRow</code>.) One future consequence,
         accepted: a server-side "derive properties from children" SQL view can no
         longer recognize field rows without parsing content — already outside the
         plan (§11).
@@ -1875,7 +1947,9 @@ implementation</strong> and keep it open until its content is fully accounted fo
   <div class="phase">
     <div class="num">B</div>
     <div class="body">
-      <div class="name">Child-backed write path, scoped — three review units</div>
+      <div class="name">Child-backed write path, scoped — three review units
+        <em>— implemented, PR #386 (dormant: every workspace at
+        <code>'cell'</code>)</em></div>
       <p>
         Everything the write path needs, but reviewed as three separable units so B
         doesn't become the monolith this section argues against.
@@ -1906,41 +1980,55 @@ implementation</strong> and keep it open until its content is fully accounted fo
         local column nor read as flipped), and the server migration + sync-rule
         update landing before the first client that acts on the column (the usual
         <code>db push</code> → <code>powersync deploy</code> → clients order; the
-        NULL-fallback makes the ordering soft rather than load-bearing) —
+        NULL-fallback makes the ordering soft rather than load-bearing — as landed,
+        the migration and regenerated sync-config ride the PR but are <em>not
+        deployed</em>; deploying is an operator runbook step) —
         dual-writing
         <code>setProperty</code>, <code>core.projectPropertyChildren</code> +
         <code>core.materializePropertyChildren</code> gated on the workspace flip
         column — which subsumes the §8 e2ee gate, since an e2ee workspace never
         leaves <code>'cell'</code> (the write path and both processors are off there,
-        not just the derive column), <code>childrenOf</code> option
-        (default-exclude, per <code>f4d0b447</code>) <em>and its query-layer twin</em>
-        (PR-review P2): the outline reads <code>core.childIds</code> /
-        <code>core.children</code> (<code>useChildIds</code>/<code>useHasChildren</code>),
-        whose SQL filters only <code>deleted = 0</code> — the tx-layer exclusion never
-        touches it. Default-exclude field rows there too (machinery queries opt in,
-        same option), or C's backfill renders every property as an ordinary outline
+        not just the derive column), and the visible/structural traversal split —
+        <em>polarity inverted from this deliverable's earlier draft</em> (PR #386,
+        §9): <code>tx.childrenOf</code> and the outline's query-layer twin
+        (<code>core.childIds</code> / <code>core.children</code>, whose SQL binds the
+        recursive positional rule workspace-scoped) return everything by default;
+        the outline hooks opt into <code>hidePropertyChildren</code>. Without the
+        outline opt-in, C's backfill renders every property as an ordinary outline
         row for production users until D's tree UI lands. A third surface joins the
         same half (PR-review P2): search and recency — <code>blocks_fts</code>
         matching plus <code>SELECT_BLOCKS_BY_CONTENT_SQL</code> /
         <code>SELECT_RECENT_BLOCKS_SQL</code> filter only
         workspace/deleted/non-empty-content (<code>kernelQueries.ts</code>), so
-        post-flip QuickFind and recent-block pickers would surface
-        <code>[[types]]</code> field rows and bare value children as ordinary hits.
+        post-flip QuickFind and recent-block pickers would surface machinery field
+        rows and bare value children as ordinary hits.
         Filter property-subtree rows out there too, or map value hits to their
-        owning parent (which of the two is slice D's call; the filter is the B1
-        floor). This is the
+        owning parent (which of the two is slice D's call; dormant while every
+        workspace reads <code>'cell'</code>, so it landed in the #389 flip-gated
+        containment bucket rather than B1). This is the
         <em>negative</em> (invisibility) half of the in-tree work and it gates the C
         flip; only the positive surface stays in D. Then the ref double-count check and
         the §5 invariant code comments.
-        <strong>B2 (schema-change migrations):</strong> the rename-reproject hook —
-        moved up from the old slice E because renames break silently without it
-        (§7) — and the codec-change re-encode pass (§9); their own subtle machinery,
-        own PR.
+        <strong>B2 (schema-change migrations):</strong> the rename re-key and the
+        codec-change re-encode pass (§9) — moved up from the old slice E because
+        renames break silently without them (§7). As shipped: detection is a
+        per-fieldId registry-snapshot diff (every rename source — panel edit,
+        outline edit of the definition block, a synced-in rename — funnels through
+        the rebuild); a rename re-keys the <em>cell only</em>, since
+        <code>((fieldId))</code> content is rename-stable (§7 — no retitle pass);
+        the migrations run under the References maintenance bucket (never on
+        cmd-Z); unconvertible values are reported via the user-error channel, never
+        silently unset; <code>addSchema</code> rejects <code>]]</code>-lossy names.
         <strong>B3 (integration):</strong> merge/orphan/panel-layout handling with the
-        §9 dedup tightening, the §6 scope-routing shim (structural ops on a
-        recognized property-subtree row resolve their <code>ChangeScope</code> from
-        the owning definition — PR-review P2), and the roam importer (a user-value writer the spike had
-        to adapt; its import tests changed for child-backed seeds).
+        §9 dedup tightening (relocate-then-subtree-delete at both call sites, one
+        canonical <code>deleteSubtreeInTx</code>; merge preserves tree-only value
+        text — unparseable/shadowed/merge-losing values relocate visibly and comment
+        threads survive). The roam importer needed <em>no code change</em>
+        (implementation finding: it writes bags via <code>repo.tx</code>, and the
+        flip-gated materializer converges imports). The §6 scope-routing shim
+        (structural ops on a recognized property-subtree row resolve their
+        <code>ChangeScope</code> from the owning definition — PR-review P2) is
+        flip-gated behavior and rides the #389 containment bucket.
         Rollout state at this stage: every workspace still at
         <code>properties_migration = 'cell'</code> — the machinery lands dormant,
         exercised in tests/dev. The flip rides <strong>with slice C, not before
@@ -1955,7 +2043,9 @@ implementation</strong> and keep it open until its content is fully accounted fo
       <p class="deliv">The write path is complete: in a flipped workspace, every
         property write is child-backed. The production flip waits for
         slice C. Rollback:
-        set the workspace back to <code>'cell'</code> <em>and run the drain</em> — one
+        set the workspace back to <code>'cell'</code> (a migration, not a bare column
+        write — the runbook drops the §6 guard trigger for the duration)
+        <em>and run the drain</em> — one
         final children→cell projection pass over affected blocks, then <em>delete</em>
         the children ("hide" is not an option: recognition is flip-gated (§9), so a
         rolled-back workspace un-recognizes surviving field rows and they would
@@ -2008,18 +2098,14 @@ implementation</strong> and keep it open until its content is fully accounted fo
         per-group staging; there is no separate later "kernel flip"). Two tooling
         steps run with it: the §9 <em>orphan-definition synthesis</em> (every
         definition-less cell key gets a synthesized, hidden-by-default definition
-        first, so the backfill's scope is total), and then the backfill. One
-        detection step runs <em>before</em> it (PR-review P2): the flip retroactively
-        reinterprets pre-existing content — any ordinary row whose whole text is a
-        <code>[[name]]</code> link to a (present or future-synthesized) definition
-        classifies as a field row the moment the workspace flips, gets hidden, and
-        its child notes project as a property value. Post-flip that shape is the §7
-        hand-typing feature; pre-flip rows never opted in. The runbook tooling
-        enumerates them (whole-block wikilink rows whose derived target is a
-        definition id, on content-role parents) for operator triage: reword the
-        genuinely-prose ones, keep the ones that were hand-authored fields all
-        along. Small fleet, one-time list — a shipped escape/provenance marker is
-        not built for this.
+        first, so the backfill's scope is total), and then the backfill. An earlier
+        revision put a pre-flip triage step here for pre-existing whole-block
+        <code>[[name]]</code> rows the flip would retroactively reinterpret
+        (PR-review P2); under §7's id-content shape that hazard <em>no longer exists
+        at the flip</em> — <code>[[name]]</code> doesn't resolve to definitions, so
+        the flip reinterprets nothing that wasn't machinery-minted. The triage
+        obligation moves wholesale to the auto-claim step (below), which is when
+        prose <code>[[status]]</code> rows first become classifiable.
         Sequence the first production run deliberately: it's an upload burst of 2 rows
         per (block, property) — run workspace-by-workspace, watch <code>ps_crud</code>
         drain — and it presupposes the <code>row_events</code> optimization
@@ -2055,13 +2141,54 @@ implementation</strong> and keep it open until its content is fully accounted fo
         the per-schema hidden toggle, ghost rows for type-expected fields (replacing
         the spike's materialized slots), add-field affordance on the block (slash
         command → schema autocomplete → field row + value in one tx). The baseline
-        field-row <em>invisibility</em> is not here — the outline query-layer
-        default-exclude ships in B1 and gates the C flip (PR-review P2); D is the
+        field-row <em>invisibility</em> is not here — the outline's visible-view
+        opt-in (<code>hidePropertyChildren</code>, §9) ships in B1 and gates the C
+        flip (PR-review P2); D is the
         positive surface that makes field rows deliberately visible and editable.
         Panel stays.
       </p>
       <p class="deliv">Users see and edit user-defined properties in the tree. Panel
         remains the fallback; no flag needed since both surfaces coexist.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">AC</div>
+    <div class="body">
+      <div class="name">Auto-claim + copy-resolves-references (follow-up, deliberately
+        out of A/B scope)</div>
+      <p>
+        The step that turns <code>[[name]]</code> from "resolves to a page or
+        nothing" into a live property affordance: <strong>property definitions claim
+        their name as an alias</strong>, exactly like type blocks do today — the
+        generic alias index, no property-special tier (§7). Recognition needs
+        <em>no change</em> (it is already form-agnostic, §9); the pre-marked spots
+        that activate: the sync same-tx prospective probe gains its async
+        <code>[[alias]]</code> branch, and the reference-target <em>reclaim</em>
+        (re-pointing already-bound rows — e.g. a <code>[[status]]</code> row bound to
+        an ordinary page before the definition claimed the name) is rebuilt
+        <em>together with cell reprojection</em>, having been deleted from slice A as
+        dead code. Its trap list, collected from earlier review rounds because they
+        re-arise here, not at the flip: <em>retroactive reinterpretation</em> — the
+        moment a definition claims its name, every pre-existing whole-block
+        <code>[[name]]</code> row in a flipped workspace lights up as a field row,
+        hidden, children projected as values (PR-review P2, relocated from slice C's
+        runbook): enumerate and triage them with the claim, per definition — reword
+        genuine prose, keep hand-authored fields; <em>name-collision pastes</em>
+        (same-named schema, incompatible codec) become reachable then and lean on the
+        §9 sweep report; alias collision semantics ride the alias machinery's
+        existing seat/winner rules. Pairs with <strong>"copy resolves
+        references"</strong> (owner call, follow-up not blocker): a generic
+        copy-boundary mechanism rendering id refs as <code>[[name]]</code> on the way
+        out — which is what makes markdown export readable and cross-workspace
+        property paste meaningful (§7); the §8/§9 structural cross-workspace rules
+        (clear-and-re-derive, seed-strip, de-structure) activate alongside it if a
+        structural move ships.
+      </p>
+      <p class="deliv">Hand-typing <code>[[status]]</code> creates a field; markdown
+        export reads as prose; cross-workspace paste resolves by name. The "it's
+        just blocks" promise completes here rather than in slice A — sequenced, not
+        dropped.</p>
     </div>
   </div>
 
@@ -2412,27 +2539,31 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
       <td>A plugin-less client keeps cell authority for a custom-codec key (C)</td>
     </tr>
     <tr>
-      <td><strong>Recognition = column + workspace flip + subtree role.</strong> A
-        field row's <code>reference_target_id</code> is a definition id, the
+      <td><strong>Recognition = column + workspace flip + subtree role, and is
+        form-agnostic.</strong> A
+        field row's <code>reference_target_id</code> is a definition id (whatever
+        bracket form produced it — <code>[[name]]</code> is never
+        property-special-cased), the
         workspace is flipped (<code>properties_migration</code> at or past
         <code>'children'</code> — never an equality test),
         <em>and</em> its parent is a content-role block. Roles alternate (§9):
         children of field rows are values, children of value rows are content — and
         content inside a property subtree can carry field rows of its own.</td>
       <td><a href="#s9">§9</a></td>
-      <td>Rendering, hidden filtering, <code>childrenOf</code> + outline-query
-        exclusion, projection, dedup walk</td>
+      <td>Rendering, hidden filtering, the visible-view opt-in
+        (<code>hidePropertyChildren</code>), projection, dedup walk</td>
       <td><code>block-type:properties</code> ref values render as values, not nested
         fields (B)</td>
     </tr>
     <tr>
-      <td><strong>Cross-workspace copies re-derive, never carry.</strong> Structural
-        copy/move clears <code>reference_target_id</code>; the derive processor
-        re-resolves from <code>[[name]]</code> against the destination's winner
-        map.</td>
+      <td><strong>Cross-workspace copies never carry a binding.</strong> Today by
+        construction (markdown-mediated paste — nothing structural crosses); if a
+        structural copy/move ships, it clears <code>reference_target_id</code> and
+        re-derives at the destination (§9).</td>
       <td><a href="#s9">§9</a></td>
       <td>Copy/move/paste paths; the §8 e2ee de-structure is its encrypted case</td>
-      <td>A cross-workspace paste resolves by the destination's name map (B3)</td>
+      <td>A pasted foreign field row degrades to an unresolvable reference block
+        (until auto-claim + copy-resolves-references)</td>
     </tr>
     <tr>
       <td><strong>The processor pair is idempotent and ping-pong-free.</strong>
