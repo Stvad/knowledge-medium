@@ -796,8 +796,11 @@ the classic checkpoint-interval tradeoff:
     ~1/(2p) events at microseconds each; even 1/p in the several hundreds
     keeps far-past lookups sub-millisecond, and the common recent-history
     reads walk from the live row and touch no anchor at all. Optimizing p for
-    reads would push it toward zero — the user's "plausibly rarer" instinct is
-    right.</li>
+    reads would push it toward <em>one</em> — anchor everything, and every
+    lookup is O(1) with no walk at all. The point is that nothing pushes it
+    there: read latency is nowhere near binding, so p is free to be set by the
+    loss window below, which lands it far lower. The user's "plausibly rarer"
+    instinct is right.</li>
   <li><strong>The binding constraint is the loss window</strong> (and with it,
     integrity-checkpoint granularity): how much of a block's <em>older</em>
     history may become unreconstructable when corruption severs its chain, and
@@ -1257,8 +1260,16 @@ block with any <code>v IS NULL</code> event:
     empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
     timing.</li>
   <li><strong>Stamp <code>workspace_id</code> while rewriting</strong> — from
-    the v1 snapshot's own <code>workspaceId</code> key, which every v1 event
-    carries on both sides by construction (§3). This is not optional bookkeeping:
+    whichever snapshot side is non-null:
+    <code>COALESCE(after_json&nbsp;-&gt;&gt;&nbsp;'workspaceId',
+    before_json&nbsp;-&gt;&gt;&nbsp;'workspaceId')</code>. <em>Not</em> "both
+    sides": a create carries no <code>before_json</code> (measured — all 345,497
+    creates on the prod instance) and a hard delete no <code>after_json</code>
+    (§4.3). The two sides can never disagree where both exist, because
+    <code>workspace_id</code> is immutable by contract
+    (<code>txEngine.ts:842</code>; a cross-workspace write throws
+    <code>DeterministicIdCrossWorkspaceError</code>), so the COALESCE resolves an
+    absence, never a conflict. This is not optional bookkeeping:
     <code>ALTER TABLE … ADD COLUMN workspace_id</code> initialises the entire v1
     stock to NULL, so without this step the column is populated for new events
     only, and a workspace-scoped recovery over the pre-migration era — the exact
@@ -1766,17 +1777,33 @@ smoke tier inside <code>yarn run check</code>, random-seed deep runs via
 drives random edit sequences (create / update / no-op update / soft-delete /
 restore / hard-delete, projected-field edits) against a model oracle —
 <code>stateAt</code> at every event must equal the model's timeline (I1/I2),
-and every event must pass the shape property (equal key sets, both sides
-agreeing with <code>full</code> — the §4.1 one-coin trap). Because anchors
+and every event must pass the shape property — which is <em>kind-dependent</em>,
+and a suite that applied one rule to all kinds would fail on its own generator:
+for updates and soft-deletes, equal key sets on both sides, both agreeing with
+<code>full</code> (the §4.1 one-coin trap); for creates and hard-deletes the
+event is one-sided by construction (a create has no <code>before_json</code>, a
+hard delete no <code>after_json</code> — §4.3), so the property is that the
+present side is a complete snapshot and the absent side is NULL. Because anchors
 carry no correctness weight, every oracle is anchor-agnostic — SQLite's
 unseedable <code>random()</code> cannot break seed reproducibility of a
 failure's <em>semantics</em> — but the suite also runs deterministic
 p&nbsp;=&nbsp;1 and p&nbsp;=&nbsp;0 trigger variants so both the full and the
 compact path are exercised on every seed. Slice B adds fuzzed interleavings
-of user / sync-applied / raw / derived / bulk writers (oracle: <em>every</em>
-write of every class produces its event — no path is exempt — labels are
-truthful, and each block reconstructs forward from its create with the
-<code>blocks</code> table ignored entirely: I3/I8), and randomized §5.1 retention sweeps interleaved
+of user / sync-applied / raw / derived / bulk writers (oracle: every write of
+every class <em>that changes a row</em> produces its event — no <em>class of
+writer</em> is exempt — labels are truthful, and each block reconstructs forward
+from its create with the <code>blocks</code> table ignored entirely: I3/I8).
+That qualifier is load-bearing rather than a hedge: an identical no-op update
+writes nothing by design (§4.1's identical-update skip — the measured 339,923
+no-op updates on the dev instance are why it exists), so an oracle demanding an
+event per <em>statement</em> would fail on the generator's own no-op case. I8
+is a claim about provenance classes — no writer is privileged — not about SQL
+statements; a write that changes no state leaves no state to reconstruct, so
+skipping it costs the log nothing. (The asymmetry with §8 is deliberate and
+worth naming: the rewriter <em>keeps</em> v1's logged no-ops as empty compact
+events because deleting history rows is the worse sin (I7), not because
+"an UPDATE happened" timing is a value this design upholds going forward — v2
+does not record it.) and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same blocks
 (safety oracle: every pruned event was a full local-ui event, no block with a
 non-local-ui compact event older than the cut is touched, and
@@ -1908,7 +1935,11 @@ under random interruption/resume points.
         historical gaps predating this design (trigger-suspended bootstrap
         windows, the pre-<code>row_events</code> era), which §8 makes
         <em>visible</em> by anchoring at every discontinuity instead of
-        splicing them.</td>
+        splicing them. One clarification, because the wording invites the
+        misreading: I8 governs <em>who</em> writes, never <em>what SQL ran</em>.
+        An identical no-op update logs nothing (§4.1's identical-update skip),
+        and that is not a third exception — it changes no state, so there is no
+        change to record and nothing a reader could fail to reconstruct.</td>
       <td><a href="#s5">§5</a></td>
       <td>Trigger gates; any future exemption; §10 readers</td>
       <td>Test: for a generated workload containing every write class (user,
