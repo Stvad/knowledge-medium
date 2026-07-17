@@ -11,8 +11,48 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
+
+/** Which of `sourceIds` are property-subtree machinery — a value child (or a
+ *  row deeper inside a property subtree) whose chain passes through a §9 field
+ *  row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL` (flip-gated by the
+ *  caller; a workspace-scoped `block_types = 'property-schema'` probe on a
+ *  non-null `reference_target_id`; root rows exempt via `parent_id IS NOT
+ *  NULL`). Field rows themselves are already suppressed from `block_references`
+ *  by the references processor, so in practice this matches property VALUE
+ *  rows that carry a wikilink/ref — the sources that would otherwise mint a
+ *  backlink attributed to hidden machinery rather than to the owning block. */
+const propertyMachinerySourceIds = async (
+  db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
+  sourceIds: readonly string[],
+): Promise<Set<string>> => {
+  if (sourceIds.length === 0) return new Set()
+  const placeholders = sourceIds.map(() => '?').join(', ')
+  const rows = await db.getAll<{ id: string }>(
+    `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, depth) AS (
+       SELECT id, id, reference_target_id, parent_id, workspace_id, 0
+         FROM blocks WHERE id IN (${placeholders})
+       UNION ALL
+       SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+         FROM blocks AS b JOIN up ON b.id = up.parent_id
+        WHERE up.depth < 100
+     )
+     SELECT DISTINCT up.start_id AS id
+       FROM up
+      WHERE up.reference_target_id IS NOT NULL
+        AND up.parent_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM block_types bt
+           WHERE bt.block_id = up.reference_target_id
+             AND bt.type = 'property-schema'
+             AND bt.workspace_id = up.workspace_id
+        )`,
+    [...sourceIds],
+  )
+  return new Set(rows.map(r => r.id))
+}
 
 /** Filter applied on top of the base "blocks that reference target X"
  *  set. Each entry is a `BlockPredicate` from the unified typed-query
@@ -90,10 +130,10 @@ export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean
 // otherwise the `ctx.run` call here resolves QueryRegistry, which loops
 // back through this query's own type.
 export const backlinksForBlockQuery: Query<
-  {workspaceId: string; id: string; filter?: BacklinksFilter},
+  {workspaceId: string; id: string; filter?: BacklinksFilter; rawSources?: boolean},
   string[]
 > = defineQuery<
-  {workspaceId: string; id: string; filter?: BacklinksFilter},
+  {workspaceId: string; id: string; filter?: BacklinksFilter; rawSources?: boolean},
   string[]
 >({
   name: BACKLINKS_FOR_BLOCK_QUERY,
@@ -101,9 +141,17 @@ export const backlinksForBlockQuery: Query<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema.optional(),
+    // Default (false): exclude property-machinery sources — a `[[Foo]]`
+    // property VALUE mints its backlink through the owning block's cell
+    // reprojection, so surfacing the hidden value row too would double it and
+    // attribute one copy to invisible machinery. `true` returns EVERY source
+    // (the raw `block_references` view), for inspection / debugging. Reference
+    // maintenance never goes through this query — it reads `block_references`
+    // directly — so filtering here is display-only, never a correctness risk.
+    rawSources: z.boolean().optional(),
   }),
   resultSchema: stringArraySchema,
-  resolve: async ({workspaceId, id, filter}, ctx) => {
+  resolve: async ({workspaceId, id, filter, rawSources}, ctx) => {
     if (!workspaceId || !id) return []
     // Target structural dep — re-resolve when the target itself is
     // deleted/restored without making target content part of the
@@ -114,14 +162,20 @@ export const backlinksForBlockQuery: Query<
       key: typedBlocksStructureKey(workspaceId, id),
     })
     const normalized = normalizeBacklinksFilter(filter)
-    const ids = await ctx.run('core.typedBlockIds', {
+    const ids = (await ctx.run('core.typedBlockIds', {
       workspaceId,
       referencedBy: {id},
       match: normalized.include,
       exclude: normalized.exclude,
       order: 'created-desc',
-    })
-    return ids.filter(sourceId => sourceId !== id)
+    })).filter(sourceId => sourceId !== id)
+    // Machinery-source exclusion is flip-gated: an un-flipped workspace (all of
+    // prod) has no property value children, so there is nothing to exclude and
+    // this pays only the cached flip read.
+    if (rawSources || ids.length === 0) return ids
+    if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
+    const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+    return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
   },
 })
 

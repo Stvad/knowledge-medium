@@ -221,6 +221,63 @@ describe('backlinksDataExtension query', () => {
     expect(out).toEqual([])
   })
 
+  describe('property-machinery source exclusion (#20)', () => {
+    const FLIP_WS = 'ws-flip'
+    const seedFlipped = async () => {
+      await sharedDb.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'flip ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [FLIP_WS],
+      )
+    }
+    const createIn = (args: {
+      id: string; parentId?: string | null; content?: string
+      referenceTargetId?: string | null; references?: BlockReference[]
+    }) =>
+      env.repo.tx(tx => tx.create({
+        id: args.id, workspaceId: FLIP_WS, parentId: args.parentId ?? null,
+        orderKey: `k-${args.id}`, content: args.content ?? '',
+        referenceTargetId: args.referenceTargetId, references: args.references ?? [],
+      }), {scope: ChangeScope.BlockDefault})
+
+    it('excludes a property VALUE source by default; rawSources returns it', async () => {
+      await seedFlipped()
+      // `D` is a recognized property definition; `F` is a field row stamped at
+      // it; `V` is F's value child carrying a `[[Foo]]` reference (the hidden
+      // machinery source); `Q` is an ordinary block referencing Foo.
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'Foo'})
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D'})
+      await createIn({id: 'V', parentId: 'F', references: [{id: 'Foo', alias: 'Foo'}]})
+      await createIn({id: 'Q', references: [{id: 'Foo', alias: 'Foo'}]})
+
+      // Sanity: both sources are in the raw index.
+      const raw = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'Foo', rawSources: true}).load())
+      expect(raw.sort()).toEqual(['Q', 'V'])
+
+      // Default view drops the hidden value-row source (the owning block's
+      // cell reprojection is what carries this backlink, not `V`).
+      const filtered = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'Foo'}).load())
+      expect(filtered).toEqual(['Q'])
+    })
+
+    it('does not filter in an un-flipped workspace (no machinery exists)', async () => {
+      await create({id: 'Foo2', workspaceId: WS})
+      await create({id: 'src', workspaceId: WS, references: [{id: 'Foo2', alias: 'Foo2'}]})
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: WS, id: 'Foo2'}).load())
+      expect(out).toEqual(['src'])
+    })
+  })
+
   it('scopes to workspaceId', async () => {
     await create({id: 'target', workspaceId: WS})
     await create({
