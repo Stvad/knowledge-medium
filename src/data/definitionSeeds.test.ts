@@ -540,6 +540,9 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // seed's deterministic id, so materializePropertySeeds throws its
     // cross-workspace guard for the whole batch. The independent type pass must
     // still run — a bad property seed can't strand valid type seed backing blocks.
+    // (Safe against the registry-priming auto-schedule: that pass is deep-idle
+    // deferred ~10-30s and can't fire before this synchronous poison write, so
+    // the id is never materialized first — no DuplicateId collision.)
     const [propSeedKey] = [...(repo.propertyDefinitions?.seedsByKey.keys() ?? [])]
     expect(propSeedKey).toBeTruthy()
     await repo.tx(tx => tx.create({

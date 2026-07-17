@@ -240,6 +240,25 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
 const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
   `${workspaceId}:${id}`
 
+/** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
+ *  key's values. An absent map is the empty map; the default `eq` compares keys
+ *  only. `b.has(key)` gates the `b.get(key)!`, so a legitimately-undefined value
+ *  isn't mistaken for a missing key. */
+const sameKeyedMap = <T>(
+  a: ReadonlyMap<string, T> | undefined,
+  b: ReadonlyMap<string, T> | undefined,
+  eq: (av: T, bv: T) => boolean = () => true,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const [key, value] of a) {
+    if (!b.has(key) || !eq(value, b.get(key)!)) return false
+  }
+  return true
+}
+
 /** True when two registry snapshots carry the same SET of seed keys (ignoring
  *  order, revisions, and everything else). Used to fire seed materialization
  *  only when the active workspace's declared seeds actually change — a new
@@ -249,14 +268,7 @@ const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
 const sameSeedKeySet = (
   a: ReadonlyMap<string, unknown> | undefined,
   b: ReadonlyMap<string, unknown> | undefined,
-): boolean => {
-  const sizeA = a?.size ?? 0
-  const sizeB = b?.size ?? 0
-  if (sizeA !== sizeB) return false
-  if (!a || !b) return true
-  for (const key of a.keys()) if (!b.has(key)) return false
-  return true
-}
+): boolean => sameKeyedMap(a, b)
 
 /** Like {@link sameSeedKeySet}, but also compares each type seed's membership
  *  `id`. `materializeTypeSeeds` skips EVERY seed in a duplicate-`id` group
@@ -267,17 +279,7 @@ const sameSeedKeySet = (
 const sameTypeSeedIdentities = (
   a: ReadonlyMap<string, {id: string}> | undefined,
   b: ReadonlyMap<string, {id: string}> | undefined,
-): boolean => {
-  const sizeA = a?.size ?? 0
-  const sizeB = b?.size ?? 0
-  if (sizeA !== sizeB) return false
-  if (!a || !b) return true
-  for (const [key, seed] of a) {
-    const other = b.get(key)
-    if (!other || other.id !== seed.id) return false
-  }
-  return true
-}
+): boolean => sameKeyedMap(a, b, (x, y) => x.id === y.id)
 
 /** The one-deep "active-or-retained-previous" retain rule, expressed once.
  *  Serve `workspaceId` from the active snapshot, or the immediately-previous one
@@ -815,7 +817,15 @@ export class Repo {
         // DIFFERENT workspace, so an in-flight read/tx that began for it still
         // resolves against real definitions. A same-workspace rebuild (contribution
         // change) or a re-prime doesn't rotate the slot.
-        const incomingWorkspaceId = propertyDefinitions?.workspaceId ?? null
+        //
+        // Derive the incoming workspace from EITHER registry: `typeDefinitions` is
+        // built without the property registry's priming gate (facetBridge), so a
+        // type-only seed change can land while `propertyDefinitions` is still null.
+        // Falling back to the type registry's workspace keeps both the retention
+        // check and the reschedule guard below from mistaking that window for "no
+        // workspace" and skipping a type-seed materialization pass.
+        const incomingWorkspaceId =
+          propertyDefinitions?.workspaceId ?? typeDefinitions?.workspaceId ?? null
         const currentWorkspaceId = this._propertyDefinitionRegistry?.workspaceId ?? null
         if (this._propertyDefinitionRegistry && incomingWorkspaceId !== currentWorkspaceId) {
           this._previousPropertyDefinitionRegistry = this._propertyDefinitionRegistry
@@ -2350,9 +2360,9 @@ export class Repo {
   ): Promise<void> {
     if (signal.aborted) return
     try {
-      // Read the CURRENT seed set at run time: a coalesced schedule may have grown
-      // it since this pass was queued, and a registry rotated by a switch-away
-      // yields an empty set for the departed workspace (→ this is a cheap no-op).
+      // `workspaceSeeds` reads live (see its doc); one extra consequence here is
+      // that a registry rotated by a switch-away yields an empty set for the
+      // departed workspace, making this a cheap no-op.
       const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
       if (kind === 'property') {
         if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds)
