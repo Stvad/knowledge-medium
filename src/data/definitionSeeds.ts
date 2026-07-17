@@ -20,8 +20,8 @@ import {
   addBlockTypeToProperties,
 } from '@/data/properties'
 import {BLOCK_TYPE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
-import {propertiesPageBlockId} from '@/data/propertiesPage'
-import {typesPageBlockId} from '@/data/typesPage'
+import {propertiesPageBlockId, getOrCreatePropertiesPage} from '@/data/propertiesPage'
+import {typesPageBlockId, getOrCreateTypesPage} from '@/data/typesPage'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
 
@@ -303,6 +303,11 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
   readonly idFor: (workspaceId: string, seedKey: string) => string
   /** Deterministic parent page id (Properties / Types). */
   readonly parentFor: (workspaceId: string) => string
+  /** Ensure the parent page (Properties / Types) exists before minting children.
+   *  Idempotent + deterministic-id; called only when there's pending work, so the
+   *  pass is self-sufficient rather than dependent on bootstrap ordering (see
+   *  `materializeSeeds`). */
+  readonly ensureParent: (repo: Repo, workspaceId: string) => Promise<unknown>
   readonly contentFor: (seed: S) => string
   readonly propertiesFor: (seed: S) => Record<string, unknown>
   readonly txDescription: string
@@ -323,9 +328,11 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
  * deterministic id before entering the write transaction; one poisoned id
  * intentionally aborts the whole batch rather than partially materializing a
  * declaration set whose identity is suspect. Missing definitions are minted
- * beneath the already-ensured deterministic parent page in one Automation
- * transaction with pristine systemMint timestamps. The kind's specifics
- * (id / parent / content / bag / label / pre-filter) come through `config`. */
+ * beneath the deterministic parent page — which the pass ensures exists first
+ * (`config.ensureParent`), so it doesn't depend on bootstrap having created it —
+ * in one Automation transaction with pristine systemMint timestamps. The kind's
+ * specifics (id / parent / ensure / content / bag / label / pre-filter) come
+ * through `config`. */
 const materializeSeeds = async <S extends {readonly seedKey: string; readonly revision: number}>(
   repo: Repo,
   workspaceId: string,
@@ -372,18 +379,33 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   if (pending.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
 
   // The probe above awaited; if the generation aborted since (the user switched
-  // workspaces — `setActiveWorkspaceId` aborts it), don't open the write tx.
-  // `repo.tx` pins writes by the row's own workspace, so materializing here would
-  // create backing blocks in the workspace the user just left, past the caller's
-  // pre-probe abort check. The write is idempotent and scope-correct, but the
-  // active-workspace guard exists to not do it — so honor the abort at the last
+  // workspaces — `setActiveWorkspaceId` aborts it), don't ensure the page or open
+  // the write tx. `repo.tx` pins writes by the row's own workspace, so materializing
+  // here would create backing blocks in the workspace the user just left, past the
+  // caller's pre-probe abort check. The write is idempotent and scope-correct, but
+  // the active-workspace guard exists to not do it — so honor the abort at the last
   // point before the tx.
   if (signal?.aborted) return {created: 0, restored: 0, skippedReadOnly: false}
+
+  // Ensure the parent system page exists before minting children. `tx.create`
+  // enforces `requireParentInWorkspace`, so a create beneath a not-yet-materialized
+  // Properties/Types page throws `ParentNotFoundError`. That's reachable: a
+  // `setActiveWorkspaceId`-driven reschedule (esp. for TYPE seeds, whose registry
+  // has no priming gate) can fire this pass before bootstrap's `ensureSystemPages`
+  // runs. Ensuring here — idempotent, deterministic-id, a cached read once the page
+  // exists, and concurrency-safe against bootstrap's own ensure (it re-checks
+  // existence inside its tx) — makes the pass self-sufficient rather than a
+  // spurious throw that waits for the next open/seed change.
+  await config.ensureParent(repo, workspaceId)
 
   let created = 0
   let restored = 0
   const parentId = config.parentFor(workspaceId)
   await repo.tx(async tx => {
+    // `ensureParent` (and `repo.tx`'s own tx_context setup) awaited since the check
+    // above; a switch-away can land in that window. Recheck before the write loops
+    // so an aborted generation commits nothing (an empty tx is a no-op).
+    if (signal?.aborted) return
     const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
     // Revalidate the complete declaration set under the same write lock before
     // the first mutation. The outside batch is only a fast no-work probe; it
@@ -422,8 +444,8 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   return {created, restored, skippedReadOnly: false}
 }
 
-/** Create/restore-only PROPERTY seed pass — missing definitions minted beneath
- * the already-ensured deterministic Properties page. See `materializeSeeds`. */
+/** Create/restore-only PROPERTY seed pass — missing definitions minted beneath the
+ * Properties page, which the pass ensures exists first. See `materializeSeeds`. */
 export const materializePropertySeeds = (
   repo: Repo,
   workspaceId: string,
@@ -434,6 +456,7 @@ export const materializePropertySeeds = (
     label: 'materializePropertySeeds',
     idFor: propertyDefinitionBlockId,
     parentFor: propertiesPageBlockId,
+    ensureParent: getOrCreatePropertiesPage,
     contentFor: seed => seed.name,
     propertiesFor: canonicalPropertySeedProperties,
     txDescription: 'materialize property definitions',
@@ -480,8 +503,8 @@ const uncontestedTypeSeeds = (
 }
 
 /** Create/restore-only TYPE seed pass — missing definitions minted beneath the
- * already-ensured deterministic Types page. Unlike the property pass it drops
- * contested-`id` seeds first (`uncontestedTypeSeeds`, via `preFilter`) so a
+ * Types page, which the pass ensures exists first. Unlike the property pass it
+ * drops contested-`id` seeds first (`uncontestedTypeSeeds`, via `preFilter`) so a
  * membership collision never materializes an order-dependent, orphan-prone
  * backing row; the property side folds its collision handling into the registry
  * upstream. Its `block-type` backing rows are kept bare (no PAGE_TYPE / alias) by
@@ -496,6 +519,7 @@ export const materializeTypeSeeds = (
     label: 'materializeTypeSeeds',
     idFor: typeDefinitionBlockId,
     parentFor: typesPageBlockId,
+    ensureParent: getOrCreateTypesPage,
     contentFor: seed => seed.label,
     propertiesFor: canonicalTypeSeedProperties,
     txDescription: 'materialize type definitions',

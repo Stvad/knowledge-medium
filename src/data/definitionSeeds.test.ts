@@ -934,6 +934,59 @@ describe('type definition materialization', () => {
       [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
   })
 
+  it('ensures its own Types page when it does not exist yet (self-sufficient before bootstrap)', async () => {
+    // A `setActiveWorkspaceId`-driven reschedule can fire the type pass before
+    // bootstrap's `ensureSystemPages` creates the Types page (the type registry has
+    // no priming gate). The pass must ensure its parent rather than throw
+    // ParentNotFound and leave the seed unmaterialized until the next open/change.
+    // This workspace never had `ensureSystemPages` run (beforeEach only ensures WS).
+    const freshWs = 'ws-no-pages'
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typesPageBlockId(freshWs)])).toBeNull()
+
+    expect(await materializeTypeSeeds(repo, freshWs, [typeSeed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+
+    // The parent Types page was materialized by the pass itself...
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typesPageBlockId(freshWs)])).not.toBeNull()
+    // ...and the backing block is parented under it.
+    const row = await sharedDb.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(freshWs, typeSeed.seedKey)])
+    expect(row.parent_id).toBe(typesPageBlockId(freshWs))
+  })
+
+  it('skips the seed write when the generation aborts during the parent-page ensure', async () => {
+    // Distinct switch-away window from the probe test above: the pre-tx check
+    // passes, then `ensureParent` awaits — an abort landing THERE must still skip
+    // the seed write. Abort while the parent page is loaded (inside ensureParent);
+    // the recheck at the top of the write tx must commit nothing, even though the
+    // page itself gets created (ensureParent ignores the signal).
+    const freshWs = 'ws-abort-in-ensure'
+    const controller = new AbortController()
+    const realLoad = repo.load.bind(repo)
+    vi.spyOn(repo, 'load').mockImplementation((async (
+      id: string,
+      opts?: {children?: boolean; ancestors?: boolean; descendants?: boolean | number},
+    ) => {
+      if (id === typesPageBlockId(freshWs)) {
+        controller.abort()
+        return null
+      }
+      return realLoad(id, opts)
+    }) as typeof repo.load)
+
+    expect(await materializeTypeSeeds(repo, freshWs, [typeSeed], controller.signal))
+      .toEqual({created: 0, restored: 0, skippedReadOnly: false})
+    // ensureParent still ran (it doesn't observe the signal), so the page exists...
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typesPageBlockId(freshWs)])).not.toBeNull()
+    // ...but the aborted generation wrote no backing block.
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(freshWs, typeSeed.seedKey)])).toBeNull()
+  })
+
   it('typeify still completes a NON-seed block-type block into a page + alias (carve-out is narrow)', async () => {
     const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
     await repo.tx(async tx => {
