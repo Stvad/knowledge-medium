@@ -1036,7 +1036,11 @@ export type { ChangeSnapshot } from '@/data/invalidation.js'
  *       the row's *membership* in a parent's live-children set changed
  *       (creation, soft-deletion, restore, parent move), or the live
  *       sibling order changed under the same parent (`order_key` update).
- *       Pure content / property edits don't fire parent-edge deps.
+ *       Also adds `before.parentId` AND the row's own `id` whenever its
+ *       `referenceTargetId` changed (field-row recognition flip): the
+ *       parent's VISIBLE membership and the row's own visible children
+ *       both shift (§9). Pure content / property edits otherwise don't
+ *       fire parent-edge deps.
  *    - `workspaceIds`: every workspace_id touched (covers backlinks
  *       handles' coarse workspace dep).
  *    - `plugin`: channel/key invalidations emitted by plugin rules.
@@ -1108,17 +1112,29 @@ export const snapshotsToChangeNotification = (
       && (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
     ) {
       parentIds.add(beforeParent)
-      // `children(id)` ALSO changes, not just the parent's: `id` flipping
-      // field-row-ness toggles whether its OWN children are property-subtree
-      // interior — a child that resolves to a definition is EXCLUDED from
-      // `children(id)` while `id` is a normal row but SHOWN as a value once
-      // `id` is a field row (§9 positional rule, PR #386 review). A handle
-      // already listing `children(id)` must re-resolve too.
-      parentIds.add(id)
     }
     // Pure field change with same parent_id and same liveness: rowId
     // alone covers it. No parent-edge entry — `repo.children(id)`
     // already declares row deps on each child for this case.
+
+    // Independent of the membership transition above (NOT chained with
+    // `else if`): whenever a live row's `referenceTargetId` changes,
+    // `children(id)` must also re-resolve — `id` flipping field-row-ness
+    // toggles whether its OWN children are property-subtree interior (a
+    // child that resolves to a definition is EXCLUDED from `children(id)`
+    // while `id` is a normal row but SHOWN as a value once `id` is a field
+    // row, §9). This holds even when the row ALSO moved in the same tx —
+    // e.g. `mergeBlocksInTx` clears a value's stamp AND relocates it in one
+    // commit, which matches the mutually-exclusive "Moved" branch above; a
+    // chained `else if` would then swallow this self-edge and strand a
+    // `children(id)` handle stale.
+    if (
+      beforeLive
+      && afterLive
+      && (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
+    ) {
+      parentIds.add(id)
+    }
 
   }
   return {

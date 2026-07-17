@@ -154,6 +154,25 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
   })
 
+  it('move + field-row flip in ONE tx: adds old/new parents AND the row itself', () => {
+    // `mergeBlocksInTx` clears a value row's referenceTargetId and relocates
+    // it in the same commit, so the collapsed snapshot carries both a
+    // parent change and a referenceTargetId change. The self-edge (`children
+    // (id)` must re-resolve, §9) has to survive alongside the parent move —
+    // the field-flip check is deliberately NOT chained onto the mutually
+    // exclusive membership `else if` (which the "Moved" arm would otherwise
+    // win, dropping `id`). Removing the standalone `parentIds.add(id)` makes
+    // this fail with ['p1','p2'].
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p1', workspaceId: 'w', referenceTargetId: 'def-1'},
+        after: {parentId: 'p2', workspaceId: 'w', referenceTargetId: null},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p1', 'p2'])
+  })
+
   it('pure content edit: row dep only, no parent-edge', () => {
     const map = new Map<string, ChangeSnapshot>([
       ['c', {
