@@ -532,6 +532,73 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(row?.deleted).toBe(0)
     })
   })
+
+  it('materializes type seeds even when the property pass throws (kinds are isolated)', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+    // Poison the property pass: park a foreign-workspace live row on a property
+    // seed's deterministic id, so materializePropertySeeds throws its
+    // cross-workspace guard for the whole batch. The independent type pass must
+    // still run — a bad property seed can't strand valid type seed backing blocks.
+    const [propSeedKey] = [...(repo.propertyDefinitions?.seedsByKey.keys() ?? [])]
+    expect(propSeedKey).toBeTruthy()
+    await repo.tx(tx => tx.create({
+      id: propertyDefinitionBlockId(WS, propSeedKey!),
+      workspaceId: OTHER_WS,
+      parentId: null,
+      orderKey: 'a0',
+      content: 'foreign occupant',
+    }), {scope: ChangeScope.BlockDefault})
+
+    repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
+    await vi.waitFor(() => {
+      expect(repo.typeDefinitions?.seedsByKey.has(typeSeed.seedKey)).toBe(true)
+    })
+
+    repo.scheduleWorkspaceSeedMaterialization(WS, false)
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const row = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
+      )
+      expect(row?.deleted).toBe(0)
+    })
+  })
+
+  it('reschedules when a type seed id de-collides, even with the key set unchanged', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+
+    // Two type seeds sharing a membership id but with distinct keys: contested, so
+    // `uncontestedTypeSeeds` backs NEITHER.
+    const seedA = seedType({seedKey: 'system:test/type/a', revision: 1, id: 'dup', label: 'A'})
+    const seedBContested = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup', label: 'B'})
+    repo.setRuntimeContributions(typeSeedsFacet, 'contested', [seedA, seedBContested])
+    await vi.waitFor(() => expect(repo.typeDefinitions?.seedsByKey.size).toBe(2))
+    await repo.awaitSeedMaterialization()
+    // Neither backed while contested (also the pre-materialization state, so this
+    // holds regardless of the auto-scheduled pass's timing).
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(WS, seedA.seedKey)])).toBeNull()
+
+    // De-collide B's id WITHOUT changing the key set. Materializability changed
+    // (both are now uncontested), so the reschedule trigger must fire on the id
+    // change alone — a key-set-only diff would miss it and leave them unbacked.
+    // NOTE: no explicit schedule here — this relies on the applyTypesAndSchemas
+    // auto-reschedule, which is the mechanism under test.
+    const seedBFixed = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup-b', label: 'B'})
+    repo.setRuntimeContributions(typeSeedsFacet, 'contested', [seedA, seedBFixed])
+
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const rowA = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedA.seedKey)])
+      const rowB = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedBFixed.seedKey)])
+      expect(rowA?.deleted).toBe(0)
+      expect(rowB?.deleted).toBe(0)
+    })
+  })
 })
 
 describe('seed definition write guard (tx layer)', () => {

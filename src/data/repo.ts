@@ -258,6 +258,27 @@ const sameSeedKeySet = (
   return true
 }
 
+/** Like {@link sameSeedKeySet}, but also compares each type seed's membership
+ *  `id`. `materializeTypeSeeds` skips EVERY seed in a duplicate-`id` group
+ *  (`uncontestedTypeSeeds`), so a declaration that de-collides an id — without
+ *  adding or removing a key — still changes what is materializable, and the
+ *  reschedule trigger must see it. Property seeds carry no such id-collision
+ *  filter, so their key-set diff alone suffices. */
+const sameTypeSeedIdentities = (
+  a: ReadonlyMap<string, {id: string}> | undefined,
+  b: ReadonlyMap<string, {id: string}> | undefined,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const [key, seed] of a) {
+    const other = b.get(key)
+    if (!other || other.id !== seed.id) return false
+  }
+  return true
+}
+
 /** The one-deep "active-or-retained-previous" retain rule, expressed once.
  *  Serve `workspaceId` from the active snapshot, or the immediately-previous one
  *  still retained across a switch; any other (genuinely foreign) workspace
@@ -802,17 +823,20 @@ export class Repo {
         // Seed materialization (§4.3): plugin/dynamic seeds first appear when the
         // toggle-aware app runtime installs in a post-paint effect, long after
         // bootstrap ran — so re-run the create/restore pass whenever this active
-        // workspace's seedKey SET changes (not on every type/preset rebuild). Diff
-        // BOTH registries against their PRIOR value (so assign them AFTER): a type
-        // seed (a `seedType` contribution) can appear post-bootstrap on its own,
-        // with no property-seed change to piggyback the reschedule on.
-        const seedKeysChanged =
+        // workspace's materializable seed set changes (not on every type/preset
+        // rebuild). Diff BOTH registries against their PRIOR value (so assign them
+        // AFTER): a type seed (a `seedType` contribution) can appear post-bootstrap
+        // on its own, with no property-seed change to piggyback the reschedule on.
+        // The type diff is id-aware (`sameTypeSeedIdentities`): materializability
+        // there also depends on membership-id collisions, so an id that de-collides
+        // without a key change must still reschedule.
+        const seedsChanged =
           !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
-          !sameSeedKeySet(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey)
+          !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey)
         this._propertyDefinitionRegistry = propertyDefinitions
         this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
-        if (seedKeysChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
+        if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
       },
@@ -2301,25 +2325,45 @@ export class Repo {
     try {
       const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
       if (!access.allowed) return
-      // Read the CURRENT seed sets at run time: coalesced schedules mean they
-      // may have grown since this pass was queued, and re-checking the projected
-      // workspace skips a pass whose workspace is no longer active/projected
-      // (closing the post-gate switch-away window too). Materialize both kinds in
-      // this one pass — same access gate, same deferred job, same dirty-bit loop;
-      // the two backing pages (Properties / Types) are independent, so order and
-      // either being empty don't matter.
-      const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
-      if (propertySeeds.length === 0 && typeSeeds.length === 0) return
-      if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds)
-      if (typeSeeds.length > 0) await materializeTypeSeeds(this, workspaceId, typeSeeds)
     } catch (err) {
       // A superseded generation (the user switched workspaces) aborts the parked
       // access wait — expected, not a failure to log or retry. Gate on OUR signal
-      // so an unrelated AbortError-named failure inside the pass still surfaces.
+      // so an unrelated AbortError-named failure still surfaces.
+      if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[seedMaterialization] workspace ${workspaceId} access wait failed: ${reason}`)
+      return
+    }
+    // Property and type seeds back INDEPENDENT pages (Properties / Types), so run
+    // each kind as its own isolated pass: a failure materializing one (e.g. a
+    // deterministic id occupied by a foreign row) must NOT suppress the other, and
+    // each rechecks the abort signal first so a switch-away landing between the two
+    // can't create backing blocks in the workspace the user just left.
+    await this.materializeSeedKind(workspaceId, signal, 'property')
+    await this.materializeSeedKind(workspaceId, signal, 'type')
+  }
+
+  private async materializeSeedKind(
+    workspaceId: string,
+    signal: AbortSignal,
+    kind: 'property' | 'type',
+  ): Promise<void> {
+    if (signal.aborted) return
+    try {
+      // Read the CURRENT seed set at run time: a coalesced schedule may have grown
+      // it since this pass was queued, and a registry rotated by a switch-away
+      // yields an empty set for the departed workspace (→ this is a cheap no-op).
+      const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+      if (kind === 'property') {
+        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds)
+      } else if (typeSeeds.length > 0) {
+        await materializeTypeSeeds(this, workspaceId, typeSeeds)
+      }
+    } catch (err) {
       if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
       const reason = err instanceof Error ? err.message : String(err)
       console.error(
-        `[seedMaterialization] workspace ${workspaceId} failed (will retry next open/seed change): ${reason}`,
+        `[seedMaterialization] workspace ${workspaceId} ${kind} seeds failed (will retry next open/seed change): ${reason}`,
       )
     }
   }

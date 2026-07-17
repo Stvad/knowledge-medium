@@ -126,6 +126,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   resolveTypedBlockQuery: 'private read',
   runReconcileRescan: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runWorkspaceSeedMaterialization: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  materializeSeedKind: 'private; reached only from runWorkspaceSeedMaterialization (delegated schedule* overrides)',
   runSubquery: 'private read',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
