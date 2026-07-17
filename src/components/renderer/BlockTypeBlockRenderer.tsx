@@ -90,10 +90,8 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
       properties: d.properties,
     } : undefined,
   })
-  // A materialized type seed is a type *defined in code* — code-owned and
-  // unshadowable, exactly like a materialized property seed (see
-  // PropertySchemaContentRenderer). Editing its backing row has no legitimate
-  // meaning and would corrupt the definition, so render it read-only. A viewer
+  // A materialized type seed is code-owned and unshadowable — lock its backing
+  // row read-only, same rationale as PropertySchemaContentRenderer. A viewer
   // (repo read-only) is the same lock for a different reason.
   const isSeedBacked = data ? isValidSeededDefinition(data) : false
   const readOnly = block.repo.isReadOnly || isSeedBacked

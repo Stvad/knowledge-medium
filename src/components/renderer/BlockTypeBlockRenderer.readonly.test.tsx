@@ -16,8 +16,10 @@ import { BlockTypeContentRenderer } from './BlockTypeBlockRenderer'
 
 const WS = 'ws-1'
 
-// A code-owned type seed materialized into the workspace, plus a user-created
-// type block for contrast.
+// A code-owned type seed materialized into the workspace. (The non-seed
+// "user-created type stays editable" case is covered at the model level in
+// model.test.ts — the renderer's editable path renders PropertyPicker, which
+// needs a RepoContext this harness doesn't inject.)
 const typeSeed = seedType({
   seedKey: 'system:test/type/read-only-demo',
   revision: 1,
