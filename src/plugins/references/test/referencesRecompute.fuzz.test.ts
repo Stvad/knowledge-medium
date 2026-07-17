@@ -656,4 +656,90 @@ describe('references pipeline sequences', () => {
       vi.useRealTimers()
     }
   })
+
+  // Deterministic canary for the ISO/live-hit sibling of the long-form
+  // bug above (found by the stable-wrong-binding sweep's deep run, seed
+  // -1450147062). A daily-note seat claims its ISO alias only via
+  // `createOrRestoreTargetBlock`'s `onInsertedOrRestored`, which does NOT
+  // run on the live-row-hit path. So a seat whose ISO alias is cleared
+  // while it stays LIVE (a direct alias edit on the daily page — the
+  // fuzzer's `setAlias clear=true` landing on the processor-minted seat)
+  // was left unowned: an unrelated block could then claim the date, and
+  // content-refs still bound to the seat (by deterministic id) stably
+  // disagreed with the new `block_aliases` claimant — two LIVE blocks
+  // disagreeing, which `sweepAliasBindings` forbids and the add-only
+  // reconcile never heals (the source only re-parses on its own row).
+  // `ensureDailyNoteTarget` (`ensureSeatClaimsIso`) now re-asserts the
+  // ISO claim on the live-row-hit path. Pins: (a) the seat re-owns the
+  // ISO after a release + a fresh date parse, (b) an unrelated block then
+  // can't steal it, (c) the sweep stays green. Before the fix (a) and (b)
+  // both fail (seat stays alias-less; the steal succeeds).
+  it('daily-note seat reclaims its ISO alias after a live release, blocking a later collision', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const ISO = '2026-01-05'
+      const dailyId = dailyNoteBlockId(WS, ISO)
+      const claimantOf = (alias: string) =>
+        sharedDb.db.getOptional<{block_id: string}>(
+          'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?', [WS, alias])
+
+      // A date wikilink mints the seat, which claims the ISO. Move the
+      // minter off the date afterwards so no live referrer holds
+      // `[[ISO]]` at release time (mirrors the counterexample, where the
+      // clear landed while ROOT's content had moved to `[[ax]]`) — that
+      // keeps the alias-removal rename ladder out of the picture, so this
+      // canary isolates the seat's own re-claim.
+      const minter = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `[[${ISO}]]`,
+      })
+      await flush()
+      expect((await claimantOf(ISO))?.block_id, 'seat claims the ISO at mint').toBe(dailyId)
+      await repo.mutate.setContent({id: minter, content: 'moved on'})
+      await flush()
+
+      // Release: a direct alias-clear on the live daily seat.
+      await repo.mutate.setProperty({id: dailyId, schema: aliasesProp, value: []})
+      await flush()
+      expect(await claimantOf(ISO), 'ISO is unclaimed after the release').toBeNull()
+
+      // A fresh `[[ISO]]` referrer resolves to the live seat and must
+      // re-claim the ISO on it (the live-row-hit path).
+      const src = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `see [[${ISO}]]`,
+      })
+      await flush()
+      expect((await claimantOf(ISO))?.block_id, 'seat re-claimed the ISO on the live-row-hit path')
+        .toBe(dailyId)
+
+      // (b) An unrelated block can no longer steal the ISO.
+      const other = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'other block',
+      })
+      await flush()
+      let caught: unknown
+      try {
+        await repo.mutate.setProperty({id: other, schema: aliasesProp, value: [ISO]})
+      } catch (e) {
+        caught = e
+      }
+      expect(caught, 'stealing the re-claimed ISO is rejected').toBeInstanceOf(ProcessorRejection)
+      expect((caught as ProcessorRejection).code).toBe('alias.collision')
+
+      // (c) The original binding still points at the seat, now consistent
+      // with the claimant — sweep + full audit stay green.
+      const srcRefs = JSON.parse(
+        (await sharedDb.db.getOptional<{references_json: string}>(
+          'SELECT references_json FROM blocks WHERE id = ?', [src]))!.references_json,
+      ) as Array<{id: string; alias: string}>
+      expect(srcRefs.find(r => r.alias === ISO)?.id, 'source still binds the seat').toBe(dailyId)
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the date binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
 })
