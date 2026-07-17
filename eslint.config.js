@@ -97,6 +97,7 @@ export default tseslint.config(
       'src/components/**/*.{ts,tsx}',
       'src/hooks/**/*.{ts,tsx}',
       'src/plugins/video-player/**/*.{ts,tsx}',
+      'src/shortcuts/**/*.{ts,tsx}',
       'src/utils/copy.ts',
       'src/utils/navigation.ts',
     ],
