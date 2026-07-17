@@ -116,4 +116,23 @@ describe('loadOrCreateChannelSecret', () => {
       expect(onDisk).toBe(results[0])
     }
   }, 30_000)
+
+  it('recovers from a reclaim gate a crashed process left behind (never throws)', async () => {
+    // A process that crashed mid-reclaim leaves the `.reclaim` gate dir with the
+    // secret file still empty. A caller starting inside the stale window must
+    // wait the gate out and reap it — NOT burn a short retry budget and throw
+    // (which at the unguarded MCP entrypoint would crash the server, so the
+    // channel would fail to start for the whole stale window instead of healing).
+    // Use a short stale window so the wait is a few hundred ms rather than 10s.
+    await fs.writeFile(file, '')
+    await fs.mkdir(`${file}.reclaim`) // gate a crashed reclaimer left behind (fresh, not yet stale)
+    const start = Date.now()
+    const secret = await loadOrCreateChannelSecret({reclaimStaleMs: 300})
+    expect(secret).toMatch(/^[0-9a-f]{64}$/)
+    expect((await fs.readFile(file, 'utf8')).trim()).toBe(secret)
+    // It waited the gate out rather than reaping instantly or giving up early.
+    expect(Date.now() - start).toBeGreaterThanOrEqual(250)
+    // ...and cleaned the gate up.
+    expect(await fs.stat(`${file}.reclaim`).then(() => true, () => false)).toBe(false)
+  }, 30_000)
 })
