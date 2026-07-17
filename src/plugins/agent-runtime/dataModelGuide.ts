@@ -152,7 +152,10 @@ The graph is more than pages. The common typed blocks (by frequency):
 - \`system:*\` (e.g. \`system:collapsed\`) is UI/system state, not user content.
 - To inspect code-declared and block-projected property definitions:
   \`yarn agent describe-runtime --facets data.definition-seeds --facets data.projected-property-definitions\`.
-  Inspect types separately with \`yarn agent describe-runtime --facets data.types\`.
+  Inspect types the same way: \`yarn agent describe-runtime --facets data.type-seeds --facets data.projected-type-definitions\`
+  (\`data.types\` holds only kernel/plugin CODE types — user-created \`block-type\`
+  blocks project into \`data.projected-type-definitions\`, so \`data.types\` alone
+  will not show them).
 
 ## Finding things — the named queries you can call
 

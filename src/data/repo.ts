@@ -146,6 +146,7 @@ import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
+import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
 import {
   materializePropertySeeds,
   awaitPropertySeedMaterializationAccess,
@@ -384,6 +385,13 @@ export class Repo {
   private sameTxProcessors: Map<string, AnySameTxProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
+  /** Active-workspace type-definition registry — the id-keyed, declaration-
+   * authoritative snapshot behind `getTypeBlockId` (block-backed types resolve
+   * to their durable block id) and the seed-provenance read-only gates. Null at
+   * stage 0 before a workspace pin; `_types` still holds the code contributions.
+   * Rebuilt by `applyTypesAndSchemas` from `projectedTypeDefinitionsFacet` +
+   * `typeSeedsFacet`. */
+  private _typeDefinitionRegistry: TypeDefinitionRegistrySnapshot | null = null
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SEED_MAP
   /** Atomic active-workspace definition snapshot. Null at stage 0 before a
    * workspace pin; identity resolution is unavailable in that state. */
@@ -641,6 +649,14 @@ export class Repo {
     return this._propertyDefinitionRegistry
   }
 
+  /** Active-workspace type-definition registry snapshot (kernel/plugin code
+   *  types are NOT in it — those live only in `types`; this is the block-built +
+   *  seed side that `getTypeBlockId` and the seed read-only gates read). Null
+   *  before a workspace pin. */
+  get typeDefinitions(): TypeDefinitionRegistrySnapshot | null {
+    return this._typeDefinitionRegistry
+  }
+
   /** Internal identity boundary factory. The caller supplies the target row's
    * workspace (the transaction layer owns that fact); resolve() itself accepts
    * only a handle/name and is therefore immune to ambient workspace switches. */
@@ -824,9 +840,11 @@ export class Repo {
         propertySchemas,
         propertyDefinitions,
         propertySeedNameCounts,
+        typeDefinitions,
       ) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        this._typeDefinitionRegistry = typeDefinitions
         // Retain the outgoing workspace's faithful snapshot when pinning a
         // DIFFERENT workspace, so an in-flight read/tx that began for it still
         // resolves against real definitions. A same-workspace rebuild (contribution

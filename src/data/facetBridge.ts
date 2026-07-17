@@ -36,6 +36,8 @@ import {
   buildPropertyDefinitionRegistry,
   buildUnboundPropertySchemas,
 } from '@/data/propertyDefinitionRegistry'
+import type {TypeDefinitionRegistrySnapshot} from '@/data/typeDefinitionRegistry'
+import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import type {
   Facet,
   FacetRuntime,
@@ -50,8 +52,10 @@ import {
   postCommitProcessorsFacet,
   propertyEditorOverridesFacet,
   projectedPropertyDefinitionsFacet,
+  projectedTypeDefinitionsFacet,
   queriesFacet,
   sameTxProcessorsFacet,
+  typeSeedsFacet,
   typesFacet,
   valuePresetCoresFacet,
   valuePresetPresentationsFacet,
@@ -64,6 +68,40 @@ import {
   type PropertyDefinitionChange,
 } from './internals/propertyDefinitionMigrations'
 import {readValuePresetRegistry} from './valuePresetRegistry'
+
+/** Merge the code-owned `typesFacet` contributions with the block-built + seed
+ *  contributions from the type-definition registry. Registry entries win a
+ *  same-`id` collision and are appended after the code entries — reproducing the
+ *  fold order + last-wins precedence of the pre-C3b single `typesFacet` (static
+ *  code contributions first; the `userTypesProjector`'s `'user-data'` bucket
+ *  appended, so a user row's id shadowed a code id). In C3b `typeSeedsFacet` is
+ *  empty and user block ids never collide with code slug ids, so the union is
+ *  disjoint; the collision rule matters only for a future seed↔code id overlap
+ *  during the Slice C4 `typesFacet.of → seedType` conversion (where the seed is
+ *  the authoritative successor). */
+export const mergeCodeAndRegistryTypes = (
+  codeTypes: ReadonlyMap<string, TypeContribution>,
+  registry: TypeDefinitionRegistrySnapshot | null,
+): ReadonlyMap<string, TypeContribution> => {
+  if (!registry || registry.typesById.size === 0) return codeTypes
+  const merged = new Map(codeTypes)
+  for (const [id, contribution] of registry.typesById) {
+    // Restore the diagnostic the pre-C3b single `keyedMapFacet` fold emitted on
+    // a duplicate key: a raw `.set()` here would silently overwrite. Unreachable
+    // today (user block ids are uuids, code ids are slugs, `typeSeedsFacet` is
+    // empty) — this is the C4 tripwire for a half-done `typesFacet.of → seedType`
+    // conversion where a code type and its seed successor both momentarily exist.
+    if (merged.has(id)) {
+      console.warn(
+        `[facetBridge] type id "${id}" is claimed by both a code contribution and ` +
+        'a block-built/seed definition; the registry entry wins (last-wins, matching ' +
+        'the pre-C3b typesFacet fold)',
+      )
+    }
+    merged.set(id, contribution)
+  }
+  return merged
+}
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
  *  the runtime-contribution path can run only the steps whose inputs
@@ -101,6 +139,7 @@ export interface FacetBridgeTarget {
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
     propertyDefinitions: PropertyDefinitionRegistrySnapshot | null,
     propertySeedNameCounts: ReadonlyMap<string, number>,
+    typeDefinitions: TypeDefinitionRegistrySnapshot | null,
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
@@ -326,11 +365,18 @@ export class FacetBridge {
         },
       },
       {
-        // Reads typesFacet for the transitional type-lift (Slice C removes it);
-        // the former direct `propertySchemasFacet` input was removed in B′.
+        // Owns the merged `repo.types` + `propertySchemas`. Types: fold the
+        // block-built rows (`projectedTypeDefinitionsFacet`) + declared type
+        // seeds (`typeSeedsFacet`) into the declaration-authoritative registry,
+        // then merge with the code-owned `typesFacet` contributions. Schemas:
+        // build the property registry, seeded by the transitional type-lift
+        // (Slice C removes the lift). The former direct `propertySchemasFacet`
+        // input was removed in B′.
         id: 'propertySchemas',
         inputs: [
           typesFacet as Facet<unknown, unknown>,
+          projectedTypeDefinitionsFacet as Facet<unknown, unknown>,
+          typeSeedsFacet as Facet<unknown, unknown>,
           projectedPropertyDefinitionsFacet as Facet<unknown, unknown>,
           definitionSeedsFacet as Facet<unknown, unknown>,
         ],
@@ -338,7 +384,21 @@ export class FacetBridge {
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
           const previousPropertyDefinitions = target.getPropertyDefinitions()
-          const types = rt.read(typesFacet)
+          const codeTypes = rt.read(typesFacet)
+          // The type-definition registry needs a workspace to scope its rows;
+          // before a pin it's null and `repo.types` is code contributions only.
+          // No priming gate (unlike the property registry): an unprimed
+          // projection is simply an empty projected-rows map — the registry then
+          // holds only declared seeds, which are code-owned and must be present
+          // pre-materialization anyway.
+          const typeDefinitions = this.activeWorkspaceId
+            ? buildTypeDefinitionRegistry({
+              workspaceId: this.activeWorkspaceId,
+              projectedDefinitions: rt.read(projectedTypeDefinitionsFacet),
+              seeds: rt.read(typeSeedsFacet),
+            })
+            : null
+          const types = mergeCodeAndRegistryTypes(codeTypes, typeDefinitions)
           const legacySchemas = liftTypeSchemas(types)
           const seeds = rt.read(definitionSeedsFacet)
           const propertySeedNameCounts = new Map<string, number>()
@@ -364,6 +424,7 @@ export class FacetBridge {
             propertySchemas,
             propertyDefinitions,
             propertySeedNameCounts,
+            typeDefinitions,
           )
           // Reproject rows whose ref-ness changed in this rebuild (e.g. a plugin
           // load makes a name ref-typed). A newly-OPENED workspace's existing
