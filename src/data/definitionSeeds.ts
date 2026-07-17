@@ -433,10 +433,11 @@ const uncontestedTypeSeeds = (
  * id aborts the whole batch; a tombstone restore preserves its bag; live stale
  * rows only log). Differences are only the kind's specifics: `typeDefinitionBlockId`
  * for identity, the Types page for the parent, `canonicalTypeSeedProperties` for
- * the bag, and an id-dedup pass (`dedupeTypeSeedsById`) the property side folds
- * into its name-collision handling upstream. `block-type` backing blocks would
- * trip the typeify same-tx processor into PAGE_TYPE + alias; the processor's seed
- * carve-out (a valid `/type/` seed row) keeps this write inert. */
+ * the bag, and a contested-id skip (`uncontestedTypeSeeds`) — the property side
+ * folds its membership-collision handling into the registry upstream.
+ * `block-type` backing blocks would trip the typeify same-tx processor into
+ * PAGE_TYPE + alias; the processor's seed carve-out (a valid `/type/` seed row)
+ * keeps this write inert. */
 export const materializeTypeSeeds = async (
   repo: Repo,
   workspaceId: string,
