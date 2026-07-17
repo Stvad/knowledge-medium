@@ -285,9 +285,11 @@
       The <code>history_mode = 'skip'</code> opt-in an earlier draft carried is
       deleted, which is what makes the log self-sufficient (I8). UI-state churn — measured at
       roughly half of a working device's update events — is logged but
-      <strong>hard-bounded</strong>: a retention sweeper prunes to the newest
-      K versions per block — written <em>full</em>, which makes them freely
-      prunable in any order (user call, <a href="#s16">O6</a>/§5.1).</li>
+      <strong>hard-bounded</strong>: a retention sweeper prunes each
+      <code>ephemeralHistory</code>-typed block (panels) to its newest K events.
+      The events stay compact like any other update; keeping the newest K is a
+      clean oldest-prefix delete, which is safe for compact events, so no
+      full-writes are needed (user call, <a href="#s16">O6</a>/§5.1).</li>
     <li><strong>Sync-applied events are kept, compact, for every workspace</strong>
       (user call 2026-07-15, superseding an earlier per-workspace-mode drop):
       local history stays self-sufficient instead of leaning on a server read
@@ -519,7 +521,20 @@ trigger-recreation ordering):
         <code>OLD.workspace_id</code> (delete) — a real column, not a payload
         field. v1 full snapshots carried <code>workspaceId</code> on every
         event; v2 compact updates omit it whenever it did not change, which is
-        almost always. Without the column, a workspace-scoped history or
+        almost always. <strong>A workspace move records on both sides without a
+        special case</strong> (review finding): a block cannot change workspace
+        in place — no code path does it (a local cross-workspace write throws
+        <code>DeterministicIdCrossWorkspaceError</code>, <code>txEngine.ts:842</code>;
+        no server RPC or migration moves one; 0 in the measured stock), and even
+        if one is introduced, blocks are workspace-bucketed in sync
+        (<code>WHERE workspace_id IN user_workspaces</code>,
+        <code>sync-config.yaml</code>), so a move leaves the old bucket and enters
+        the new one — surfacing as a <em>delete</em> in the source workspace
+        (stamped <code>OLD</code>) and a <em>create</em> in the destination
+        (stamped <code>NEW</code>), each visible from its own side. The single
+        constraint this puts on any future workspace-move feature: model it as
+        delete+create (or dual-stamp), never as an in-place <code>workspace_id</code>
+        UPDATE, which would indeed record only the destination. Without the column, a workspace-scoped history or
         recovery query would have to reconstruct arbitrary compact events just
         to learn membership — and for a <em>hard-deleted</em> block there is no
         live <code>blocks</code> row left to join, so it would miss those rows
@@ -617,15 +632,17 @@ corruption" carries this one raw-write asterisk (slice-B raw-write test).
 
 <p>Index changes — <strong>nothing the v2 triggers need</strong>: the v2
 trigger reads no history (§4.1/I6), so slice A ships no index work at all.
-Slice B adds <strong>no</strong> <code>row_events</code> index: the §5.1 sweeper
-keys on the block's <em>type</em> (a <code>blocks</code> query over the ~857
-flagged blocks), then prunes each flagged block's events with the existing
-<code>(block_id, created_at DESC)</code> index — so it needs no per-event index of
-its own, and the earlier partial <code>WHERE scope = 'local-ui'</code> index (and
-its per-UiState-write insert cost) is gone. Slice C adds
-<code>(block_id, id)</code> for reader walks and the §8 rewriter —
-<code>id</code> is AUTOINCREMENT-monotonic and is the authoritative per-block
-order (same-millisecond events in one tx tie on <code>created_at</code>). The
+Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper keys on the block's
+<em>type</em> (a <code>blocks</code> query over the ~857 flagged blocks), then
+prunes each flagged block to its newest K events <em>by <code>id</code></em> —
+which is what makes the cut a safe oldest-prefix delete (<code>created_at</code>
+is not reliably monotone in <code>id</code>, so ordering the cut by timestamp
+could hole a survivor, §5.1). The earlier partial <code>WHERE scope =
+'local-ui'</code> index (and its per-UiState-write insert cost) is gone;
+<code>(block_id, id)</code> replaces it and is the same index slice C's reader
+walks and the §8 rewriter need, so it is added once here. <code>id</code> is
+AUTOINCREMENT-monotonic and is the authoritative per-block order
+(same-millisecond events in one tx tie on <code>created_at</code>). The
 existing <code>(block_id, created_at DESC)</code> index is
 <strong>retained</strong> (review finding): per-block time-seek ("latest event
 ≤ T") has no sound substitute — <code>id</code> order is insertion order, and
@@ -877,13 +894,20 @@ in the history log? Options considered:
     <li><strong>Steady-state derived writes log normally</strong> (option d):
       projection, sweep repairs, per-row catch-up. In compact form a 2–3-write
       fan-out per property edit costs ~1&nbsp;KB total — affordable, and this
-      is precisely the record convergence debugging needs ("which pass rewrote
-      the cell, from what, to what, when"). No new provenance column:
-      every local event already carries <code>tx_id</code>, and
-      <code>command_events</code> (scope, description,
+      is the record convergence debugging needs — with one honest limit on
+      granularity. No new provenance column: every local event already carries
+      <code>tx_id</code>, and <code>command_events</code> (scope, description,
       <code>mutator_calls</code>; <code>commitPipeline.ts:348-368</code>)
-      identifies the writer — provenance is a join, and a later compaction pass
-      could target it by that join if the volume ever warrants.</li>
+      identifies the writing <em>tx</em> and the <code>tx.run</code> mutators it
+      invoked — provenance is a join, and a later compaction pass could target it
+      by that join if the volume ever warrants. What the join does <em>not</em>
+      resolve (review finding): a same-tx processor pass (projections /
+      normalizers running after the user fn) shares the outer tx's
+      <code>tx_id</code> and is not separately named in <code>mutator_calls</code>,
+      so its derived row writes attribute to the tx, not to "which pass". Per-pass
+      attribution for those would need processor provenance the design does not
+      add today; the claim is the tx and its mutators, from/to/when — not the
+      internal pass.</li>
     <li><strong>So do the one-shot bulk bursts</strong> — the props backfill,
       the arrival catch-up pass, future whole-table column backfills. The
       exemption that used to cover them is deleted, for four reasons:
@@ -1004,8 +1028,14 @@ Retention keys on the type.
     A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) enumerates
     blocks whose type carries <code>ephemeralHistory</code> (~857 panels on prod
     — a cheap <code>blocks</code> query, not a <code>row_events</code> scan) and,
-    for each, deletes all but its newest K <code>row_events</code> via the
-    existing <code>(block_id, created_at DESC)</code> index (§3). Because the key
+    for each, deletes all but its newest K <code>row_events</code> ordered by
+    <strong><code>id</code>, not <code>created_at</code></strong>: <code>id</code>
+    is the authoritative per-block order (§3), and because <code>created_at</code>
+    can tie within a tx or step under wall-clock skew, a cut by timestamp could
+    retain an earlier-<code>id</code> event while deleting a later one — holing a
+    survivor's backward walk, the exact corruption this is meant to avoid. The cut
+    is <code>id &lt; (K-th largest id for the block)</code>, served by the
+    <code>(block_id, id)</code> index that slice B adds for this (§3). Because the key
     is the block's <em>type</em> — read from the synced row, classified by code
     present on every device — a panel that synced in from another device is
     recognised identically to a locally-created one. That is exactly the blind
@@ -1455,11 +1485,16 @@ tool.
 </div>
 
 <p>
-Ship it in two forms, mirroring the ANALYZE precedent (automatic drift-gated
-pass + manual override command in
+Two forms are specified here, mirroring the ANALYZE precedent (automatic
+drift-gated pass + manual override command in
 <code>src/plugins/db-maintenance/plugin.ts:1-23</code>): the deep-idle one-shot,
-plus a command-palette "Compact database" action with a size/duration toast for
-users who want it now. Fallback variant if in-place VACUUM proves fragile on
+and a command-palette "Compact database" action with a size/duration toast for
+users who want it now. <strong>Only the manual command ships in slice D;</strong>
+the deep-idle one-shot is specified but <em>deferred</em> — <a href="#s16">O2</a>
+is resolved manual-first, because an automatic minutes-long single-worker stall
+fired by a heuristic is the riskiest UX path in this design, so it waits for a
+later release with real telemetry (see slice D). Fallback variant if in-place
+VACUUM proves fragile on
 this VFS: <code>VACUUM INTO</code> a staging OPFS file + swap at next boot —
 the swap machinery already exists for DB import/recovery
 (<code>src/utils/exportSqliteDb.ts</code>, <code>localDbRecovery.ts</code>);
@@ -1802,9 +1837,9 @@ into is smaller).
         table and drop gates left with the §6 revision, the
         <code>history_mode</code> gate with the §5 revision); the
         <code>ephemeralHistory</code> block-type facet + the §5.1 retention
-        sweeper (whole-block newest-K, keyed on the block's type, using the
-        existing <code>(block_id, created_at DESC)</code> index — no full-writes,
-        no new <code>row_events</code> index); <code>scope</code> stamped as
+        sweeper (whole-block newest-K, keyed on the block's type, cut by
+        <code>id</code> via a new <code>(block_id, id)</code> index — no
+        full-writes); <code>scope</code> stamped as
         provenance only; tests pinning I3 (incl. raw-write labeling + logging)
         and I8 (no write path is exempt — every kind logs) — plus the fuzzed
         writer-interleaving suite (note below).</td>
@@ -1814,9 +1849,9 @@ into is smaller).
       <td><strong>C — stock migration</strong></td>
       <td>§8 idle rewriter (per-block, discontinuity-anchoring) armed behind
         the backup prompt (§8.2), partial work index, completion marker,
-        <code>(block_id, id)</code> reader/rewriter index add + explicit
-        ANALYZE (<code>(block_id, created_at DESC)</code> is retained per §3 —
-        revisit only with measurements); fuzzed equivalence suite (I5) +
+        <code>(block_id, id)</code> reused from slice B for reader/rewriter walks
+        + explicit ANALYZE (<code>(block_id, created_at DESC)</code> is retained
+        per §3 — revisit only with measurements); fuzzed equivalence suite (I5) +
         resumability under random interruption (note below).</td>
       <td>Requires A. Gates D.</td>
     </tr>
