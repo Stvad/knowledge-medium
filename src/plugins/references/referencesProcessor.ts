@@ -367,11 +367,11 @@ const claimLiteralDateAliases = async (
   targetId: string,
   iso: string,
   aliases: readonly string[],
-): Promise<void> => {
+): Promise<boolean> => {
   const literals = [...new Set(aliases.filter(alias => alias !== iso))]
-  if (literals.length === 0) return
+  if (literals.length === 0) return false
   const target = await tx.get(targetId)
-  if (target === null || target.deleted) return
+  if (target === null || target.deleted) return false
   let existing: readonly string[]
   try {
     const encoded = target.properties[aliasesProp.name]
@@ -383,16 +383,17 @@ const claimLiteralDateAliases = async (
     // must never un-claim the target's ISO. Losing a live binding is
     // worse than leaving the literal unclaimed, so skip the claim for
     // this target; it degrades to the pre-claim first-writer behavior.
-    return
+    return false
   }
   const missing = literals.filter(literal => !existing.includes(literal))
-  if (missing.length === 0) return
+  if (missing.length === 0) return false
   // skipMetadata: derived bookkeeping, same as the source-references
   // write in applySourcePlan — advances updatedAt for sync but must not
   // stamp userUpdatedAt/updatedBy, or a background re-parse of some
   // unrelated source makes the target look freshly user-edited.
   try {
     await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
+    return true
   } catch (err) {
     // Swallow ONLY alias-collision aborts. The alias-update trigger
     // deletes and re-inserts ALL of the target's aliases, re-checking
@@ -409,6 +410,7 @@ const claimLiteralDateAliases = async (
     // first-writer behavior for this target only (adversarial review
     // on PR #384).
     if (parseAliasCollisionError(err) === null) throw err
+    return false
   }
 }
 
@@ -474,7 +476,16 @@ const applySourcePlan = async (
     for (const alias of aliases) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
     }
-    await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
+    const claimedNewLiterals = await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
+    // §9 arrival-order repair, LOCAL half (mirror of the aliasesToEnsure path
+    // below): a whole-block `[[2026-01-05]]` — or long-form — row written
+    // before this daily-note target existed derived its reference_target_id to
+    // NULL, and nothing content-driven revisits it. The target's creation (or
+    // a newly-claimed literal on an existing target) is the trigger. Deferred +
+    // batched on Repo; the per-open sweep covers pre-sweep writes.
+    if (ensured.inserted || claimedNewLiterals) {
+      ctx.repo.scheduleReferenceTargetNameRederive(plan.workspaceId, [iso, ...aliases])
+    }
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
