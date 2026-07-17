@@ -347,16 +347,15 @@ export type SyncObserverOptions = Pick<
 >
 
 /** One CAS-guarded `reference_target_id` write for `stampReferenceTargets`.
- *  `expectedTargetId` is the column value the scan saw: NULL for the
- *  strictly-additive per-open sweep; the added-definition rederive passes
- *  the scanned value so a definition can reclaim rows the alias tier
- *  stamped before it existed (§9 winner determinism) — without ever racing
- *  a concurrent write that moved the column since the scan. */
+ *  Strictly ADDITIVE: callers pass only rows the scan saw at a NULL column,
+ *  and the CAS re-checks (NULL column, unchanged content) inside the write tx
+ *  — so a concurrent local edit or sync arrival that already owns the column
+ *  since the scan is never clobbered. Re-pointing an already-stamped row is
+ *  deliberately out of scope (see `drainNameRederives`). */
 interface ReferenceTargetStamp {
   id: string
   scannedContent: string
   targetId: string
-  expectedTargetId: string | null
 }
 
 export class Repo {
@@ -2480,7 +2479,7 @@ export class Repo {
       // (`null`) alike mean "nothing to write".
       if (typeof derived === 'string') {
         updates.push({
-          id: row.id, scannedContent: row.content, targetId: derived, expectedTargetId: null,
+          id: row.id, scannedContent: row.content, targetId: derived,
         })
       }
     }
@@ -2536,14 +2535,14 @@ export class Repo {
       const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
       await this.db.writeTransaction(async tx => {
         await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
-        for (const {id, scannedContent, targetId, expectedTargetId} of chunk) {
+        for (const {id, scannedContent, targetId} of chunk) {
           const freshRow = await tx.getOptional<BlockRow>(
             `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
             [id],
           )
           if (
             freshRow === null
-            || (freshRow.reference_target_id ?? null) !== expectedTargetId
+            || (freshRow.reference_target_id ?? null) !== null
             || freshRow.content !== scannedContent
           ) continue
           await tx.execute(
@@ -2616,17 +2615,21 @@ export class Repo {
     if (!registry || registry.workspaceId !== workspaceId) return
     this.pendingNameRederives.delete(workspaceId)
     try {
-      // NO `reference_target_id IS NULL` filter (unlike the sweep): a
-      // definition ADDED after rows were legitimately alias-stamped must
-      // reclaim them — §9's winner rule is a pure function of content, so
-      // two rows with identical content must never stay bound to different
-      // targets. Re-derivation is idempotent for rows the winner didn't
-      // change (`derived === current` skips below).
-      const candidates = await this.db.getAll<
-        {id: string; content: string; reference_target_id: string | null}
-      >(
-        `SELECT id, content, reference_target_id FROM blocks
+      // Strictly additive (`reference_target_id IS NULL`, like the sweep):
+      // late-bind rows that derived to NULL because their target didn't exist
+      // yet — a generic alias minted mid-session (referencesProcessor enqueues
+      // the name when it creates the seat) repairs `[[Foo]]` rows written
+      // before page Foo existed. Re-pointing an ALREADY-stamped row is
+      // deliberately NOT done: `reference_target_id`'s only consumers are
+      // property field-row recognition (is-target-a-definition), and
+      // definitions aren't name-resolvable yet, so a non-NULL re-point would
+      // change nothing any reader observes. That reclaim (with the cell
+      // reprojection a raw stamp currently skips) belongs to the auto-claim
+      // work that makes definitions name-resolvable.
+      const candidates = await this.db.getAll<{id: string; content: string}>(
+        `SELECT id, content FROM blocks
           WHERE workspace_id = ?
+            AND reference_target_id IS NULL
             AND (
               (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
               OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
@@ -2638,12 +2641,9 @@ export class Repo {
       for (const row of candidates) {
         const exact = parseExactReferenceBlockContent(row.content)
         if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
-        const current = row.reference_target_id ?? null
         const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-        if (typeof derived === 'string' && derived !== current) {
-          updates.push({
-            id: row.id, scannedContent: row.content, targetId: derived, expectedTargetId: current,
-          })
+        if (typeof derived === 'string') {
+          updates.push({id: row.id, scannedContent: row.content, targetId: derived})
         }
       }
       await this.stampReferenceTargets(updates)
