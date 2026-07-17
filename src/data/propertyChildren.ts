@@ -131,10 +131,19 @@ const needsEscape = (schema: AnyPropertySchema, s: string): boolean => {
 const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): string => {
   if (encoded === undefined) return ''
   if (encoded === null) return codecAcceptsNull(schema) ? 'null' : ''
+  if (schema.codec.type === 'ref') {
+    // A ref value child holds the reference in editable `((id))` form — the
+    // same block-reference affordance as everywhere else, and the same shape
+    // as the field row's own `((fieldId))` — so `core.deriveReferenceTarget`
+    // stamps it and reference maintenance (merge retarget, inline-deleted)
+    // sees it. The CELL keeps a bare id (`codecs.ref` encodes via `string`);
+    // only the child content is reference-shaped.
+    if (typeof encoded !== 'string') return JSON.stringify(encoded)
+    return referenceBlockContentForId(encoded)
+  }
   if (
     schema.codec.type === 'string'
     || schema.codec.type === 'url'
-    || schema.codec.type === 'ref'
   ) {
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
     return needsEscape(schema, encoded) ? JSON.stringify(encoded) : encoded
@@ -150,9 +159,13 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
   return serialized === undefined ? '' : serialized
 }
 
-const contentToEncodedValue = (schema: AnyPropertySchema, content: string): unknown => {
+const contentToEncodedValue = (
+  schema: AnyPropertySchema,
+  content: string,
+  referenceTargetId: string | null,
+): unknown => {
   if (
-    (schema.codec.type === 'string' || schema.codec.type === 'url' || schema.codec.type === 'ref')
+    (schema.codec.type === 'string' || schema.codec.type === 'url')
     && content.trim().startsWith('"') && content.trim().endsWith('"')
   ) {
     try {
@@ -166,9 +179,21 @@ const contentToEncodedValue = (schema: AnyPropertySchema, content: string): unkn
     return schema.codec.encode(schema.codec.decode(null))
   }
   switch (schema.codec.type) {
+    case 'ref':
+      // The column IS the decoded ref value: DERIVE already parsed the content
+      // (`((id))` textually, `[[alias]]` via lookup) and stored the result,
+      // keeping "column is null iff content isn't a resolvable exact ref". So
+      // we re-use that parse instead of re-doing it — and a NULL column means
+      // the content is prose / a dangling ref: unparseable, so the projection
+      // skips it and the cell reads unset while the row keeps its text. The
+      // explicit-null case for an optional ref is handled by the sentinel
+      // above, before we get here.
+      if (referenceTargetId === null) {
+        throw new CodecError('resolvable reference', content)
+      }
+      return referenceTargetId
     case 'string':
     case 'url':
-    case 'ref':
       return content
     case 'date':
       return content.trim() === '' ? null : content.trim()
@@ -196,12 +221,18 @@ export const encodedPropertyValueToChildContent = (
 
 /** Parse a property-value child back into the canonical encoded value
  *  stored on the parent cell. Throws when the child content cannot be
- *  interpreted for this field's current codec. */
+ *  interpreted for this field's current codec.
+ *
+ *  `referenceTargetId` is the value child's derived column — the source of
+ *  truth for a `ref`-typed value (its content is the `((id))` edit affordance,
+ *  the column is the resolved id). Every caller has the row in hand; pass
+ *  `row.referenceTargetId ?? null`. It is unused for non-ref codecs. */
 export const propertyChildContentToEncodedValue = (
   schema: AnyPropertySchema,
   content: string,
+  referenceTargetId: string | null = null,
 ): unknown => {
-  const encoded = contentToEncodedValue(schema, content)
+  const encoded = contentToEncodedValue(schema, content, referenceTargetId)
   // Decode and re-encode so tolerant user text ("1" for number,
   // date strings, etc.) lands in the same canonical JSON shape as
   // tx.setProperty would have stored directly.

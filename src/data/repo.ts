@@ -2833,7 +2833,9 @@ export class Repo {
               const values = await tx.childrenOf(sibling.id, undefined)
               for (const value of values) {
                 try {
-                  const encoded = propertyChildContentToEncodedValue(schema, value.content)
+                  const encoded = propertyChildContentToEncodedValue(
+                    schema, value.content, value.referenceTargetId ?? null,
+                  )
                   if (!hasProjection) {
                     projected = encoded
                     hasProjection = true

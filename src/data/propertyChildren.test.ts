@@ -220,6 +220,94 @@ describe('flipped workspace (properties_migration = children)', () => {
     await repo.tx(tx => tx.delete(field!.id), {scope: ChangeScope.BlockDefault})
     expect(await cellValue('p')).toBeUndefined()
   })
+})
+
+describe('flipped workspace — ref-typed property values are editable `((id))` (#16)', () => {
+  const RELATED_FIELD_ID = 'field-related-children'
+  const relatedSchema = defineProperty<string>('related', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  const setupWithRef = async (): Promise<Repo> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    // A second projected definition alongside `status`, ref-typed.
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-related-definition',
+      [{
+        metadata: {
+          fieldId: RELATED_FIELD_ID, workspaceId: WS, createdAt: 1,
+          name: relatedSchema.name, changeScope: relatedSchema.changeScope,
+          hidden: false, origin: 'user' as const,
+        },
+        schema: relatedSchema,
+      }],
+      {workspaceId: WS},
+    )
+    return repo
+  }
+
+  const relatedCell = async (id: string): Promise<unknown> => {
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id],
+    )
+    return (JSON.parse(row.properties_json) as Record<string, unknown>)[relatedSchema.name]
+  }
+
+  const relatedValueChild = async (parentId: string): Promise<ChildRow | undefined> => {
+    const fields = (await childrenRows(parentId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === RELATED_FIELD_ID,
+    )
+    if (fields.length === 0) return undefined
+    return (await childrenRows(fields[0]!.id)).find(v => v.deleted === 0)
+  }
+
+  it('stores the value child as `((target))` while the cell keeps the bare id', async () => {
+    const repo = await setupWithRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+
+    const value = await relatedValueChild('p')
+    // The tree shows a real, clickable/editable block reference...
+    expect(value?.content).toBe('((target-xyz))')
+    // ...DERIVE stamped its column (so it's a ref to reference maintenance)...
+    expect(value?.reference_target_id).toBe('target-xyz')
+    // ...and the synced cell keeps the bare id.
+    expect(await relatedCell('p')).toBe('target-xyz')
+  })
+
+  it('re-projects the cell from the column when the ref is retargeted in the tree', async () => {
+    const repo = await setupWithRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+    const value = await relatedValueChild('p')
+
+    await repo.tx(tx => tx.update(value!.id, {content: '((target-abc))'}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await relatedCell('p')).toBe('target-abc')
+  })
+
+  it('typing prose into a ref value unsets the cell key but preserves the row', async () => {
+    const repo = await setupWithRef()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, 'target-xyz'),
+      {scope: ChangeScope.BlockDefault})
+    const value = await relatedValueChild('p')
+
+    // "people will type text into ref properties, like logs" — the graceful path.
+    await repo.tx(tx => tx.update(value!.id, {content: 'saw a bug in prod today'}),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await relatedCell('p')).toBeUndefined()
+    const survivor = await relatedValueChild('p')
+    expect(survivor?.content).toBe('saw a bug in prod today')
+    expect(survivor?.reference_target_id).toBeNull()
+  })
 
   it('raw cell writes materialize field/value children; key removal soft-deletes them', async () => {
     await seedWorkspace('children')
@@ -839,6 +927,63 @@ describe('content <-> value codecs: "null"-collision escaping (PR #386 review fi
     const content = propertyValueToChildContent(statusSchema, 'null')
     expect(content).toBe('null')
     expect(propertyChildContentToEncodedValue(statusSchema, content)).toBe('null')
+  })
+})
+
+describe('content <-> value codecs: ref values are `((id))`, read via reference_target_id', () => {
+  // A ref value child holds the reference in EDITABLE `((id))` form (the same
+  // affordance as any block reference), while the cell keeps a bare id. The
+  // read side does NOT re-parse the content — `core.deriveReferenceTarget`
+  // already parsed it and stored the result in `reference_target_id`, keeping
+  // the invariant "column is null iff content isn't a resolvable exact ref".
+  // So the codec reads the column: content is the edit affordance, the column
+  // is the truth.
+  const refSchema = defineProperty<string>('related', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+  const optionalRefSchema = defineProperty<string | undefined>('maybe-related', {
+    codec: codecs.optionalRef(),
+    defaultValue: undefined,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('writes a ref value as `((id))`, not the bare id', () => {
+    expect(propertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
+    expect(encodedPropertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
+  })
+
+  it('reads the ref back from the column (the bare id lands in the cell)', () => {
+    const content = propertyValueToChildContent(refSchema, 'block-abc')
+    // The derived column DERIVE would have stamped for `((block-abc))`.
+    expect(propertyChildContentToEncodedValue(refSchema, content, 'block-abc')).toBe('block-abc')
+  })
+
+  it('rejects prose typed into a ref value (column NULL) instead of coercing it', () => {
+    // "people will type text into ref properties, like logs" — DERIVE clears
+    // the column for non-ref content, so the codec throws → the projection
+    // skips it → the cell key reads unset while the row text is preserved.
+    expect(() =>
+      propertyChildContentToEncodedValue(refSchema, 'saw a bug in prod today', null),
+    ).toThrow()
+  })
+
+  it('rejects a `((id))` whose target never resolved (column still NULL)', () => {
+    // A dangling/unresolved ref: content looks ref-shaped but nothing stamped
+    // it (e.g. an as-yet-unresolvable alias). Unparseable until it resolves.
+    expect(() =>
+      propertyChildContentToEncodedValue(refSchema, '[[Not Yet A Page]]', null),
+    ).toThrow()
+  })
+
+  it('an optional ref preserves an explicit null (sentinel wins over the column read)', () => {
+    const content = encodedPropertyValueToChildContent(optionalRefSchema, null)
+    expect(content).toBe('null')
+    // Must NOT throw despite a null column — the generic null sentinel runs
+    // first, so an intentionally-unset optional ref decodes to its unset form
+    // (encoded as null, like every other null-accepting codec).
+    expect(propertyChildContentToEncodedValue(optionalRefSchema, content, null)).toBeNull()
   })
 })
 
