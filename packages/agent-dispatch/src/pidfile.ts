@@ -8,6 +8,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { isErrnoException } from '@knowledge-medium/agent-cli/config'
+import { createFileExclusive } from './atomicFile.js'
 
 const defaultIsAlive = (pid: number): boolean => {
   if (!(pid > 0)) return false
@@ -46,10 +47,10 @@ const GATE_STALE_MS = 10_000
 /**
  * Acquire is built from two atomic primitives, and never unlinks the
  * pidfile — both are load-bearing for mutual exclusion:
- * - CREATE is link(tmp, file): the file appears with its full content
- *   or not at all. writeFile(wx) is create-THEN-write, and a rival
- *   reading the empty window parses pid 0 = "stale" and steals a live
- *   daemon's fresh pidfile.
+ * - CREATE is `createFileExclusive` (link(tmp, file)): the file appears
+ *   with its full content or not at all. A create-THEN-write (writeFile
+ *   wx) would let a rival read the empty window, parse pid 0 = "stale",
+ *   and steal a live daemon's fresh pidfile.
  * - TAKEOVER is rename(tmp, file) under the gate: an atomic replace of
  *   content judged stale, with no absent window. The old rm-then-create
  *   takeover let a rival's ungated create land in the gap after a
@@ -62,21 +63,8 @@ export const acquirePidfile = async ({file, pid = process.pid, isAlive = default
   await fs.mkdir(path.dirname(file), {recursive: true})
   const tmp = `${file}.${pid}.tmp`
 
-  const createExclusive = async (): Promise<boolean> => {
-    await fs.writeFile(tmp, `${pid}\n`)
-    try {
-      await fs.link(tmp, file)
-      return true
-    } catch (error) {
-      if (isErrnoException(error) && error.code === 'EEXIST') return false
-      throw error
-    } finally {
-      await fs.rm(tmp, {force: true})
-    }
-  }
-
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (await createExclusive()) return
+    if (await createFileExclusive(file, `${pid}\n`)) return
 
     const {pid: existing} = await readPidfile(file)
     if (existing && isAlive(existing) && existing !== pid) throw alreadyRunning(existing)
