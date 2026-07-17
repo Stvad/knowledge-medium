@@ -1,8 +1,14 @@
 import {v5 as uuidv5} from 'uuid'
 import {ChangeScope, type BlockData} from '@/data/api'
 import {isPropertySeedKey, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
-import {isTypeSeedKey} from '@/data/typeSeeds'
+import {isTypeSeedKey, type TypeSeedDeclaration} from '@/data/typeSeeds'
 import {
+  blockTypeColorProp,
+  blockTypeDescriptionProp,
+  blockTypeHideFromBlockDisplayProp,
+  blockTypeHideFromCompletionProp,
+  blockTypeLabelProp,
+  blockTypeTypeIdProp,
   presetConfigProp,
   presetIdProp,
   propertyChangeScopeProp,
@@ -13,8 +19,9 @@ import {
   seedRevisionProp,
   addBlockTypeToProperties,
 } from '@/data/properties'
-import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
+import {BLOCK_TYPE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {propertiesPageBlockId} from '@/data/propertiesPage'
+import {typesPageBlockId} from '@/data/typesPage'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
 
@@ -106,6 +113,47 @@ export const canonicalPropertySeedProperties = (
   return addBlockTypeToProperties(properties, PROPERTY_SCHEMA_TYPE)
 }
 
+/** The one canonical block-property bag for a TYPE seed's backing block — a
+ * `block-type` definition block, the type analog of `canonicalPropertySeed-
+ * Properties`. It carries the declaration's identity/display facts (`block-type:
+ * type-id` is the membership token `id`, the type analog of `propertyNameProp`)
+ * plus `seed:key`/`seed:revision` provenance.
+ *
+ * Deliberately NOT PAGE_TYPE and NOT aliased — unlike a user-authored type (the
+ * `#type` gesture / `createTypeBlock`, completed into a navigable `[[Label]]`
+ * page by the typeify same-tx processor), a code type was never a page. Forcing
+ * PAGE_TYPE + an alias here would be a visible behavior change at the C4 cutover
+ * and risk `alias.collision` on the real type labels; the typeify carve-out for
+ * seed rows keeps this bare row bare. `block-type:properties` (the property refs)
+ * is also omitted: materializing a ref needs each target's deterministic
+ * property-definition id derived from a seeded property HANDLE, which lands with
+ * C4 — no current type seed declares `properties`. */
+export const canonicalTypeSeedProperties = (
+  seed: TypeSeedDeclaration,
+): Record<string, unknown> => {
+  const properties: Record<string, unknown> = {
+    [blockTypeLabelProp.name]: blockTypeLabelProp.codec.encode(seed.label),
+    [blockTypeTypeIdProp.name]: blockTypeTypeIdProp.codec.encode(seed.id),
+    [seedKeyProp.name]: seedKeyProp.codec.encode(seed.seedKey),
+    [seedRevisionProp.name]: seedRevisionProp.codec.encode(seed.revision),
+  }
+  if (seed.description !== undefined) {
+    properties[blockTypeDescriptionProp.name] = blockTypeDescriptionProp.codec.encode(seed.description)
+  }
+  if (seed.color !== undefined) {
+    properties[blockTypeColorProp.name] = blockTypeColorProp.codec.encode(seed.color)
+  }
+  if (seed.hideFromCompletion !== undefined) {
+    properties[blockTypeHideFromCompletionProp.name] =
+      blockTypeHideFromCompletionProp.codec.encode(seed.hideFromCompletion)
+  }
+  if (seed.hideFromBlockDisplay !== undefined) {
+    properties[blockTypeHideFromBlockDisplayProp.name] =
+      blockTypeHideFromBlockDisplayProp.codec.encode(seed.hideFromBlockDisplay)
+  }
+  return addBlockTypeToProperties(properties, BLOCK_TYPE_TYPE)
+}
+
 interface SeedProbeRow {
   readonly id: string
   readonly workspace_id: string
@@ -179,30 +227,39 @@ const revisionFromProperties = (properties: Record<string, unknown>): number | u
   }
 }
 
-const assertUniqueSeedKeys = (seeds: readonly AnyPropertySeedDeclaration[]): void => {
+// The materialization guards are shared verbatim by both kinds — property and
+// type seeds probe the same deterministic-id namespace with the same poisoned-id
+// / cross-workspace / provenance invariants. `label` names the caller so the
+// error text stays accurate for whichever pass raised it.
+const assertUniqueSeedKeys = (
+  label: string,
+  seeds: readonly {readonly seedKey: string}[],
+): void => {
   const seen = new Set<string>()
   for (const seed of seeds) {
     if (seen.has(seed.seedKey)) {
-      throw new Error(`[materializePropertySeeds] duplicate seed key ${JSON.stringify(seed.seedKey)}`)
+      throw new Error(`[${label}] duplicate seed key ${JSON.stringify(seed.seedKey)}`)
     }
     seen.add(seed.seedKey)
   }
 }
 
 const assertSeedWorkspace = (
+  label: string,
   id: string,
   expectedWorkspaceId: string,
   actualWorkspaceId: string,
 ): void => {
   if (actualWorkspaceId !== expectedWorkspaceId) {
     throw new Error(
-      `[materializePropertySeeds] seed id ${id} belongs to workspace ${actualWorkspaceId}, ` +
+      `[${label}] seed id ${id} belongs to workspace ${actualWorkspaceId}, ` +
       `not ${expectedWorkspaceId}`,
     )
   }
 }
 
 const assertSeedProvenance = (
+  label: string,
   id: string,
   workspaceId: string,
   expectedSeedKey: string,
@@ -211,7 +268,7 @@ const assertSeedProvenance = (
   const actualSeedKey = validSeedKeyForRow({id, workspaceId, properties})
   if (actualSeedKey !== expectedSeedKey) {
     throw new Error(
-      `[materializePropertySeeds] seed id ${id} does not carry expected seed key ${expectedSeedKey}`,
+      `[${label}] seed id ${id} does not carry expected seed key ${expectedSeedKey}`,
     )
   }
 }
@@ -244,7 +301,7 @@ export const materializePropertySeeds = async (
   workspaceId: string,
   seeds: readonly AnyPropertySeedDeclaration[],
 ): Promise<PropertySeedMaterializationResult> => {
-  assertUniqueSeedKeys(seeds)
+  assertUniqueSeedKeys('materializePropertySeeds', seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
   if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
 
@@ -258,11 +315,11 @@ export const materializePropertySeeds = async (
     propertyDefinitionBlockId(workspaceId, seed.seedKey), seed,
   ] as const))
   const rowsById = new Map(rows.map(row => {
-    assertSeedWorkspace(row.id, workspaceId, row.workspace_id)
+    assertSeedWorkspace('materializePropertySeeds', row.id, workspaceId, row.workspace_id)
     const seed = seedsById.get(row.id)
     if (!seed) throw new Error(`[materializePropertySeeds] unexpected probe row ${row.id}`)
     const properties = parseProbeProperties(row)
-    assertSeedProvenance(row.id, workspaceId, seed.seedKey, properties)
+    assertSeedProvenance('materializePropertySeeds', row.id, workspaceId, seed.seedKey, properties)
     return [row.id, {row, properties}] as const
   }))
 
@@ -293,8 +350,8 @@ export const materializePropertySeeds = async (
       const id = propertyDefinitionBlockId(workspaceId, seed.seedKey)
       const current = await tx.get(id)
       if (current) {
-        assertSeedWorkspace(id, workspaceId, current.workspaceId)
-        assertSeedProvenance(id, workspaceId, seed.seedKey, current.properties)
+        assertSeedWorkspace('materializePropertySeeds', id, workspaceId, current.workspaceId)
+        assertSeedProvenance('materializePropertySeeds', id, workspaceId, seed.seedKey, current.properties)
       }
       currentById.set(id, current)
     }
@@ -318,6 +375,102 @@ export const materializePropertySeeds = async (
       created += 1
     }
   }, {scope: ChangeScope.Automation, description: 'materialize property definitions'})
+
+  return {created, restored, skippedReadOnly: false}
+}
+
+export interface TypeSeedMaterializationResult {
+  readonly created: number
+  readonly restored: number
+  readonly skippedReadOnly: boolean
+}
+
+/** Isolated create/restore-only TYPE seed pass — the exact structural mirror of
+ * `materializePropertySeeds`, over the same deterministic-id namespace and the
+ * same probe → revalidate-under-lock → create/restore discipline (one poisoned
+ * id aborts the whole batch; a tombstone restore preserves its bag; live stale
+ * rows only log). Differences are only the kind's specifics: `typeDefinitionBlockId`
+ * for identity, the Types page for the parent, and `canonicalTypeSeedProperties`
+ * for the bag. `block-type` backing blocks would trip the typeify same-tx
+ * processor into PAGE_TYPE + alias; the processor's seed carve-out (a valid
+ * `/type/` seed row) keeps this write inert. */
+export const materializeTypeSeeds = async (
+  repo: Repo,
+  workspaceId: string,
+  seeds: readonly TypeSeedDeclaration[],
+): Promise<TypeSeedMaterializationResult> => {
+  assertUniqueSeedKeys('materializeTypeSeeds', seeds)
+  if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
+  if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
+
+  const ids = seeds.map(seed => typeDefinitionBlockId(workspaceId, seed.seedKey))
+  const placeholders = ids.map(() => '?').join(', ')
+  const rows = await repo.db.getAll<SeedProbeRow>(
+    `SELECT id, workspace_id, properties_json, deleted FROM blocks WHERE id IN (${placeholders})`,
+    ids,
+  )
+  const seedsById = new Map(seeds.map(seed => [
+    typeDefinitionBlockId(workspaceId, seed.seedKey), seed,
+  ] as const))
+  const rowsById = new Map(rows.map(row => {
+    assertSeedWorkspace('materializeTypeSeeds', row.id, workspaceId, row.workspace_id)
+    const seed = seedsById.get(row.id)
+    if (!seed) throw new Error(`[materializeTypeSeeds] unexpected probe row ${row.id}`)
+    const properties = parseProbeProperties(row)
+    assertSeedProvenance('materializeTypeSeeds', row.id, workspaceId, seed.seedKey, properties)
+    return [row.id, {row, properties}] as const
+  }))
+
+  const pending = seeds.filter((seed, index) => {
+    const probed = rowsById.get(ids[index]!)
+    if (!probed || probed.row.deleted === 1) return true
+    const storedRevision = revisionFromProperties(probed.properties)
+    if (storedRevision !== undefined && storedRevision < seed.revision) {
+      console.warn(
+        `[definitionSeeds] ${seed.seedKey} revision ${storedRevision} trails code revision ${seed.revision}; ` +
+        'background materialization does not repair payloads',
+      )
+    }
+    return false
+  })
+  if (pending.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
+
+  let created = 0
+  let restored = 0
+  const parentId = typesPageBlockId(workspaceId)
+  await repo.tx(async tx => {
+    const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
+    // Revalidate the complete declaration set under the same write lock before
+    // the first mutation — the outside batch is only a fast no-work probe.
+    for (const seed of seeds) {
+      const id = typeDefinitionBlockId(workspaceId, seed.seedKey)
+      const current = await tx.get(id)
+      if (current) {
+        assertSeedWorkspace('materializeTypeSeeds', id, workspaceId, current.workspaceId)
+        assertSeedProvenance('materializeTypeSeeds', id, workspaceId, seed.seedKey, current.properties)
+      }
+      currentById.set(id, current)
+    }
+    for (const seed of seeds) {
+      const id = typeDefinitionBlockId(workspaceId, seed.seedKey)
+      const current = currentById.get(id) ?? null
+      if (current && !current.deleted) continue
+      if (current?.deleted) {
+        await tx.restore(id, undefined, {skipMetadata: true})
+        restored += 1
+        continue
+      }
+      await tx.create({
+        id,
+        workspaceId,
+        parentId,
+        orderKey: 'a0',
+        content: seed.label,
+        properties: canonicalTypeSeedProperties(seed),
+      }, {systemMint: true})
+      created += 1
+    }
+  }, {scope: ChangeScope.Automation, description: 'materialize type definitions'})
 
   return {created, restored, skippedReadOnly: false}
 }
