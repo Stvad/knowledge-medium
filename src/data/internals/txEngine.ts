@@ -1201,7 +1201,7 @@ export class TxImpl implements Tx {
           parentId: existing.id,
           orderKey: keyAtStart(null),
           content,
-        }, opts)
+        })
       }
       return
     }
@@ -1209,19 +1209,25 @@ export class TxImpl implements Tx {
     // Machinery inserts field rows FIRST among children (§9 ordering
     // decision): fields cluster above content as an emergent default;
     // orderKey stays user-owned afterwards.
+    //
+    // Canonical child-backed property rows are synced data — create them
+    // with real metadata (matching the post-commit materialize processor,
+    // which passes no opts). The parent write's {skipMetadata} governs the
+    // PARENT's updated_at only; forwarding it here would birth these synced
+    // rows with created_at=0 / created_by='' (Codex review, PR #386).
     const fieldRowId = await this.create({
       workspaceId: parent.workspaceId,
       parentId: parent.id,
       referenceTargetId: schema.fieldId,
       orderKey: keyAtStart(null),
       content: propertyFieldContent(schema.fieldId),
-    }, opts)
+    })
     await this.create({
       workspaceId: parent.workspaceId,
       parentId: fieldRowId,
       orderKey: keyAtStart(null),
       content,
-    }, opts)
+    })
   }
 
   private async requireParentInWorkspace(
