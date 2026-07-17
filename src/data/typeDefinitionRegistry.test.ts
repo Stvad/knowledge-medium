@@ -226,4 +226,41 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
     expect(reg.contestedSeedKeys.has(TODO_KEY)).toBe(false)
   })
+
+  it('refuses getTypeBlockId for an already-mirrored seed whose KEY is now contested', () => {
+    // A backing row exists (materialized when the key was uncontested); a later
+    // load adds a second contribution with the same key. The materializer can't
+    // delete the row, so `getTypeBlockId` must fail closed rather than point at the
+    // stale, order-dependent mirror.
+    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([projected({blockId: backingId, seedKey: PAGE_KEY, label: 'First'})]),
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'first', label: 'First'}),
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'second', label: 'Second'}),
+      ],
+    })
+    expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
+    // Provenance is retained (the read-only gate still recognizes the row)...
+    expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
+    // ...but the block-id binding is refused until the duplicate key is removed.
+    expect(reg.blockIdByTypeId.has('first')).toBe(false)
+  })
+
+  it('refuses getTypeBlockId for an already-mirrored seed whose membership ID is now contested', () => {
+    const KEY_B = 'system:kernel-data/type/todo'
+    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([projected({blockId: backingId, seedKey: PAGE_KEY, label: 'A'})]),
+      // Distinct keys, same membership id → id-contested.
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+        seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+      ],
+    })
+    expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
+    expect(reg.blockIdByTypeId.has('shared')).toBe(false)
+  })
 })

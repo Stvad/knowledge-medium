@@ -138,6 +138,7 @@ export const buildTypeDefinitionRegistry = (
   //    materialized row. Dedup by membership id (fail closed). blockIdByTypeId
   //    is deferred to step 2, bound only from an actual valid mirror.
   const seedKeyById = new Map<string, string>()
+  const contestedTypeIds = new Set<string>()
   for (const seed of seedsByKey.values()) {
     const priorKey = seedKeyById.get(seed.id)
     if (priorKey !== undefined) {
@@ -145,6 +146,7 @@ export const buildTypeDefinitionRegistry = (
         `[buildTypeDefinitionRegistry] duplicate type seed id ${seed.id} ` +
         `(keys ${priorKey} + ${seed.seedKey}); keeping first`,
       )
+      contestedTypeIds.add(seed.id)
       continue
     }
     seedKeyById.set(seed.id, seed.seedKey)
@@ -166,7 +168,19 @@ export const buildTypeDefinitionRegistry = (
       // (it lost the membership-id dedup to another seed), the mirror is still
       // code-owned: retain it only in `definitionsByBlockId` (above) for
       // provenance — never republish it as a user-selectable type.
-      if (seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey) {
+      //
+      // Refuse the binding when the seed's key OR id is CONTESTED (duplicated
+      // this rebuild). The materializer withholds contested seeds from NEW writes,
+      // but it can't delete a row created while the seed was uncontested — so an
+      // already-materialized mirror survives a later collision. Its stored content
+      // is frozen contribution-order-dependent (which duplicate first materialized),
+      // so keep `getTypeBlockId` UNDEFINED until the collision is resolved rather
+      // than pointing a link/repair consumer at that stale, order-dependent block.
+      if (
+        seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey &&
+        !contestedSeedKeys.has(declaredSeed.seedKey) &&
+        !contestedTypeIds.has(declaredSeed.id)
+      ) {
         blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
       }
       continue

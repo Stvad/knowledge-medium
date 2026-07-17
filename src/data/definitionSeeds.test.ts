@@ -1025,6 +1025,29 @@ describe('type definition materialization', () => {
       [typeDefinitionBlockId(freshWs, typeSeed.seedKey)])).toBeNull()
   })
 
+  it('skips the seed write when the role demotes to viewer before the write loop', async () => {
+    // `ChangeScope.Automation` is permitted in read-only mode, so a demotion that
+    // lands after the top-of-fn read-only check + access gate but before the write
+    // loop must be caught at the final checkpoint — else a viewer gets backing rows
+    // and RLS-rejected writes. WS's Types page already exists (beforeEach), so
+    // `ensureParent` is a no-op read; demote during that read (still returning the
+    // real page so ensureParent doesn't try a read-only-blocked create), then the
+    // write loop must skip.
+    const realLoad = repo.load.bind(repo)
+    vi.spyOn(repo, 'load').mockImplementation((async (
+      id: string,
+      opts?: {children?: boolean; ancestors?: boolean; descendants?: boolean | number},
+    ) => {
+      if (id === typesPageBlockId(WS)) repo.setReadOnly(true)
+      return realLoad(id, opts)
+    }) as typeof repo.load)
+
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed]))
+      .toEqual({created: 0, restored: 0, skippedReadOnly: false})
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
+  })
+
   it('typeify still completes a NON-seed block-type block into a page + alias (carve-out is narrow)', async () => {
     const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
     await repo.tx(async tx => {

@@ -422,13 +422,19 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
       }
       currentById.set(id, current)
     }
-    // The revalidation reads above are each awaited; a switch-away can land during
-    // one of them. Recheck once more here — the last read-only point before the
-    // write loop — so an abort during revalidation still commits nothing. This is
+    // The revalidation reads above are each awaited; a switch-away OR a role
+    // demotion can land during one of them. Recheck once more here — the last
+    // read-only point before the write loop — so neither writes anything. This is
     // the atomic guard: the write loop below is the mutation unit (returning from
     // inside it would commit the partial writes already made), so this is the
     // correct final checkpoint, not a per-write check.
-    if (signal?.aborted) return
+    //
+    // `repo.isReadOnly`: the top-of-fn check and the access gate both ran before
+    // these awaits, but the seed write is `ChangeScope.Automation`, which
+    // `scopeAllowedInReadOnly` PERMITS — so a flip to viewer mid-pass would
+    // otherwise create/restore backing rows for a viewer and enqueue RLS-rejected
+    // writes. Re-read it at the last moment.
+    if (signal?.aborted || repo.isReadOnly) return
     for (const seed of materializable) {
       const id = config.idFor(workspaceId, seed.seedKey)
       const current = currentById.get(id) ?? null
