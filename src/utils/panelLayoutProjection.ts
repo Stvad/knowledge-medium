@@ -759,31 +759,18 @@ export const reconcilePanelRows = async (
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
 
-    // A tombstoned panel/stack row would strand its hidden property-field
-    // machinery children (UiState props materialized as field/value rows on a
-    // flipped workspace) live under the tombstone — the #8 hazard
-    // `deletePanelRow` already guards against. Delete just those machinery
-    // subtrees (the full child set minus the visible one). Layout-row children
-    // are handled by the reconcile itself (reused panels were moved out by
-    // `materializeSlots`, unmatched panels already deleted, nested stacks are
-    // their own entries in `stackRowsToDelete`), so we must NOT cascade into
-    // them via a blanket subtree delete. No-op on un-flipped workspaces, where
-    // every child is visible — so the live reconcile path is unchanged.
-    const deleteRowMachinery = async (row: BlockData): Promise<void> => {
-      const all = await tx.childrenOf(row.id, row.workspaceId)
-      if (all.length === 0) return
-      const visible = new Set(
-        (await visibleChildrenOf(tx, row.id, row.workspaceId))
-          .map(child => child.id),
-      )
-      for (const child of all) {
-        if (!visible.has(child.id)) await deleteLayoutRowSubtreeInTx(tx, child.id)
-      }
-    }
-
+    // Removed layout rows are deleted WITH their whole subtree
+    // (`deleteLayoutRowSubtreeInTx`), same as `deletePanelRow`. Hierarchical
+    // editing: anything meant to survive a reconcile is moved out of the doomed
+    // subtree FIRST — the reused panels are relocated into the freshly-built
+    // stacks by `materializeSlots` (`tx.move`), and unmatched panels are leaves
+    // with nothing to preserve. So by delete time each doomed row's subtree
+    // holds only what should go: its hidden property-field machinery (a flipped
+    // workspace's materialized UiState props) and husk stacks that are their own
+    // `stackRowsToDelete` entries (idempotent re-delete). A bare `tx.delete`
+    // would instead strand that machinery live under the tombstone (#8).
     for (const slot of rowsToDelete) {
-      await deleteRowMachinery(slot.row)
-      await tx.delete(slot.row.id)
+      await deleteLayoutRowSubtreeInTx(tx, slot.row.id)
       deletedPanelRowIds.push(slot.row.id)
     }
 
@@ -853,8 +840,7 @@ export const reconcilePanelRows = async (
     await materializeSlots(targetSlots, layoutSessionBlock.id)
 
     for (const stackRow of stackRowsToDelete) {
-      await deleteRowMachinery(stackRow)
-      await tx.delete(stackRow.id)
+      await deleteLayoutRowSubtreeInTx(tx, stackRow.id)
     }
 
     // Either/or: an inbound `;active` names a row THIS reconcile just
