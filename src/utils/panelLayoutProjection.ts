@@ -758,7 +758,30 @@ export const reconcilePanelRows = async (
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
 
+    // A tombstoned panel/stack row would strand its hidden property-field
+    // machinery children (UiState props materialized as field/value rows on a
+    // flipped workspace) live under the tombstone — the #8 hazard
+    // `deletePanelRow` already guards against. Delete just those machinery
+    // subtrees (the full child set minus the visible one). Layout-row children
+    // are handled by the reconcile itself (reused panels were moved out by
+    // `materializeSlots`, unmatched panels already deleted, nested stacks are
+    // their own entries in `stackRowsToDelete`), so we must NOT cascade into
+    // them via a blanket subtree delete. No-op on un-flipped workspaces, where
+    // every child is visible — so the live reconcile path is unchanged.
+    const deleteRowMachinery = async (row: BlockData): Promise<void> => {
+      const all = await tx.childrenOf(row.id, row.workspaceId)
+      if (all.length === 0) return
+      const visible = new Set(
+        (await tx.childrenOf(row.id, row.workspaceId, {hidePropertyChildren: true}))
+          .map(child => child.id),
+      )
+      for (const child of all) {
+        if (!visible.has(child.id)) await deleteLayoutRowSubtreeInTx(tx, child.id)
+      }
+    }
+
     for (const slot of rowsToDelete) {
+      await deleteRowMachinery(slot.row)
       await tx.delete(slot.row.id)
       deletedPanelRowIds.push(slot.row.id)
     }
@@ -829,6 +852,7 @@ export const reconcilePanelRows = async (
     await materializeSlots(targetSlots, layoutSessionBlock.id)
 
     for (const stackRow of stackRowsToDelete) {
+      await deleteRowMachinery(stackRow)
       await tx.delete(stackRow.id)
     }
 
