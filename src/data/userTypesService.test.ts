@@ -120,16 +120,18 @@ describe('UserTypesService subscription', () => {
     expect(env.service.getTypeBlockId(id)).toBe(id)
   })
 
-  it('does not let a seed-valid /type/ row hijack a type id via a colliding claim (C2b transitional)', async () => {
+  it('does not let a seed-valid /type/ row hijack a type id via a colliding claim', async () => {
     env = await setup()
     // Simulate a synced/imported block-type row that is a VALID seeded
     // definition: it sits at the deterministic id for a /type/ seed key and
     // claims an existing id ('page'). parseTypeDefinitionMetadata honors that
-    // claim (it passes the id equation), but the transitional projector must
-    // still key the user-data contribution by the block id — otherwise the
-    // last-wins typesFacet would let this row REPLACE the 'page' type, with no
-    // §7 winner resolution to bound it until C3. Created at Automation scope so
-    // the seed-write backstop (BlockDefault-only) doesn't reject the mint.
+    // claim (it passes the id equation) and the projector publishes the full
+    // metadata, but its `/type/` key is NOT a current declaration (no /type/
+    // seeds exist yet), so `buildTypeDefinitionRegistry` demotes the row to its
+    // own block id rather than binding the 'page' membership — closing the
+    // hijack the last-wins typesFacet would otherwise allow. Created at
+    // Automation scope so the seed-write backstop (BlockDefault-only) doesn't
+    // reject the mint.
     const seedKey = 'system:kernel-data/type/page'
     const blockId = typeDefinitionBlockId(WS, seedKey)
     // Mint the whole bag through tx.create (like the property materializer):
@@ -165,7 +167,7 @@ describe('UserTypesService subscription', () => {
     await waitForTypeRegistration(env.repo, blockId, 'Imported Page')
     expect(env.repo.types.get(blockId)!.id).toBe(blockId)
     // 'page' is not hijacked: the built-in kernel type is untouched, and the
-    // user-types projector never acquires a 'page' key pointing at this block.
+    // registry never binds the 'page' membership id to this block.
     expect(env.repo.types.get('page')?.label).toBe('Page')
     expect(env.service.getTypeBlockId('page')).not.toBe(blockId)
   })
@@ -175,7 +177,7 @@ describe('UserTypesService subscription', () => {
     const id = await createBlockTypeBlock(env.repo, {label: 'Auto', hideFromCompletion: true})
     expect(env.repo.types.get(id)).toMatchObject({hideFromCompletion: true})
     // Flipping the flag must clear it on the contribution — pins the
-    // hideFromCompletion arm of the contributionsEqual dedup (else the republish
+    // hideFromCompletion arm of the projectedDefinitionsEqual dedup (else the republish
     // would be suppressed and the type would stay hidden from completion).
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeHideFromCompletionProp, false)
@@ -196,7 +198,7 @@ describe('UserTypesService subscription', () => {
     expect(contribution).toMatchObject({hideFromBlockDisplay: true, color: '#e11d48'})
 
     // Display config is live-editable, ONE FIELD AT A TIME — each step
-    // pins its own field in the contributionsEqual dedup (a combined
+    // pins its own field in the projectedDefinitionsEqual dedup (a combined
     // write would let either comparison vanish behind the other).
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeColorProp, 'tomato')
@@ -546,6 +548,31 @@ describe('UserTypesService subscription', () => {
     // (RangeError: Maximum call stack size exceeded).
     await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
       .resolves.toBeDefined()
+  })
+
+  it('terminates the feedback loop for a type WITH a resolved ref-typed property', async () => {
+    // The zero-property case above never reaches projectedDefinitionsEqual's
+    // property-array arm. A refList property is the churn case: its preset's
+    // build() mints a fresh codec (and a fresh [] default) on EVERY schema-
+    // projector rebuild, and that projector has no dedup, so an unrelated
+    // property edit re-resolves the type's property to a reference-fresh-but-
+    // equal schema. The field-wise dedup must still let the cascade settle
+    // (a bounded extra rebuild), not recurse into a stack overflow.
+    env = await setup()
+    const tags = await env.repo.userSchemas.addSchema({name: 'tags', presetId: 'refList'})
+    const tagsBlockId = env.repo.userSchemas.getSchemaBlockId(tags.name)!
+    const typeId = await createBlockTypeBlock(env.repo, {
+      label: 'Task',
+      properties: [tagsBlockId],
+    })
+    expect(env.repo.types.get(typeId)?.properties).toHaveLength(1)
+
+    // Editing an UNRELATED property-schema block fires onPropertySchemasChange
+    // and republishes ALL schemas with fresh codecs.
+    await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
+      .resolves.toBeDefined()
+    // The type survives with its property intact.
+    expect(env.repo.types.get(typeId)?.properties).toHaveLength(1)
   })
 })
 

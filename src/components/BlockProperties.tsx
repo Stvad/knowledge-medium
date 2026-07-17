@@ -12,7 +12,8 @@ import { useChildIds, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock, useUserPage } from '@/data/globalState.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
-import { propertyEditorOverridesFacet, typesFacet } from '../data/facets.ts'
+import { useTypes } from '@/hooks/typeRegistry.js'
+import { propertyEditorOverridesFacet } from '../data/facets.ts'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import {
   editorSelection,
@@ -92,7 +93,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const propertyDefinitions = block.repo.propertyDefinitions
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
-  const typesRegistry = runtime.read(typesFacet)
+  // Merged registry (kernel + plugin + block-built user types) via repo.types,
+  // reactive on type-registry changes. Reading `typesFacet` directly would miss
+  // user-defined types after the C3b projector re-route.
+  const typesRegistry = useTypes()
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
   const syntheticRows = useMemo(

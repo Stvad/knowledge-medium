@@ -5,8 +5,7 @@
 
 import { useCallback, useMemo, useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { typesFacet } from '@/data/facets.js'
+import { useTypes } from '@/hooks/typeRegistry.js'
 import type { RefCodecOptions, ValuePresetConfigEditorProps } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,8 +14,10 @@ export function RefTargetTypePicker({
   value,
   onChange,
 }: ValuePresetConfigEditorProps<RefCodecOptions>) {
-  const runtime = useAppRuntime()
-  const types = runtime.read(typesFacet)
+  // Merged registry (kernel + plugin + block-built user types) via repo.types,
+  // reactive on type-registry changes. Reading `typesFacet` directly would miss
+  // user-defined types after the C3b projector re-route.
+  const types = useTypes()
 
   // Constraints are stored as type ids, but users think in labels — built-in
   // types have readable slug ids, while user-defined ones are UUIDs. Show the
