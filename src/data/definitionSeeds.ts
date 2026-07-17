@@ -403,8 +403,10 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   const parentId = config.parentFor(workspaceId)
   await repo.tx(async tx => {
     // `ensureParent` (and `repo.tx`'s own tx_context setup) awaited since the check
-    // above; a switch-away can land in that window. Recheck before the write loops
-    // so an aborted generation commits nothing (an empty tx is a no-op).
+    // above; a switch-away can land in that window. Early-out here so an aborted
+    // generation skips even the read-only revalidation below (whose asserts would
+    // otherwise log a spurious non-abort failure); the atomic write guard is the
+    // second recheck, immediately before the write loop.
     if (signal?.aborted) return
     const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
     // Revalidate the complete declaration set under the same write lock before
@@ -420,6 +422,13 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
       }
       currentById.set(id, current)
     }
+    // The revalidation reads above are each awaited; a switch-away can land during
+    // one of them. Recheck once more here — the last read-only point before the
+    // write loop — so an abort during revalidation still commits nothing. This is
+    // the atomic guard: the write loop below is the mutation unit (returning from
+    // inside it would commit the partial writes already made), so this is the
+    // correct final checkpoint, not a per-write check.
+    if (signal?.aborted) return
     for (const seed of materializable) {
       const id = config.idFor(workspaceId, seed.seedKey)
       const current = currentById.get(id) ?? null
