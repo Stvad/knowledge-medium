@@ -293,45 +293,70 @@ const parseProbeProperties = (row: SeedProbeRow): Record<string, unknown> => {
   return {}
 }
 
-/** Isolated create/restore-only property seed pass. Callers supply the exact
- * declarations visible to their runtime and a concrete workspace. Production
- * trigger/access-gate wiring intentionally lands in a later sub-slice.
+/** The kind-specific inputs to `materializeSeeds`: everything that differs
+ * between the property and type passes, which is only a handful of first-class
+ * values. */
+interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonly revision: number}> {
+  /** Names the caller in guard/error text (`materializePropertySeeds` / `materializeTypeSeeds`). */
+  readonly label: string
+  /** Deterministic backing-block id for a seed key (`property`/`type` variant). */
+  readonly idFor: (workspaceId: string, seedKey: string) => string
+  /** Deterministic parent page id (Properties / Types). */
+  readonly parentFor: (workspaceId: string) => string
+  readonly contentFor: (seed: S) => string
+  readonly propertiesFor: (seed: S) => Record<string, unknown>
+  readonly txDescription: string
+  /** Optional pre-materialization filter, applied AFTER the read-only / empty
+   *  guards and before the probe. Types drop contested-`id` seeds here; the
+   *  property side has no analog (its registry handles name collisions upstream). */
+  readonly preFilter?: (seeds: readonly S[]) => readonly S[]
+}
+
+/** Isolated create/restore-only seed materialization pass — the ONE copy of the
+ * discipline both kinds run over the shared deterministic-id namespace. Callers
+ * supply the exact declarations visible to their runtime and a concrete
+ * workspace; production trigger/access-gate wiring intentionally lands in a
+ * later sub-slice.
  *
- * The background pass never repairs payloads: live stale rows only log, and a
- * tombstone restore preserves its existing bag. The batched probe validates
- * every occupied deterministic id before entering the write transaction; one
- * poisoned id intentionally aborts the whole batch rather than partially
- * materializing a declaration set whose identity is suspect. Missing
- * definitions are minted beneath the already-ensured deterministic Properties
- * page in one Automation transaction with pristine systemMint timestamps. */
-export const materializePropertySeeds = async (
+ * Never repairs payloads: live stale rows only log, a tombstone restore
+ * preserves its existing bag. The batched probe validates every occupied
+ * deterministic id before entering the write transaction; one poisoned id
+ * intentionally aborts the whole batch rather than partially materializing a
+ * declaration set whose identity is suspect. Missing definitions are minted
+ * beneath the already-ensured deterministic parent page in one Automation
+ * transaction with pristine systemMint timestamps. The kind's specifics
+ * (id / parent / content / bag / label / pre-filter) come through `config`. */
+const materializeSeeds = async <S extends {readonly seedKey: string; readonly revision: number}>(
   repo: Repo,
   workspaceId: string,
-  seeds: readonly AnyPropertySeedDeclaration[],
+  seeds: readonly S[],
+  config: SeedMaterializationConfig<S>,
 ): Promise<SeedMaterializationResult> => {
-  assertUniqueSeedKeys('materializePropertySeeds', seeds)
+  assertUniqueSeedKeys(config.label, seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
   if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
+  const materializable = config.preFilter ? config.preFilter(seeds) : seeds
+  if (materializable.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
 
-  const ids = seeds.map(seed => propertyDefinitionBlockId(workspaceId, seed.seedKey))
+  const ids = materializable.map(seed => config.idFor(workspaceId, seed.seedKey))
   const placeholders = ids.map(() => '?').join(', ')
   const rows = await repo.db.getAll<SeedProbeRow>(
     `SELECT id, workspace_id, properties_json, deleted FROM blocks WHERE id IN (${placeholders})`,
     ids,
   )
-  const seedsById = new Map(seeds.map(seed => [
-    propertyDefinitionBlockId(workspaceId, seed.seedKey), seed,
+  const seedsById = new Map(materializable.map(seed => [
+    config.idFor(workspaceId, seed.seedKey), seed,
   ] as const))
   const rowsById = new Map(rows.map(row => {
-    assertSeedWorkspace('materializePropertySeeds', row.id, workspaceId, row.workspace_id)
+    assertSeedWorkspace(config.label, row.id, workspaceId, row.workspace_id)
     const seed = seedsById.get(row.id)
-    if (!seed) throw new Error(`[materializePropertySeeds] unexpected probe row ${row.id}`)
+    if (!seed) throw new Error(`[${config.label}] unexpected probe row ${row.id}`)
     const properties = parseProbeProperties(row)
-    assertSeedProvenance('materializePropertySeeds', row.id, workspaceId, seed.seedKey, properties)
+    assertSeedProvenance(config.label, row.id, workspaceId, seed.seedKey, properties)
     return [row.id, {row, properties}] as const
   }))
 
-  const pending = seeds.filter((seed, index) => {
+  const pending = materializable.filter((seed, index) => {
     const probed = rowsById.get(ids[index]!)
     if (!probed || probed.row.deleted === 1) return true
     const storedRevision = revisionFromProperties(probed.properties)
@@ -347,24 +372,24 @@ export const materializePropertySeeds = async (
 
   let created = 0
   let restored = 0
-  const parentId = propertiesPageBlockId(workspaceId)
+  const parentId = config.parentFor(workspaceId)
   await repo.tx(async tx => {
     const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
     // Revalidate the complete declaration set under the same write lock before
     // the first mutation. The outside batch is only a fast no-work probe; it
     // cannot authorize a partial write if another actor poisons a previously
     // valid deterministic id between the probe and this transaction.
-    for (const seed of seeds) {
-      const id = propertyDefinitionBlockId(workspaceId, seed.seedKey)
+    for (const seed of materializable) {
+      const id = config.idFor(workspaceId, seed.seedKey)
       const current = await tx.get(id)
       if (current) {
-        assertSeedWorkspace('materializePropertySeeds', id, workspaceId, current.workspaceId)
-        assertSeedProvenance('materializePropertySeeds', id, workspaceId, seed.seedKey, current.properties)
+        assertSeedWorkspace(config.label, id, workspaceId, current.workspaceId)
+        assertSeedProvenance(config.label, id, workspaceId, seed.seedKey, current.properties)
       }
       currentById.set(id, current)
     }
-    for (const seed of seeds) {
-      const id = propertyDefinitionBlockId(workspaceId, seed.seedKey)
+    for (const seed of materializable) {
+      const id = config.idFor(workspaceId, seed.seedKey)
       const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
       if (current?.deleted) {
@@ -377,15 +402,31 @@ export const materializePropertySeeds = async (
         workspaceId,
         parentId,
         orderKey: 'a0',
-        content: seed.name,
-        properties: canonicalPropertySeedProperties(seed),
+        content: config.contentFor(seed),
+        properties: config.propertiesFor(seed),
       }, {systemMint: true})
       created += 1
     }
-  }, {scope: ChangeScope.Automation, description: 'materialize property definitions'})
+  }, {scope: ChangeScope.Automation, description: config.txDescription})
 
   return {created, restored, skippedReadOnly: false}
 }
+
+/** Create/restore-only PROPERTY seed pass — missing definitions minted beneath
+ * the already-ensured deterministic Properties page. See `materializeSeeds`. */
+export const materializePropertySeeds = (
+  repo: Repo,
+  workspaceId: string,
+  seeds: readonly AnyPropertySeedDeclaration[],
+): Promise<SeedMaterializationResult> =>
+  materializeSeeds(repo, workspaceId, seeds, {
+    label: 'materializePropertySeeds',
+    idFor: propertyDefinitionBlockId,
+    parentFor: propertiesPageBlockId,
+    contentFor: seed => seed.name,
+    propertiesFor: canonicalPropertySeedProperties,
+    txDescription: 'materialize property definitions',
+  })
 
 /** Exclude EVERY seed whose membership `id` is claimed by more than one seed in
  * the batch (returning the uncontested rest). Two seeds sharing an `id` are an
@@ -427,99 +468,24 @@ const uncontestedTypeSeeds = (
   return kept
 }
 
-/** Isolated create/restore-only TYPE seed pass — the exact structural mirror of
- * `materializePropertySeeds`, over the same deterministic-id namespace and the
- * same probe → revalidate-under-lock → create/restore discipline (one poisoned
- * id aborts the whole batch; a tombstone restore preserves its bag; live stale
- * rows only log). Differences are only the kind's specifics: `typeDefinitionBlockId`
- * for identity, the Types page for the parent, `canonicalTypeSeedProperties` for
- * the bag, and a contested-id skip (`uncontestedTypeSeeds`) — the property side
- * folds its membership-collision handling into the registry upstream.
- * `block-type` backing blocks would trip the typeify same-tx processor into
- * PAGE_TYPE + alias; the processor's seed carve-out (a valid `/type/` seed row)
- * keeps this write inert. */
-export const materializeTypeSeeds = async (
+/** Create/restore-only TYPE seed pass — missing definitions minted beneath the
+ * already-ensured deterministic Types page. Unlike the property pass it drops
+ * contested-`id` seeds first (`uncontestedTypeSeeds`, via `preFilter`) so a
+ * membership collision never materializes an order-dependent, orphan-prone
+ * backing row; the property side folds its collision handling into the registry
+ * upstream. Its `block-type` backing rows are kept bare (no PAGE_TYPE / alias) by
+ * the typeify same-tx processor's `/type/`-seed carve-out. See `materializeSeeds`. */
+export const materializeTypeSeeds = (
   repo: Repo,
   workspaceId: string,
   seeds: readonly TypeSeedDeclaration[],
-): Promise<SeedMaterializationResult> => {
-  assertUniqueSeedKeys('materializeTypeSeeds', seeds)
-  if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
-  if (seeds.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
-  // Never write a backing row for a contested membership id — materializing an
-  // order-dependent winner would orphan a phantom `/type/` row across a reorder
-  // or an authoring fix (Codex P2). Materialize only the uncontested seeds.
-  const materializable = uncontestedTypeSeeds(seeds)
-  if (materializable.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
-
-  const ids = materializable.map(seed => typeDefinitionBlockId(workspaceId, seed.seedKey))
-  const placeholders = ids.map(() => '?').join(', ')
-  const rows = await repo.db.getAll<SeedProbeRow>(
-    `SELECT id, workspace_id, properties_json, deleted FROM blocks WHERE id IN (${placeholders})`,
-    ids,
-  )
-  const seedsById = new Map(materializable.map(seed => [
-    typeDefinitionBlockId(workspaceId, seed.seedKey), seed,
-  ] as const))
-  const rowsById = new Map(rows.map(row => {
-    assertSeedWorkspace('materializeTypeSeeds', row.id, workspaceId, row.workspace_id)
-    const seed = seedsById.get(row.id)
-    if (!seed) throw new Error(`[materializeTypeSeeds] unexpected probe row ${row.id}`)
-    const properties = parseProbeProperties(row)
-    assertSeedProvenance('materializeTypeSeeds', row.id, workspaceId, seed.seedKey, properties)
-    return [row.id, {row, properties}] as const
-  }))
-
-  const pending = materializable.filter((seed, index) => {
-    const probed = rowsById.get(ids[index]!)
-    if (!probed || probed.row.deleted === 1) return true
-    const storedRevision = revisionFromProperties(probed.properties)
-    if (storedRevision !== undefined && storedRevision < seed.revision) {
-      console.warn(
-        `[definitionSeeds] ${seed.seedKey} revision ${storedRevision} trails code revision ${seed.revision}; ` +
-        'background materialization does not repair payloads',
-      )
-    }
-    return false
+): Promise<SeedMaterializationResult> =>
+  materializeSeeds(repo, workspaceId, seeds, {
+    label: 'materializeTypeSeeds',
+    idFor: typeDefinitionBlockId,
+    parentFor: typesPageBlockId,
+    contentFor: seed => seed.label,
+    propertiesFor: canonicalTypeSeedProperties,
+    txDescription: 'materialize type definitions',
+    preFilter: uncontestedTypeSeeds,
   })
-  if (pending.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
-
-  let created = 0
-  let restored = 0
-  const parentId = typesPageBlockId(workspaceId)
-  await repo.tx(async tx => {
-    const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
-    // Revalidate the complete declaration set under the same write lock before
-    // the first mutation — the outside batch is only a fast no-work probe.
-    for (const seed of materializable) {
-      const id = typeDefinitionBlockId(workspaceId, seed.seedKey)
-      const current = await tx.get(id)
-      if (current) {
-        assertSeedWorkspace('materializeTypeSeeds', id, workspaceId, current.workspaceId)
-        assertSeedProvenance('materializeTypeSeeds', id, workspaceId, seed.seedKey, current.properties)
-      }
-      currentById.set(id, current)
-    }
-    for (const seed of materializable) {
-      const id = typeDefinitionBlockId(workspaceId, seed.seedKey)
-      const current = currentById.get(id) ?? null
-      if (current && !current.deleted) continue
-      if (current?.deleted) {
-        await tx.restore(id, undefined, {skipMetadata: true})
-        restored += 1
-        continue
-      }
-      await tx.create({
-        id,
-        workspaceId,
-        parentId,
-        orderKey: 'a0',
-        content: seed.label,
-        properties: canonicalTypeSeedProperties(seed),
-      }, {systemMint: true})
-      created += 1
-    }
-  }, {scope: ChangeScope.Automation, description: 'materialize type definitions'})
-
-  return {created, restored, skippedReadOnly: false}
-}
