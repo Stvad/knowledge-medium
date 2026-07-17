@@ -138,7 +138,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
   referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
   runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
-  runPropertyDefinitionMigration: 'private; jobs are enqueued via the facetBridge-bound schedule',
+  runPropertyDefinitionMigrationBatch: 'private; jobs are enqueued via the facetBridge-bound schedule',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──

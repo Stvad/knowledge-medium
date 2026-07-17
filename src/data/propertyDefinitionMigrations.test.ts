@@ -280,6 +280,83 @@ describe('codec-change migration', () => {
   })
 })
 
+describe('simultaneous name swap (a -> b AND b -> a in one rebuild)', () => {
+  const FIELD_A = 'field-swap-a'
+  const FIELD_B = 'field-swap-b'
+  const alpha = schemaWith('alpha')
+  const beta = schemaWith('beta')
+  // The swapped pair: the SAME fieldIds now carry each other's old names.
+  const alphaRenamedToBeta = schemaWith('beta')
+  const betaRenamedToAlpha = schemaWith('alpha')
+
+  const publishPair = (repo: Repo, a: typeof alpha, b: typeof beta): void => {
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-swap-definitions',
+      [
+        {
+          metadata: {
+            fieldId: FIELD_A, workspaceId: WS, createdAt: 1, name: a.name,
+            changeScope: a.changeScope, hidden: false, origin: 'user' as const,
+          },
+          schema: a,
+        },
+        {
+          metadata: {
+            fieldId: FIELD_B, workspaceId: WS, createdAt: 1, name: b.name,
+            changeScope: b.changeScope, hidden: false, origin: 'user' as const,
+          },
+          schema: b,
+        },
+      ],
+      {workspaceId: WS},
+    )
+  }
+
+  const liveFieldRow = async (blockId: string, fieldId: string): Promise<string | undefined> =>
+    (await sharedDb.db.get<{id: string} | undefined>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0',
+      [blockId, fieldId],
+    ))?.id
+
+  it('keeps BOTH values: each lands under the other definition\'s old name', async () => {
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    publishPair(repo, alpha, beta)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: null, orderKey: 'k-host', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('host', alpha, 'alpha-value'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('host', beta, 'beta-value'),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(await cell('host')).toEqual({alpha: 'alpha-value', beta: 'beta-value'})
+    const fieldA = await liveFieldRow('host', FIELD_A)
+    const fieldB = await liveFieldRow('host', FIELD_B)
+    expect(fieldA).toBeDefined()
+    expect(fieldB).toBeDefined()
+
+    // The swap, in ONE rebuild.
+    vi.useFakeTimers()
+    publishPair(repo, alphaRenamedToBeta, betaRenamedToAlpha)
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    // Each definition's value follows ITS fieldId to its new name — nothing is
+    // clobbered by the other pass, and neither field row is tombstoned by the
+    // materializer reading a re-key as a user delete.
+    expect(await cell('host')).toEqual({beta: 'alpha-value', alpha: 'beta-value'})
+    expect(await liveFieldRow('host', FIELD_A)).toBe(fieldA)
+    expect(await liveFieldRow('host', FIELD_B)).toBe(fieldB)
+  })
+})
+
 describe('name round-trip guard (§7)', () => {
   it('accepts ordinary names and rejects ]]-lossy ones', () => {
     expect(isRoundTrippableReferenceLabel('status')).toBe(true)

@@ -2726,52 +2726,68 @@ export class Repo {
     changes: readonly PropertyDefinitionChange[],
   ): Promise<void> {
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
-    for (const change of changes) {
-      try {
-        await this.runPropertyDefinitionMigration(workspaceId, change)
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err)
-        console.error(
-          `[propertyDefinitionMigrations] "${change.newName}" (${change.fieldId}) failed: ${reason}`,
-        )
-      }
+    try {
+      await this.runPropertyDefinitionMigrationBatch(workspaceId, changes)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      const names = changes.map(change => `"${change.newName}" (${change.fieldId})`).join(', ')
+      console.error(`[propertyDefinitionMigrations] ${names} failed: ${reason}`)
     }
   }
 
-  private async runPropertyDefinitionMigration(
+  /** Re-key + re-encode every parent touched by THIS rebuild's definition
+   *  changes, applying each parent's whole change set in ONE cell write.
+   *
+   *  Per-change passes are unsafe when two definitions SWAP names (`a→b` and
+   *  `b→a` in one rebuild). Migrating `a→b` first writes the intermediate cell
+   *  `{b: <a's value>}`, which (1) clobbers b's value outright and (2) removes
+   *  key `a` — and because `a` now resolves through the FINAL name map to the
+   *  OTHER definition, the same-tx materializer (which watches `properties`)
+   *  reads that removal as a user delete and tombstones that definition's field
+   *  row before its own pass runs. No ordering avoids it: a swap is a cycle.
+   *
+   *  Applying a parent's whole set at once has no intermediate state: every
+   *  old name is dropped BEFORE any new name is assigned, so a swap lands as
+   *  `{a: <b's value>, b: <a's value>}` in a single write and the materializer
+   *  never sees a key go missing. */
+  private async runPropertyDefinitionMigrationBatch(
     workspaceId: string,
-    change: PropertyDefinitionChange,
+    changes: readonly PropertyDefinitionChange[],
   ): Promise<void> {
-    const resolution = this.propertySchemaResolverFor(workspaceId).resolveField(change.fieldId)
+    const resolver = this.propertySchemaResolverFor(workspaceId)
     // Shadowed/unavailable definitions are excluded from the name map and
     // the cell projection (§6) — nothing to re-key for them.
-    if (resolution.status !== 'resolved') return
-    const schema = resolution.schema
+    const plans = changes.flatMap(change => {
+      const resolution = resolver.resolveField(change.fieldId)
+      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
+    })
+    if (plans.length === 0) return
 
     // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
     // is user content (never a field row); retitling it would rewrite the
     // user's text.
-    const candidates = await this.db.getAll<{id: string; parent_id: string | null}>(
-      `SELECT id, parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id = ? AND deleted = 0
-          AND parent_id IS NOT NULL`,
-      [workspaceId, change.fieldId],
+    const fieldIds = plans.map(plan => plan.change.fieldId)
+    const candidates = await this.db.getAll<{parent_id: string | null}>(
+      `SELECT DISTINCT parent_id FROM blocks
+        WHERE workspace_id = ? AND reference_target_id IN (${fieldIds.map(() => '?').join(', ')})
+          AND deleted = 0 AND parent_id IS NOT NULL`,
+      [workspaceId, ...fieldIds],
     )
-    if (candidates.length === 0) return
+    const parentIds = candidates
+      .map(row => row.parent_id)
+      .filter((id): id is string => id !== null)
+    if (parentIds.length === 0) return
 
-    let unconvertible = 0
-    // Across ALL chunks: a parent whose field rows span a chunk boundary
-    // must not re-iterate its values (double-counting unconvertibles in the
-    // user-facing report).
-    const reprojectedParents = new Set<string>()
+    // Per changed definition, for the user-facing unparseable-values report.
+    const unconvertibleByField = new Map<string, number>()
     const CHUNK = 100
-    for (let i = 0; i < candidates.length; i += CHUNK) {
-      const chunk = candidates.slice(i, i + CHUNK)
+    for (let i = 0; i < parentIds.length; i += CHUNK) {
+      const chunk = parentIds.slice(i, i + CHUNK)
       await this.tx(async tx => {
-        // §9 ancestry rule, memoized per tx: a candidate whose parent chain
-        // passes through a field row is a VALUE/comment (e.g. a ref-typed
-        // value pointing at this very definition), not a field row — never
-        // retitle or re-key those. Checker built ONCE per chunk (rather than
+        // §9 ancestry rule, memoized per tx: a row whose parent chain passes
+        // through a field row is a VALUE/comment (e.g. a ref-typed value
+        // pointing at this very definition), not a field row — never retitle
+        // or re-key those. Checker built ONCE per chunk (rather than
         // re-resolving the registry snapshot on every walked row) — the
         // registry is a tx-start-captured snapshot, so it can't change
         // mid-chunk anyway.
@@ -2783,76 +2799,95 @@ export class Repo {
             || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
         }
 
-        for (const candidate of chunk) {
-          const fieldRow = await tx.get(candidate.id)
-          if (fieldRow === null || fieldRow.deleted) continue
-          if (await isInsidePropertySubtreeWalk(
-            fieldRow.parentId, (id) => tx.get(id), isFieldDefinition, subtreeMemo,
-          )) continue
-
-          // Field-row content is `((fieldId))` — id-addressed and
-          // rename-stable (§7), so there is nothing to retitle here: the row
-          // already carries `reference_target_id = change.fieldId` precisely
-          // because its content is that id-ref. A rename thus fires NEITHER
-          // MATERIALIZE nor PROJECT (no content changed), which makes this
-          // pass the sole actor that re-keys the name-keyed cell below.
-
-          // Re-encode + re-key once per parent (a parent's projection reads
-          // ALL its field rows for this schema in deterministic order).
-          const parentId = fieldRow.parentId
-          if (parentId === null || reprojectedParents.has(parentId)) continue
-          reprojectedParents.add(parentId)
+        for (const parentId of chunk) {
           const parent = await tx.get(parentId)
           if (parent === null || parent.deleted) continue
+          // The candidates are this parent's OWN children, so one walk from the
+          // parent decides them all: if the parent chain passes through a field
+          // row, every child here is property-subtree interior, not a field row.
+          if (await isInsidePropertySubtreeWalk(
+            parentId, (id) => tx.get(id), isFieldDefinition, subtreeMemo,
+          )) continue
 
+          // Field-row content is `((fieldId))` — id-addressed and rename-stable
+          // (§7), so there is nothing to retitle: the row already carries
+          // `reference_target_id = change.fieldId` precisely because its content
+          // is that id-ref. A rename changes no child content, so PROJECT never
+          // fires for it; the cell write below DOES fire MATERIALIZE (it watches
+          // `properties`), which is exactly why every old name must be dropped
+          // before any new one is assigned — see the method doc.
           const siblings = await tx.childrenOf(parentId, undefined)
-          let projected: unknown
-          let hasProjection = false
-          let parentUnconvertible = 0
-          for (const sibling of siblings) {
-            if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
-            const values = await tx.childrenOf(sibling.id, undefined)
-            for (const value of values) {
-              try {
-                const encoded = propertyChildContentToEncodedValue(schema, value.content)
-                if (!hasProjection) {
-                  projected = encoded
-                  hasProjection = true
+          const oldNames: string[] = []
+          const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+
+          for (const {change, schema} of plans) {
+            let projected: unknown
+            let hasProjection = false
+            let parentUnconvertible = 0
+            let sawFieldRow = false
+            // Re-encode + re-key once per parent (a parent's projection reads
+            // ALL its field rows for this schema in deterministic order).
+            for (const sibling of siblings) {
+              if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
+              sawFieldRow = true
+              const values = await tx.childrenOf(sibling.id, undefined)
+              for (const value of values) {
+                try {
+                  const encoded = propertyChildContentToEncodedValue(schema, value.content)
+                  if (!hasProjection) {
+                    projected = encoded
+                    hasProjection = true
+                  }
+                  // Canonicalize the child content under the (possibly new)
+                  // codec so the stored text matches what setProperty would
+                  // write.
+                  const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                  if (value.content !== canonical) {
+                    await tx.update(value.id, {content: canonical}, {skipMetadata: true})
+                  }
+                } catch {
+                  parentUnconvertible += 1
                 }
-                // Canonicalize the child content under the (possibly new)
-                // codec so the stored text matches what setProperty would
-                // write.
-                const canonical = encodedPropertyValueToChildContent(schema, encoded)
-                if (value.content !== canonical) {
-                  await tx.update(value.id, {content: canonical}, {skipMetadata: true})
-                }
-              } catch {
-                parentUnconvertible += 1
               }
             }
-          }
-          unconvertible += parentUnconvertible
+            // This parent carries no field row for this definition — its cell
+            // keys for it are none of this change's business.
+            if (!sawFieldRow) continue
+            if (parentUnconvertible > 0) {
+              unconvertibleByField.set(
+                change.fieldId,
+                (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
+              )
+            }
 
-          const nextProperties = {...parent.properties}
-          if (change.oldName !== schema.name) delete nextProperties[change.oldName]
-          if (hasProjection) {
-            nextProperties[schema.name] = projected
-          } else if (parentUnconvertible === 0) {
-            delete nextProperties[schema.name]
+            if (change.oldName !== schema.name) oldNames.push(change.oldName)
+            if (hasProjection) {
+              assignments.push({name: schema.name, value: projected, unset: false})
+            } else if (parentUnconvertible === 0) {
+              assignments.push({name: schema.name, value: undefined, unset: true})
+            }
+            // else (all-unconvertible): leave the new key unset — no assignment.
+            //   - rename: the old key is dropped below and the new key stays
+            //     absent → the cell shows unset for the unparseable values, §9's
+            //     contract. Re-keying the stale value under the new name would
+            //     violate §9 (cell derives from children), so we don't.
+            //   - no rename: the existing key rides untouched (no old name to
+            //     drop, no assignment) so a stale-but-fixable value stays
+            //     visible; the next valid edit reprojects and heals it
+            //     (§5 pending-reprojection).
+            // This pass NEVER deletes value rows, so they stay live
+            // unconditionally and the unconvertible COUNT is surfaced below.
           }
-          // else (all-unconvertible): leave the new key unset. Because
-          // field-row content is id-addressed and rename-stable, this pass is
-          // the SOLE cell writer (no MATERIALIZE/PROJECT fires), so the cell
-          // is exactly what we write here — no downstream pass to defer to:
-          //   - rename: the old key was deleted above and the new key stays
-          //     absent → the cell shows unset for the unparseable values, §9's
-          //     contract. Re-keying the stale value under the new name would
-          //     violate §9 (cell derives from children), so we don't.
-          //   - no rename: the existing key rides untouched (we don't delete
-          //     it) so a stale-but-fixable value stays visible; the next valid
-          //     edit reprojects and heals it (§5 pending-reprojection).
-          // This pass NEVER deletes value rows, so they stay live
-          // unconditionally and the unconvertible COUNT is surfaced below.
+
+          // Drop EVERY old name before assigning ANY new one: a swap's old name
+          // is another plan's new name, so interleaving would delete what a
+          // previous plan just wrote (and strand the other definition's value).
+          const nextProperties = {...parent.properties}
+          for (const oldName of oldNames) delete nextProperties[oldName]
+          for (const assignment of assignments) {
+            if (assignment.unset) delete nextProperties[assignment.name]
+            else nextProperties[assignment.name] = assignment.value
+          }
           if (!propertiesEqual(parent.properties, nextProperties)) {
             await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
           }
@@ -2867,13 +2902,18 @@ export class Repo {
         // uploads normally, never exposed to cmd-Z. Writes are
         // skipMetadata — machinery, not "last edited".
         scope: ChangeScope.References,
-        description: `migrate property definition ${change.oldName} -> ${schema.name}`,
+        description: plans.length === 1
+          ? `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`
+          : `migrate ${plans.length} property definitions`,
       })
     }
 
-    if (unconvertible > 0) {
-      // §9: a codec change that strands values must be user-visible, never a
-      // silent unset. The rows stay in the tree, fixable by hand.
+    // §9: a codec change that strands values must be user-visible, never a
+    // silent unset. The rows stay in the tree, fixable by hand. Reported per
+    // definition — one rebuild can change several.
+    for (const {change, schema} of plans) {
+      const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
+      if (unconvertible === 0) continue
       const message =
         `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
         + `"${schema.name}" could not convert to the new type; they remain in `
