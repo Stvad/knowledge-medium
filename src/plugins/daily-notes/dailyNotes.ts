@@ -319,7 +319,7 @@ export const ensureDailyNoteTarget = async (
   // whole write tx (found by referencesRecompute.fuzz.test.ts).
   const claimant = await tx.aliasLookup(date, workspaceId)
   if (claimant !== null) return {id: claimant.id, inserted: false}
-  return createOrRestoreTargetBlock(tx, {
+  const result = await createOrRestoreTargetBlock(tx, {
     id: dailyNoteBlockId(workspaceId, date),
     workspaceId,
     parentId: null,
@@ -340,4 +340,39 @@ export const ensureDailyNoteTarget = async (
       )
     },
   })
+  if (!result.inserted) {
+    // Live-row hit: createOrRestoreTargetBlock runs `onInsertedOrRestored`
+    // (which claims the ISO alias) only on insert/restore, NOT when the
+    // seat already exists live. A seat whose ISO alias was cleared while it
+    // stayed live (a direct alias edit on the daily page) would then never
+    // reclaim it — leaving the date unowned so an unrelated block can claim
+    // it, splitting the date's identity between the seat (bound by
+    // content-refs via the deterministic id) and the new claimant (via
+    // block_aliases): the LIVE-LIVE stable-wrong-binding the sweep forbids
+    // (found by referencesRecompute.fuzz.test.ts). The in-tx `aliasLookup`
+    // above proved the ISO is unclaimed here, so re-assert it if missing —
+    // append (not replace), since the seat may hold long-form literals
+    // claimed via claimLiteralDateAliases.
+    await ensureSeatClaimsIso(tx, result.id, date)
+  }
+  return result
+}
+
+/** Append `iso` to the seat's alias list if absent. Precondition: the
+ *  caller proved `iso` is unclaimed in this tx (else the uniqueness
+ *  trigger aborts the whole write). A malformed alias property is left
+ *  untouched — replacing it would drop entries the block_aliases trigger
+ *  still indexes, worse than leaving the ISO unclaimed. */
+const ensureSeatClaimsIso = async (tx: Tx, id: string, iso: string): Promise<void> => {
+  const seat = await tx.get(id)
+  if (seat === null || seat.deleted) return
+  let existing: readonly string[]
+  try {
+    const encoded = seat.properties[aliasesProp.name]
+    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+  } catch {
+    return
+  }
+  if (existing.includes(iso)) return
+  await tx.setProperty(id, aliasesProp, [...existing, iso], {skipMetadata: true})
 }
