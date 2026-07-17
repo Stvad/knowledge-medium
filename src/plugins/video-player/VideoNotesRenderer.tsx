@@ -71,7 +71,7 @@ export const VideoNotesLayout: BlockLayout = (slots) => {
   // must not flash before we KNOW the video has no notes (so no [] default).
   // Identity selector: an id list has nothing narrower to select; the
   // selector exists to satisfy block/no-broad-block-subscriptions.
-  const childIds = useHandle(slots.block.repo.query.childIds({id: slots.block.id, hydrate: true}), {
+  const childIds = useHandle(slots.block.repo.query.childIds({id: slots.block.id, hydrate: true, hidePropertyChildren: true}), {
     selector: ids => ids,
   })
   const containerRef = useRef<HTMLDivElement>(null)

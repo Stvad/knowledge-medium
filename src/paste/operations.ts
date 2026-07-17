@@ -163,7 +163,7 @@ const resolveRootDestination = async (
     placement,
   }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId'>,
 ): Promise<RootDestination> => {
-  const targetChildren = await tx.childrenOf(target.id, target.workspaceId)
+  const targetChildren = await tx.childrenOf(target.id, target.workspaceId, {hidePropertyChildren: true})
   const targetIsScopeRoot = scopeRootId === target.id
   const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
   const rootsAsChildren = targetIsScopeRoot ||

@@ -420,9 +420,12 @@ describe('Block.childIds / children / parent', () => {
     expect(ids).toEqual(['c1', 'c2'])
   })
 
-  it('childIds is identity-stable with repo.query.childIds', () => {
+  it('childIds is identity-stable with repo.query.childIds (visible view)', () => {
     const b = new Block(env.repo, 'p')
-    expect(b.childIds).toBe(env.repo.query.childIds({id: 'p'}))
+    // The facade getter speaks the visible/outline view (§9), so it delegates
+    // to the `hidePropertyChildren`-keyed handle — same instance the option
+    // returns, distinct from the everything-view handle.
+    expect(b.childIds).toBe(env.repo.query.childIds({id: 'p', hidePropertyChildren: true}))
   })
 
   it('children returns the repo.children handle with full BlockData rows', async () => {

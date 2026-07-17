@@ -162,7 +162,7 @@ const panelRowsForLayoutSession = async (
   layoutSessionBlock: Block,
 ) => panelRowsInLayoutOrder(
   layoutSessionBlock.id,
-  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load(),
+  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load(),
 )
 
 const resolveActivePanelRow = async (

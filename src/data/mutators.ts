@@ -517,7 +517,7 @@ export const indent = defineMutator<{id: string}, void>({
       // No parent — can't indent the root. Legacy was a no-op here.
       return
     }
-    const siblings = await tx.childrenOf(self.parentId)
+    const siblings = await tx.childrenOf(self.parentId, undefined, {hidePropertyChildren: true})
     const ix = siblings.findIndex(s => s.id === id)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
@@ -643,7 +643,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // The scope root anchors the view; it can't move within itself.
     if (scopeRootId !== undefined && id === scopeRootId) return false
 
-    const siblings = await tx.childrenOf(self.parentId)
+    const siblings = await tx.childrenOf(self.parentId, undefined, {hidePropertyChildren: true})
     const idx = siblings.findIndex(s => s.id === id)
     if (idx === -1) return false
 
@@ -674,7 +674,7 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     // shallower level (changing indentation), so it's also a no-op.
     if (scopeRootId === undefined || self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
-    const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
+    const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId, {hidePropertyChildren: true})
     const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
     const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
     if (!neighbourParent) return false

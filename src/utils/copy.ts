@@ -14,7 +14,7 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
   // the root (0 for the root). No per-parent handle creation, no recursive
   // cache reads, and no re-deriving depth here.
-  const blocks = await block.repo.query.subtree({id: block.id}).load()
+  const blocks = await block.repo.query.subtree({id: block.id, hidePropertyChildren: true}).load()
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }

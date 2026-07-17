@@ -343,7 +343,7 @@ const loadSubtreeRowsInTx = async (
 ): Promise<BlockData[]> => {
   const rows: BlockData[] = [root]
   const visit = async (parentId: string): Promise<void> => {
-    const children = await tx.childrenOf(parentId, root.workspaceId)
+    const children = await tx.childrenOf(parentId, root.workspaceId, {hidePropertyChildren: true})
     for (const child of children) {
       rows.push(child)
       await visit(child.id)
@@ -487,7 +487,7 @@ export const insertPanelRow = async (
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
 
-    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {hidePropertyChildren: true})
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
@@ -518,7 +518,7 @@ const insertPanelAtStartOfStackInTx = async (
     blockId: string
   },
 ): Promise<string> => {
-  const children = await tx.childrenOf(args.stackId, args.workspaceId)
+  const children = await tx.childrenOf(args.stackId, args.workspaceId, {hidePropertyChildren: true})
   const orderKey = keyBetween(null, children[0]?.orderKey ?? null)
   return createPanelRowInTx(repo, tx, {
     workspaceId: args.workspaceId,
@@ -552,7 +552,7 @@ export const insertSidebarStackedPanel = async (
       }
 
       if (source?.parentId === layoutSessionBlock.id) {
-        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {hidePropertyChildren: true})
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
@@ -587,7 +587,7 @@ export const insertSidebarStackedPanel = async (
       }
     }
 
-    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {hidePropertyChildren: true})
     const previous = siblings.at(-1)
     const stackId = await createPanelStackRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
@@ -913,7 +913,7 @@ export const applyCurrentLayoutUrl = async ({
     ? degradeSublayoutSlots(route.slots)
     : route.slots
 
-  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load()
+  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
   if (targetSlots.length === 0) {
@@ -932,7 +932,7 @@ export const applyCurrentLayoutUrl = async ({
   // store them). Cannot loop: replaceState fires no event, and a second
   // pass over the replaced hash compares equal.
   const finalRows = changed
-    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load()
+    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
     : currentRows
   const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows)
   const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots))
@@ -998,7 +998,7 @@ export class PanelLayoutProjection {
 
   async start(): Promise<void> {
     if (this.unsubscribeRows || this.unsubscribeUrl) return
-    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id})
+    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true})
     const initialRows = await rowsHandle.load()
     this.lastSlots = layoutSlotsFromRows(this.layoutSessionBlock.id, initialRows)
     this.unsubscribeRows = rowsHandle.subscribe(rows => {
@@ -1056,7 +1056,7 @@ export class PanelLayoutProjection {
             // the generation check skips the pass when a live subscription
             // event was processed after drain (its rows are newer).
             const generationAtDrain = this.outboundGeneration
-            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id}).load()
+            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true}).load()
             // Re-check after the await: a NEW inbound may have queued during
             // the load (and rows events suppressed under it re-set the flag).
             // Bail WITHOUT clearing — that inbound's own drain owns the flag

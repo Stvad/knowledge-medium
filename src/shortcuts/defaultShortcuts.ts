@@ -170,7 +170,7 @@ const createNodeInActivePanelFromGlobalContext = async (
 
   const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
   await layoutSessionBlock.load()
-  const rows = await repo.query.subtree({id: layoutSessionBlock.id}).load()
+  const rows = await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
   const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
   const activePanelRow =
