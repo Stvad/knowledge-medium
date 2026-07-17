@@ -231,7 +231,7 @@
   skipped (§5.1, O6), and the stock migration backup-prompted (§8.2).
   Further user calls 2026-07-17 simplified the design rather than extending it:
   UiState retention keys on the block's <em>type</em> (an
-  <code>ephemeralHistory</code> facet) and prunes the whole block to newest-K —
+  explicit <code>no-history</code> type) and prunes the whole block to newest-K —
   which, because that is a clean oldest-prefix delete, is safe for compact events
   and retired the earlier scope-keyed prefix-cut and write-full variants, their
   "phase 2", and the candidate index (§5.1, O6), demoting <code>scope</code> to
@@ -286,7 +286,7 @@
       deleted, which is what makes the log self-sufficient (I8). UI-state churn — measured at
       roughly half of a working device's update events — is logged but
       <strong>hard-bounded</strong>: a retention sweeper prunes each
-      <code>ephemeralHistory</code>-typed block (panels) to its newest K events.
+      <code>no-history</code>-typed block (panels carry the type) to its newest K events.
       The events stay compact like any other update; keeping the newest K is a
       clean oldest-prefix delete, which is safe for compact events, so no
       full-writes are needed (user call, <a href="#s16">O6</a>/§5.1).</li>
@@ -643,7 +643,7 @@ corruption" carries this one raw-write asterisk (slice-B raw-write test).
 trigger reads no history (§4.1/I6), so slice A ships no index work at all.
 Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper takes the block ids
 with &gt; K events (a bounded index-only aggregate over this index — ~50–80
-blocks, §12), keeps the <code>ephemeralHistory</code>-typed ones (live or
+blocks, §12), keeps the <code>no-history</code>-typed ones (live or
 deleted, §5.1), then prunes each to its newest K events <em>by <code>id</code></em> —
 which is what makes the cut a safe oldest-prefix delete (<code>created_at</code>
 is not reliably monotone in <code>id</code>, so ordering the cut by timestamp
@@ -1042,23 +1042,50 @@ Retention keys on the type.
 <p>Mechanism — three parts, each chosen so the signal survives sync:</p>
 
 <ul>
-  <li><strong>Prunability is a block-type facet, not a per-event flag or a
-    per-block column.</strong> A block type declares its history ephemeral once,
-    in code — <code>defineBlockType({ id: PANEL_TYPE, ephemeralHistory: true })</code>,
-    initially just <code>{panel, panel-stack}</code>, the facet being the
-    extension seam so a future view-state block opts in without touching the
-    sweeper. Two reasons it lives on the type: it is <em>stable</em> (a panel is
-    always a panel — nothing a stray write can flip, unlike "scope of the last
-    write", which is why we do not stamp scope on the block), and it <em>rides
-    sync for free</em> because a block's type is already part of its replicated
-    <code>properties</code>. No new synced column, no <code>sync-config.yaml</code>
-    change, no migration on the hot <code>blocks</code> table.</li>
+  <li><strong>Prunability is its own explicit type, <code>no-history</code>,
+    carried in the block's <code>types</code>.</strong> Not a facet on
+    <code>panel</code>, and not a per-event flag or per-block column: a distinct,
+    purpose-built type whose <em>name is its contract</em> — a block tagged
+    <code>no-history</code> is declaring "don't keep my history", and the sweeper
+    prunes exactly those. Panels get it at creation
+    (<code>panelLayoutProjection</code> / the UI-state extensions stamp
+    <code>types: ["panel", "no-history"]</code>), and a one-time backfill adds it
+    to existing panel/panel-stack blocks (~857, scoped to the active workspace).
+    Two reasons this is the right signal, and both answer the review finding that
+    keying on <code>panel</code> was unsafe:
+    <ul>
+      <li><em>It is explicit, so user-editability is a feature, not a hazard.</em>
+        The danger in keying on <code>panel</code> was <em>implicitness</em> —
+        types live in user-editable <code>properties_json.$.types</code>
+        (<code>blockType.ts</code>: even structural types stay "removable in the
+        property panel"), so a content block tagged <code>panel</code> would have
+        lost its history silently, with nothing in the type name warning of it. A
+        type called <code>no-history</code> inverts that: applying it is a
+        deliberate, legible choice a user is welcome to make on their own scratch
+        blocks, and losing history is the thing they asked for — not a surprise.
+        Mis-tagging <code>panel</code> is now harmless, because <code>panel</code>
+        is no longer the key.</li>
+      <li><em>It rides sync and is stable enough.</em> The type is part of the
+        block's replicated <code>properties</code>, so it is present and identical
+        on every device (the completeness the scope key lacked). No new synced
+        column, no <code>sync-config.yaml</code> change, no migration on the hot
+        <code>blocks</code> table — and the derived <code>block_types</code> index
+        (<code>clientSchema.ts:861-865</code>) makes "find the
+        <code>no-history</code> blocks" a cheap indexed lookup.</li>
+    </ul>
+    The residual data-loss surface is a genuinely churning block (§below: only
+    blocks with &gt; K events are ever touched) that a user <em>explicitly</em>
+    marks <code>no-history</code> and later regrets — the same shape as any
+    deliberate destructive action, and far narrower than an accidental structural
+    tag. No paternalistic guard second-guesses the mark; the explicit type
+    <em>is</em> the safety.</li>
   <li><strong>The sweeper keys on the synced block, so every device agrees.</strong>
     A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) takes as
     candidates the block ids with <em>more than K events</em> (a bounded
     index-only aggregate over <code>(block_id, id)</code> — measured ~50–80 such
-    blocks on either instance, §12, so the set is tiny) and keeps those whose
-    block is <code>ephemeralHistory</code>-typed. <strong>Deleted blocks are in
+    blocks on either instance, §12, so the set is tiny) and keeps those carrying
+    the <code>no-history</code> type (a <code>block_types</code> lookup for live
+    blocks). <strong>Deleted blocks are in
     the set, deliberately</strong> (review finding): a soft-deleted panel is still
     a <code>blocks</code> row (<code>deleted=1</code>), and a hard-deleted or
     stream-exited one is classified from its most-recent event's snapshot — so a
@@ -1082,8 +1109,8 @@ Retention keys on the type.
     retains fewer than K when a gap sits that recently: correctness over hitting
     exactly K. Served by the <code>(block_id, id)</code> index slice B adds for
     this (§3). Because the key
-    is the block's <em>type</em> — read from the synced row, classified by code
-    present on every device — a panel that synced in from another device is
+    is the block's <code>no-history</code> <em>type</em> — read from the synced
+    row on every device — a panel that synced in from another device is
     recognised identically to a locally-created one. That is exactly the blind
     spot the scope-keyed draft had: <code>scope</code> is NULL on sync arrivals,
     so it could only ever bound the events a device authored itself, a minority
@@ -1114,9 +1141,9 @@ Retention keys on the type.
     behaviour change from the scope-keyed draft, which preserved sync-authored
     panel events; naming it so it can be vetoed. I7 is amended to match: the
     sweeper is the second sanctioned <code>row_events</code> mutation (with the §8
-    rewrite), and it may delete <em>any</em> event on an
-    <code>ephemeralHistory</code>-typed block keeping the newest K — never any
-    event on a block without that facet.</li>
+    rewrite), and it may delete <em>any</em> event on a
+    <code>no-history</code>-typed block keeping the newest K — never any
+    event on a block without that type.</li>
   <li><strong>Scope is kept, but only as provenance.</strong> The
     <code>scope</code> stamp (§3) still rides on each event for forensics and for
     the #210 provenance story — "what edit scope produced this" — but it no longer
@@ -1912,8 +1939,9 @@ into is smaller).
         three-way <code>source</code> tag (§6.2 — labeling only; the policy
         table and drop gates left with the §6 revision, the
         <code>history_mode</code> gate with the §5 revision); the
-        <code>ephemeralHistory</code> block-type facet + the §5.1 retention
-        sweeper (whole-block newest-K, keyed on the block's type, cut by
+        <code>no-history</code> type (stamped on panels at creation + a one-time
+        backfill onto existing panel/panel-stack blocks) + the §5.1 retention
+        sweeper (whole-block newest-K, keyed on that type, cut by
         <code>id</code> via a new <code>(block_id, id)</code> index — no
         full-writes); <code>scope</code> stamped as
         provenance only; tests pinning I3 (incl. raw-write labeling + logging)
@@ -1980,7 +2008,7 @@ from its create with the <code>blocks</code> table ignored entirely: I3/I8,
 excepting the raw <code>UPDATE&nbsp;…&nbsp;SET&nbsp;id</code> case below),
 and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same
-<code>ephemeralHistory</code>-typed blocks — <em>including generated
+<code>no-history</code>-typed blocks — <em>including generated
 <code>full=2</code> discontinuities among the newest K</em> (safety oracle: after
 a sweep, a flagged block retains its newest K events <em>whatever their
 source</em>, the cut never crosses the latest <code>full=2</code> wall (so a
@@ -2131,9 +2159,9 @@ generator, which is how both were found.
       <td>I7</td>
       <td><strong>History rows are immutable</strong> once written — two
         narrowly sanctioned exceptions: the §8 one-time rewrite, and the §5.1
-        retention sweeper, which may delete any event on an
-        <code>ephemeralHistory</code>-typed block keeping the newest K, and never
-        touches a block without that facet. All other runtime code never UPDATEs
+        retention sweeper, which may delete any event on a
+        <code>no-history</code>-typed block keeping the newest K, and never
+        touches a block without that type. All other runtime code never UPDATEs
         or DELETEs <code>row_events</code>.</td>
       <td><a href="#s1">§1</a>/<a href="#s8">§8</a></td>
       <td>All future code</td>
@@ -2151,8 +2179,8 @@ generator, which is how both were found.
         never a dependency for the history to be complete — which is what lets
         §10's parent-edge index be fully log-derivable. Two exceptions, both
         named and bounded rather than silent: UI-state retention (§5.1 —
-        <code>ephemeralHistory</code>-typed view-state churn, pruned to the newest
-        K per block, never content), and the
+        <code>no-history</code>-typed view-state churn, pruned to the newest
+        K per block, never untagged content), and the
         historical gaps predating this design (trigger-suspended bootstrap
         windows, the pre-<code>row_events</code> era), which §8 makes
         <em>visible</em> by anchoring at every discontinuity instead of
@@ -2230,26 +2258,33 @@ generator, which is how both were found.
     <code>sqlite_master</code> trigger-body probe, and #288's dependency on
     slice B. Reintroduce only against a concrete burst that is genuinely
     unaffordable — and then keyed on provenance (I4), never columns.</li>
-  <li><strong>Scope-keyed UiState retention (two dead variants)</strong> — both
-    superseded 2026-07-17 (user) by keying on the block's <em>type</em> and
-    pruning the whole block to newest-K (§5.1). (a) <em>Prefix-cut over compact
-    events</em> (rule R1, the original O6 mechanism): because a compact event
-    cannot be deleted from a middle without silently splicing (§4.3), the sweeper
-    cut only a block's oldest contiguous all-local-ui <em>prefix</em>, with
-    opposite sentinels for two absent operands, and dragged a "freeze class" — any
-    interleaved non-local-ui event pinned the cut forever, making the bound
-    partial and needing an undesigned "phase 2". (b) <em>Write local-ui events
-    <code>full</code> for order-free pruning</em>: dissolved the freeze but keyed
-    the sweeper on the event's <code>scope</code>, which is NULL on every sync
-    arrival — measured on prod, that left the flagship 14,768-event panel with
-    <strong>0</strong> prunable events (its 244 sync-authored events are unkeyed),
-    and cost full snapshots plus a per-write partial index on the hottest class.
-    The common root cause of both: <code>scope</code> lives in
-    <code>tx_context</code> and does not survive sync, so no scope-keyed rule can
-    bound a shared block. Moving the key to the synced block <em>type</em> makes
-    whole-block newest-K a clean oldest-prefix delete — safe for compact events
-    with no full-writes, no freeze, no phase 2, no index. Kept as the record that
-    the <em>keying</em>, not the event format or the sweeper predicate, was the
+  <li><strong>Scope-keyed UiState retention (three dead variants)</strong> — all
+    superseded 2026-07-17 (user), landing on an explicit <code>no-history</code>
+    type + whole-block newest-K (§5.1). (a) <em>Prefix-cut over compact events</em>
+    (rule R1, the original O6 mechanism): because a compact event cannot be deleted
+    from a middle without silently splicing (§4.3), the sweeper cut only a block's
+    oldest contiguous all-local-ui <em>prefix</em>, with opposite sentinels for two
+    absent operands, and dragged a "freeze class" — any interleaved non-local-ui
+    event pinned the cut forever, making the bound partial and needing an
+    undesigned "phase 2". (b) <em>Write local-ui events <code>full</code> for
+    order-free pruning</em>: dissolved the freeze but keyed the sweeper on the
+    event's <code>scope</code>, which is NULL on every sync arrival — measured on
+    prod, that left the flagship 14,768-event panel with <strong>0</strong>
+    prunable events (its 244 sync-authored events are unkeyed), and cost full
+    snapshots plus a per-write partial index on the hottest class. (c) <em>Key on
+    the structural <code>panel</code> type</em>: fixed the sync-completeness (type
+    rides sync) and let whole-block newest-K over compact events work, but keyed a
+    <em>destructive</em> delete on <code>panel</code>-ness — and types are
+    user-editable (<code>properties_json.$.types</code>), so a content block
+    tagged <code>panel</code> would lose its history <em>silently</em>, the
+    retention consequence invisible in the structural type's name (review finding).
+    The fix is not to lock the type down but to name the consequence: a dedicated
+    <code>no-history</code> type that panels carry and users may apply to their own
+    scratch blocks — the prune becomes a legible, deliberate opt-out, and
+    mis-tagging <code>panel</code> is harmless. Root cause across (a)/(b):
+    <code>scope</code> does not survive sync. Across (b)/(c): the key must be both
+    sync-complete <em>and</em> a non-surprising signal for a delete. Kept as the
+    record that the <em>keying</em>, not the event format or the predicate, was the
     lever.</li>
   <li><strong>In-trigger retention pruning</strong> — enforcing the UiState
     bound from the trigger itself would put an indexed read + DELETE on the
@@ -2334,15 +2369,18 @@ generator, which is how both were found.
   <li><strong>O6 — RESOLVED (2026-07-15, user; mechanism settled 2026-07-17):
     UiState events are logged but hard-bounded, not skipped</strong> — newest
     K = 8 per block via a deep-idle sweeper. Skip-entirely is recorded in §15.
-    The <em>keying</em> took two supersessions to get right, both driven by the
-    user and both recorded in §15: scope-keyed prefix-cut over compact events
-    (rule R1) → scope-keyed with local-ui events written <code>full</code> →, and
-    finally, keyed on the block's <strong>type</strong> (an
-    <code>ephemeralHistory</code> block-type facet) with the whole block pruned to
-    newest-K. The last move is the one that works: scope is NULL on sync arrivals,
-    so any scope-keyed rule bounds only self-authored events (measured: 0 of the
+    The <em>keying</em> took several supersessions to get right, all driven by the
+    user and recorded in §15: scope-keyed prefix-cut over compact events
+    (rule R1) → scope-keyed with local-ui events written <code>full</code> →
+    keyed on the structural <code>panel</code> type → and finally an explicit,
+    dedicated <strong><code>no-history</code> type</strong> (stamped on panels,
+    user-assignable to any block) with the whole block pruned to newest-K. The
+    last move is the one that works: scope is NULL on sync arrivals, so any
+    scope-keyed rule bounds only self-authored events (measured: 0 of the
     14,768-event flagship panel prunable); the block's type survives sync, so
-    every device bounds the same block. And because keep-newest-K deletes a clean
+    every device bounds the same block; and a purpose-named type makes the
+    prune an explicit, legible opt-out rather than a silent consequence of a
+    structural tag (the review finding against keying on <code>panel</code>). And because keep-newest-K deletes a clean
     oldest prefix, it is safe for <em>compact</em> events (survivors reconstruct
     backward from the live row, never crossing the hole — §4.3), so no full-writes,
     no order-free machinery, no candidate index, and <code>scope</code> demotes to
