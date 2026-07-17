@@ -228,7 +228,14 @@
   calls: sync events kept for every workspace (§6, former O1), and invertible
   patches + sampled anchors adopted over the deterministic probe (§4, O5);
   two same-day policy calls followed — UiState history bounded rather than
-  skipped (§5.3, O6), and the stock migration backup-prompted (§8.2).
+  skipped (§5.1, O6), and the stock migration backup-prompted (§8.2).
+  Two further user calls 2026-07-17 simplified the design rather than extending
+  it: UiState events are written <em>full</em>, which made pruning order-free
+  and retired the prefix-cut rule and its "phase 2" (§5.1, O6); and the
+  <code>history_mode = 'skip'</code> exemption was <strong>deleted</strong> —
+  every write now logs, which makes the log self-sufficient (§5, I8) and
+  decouples PR #288 from this project (§11). Both deleted designs are recorded
+  in §15.
   §12's arithmetic was re-grounded 2026-07-15 against live measurements of two
   client instances of the same workspace via the agent bridge (a 63-day dev
   profile, 1.94M events, and a 23-day prod profile, 401k events); measured
@@ -266,14 +273,14 @@
       predecessor</strong>: walks terminate on the newer side unconditionally —
       live row, delete event, or anchor (§4.3). The old "every chain starts
       full" promotion machinery is unnecessary (§4.1).</li>
-    <li><strong>Derived writes log normally in compact form; only enumerated
-      one-shot bulk bursts skip</strong>, via a tx-scoped
-      <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
-      column-keyed; hard deletes never skip (§5). UI-state churn — measured at
+    <li><strong>Every write logs — there is no exemption mechanism</strong>
+      (§5, revised 2026-07-17): derived writes and one-shot bulk bursts alike.
+      The <code>history_mode = 'skip'</code> opt-in an earlier draft carried is
+      deleted, which is what makes the log self-sufficient (I8). UI-state churn — measured at
       roughly half of a working device's update events — is logged but
       <strong>hard-bounded</strong>: a retention sweeper prunes to the newest
       K versions per block — written <em>full</em>, which makes them freely
-      prunable in any order (user call, <a href="#s16">O6</a>/§5.3).</li>
+      prunable in any order (user call, <a href="#s16">O6</a>/§5.1).</li>
     <li><strong>Sync-applied events are kept, compact, for every workspace</strong>
       (user call 2026-07-15, superseding an earlier per-workspace-mode drop):
       local history stays self-sufficient instead of leaning on a server read
@@ -487,7 +494,7 @@ trigger-recreation ordering):
       <td><code>full INTEGER</code></td>
       <td><code>1</code> = the payload sides present carry <em>complete</em>
         row state (create, hard delete, sampled anchor, migration anchor, and
-        every <code>scope='local-ui'</code> event — §5.3 writes those full on
+        every <code>scope='local-ui'</code> event — §5.1 writes those full on
         purpose, which is what makes them freely prunable);
         <code>0</code> = compact invertible patch (changed fields only, both
         sides). <code>NULL</code> on v1 rows — every v1 row is full by
@@ -522,7 +529,7 @@ trigger-recreation ordering):
         comment, the trigger gate, not the TS clear, is the load-bearing
         check. NULL on all v1 rows. Costs nothing — the trigger already
         probes <code>tx_context</code> — and buys per-event provenance for
-        forensics plus the key the §5.3 UiState retention sweeper prunes by.
+        forensics plus the key the §5.1 UiState retention sweeper prunes by.
         The gate is mandatory, not hygiene: an event mislabeled
         <code>'local-ui'</code> becomes sweeper-prunable, i.e. deletable
         content history. Slice B pins it: a raw/sync write while
@@ -580,13 +587,13 @@ under the no-op skip, where v1 recorded the move; the v2 spec includes
 <code>block_id = NEW.id</code>). That preserves v1 parity and bounds the
 damage, no more: the old id's newer-side terminator is broken by the raw key
 rewrite itself (v1 alike — that chain reconstructs only via its older-side
-full, and a skip-created row genuinely breaks), so §4.3's "ChainBroken ⇒
+full), so §4.3's "ChainBroken ⇒
 corruption" carries this one raw-write asterisk (slice-B raw-write test).
 </p>
 
 <p>Index changes — <strong>nothing the v2 triggers need</strong>: the v2
 trigger reads no history (§4.1/I6), so slice A ships no index work at all.
-Slice B adds one small partial index for the §5.3 sweeper's recurring
+Slice B adds one small partial index for the §5.1 sweeper's recurring
 candidate scan — <code>row_events(block_id, id) WHERE scope = 'local-ui'</code>
 — tiny by construction (it holds only the class being bounded) at the cost of
 one index insert per UiState event; without it every deep-idle sweep scans the
@@ -802,32 +809,36 @@ empirically.
 <em>Measured reality check (2026-07-15, §12):</em> the per-block event
 distribution is flat-plus-spiky — mean 2.9 events per ever-logged block on the
 dev instance, yet maxima of 8,082 (dev) and 14,702 (prod — a single UI-state
-panel block, §5.3), with only ~80 blocks above 64 events. For 99.99% of blocks
+panel block, §5.1), with only ~80 blocks above 64 events. For 99.99% of blocks
 anchors never fire and never matter: their walks terminate at a create or the
 live row within a handful of events. Anchors are in practice a hot-block
 mechanism — which is exactly where the loss-window bound and integrity
 checkpoints are worth paying for. p = 1/64 stands.
 </p>
 
-<h2 id="s5">5. Derived-write logging — analysis and recommendation</h2>
+<h2 id="s5">5. Derived-write logging: everything logs (revised)</h2>
+
+<p><em>Revision note (2026-07-17, user call): earlier drafts exempted
+enumerated one-shot bulk bursts (the #288 backfill) from logging via a
+<code>tx_context.history_mode = 'skip'</code> gate. <strong>That mechanism is
+deleted — every write logs.</strong> The argument is below; the deleted design,
+and what it cost, is recorded in <a href="#s15">§15</a>.</em></p>
 
 <p>
 The props migration introduces machine writers: the one-shot backfill (~650k
 creates), the children→cell projection (2–3 row writes per property edit), the
 consistency sweep, and arrival catch-up. The question: do their writes belong
-in the history log? The earlier "skip them all via a tx_context-gated trigger
-condition" suggestion trades away exactly the record you want when the
-machinery misbehaves. Options considered:
+in the history log? Options considered:
 </p>
 
 <div class="table-scroll">
 <table>
   <thead><tr><th></th><th>Option</th><th>Bytes (backfill burst)</th><th>Debugging value</th><th>Verdict</th></tr></thead>
   <tbody>
-    <tr><td>(a)</td><td>Skip entirely</td><td>0</td><td>Per-tx only (via <code>command_events</code>)</td><td><strong>Adopted for enumerated one-shot bursts only</strong></td></tr>
+    <tr><td>(a)</td><td>Skip entirely</td><td>0 on the authoring device; <em>~230&nbsp;MB on every other one anyway</em></td><td>Per-tx only (via <code>command_events</code>) — and only on the devices that <em>didn't</em> run it</td><td><strong>Rejected 2026-07-17 (user)</strong> — was adopted for enumerated one-shot bursts; see the callout</td></tr>
     <tr><td>(b)</td><td>Log compact, values stripped</td><td>~650k &times; ~90&nbsp;B ≈ 60&nbsp;MB + index churn</td><td>Row-level "something wrote here", no values</td><td>Rejected — pays row+index cost for little: burst writes are fully derivable, so the values a debugger wants are reconstructable from the sources' own logged history</td></tr>
     <tr><td>(c)</td><td>Log compact, sampled</td><td>~1–10&nbsp;MB</td><td>Statistical only</td><td>Rejected — a sampled forensic log answers neither "what happened to <em>this</em> block" nor "how much happened"</td></tr>
-    <tr><td>(d)</td><td>Log normally, provenance-marked</td><td>~650k &times; ~350&nbsp;B ≈ 230&nbsp;MB/device</td><td>Full</td><td><strong>Adopted for steady-state derived writes</strong> — and the "mark" is free, see below</td></tr>
+    <tr><td>(d)</td><td>Log normally, provenance-marked</td><td>~650k &times; ~350&nbsp;B ≈ 230&nbsp;MB/device, one-time</td><td>Full</td><td><strong>Adopted for every derived write</strong> — steady-state and bulk alike; the "mark" is free, see below</td></tr>
   </tbody>
 </table>
 </div>
@@ -845,105 +856,62 @@ machinery misbehaves. Options considered:
       <code>mutator_calls</code>; <code>commitPipeline.ts:348-368</code>)
       identifies the writer — provenance is a join, and a later compaction pass
       could target it by that join if the volume ever warrants.</li>
-    <li><strong>Enumerated one-shot bulk bursts skip</strong> (option a): the
-      props backfill, the arrival catch-up bulk pass, and future whole-table
-      column backfills. Justification: their writes are fully derivable (field
-      rows mirror cell values whose own edit history <em>is</em> logged), each
-      burst still leaves a <code>command_events</code> row per tx, and the
-      §4.3 newer-side walk brackets the gap — §5.2 states precisely what a
-      skip does and does not give up.</li>
+    <li><strong>So do the one-shot bulk bursts</strong> — the props backfill,
+      the arrival catch-up pass, future whole-table column backfills. The
+      exemption that used to cover them is deleted, for four reasons:
+      <ul>
+        <li><em>It was asymmetric, and pointed the wrong way.</em> Because §6
+          keeps sync events, every <em>other</em> device logs the backfill's
+          650k creates as sync arrivals regardless. The skip saved ~230&nbsp;MB
+          on the one device that <em>ran</em> the migration — precisely where a
+          bug would originate — while the devices that merely received the
+          results kept the full record. You would have debugged the migration
+          on a machine that never ran it, and the fleet's histories would
+          disagree about whether it happened.</li>
+        <li><em>The riskiest write is the one you least want unlogged.</em>
+          This system's own incident history is exactly this class of
+          operation — bulk passes that damaged live data and whose recovery
+          depended on reconstructing what the pass actually did. A 650k-row
+          migration is the single riskiest write it will ever perform; that is
+          an argument for logging it, not against.</li>
+        <li><em>The economics moved under the decision.</em> Skip was reasoned
+          about against a 2.2&nbsp;GB log. This document's whole job is freeing
+          ~1.45&nbsp;GB; the burst costs ~230&nbsp;MB once. The room exists
+          now.</li>
+        <li><em>It bought a permanent invariant hole for a rare event.</em>
+          Bulk migrations should not be routine. With no skip, every block's
+          history opens with its create — so the log is self-sufficient
+          (<a href="#invariants">I8</a>) and §10's parent-edge index is fully
+          log-derivable instead of leaning on the live <code>blocks</code>
+          table as a crutch.</li>
+      </ul>
+      <strong>Cost owned:</strong> ~230&nbsp;MB one-time on the authoring
+      device. Creates are incompressible — compaction does not shrink them and
+      VACUUM will not reclaim them; that is real data we are choosing to keep.
+      Bulk cleanups likewise pay a tombstone per row: the dev instance's
+      317k-block workspace-migration purge cost ~194&nbsp;MB of delete events
+      (measured, §12) — the price of "every deleted block's last state survives
+      locally". If some future burst is genuinely unaffordable, an exemption can
+      be reintroduced then, against a concrete case rather than a speculative
+      one.</li>
   </ul>
 </div>
 
-<h3>5.1 Mechanism: <code>tx_context.history_mode</code></h3>
-
 <p>
-Add a nullable <code>history_mode TEXT</code> column to <code>tx_context</code>
-(<code>clientSchema.ts:38-48</code>) — on an existing device this is an
-idempotent <code>ALTER TABLE</code> ensure-migration ordered before any writer
-touches it, <em>not</em> merely an edit to the <code>CREATE TABLE IF NOT
-EXISTS</code> body (which never runs once the table exists);
-<code>ensureUndoGroupIdColumns</code> already ALTERs <code>tx_context</code> for
-<code>group_id</code> and is the exact precedent (the same applies to
-<code>apply_kind</code>, §6.2 — both land in that one ensure-migration, or
-slice B's first <code>UPDATE tx_context SET history_mode = ?</code> hits
-<code>no such column</code>). Set by the commit pipeline from a new
-optional <code>RepoTxOptions.historyMode</code> (<code>tx.ts:269-277</code>) in
-step 1 (<code>commitPipeline.ts:261-265</code>) and cleared with the rest in
-step 5 (<code>:375-383</code>, rollback-safe inside the tx). One value:
-<code>'skip'</code>. The <em>create and update</em> row_events triggers add
-<code>COALESCE((SELECT history_mode FROM tx_context WHERE id = 1), 'full') != 'skip'</code>
-to their WHEN clause — the delete trigger carries no <code>history_mode</code>
-gate at all (§5.2 / I2's corollary). The update trigger's gate carries one
-further exemption, for the same reason the delete trigger has none: a
-<em>deletion-state transition</em> is never skippable, so the gate is
-<code>AND (OLD.deleted IS NEW.deleted)</code>-qualified —
-<code>tx.delete</code> and restore are UPDATEs of <code>deleted</code>
-(<code>kind='soft-delete'</code>, <code>clientSchema.ts:456</code>), not
-physical DELETEs, so an unqualified gate would let a <code>'skip'</code> tx
-suppress the only event recording that the block was deleted or restored. That
-would strand the §10 subtree index (which closes and reopens parent intervals
-on exactly those transitions) and hide a deletion from history entirely —
-strictly worse than the hard-delete case I2 already forbids. NULL/absent means full logging — the default cannot
-silently drop history (invariant <a href="#invariants">I3</a>), sync-applied
-writes (which never set it) are unaffected, and only a caller that explicitly
-opts in is exempt (invariant <a href="#invariants">I4</a>: exemption by
-provenance, never by column — skipping <code>properties_json</code> wholesale
-would lose primary history for carve-out/un-flipped/orphan keys, per PR #288
-§12).
+With no exemption gate, the trigger WHEN clauses lose their
+<code>history_mode</code> condition entirely — the only remaining
+bootstrap-scoped silence is the existing <code>withTriggerSuspended</code>
+bracket (<code>clientSchema.ts:1187-1200</code>), which stays bootstrap-only
+because dropping a trigger is DB-global and would also unlog concurrent
+writers mid-session. Invariant <a href="#invariants">I4</a> (exemption by
+provenance, never by column) survives as a standing review rule rather than a
+live mechanism: if an exemption is ever reintroduced, it may not condition on
+<em>which columns</em> changed — skipping <code>properties_json</code>
+wholesale would lose primary history for carve-out/un-flipped/orphan keys (PR
+#288 §12).
 </p>
 
-<p>
-This is the tx-scoped, concurrency-safe generalization of the existing
-<code>withTriggerSuspended</code> bracket (<code>clientSchema.ts:1187-1200</code>) —
-which stays bootstrap-only, because dropping a trigger is DB-global and would
-also unlog concurrent writers mid-session.
-</p>
-
-<h3>5.2 What a skip costs history — and what stays rederivable</h3>
-
-<p>
-The instinct behind keeping sync events (§6) — history is most valuable when
-self-sufficient — applies here too, so it is worth being precise about what a
-<code>'skip'</code> burst gives up under the §4 format:
-</p>
-
-<ul>
-  <li><strong>Net outcomes stay reconstructable from local history alone — no
-    re-derivation needed.</strong> The backward walk from the live row (§4.3)
-    un-applies every <em>logged</em> event; un-applying all logged events of a
-    skip-created row therefore lands exactly on the state the burst left
-    behind. The "rederivable from the source blocks' own logged history"
-    argument in the table above is true, but it is not what carries the
-    property — the walk's bracketing does, and that holds even if the
-    derivation code has changed since.</li>
-  <li><strong>What is genuinely not recorded:</strong> intermediate states
-    <em>within</em> the gap (a burst that writes the same row twice collapses
-    to its net effect), and per-write attribution/timing inside it —
-    <code>command_events</code> keeps the tx-level record (which pass ran,
-    when, how many writes), not row-level values.</li>
-  <li><strong>No deletion-state transition ever skips.</strong> A hard delete
-    inside a <code>'skip'</code> tx would erase both newer-side terminators at
-    once — the live row is gone and no delete event (full before) exists —
-    leaving every older state of that block unreconstructable and breaking
-    <a href="#invariants">I2</a>. The delete trigger therefore carries no
-    <code>history_mode</code> gate at all: the enumerated bursts are
-    create/update-shaped, and a purge that wants silence is a design change
-    that must renegotiate I2 explicitly, not a flag to set. The same rule
-    extends to <em>soft</em> delete and restore, which are UPDATEs of
-    <code>deleted</code> and so travel through the gated update trigger: its
-    gate is qualified with <code>OLD.deleted IS NEW.deleted</code> (§5.1), so a
-    skip burst can never suppress the record that a block was deleted or
-    brought back. Skipping those would hide a deletion from history outright
-    and strand the §10 subtree index, which closes and reopens parent intervals
-    on precisely those transitions. Cost owned: bulk
-    cleanups pay a tombstone per row — the dev instance's 317k-block
-    workspace-migration purge cost ~194&nbsp;MB of delete events (measured,
-    §12), the price of "every deleted block's last state survives
-    locally".</li>
-</ul>
-
-<h3>5.3 Measured: UI-state churn dominates organic updates — bounded, not skipped (O6)</h3>
+<h3>5.1 Measured: UI-state churn dominates organic updates — bounded, not skipped (O6)</h3>
 
 <p>
 Live measurement (2026-07-15, §12) surfaced a third write class this section's
@@ -1116,9 +1084,10 @@ records those changes. Read against
       full, v2 cannot shrink them. This was the second-largest byte win of the earlier
       draft; deliberately given back.</li>
     <li><strong>#288's backfill arrival burst logs on receiving devices</strong>
-      (~650k full creates ≈ ~230&nbsp;MB one-time per device) unless #288 adds
-      its own enumerated arrival exemption — G2 in <a href="#s11">§11</a> is
-      renegotiated accordingly.</li>
+      (~650k full creates ≈ ~230&nbsp;MB one-time per device). With the §5
+      revision the authoring device pays the same, so this stopped being an
+      asymmetry to negotiate — G2 in <a href="#s11">§11</a> is now simply
+      priced, with no exemption offered or needed.</li>
     <li>The comment at <code>clientSchema.ts:55-69</code> ("the ONLY place an
       INCOMING sync change is durably recorded") stays unconditionally true —
       no update needed for this section (slice B touches it only for the
@@ -1140,9 +1109,14 @@ distinguishes sync-apply from the <em>other</em> NULL-source writers (the raw
 path, §2.1) — now purely for truthful attribution, no longer load-bearing for
 any gate: the materializer's Phase-2 bracket, which today sets
 <code>source = NULL</code> (<code>materialize.ts:344</code>), additionally sets
-a new nullable <code>tx_context.apply_kind</code> column (added by the same
-idempotent ensure-ALTER as <code>history_mode</code>, §5.1), set to
-<code>'sync'</code>. Unlike today's
+a new nullable <code>tx_context.apply_kind</code> column — added by an
+idempotent <code>ALTER TABLE</code> ensure-migration ordered before any writer
+touches it, <em>not</em> merely an edit to the <code>CREATE TABLE IF NOT
+EXISTS</code> body (which never runs once the table exists);
+<code>ensureUndoGroupIdColumns</code> already ALTERs <code>tx_context</code> and
+is the exact precedent, or the materializer's first
+<code>UPDATE tx_context SET apply_kind = ?</code> hits <code>no such
+column</code> — set to <code>'sync'</code>. Unlike today's
 bracket — which only <em>opens</em> (it asserts <code>source = NULL</code> and
 relies on NULL being the resting state) — the clear must be explicit: reset
 <code>apply_kind = NULL</code> as the last statement of the same write
@@ -1164,8 +1138,9 @@ three-value enum; the three-way tag governs new writes only.
 
 <p>
 Two review lessons from the deleted drop gate stay on the books as review
-rules (they still bind the §5.1 <code>history_mode</code> gate and any future
-trigger predicate): <strong>every WHEN predicate must be NULL-safe</strong>
+rules (they bind the label projection and any future trigger predicate — the
+<code>history_mode</code> gate they were first written for is itself gone with
+the §5 revision): <strong>every WHEN predicate must be NULL-safe</strong>
 under SQLite's three-valued logic — a bare <code>(subquery) = 'x'</code>
 against a missing row yields NULL, <code>NOT (TRUE AND NULL)</code> is still
 NULL, and a NULL WHEN silently skips the INSERT, i.e. silently drops history
@@ -1278,8 +1253,8 @@ block with any <code>v IS NULL</code> event:
     claim. Sync-applied events carry no <code>tx_id</code> and correctly
     stay NULL. Scope-stamped v1 rows are also <em>kept full</em> rather than
     compacted (they already are full snapshots — declining to compact them is
-    both cheaper and what makes them freely prunable, §5.3). This is what lets
-    the §5.3 retention bound reach the measured stock churn — the 14.7k-event
+    both cheaper and what makes them freely prunable, §5.1). This is what lets
+    the §5.1 retention bound reach the measured stock churn — the 14.7k-event
     panel — rather than only future traffic. One count to run at
     implementation: v1 tx-carrying events with no <code>command_events</code>
     row would indicate a decoupled era and quantify the backfill's
@@ -1344,12 +1319,14 @@ block with any <code>v IS NULL</code> event:
     v-NULL = readable-as-full, merely uncompacted — permanently, unless the
     job is deliberately re-armed; the marker-gated one-shot does not re-scan
     on its own); and during a downgrade window the v1 bodies carry
-    no <code>history_mode</code> gate, no identical-update skip, and no
-    scope stamp — see the G1 caveat in §11. G1's <code>sqlite_master</code>
-    probe guards only the #288 backfill's own batches; ordinary organic and
-    sync writes from a stale tab are <em>not</em> guarded and will log as
-    ungated <code>v IS NULL</code> full rows until that tab reboots on new
-    code. This is owned, not fixed: it stays sound (v-NULL reads as full and
+    no identical-update skip, no <code>workspace_id</code>, and no
+    scope stamp, so a stale tab's writes land as
+    <code>v IS NULL</code> full rows until that tab reboots on new
+    code. (This used to be sharper: while the §5 <code>'skip'</code> gate
+    existed, a mid-run downgrade would also silently un-skip the #288 backfill,
+    which is why G1 carried a per-chunk <code>sqlite_master</code> trigger-body
+    probe. With no gate to lose, that whole guard is gone — a downgraded tab now
+    costs only encoding, never a policy.) This is owned, not fixed: it stays sound (v-NULL reads as full and
     reconstruction never assumes a cadence), the only cost is those rows miss
     the skip/scope semantics until a later recompaction, and the small fleet
     bounds the exposure. A trigger-body version guard — refuse to install
@@ -1432,18 +1409,21 @@ live file has not advanced past it — discarding the <em>staging</em> file
 otherwise, never the live one. The fence must be the SQLite file change
 counter (or an equivalent any-committed-write signal): a
 <code>MAX(row_events.id)</code>-plus-<code>ps_crud</code>-emptiness fence
-looks natural but is defeated by this doc's own §5 mechanism — a
-<code>history_mode = 'skip'</code> burst (the #288 backfill runs at exactly
-this kind of idle) writes zero row_events rows and its uploads drain, so the
-swap would pass and silently discard the burst's <code>command_events</code>
-record and completion markers, then re-pay the ~230&nbsp;MB arrival logging
-G1 exists to prevent. The fence value and the pending-swap state must live
+looks natural but is defeated by this doc's own machinery, running in exactly
+the deep-idle window the snapshot targets. The §8 rewriter <em>UPDATEs</em>
+existing rows in place and the §5.1 sweeper <em>DELETEs</em> them: both advance
+the file substantially while leaving <code>MAX(row_events.id)</code> untouched.
+Marker and bookkeeping writes (<code>client_schema_state</code> completion
+flags, <code>command_events</code>) and PowerSync's <code>blocks_synced</code>
+applies likewise advance the file without inserting a single row_events row. In
+every one of those cases the swap would pass its fence and silently discard the
+work. The fence value and the pending-swap state must live
 beside the staging file (or inside it), <em>never</em> in the live DB — an
 in-DB marker in this section's usual <code>client_schema_state</code> idiom
 would itself advance the counter and deterministically invalidate every
 swap. Cost owned: with a correct fence, the staging file
 survives only a write-free session tail — any user return invalidates it
-(interaction writes panel state, §5.3) and re-pays a multi-GB staging write
+(interaction writes panel state, §5.1) and re-pays a multi-GB staging write
 on exactly the quota-tight device this route serves. If retries prove
 wasteful, swap immediately after <code>INTO</code> under a quiesced writer
 (close/reopen) instead of at next boot.
@@ -1493,10 +1473,10 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         is a <code>deleted = 1</code> UPDATE (<code>kind='soft-delete'</code>)
         that does not touch <code>parentId</code>, so a parentId-transition-only
         builder would leave a deleted block enumerated forever — it keys on the
-        <code>deleted</code> flag and create/hard-delete boundaries too. A
-        <em>skip-created</em> block (§5 exemption) has no create event to open an
-        interval from; until its first logged move it is enumerated from the live
-        <code>blocks</code> table (which still holds it), not the log. Per-member
+        <code>deleted</code> flag and create/hard-delete boundaries too. Every
+        block has a create event to open its interval from (§5 revised — with no
+        skip exemption the index is fully log-derivable and needs no live-
+        <code>blocks</code> crutch; <a href="#invariants">I8</a>). Per-member
         state is §4.3 <code>stateAt</code>; deleted-at-T members reconstruct fine
         (delete events carry full before). Per-block time-seek: the retained
         <code>(block_id, created_at DESC)</code> index (§3), read
@@ -1553,44 +1533,44 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
 </table>
 </div>
 
-<h2 id="s11">11. Contract with PR #288 (the slice-C gate)</h2>
+<h2 id="s11">11. Contract with PR #288 (revised — no longer a gate)</h2>
 
-<p>What this design guarantees to the props migration, in its §12 terms:</p>
+<p><em>Revision note (2026-07-17): with the <code>'skip'</code> exemption
+deleted (§5), this section stops being a gate. #288's slice C no longer needs
+anything from this project — it logs its burst like any other writer, and the
+former G1/G2 negotiation is moot.</em></p>
+
+<p>What this design now says to the props migration, in its §12 terms:</p>
 
 <ol>
-  <li><strong>G1 — authoring device:</strong> the backfill runs its
-    <code>repo.tx</code> batches with <code>historyMode: 'skip'</code> → ~650k
-    creates write <em>zero</em> row_events rows (vs ~230&nbsp;MB + index churn).
-    <code>command_events</code> still records every backfill tx. One caveat
-    (§8.2): a stale tab re-boot can reinstall v1 trigger bodies, which have no
-    <code>history_mode</code> gate — and the backfill runs 5–10 minutes
-    chunked across many txs, so a mid-run downgrade would silently log the
-    remaining creates. Guard: probe the installed trigger body
-    (<code>SELECT sql FROM sqlite_master</code>, one row) <em>inside each
-    chunk's write transaction</em> — serialized against any stale tab's DDL,
-    negligible cost — and abort/wait if the body lacks the gate. Even that
-    closes the window per-batch, not per-run; the residue is one batch's
-    creates, not ~230&nbsp;MB.</li>
-  <li><strong>G2 — receiving devices (renegotiated with the §6 revision):</strong>
-    backfilled rows arrive as sync-applied creates and now <em>log</em> —
-    ~650k full creates ≈ ~230&nbsp;MB one-time per receiving device. This
-    design no longer provides a workspace-level drop; if that cost is
-    unacceptable, the exemption must be #288-side (an enumerated arrival-burst
-    skip keyed on markers #288 controls). G2 weakens from "zero rows" to
-    "priced, optionally exemptable by #288".</li>
+  <li><strong>G1 — the backfill logs, everywhere (was: authoring device
+    skips).</strong> The ~650k creates cost ~230&nbsp;MB one-time <em>per
+    device</em>, authoring and receiving alike, and
+    <code>command_events</code> still records every backfill tx. The old
+    exemption saved that only on the authoring device while every other device
+    logged the same creates as sync arrivals (§6) — an asymmetry that left the
+    machine which <em>ran</em> the migration as the only one without a record.
+    The whole apparatus it required is gone with it: the
+    <code>history_mode</code> gate, its NULL-safety rule, its deletion-state
+    carve-out, and the per-chunk <code>sqlite_master</code> trigger-body probe
+    that existed solely to stop a stale tab from silently un-skipping a run
+    mid-flight.</li>
+  <li><strong>G2 — receiving devices: unchanged and now consistent.</strong>
+    Backfilled rows arrive as sync-applied creates and log (~230&nbsp;MB
+    one-time per device, §6). No arrival exemption is needed or offered; every
+    device's history agrees about what happened.</li>
   <li><strong>G3 — no stranded chains, trivially:</strong> v2 events are
-    self-restoring and never lean on a predecessor (I1) — the first later edit
-    of a skip-exempted row is immediately usable (it stores its own befores),
-    and full state around it reconstructs from the live row (§4.3). The
+    self-restoring and never lean on a predecessor (I1), so the first later
+    edit of any row is immediately usable (it stores its own befores). The
     promotion machinery this guarantee used to require is gone; the guarantee
     itself is strictly stronger.</li>
   <li><strong>G4 — steady-state fan-out priced:</strong> a property edit's 2–3
     row writes log as compact events (~1&nbsp;KB total), not 2–3 full snapshot
     pairs (~4–6&nbsp;KB).</li>
-  <li><strong>G5 — ordering:</strong> #288 slice C requires this project's
-    slices A+B only (format + provenance/sync policy). The §8 migration and §9
-    VACUUM (slices C/D) may trail — they concern the existing stock, not the
-    new burst. Matches #288's "prerequisite for slice C, not slices A–B".</li>
+  <li><strong>G5 — ordering: #288 is decoupled.</strong> Slice C no longer
+    depends on this project's slice B (there is no exemption to plumb), so the
+    two can land in either order. What #288 gets by waiting is only the cheaper
+    per-event encoding (slice A) — worth having, not a prerequisite.</li>
 </ol>
 
 <h2 id="s12">12. Storage arithmetic</h2>
@@ -1640,7 +1620,7 @@ sizing/verification query here. Files are bigger — row and index B-trees add
     ~60&nbsp;B timing stubs). On the organic prod instance no-ops are 1.3% —
     the skip is about machinery, not typing.</li>
   <li><strong>Added: UI-state churn is ~half of organic update traffic</strong>
-    (§5.3/O6) — and shrinks only ~1.7&times; under compact patches, since each
+    (§5.1/O6) — and shrinks only ~1.7&times; under compact patches, since each
     write replaces the whole properties value. Bounded retention (newest K per
     block), not the patch format, is the lever for that class.</li>
   <li><strong>Context for the dev mix: half the log is one day.</strong>
@@ -1649,7 +1629,7 @@ sizing/verification query here. Files are bigger — row and index B-trees add
     workspace id (317k user creates), and the old workspace's purge an hour
     later (317k sync-labeled deletes): ~975k of 1.94M events. The 16%
     hard-delete share is a one-time migration artifact, not steady state —
-    and a concrete instance of §5.2's "bulk cleanups pay a tombstone per
+    and a concrete instance of §5's "bulk cleanups pay a tombstone per
     row" (~194&nbsp;MB).</li>
 </ul>
 
@@ -1663,10 +1643,10 @@ sizing/verification query here. Files are bigger — row and index B-trees add
     <tr><td>Hard + soft deletes (318k — full by nature)</td><td>196&nbsp;MB</td><td>196&nbsp;MB (unchanged)</td></tr>
     <tr><td><strong>Stock payload total</strong></td><td><strong>1.92&nbsp;GB</strong></td><td><strong>~0.9&nbsp;GB (~2.1&times;) → ~1.2&nbsp;GB of file reclaimed at VACUUM</strong></td></tr>
     <tr><td>Fresh device, first sync (345k blocks — measured on prod)</td><td>~205&nbsp;MB</td><td>~205&nbsp;MB (kept — §6; creates are full in v2 too)</td></tr>
-    <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
-    <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB unless #288 adds an arrival exemption (§11 G2)</td></tr>
+    <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB — logged, no exemption (§5 revised; was <strong>0</strong>)</td></tr>
+    <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB (sync arrivals, §6) — every device now agrees</td></tr>
     <tr><td>Ongoing: one organic content edit (dev user-source update mean: 510&nbsp;MB / 256k events ≈ 2.0&nbsp;KB)</td><td>~2.0&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
-    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB, forever</td><td>~2.4&nbsp;KB (kept <em>full</em> on purpose, §5.3) — but a panel block's whole local-write history plateaus at ~K &times; 2.4&nbsp;KB ≈ <strong>19&nbsp;KB</strong> under O6 retention, regardless of write rate</td></tr>
+    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB, forever</td><td>~2.4&nbsp;KB (kept <em>full</em> on purpose, §5.1) — but a panel block's whole local-write history plateaus at ~K &times; 2.4&nbsp;KB ≈ <strong>19&nbsp;KB</strong> under O6 retention, regardless of write rate</td></tr>
   </tbody>
 </table>
 </div>
@@ -1701,20 +1681,17 @@ into is smaller).
       <td>—</td>
     </tr>
     <tr>
-      <td><strong>B — provenance + sync policy</strong></td>
-      <td><code>tx_context.history_mode</code> + <code>RepoTxOptions.historyMode</code>
-        plumbing (NULL-safe WHEN gate on create/update only — the delete
-        trigger carries no <code>history_mode</code> gate, §5.2);
-        <code>tx_context.apply_kind</code> sync marker + the truthful three-way
-        <code>source</code> tag (§6.2 — labeling only; the policy table and
-        drop gates left with the §6 revision); local-ui events written
-        <code>full=1</code> (§5.3) + the §5.3 UiState retention sweeper
-        (newest K per block, order-free) + its partial candidate index
-        (§3); tests pinning
-        I1-under-exemption, I3 (incl. raw-write labeling + logging), and
-        delete-always-logs — plus the fuzzed writer-interleaving suite (note
-        below).</td>
-      <td><strong>Unblocks #288 slice C</strong> (G1–G3)</td>
+      <td><strong>B — provenance + UI-state retention</strong></td>
+      <td><code>tx_context.apply_kind</code> sync marker + the truthful
+        three-way <code>source</code> tag (§6.2 — labeling only; the policy
+        table and drop gates left with the §6 revision, the
+        <code>history_mode</code> gate with the §5 revision); local-ui events
+        written <code>full=1</code> (§5.1) + the §5.1 UiState retention sweeper
+        (newest K per block, order-free) + its partial candidate index (§3);
+        tests pinning I3 (incl. raw-write labeling + logging) and I8 (no write
+        path is exempt — every kind logs) — plus the fuzzed
+        writer-interleaving suite (note below).</td>
+      <td>Independent — #288 slice C no longer waits on it (§11 revised)</td>
     </tr>
     <tr>
       <td><strong>C — stock migration</strong></td>
@@ -1755,9 +1732,10 @@ unseedable <code>random()</code> cannot break seed reproducibility of a
 failure's <em>semantics</em> — but the suite also runs deterministic
 p&nbsp;=&nbsp;1 and p&nbsp;=&nbsp;0 trigger variants so both the full and the
 compact path are exercised on every seed. Slice B adds fuzzed interleavings
-of user / sync-applied / raw / <code>'skip'</code> writers (oracle: exactly
-the skip-tx create/update events are absent, delete events always present,
-labels truthful — I3/I4), and randomized §5.3 retention sweeps interleaved
+of user / sync-applied / raw / derived / bulk writers (oracle: <em>every</em>
+write of every class produces its event — no path is exempt — labels are
+truthful, and each block reconstructs forward from its create with the
+<code>blocks</code> table ignored entirely: I3/I8), and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same blocks
 (safety oracle: every pruned event was a full local-ui event, no block with a
 non-local-ui compact event older than the cut is touched, and
@@ -1800,25 +1778,26 @@ under random interruption/resume points.
         anchor. Readers never assume a
         cadence — only the <code>full</code> flag; anchors bound the expected
         walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.
-        Corollary (§5.2): no deletion-state transition is ever
-        <code>history_mode</code>-exempt — a skipped hard delete would erase
-        both terminators at once, and a skipped soft-delete/restore (an UPDATE
-        of <code>deleted</code>, so gated by the update trigger) would hide the
-        transition itself and strand §10's interval index.</td>
+        Trivially safe since the §5 revision: with no exemption mechanism, no
+        write of any kind — hard delete, soft delete, restore — can go
+        unlogged, so the terminators cannot be erased by policy (this used to
+        need a carve-out per deletion shape).</td>
       <td><a href="#s4">§4.3/4.4</a></td>
       <td>Readers; §8 rewriter</td>
       <td>Property test: random edit sequences incl. hard-deletes and
-        skip-created rows; every <code>stateAt</code> equals the
+        deletion/restore cycles; every <code>stateAt</code> equals the
         actually-written state.</td>
     </tr>
     <tr>
       <td>I3</td>
-      <td><strong>Absent policy means log.</strong> NULL
-        <code>history_mode</code>, or a write with neither a repo.tx source nor
-        the sync-apply marker (<code>'raw'</code>, §6.2) ⇒ full logging. No
-        default ever drops history — and every gate predicate must be NULL-safe
-        under SQLite three-valued logic (§6.2): a NULL WHEN silently drops.</td>
-      <td><a href="#s5">§5.1</a>/<a href="#s6">§6.2</a></td>
+      <td><strong>Absent policy means log.</strong> A write with neither a
+        repo.tx source nor the sync-apply marker (<code>'raw'</code>, §6.2) ⇒
+        full logging. No default ever drops history — and every gate predicate
+        must be NULL-safe under SQLite three-valued logic (§6.2): a NULL WHEN
+        silently drops. (The <code>history_mode</code> gate this rule was
+        written for is gone with the §5 revision; the NULL-safety rule stands
+        for the label projection and any future gate.)</td>
+      <td><a href="#s5">§5</a>/<a href="#s6">§6.2</a></td>
       <td>Trigger WHEN gates</td>
       <td>Test: a sync-applied write produces a <code>'sync'</code>-labeled
         event; a raw (no-tx, no-marker) write produces a <code>'raw'</code>
@@ -1830,11 +1809,12 @@ under random interruption/resume points.
       <td><strong>Exemption by provenance, never by column.</strong> No trigger
         gate or policy may condition on <em>which columns</em> changed —
         skipping <code>properties_json</code> wholesale would lose primary
-        history for cell-only keys.</td>
-      <td><a href="#s5">§5.1</a></td>
+        history for cell-only keys. Since the §5 revision there is no exemption
+        mechanism at all, so this stands as a <em>standing review rule</em> for
+        anything that reintroduces one, not a live constraint.</td>
+      <td><a href="#s5">§5</a></td>
       <td>Trigger bodies; future policy changes</td>
-      <td>Test: a properties_json-only update under default policy logs; plus
-        review rule.</td>
+      <td>Test: a properties_json-only update logs; plus review rule.</td>
     </tr>
     <tr>
       <td>I5</td>
@@ -1862,7 +1842,7 @@ under random interruption/resume points.
     <tr>
       <td>I7</td>
       <td><strong>History rows are immutable</strong> once written — two
-        narrowly sanctioned exceptions: the §8 one-time rewrite, and the §5.3
+        narrowly sanctioned exceptions: the §8 one-time rewrite, and the §5.1
         UiState retention sweeper (<code>full=1</code> scope-stamped rows only,
         and never on a block carrying an older non-local-ui compact event).
         All other runtime code never UPDATEs or DELETEs
@@ -1871,6 +1851,29 @@ under random interruption/resume points.
       <td>All future code</td>
       <td>Review rule (no test — restating it in a test would just duplicate
         the absence).</td>
+    </tr>
+    <tr>
+      <td>I8</td>
+      <td><strong>The log is self-sufficient.</strong> No write path is exempt
+        from logging (§5 — the <code>history_mode</code> skip is deleted), so
+        every block's history opens with its own <code>create</code> and
+        records every subsequent change: a forward walk from that create
+        reconstructs any state <em>from the log alone</em>. The live
+        <code>blocks</code> row is a convenience and a walk terminator (§4.3),
+        never a dependency for the history to be complete — which is what lets
+        §10's parent-edge index be fully log-derivable. Two exceptions, both
+        named and bounded rather than silent: UI-state retention (§5.1 —
+        non-knowledge panel churn, bounded to K, never content), and the
+        historical gaps predating this design (trigger-suspended bootstrap
+        windows, the pre-<code>row_events</code> era), which §8 makes
+        <em>visible</em> by anchoring at every discontinuity instead of
+        splicing them.</td>
+      <td><a href="#s5">§5</a></td>
+      <td>Trigger gates; any future exemption; §10 readers</td>
+      <td>Test: for a generated workload containing every write class (user,
+        sync, raw, derived, bulk), reconstructing each block forward from its
+        create — with the <code>blocks</code> table ignored entirely — equals
+        the actually-written state at every event.</td>
     </tr>
   </tbody>
 </table>
@@ -1908,10 +1911,32 @@ under random interruption/resume points.
   <li><strong>Values-free or sampled logging for the bulk bursts</strong> —
     §5 table rows (b)/(c).</li>
   <li><strong>Skipping UiState-scoped events entirely</strong> — proposed
-    from the §5.3 measurements, set aside by the user 2026-07-15 in favor of
+    from the §5.1 measurements, set aside by the user 2026-07-15 in favor of
     bounded retention (keep newest K per block): a short local record keeps
     panel-state debugging possible while the bound removes the actual
     problem (unbounded accumulation).</li>
+  <li><strong><code>history_mode = 'skip'</code> exemption for bulk bursts</strong>
+    — adopted 2026-07-15, deleted 2026-07-17 (user). A tx-scoped
+    <code>tx_context.history_mode</code> column + <code>RepoTxOptions</code>
+    plumbing let enumerated one-shot bursts (the #288 backfill) write nothing to
+    the log, saving ~230&nbsp;MB on the authoring device. Why it was wrong, in
+    the order the reasons landed: it was <em>asymmetric</em> — §6 keeps sync
+    events, so all other devices logged the same 650k creates on arrival, and
+    the exemption blinded only the machine that ran the migration; it removed
+    the record from the <em>riskiest write the system performs</em>, which is
+    this project's own repeated failure mode (bulk passes that damaged data and
+    whose recovery depended on reconstructing what they did); its economics were
+    set against a 2.2&nbsp;GB log that this very document shrinks by
+    ~1.45&nbsp;GB; and it bought a <em>permanent</em> invariant hole (I8 — the
+    log stopped being self-sufficient, and §10's parent-edge index needed the
+    live <code>blocks</code> table to enumerate skip-created rows) in exchange
+    for a rare event that should not be routine. Deleting it also removed the
+    gate, its NULL-safety rule, its deletion-state carve-out
+    (<code>OLD.deleted IS NEW.deleted</code> — soft-delete/restore are UPDATEs
+    and would otherwise have been skippable), the per-chunk
+    <code>sqlite_master</code> trigger-body probe, and #288's dependency on
+    slice B. Reintroduce only against a concrete burst that is genuinely
+    unaffordable — and then keyed on provenance (I4), never columns.</li>
   <li><strong>Prefix-cut retention over <em>compact</em> UiState events</strong>
     (rule R1) — the original O6 mechanism, superseded 2026-07-17 (user) by
     writing local-ui events <code>full</code>. Because a compact event cannot be
@@ -1965,7 +1990,10 @@ under random interruption/resume points.
     for every workspace (§6 revised) — local history stays self-sufficient,
     and the missing <code>blocks_history</code> RPC no longer matters to the
     local log. The first-sync create burst and the #288 arrival cost are owned
-    in §6/§12; G2 renegotiated in §11.</li>
+    in §6/§12; G2 in §11 is priced, not negotiated. The same self-sufficiency
+    instinct later retired the <code>'skip'</code> exemption outright (§5
+    revised 2026-07-17, I8) — O1 was its first application, not its only
+    one.</li>
   <li><strong>O2 — auto-VACUUM at deep idle vs manual-first.</strong> A
     minutes-long single-worker stall triggered by a heuristic is the riskiest UX
     moment in this design. Lean: ship the manual command in slice D, enable the
@@ -2005,7 +2033,7 @@ under random interruption/resume points.
   <li><strong>O6 — RESOLVED (2026-07-15, user): UiState events are logged
     but hard-bounded, not skipped</strong> — newest K = 8 per block via the
     scope-stamped deep-idle sweeper. Mechanism and the measured trigger are
-    §5.3's; skip-entirely is recorded in §15. <em>Refined 2026-07-17 (user):
+    §5.1's; skip-entirely is recorded in §15. <em>Refined 2026-07-17 (user):
     local-ui events are written <strong>full</strong>, which makes them freely
     prunable in any order.</em> That one change retired the whole prefix-cut
     apparatus this entry used to carry — rule R1, the two-sentinel predicate,
