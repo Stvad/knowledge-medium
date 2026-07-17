@@ -684,6 +684,52 @@ describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)',
   })
 })
 
+describe('content <-> value codecs: lenient-read codecs keep values the write side rejects', () => {
+  // `enum` deliberately splits its read/write strictness (codecs.ts): `encode`
+  // rejects out-of-set values, but `decode` accepts a value whose option was
+  // later removed/renamed so it "still decodes and stays editable". Projection
+  // re-canonicalizes via encode(decode(...)) — which must NOT turn such a
+  // preserved value into "unparseable" and drop the owning cell key.
+  const currentOptionsSchema = defineProperty<string>('priority', {
+    codec: codecs.enum(['low', 'high']),
+    defaultValue: 'low',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  // The same property BEFORE 'urgent' was removed from its option list —
+  // used to produce the child content exactly as it was stored back then.
+  const legacyOptionsSchema = defineProperty<string>('priority', {
+    codec: codecs.enum(['low', 'high', 'urgent']),
+    defaultValue: 'low',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  it('a value whose option was removed survives the projection round-trip', () => {
+    // Written while 'urgent' was still valid; the option list has since dropped it.
+    const content = propertyValueToChildContent(legacyOptionsSchema, 'urgent')
+    // The read/write split that makes this preservable: decode keeps it, encode rejects it.
+    expect(currentOptionsSchema.codec.decode('urgent')).toBe('urgent')
+    expect(() => currentOptionsSchema.codec.encode('urgent')).toThrow()
+
+    // Must NOT throw — throwing marks it unparseable and the caller drops the cell key.
+    expect(propertyChildContentToEncodedValue(currentOptionsSchema, content)).toBe('urgent')
+  })
+
+  it('still canonicalizes values that ARE in the current option set', () => {
+    const content = propertyValueToChildContent(currentOptionsSchema, 'high')
+    expect(propertyChildContentToEncodedValue(currentOptionsSchema, content)).toBe('high')
+  })
+
+  it('a genuine shape error still throws (decode failure is not swallowed)', () => {
+    const numberSchema = defineProperty<number>('count', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    expect(() => propertyChildContentToEncodedValue(numberSchema, 'not-a-number')).toThrow()
+  })
+})
+
 describe('content <-> value codecs: "null"-collision escaping (PR #386 review fix)', () => {
   // string-typed, null-accepting codec — the shape that exposed the bug:
   // an unescaped literal 'null' child content is ambiguous with the

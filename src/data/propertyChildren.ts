@@ -197,7 +197,22 @@ export const propertyChildContentToEncodedValue = (
   // Decode and re-encode so tolerant user text ("1" for number,
   // date strings, etc.) lands in the same canonical JSON shape as
   // tx.setProperty would have stored directly.
-  return schema.codec.encode(schema.codec.decode(encoded))
+  const decoded = schema.codec.decode(encoded)
+  try {
+    return schema.codec.encode(decoded)
+  } catch {
+    // Lenient-read codec whose write side is stricter than its read side —
+    // `enum` is the case that matters: `decode` deliberately accepts a value
+    // whose option was later removed/renamed so it "still decodes and stays
+    // editable" (codecs.ts), while `encode` rejects it. Canonicalizing through
+    // the CURRENT option set would turn a value the codec intends to preserve
+    // into "unparseable", and the caller (projection / B2 re-encode) would drop
+    // the parent key — silent data loss on a config change, and a regression
+    // against the cell era, which keeps such a value until it is re-set.
+    // It decoded, so it is readable: keep the stored encoding as-is rather
+    // than canonicalizing. A genuine shape error still throws out of `decode`.
+    return encoded
+  }
 }
 
 export const propertiesEqual = (
