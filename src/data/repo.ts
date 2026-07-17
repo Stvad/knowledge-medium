@@ -2787,13 +2787,13 @@ export class Repo {
           const parent = await tx.get(parentId)
           if (parent === null || parent.deleted) continue
 
-          const siblings = await tx.childrenOf(parentId, undefined, {includePropertyChildren: true})
+          const siblings = await tx.childrenOf(parentId, undefined)
           let projected: unknown
           let hasProjection = false
           let parentUnconvertible = 0
           for (const sibling of siblings) {
             if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
-            const values = await tx.childrenOf(sibling.id, undefined, {includePropertyChildren: true})
+            const values = await tx.childrenOf(sibling.id, undefined)
             for (const value of values) {
               try {
                 const encoded = propertyChildContentToEncodedValue(schema, value.content)

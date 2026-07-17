@@ -773,7 +773,7 @@ export class TxImpl implements Tx {
   async childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {includePropertyChildren?: boolean},
+    options?: {hidePropertyChildren?: boolean},
   ): Promise<BlockData[]> {
     let data: BlockData[]
     if (parentId === null) {
@@ -797,18 +797,19 @@ export class TxImpl implements Tx {
       const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
       data = rows.map(parseBlockRow)
     }
-    // Default EXCLUDES property field rows in a flipped workspace (§9):
-    // structural/outline callers must see only visible children. Cheap
+    // Default returns EVERY child (structural view). The display-visible
+    // view — excluding recognized property field rows in a flipped
+    // workspace (§9) — is opt-in via `hidePropertyChildren`. Cheap
     // short-circuits first — un-flipped workspaces (dormant) and listings
     // with no stamped rows pay only the (per-tx-cached) flip read; the §9
     // ancestry rule then exempts property-subtree interiors so ref-typed
     // VALUES pointing at definitions are never misread as nested fields.
     // Root listings are exempt outright: a field row is positionally a
     // child of the block that OWNS the property — a workspace-root row
-    // whose content happens to be `[[some property]]` is user content, and
-    // filtering it would corrupt root sibling enumeration (PR #386 review).
+    // whose content happens to be `[[some property]]` is user content, so
+    // it is never filtered even under `hidePropertyChildren`.
     if (parentId === null) return data
-    if (options?.includePropertyChildren === true || data.length === 0) return data
+    if (options?.hidePropertyChildren !== true || data.length === 0) return data
     if (!(await this.isPropertyChildBackedWorkspace(data[0]!.workspaceId))) return data
     const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
     if (!data.some(row => isPropertyFieldInstance(row, isFieldDefinition))) return data
@@ -1184,7 +1185,7 @@ export class TxImpl implements Tx {
       if (existing.content !== propertyFieldContent(schema.fieldId)) {
         await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)}, opts)
       }
-      const values = await this.childrenOf(existing.id, undefined, {includePropertyChildren: true})
+      const values = await this.childrenOf(existing.id, undefined)
       const [primary, ...duplicates] = values
       if (primary) {
         if (primary.content !== content) await this.update(primary.id, {content}, opts)

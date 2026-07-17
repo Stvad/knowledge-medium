@@ -648,7 +648,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
         // generated field rows (with their value children).
         await tx.delete(id)
         if (!sweepGeneratedFieldRows) continue
-        const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+        const children = await tx.childrenOf(id, undefined)
         for (const child of children) {
           const target = child.referenceTargetId ?? null
           if (target !== null && generatedFieldIds.has(target)) {

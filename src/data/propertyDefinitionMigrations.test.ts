@@ -232,7 +232,7 @@ describe('codec-change migration', () => {
     }
     // Also visible through the ordinary property-children read surface.
     const values = await repo.tx(
-      tx => tx.childrenOf(fieldRowId, undefined, {includePropertyChildren: true}),
+      tx => tx.childrenOf(fieldRowId),
       {scope: ChangeScope.BlockDefault},
     )
     expect(values.map(v => v.id)).toContain(valueRowId)

@@ -26,7 +26,7 @@ export const deleteSubtreeInTx = async (
     const id = stack.pop()!
     if (seen.has(id)) continue
     seen.add(id)
-    const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+    const children = await tx.childrenOf(id, undefined)
     for (const child of children) stack.push(child.id)
     const preDelete = onDelete ? await tx.get(id) : null
     await tx.delete(id)

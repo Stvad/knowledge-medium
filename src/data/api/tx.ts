@@ -205,15 +205,14 @@ export interface Tx {
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
    *  `deleted = 0`. Reads SQL via the writeTransaction.
    *
-   *  In a child-backed workspace (PR #288 §9) the default EXCLUDES
-   *  property field rows: structural/outline callers (sibling lists,
-   *  moves, paste, panel layout) must see only visible children — a
-   *  materialized hidden field sorted before the content children would
-   *  corrupt sibling-position math. The property-children machinery —
-   *  and copy/export/import/delete-cascade traversals, which must carry
-   *  the field/value rows — opts IN with `{includePropertyChildren:
-   *  true}`. In an un-flipped workspace nothing is recognized, so the
-   *  default is a no-op (dormant).
+   *  Returns EVERY child by default — property field/value rows included.
+   *  This is the structural view: the actual tree, no hidden rows, so a
+   *  traversal can never silently miss machinery it needs to carry (delete
+   *  cascade, copy, merge). The display-visible view — which excludes
+   *  recognized property field rows in a child-backed workspace (PR #288
+   *  §9) — is opt-IN via `{hidePropertyChildren: true}`. In an un-flipped
+   *  workspace nothing is recognized, so `hidePropertyChildren` is a no-op
+   *  (dormant).
    *
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
@@ -230,7 +229,7 @@ export interface Tx {
   childrenOf(
     parentId: string | null,
     workspaceId?: string,
-    options?: {includePropertyChildren?: boolean},
+    options?: {hidePropertyChildren?: boolean},
   ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by

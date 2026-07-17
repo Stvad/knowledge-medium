@@ -185,7 +185,7 @@ const firstProjectedFieldValue = async (
   fieldRows: readonly BlockData[],
 ): Promise<unknown | undefined> => {
   for (const fieldRow of fieldRows) {
-    const values = await tx.childrenOf(fieldRow.id, undefined, {includePropertyChildren: true})
+    const values = await tx.childrenOf(fieldRow.id, undefined)
     for (const value of values) {
       try {
         return propertyChildContentToEncodedValue(schema, value.content)
@@ -220,7 +220,7 @@ const reprojectParentField = async (
   // property values and write a junk key into a synced cell.
   if (await lookups.isInsidePropertySubtree(parent.id)) return
 
-  const children = await tx.childrenOf(affected.parentId, undefined, {includePropertyChildren: true})
+  const children = await tx.childrenOf(affected.parentId, undefined)
   const fieldRows = fieldRowsForSchema(children, affected.fieldId)
   const projected = await firstProjectedFieldValue(tx, schema, fieldRows)
   const nextProperties = {...parent.properties}
@@ -268,7 +268,7 @@ export const materializePropertyChildrenForExistingRow = async (
   if (row.deleted) return
   if (names.length === 0) return
 
-  const children = await tx.childrenOf(row.id, undefined, {includePropertyChildren: true})
+  const children = await tx.childrenOf(row.id, undefined)
 
   for (const name of names) {
     const schema = lookups.resolveNameSchema(name)
@@ -305,7 +305,7 @@ export const materializePropertyChildrenForExistingRow = async (
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
-      const values = await tx.childrenOf(primary.id, undefined, {includePropertyChildren: true})
+      const values = await tx.childrenOf(primary.id, undefined)
       const [primaryValue, ...duplicateValues] = values
       if (primaryValue) {
         if (primaryValue.content !== content) {
@@ -367,9 +367,9 @@ const materializePropertiesForChangedRow = async (
 
 /** Move every child of `fromId` under `toId`, appended at the end. */
 const relocateChildren = async (tx: Tx, fromId: string, toId: string): Promise<void> => {
-  const movable = await tx.childrenOf(fromId, undefined, {includePropertyChildren: true})
+  const movable = await tx.childrenOf(fromId, undefined)
   if (movable.length === 0) return
-  const anchor = (await tx.childrenOf(toId, undefined, {includePropertyChildren: true}))
+  const anchor = (await tx.childrenOf(toId, undefined))
     .at(-1)?.orderKey ?? null
   const keys = keysBetween(anchor, null, movable.length)
   for (let i = 0; i < movable.length; i++) {
@@ -406,11 +406,11 @@ export const collapseDuplicateFieldRow = async (
   duplicate: BlockData,
 ): Promise<void> => {
   const duplicateValues = await tx.childrenOf(
-    duplicate.id, undefined, {includePropertyChildren: true},
+    duplicate.id, undefined,
   )
   for (const value of duplicateValues) {
     const survivorValues = await tx.childrenOf(
-      survivorFieldRowId, undefined, {includePropertyChildren: true},
+      survivorFieldRowId, undefined,
     )
     const survivorPrimary = survivorValues[0]
     if (!survivorPrimary) {
@@ -423,7 +423,7 @@ export const collapseDuplicateFieldRow = async (
       await collapseDuplicateValueChild(tx, survivorPrimary.id, value)
     } else {
       const anchor = (await tx.childrenOf(
-        survivorPrimary.id, undefined, {includePropertyChildren: true},
+        survivorPrimary.id, undefined,
       )).at(-1)?.orderKey ?? null
       await tx.move(value.id, {parentId: survivorPrimary.id, orderKey: keysBetween(anchor, null, 1)[0]!})
     }

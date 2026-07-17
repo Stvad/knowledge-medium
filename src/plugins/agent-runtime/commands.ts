@@ -23,6 +23,7 @@ import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
@@ -488,7 +489,10 @@ const reconcileMarkdownSubtree = async (
         // foreign children remain, and a child under a parent that is itself
         // doomed bubbles up again until it lands under a surviving ancestor.
         const target = doomed.parentId ?? parentId
-        const foreign = (await tx.childrenOf(doomed.id, workspaceId))
+        // Visible view: a property field row is machinery OWNED by `doomed`
+        // (not foreign content), so it must not be rescued/reparented — it
+        // goes with `doomed` in the subtree-delete below.
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {hidePropertyChildren: true}))
           .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
         if (foreign.length > 0) {
           // Land the rescued children in the doomed node's OWN slot (between
@@ -509,7 +513,13 @@ const reconcileMarkdownSubtree = async (
             lower = orderKey
           }
         }
-        await tx.delete(doomed.id)
+        // Subtree-delete (not single-row): after foreign content is rescued
+        // above, `doomed`'s only remaining descendants are its own property
+        // field/value machinery, which must be tombstoned with it rather
+        // than stranded live under the tombstone (§9). In an un-flipped
+        // workspace there is no machinery, so this equals the single-row
+        // delete it replaces.
+        await deleteSubtreeInTx(tx, doomed.id)
       }
     }
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})

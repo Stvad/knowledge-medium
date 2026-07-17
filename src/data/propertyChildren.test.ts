@@ -271,9 +271,9 @@ describe('childrenOf visible-children exclusion (§9)', () => {
   it('default excludes recognized field rows; machinery opts in', async () => {
     const repo = await setupFlipped()
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('p')
+      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
       expect(visible.map(c => c.id)).toEqual(['content-child'])
-      const all = await tx.childrenOf('p', undefined, {includePropertyChildren: true})
+      const all = await tx.childrenOf('p')
       expect(all).toHaveLength(2)
     }, {scope: ChangeScope.BlockDefault})
   })
@@ -572,7 +572,7 @@ describe('flip predicate / SQL gate lock (§6)', () => {
 })
 
 describe('query-layer twin (core.childIds / core.children)', () => {
-  it('excludes field rows in a flipped workspace; opts in for machinery', async () => {
+  it('default includes field rows in a flipped workspace; visible view opts out', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await seedDefinitionBlock(repo)
@@ -585,12 +585,12 @@ describe('query-layer twin (core.childIds / core.children)', () => {
     await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
       {scope: ChangeScope.BlockDefault})
 
-    const visibleIds = await repo.runQuery('core.childIds', {id: 'p'})
-    expect(visibleIds).toEqual(['content-child'])
-    const allIds = await repo.runQuery('core.childIds', {id: 'p', includePropertyChildren: true})
+    const allIds = await repo.runQuery('core.childIds', {id: 'p'})
     expect(allIds).toHaveLength(2)
+    const visibleIds = await repo.runQuery('core.childIds', {id: 'p', hidePropertyChildren: true})
+    expect(visibleIds).toEqual(['content-child'])
 
-    const visible = await repo.runQuery('core.children', {id: 'p'}) as BlockData[]
+    const visible = await repo.runQuery('core.children', {id: 'p', hidePropertyChildren: true}) as BlockData[]
     expect(visible.map(c => c.id)).toEqual(['content-child'])
   })
 
@@ -627,15 +627,15 @@ describe('core.subtree visible-subtree exclusion (PR #386 review gap fix, §9)',
     return repo
   }
 
-  it('default excludes the field row and its value child; machinery opts in', async () => {
+  it('default includes the field row and its value child; visible view opts out', async () => {
     const repo = await setupFlippedWithDefinition()
     const [field] = await liveFieldRows('p')
     const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
 
-    const visible = await repo.query.subtree({id: 'p'}).load()
+    const visible = await repo.query.subtree({id: 'p', hidePropertyChildren: true}).load()
     expect(visible.map(r => r.id).sort()).toEqual(['content-child', 'p'])
 
-    const all = await repo.query.subtree({id: 'p', includePropertyChildren: true}).load()
+    const all = await repo.query.subtree({id: 'p'}).load()
     expect(all).toHaveLength(4)
     expect(all.map(r => r.id)).toEqual(expect.arrayContaining([field!.id, value!.id]))
   })

@@ -76,12 +76,12 @@ export const mergeBlocksInTx = async (
   }
 
   // Re-parent only `from`'s regular (visible, non property-field) children
-  // under `into` — childrenOf's flip-gated default. Property-field children
-  // are derived from the property bag and must NOT be carried over: the
-  // merged bag written to `into` below re-materializes the correct
-  // field/value children for `into` (PR #288 §9).
-  const intoChildren = await tx.childrenOf(into.id)
-  const fromChildren = await tx.childrenOf(from.id)
+  // under `into` — the VISIBLE view (opt into `hidePropertyChildren`).
+  // Property-field children are derived from the property bag and must NOT
+  // be carried over: the merged bag written to `into` below re-materializes
+  // the correct field/value children for `into` (PR #288 §9).
+  const intoChildren = await tx.childrenOf(into.id, undefined, {hidePropertyChildren: true})
+  const fromChildren = await tx.childrenOf(from.id, undefined, {hidePropertyChildren: true})
   if (fromChildren.length > 0) {
     const keys = keysBetween(intoChildren.at(-1)?.orderKey ?? null, null, fromChildren.length)
     for (let i = 0; i < fromChildren.length; i++) {
@@ -103,9 +103,11 @@ export const mergeBlocksInTx = async (
   // recreates them).
   const mergedProperties = mergeProps(into.properties, from.properties)
   const fromPropertyChildren = (await tx.childrenOf(
-    from.id, undefined, {includePropertyChildren: true},
+    from.id, undefined,
   )).filter(child => !fromChildren.some(visible => visible.id === child.id))
-  let relocateAnchor = (await tx.childrenOf(into.id)).at(-1)?.orderKey ?? null
+  let relocateAnchor = (
+    await tx.childrenOf(into.id, undefined, {hidePropertyChildren: true})
+  ).at(-1)?.orderKey ?? null
   const relocateUnderInto = async (id: string): Promise<void> => {
     const [key] = keysBetween(relocateAnchor, null, 1)
     await tx.move(id, {parentId: into.id, orderKey: key})
@@ -120,13 +122,13 @@ export const mergeBlocksInTx = async (
       && Object.prototype.hasOwnProperty.call(mergedProperties, schema.name)
       ? encodedPropertyValueToChildContent(schema, mergedProperties[schema.name])
       : null
-    const values = await tx.childrenOf(fieldRow.id, undefined, {includePropertyChildren: true})
+    const values = await tx.childrenOf(fieldRow.id, undefined)
     for (const value of values) {
       if (mergedValueContent !== null && value.content === mergedValueContent) {
         // The bag regenerates this value on `into` — keep only its
         // user-authored descendants.
         const valueDescendants = await tx.childrenOf(
-          value.id, undefined, {includePropertyChildren: true},
+          value.id, undefined,
         )
         for (const descendant of valueDescendants) {
           await relocateUnderInto(descendant.id)
