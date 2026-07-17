@@ -41,7 +41,21 @@ const requireExplicitChildView = {
       description:
         'Outline/display code must choose the child view explicitly (visible vs. structural).',
     },
-    schema: [],
+    // `check` picks how much of the surface to guard:
+    //   'all'   — query handles AND `tx.childrenOf`. For pure display dirs,
+    //             where every traversal is a display read.
+    //   'query' — query handles only. The default everywhere else: a
+    //             `repo.query.{children,subtree,childIds}({id})` is a READ-OUT
+    //             (render, serialize, hand to an agent) and every such call
+    //             site in `src/` wants the visible view, while `tx.childrenOf`
+    //             is the low-level primitive that mixed data-layer files
+    //             (mutators, paste, panelLayoutProjection, agent-runtime)
+    //             legitimately call structurally for order-key/sibling math.
+    schema: [{
+      type: 'object',
+      properties: {check: {enum: ['all', 'query']}},
+      additionalProperties: false,
+    }],
     messages: {
       explicitChildView:
         'Choose the child view explicitly: use `visibleChildrenOf(tx, …)` or pass '
@@ -52,6 +66,7 @@ const requireExplicitChildView = {
   },
   create(context) {
     if (isTestFile(getFilename(context))) return {}
+    const check = context.options[0]?.check ?? 'all'
     return {
       CallExpression(node) {
         const callee = node.callee
@@ -60,6 +75,7 @@ const requireExplicitChildView = {
         const name = callee.property.name
 
         if (name === 'childrenOf') {
+          if (check !== 'all') return
           // Options is the trailing arg; scan every arg for the flag object so
           // the 2-arg and 3-arg spellings are both covered.
           if (!node.arguments.some(arg => objHasKey(arg, 'hidePropertyChildren'))) {

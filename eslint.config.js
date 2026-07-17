@@ -87,12 +87,31 @@ export default tseslint.config(
     // `repo.query.{children,subtree,childIds}` default to the structural
     // everything-view (hidden property field-row machinery included); the
     // visible/outline view is opt-in (`hidePropertyChildren` / the
-    // `visibleChildrenOf` helper). Scoped to pure outline/display modules,
-    // where the visible view is the near-universal intent and a forgotten
-    // opt-in silently leaks machinery into user-facing traversals. The mixed
-    // data-layer files (mutators, paste, panelLayoutProjection) that
-    // legitimately interleave both views are deliberately NOT in scope —
-    // they use the named `visibleChildrenOf` helper so intent reads inline.
+    // `visibleChildrenOf` helper).
+    //
+    // Split by ALTITUDE, not by directory (the first cut scoped this to a
+    // list of display dirs and two consecutive reviews found bare traversals
+    // just outside it — `export_document`, then the agent bridge's
+    // `get-subtree`; chasing directories loses that race):
+    //
+    //   - a `repo.query.{children,subtree,childIds}({id})` is a READ-OUT —
+    //     rendered, serialized, or handed to an agent. Every such call site in
+    //     `src/` wants the visible view, so guard the query handles EVERYWHERE
+    //     and let new consumers inherit the check for free.
+    //   - `tx.childrenOf` is the low-level primitive. Mixed data-layer files
+    //     (mutators, paste, panelLayoutProjection, agent-runtime) call it
+    //     structurally on purpose — order-key and sibling math must see every
+    //     row — so it is only guarded in the pure display dirs below, and the
+    //     mixed files spell visible intent with the `visibleChildrenOf` helper.
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: {'child-view': childView},
+    rules: {
+      'child-view/require-explicit-child-view': ['error', {check: 'query'}],
+    },
+  },
+  {
+    // Pure outline/display modules: every child traversal is a display read,
+    // so `tx.childrenOf` is guarded here too.
     files: [
       'src/components/**/*.{ts,tsx}',
       'src/hooks/**/*.{ts,tsx}',
@@ -101,9 +120,8 @@ export default tseslint.config(
       'src/utils/copy.ts',
       'src/utils/navigation.ts',
     ],
-    plugins: {'child-view': childView},
     rules: {
-      'child-view/require-explicit-child-view': 'error',
+      'child-view/require-explicit-child-view': ['error', {check: 'all'}],
     },
   },
   {

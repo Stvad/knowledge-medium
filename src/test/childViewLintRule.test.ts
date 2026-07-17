@@ -40,6 +40,11 @@ describe('child-view ESLint rule', () => {
           filename: '/repo/src/components/Foo.test.tsx',
           code: `repo.query.subtree({id: block.id})`,
         },
+        // `check: 'query'` (the default outside pure display dirs): the
+        // low-level primitive is NOT guarded, so mixed data-layer files keep
+        // calling it structurally for order-key / sibling math.
+        { code: `const kids = await tx.childrenOf(id, ws)`, options: [{check: 'query'}] },
+        { code: `const kids = await tx.childrenOf(parentId)`, options: [{check: 'query'}] },
       ],
       invalid: [
         {
@@ -56,6 +61,15 @@ describe('child-view ESLint rule', () => {
         },
         {
           code: `const kids = await tx.childrenOf(parentId)`,
+          errors: [{ messageId: 'explicitChildView' }],
+        },
+        // …but a query handle IS guarded under `check: 'query'` — that's what
+        // makes the rule catch new read-out consumers anywhere in `src/`
+        // (the agent bridge's `get-subtree`, an export action) rather than
+        // only inside a hand-maintained list of display directories.
+        {
+          code: `const rows = await repo.query.subtree({id: rootId}).load()`,
+          options: [{check: 'query'}],
           errors: [{ messageId: 'explicitChildView' }],
         },
       ],

@@ -66,7 +66,15 @@ export const propertyFieldContent = (fieldId: string): string =>
   referenceBlockContentForId(fieldId)
 
 const finiteNumberFromContent = (content: string): number => {
-  const value = Number(content.trim())
+  const trimmed = content.trim()
+  // `Number('')` and `Number('   ')` are 0, not NaN, so the isFinite guard
+  // below waves blank content through as a real zero — a cleared value row
+  // would silently project 0 over the cell (PR #386 review). Blank is not the
+  // encoding of any number (`encodedValueToContent` writes `String(n)`, and
+  // reserves '' for undefined), so it's unparseable: throwing preserves the
+  // row's text and surfaces the count, rather than inventing a value.
+  if (trimmed === '') throw new CodecError('finite number content', content)
+  const value = Number(trimmed)
   if (!Number.isFinite(value)) throw new CodecError('finite number content', content)
   return value
 }

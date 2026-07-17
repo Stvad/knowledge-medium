@@ -730,6 +730,36 @@ describe('content <-> value codecs: lenient-read codecs keep values the write si
   })
 })
 
+describe('content <-> value codecs: blank numeric content is unparseable, not zero', () => {
+  const numberSchema = defineProperty<number>('count', {
+    codec: codecs.number,
+    defaultValue: 0,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  // `Number('')` is 0 (not NaN), so a plain isFinite guard waves blank content
+  // through as a real zero: clearing a value row would silently project 0 over
+  // the cell instead of being treated as unparseable (PR #386 review).
+  it.each([['', 'empty'], ['   ', 'spaces'], ['\t\n', 'other whitespace']])(
+    'rejects %j (%s) rather than coercing it to 0',
+    content => {
+      // The trap this pins, spelled out — if the guard regresses, `Number`
+      // hands back a finite 0 and the throw below disappears.
+      expect(Number(content)).toBe(0)
+      expect(Number.isFinite(Number(content))).toBe(true)
+
+      expect(() => propertyChildContentToEncodedValue(numberSchema, content)).toThrow()
+    },
+  )
+
+  it('still round-trips a real zero', () => {
+    // The value blank must NOT be confused with: 0 has its own content ('0').
+    const content = propertyValueToChildContent(numberSchema, 0)
+    expect(content).toBe('0')
+    expect(propertyChildContentToEncodedValue(numberSchema, content)).toBe(0)
+  })
+})
+
 describe('content <-> value codecs: "null"-collision escaping (PR #386 review fix)', () => {
   // string-typed, null-accepting codec — the shape that exposed the bug:
   // an unescaped literal 'null' child content is ambiguous with the

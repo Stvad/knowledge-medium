@@ -1323,7 +1323,13 @@ export const createAgentRuntimeContext = ({
     sql: (sql, params, mode) => runSql(repo, sql, params, mode),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
-    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
+    // The visible outline: `get-subtree` (and the MCP `subtree` tool, and
+    // agent-dispatch's prompt render) already surface each row's property BAG,
+    // so emitting field/value rows too would show the same properties a second
+    // time as `((fieldId))` blocks pretending to be user content. Agents that
+    // genuinely want raw storage have `sql` (PR #386 review).
+    getSubtree: async rootId =>
+      await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
