@@ -4,14 +4,25 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {ChangeScope, seedProperty, SeededDefinitionWriteError} from '@/data/api'
 import {
   canonicalPropertySeedProperties,
+  canonicalTypeSeedProperties,
   awaitPropertySeedMaterializationAccess,
   DEFINITION_SEED_NS,
   isValidSeededDefinition,
   materializePropertySeeds,
+  materializeTypeSeeds,
   propertyDefinitionBlockId,
   typeDefinitionBlockId,
 } from '@/data/definitionSeeds'
 import {
+  aliasesProp,
+  blockTypeColorProp,
+  blockTypeDescriptionProp,
+  blockTypeHideFromBlockDisplayProp,
+  blockTypeHideFromCompletionProp,
+  blockTypeLabelProp,
+  blockTypeTypeIdProp,
+  getAliases,
+  getBlockTypes,
   propertyDefaultProp,
   propertyHiddenProp,
   propertyNameProp,
@@ -19,6 +30,10 @@ import {
   seedRevisionProp,
 } from '@/data/properties'
 import {propertiesPageBlockId} from '@/data/propertiesPage'
+import {typesPageBlockId} from '@/data/typesPage'
+import {seedType} from '@/data/typeSeeds'
+import {typeSeedsFacet} from '@/data/facets'
+import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
@@ -40,6 +55,16 @@ const seedWithoutDefault = seedProperty({
   name: 'test:count',
   preset: 'number',
   changeScope: ChangeScope.BlockDefault,
+})
+const typeSeed = seedType({
+  seedKey: 'system:test/type/widget',
+  revision: 1,
+  id: 'test-widget',
+  label: 'Widget',
+  description: 'a test widget type',
+  color: 'tomato',
+  hideFromCompletion: true,
+  // hideFromBlockDisplay deliberately omitted
 })
 const seedWithExplicitAbsence = seedProperty({
   seedKey: 'system:test/property/subtitle',
@@ -724,5 +749,158 @@ describe('seed definition write guard (tx layer)', () => {
       'SELECT deleted FROM blocks WHERE id = ?', [siblingId],
     )
     expect(siblingRow.deleted, 'the donor was tombstoned by the merge').toBe(1)
+  })
+})
+
+describe('type definition materialization', () => {
+  it('canonicalTypeSeedProperties encodes identity/display facts, is provenance-valid, and carries only block-type membership', () => {
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    const bag = canonicalTypeSeedProperties(typeSeed)
+
+    expect(isValidSeededDefinition({id, workspaceId: WS, properties: bag})).toBe(true)
+    expect(blockTypeLabelProp.codec.decode(bag[blockTypeLabelProp.name])).toBe(typeSeed.label)
+    expect(blockTypeTypeIdProp.codec.decode(bag[blockTypeTypeIdProp.name])).toBe(typeSeed.id)
+    expect(seedKeyProp.codec.decode(bag[seedKeyProp.name])).toBe(typeSeed.seedKey)
+    expect(seedRevisionProp.codec.decode(bag[seedRevisionProp.name])).toBe(typeSeed.revision)
+    expect(blockTypeDescriptionProp.codec.decode(bag[blockTypeDescriptionProp.name])).toBe(typeSeed.description)
+    expect(blockTypeColorProp.codec.decode(bag[blockTypeColorProp.name])).toBe(typeSeed.color)
+    expect(blockTypeHideFromCompletionProp.codec.decode(bag[blockTypeHideFromCompletionProp.name])).toBe(true)
+    expect(bag).not.toHaveProperty(blockTypeHideFromBlockDisplayProp.name)
+    expect(bag).not.toHaveProperty(aliasesProp.name)
+    // Membership is BLOCK_TYPE_TYPE only — a code type is not a navigable page.
+    expect(getBlockTypes({properties: bag})).toEqual([BLOCK_TYPE_TYPE])
+  })
+
+  it('materializes the backing block under Types, bare (no PAGE_TYPE, no alias), and is idempotent', async () => {
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+
+    const row = repo.block(id).peek()
+    expect(row).toBeTruthy()
+    expect(row!.parentId).toBe(typesPageBlockId(WS))
+    // Proves the typeify carve-out fired: a plain block-type block would have
+    // picked up PAGE_TYPE + an alias (see the control test below).
+    expect(getBlockTypes(row!)).toContain(BLOCK_TYPE_TYPE)
+    expect(getBlockTypes(row!)).not.toContain(PAGE_TYPE)
+    expect(getAliases(row!)).toEqual([])
+
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed]))
+      .toEqual({created: 0, restored: 0, skippedReadOnly: false})
+  })
+
+  it('restores a tombstoned backing block', async () => {
+    await materializeTypeSeeds(repo, WS, [typeSeed])
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    await repo.tx(tx => tx.delete(id), {scope: ChangeScope.Automation})
+
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed]))
+      .toEqual({created: 0, restored: 1, skippedReadOnly: false})
+    const row = await sharedDb.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])
+    expect(row.deleted).toBe(0)
+  })
+
+  it('skips read-only repos explicitly', async () => {
+    repo.setReadOnly(true)
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed]))
+      .toEqual({created: 0, restored: 0, skippedReadOnly: true})
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)]))
+      .toBeNull()
+  })
+
+  it('rejects a live deterministic-id occupant from another workspace (cross-workspace guard is wired)', async () => {
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    await repo.tx(tx => tx.create({
+      id,
+      workspaceId: OTHER_WS,
+      parentId: null,
+      orderKey: 'a0',
+      content: 'foreign live row',
+    }), {scope: ChangeScope.BlockDefault})
+
+    await expect(materializeTypeSeeds(repo, WS, [typeSeed])).rejects.toThrow(
+      `seed id ${id} belongs to workspace ${OTHER_WS}`,
+    )
+  })
+
+  it('typeify still completes a NON-seed block-type block into a page + alias (carve-out is narrow)', async () => {
+    const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
+    await repo.tx(async tx => {
+      await repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {})
+      await tx.setProperty(id, blockTypeLabelProp, 'Plain Type')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = repo.block(id).peek()
+    expect(getBlockTypes(row!)).toContain(PAGE_TYPE)
+    expect(getAliases(row!)).toEqual(['Plain Type'])
+  })
+
+  it('flows a materialized seed through the registry to repo.types + getTypeBlockId', async () => {
+    repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
+    await materializeTypeSeeds(repo, WS, [typeSeed])
+
+    // The declared-seed contribution publishes into `repo.types` immediately
+    // (independent of the block), so wait on the block-bound side of the
+    // registry to prove the materialized row was actually projected.
+    await vi.waitFor(() => {
+      expect(repo.userTypes.getTypeBlockId(typeSeed.id)).toBeDefined()
+    }, {timeout: 3000})
+
+    expect(repo.types.get(typeSeed.id)).toMatchObject({
+      id: typeSeed.id,
+      label: typeSeed.label,
+      hideFromCompletion: true,
+    })
+    const blockId = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    expect(repo.userTypes.getTypeBlockId(typeSeed.id)).toBe(blockId)
+    expect(repo.typeDefinitions?.blockIdByTypeId.get(typeSeed.id)).toBe(blockId)
+  })
+
+  it('materializes NO seed of a contested membership id, but still materializes the uncontested ones', async () => {
+    // typeSeed + twin share an `id` but carry different keys (→ different
+    // deterministic ids, so assertUniqueSeedKeys passes). Materializing an
+    // order-dependent keep-first winner would orphan a phantom `/type/` row on a
+    // reorder / authoring fix (this create/restore-only pass never deletes), so
+    // NEITHER contested declaration is backed. A third, uncontested seed in the
+    // same batch must still materialize — one bad contribution can't abort the pass.
+    const twin = seedType({
+      seedKey: 'system:test/type/widget-twin', revision: 1, id: typeSeed.id, label: 'Widget Twin',
+    })
+    const other = seedType({
+      seedKey: 'system:test/type/gadget', revision: 1, id: 'test-gadget', label: 'Gadget',
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await materializeTypeSeeds(repo, WS, [typeSeed, twin, other]))
+        .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate type seed id'))
+    } finally {
+      warn.mockRestore()
+    }
+    // No backing row for either contested declaration...
+    expect(await sharedDb.db.getOptional(
+      'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
+    )).toBeNull()
+    expect(await sharedDb.db.getOptional(
+      'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, twin.seedKey)],
+    )).toBeNull()
+    // ...but the uncontested seed materialized.
+    expect(repo.block(typeDefinitionBlockId(WS, other.seedKey)).peek()).toBeTruthy()
+  })
+
+  it('rejects a user-scope create that forges a provenance-valid /type/ seed row (tx guard is grammar-agnostic)', async () => {
+    // The tx-layer seed-write guard (`assertNoSeedDefinitionWrites`) fires for
+    // BlockDefault-scope writes on any row transitioning into a valid seeded
+    // definition — property OR type grammar. This closes the loop the existing
+    // forge tests only cover for `/property/` keys.
+    const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
+    await expect(repo.tx(tx => tx.create({
+      id,
+      workspaceId: WS,
+      parentId: repo.typesPageId!,
+      orderKey: 'a0',
+      content: typeSeed.label,
+      properties: canonicalTypeSeedProperties(typeSeed),
+    }), {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
   })
 })

@@ -49,6 +49,8 @@ import {
   getAliases,
   getBlockTypes,
 } from '@/data/properties'
+import { seededDefinitionKey } from '@/data/definitionSeeds'
+import { isTypeSeedKey } from '@/data/typeSeeds'
 
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
 
@@ -62,6 +64,16 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       if (!addedTypes(row).includes(BLOCK_TYPE_TYPE)) continue
       const after = row.after
       if (!after || after.deleted) continue
+
+      // Seed-owned type rows (`materializeTypeSeeds` mints a `block-type` block at
+      // its deterministic `/type/` id) are code-authored, complete definitions —
+      // do NOT typeify them into navigable `[[Label]]` pages + aliases. That's the
+      // user-type gesture; code types were never pages, so forcing PAGE_TYPE +
+      // alias here would be a visible behavior change at the C4 cutover (and the
+      // materializer's Automation-scope tx would trip a BlockDefault scope clash).
+      // The materializer writes the finished bag; there is nothing to complete.
+      const seedKey = seededDefinitionKey(after)
+      if (seedKey !== undefined && isTypeSeedKey(seedKey)) continue
 
       const rawLabel = after.properties[blockTypeLabelProp.name]
       const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
