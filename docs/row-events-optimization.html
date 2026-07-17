@@ -506,14 +506,23 @@ trigger-recreation ordering):
     <tr>
       <td><code>full INTEGER</code></td>
       <td><code>1</code> = the payload sides present carry <em>complete</em>
-        row state (create, hard delete, sampled anchor, migration anchor, and the
-        raw <code>UPDATE … SET id</code> rename event below);
-        <code>0</code> = compact invertible patch (changed fields only, both
-        sides). UiState events are compact like any other update — §5.1's bound
-        keys on the block's type, not on <code>full</code>, so nothing is written
-        full for retention's sake. <code>NULL</code> on v1 rows — every v1 row is
-        full by construction, so readers treat <code>v IS NULL</code> as full.
-        There is no cadence state anywhere — the log stays self-describing.</td>
+        row state (create, hard delete, sampled anchor, and the raw
+        <code>UPDATE … SET id</code> rename event below);
+        <code>2</code> = a <strong>discontinuity anchor</strong>: complete state
+        <em>and</em> a marker that an unlogged gap lies immediately older (§8.1) —
+        readers must treat it as a <em>wall</em>: a newer-side backward walk may
+        use it as a base for events at or newer than it, but may not cross it to
+        reconstruct anything <em>older</em> (§4.3), because the gap behind it
+        would splice stale values. A sampled anchor (<code>full=1</code>) has no
+        such wall — the two must be distinguishable, which is why the
+        discontinuity case gets its own value rather than sharing
+        <code>full=1</code>. <code>0</code> = compact invertible patch (changed
+        fields only, both sides). UiState events are compact like any other
+        update — §5.1's bound keys on the block's type, not on <code>full</code>,
+        so nothing is written full for retention's sake. <code>NULL</code> on v1
+        rows — every v1 row is full by construction, so readers treat
+        <code>v IS NULL</code> as full (and never as a wall). There is no cadence
+        state anywhere — the log stays self-describing.</td>
     </tr>
     <tr>
       <td><code>workspace_id TEXT</code></td>
@@ -632,15 +641,18 @@ corruption" carries this one raw-write asterisk (slice-B raw-write test).
 
 <p>Index changes — <strong>nothing the v2 triggers need</strong>: the v2
 trigger reads no history (§4.1/I6), so slice A ships no index work at all.
-Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper keys on the block's
-<em>type</em> (a <code>blocks</code> query over the ~857 flagged blocks), then
-prunes each flagged block to its newest K events <em>by <code>id</code></em> —
+Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper takes the block ids
+with &gt; K events (a bounded index-only aggregate over this index — ~50–80
+blocks, §12), keeps the <code>ephemeralHistory</code>-typed ones (live or
+deleted, §5.1), then prunes each to its newest K events <em>by <code>id</code></em> —
 which is what makes the cut a safe oldest-prefix delete (<code>created_at</code>
 is not reliably monotone in <code>id</code>, so ordering the cut by timestamp
 could hole a survivor, §5.1). The earlier partial <code>WHERE scope =
 'local-ui'</code> index (and its per-UiState-write insert cost) is gone;
 <code>(block_id, id)</code> replaces it and is the same index slice C's reader
-walks and the §8 rewriter need, so it is added once here. <code>id</code> is
+walks and the §8 rewriter need; each creates it idempotently
+(<code>CREATE INDEX IF NOT EXISTS</code>) so neither slice depends on the other's
+ordering (slice B is independent of C). <code>id</code> is
 AUTOINCREMENT-monotonic and is the authoritative per-block order
 (same-millisecond events in one tx tie on <code>created_at</code>). The
 existing <code>(block_id, created_at DESC)</code> index is
@@ -747,7 +759,9 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
     anchor's before still yields the state just prior to it.</li>
   <li><em>Symmetric bases</em>: a full event serves forward walks (its after
     side) and backward walks (its before side) equally — §4.3 picks whichever
-    full state is nearer.</li>
+    full state is nearer. The one exception is a discontinuity anchor
+    (<code>full=2</code>, §3/§8.1): its before side is a valid backward-walk base
+    only down to itself, never across the gap it marks to older events.</li>
   <li><em>Cost is noise</em>: one extra full pair per 1/p events ≈
     +25&nbsp;B amortized per update at p = 1/64 (§4.4).</li>
 </ul>
@@ -761,7 +775,7 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
                                            # E.before_json is NOT this state — it is only the
                                            # newer-side base for reconstructing OLDER events.
   if E.v is NULL or E.full:
-      return E.after                       # create / anchor: the full after snapshot
+      return E.after                       # create / anchor (full=1 or 2): the full after snapshot
 
   # nearest full state on EITHER side, whichever is closer:
   #   older side: newest event ≤ E with a full after (create, anchor)
@@ -774,12 +788,19 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
   # a purged block at its delete event (full before). ChainBroken can only
   # mean corruption inside the log — see the failure bound.
   #
-  # Gap safety: a base is valid only if NO unlogged gap (a §5 skip, a
-  # trigger-suspended window) lies between it and E — crossing one splices
-  # stale values for fields changed inside the gap. The newer-side walk from
-  # the live row is always gap-safe; prefer it, and trust an older-side base
-  # only back to the nearest full state with no interposed gap. The §8
-  # migration guarantees this for stock by anchoring at every discontinuity.</code></pre>
+  # Gap safety: a base is valid only if NO unlogged gap (a trigger-suspended
+  # window, the pre-log era) lies between it and E — crossing one splices
+  # stale values for fields changed inside the gap. Two enforcers:
+  #   1. A discontinuity anchor (full=2) is a WALL: it marks a gap immediately
+  #      older than itself. A newer-side base is gap-safe for E only if NO
+  #      full=2 wall lies in (E, base]. If one does, that base is on the far
+  #      side of a gap from E — reject it and fall to an older-side base on
+  #      E's own segment (or terminate: E predates all its logged state).
+  #      This is the read-time check the "add gap metadata" rule buys — a
+  #      full=1 sampled anchor may be crossed freely; a full=2 may not.
+  #   2. The newer-side walk from the live row is always gap-safe (it replays
+  #      trigger-recorded OLD values); prefer it. The §8 migration marks every
+  #      stock discontinuity full=2, so this check covers migrated gaps too.</code></pre>
 
 <p>
 Complexity: expected walk = distance to the nearest full state on either side
@@ -1025,10 +1046,19 @@ Retention keys on the type.
     <code>properties</code>. No new synced column, no <code>sync-config.yaml</code>
     change, no migration on the hot <code>blocks</code> table.</li>
   <li><strong>The sweeper keys on the synced block, so every device agrees.</strong>
-    A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) enumerates
-    blocks whose type carries <code>ephemeralHistory</code> (~857 panels on prod
-    — a cheap <code>blocks</code> query, not a <code>row_events</code> scan) and,
-    for each, deletes all but its newest K <code>row_events</code> ordered by
+    A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) takes as
+    candidates the block ids with <em>more than K events</em> (a bounded
+    index-only aggregate over <code>(block_id, id)</code> — measured ~50–80 such
+    blocks on either instance, §12, so the set is tiny) and keeps those whose
+    block is <code>ephemeralHistory</code>-typed. <strong>Deleted blocks are in
+    the set, deliberately</strong> (review finding): a soft-deleted panel is still
+    a <code>blocks</code> row (<code>deleted=1</code>), and a hard-deleted or
+    stream-exited one is classified from its most-recent event's snapshot — so a
+    panel deleted <em>before</em> a sweep capped it does not keep its whole
+    pre-delete history (up to the full delete-before snapshot, potentially
+    multi-MB) forever. Enumerating live blocks by type alone would miss exactly
+    those. For each candidate it then deletes all but its newest K
+    <code>row_events</code> ordered by
     <strong><code>id</code>, not <code>created_at</code></strong>: <code>id</code>
     is the authoritative per-block order (§3), and because <code>created_at</code>
     can tie within a tx or step under wall-clock skew, a cut by timestamp could
@@ -1296,21 +1326,28 @@ block with any <code>v IS NULL</code> event:
     full=1</code>, payload unchanged. Reset <code>pos</code>.</li>
   <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
     comparing the event's <em>own</em> before/after JSON (exact — no cross-event
-    inference), then keep it <strong>full (anchor, <code>full=1</code>)</strong>
-    if any of:
+    inference), then keep it <strong>full</strong> if any of the following — and
+    the <em>value</em> of <code>full</code> matters, because a reader must tell a
+    continuous anchor from a gap boundary (§3, §4.3):
     <ul>
-      <li><em>no <code>runningState</code></em> — the block's history doesn't
-        open with a create (pre-log era, historical gaps);</li>
-      <li><em>cadence</em> — <code>pos ≥ 63</code> (deterministic every-64th in
-        the rewriter — it runs offline, no coin needed, and readers key on
-        <code>full</code>, never on spacing);</li>
-      <li><em>discontinuity</em> — the event's <code>before_json</code> ≠
-        <code>runningState</code>. This is the load-bearing sampling rule: v1
-        <code>before</code> is normally redundant with the previous event's
-        <code>after</code>, but where the log has gaps (trigger-suspended
-        backfill windows, the pre-row_events era of a block, historical bugs)
-        it is <em>not</em> — anchoring exactly at discontinuities keeps those
-        seams reconstructable and visible instead of silently splicing them.</li>
+      <li><em>cadence</em> (<code>full=1</code>) — <code>pos ≥ 63</code>
+        (deterministic every-64th in the rewriter — it runs offline, no coin
+        needed, and readers key on <code>full</code>, never on spacing). This
+        anchor is continuous with its predecessor, so it is a crossable base.</li>
+      <li><em>no <code>runningState</code></em> (<code>full=1</code>) — the
+        block's history doesn't open with a create (pre-log era). It is a chain
+        <em>start</em>, not a wall: nothing logged is older, so there is nothing
+        to splice across.</li>
+      <li><em>discontinuity</em> (<strong><code>full=2</code></strong>) — the
+        event's <code>before_json</code> ≠ <code>runningState</code>: there
+        <em>are</em> older logged events, but they don't connect (a
+        trigger-suspended backfill window, historical bugs). This is the
+        load-bearing sampling rule, and it must be a <code>full=2</code>
+        <em>wall</em>, not a plain <code>full=1</code> anchor — otherwise a reader
+        reconstructing a pre-gap event could pick this anchor as a newer-side base
+        and walk backward across the gap, splicing exactly the stale values the
+        rule exists to prevent (§4.3). Marking it <code>full=2</code> keeps the
+        seam both reconstructable <em>and visible</em>.</li>
     </ul>
     Otherwise rewrite compact: <code>before_json</code> = changed fields' old
     values, <code>after_json</code> = changed fields' new values (equal key
@@ -1849,7 +1886,9 @@ into is smaller).
       <td><strong>C — stock migration</strong></td>
       <td>§8 idle rewriter (per-block, discontinuity-anchoring) armed behind
         the backup prompt (§8.2), partial work index, completion marker,
-        <code>(block_id, id)</code> reused from slice B for reader/rewriter walks
+        <code>(block_id, id)</code> for reader/rewriter walks — created
+        idempotently (<code>CREATE INDEX IF NOT EXISTS</code>) since slice B is
+        independent and may not have shipped, so C does not depend on B for it —
         + explicit ANALYZE (<code>(block_id, created_at DESC)</code> is retained
         per §3 — revisit only with measurements); fuzzed equivalence suite (I5) +
         resumability under random interruption (note below).</td>
@@ -1914,7 +1953,11 @@ a flagged block with &gt; K events ends the sweep with exactly K). Slice C's I5
 equivalence suite is the same
 generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
-under random interruption/resume points.
+under random interruption/resume points. It specifically pins the
+<code>full=2</code> wall: the migration must mark every generated discontinuity
+<code>full=2</code> (not <code>full=1</code>), and a point lookup of a
+<em>pre-gap</em> event must reconstruct from its own segment, never picking the
+post-gap anchor as a newer-side base (which would splice the gap's values).
 </p>
 
 <p>
