@@ -2914,10 +2914,16 @@ export class Repo {
     for (const {change, schema} of plans) {
       const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
       if (unconvertible === 0) continue
+      // Claim only what's true: this pass never deletes a value row, so the
+      // text is preserved verbatim. It does NOT promise a surface — value
+      // children sit under a field row, and the visible view prunes field
+      // rows (§9), so post-flip they are reachable through the property
+      // rows, not by scrolling the outline. Naming the outline here would
+      // send the user somewhere the values demonstrably aren't (#386 review).
       const message =
         `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
-        + `"${schema.name}" could not convert to the new type; they remain in `
-        + `the outline unchanged`
+        + `"${schema.name}" could not convert to the new type; their original `
+        + `text is preserved unchanged`
       console.warn(`[propertyDefinitionMigrations] ${message}`)
       this.userErrorListeners.notify(new ProcessorRejection(
         message, 'property.codec-change.unconvertible',
