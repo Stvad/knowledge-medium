@@ -468,7 +468,7 @@ which has no row_events triggers. Only the observer moves data into
 <h2 id="s3">3. Event format v2</h2>
 
 <p>
-Three new columns, added by an idempotent ALTER migration in the
+Four new columns, added by an idempotent ALTER migration in the
 <code>ensureUndoGroupIdColumns</code> mold (and with its same must-run-before-
 trigger-recreation ordering):
 </p>
@@ -493,6 +493,21 @@ trigger-recreation ordering):
         sides). <code>NULL</code> on v1 rows — every v1 row is full by
         construction, so readers treat <code>v IS NULL</code> as full. There
         is no cadence state anywhere — the log stays self-describing.</td>
+    </tr>
+    <tr>
+      <td><code>workspace_id TEXT</code></td>
+      <td>Stamped from <code>NEW.workspace_id</code> (insert/update) /
+        <code>OLD.workspace_id</code> (delete) — a real column, not a payload
+        field. v1 full snapshots carried <code>workspaceId</code> on every
+        event; v2 compact updates omit it whenever it did not change, which is
+        almost always. Without the column, a workspace-scoped history or
+        recovery query would have to reconstruct arbitrary compact events just
+        to learn membership — and for a <em>hard-deleted</em> block there is no
+        live <code>blocks</code> row left to join, so it would miss those rows
+        entirely, i.e. exactly the forensics case §10 exists for. Costs one
+        indexed-width string per event and keeps the log queryable per
+        workspace on its own (the "never touch unopened workspaces" rule the
+        rest of the system holds to).</td>
     </tr>
     <tr>
       <td><code>scope TEXT</code></td>
@@ -859,7 +874,17 @@ step 5 (<code>:375-383</code>, rollback-safe inside the tx). One value:
 <code>'skip'</code>. The <em>create and update</em> row_events triggers add
 <code>COALESCE((SELECT history_mode FROM tx_context WHERE id = 1), 'full') != 'skip'</code>
 to their WHEN clause — the delete trigger carries no <code>history_mode</code>
-gate at all (§5.2 / I2's corollary). NULL/absent means full logging — the default cannot
+gate at all (§5.2 / I2's corollary). The update trigger's gate carries one
+further exemption, for the same reason the delete trigger has none: a
+<em>deletion-state transition</em> is never skippable, so the gate is
+<code>AND (OLD.deleted IS NEW.deleted)</code>-qualified —
+<code>tx.delete</code> and restore are UPDATEs of <code>deleted</code>
+(<code>kind='soft-delete'</code>, <code>clientSchema.ts:456</code>), not
+physical DELETEs, so an unqualified gate would let a <code>'skip'</code> tx
+suppress the only event recording that the block was deleted or restored. That
+would strand the §10 subtree index (which closes and reopens parent intervals
+on exactly those transitions) and hide a deletion from history entirely —
+strictly worse than the hard-delete case I2 already forbids. NULL/absent means full logging — the default cannot
 silently drop history (invariant <a href="#invariants">I3</a>), sync-applied
 writes (which never set it) are unaffected, and only a caller that explicitly
 opts in is exempt (invariant <a href="#invariants">I4</a>: exemption by
@@ -897,14 +922,21 @@ self-sufficient — applies here too, so it is worth being precise about what a
     to its net effect), and per-write attribution/timing inside it —
     <code>command_events</code> keeps the tx-level record (which pass ran,
     when, how many writes), not row-level values.</li>
-  <li><strong>Hard deletes never skip.</strong> A hard delete inside a
-    <code>'skip'</code> tx would erase both newer-side terminators at once —
-    the live row is gone and no delete event (full before) exists — leaving
-    every older state of that block unreconstructable and breaking
+  <li><strong>No deletion-state transition ever skips.</strong> A hard delete
+    inside a <code>'skip'</code> tx would erase both newer-side terminators at
+    once — the live row is gone and no delete event (full before) exists —
+    leaving every older state of that block unreconstructable and breaking
     <a href="#invariants">I2</a>. The delete trigger therefore carries no
     <code>history_mode</code> gate at all: the enumerated bursts are
     create/update-shaped, and a purge that wants silence is a design change
-    that must renegotiate I2 explicitly, not a flag to set. Cost owned: bulk
+    that must renegotiate I2 explicitly, not a flag to set. The same rule
+    extends to <em>soft</em> delete and restore, which are UPDATEs of
+    <code>deleted</code> and so travel through the gated update trigger: its
+    gate is qualified with <code>OLD.deleted IS NEW.deleted</code> (§5.1), so a
+    skip burst can never suppress the record that a block was deleted or
+    brought back. Skipping those would hide a deletion from history outright
+    and strand the §10 subtree index, which closes and reopens parent intervals
+    on precisely those transitions. Cost owned: bulk
     cleanups pay a tombstone per row — the dev instance's 317k-block
     workspace-migration purge cost ~194&nbsp;MB of delete events (measured,
     §12), the price of "every deleted block's last state survives
@@ -1480,10 +1512,17 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         to restore to; detection that someone else changed the field since</td>
       <td>My tx's events carry their own before values (§4.1) — restore =
         un-apply, per block in the tx, that block's own events'
-        <code>before_json</code> (one restore per <code>block_id</code>, from its
-        own earliest event in the tx — not a single "tx's first event"); no
-        reconstruction at all, including for the first edit after an unlogged
-        gap. Two per-kind carve-outs: a <code>create</code>
+        <code>before_json</code>; no reconstruction at all, including for the
+        first edit after an unlogged gap. <em>Fold, don't pick</em>: one tx can
+        write the same block more than once and touch different fields each time
+        (a mutator sets <code>content</code>, a same-tx processor later sets
+        <code>references</code>/<code>properties</code>), so the block's
+        <em>earliest</em> event alone carries befores only for that first
+        statement's fields — restoring from it would leave the rest of the tx
+        applied. Fold all of the block's events in <code>id</code> order, taking
+        each field's <em>first</em> before and its <em>final</em> after; that
+        folded pair is the restore target and the drift baseline. Two per-kind
+        carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
         (soft-delete/tombstone), with redo re-applying <code>after_json</code>;
         and when the anchor coin made an update <code>full=1</code>,
@@ -1650,8 +1689,8 @@ into is smaller).
   <tbody>
     <tr>
       <td><strong>A — format</strong></td>
-      <td>ALTER adds (<code>v</code>, <code>full</code>, <code>scope</code>;
-        ordering per §8.2);
+      <td>ALTER adds (<code>v</code>, <code>full</code>,
+        <code>workspace_id</code>, <code>scope</code>; ordering per §8.2);
         v2 trigger bodies generated from the shared column spec (invertible
         changed-field patches on both sides, projected-field diffs,
         identical-update skip, one-coin p=1/64 anchor sampling — no probe, no
@@ -1761,9 +1800,11 @@ under random interruption/resume points.
         anchor. Readers never assume a
         cadence — only the <code>full</code> flag; anchors bound the expected
         walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.
-        Corollary (§5.2): hard deletes are never
+        Corollary (§5.2): no deletion-state transition is ever
         <code>history_mode</code>-exempt — a skipped hard delete would erase
-        both terminators at once.</td>
+        both terminators at once, and a skipped soft-delete/restore (an UPDATE
+        of <code>deleted</code>, so gated by the update trigger) would hide the
+        transition itself and strand §10's interval index.</td>
       <td><a href="#s4">§4.3/4.4</a></td>
       <td>Readers; §8 rewriter</td>
       <td>Property test: random edit sequences incl. hard-deletes and
