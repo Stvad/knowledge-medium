@@ -313,8 +313,14 @@ export const materializePropertyChildrenForExistingRow = async (
         if (primaryValue.content !== content) {
           await tx.update(primaryValue.id, {content})
         }
+        // Fold only EXACT duplicates of the projected cell value (concurrent
+        // dual-writes of the same value); DIVERGENT siblings are a surfaced
+        // conflict — from a merge or divergent concurrent write — and are
+        // kept as peer values, not silently collapsed onto the winner.
         for (const duplicate of duplicateValues) {
-          await collapseDuplicateValueChild(tx, primaryValue.id, duplicate)
+          if (duplicate.content === content) {
+            await collapseDuplicateValueChild(tx, primaryValue.id, duplicate)
+          }
         }
       } else {
         await tx.create({
@@ -397,11 +403,13 @@ export const collapseDuplicateValueChild = async (
 }
 
 /** §9 dedup, FIELD-row form: before deleting a duplicate field row, its
- *  values must not silently vanish — a divergent losing value is data loss
- *  in effect if not in storage. Values equal to the survivor's primary fold
- *  (sub-children relocate); DIVERGENT values relocate visibly under the
- *  surviving value child (not directly under the field row, where the
- *  value-child dedup would just re-collapse them). */
+ *  values must not silently vanish. A field row holds a SET of value children,
+ *  deduped by content — so a duplicate's value that MATCHES an existing
+ *  survivor value folds into it (sub-children relocate), and a DIVERGENT value
+ *  is kept as a peer SIBLING value under the survivor field row. Projection
+ *  reads the first value, so the cell keeps the survivor's winner while the
+ *  conflicting value stays visible and reconcilable — never nested under the
+ *  winner as if it were an annotation, never dropped. */
 export const collapseDuplicateFieldRow = async (
   tx: Tx,
   survivorFieldRowId: string,
@@ -414,20 +422,12 @@ export const collapseDuplicateFieldRow = async (
     const survivorValues = await tx.childrenOf(
       survivorFieldRowId, undefined,
     )
-    const survivorPrimary = survivorValues[0]
-    if (!survivorPrimary) {
-      // The survivor had no value at all — the loser's value BECOMES it.
+    const match = survivorValues.find(v => v.content === value.content)
+    if (match) {
+      await collapseDuplicateValueChild(tx, match.id, value)
+    } else {
       const anchor = survivorValues.at(-1)?.orderKey ?? null
       await tx.move(value.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
-      continue
-    }
-    if (value.content === survivorPrimary.content) {
-      await collapseDuplicateValueChild(tx, survivorPrimary.id, value)
-    } else {
-      const anchor = (await tx.childrenOf(
-        survivorPrimary.id, undefined,
-      )).at(-1)?.orderKey ?? null
-      await tx.move(value.id, {parentId: survivorPrimary.id, orderKey: keysBetween(anchor, null, 1)[0]!})
     }
   }
   await deleteSubtreeInTx(tx, duplicate.id)

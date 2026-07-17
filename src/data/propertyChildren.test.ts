@@ -8,6 +8,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type BlockData } from '@/data/api'
+import { keyAtStart } from './orderKey'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
@@ -309,6 +310,52 @@ describe('flipped workspace — ref-typed property values are editable `((id))` 
     expect(survivor?.reference_target_id).toBeNull()
   })
 
+  it('a merge-losing ref value keeps its stamp (no unsound stamp-clear) — #19', async () => {
+    // #19: the old merge relocated a divergent losing value to ORDINARY
+    // content and had to null a definition-shaped `reference_target_id` so it
+    // wouldn't project as a field row of `into`. That clear was unsound (the
+    // column is content-derived + device-local: it evaporates on the next
+    // edit and never syncs). Union-with-dedupe nests the loser under `into`'s
+    // winning value — property-subtree interior, §9-exempt — so NO clear is
+    // needed and the stamp stays correct.
+    const repo = await setupWithRef()
+    await seedDefinitionBlock(repo) // makes STATUS_FIELD_ID resolve as a definition
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    // Both have `related`; `from`'s value points at the Status DEFINITION —
+    // the exact shape that would misclassify if relocated to ordinary content.
+    await repo.tx(tx => tx.setProperty('into', relatedSchema, 'target-into'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('from', relatedSchema, STATUS_FIELD_ID),
+      {scope: ChangeScope.BlockDefault})
+    const fromRelated = (await childrenRows('from')).find(
+      r => r.deleted === 0 && r.reference_target_id === RELATED_FIELD_ID,
+    )
+    const [fromValue] = (await childrenRows(fromRelated!.id)).filter(v => v.deleted === 0)
+    expect(fromValue!.reference_target_id).toBe(STATUS_FIELD_ID)
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The losing value survives with its stamp INTACT (old code would null it)…
+    const survivor = await sharedDb.db.get<{deleted: number; reference_target_id: string | null}>(
+      'SELECT deleted, reference_target_id FROM blocks WHERE id = ?', [fromValue!.id],
+    )
+    expect(survivor.deleted).toBe(0)
+    expect(survivor.reference_target_id).toBe(STATUS_FIELD_ID)
+    // …and it did NOT project as a Status field row of `into` (no clobber).
+    const intoStatus = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', ['into'],
+    )
+    expect((JSON.parse(intoStatus.properties_json) as Record<string, unknown>)[statusSchema.name])
+      .toBeUndefined()
+    expect((JSON.parse(intoStatus.properties_json) as Record<string, unknown>)[relatedSchema.name])
+      .toBe('target-into')
+  })
+
   it('raw cell writes materialize field/value children; key removal soft-deletes them', async () => {
     await seedWorkspace('children')
     const repo = setup()
@@ -435,7 +482,7 @@ describe('childrenOf visible-children exclusion (§9)', () => {
 })
 
 describe('merge integration (§9, slice B3)', () => {
-  it('re-materializes the merged bag; source field rows tombstone with their values', async () => {
+  it('adopts a source field row for a property `into` lacks (moved, not recreated)', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'into')
@@ -451,15 +498,16 @@ describe('merge integration (§9, slice B3)', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     expect(await cellValue('into')).toBe('from-status')
-    // `into` re-materialized its own field/value rows from the merged bag…
+    // `into` lacked `status`, so `from`'s field row is MOVED over intact and
+    // becomes `into`'s — not tombstoned-and-recreated (#23: property children
+    // always transfer to `into`, never delete-and-rebuild).
     const intoFields = await liveFieldRows('into')
-    expect(intoFields).toHaveLength(1)
-    // …and `from`'s field row + value child are tombstoned, not carried or
-    // stranded live under the tombstone.
+    expect(intoFields.map(f => f.id)).toEqual([fromField!.id])
     const fromFieldRow = await sharedDb.db.get<{deleted: number}>(
       'SELECT deleted FROM blocks WHERE id = ?', [fromField!.id],
     )
-    expect(fromFieldRow.deleted).toBe(1)
+    expect(fromFieldRow.deleted).toBe(0)
+    // Nothing stranded live under the `from` tombstone.
     const strandedLive = await sharedDb.db.getAll<{id: string}>(
       `SELECT b.id FROM blocks b JOIN blocks p ON p.id = b.parent_id
         WHERE p.deleted = 1 AND b.deleted = 0 AND b.workspace_id = ?`,
@@ -490,16 +538,55 @@ describe('merge integration (§9, slice B3)', () => {
       await mergeBlocksInTx(tx, {into: into!, from: from!})
     }, {scope: ChangeScope.BlockDefault})
 
+    // The comment survives, still attached to the value it was authored on
+    // (which now lives under `into` via the adopted field row) — more faithful
+    // than flattening it directly under `into`.
     const comment = await sharedDb.db.get<{deleted: number; parent_id: string}>(
       'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment'],
     )
     expect(comment.deleted).toBe(0)
-    expect(comment.parent_id).toBe('into')
+    expect(comment.parent_id).toBe(fromValue!.id)
+  })
+
+  it('a divergent value from BOTH sides survives as a peer sibling, cell target-wins (#23)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'into-status'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
+    const [intoField] = await liveFieldRows('into')
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Cell keeps `into`'s value (projection reads the first sibling), one field row…
+    expect(await cellValue('into')).toBe('into-status')
+    expect((await liveFieldRows('into')).map(f => f.id)).toEqual([intoField!.id])
+    // …and `from`'s divergent value survives as a PEER value child under the
+    // same field row — a set of values, not a winner with the loser nested
+    // under it, not litter in the outline, not silently dropped.
+    const survivor = await sharedDb.db.get<{deleted: number; parent_id: string; content: string}>(
+      'SELECT deleted, parent_id, content FROM blocks WHERE id = ?', [fromValue!.id],
+    )
+    expect(survivor.deleted).toBe(0)
+    expect(survivor.content).toBe('from-status')
+    expect(survivor.parent_id).toBe(intoField!.id)
+    // Both values live directly under the field row (siblings).
+    const siblings = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(siblings.map(v => v.content).sort()).toEqual(['from-status', 'into-status'])
   })
 })
 
 describe('duplicate collapse preservation (§9, slice B3)', () => {
-  it('relocates a divergent losing value and its comments instead of silently deleting', async () => {
+  it('keeps a divergent losing value as a sibling (with its comments) instead of deleting', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'p')
@@ -510,18 +597,21 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
         id: 'field-a', workspaceId: WS, parentId: 'p', orderKey: 'a',
         content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
       })
+      // Real fractional keys — a divergent value now moves to a SIBLING slot
+      // computed against the survivor's last value key, so that key must be a
+      // valid fractional-index (a bare 'a' is not).
       await tx.create({
-        id: 'value-a', workspaceId: WS, parentId: 'field-a', orderKey: 'a', content: 'alpha',
+        id: 'value-a', workspaceId: WS, parentId: 'field-a', orderKey: keyAtStart(), content: 'alpha',
       })
       await tx.create({
         id: 'field-b', workspaceId: WS, parentId: 'p', orderKey: 'b',
         content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
       })
       await tx.create({
-        id: 'value-b', workspaceId: WS, parentId: 'field-b', orderKey: 'a', content: 'beta',
+        id: 'value-b', workspaceId: WS, parentId: 'field-b', orderKey: keyAtStart(), content: 'beta',
       })
       await tx.create({
-        id: 'comment-b', workspaceId: WS, parentId: 'value-b', orderKey: 'a',
+        id: 'comment-b', workspaceId: WS, parentId: 'value-b', orderKey: keyAtStart(),
         content: 'note on beta',
       })
     }, {scope: ChangeScope.BlockDefault})
@@ -537,13 +627,13 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
       'SELECT deleted FROM blocks WHERE id = ?', ['field-b'],
     )
     expect(fieldB.deleted).toBe(1)
-    // …but the DIVERGENT losing value survives visibly under the surviving
-    // value child, with its comment thread intact beneath it.
+    // …but the DIVERGENT losing value survives as a PEER sibling value under
+    // the surviving field row, with its comment thread intact beneath it.
     const valueB = await sharedDb.db.get<{deleted: number; parent_id: string}>(
       'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['value-b'],
     )
     expect(valueB.deleted).toBe(0)
-    expect(valueB.parent_id).toBe('value-a')
+    expect(valueB.parent_id).toBe('field-a')
     const commentB = await sharedDb.db.get<{deleted: number; parent_id: string}>(
       'SELECT deleted, parent_id FROM blocks WHERE id = ?', ['comment-b'],
     )
@@ -632,22 +722,27 @@ describe('§9 positional rule on the WRITE side (round-2 review fixes)', () => {
   })
 })
 
-describe('merge relocate-visibly with a ref-typed value (round-2 fix)', () => {
-  it('clears the derived column so the relocated value stays visible, bag intact', async () => {
+describe('merge keeps a ref-typed losing value interior, stamp intact (#19)', () => {
+  it('the losing ref value survives as a hidden sibling with its stamp NOT cleared', async () => {
     await seedWorkspace('children')
     const repo = setup()
+    await seedDefinitionBlock(repo) // makes STATUS_FIELD_ID resolve as a definition
     await createBlock(repo, 'into')
     await createBlock(repo, 'from')
-    // into wins the key; from's DIVERGENT value is ref-typed at the
-    // definition block — the exact hidden-fake-field-row shape.
+    // into wins the key; from's DIVERGENT value is ref-typed at the definition
+    // block — the exact shape the OLD code had to stamp-clear to stop it
+    // projecting as a hidden field row of `into`.
     await repo.tx(tx => tx.setProperty('into', statusSchema, 'kept'),
       {scope: ChangeScope.BlockDefault})
     await repo.tx(tx => tx.setProperty('from', statusSchema, 'x'),
       {scope: ChangeScope.BlockDefault})
+    const [intoField] = await liveFieldRows('into')
     const [fromField] = await liveFieldRows('from')
     const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
     await repo.tx(tx => tx.update(fromValue!.id, {content: `((${STATUS_FIELD_ID}))`}),
       {scope: ChangeScope.BlockDefault})
+    expect((await childrenRows(fromField!.id)).find(v => v.id === fromValue!.id)?.reference_target_id)
+      .toBe(STATUS_FIELD_ID)
 
     await repo.tx(async tx => {
       const into = await tx.get('into')
@@ -655,21 +750,22 @@ describe('merge relocate-visibly with a ref-typed value (round-2 fix)', () => {
       await mergeBlocksInTx(tx, {into: into!, from: from!, mergeProperties: intoProps => intoProps})
     }, {scope: ChangeScope.BlockDefault})
 
-    // The merged bag keeps into's value…
     expect(await cellValue('into')).toBe('kept')
-    // …and the relocated value row is LIVE under into with a CLEARED
-    // column (visible ordinary content, not a hidden fake field row).
-    const relocated = await sharedDb.db.get<{deleted: number; parent_id: string; reference_target_id: string | null}>(
+    // The losing value survives as a SIBLING under into's status field row,
+    // with its stamp INTACT — no unsound clear (#19). It's property-subtree
+    // interior, so §9 keeps it out of the visible outline AND stops it
+    // projecting as a Status field row of `into`.
+    const survivor = await sharedDb.db.get<{deleted: number; parent_id: string; reference_target_id: string | null}>(
       'SELECT deleted, parent_id, reference_target_id FROM blocks WHERE id = ?',
       [fromValue!.id],
     )
-    expect(relocated.deleted).toBe(0)
-    expect(relocated.parent_id).toBe('into')
-    expect(relocated.reference_target_id).toBeNull()
-    // Visible to the outline default:
+    expect(survivor.deleted).toBe(0)
+    expect(survivor.parent_id).toBe(intoField!.id)
+    expect(survivor.reference_target_id).toBe(STATUS_FIELD_ID)
+    // NOT a visible ordinary child of into (it's interior machinery)…
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('into')
-      expect(visible.map(c => c.id)).toContain(fromValue!.id)
+      const visible = await tx.childrenOf('into', undefined, {hidePropertyChildren: true})
+      expect(visible.map(c => c.id)).not.toContain(fromValue!.id)
     }, {scope: ChangeScope.BlockDefault})
   })
 })
