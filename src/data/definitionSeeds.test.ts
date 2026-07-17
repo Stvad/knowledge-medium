@@ -915,6 +915,25 @@ describe('type definition materialization', () => {
     )
   })
 
+  it('does not open the write tx when the generation aborts during the probe', async () => {
+    // The switch-away window: the abort lands AFTER the caller's pre-probe check,
+    // while the seed-id probe is in flight. materializeSeeds must recheck the
+    // signal and skip the write — not create a backing block in the workspace the
+    // user just left (`repo.tx` pins by row workspace, not the active one).
+    const controller = new AbortController()
+    // The seed is fresh, so the probe finds no existing rows (empty). Abort the
+    // moment it runs, simulating a switch-away in the probe's await window.
+    vi.spyOn(repo.db, 'getAll').mockImplementation((async (sql: string) => {
+      if (sql.includes('WHERE id IN')) controller.abort()
+      return []
+    }) as typeof repo.db.getAll)
+
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed], controller.signal))
+      .toEqual({created: 0, restored: 0, skippedReadOnly: false})
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
+  })
+
   it('typeify still completes a NON-seed block-type block into a page + alias (carve-out is narrow)', async () => {
     const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
     await repo.tx(async tx => {

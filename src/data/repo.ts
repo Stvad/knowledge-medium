@@ -2365,9 +2365,9 @@ export class Repo {
       // departed workspace, making this a cheap no-op.
       const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
       if (kind === 'property') {
-        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds)
+        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds, signal)
       } else if (typeSeeds.length > 0) {
-        await materializeTypeSeeds(this, workspaceId, typeSeeds)
+        await materializeTypeSeeds(this, workspaceId, typeSeeds, signal)
       }
     } catch (err) {
       if (signal.aborted && err instanceof Error && err.name === 'AbortError') return

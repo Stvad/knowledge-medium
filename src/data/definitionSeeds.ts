@@ -331,6 +331,7 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   workspaceId: string,
   seeds: readonly S[],
   config: SeedMaterializationConfig<S>,
+  signal?: AbortSignal,
 ): Promise<SeedMaterializationResult> => {
   assertUniqueSeedKeys(config.label, seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
@@ -369,6 +370,15 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
     return false
   })
   if (pending.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
+
+  // The probe above awaited; if the generation aborted since (the user switched
+  // workspaces — `setActiveWorkspaceId` aborts it), don't open the write tx.
+  // `repo.tx` pins writes by the row's own workspace, so materializing here would
+  // create backing blocks in the workspace the user just left, past the caller's
+  // pre-probe abort check. The write is idempotent and scope-correct, but the
+  // active-workspace guard exists to not do it — so honor the abort at the last
+  // point before the tx.
+  if (signal?.aborted) return {created: 0, restored: 0, skippedReadOnly: false}
 
   let created = 0
   let restored = 0
@@ -418,6 +428,7 @@ export const materializePropertySeeds = (
   repo: Repo,
   workspaceId: string,
   seeds: readonly AnyPropertySeedDeclaration[],
+  signal?: AbortSignal,
 ): Promise<SeedMaterializationResult> =>
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializePropertySeeds',
@@ -426,7 +437,7 @@ export const materializePropertySeeds = (
     contentFor: seed => seed.name,
     propertiesFor: canonicalPropertySeedProperties,
     txDescription: 'materialize property definitions',
-  })
+  }, signal)
 
 /** Exclude EVERY seed whose membership `id` is claimed by more than one seed in
  * the batch (returning the uncontested rest). Two seeds sharing an `id` are an
@@ -479,6 +490,7 @@ export const materializeTypeSeeds = (
   repo: Repo,
   workspaceId: string,
   seeds: readonly TypeSeedDeclaration[],
+  signal?: AbortSignal,
 ): Promise<SeedMaterializationResult> =>
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializeTypeSeeds',
@@ -488,4 +500,4 @@ export const materializeTypeSeeds = (
     propertiesFor: canonicalTypeSeedProperties,
     txDescription: 'materialize type definitions',
     preFilter: uncontestedTypeSeeds,
-  })
+  }, signal)
