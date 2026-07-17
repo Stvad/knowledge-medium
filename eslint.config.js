@@ -5,6 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import blockSubscriptions from './eslint-rules/block-subscriptions.js'
 import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
+import childView from './eslint-rules/child-view.js'
 
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
@@ -79,6 +80,29 @@ export default tseslint.config(
       // new code keeps re-rolling `new Set<() => void>()` because nothing points
       // to the shared util. Silence genuine non-listener function-Sets per-site.
       'callback-set/prefer-callback-set': 'warn',
+    },
+  },
+  {
+    // Child-visibility guardrail (PR #288/#386). `tx.childrenOf` /
+    // `repo.query.{children,subtree,childIds}` default to the structural
+    // everything-view (hidden property field-row machinery included); the
+    // visible/outline view is opt-in (`hidePropertyChildren` / the
+    // `visibleChildrenOf` helper). Scoped to pure outline/display modules,
+    // where the visible view is the near-universal intent and a forgotten
+    // opt-in silently leaks machinery into user-facing traversals. The mixed
+    // data-layer files (mutators, paste, panelLayoutProjection) that
+    // legitimately interleave both views are deliberately NOT in scope —
+    // they use the named `visibleChildrenOf` helper so intent reads inline.
+    files: [
+      'src/components/**/*.{ts,tsx}',
+      'src/hooks/**/*.{ts,tsx}',
+      'src/plugins/video-player/**/*.{ts,tsx}',
+      'src/utils/copy.ts',
+      'src/utils/navigation.ts',
+    ],
+    plugins: {'child-view': childView},
+    rules: {
+      'child-view/require-explicit-child-view': 'error',
     },
   },
   {
