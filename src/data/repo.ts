@@ -129,6 +129,7 @@ import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegis
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
 import {
   materializePropertySeeds,
+  materializeTypeSeeds,
   awaitPropertySeedMaterializationAccess,
 } from './definitionSeeds'
 import {
@@ -789,7 +790,6 @@ export class Repo {
       ) => {
         this._types = types
         this._propertySchemas = propertySchemas
-        this._typeDefinitionRegistry = typeDefinitions
         // Retain the outgoing workspace's faithful snapshot when pinning a
         // DIFFERENT workspace, so an in-flight read/tx that began for it still
         // resolves against real definitions. A same-workspace rebuild (contribution
@@ -802,12 +802,15 @@ export class Repo {
         // Seed materialization (§4.3): plugin/dynamic seeds first appear when the
         // toggle-aware app runtime installs in a post-paint effect, long after
         // bootstrap ran — so re-run the create/restore pass whenever this active
-        // workspace's seedKey SET changes (not on every type/preset rebuild).
-        const seedKeysChanged = !sameSeedKeySet(
-          this._propertyDefinitionRegistry?.seedsByKey,
-          propertyDefinitions?.seedsByKey,
-        )
+        // workspace's seedKey SET changes (not on every type/preset rebuild). Diff
+        // BOTH registries against their PRIOR value (so assign them AFTER): a type
+        // seed (a `seedType` contribution) can appear post-bootstrap on its own,
+        // with no property-seed change to piggyback the reschedule on.
+        const seedKeysChanged =
+          !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
+          !sameSeedKeySet(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey)
         this._propertyDefinitionRegistry = propertyDefinitions
+        this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
         if (seedKeysChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
@@ -2230,11 +2233,27 @@ export class Repo {
    * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
    * read-only session; the gate is the authoritative check.
    */
+  /** The current property + type seed declarations for `workspaceId`, or empty
+   *  arrays when a registry is absent or pinned to a different workspace. Read
+   *  live (not snapshotted) so a coalesced pass materializes the latest set. */
+  private workspaceSeeds(workspaceId: string) {
+    const propertyRegistry = this._propertyDefinitionRegistry
+    const typeRegistry = this._typeDefinitionRegistry
+    return {
+      propertySeeds: propertyRegistry?.workspaceId === workspaceId
+        ? [...propertyRegistry.seedsByKey.values()]
+        : [],
+      typeSeeds: typeRegistry?.workspaceId === workspaceId
+        ? [...typeRegistry.seedsByKey.values()]
+        : [],
+    }
+  }
+
   scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
     if (this.isReadOnly || !workspaceId) return
-    const registry = this._propertyDefinitionRegistry
-    if (!registry || registry.workspaceId !== workspaceId) return
-    if (registry.seedsByKey.size === 0) return
+    // Gate on EITHER registry: a type-seed-only change must still schedule a pass.
+    const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+    if (propertySeeds.length === 0 && typeSeeds.length === 0) return
     // Coalesce: one pending pass per workspace. Repeated seed-set changes while a
     // pass is parked on the membership wait would otherwise stack a job + a
     // `workspace_members` subscription each; the pending pass reads the latest
@@ -2282,15 +2301,17 @@ export class Repo {
     try {
       const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
       if (!access.allowed) return
-      // Read the CURRENT seed set at run time: coalesced schedules mean it may
-      // have grown since this pass was queued, and re-checking the projected
+      // Read the CURRENT seed sets at run time: coalesced schedules mean they
+      // may have grown since this pass was queued, and re-checking the projected
       // workspace skips a pass whose workspace is no longer active/projected
-      // (closing the post-gate switch-away window too).
-      const registry = this._propertyDefinitionRegistry
-      if (!registry || registry.workspaceId !== workspaceId) return
-      const seeds = [...registry.seedsByKey.values()]
-      if (seeds.length === 0) return
-      await materializePropertySeeds(this, workspaceId, seeds)
+      // (closing the post-gate switch-away window too). Materialize both kinds in
+      // this one pass — same access gate, same deferred job, same dirty-bit loop;
+      // the two backing pages (Properties / Types) are independent, so order and
+      // either being empty don't matter.
+      const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+      if (propertySeeds.length === 0 && typeSeeds.length === 0) return
+      if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds)
+      if (typeSeeds.length > 0) await materializeTypeSeeds(this, workspaceId, typeSeeds)
     } catch (err) {
       // A superseded generation (the user switched workspaces) aborts the parked
       // access wait — expected, not a failure to log or retry. Gate on OUR signal

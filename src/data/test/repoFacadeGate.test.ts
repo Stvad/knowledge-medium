@@ -128,6 +128,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runWorkspaceSeedMaterialization: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   runSubquery: 'private read',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 

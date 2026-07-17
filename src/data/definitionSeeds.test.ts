@@ -510,6 +510,28 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // loop terminates once no further change is pending — no unbounded re-running.
     expect(calls).toBe(2)
   })
+
+  it('materializes registry TYPE seeds through the same deferred pass', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+    // A dynamic type seed (a `seedType` contribution that appears post-bootstrap).
+    repo.setRuntimeContributions(typeSeedsFacet, 'test-type-seed', [typeSeed])
+    await vi.waitFor(() => {
+      expect(repo.typeDefinitions?.seedsByKey.has(typeSeed.seedKey)).toBe(true)
+    })
+
+    // Drive ONLY the wiring path (no direct materializeTypeSeeds call): the one
+    // deferred pass must now materialize type seeds alongside property seeds.
+    repo.scheduleWorkspaceSeedMaterialization(WS, false)
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const row = await sharedDb.db.getOptional<{parent_id: string; deleted: number}>(
+        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
+      )
+      expect(row?.parent_id).toBe(typesPageBlockId(WS))
+      expect(row?.deleted).toBe(0)
+    })
+  })
 })
 
 describe('seed definition write guard (tx layer)', () => {
