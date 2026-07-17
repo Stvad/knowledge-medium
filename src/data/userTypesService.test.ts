@@ -549,6 +549,31 @@ describe('UserTypesService subscription', () => {
     await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
       .resolves.toBeDefined()
   })
+
+  it('terminates the feedback loop for a type WITH a resolved ref-typed property', async () => {
+    // The zero-property case above never reaches projectedDefinitionsEqual's
+    // property-array arm. A refList property is the churn case: its preset's
+    // build() mints a fresh codec (and a fresh [] default) on EVERY schema-
+    // projector rebuild, and that projector has no dedup, so an unrelated
+    // property edit re-resolves the type's property to a reference-fresh-but-
+    // equal schema. The field-wise dedup must still let the cascade settle
+    // (a bounded extra rebuild), not recurse into a stack overflow.
+    env = await setup()
+    const tags = await env.repo.userSchemas.addSchema({name: 'tags', presetId: 'refList'})
+    const tagsBlockId = env.repo.userSchemas.getSchemaBlockId(tags.name)!
+    const typeId = await createBlockTypeBlock(env.repo, {
+      label: 'Task',
+      properties: [tagsBlockId],
+    })
+    expect(env.repo.types.get(typeId)?.properties).toHaveLength(1)
+
+    // Editing an UNRELATED property-schema block fires onPropertySchemasChange
+    // and republishes ALL schemas with fresh codecs.
+    await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
+      .resolves.toBeDefined()
+    // The type survives with its property intact.
+    expect(env.repo.types.get(typeId)?.properties).toHaveLength(1)
+  })
 })
 
 describe('UserTypesService workspace switch', () => {

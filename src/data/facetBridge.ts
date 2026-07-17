@@ -75,13 +75,27 @@ import {readValuePresetRegistry} from './valuePresetRegistry'
  *  disjoint; the collision rule matters only for a future seed↔code id overlap
  *  during the Slice C4 `typesFacet.of → seedType` conversion (where the seed is
  *  the authoritative successor). */
-const mergeCodeAndRegistryTypes = (
+export const mergeCodeAndRegistryTypes = (
   codeTypes: ReadonlyMap<string, TypeContribution>,
   registry: TypeDefinitionRegistrySnapshot | null,
 ): ReadonlyMap<string, TypeContribution> => {
   if (!registry || registry.typesById.size === 0) return codeTypes
   const merged = new Map(codeTypes)
-  for (const [id, contribution] of registry.typesById) merged.set(id, contribution)
+  for (const [id, contribution] of registry.typesById) {
+    // Restore the diagnostic the pre-C3b single `keyedMapFacet` fold emitted on
+    // a duplicate key: a raw `.set()` here would silently overwrite. Unreachable
+    // today (user block ids are uuids, code ids are slugs, `typeSeedsFacet` is
+    // empty) — this is the C4 tripwire for a half-done `typesFacet.of → seedType`
+    // conversion where a code type and its seed successor both momentarily exist.
+    if (merged.has(id)) {
+      console.warn(
+        `[facetBridge] type id "${id}" is claimed by both a code contribution and ` +
+        'a block-built/seed definition; the registry entry wins (last-wins, matching ' +
+        'the pre-C3b typesFacet fold)',
+      )
+    }
+    merged.set(id, contribution)
+  }
   return merged
 }
 
