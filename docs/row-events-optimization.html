@@ -621,12 +621,17 @@ trigger-recreation ordering):
         <code>WHERE no_history = 1</code> instead of a live/soft/hard three-source
         enumeration. Set from the synced row, so sync-applied writes to a
         <code>no-history</code> block are flagged too (the completeness scope
-        lacked). <strong>Write-time-only — never backfilled</strong>: because a tag
-        or untag is itself a logged write (I9: no unlogged type change), a block's
-        <em>current</em> status is its latest event's flag, so §5.1 reads status
-        from the log without ever rewriting past rows (I7 intact). NULL is
-        impossible on v2 rows; on v1 rows it is absent until slice B's
-        <code>ALTER</code>, read as 0 (v1 predates <code>no-history</code>).</td>
+        lacked). <strong>Write-time-only, never backfilled, and
+        <em>advisory</em></strong>: it accelerates <em>discovery</em> only — the
+        prune decision itself reads the authoritative type (the <code>blocks</code>
+        row, or a hard-deleted block's delete-event snapshot), so no correctness
+        claim rests on which trigger body wrote a given row (§5.1, review finding:
+        a stale slice-A body writes <code>v = 2</code> rows that predate this
+        column, so the format version is <em>not</em> a capability test for it).
+        Being advisory is also why it needs no retroactive backfill, leaving I7 at
+        two exceptions. On v1 rows the column is absent until slice B's
+        <code>ALTER</code> and reads as 0; a 0 never means "not
+        <code>no-history</code>", only "not a discovery hit".</td>
     </tr>
   </tbody>
 </table>
@@ -738,10 +743,10 @@ reaching live/soft/hard-deleted blocks alike), replacing both the earlier
 <code>WHERE scope = 'local-ui'</code> partial index <em>and</em> the
 delete-surviving side table a prior draft needed for deleted candidates. It then
 uses the <strong>full <code>(block_id, id)</code></strong> index per candidate to
-read the latest event's flag (current status, §5.1), count events, and cut the
-oldest prefix <em>by <code>id</code></em> — the latest event may be
-<em>un</em>flagged (an untagged block), so this step needs the all-events index,
-not the partial one. Ordering the cut by <code>id</code> (not
+count events and cut the oldest prefix <em>by <code>id</code></em> (the prune
+<em>decision</em> comes from the authoritative type, not from any event flag —
+§5.1). The cut deletes flagged <em>and</em> unflagged rows of the whole block, so
+this step needs the all-events index, not the partial one. Ordering the cut by <code>id</code> (not
 <code>created_at</code>, which is not reliably monotone in <code>id</code>) is
 what makes it a safe oldest-prefix delete (§5.1). That full
 <code>(block_id, id)</code> index is the same one slice C's reader walks and the
@@ -1307,44 +1312,36 @@ just panels.
         B's type stamping/backfill begins, so that by the time blocks are being
         tagged, no client in the fleet will install a body that can't stamp the
         flag.</li>
-      <li><em>Current status is read from the log, not the block — so the flag
-        needs no retroactive backfill.</em> A block's current
-        <code>no-history</code> status <em>is</em> its latest event's flag: any tag
-        or untag is a write to <code>properties.types</code>, hence itself a logged
-        event carrying the new status (I9 guarantees no unlogged type change —
-        suspended writes are metadata-only). So per candidate the sweeper checks two
-        indexed lookups on <code>(block_id, id)</code>: is the latest event
-        (<code>MAX(id)</code>) flagged, and are there &gt; K events? Latest flagged
-        ⇒ currently <code>no-history</code> ⇒ prune its <em>whole</em> history to
+      <li><em>The prune decision reads the <strong>authoritative type</strong>, never
+        an event flag.</em> The flag's whole job is <em>discovery</em>; once a
+        candidate is in hand, whether to prune it is answered from the type itself:
+        the <code>blocks</code> row's <code>properties_json.types</code> for a live
+        or soft-deleted block (it is right there), and the delete event's
+        <code>before_json</code> snapshot for a hard-deleted one (delete events are
+        <code>full=1</code>, so they carry <code>properties</code>; and the cut
+        always keeps the newest K, so a hard-deleted block's delete event is never
+        pruned away). Currently typed ⇒ prune its <em>whole</em> history to
         newest-K — all events, flagged or not (e.g. a <code>create</code> written
-        before an <code>addTypeInTx</code> tag). Latest unflagged ⇒ the user
-        untagged it ⇒ skip; already-pruned events stay gone (retention is one-way),
-        nothing further is cut. This keeps the flag <strong>write-time-only</strong>:
-        no tag-time UPDATE of past rows, so I7 keeps its two exceptions and event
-        <em>payloads</em> stay immutable. A hard-deleted block's status is frozen at
-        its delete event's flag (the type as of deletion) — exactly right.</li>
-      <li><em>…with one guard: an event that <strong>could not</strong> have
-        stamped the flag doesn't get to answer the question</em> (review finding).
-        A stale tab is the hazard: boot-time <code>withTriggerRecreate</code>
-        reinstalls every trigger body from <em>whichever client booted last</em>, so
-        an older tab rebooting after slice B reinstalls a pre-slice-B body whose
-        <code>INSERT INTO row_events</code> column list has no
-        <code>no_history</code> (<code>clientSchema.ts:450-463</code> is that
-        shape). Writes to a tagged panel then default the latest event's flag to 0,
-        and a naive latest-event rule would read the block as untagged and silently
-        stop bounding it. Two defences, both worth having: <strong>(1) version-guard
-        the recreation</strong> — the bootstrap records a trigger-body version and
-        an older client does <em>not</em> downgrade newer bodies, which protects
-        every v2 stamp (<code>v</code>, <code>full</code>,
-        <code>workspace_id</code>, <code>scope</code>), not just this flag;
-        <strong>(2) make the reader defensive anyway</strong> — status comes from
-        the latest event <em>that could have carried it</em>, i.e. the latest
-        <code>v = 2</code> event. If the latest event is v1-shaped
-        (<code>v IS NULL</code> — a downgrade-window write), the sweeper falls back
-        to the authoritative type itself: the live <code>blocks</code> row for a
-        live or soft-deleted block, or the delete event's snapshot for a
-        hard-deleted one. The fallback only engages during a downgrade window, and
-        it fails <em>safe</em> (it consults the source of truth, never guesses).</li>
+        before an <code>addTypeInTx</code> tag). Not currently typed ⇒ skip;
+        already-pruned events stay gone (retention is one-way), nothing further is
+        cut. The flag is therefore <strong>write-time-only and advisory</strong>: no
+        retroactive backfill, so I7 keeps its two exceptions and event
+        <em>payloads</em> stay immutable.
+        <strong>This is deliberately <em>not</em> "status = the latest event's
+        flag"</strong>, which two review rounds killed: that rule made correctness
+        depend on which trigger body happened to write the newest row. A stale tab
+        is the hazard — boot-time <code>withTriggerRecreate</code> reinstalls every
+        body from <em>whichever client booted last</em>, so an older tab rebooting
+        after slice B can reinstall a body with no <code>no_history</code> in its
+        <code>INSERT</code> list (<code>clientSchema.ts:450-463</code>), defaulting
+        the flag to 0 on a tagged panel. Worse, a <em>slice-A</em> body writes
+        <code>v = 2</code> rows that still predate the column, so even "the latest
+        <code>v = 2</code> event" is not a capability test (review finding) — the
+        format version and the column's existence are independent. Reading the type
+        instead sidesteps the entire question: no capability marker, no trigger-body
+        version in the correctness path, and immune to any future column-ordering
+        surprise. The version guard (slice A/B) is still worth having — it protects
+        every v2 stamp — but retention no longer <em>depends</em> on it.</li>
     </ul>
     Deleted blocks are pruned deliberately: a panel deleted <em>before</em> a sweep
     capped it would otherwise keep its whole pre-delete history (up to the full
@@ -1371,7 +1368,7 @@ just panels.
     both mechanisms are unnecessary. This also retires the sweeper's one sanctioned
     <code>row_events</code> <em>insert</em> — it now only <em>deletes</em> (I7).
     Discovery uses the partial <code>(no_history, block_id, id)</code> index; the
-    per-candidate latest-flag check, count, and cut use the full
+    per-candidate count and cut use the full
     <code>(block_id, id)</code> index (the cut deletes flagged <em>and</em>
     unflagged rows of the whole block, and the latest event may be unflagged, so
     the partial index alone won't serve them — §3).
@@ -2403,7 +2400,7 @@ into is smaller).
         <code>(no_history, block_id, id) WHERE no_history = 1</code> for discovery
         <strong>+ the full <code>(block_id, id)</code> index</strong>, created
         idempotently here too (review finding): the sweeper needs it for each
-        candidate's latest-flag lookup, count, and prefix cut, and B may ship before
+        candidate's event count and prefix cut, and B may ship before
         C — without it those run against <code>(block_id, created_at DESC)</code>
         and re-scan/sort hot panel histories every deep idle. Plus the §5.1
         retention sweeper itself (whole-block newest-K, cut by <code>id</code>, no
@@ -2484,13 +2481,16 @@ via the <code>no_history</code> flag its events still carry (live, soft-deleted,
 and hard-deleted all found by one partial-index query), no survivor is older than
 any pruned event, and <code>stateAt</code> stays exact for every survivor
 <em>including compact ones</em> — the property that proves oldest-prefix deletion
-is safe without full-writes; <strong>current status = latest event's flag</strong>
-— tag then untag interleaved with edits leaves the block skipped (latest
-unflagged) with no rewrite of past rows, and create-then-tag prunes the whole
-block including the unflagged create (latest flagged); non-flagged-latest blocks
-are never touched, and a flagged block with a foreign-typed sibling in the same tx
-does not drag it in. Plus a <em>progress</em> oracle, because a never-prunes
-sweeper passes safety trivially: a latest-flagged block with &gt; K events ends
+is safe without full-writes; <strong>the prune decision tracks the authoritative
+type, never an event flag</strong> — tag then untag interleaved with edits leaves
+the block skipped, create-then-tag prunes the whole block including its unflagged
+create, and (the case that killed the latest-event rule) a block written by a
+<em>stale trigger body</em> that could not stamp <code>no_history</code> — including
+a slice-A body emitting <code>v = 2</code> rows without the column — is still
+pruned, because the decision reads the type; untyped blocks are never touched, and
+a typed block with a foreign-typed sibling in the same tx does not drag it in.
+Plus a <em>progress</em> oracle, because a never-prunes
+sweeper passes safety trivially: a currently-typed block with &gt; K events ends
 the sweep with exactly K). Slice C's I5
 equivalence suite is the same
 generator aimed at v1 histories (metadata-only gaps, pre-log openings, no-op
