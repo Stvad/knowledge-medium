@@ -1179,7 +1179,16 @@ just panels.
     would make real preference history a retention candidate — the sweeper must
     never touch prefs. A backfill pass adds it to
     <em>every existing block in the <code>ui-state</code> subtree</em>, walked
-    from the per-workspace root — not an enumerated by-kind list (panels only)
+    from <strong>every workspace member's</strong> root — <em>not</em> just the
+    active user's (review finding): UI-state roots are <em>per user</em>
+    (<code>getUIStateBlock</code> puts <code>ui-state</code> under that user's
+    page, <code>stateBlocks.ts:344-361</code>) while sync downloads every block in
+    the workspace (<code>sync-config.yaml</code>), so a collaborator on a legacy
+    client keeps syncing untyped, unflagged UI-state churn into this DB that a
+    single-root walk never sees. Enumeration is cheap and needs no traversal
+    because the roots are computable: <code>userPageBlockId(workspaceId, userId)</code>
+    for each member, then <code>stateChildBlockId(userPage, 'ui-state')</code>
+    (<code>stateBlocks.ts:54-58</code>) — not an enumerated by-kind list (panels only)
     that a review finding showed misses the <code>layout-sessions</code> children
     and their descendants: <code>getLayoutSessionBlock</code> creates
     <code>ui-state/layout-sessions/{id}</code> through the <em>same</em>
@@ -1202,7 +1211,7 @@ just panels.
     completion marker; and, more importantly, <strong>B1's discovery of live
     UI-state blocks is <em>structural</em>, not tag-dependent</strong> — the
     sweeper already has to confirm dedicated-UI-state membership before pruning
-    anything in B1 (§13), so it discovers those blocks by subtree membership
+    anything in B1 (§13), so it discovers those blocks by computed identity
     directly and an untagged old-client creation is found anyway. The type and flag
     stay load-bearing for the cases structure cannot reach: deleted blocks, and
     (post-O7) user-tagged blocks outside the subtree. <strong>The walk must not filter out
@@ -1211,7 +1220,7 @@ just panels.
     the partial-index sweeper would never discover it and its history would sit
     unbounded forever — contradicting the "deleted flagged blocks are bounded"
     claim below. A soft-deleted block is still a <code>blocks</code> row with its
-    parent pointer, so subtree membership — the <em>same</em> signal used for live
+    parent pointer, so computed identity — the <em>same</em> signal used for live
     ones, not a reintroduction of structural <code>panel</code> keying — reaches it.
     (Implementation note: the strict type path rejects tombstones, so this needs a
     tagging path that tolerates <code>deleted = 1</code>.) Measured legacy stock on
@@ -1351,15 +1360,38 @@ just panels.
         reinstalls the current body <em>and</em> runs the reconciliation. Cost stays
         bounded because the probe is one row read and the scan only follows an
         actual regression; it stops entirely once no pre-guard client remains.
+        <strong>Ordering is load-bearing: the probe must run <em>before</em> the
+        schema bootstrap recreates triggers</strong> (review finding) — that
+        bootstrap expands to <code>DROP TRIGGER IF EXISTS</code> +
+        <code>CREATE TRIGGER</code> unconditionally on every boot
+        (<code>clientSchema.ts:1170-1174</code>), so recreating first would
+        <em>overwrite the very evidence</em> the probe looks for: the client would
+        see a current body, conclude nothing happened, skip the reconciliation, and
+        leave the tombstone undiscoverable. Probe, then recreate.
         <strong>And the scan is <em>structural</em>, not type-keyed</strong>
-        (review finding): it also collects tombstones whose delete snapshot shows
-        <code>ui-state</code>-subtree parentage regardless of type or flag —
-        because delete events are <code>full=1</code> they carry
+        (review finding): it also collects tombstones identified by
+        <em>computed identity</em> regardless of type or flag — delete events are
+        <code>full=1</code>, so the snapshot carries both the block's own id and its
         <code>parentId</code>. That is the only thing that reaches a UI-state block
         an old client created untagged, churned, and hard-deleted before any
         upgraded reconciliation saw it: no <code>blocks</code> row for structural
         discovery, no type or flag for a type-keyed scan, and otherwise invisible
-        forever.</li>
+        forever. Three tiers, in order of certainty (review finding — a single
+        <code>parentId</code> is <em>not</em> sufficient for nested rows, since
+        layout-session descendants nest through
+        <code>ui-state/layout-sessions/{id}</code> and panels may sit under
+        panel-stack rows): <em>(1)</em> the tombstone's own id is in the computed
+        deterministic set — decisive, no ancestry needed; <em>(2)</em> its
+        <code>parentId</code> is in that set — decisive for a panel or
+        layout-session child; <em>(3)</em> its <code>parentId</code> is a runtime id,
+        so walk up through surviving <code>blocks</code> rows <em>and</em> other
+        tombstones' delete snapshots until the chain reaches a computed id.
+        <strong>Named residual:</strong> if an old client hard-deleted an entire
+        runtime-id chain (panel <em>and</em> its panel-stack row) so no link
+        survives in either place, that tombstone cannot be classified and its
+        history stays unbounded. It is bounded in size (already deleted, cannot
+        grow), requires the compound mixed-version case to occur, and disappears
+        once no pre-guard client remains — recorded rather than papered over.</li>
       <li><em>The prune decision reads the <strong>authoritative type</strong>, never
         an event flag.</em> The flag's whole job is <em>discovery</em>; once a
         candidate is in hand, whether to prune it is answered from the type itself:
@@ -1650,7 +1682,21 @@ only the row_events triggers' <em>label projection</em> reads
 (<code>clientSchema.ts:422</code>) retires in favor of a truthful three-way
 <code>source</code> tag — <code>'user'</code> (repo.tx), <code>'sync'</code>
 (marker present), <code>'raw'</code> (neither — the unguarded paths, always
-logged, I3). Existing v1 rows keep their historical 'sync' ambiguity — and
+logged, I3).
+<strong>The NULL/NULL default must stay <code>'sync'</code>, not
+<code>'raw'</code></strong> (review finding): in a mixed-version session a B
+client installs this trigger while an older tab still runs the current
+materializer, which sets only <code>source = NULL</code> and never
+<code>apply_kind</code> (<code>materialize.ts:341-345</code>). Falling through to
+<code>'raw'</code> would permanently mislabel <em>every</em> materialized server
+change until the last writer upgrades — the common case losing to the rare one.
+So <code>'raw'</code> requires <em>positive</em> evidence (a marker written by a
+raw path), and an unmarked NULL-source write keeps the historical
+<code>'sync'</code> reading. Residual, named: during that window a genuine raw
+write from a pre-B client reads as <code>'sync'</code>. That is provenance
+imprecision in the direction of the truth-preserving default, and it gates
+nothing — <code>source</code>/<code>scope</code> are provenance only, never a
+delete or upload gate (§3). Existing v1 rows keep their historical 'sync' ambiguity — and
 stock rows also carry legacy source strings from retired <code>TxSource</code>
 values (the dev instance holds ~11k <code>'local-ephemeral'</code> events,
 §12), so readers must treat <code>source</code> as an open set, not a closed
@@ -2482,7 +2528,7 @@ into is smaller).
       did (§5.1's one-shot tombstone scan per version transition; the recurring
       UI-state subtree pass);</li>
     <li>a <strong>structural fallback</strong> that does not depend on the new
-      mechanism at all (B1 discovering UI-state blocks by subtree membership
+      mechanism at all (B1 discovering UI-state blocks by computed deterministic id
       rather than by tag);</li>
     <li>or an explicit <strong>fleet precondition</strong> — the invariant holds
       once no pre-slice client can still run (<a href="#invariants">I9</a>, whose
@@ -2541,7 +2587,7 @@ into is smaller).
         layout-session / plugin UI-state block <em>after</em> any marker, and that
         row carries no type at all, so a one-shot leaves new hot UI-state invisible
         to retention. Paired with B1's <strong>structural</strong> discovery of live
-        UI-state blocks (subtree membership, §5.1), which is what makes an untagged
+        UI-state blocks (computed identity, §5.1), which is what makes an untagged
         old-client creation safe rather than merely unlikely)
         + <strong>the stale-tombstone reconciliation</strong> — a tombstone scan
         armed by <em>evidence of a downgrade</em>: every boot probes the installed
@@ -2588,12 +2634,33 @@ into is smaller).
         B1 would expose the type to ordinary content blocks through the property
         panel and let users create undoable candidates before the gate resolves —
         silently defeating the split. Therefore <em>in B1 the sweeper prunes only
-        blocks it can independently confirm are dedicated UI-state storage</em>
-        (membership in the <code>ui-state</code> subtree / the known UI-state
-        creation seams), <strong>regardless of who applied the type</strong>. A
+        blocks it can independently confirm are dedicated UI-state storage</em>,
+        <strong>regardless of who applied the type</strong>. A
         user-applied <code>no-history</code> on a content block is then inert
         rather than destructive, and B2 is exactly the step that relaxes the
-        sweeper to honour the type anywhere. Hiding the type from the property
+        sweeper to honour the type anywhere.
+        <strong>That confirmation must be <em>deterministic identity</em>, not
+        subtree membership</strong> (review finding): descendant membership is
+        mutable block structure — the <code>ui-state</code> root is an ordinary
+        child of the user's page and <code>tx.move</code> permits re-parenting any
+        block under any non-deleted parent (<code>txEngine.ts:486-506</code>), so a
+        user or plugin could move an undoable content block under the subtree,
+        apply the visible type, and B1 would "structurally confirm" it and prune
+        undoable history — the gate defeating itself. The sound test is that these
+        blocks have <strong>computable ids</strong>:
+        <code>userPageBlockId = uuidv5(workspaceId:userId)</code> and
+        <code>stateChildBlockId = uuidv5(parentId:namespace)</code>
+        (<code>stateBlocks.ts:54-58</code>), so the whole
+        <code>ui-state</code> → <code>layout-sessions</code> → session /
+        plugin-UI-state chain is derivable offline. The sweeper computes that id
+        set and gates on membership in it. A moved content block cannot acquire one
+        of those ids — they are already occupied by the real state blocks — so the
+        gate is unforgeable rather than merely conventional.
+        (<code>systemMint</code> looks like the other candidate signal but is a
+        tx-time attribution option, not a persisted per-block flag, so it cannot be
+        gated on.) Panels and panel-stack rows carry runtime ids and are covered by
+        their <em>parent</em> being a computed id; where a whole runtime-id chain is
+        hard-deleted, see §5.1's named residual. Hiding the type from the property
         panel until B2 is worth doing too, but it is the cosmetic half — the
         sweeper-side restriction is the enforceable one, because it does not depend
         on a type-registry capability that does not exist today. The reason is asymmetry, not caution:
@@ -2697,7 +2764,7 @@ installed (no event carries the flag) and <em>then deleted</em> (so
 one-shot tombstone reconciliation (§5.1), not by the partial-index scan. Without
 that case the tests would bless a sweeper that permanently misses deleted
 stale-body candidates. Live UI-state blocks are additionally asserted discoverable
-<em>structurally</em> (subtree membership), so an untagged old-client creation is
+<em>structurally</em> (computed identity), so an untagged old-client creation is
 still found.
 Plus a <em>progress</em> oracle, because a never-prunes
 sweeper passes safety trivially: a currently-typed block with &gt; K events ends
