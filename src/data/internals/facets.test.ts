@@ -36,6 +36,7 @@ import {
   mutatorsFacet,
   propertyEditorOverridesFacet,
   queriesFacet,
+  typeSeedsFacet,
   typesFacet,
   valuePresetCoresFacet,
 } from '../facets'
@@ -192,19 +193,22 @@ describe('typesFacet + schema lift', () => {
     }
   })
 
-  it('kernelDataExtension contributes kernel block types', () => {
+  it('kernelDataExtension contributes kernel block types as seeds', () => {
+    // C4a: kernel types are code seeds now — they register into `typeSeedsFacet`
+    // (a list facet the materializer reads), not the static `typesFacet`.
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(typesFacet)
-    expect(registered.size).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    expect(runtime.read(typesFacet).size).toBe(0)
+    const registered = runtime.read(typeSeedsFacet)
+    expect(registered.length).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    const byId = new Map(registered.map(t => [t.id, t]))
     for (const type of KERNEL_TYPE_CONTRIBUTIONS) {
-      expect(registered.get(type.id)).toBe(type)
+      expect(byId.get(type.id)).toBe(type)
     }
   })
 
   it('Extension blocks lift name and description metadata properties', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(typesFacet)
-    const extensionType = registered.get(EXTENSION_TYPE)
+    const extensionType = runtime.read(typeSeedsFacet).find(t => t.id === EXTENSION_TYPE)
 
     expect(extensionType?.properties).toEqual(
       expect.arrayContaining([extensionNameProp, extensionDescriptionProp]),

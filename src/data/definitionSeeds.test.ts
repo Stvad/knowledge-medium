@@ -578,7 +578,13 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     const seedA = seedType({seedKey: 'system:test/type/a', revision: 1, id: 'dup', label: 'A'})
     const seedBContested = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup', label: 'B'})
     repo.setRuntimeContributions(typeSeedsFacet, 'contested', [seedA, seedBContested])
-    await vi.waitFor(() => expect(repo.typeDefinitions?.seedsByKey.size).toBe(2))
+    // Gate on the test seeds' own keys, not a total count: post-C4a the registry
+    // also carries the kernel type seeds (`system:kernel-data/type/*`), so an
+    // absolute `seedsByKey.size` would double-count them.
+    await vi.waitFor(() => {
+      expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/a')).toBe(seedA)
+      expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/b')).toBe(seedBContested)
+    })
     await repo.awaitSeedMaterialization()
     // Neither backed while contested (also the pre-materialization state, so this
     // holds regardless of the auto-scheduled pass's timing).
@@ -617,8 +623,11 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     const second = seedType({seedKey: DUP_KEY, revision: 1, id: 'dup-second', label: 'Second'})
     const backingId = typeDefinitionBlockId(WS, DUP_KEY)
     repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first, second])
+    // The two same-key contributions collapse to one (keep-first); assert that
+    // survivor directly rather than a total `seedsByKey.size`, which post-C4a also
+    // counts the kernel type seeds (`system:kernel-data/type/*`).
     await vi.waitFor(() => {
-      expect(repo.typeDefinitions?.seedsByKey.size).toBe(1)
+      expect(repo.typeDefinitions?.seedsByKey.get(DUP_KEY)).toBe(first)
       expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(true)
     })
 

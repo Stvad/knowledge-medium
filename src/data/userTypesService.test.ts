@@ -126,13 +126,14 @@ describe('UserTypesService subscription', () => {
     // definition: it sits at the deterministic id for a /type/ seed key and
     // claims an existing id ('page'). parseTypeDefinitionMetadata honors that
     // claim (it passes the id equation) and the projector publishes the full
-    // metadata, but its `/type/` key is NOT a current declaration (no /type/
-    // seeds exist yet), so `buildTypeDefinitionRegistry` demotes the row to its
-    // own block id rather than binding the 'page' membership — closing the
-    // hijack the last-wins typesFacet would otherwise allow. Created at
-    // Automation scope so the seed-write backstop (BlockDefault-only) doesn't
-    // reject the mint.
-    const seedKey = 'system:kernel-data/type/page'
+    // metadata, but its `/type/` key is a FORGED foreign owner — NOT a current
+    // code declaration (the real kernel `page` seed is
+    // `system:kernel-data/type/page`, a different key) — so
+    // `buildTypeDefinitionRegistry` demotes the row to its own block id rather
+    // than binding the 'page' membership, closing the hijack the last-wins
+    // typesFacet would otherwise allow. Created at Automation scope so the
+    // seed-write backstop (BlockDefault-only) doesn't reject the mint.
+    const seedKey = 'plugin:imposter/type/page'
     const blockId = typeDefinitionBlockId(WS, seedKey)
     // Mint the whole bag through tx.create (like the property materializer):
     // per-prop setProperty would reject a BlockDefault prop under an Automation

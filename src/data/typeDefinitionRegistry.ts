@@ -107,6 +107,53 @@ const indexSeedsByKey = (
   return {seedsByKey, contestedSeedKeys}
 }
 
+/** Step 1 of the registry build, shared with the pre-pin unbound view: index the
+ * declared seeds by key (keep-first), then synthesize each into its publishable
+ * `typesById` contribution, deduping by membership id (keep-first, fail closed).
+ * Also returns the contested key/id sets and the id→key map the projected-row
+ * binding step needs. Pure over the declarations — no workspace or projected
+ * rows required, which is exactly why the unbound view can reuse it. */
+const synthesizeSeedTypes = (
+  seeds: readonly TypeSeedDeclaration[],
+): {
+  seedsByKey: Map<string, TypeSeedDeclaration>
+  contestedSeedKeys: Set<string>
+  typesById: Map<string, TypeContribution>
+  seedKeyById: Map<string, string>
+  contestedTypeIds: Set<string>
+} => {
+  const {seedsByKey, contestedSeedKeys} = indexSeedsByKey(seeds)
+  const typesById = new Map<string, TypeContribution>()
+  const seedKeyById = new Map<string, string>()
+  const contestedTypeIds = new Set<string>()
+  for (const seed of seedsByKey.values()) {
+    const priorKey = seedKeyById.get(seed.id)
+    if (priorKey !== undefined) {
+      console.warn(
+        `[buildTypeDefinitionRegistry] duplicate type seed id ${seed.id} ` +
+        `(keys ${priorKey} + ${seed.seedKey}); keeping first`,
+      )
+      contestedTypeIds.add(seed.id)
+      continue
+    }
+    seedKeyById.set(seed.id, seed.seedKey)
+    typesById.set(seed.id, seedContribution(seed))
+  }
+  return {seedsByKey, contestedSeedKeys, typesById, seedKeyById, contestedTypeIds}
+}
+
+/** Stage-0 type view used before a workspace is pinned: the declared seeds'
+ * publishable contributions with no block binding (the type twin of
+ * `buildUnboundPropertySchemas`). `getTypeBlockId` stays unavailable pre-pin —
+ * that needs the workspace-scoped registry — but the code-owned seed types must
+ * still surface in `repo.types` for a fresh client before any pin AND for the
+ * window between runtime install and the first `setActiveWorkspaceId` (once a
+ * runtime is installed, `repo._types` is driven by the facet rebuild, so the
+ * static `KERNEL_TYPES` constructor fallback no longer applies). */
+export const buildUnboundTypes = (
+  seeds: readonly TypeSeedDeclaration[],
+): ReadonlyMap<string, TypeContribution> => synthesizeSeedTypes(seeds).typesById
+
 /** Build the workspace's type-definition registry from projected user rows +
  * declared seeds.
  *
@@ -136,29 +183,14 @@ const indexSeedsByKey = (
 export const buildTypeDefinitionRegistry = (
   args: BuildTypeDefinitionRegistryArgs,
 ): TypeDefinitionRegistrySnapshot => {
-  const {seedsByKey, contestedSeedKeys} = indexSeedsByKey(args.seeds)
-  const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
-  const typesById = new Map<string, TypeContribution>()
-  const blockIdByTypeId = new Map<string, string>()
-
   // 1. Declared seeds — authoritative contribution, present even without a
-  //    materialized row. Dedup by membership id (fail closed). blockIdByTypeId
-  //    is deferred to step 2, bound only from an actual valid mirror.
-  const seedKeyById = new Map<string, string>()
-  const contestedTypeIds = new Set<string>()
-  for (const seed of seedsByKey.values()) {
-    const priorKey = seedKeyById.get(seed.id)
-    if (priorKey !== undefined) {
-      console.warn(
-        `[buildTypeDefinitionRegistry] duplicate type seed id ${seed.id} ` +
-        `(keys ${priorKey} + ${seed.seedKey}); keeping first`,
-      )
-      contestedTypeIds.add(seed.id)
-      continue
-    }
-    seedKeyById.set(seed.id, seed.seedKey)
-    typesById.set(seed.id, seedContribution(seed))
-  }
+  //    materialized row. Dedup by key then by membership id (fail closed).
+  //    blockIdByTypeId is deferred to step 2, bound only from an actual valid
+  //    mirror. Shared with `buildUnboundTypes` (the pre-pin view is step 1 alone).
+  const {seedsByKey, contestedSeedKeys, typesById, seedKeyById, contestedTypeIds} =
+    synthesizeSeedTypes(args.seeds)
+  const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
+  const blockIdByTypeId = new Map<string, string>()
 
   // 2. Projected block rows.
   for (const def of args.projectedDefinitions.values()) {

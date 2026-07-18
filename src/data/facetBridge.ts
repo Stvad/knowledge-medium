@@ -37,7 +37,7 @@ import {
   buildUnboundPropertySchemas,
 } from '@/data/propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from '@/data/typeDefinitionRegistry'
-import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
+import {buildTypeDefinitionRegistry, buildUnboundTypes} from '@/data/typeDefinitionRegistry'
 import type {
   Facet,
   FacetRuntime,
@@ -66,18 +66,21 @@ import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjectio
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** Merge the code-owned `typesFacet` contributions with the block-built + seed
- *  contributions from the type-definition registry. Registry entries win a
- *  same-`id` collision and are appended after the code entries — reproducing the
- *  fold order + last-wins precedence of the pre-C3b single `typesFacet` (static
- *  code contributions first; the `userTypesProjector`'s `'user-data'` bucket
- *  appended, so a user row's id shadowed a code id). In C3b `typeSeedsFacet` is
- *  empty and user block ids never collide with code slug ids, so the union is
- *  disjoint; the collision rule matters only for a future seed↔code id overlap
- *  during the Slice C4 `typesFacet.of → seedType` conversion (where the seed is
- *  the authoritative successor). */
+ *  contributions carried in `typesById` — either the workspace-scoped
+ *  type-definition registry OR (before a pin) the unbound seed synthesis
+ *  (`buildUnboundTypes`), which is why the param is just the `typesById`-bearing
+ *  slice rather than the full snapshot. Overlay entries win a same-`id` collision
+ *  and are appended after the code entries — reproducing the fold order +
+ *  last-wins precedence of the pre-C3b single `typesFacet` (static code
+ *  contributions first; the `userTypesProjector`'s `'user-data'` bucket appended,
+ *  so a user row's id shadowed a code id). Post-C4a the kernel type seeds live in
+ *  `typesById`, not `codeTypes`, so the union stays disjoint (no code↔seed id
+ *  overlap); the collision warn is the tripwire for a HALF-done
+ *  `typesFacet.of → seedType` conversion where a code type and its seed successor
+ *  both momentarily exist. */
 export const mergeCodeAndRegistryTypes = (
   codeTypes: ReadonlyMap<string, TypeContribution>,
-  registry: TypeDefinitionRegistrySnapshot | null,
+  registry: Pick<TypeDefinitionRegistrySnapshot, 'typesById'> | null,
 ): ReadonlyMap<string, TypeContribution> => {
   if (!registry || registry.typesById.size === 0) return codeTypes
   const merged = new Map(codeTypes)
@@ -371,20 +374,31 @@ export class FacetBridge {
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
           const codeTypes = rt.read(typesFacet)
+          const seedTypes = rt.read(typeSeedsFacet)
           // The type-definition registry needs a workspace to scope its rows;
-          // before a pin it's null and `repo.types` is code contributions only.
-          // No priming gate (unlike the property registry): an unprimed
-          // projection is simply an empty projected-rows map — the registry then
-          // holds only declared seeds, which are code-owned and must be present
-          // pre-materialization anyway.
+          // before a pin it stays null (identity resolution / `getTypeBlockId` is
+          // correctly unavailable). No priming gate (unlike the property
+          // registry): an unprimed projection is simply an empty projected-rows
+          // map — the registry then holds only declared seeds, which are
+          // code-owned and must be present pre-materialization anyway.
           const typeDefinitions = this.activeWorkspaceId
             ? buildTypeDefinitionRegistry({
               workspaceId: this.activeWorkspaceId,
               projectedDefinitions: rt.read(projectedTypeDefinitionsFacet),
-              seeds: rt.read(typeSeedsFacet),
+              seeds: seedTypes,
             })
             : null
-          const types = mergeCodeAndRegistryTypes(codeTypes, typeDefinitions)
+          // Post-C4a the kernel/plugin type seeds live in `typeSeedsFacet`, not
+          // the static `typesFacet`, so a pre-pin `repo.types` would otherwise be
+          // missing every seeded type. Mirror `buildUnboundPropertySchemas`: fall
+          // back to the unbound seed synthesis so seeded types are readable before
+          // a workspace pins the registry (and in the runtime-install→first-pin
+          // window, where `repo._types` is already facet-driven, not the static
+          // `KERNEL_TYPES` fallback).
+          const types = mergeCodeAndRegistryTypes(
+            codeTypes,
+            typeDefinitions ?? {typesById: buildUnboundTypes(seedTypes)},
+          )
           const legacySchemas = liftTypeSchemas(types)
           const seeds = rt.read(definitionSeedsFacet)
           const propertySeedNameCounts = new Map<string, number>()

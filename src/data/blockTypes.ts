@@ -1,4 +1,4 @@
-import { defineBlockType, INFRASTRUCTURE_TYPE_DISPLAY, type TypeContribution } from '@/data/api'
+import { INFRASTRUCTURE_TYPE_DISPLAY, seedType, type TypeSeedDeclaration } from '@/data/api'
 import {
   aliasesProp,
   blockTypeColorProp,
@@ -42,19 +42,51 @@ export const RECENTS_PAGE_TYPE = 'panel:recents'
  *  surfaces resolve an id to its page/name. Kernel-owned. */
 export const USER_TYPE = 'user'
 
-export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
-  defineBlockType({
+/** Kernel-owned block types, declared as code seeds (`seedType`) so the
+ * schema-unification materializer mints one deterministic backing block per type
+ * per workspace (`src/data/definitionSeeds.ts`) — the type-side twin of
+ * `KERNEL_PROPERTY_SEEDS`. Contributed through `typeSeedsFacet` (not the static
+ * `typesFacet`) by `kernelDataExtension`. `seedKey` (`system:kernel-data/type/<id>`)
+ * is the permanent identity that fixes the backing block id; `revision: 1` is the
+ * initial payload version. The declaration doubles as the `TypeContribution` the
+ * registry synthesizes into `repo.types`, so these stay authoritative before any
+ * row materializes (and via the `KERNEL_TYPES` fallback before a workspace pin). */
+export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeSeedDeclaration[] = [
+  seedType({
+    seedKey: 'system:kernel-data/type/extension',
+    revision: 1,
     id: EXTENSION_TYPE,
     label: 'Extension',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [extensionNameProp, extensionDescriptionProp],
   }),
-  defineBlockType({id: PAGE_TYPE, label: 'Page', ...INFRASTRUCTURE_TYPE_DISPLAY, properties: [aliasesProp]}),
+  seedType({
+    seedKey: 'system:kernel-data/type/page',
+    revision: 1,
+    id: PAGE_TYPE,
+    label: 'Page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
+    properties: [aliasesProp],
+  }),
   // Panels/user pages ARE plumbing for the # dropdown, but their chips
   // are informative when the block itself is on screen — keep those.
-  defineBlockType({id: PANEL_TYPE, label: 'Panel', hideFromCompletion: true}),
-  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack', hideFromCompletion: true}),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel',
+    revision: 1,
+    id: PANEL_TYPE,
+    label: 'Panel',
+    hideFromCompletion: true,
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/panel-stack',
+    revision: 1,
+    id: PANEL_STACK_TYPE,
+    label: 'Panel stack',
+    hideFromCompletion: true,
+  }),
+  seedType({
+    seedKey: 'system:kernel-data/type/property-schema',
+    revision: 1,
     id: PROPERTY_SCHEMA_TYPE,
     label: 'Property schema',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
@@ -62,13 +94,17 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
     // and the panel surfaces them through the type-section path.
     properties: [propertyNameProp, presetIdProp, presetConfigProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:properties',
+    revision: 1,
     id: PROPERTIES_PAGE_TYPE,
     label: 'Properties page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/block-type',
+    revision: 1,
     id: BLOCK_TYPE_TYPE,
     label: 'Type',
     // Offered in the `#` menu (Tana-style): `book #type` turns the block
@@ -90,19 +126,25 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
       blockTypeColorProp,
     ],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:types',
+    revision: 1,
     id: TYPES_PAGE_TYPE,
     label: 'Types page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/panel:recents',
+    revision: 1,
     id: RECENTS_PAGE_TYPE,
     label: 'Recents page',
     ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
-  defineBlockType({
+  seedType({
+    seedKey: 'system:kernel-data/type/user',
+    revision: 1,
     id: USER_TYPE,
     label: 'User',
     // Never offered by the # dropdown, but the chip is informative on
