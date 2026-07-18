@@ -1398,7 +1398,20 @@ just panels.
         reinstalls the current body <em>and</em> runs the reconciliation. Cost stays
         bounded because the probe is one row read and the scan only follows an
         actual regression.
-        <strong>A downgrade is not the only arming condition</strong> (review
+        <strong>Soft-deleted stale-body blocks fall between both paths</strong>
+        (review finding): <code>block_types</code> is <em>not</em> a live+soft
+        index — its update trigger deletes a block's entries and reinserts only
+        when <code>NEW.deleted = 0</code> (<code>clientSchema.ts:881-885</code>) —
+        and a stale body wrote no <code>no_history</code> flags, so the partial
+        index is empty for that block too. The block still <em>exists</em>, so the
+        hard-tombstone scan does not enumerate it either. A user-tagged block
+        soft-deleted during the old-writer window is therefore invisible to the
+        whole union. Closing it costs one more read in the same arming window: the
+        reconciliation also scans <code>blocks WHERE deleted = 1</code> for the
+        authoritative type. That is the tombstone-population scan §5.1 refuses to
+        run every deep idle — affordable here for the same reason as the
+        hard-deleted scan, because it is armed by evidence rather than scheduled.
+        <strong>And a downgrade is not the only arming condition</strong> (review
         finding): a <em>post</em>-guard but pre-B client leaves the current trigger
         body untouched — so the probe sees nothing wrong — while still creating
         UI-state rows without the <code>no-history</code> type, because it predates
@@ -1916,14 +1929,29 @@ block with any <code>v IS NULL</code> event:
         older, so there is nothing to splice across.</li>
     </ul>
     A <code>before_json ≠ runningState</code> divergence (an unlogged gap precedes
-    this event) needs <strong>no wall and no special fullness</strong>: git
-    history confirms the only write path that ever suspended the trigger is the
-    one-time <code>user_updated_at</code> backfill (commit <code>ef4862550</code>;
-    the sole <code>withTriggerSuspended</code> UPDATE across all history is
-    <code>SET user_updated_at = updated_at</code>), so any divergence is
-    metadata-only and content-continuous (I9). The event rewrites compact like any
-    other — the rewriter may emit <code>full=1</code> at such a seam as a courtesy
-    checkpoint, but it is a crossable anchor, never a wall.
+    this event) must be <strong>classified, not assumed</strong>. The
+    <em>expected</em> case is metadata-only and needs no wall: git history confirms
+    the only write path that ever suspended the trigger is the one-time
+    <code>user_updated_at</code> backfill (commit <code>ef4862550</code>; the sole
+    <code>withTriggerSuspended</code> UPDATE across all history is
+    <code>SET user_updated_at = updated_at</code>), which is content-continuous
+    (I9). Such an event rewrites compact like any other — the rewriter may emit
+    <code>full=1</code> at the seam as a courtesy checkpoint, but it is a crossable
+    anchor, never a wall.
+    <strong>A <em>content-level</em> divergence is a different animal and must not
+    be compacted through</strong> (review finding — an earlier draft said "any
+    divergence is metadata-only", which contradicts the very detection I9 relies on
+    §8.1 to perform): it is positive evidence that some write bypassed the trigger,
+    most plausibly a pre-A mixed-version trigger-recreation window (I9's stated
+    precondition). Compacting it away would let a later <code>stateAt</code> walk
+    cross the seam and splice post-gap values into pre-gap history — silently, and
+    exactly the corruption walls were retired on the premise that it cannot happen.
+    So the rewriter compares the divergence field-wise: metadata-only ⇒ proceed;
+    any content or structure field ⇒ <strong>stop and report</strong>, and mark
+    that seam non-crossable rather than compacting it. The expected count is zero,
+    which is what makes "stop and report" an affordable default rather than a
+    routine branch — if it fires, the fleet precondition was violated and the
+    operator should know before the migration rewrites anything further.
     Otherwise rewrite compact: <code>before_json</code> = changed fields' old
     values, <code>after_json</code> = changed fields' new values (equal key
     sets — the invertible-patch shape of §3), <code>v=2, full=0</code>, and
@@ -2693,12 +2721,24 @@ into is smaller).
         capability, and a body lacking it means a pre-guard client ran since last
         boot, so the client reinstalls and reconciles (review finding — a one-shot
         keyed to a version bump misses a downgrade that happens <em>after</em> that
-        boot). The scan is <strong>structural as well as type-keyed</strong>: it
-        collects tombstones whose delete snapshot shows <code>ui-state</code>
-        parentage regardless of type/flag, which is the only path that reaches a
-        UI-state block an old client created untagged and hard-deleted. Without it
-        those candidates are permanently undiscoverable — so it is a shipped
-        deliverable here, not just narrative and tests.
+        boot). <strong>A downgrade is not the only arming condition</strong>
+        (review finding — this checklist previously listed only the probe): a
+        <em>guarded but pre-B</em> client keeps the current trigger body, so the
+        probe sees nothing wrong, while still creating untyped UI-state rows
+        because it predates the stamping. If it creates, churns and hard-deletes
+        one before the recurring live pass sees it, there is no flag, no type and
+        no downgrade evidence. So the scan also stays armed through the whole
+        <em>old-creator</em> window; both conditions retire together once no pre-B
+        client remains. The scan is <strong>structural as well as
+        type-keyed</strong>: it collects tombstones by computed identity/ancestry
+        regardless of type or flag — the only path that reaches a UI-state block an
+        old client created untagged and hard-deleted — and in the same window it
+        scans <code>blocks WHERE deleted = 1</code> for the authoritative type,
+        which is the only path to a <em>soft</em>-deleted stale-body block
+        (<code>block_types</code> drops it, and the tombstone scan does not
+        enumerate it because the row still exists). Without these those candidates
+        are permanently undiscoverable — so they are shipped
+        deliverables here, not just narrative and tests.
         Plus the
         <code>row_events.no_history</code> column the trigger denormalizes from
         that type, a partial index
@@ -2785,10 +2825,24 @@ into is smaller).
               durable "system-minted state block" flag written at creation and not
               user-settable. Note this is now the <em>only</em> form (i) can take:
               deterministic panel ids alone would not do it, since computed ids are
-              squattable (above). A code change in the state-block creation path,
-              and the only option that makes B1 <em>sound</em> on its own. It also
-              pays a second dividend — a column read replaces the per-write
-              <code>properties_json</code> extraction §5.1's flag needs (I6).
+              squattable (above). It also pays a second dividend — a column read
+              replaces the per-write <code>properties_json</code> extraction §5.1's
+              flag needs (I6).
+              <strong>But it must be a <em>synced</em> signal, not a local
+              flag</strong> (review finding), which is what actually sets this
+              option's price: a panel created on device A arrives on device B
+              through the <code>blocks</code> sync projection, which carries only
+              the existing columns (<code>sync-config.yaml:64-76</code>). A
+              local-only creation flag would therefore be absent on every receiving
+              device — and since type, parentage and computed id have all just been
+              ruled out, B would have no sound fallback and would either skip
+              remote-authored UI-state churn (most of a shared panel's traffic) or
+              silently drop back to an unsound gate. So (i) means a new
+              <strong>synced column on <code>blocks</code></strong>: a schema
+              change, a <code>sync-config.yaml</code> change, and a PowerSync
+              deploy — not merely a code change in the creation path. That is a
+              materially bigger step than this option looked at first, and it is
+              the honest comparison point for (ii) and (iii).
               <strong>But a creation-time flag does not exist on the stock</strong>
               (review finding), including the 14.7k-event panel that motivates the
               whole project, and the only signals available to backfill it are the
