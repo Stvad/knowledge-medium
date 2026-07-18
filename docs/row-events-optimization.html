@@ -1707,10 +1707,21 @@ block with any <code>v IS NULL</code> event:
 </p>
 
 <ol>
-  <li>Stream its v1 events ascending. Maintain <code>runningState</code> (the
-    reconstructed after of the previous kept event) and <code>pos</code> (compact
-    count since the last full event — a rewriter-local counter; nothing in the
-    output encodes it).</li>
+  <li>Stream <strong>all</strong> its events ascending — <em>not only the v1
+    ones</em> (review finding). Rewrite only the v1 rows, but advance
+    <code>runningState</code> through <strong>every</strong> event, v2 included,
+    because v1 and v2 can interleave within one block (§8.2: a stale tab that
+    reinstalls v1 trigger bodies after slice A resumes writing v1-shaped rows
+    alongside earlier v2 ones). A v1-only stream would compare one v1 event's
+    <code>before_json</code> against a <code>runningState</code> that never saw the
+    normal, fully-logged v2 edit in between, so that edit would read as a
+    content-level divergence — i.e. a <em>false</em> I9 violation, which under the
+    detection rule below could wrongly wall or block the migration. Maintain
+    <code>runningState</code> (the reconstructed after of the previous event, kept
+    or not) and <code>pos</code> (compact count since the last full event — a
+    rewriter-local counter; nothing in the output encodes it; already-v2 rows
+    advance it according to their own <code>full</code> value, so cadence stays
+    consistent across the interleave).</li>
   <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
     Reset <code>pos</code>. (A create opens a chain — nothing logged is older.)</li>
   <li><code>delete</code>: stamp <code>v=2, full=1</code>, payload unchanged
@@ -2470,10 +2481,25 @@ into is smaller).
         <code>no-history</code> type (a registered <code>TypeContribution</code>,
         stamped on <em>every</em> UI-state block at creation — panels, panel-stack
         rows, the root <code>ui-state</code> child, and plugin UI-state blocks,
-        §5.1 — + a one-time backfill onto the existing <code>ui-state</code>
-        subtree, <em>including its soft-deleted members</em>) + the
+        §5.1 — + a <strong>recurring</strong> subtree reconciliation onto the
+        existing <code>ui-state</code> subtree, <em>including its soft-deleted
+        members</em> — <em>not</em> a one-shot with a completion marker (review
+        finding): an old tab or device can create or sync a panel /
+        layout-session / plugin UI-state block <em>after</em> any marker, and that
+        row carries no type at all, so a one-shot leaves new hot UI-state invisible
+        to retention. Paired with B1's <strong>structural</strong> discovery of live
+        UI-state blocks (subtree membership, §5.1), which is what makes an untagged
+        old-client creation safe rather than merely unlikely)
+        + <strong>the one-shot stale-tombstone reconciliation</strong> — a
+        tombstone scan for the <code>no-history</code> type on the first boot of a
+        client whose trigger-body version exceeds the recorded one (review
+        finding): a pre-guard client can reinstall an old body and then delete a
+        tagged block, leaving neither a flag nor a <code>block_types</code> row, and
+        those candidates are otherwise permanently undiscoverable — so it is a
+        shipped deliverable here, not just narrative and tests.
+        Plus the
         <code>row_events.no_history</code> column the trigger denormalizes from
-        that type + a partial index
+        that type, a partial index
         <code>(no_history, block_id, id) WHERE no_history = 1</code> for discovery
         <strong>+ the full <code>(block_id, id)</code> index</strong>, created
         idempotently here too (review finding): the sweeper needs it for each
