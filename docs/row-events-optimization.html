@@ -1054,12 +1054,16 @@ just panels.
     <code>panel</code>, and not a per-event flag or per-block column: a distinct,
     purpose-built type whose <em>name is its contract</em> — a block tagged
     <code>no-history</code> is declaring "don't keep my history", and the sweeper
-    prunes exactly those. Every UI-state block gets it at creation — not just
-    panels but the root <code>ui-state</code> child and plugin UI-state blocks
-    (§above): the one UI-state-block factory (<code>getUIStateBlock</code> /
-    <code>ensureUiChild</code>) and <code>panelLayoutProjection</code> stamp
-    <code>no-history</code> into <code>types</code>, so the whole class is covered
-    from one seam. A one-time backfill adds it to existing UI-state blocks
+    prunes exactly those. Every UI-state block gets it at creation, across
+    <em>all</em> creation paths (review finding — there is no single factory): the
+    root <code>ui-state</code> child via <code>getUIStateBlock</code> /
+    <code>ensureUiChild</code>, the <em>plugin</em> UI-state children via
+    <code>getPluginUIStateBlock</code> / <code>ensureStateChild</code>
+    (<code>stateBlocks.ts:376-397</code> — a distinct seam, easy to miss), and
+    panels via <code>panelLayoutProjection</code>. Each stamps
+    <code>no-history</code> into <code>types</code>; the clean implementation
+    threads it through the shared child-creation primitive so a future UI-state
+    block cannot be added without it. A one-time backfill adds it to existing UI-state blocks
     (panels ~857 + the per-workspace root/plugin ones). The backfill is
     <strong>per-workspace, run when a workspace is active</strong> — it must not
     write blocks in workspaces the user hasn't opened (the sync-queue-flood rule
@@ -1160,8 +1164,12 @@ just panels.
     deleted or simply went idle would never be written again, so it would be
     deferred forever and never bounded — the exact unbounded case retention
     exists to prevent. The reconciliation anchor depends on no future trigger
-    firing. (Hard-deleted blocks have no live row and no terminal gap — their delete
-    event's full <code>before</code> is already the terminal base.) Because the key
+    firing. (Hard-deleted blocks have no live row, so no <em>terminal</em> gap
+    applies — but this does not exempt them from gap handling: a hard delete whose
+    own <code>before</code> followed an unlogged gap is a <code>full=2</code> wall,
+    stamped by §8.1 exactly like a discontinuity anchor, so a reader can't walk
+    back across it either. Terminal-gap reconciliation is a live-block concern;
+    delete-after-gap walls are the delete-side of the same rule.) Because the key
     is the block's <code>no-history</code> <em>type</em> — read from the synced
     row on every device — a panel that synced in from another device is
     recognised identically to a locally-created one. That is exactly the blind
@@ -1706,12 +1714,18 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         the per-block log answers but cannot enumerate cheaply. The format
         keeps it answerable: every parentId transition is logged
         column-granularly. For a compact event (<code>full=0</code>) the key set
-        tells you cheaply whether <code>parentId</code> moved; for a
-        <code>full=1</code> event (sampled or migration anchor, create) both
-        sides are complete snapshots, so the builder must <em>diff</em>
-        <code>before_json.parentId</code> against <code>after_json.parentId</code>
-        rather than read key presence — otherwise every anchor reads as a move
-        and real moves that landed on an anchor are missed. Enumeration needs a
+        tells you cheaply whether <code>parentId</code> moved; for a full event
+        (<code>full=1/2</code>) the handling is <em>kind-dependent</em>, and
+        treating them all as two-sided diffs is a bug (review finding): a
+        <strong>create</strong> has <code>before_json = NULL</code> (§3) — it
+        <em>opens</em> the parent edge at <code>after_json.parentId</code>, no
+        diff; a <strong>hard delete</strong> has <code>after_json = NULL</code> —
+        it <em>closes</em> the edge, no diff; only a genuine <strong>anchor</strong>
+        (sampled or migration, both sides full) is diffed
+        <code>before_json.parentId</code> vs <code>after_json.parentId</code>
+        (reading key presence would make every anchor read as a move, and real
+        moves that landed on an anchor would be missed). The NULL side is the
+        signal for which bookend applies. Enumeration needs a
         derived <em>parent-edge index</em> ((parent_id, block_id, event-id
         interval) — fully rebuildable from the log, built lazily when the history
         UI ships; explicitly out of scope for these slices). The interval must
@@ -1797,16 +1811,23 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         takes one undo — and panel churn landing between two grouped edits is the
         everyday case, not a corner. The boundary is an <strong>undoable,
         writing tx on the same scope's stack carrying a different
-        <code>group_id</code></strong>. <strong>Contiguity is defined over
-        row-event <code>id</code> order</strong>, the log's own total order (the
-        stack is built in commit order = <code>id</code> order): from the selected
-        tx, walk the block's events outward by <code>id</code> in both directions,
-        admitting a neighbouring tx only while its <code>group_id</code> equals the
-        selection's and no <em>boundary</em> tx (as defined above) sits between —
-        the run is the maximal such <code>id</code>-interval. This is well-defined
-        without reading the undo stack: <code>group_id</code>, <code>tx_id</code>,
-        <code>scope</code>, and <code>source</code> on the events carry everything
-        the boundary test needs.
+        <code>group_id</code></strong>. <strong>Contiguity is over the whole
+        scope's tx order, not one block's events</strong> (review finding): the
+        split happens on the <em>stack</em>, which is per scope and spans every
+        block, so a group of edits to block A separated by a same-scope undoable
+        tx that wrote only block B <em>is</em> split — even though B's tx never
+        touched A. Defined precisely: over row-event <code>id</code> order (the
+        log's total order, = commit order = stack order), take the sequence of
+        <em>undoable, writing txs in the selection's scope</em> (distinct
+        <code>tx_id</code>s, each classified from its events' <code>scope</code> /
+        <code>source</code>); from the selected tx, extend across adjacent such txs
+        while their <code>group_id</code> equals the selection's, stopping at the
+        first whose <code>group_id</code> differs — the run is that maximal tx
+        interval, and the folded target is every event of those txs on every block
+        they touched. Per-block walking would miss the block-B splitter; the
+        boundary test lives at the scope-tx level. Well-defined from the events
+        alone (<code>group_id</code>, <code>tx_id</code>, <code>scope</code>,
+        <code>source</code>), no undo-stack read.
         Two per-kind carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
         (soft-delete/tombstone), with redo re-applying <strong>the folded final
