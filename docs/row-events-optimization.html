@@ -2093,9 +2093,22 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         block, so a group of edits to block A separated by a same-scope undoable
         tx that wrote only block B <em>is</em> split — even though B's tx never
         touched A. The <em>intent</em>: over commit order, take the sequence of
-        <em>undoable, writing txs in the selection's scope</em>; from the selected
-        tx extend across adjacent such txs while their <code>group_id</code> equals
-        the selection's, stopping at the first that differs;
+        <em>undoable, writing, non-replay txs in the selection's scope</em>; from
+        the selected tx extend across adjacent such txs while their
+        <code>group_id</code> equals the selection's, stopping at the first that
+        differs; <strong>replay txs must be excluded and cannot be today</strong>
+        (review finding): undo/redo application runs through the same commit
+        pipeline and therefore <em>does</em> insert a <code>command_events</code>
+        row, but is deliberately never pushed onto the live undo stack
+        (<code>repo.ts:1423</code> — <code>runTx</code> "records on undo stack",
+        <code>_replay</code> "does not"). A reader building the run from every
+        undoable writing tx in the ledger would count those replay writes as stack
+        entries or boundaries and diverge from cmd-Z behaviour. The
+        <code>isReplay</code> flag exists at commit time
+        (<code>commitPipeline.ts:177</code>, threaded from
+        <code>repo.ts:1440</code>) but is <em>not persisted</em>, so it must be
+        stamped onto <code>command_events</code> alongside the other per-tx state
+        below;
         <code>group_id</code> and per-field diffs join from <code>row_events</code>
         on <code>tx_id</code>. <strong>But this revision surfaces a correctness gap
         rather than hiding it</strong> (review findings): a <code>no-history</code>
@@ -2120,10 +2133,19 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         tx and splits a group live-undo keeps, while filtering to
         txs-that-kept-events drops the fully-pruned <em>writing</em> tx we needed as
         a boundary. The ledger alone can't tell the two apart.
-        The honest fix is <strong>durable per-tx state that survives the prune</strong>:
-        a <em>real</em> DB-wide monotonic tx sequence plus a wrote-a-row
-        flag/count on <code>command_events</code>, so order and boundaries
-        reconstruct with no surviving <code>row_events</code>. Note the existing
+        <em>(3) No group membership.</em> Even knowing the tx existed and wrote,
+        its <code>group_id</code> lived only on the deleted <code>row_events</code>
+        (review finding). For A(g), B(g, writing only a pruned
+        <code>no-history</code> block), C(g) — all one group — a reader that treats
+        the unreadable B as a boundary <em>splits an action live undo merges</em>.
+        So "unprovable ⇒ boundary" is not a safe default either: it over-splits as
+        readily as the alternative under-splits.
+        The honest fix is <strong>durable per-tx state that survives the prune</strong>
+        — on <code>command_events</code>, all three values already computed at
+        commit time: a <em>real</em> DB-wide monotonic tx sequence, the
+        <code>group_id</code>, and a wrote-a-row flag/count. With those, order,
+        membership, and write-ness all reconstruct with no surviving
+        <code>row_events</code> at all. Note the existing
         <code>tx_context.tx_seq</code> is <em>not</em> that sequence (review
         finding): it is seeded from <code>Date.now()</code> per <code>Repo</code>
         and incremented in-memory (<code>repo.ts:751-756</code>), so a clock
@@ -2347,9 +2369,16 @@ into is smaller).
         changed-field patches on both sides, projected-field diffs,
         identical-update skip, one-coin p=1/64 anchor sampling — no probe, no
         index prerequisite, §4.1); <code>stateAt</code> reader utility (§4.3);
-        tests pinning I1/I2/I4/I6 — the I1/I2 properties as a fast-check
-        stateful fuzz suite (note below). All new events compact from
-        here.</td>
+        <strong>transactional trigger recreation</strong> — wrap each
+        <code>withTriggerRecreate</code> DROP+CREATE pair and the
+        <code>withTriggerSuspended</code> bracket in a write transaction
+        (<code>clientSchema.ts:1170-1175</code>) so the swap is atomic to every
+        connection (review finding: without it a multi-tab boot can write
+        <code>blocks</code> while the row-event trigger is absent, creating exactly
+        the content gap the no-wall reconstruction design assumes cannot happen —
+        <a href="#invariants">I9</a>); tests pinning I1/I2/I4/I6/I9 — the I1/I2
+        properties as a fast-check stateful fuzz suite (note below). All new events
+        compact from here.</td>
       <td>—</td>
     </tr>
     <tr>
@@ -2358,6 +2387,12 @@ into is smaller).
         three-way <code>source</code> tag (§6.2 — labeling only; the policy
         table and drop gates left with the §6 revision, the
         <code>history_mode</code> gate with the §5 revision); the
+        <strong>the trigger-version guard, shipped first</strong> — the bootstrap
+        records a trigger-body version and an older client must not downgrade newer
+        bodies; this has to land in a release <em>before</em> any type
+        stamping/backfill begins (review finding), or a stale-tab boot reinstalls a
+        body that can't stamp <code>no_history</code> and newly tagged blocks become
+        undiscoverable or read as untagged (§5.1). Then the
         <code>no-history</code> type (a registered <code>TypeContribution</code>,
         stamped on <em>every</em> UI-state block at creation — panels, panel-stack
         rows, the root <code>ui-state</code> child, and plugin UI-state blocks,
@@ -2911,14 +2946,24 @@ generator, which is how both were found.
     and a fully-pruned writing tx is indistinguishable from a zero-write one. Three
     candidate resolutions, none yet chosen:
     <ul>
-      <li><em>(a) Provision durable per-tx state now</em> — a
-        <strong>SQLite-allocated</strong> DB-wide monotonic tx sequence (a
-        dedicated <code>AUTOINCREMENT</code>, like <code>row_events.id</code>) plus
-        a wrote-a-row flag/count on <code>command_events</code>. <strong>Not</strong>
-        the existing <code>tx_context.tx_seq</code>, which is
-        <code>Date.now()</code>-seeded per session (<code>repo.ts:751-756</code>)
-        and so not a durable total order (review finding). Closes it exactly, but
-        adds persisted state for a reader that does not exist yet (I6).</li>
+      <li><em>(a) Provision durable per-tx state now</em> — on
+        <code>command_events</code>, four values all already computed at commit
+        time: a <strong>SQLite-allocated</strong> DB-wide monotonic tx sequence (a
+        dedicated <code>AUTOINCREMENT</code>, like <code>row_events.id</code>), the
+        <strong><code>group_id</code></strong>, a <strong>wrote-a-row
+        flag/count</strong>, and <strong><code>is_replay</code></strong>. All four
+        are load-bearing, each for a distinct failure the review surfaced:
+        without the sequence there is no durable order (the existing
+        <code>tx_context.tx_seq</code> is <code>Date.now()</code>-seeded per session,
+        <code>repo.ts:751-756</code>, so persisting it gives no total order);
+        without <code>group_id</code> a fully-pruned same-group tx can't be shown to
+        belong to the group and <em>over-splits</em> an action live undo merges;
+        without the write flag a zero-write tx is indistinguishable from a pruned
+        writing one (and <code>mutator_calls</code> can't substitute — §3); without
+        <code>is_replay</code> undo/redo replays are counted as stack entries
+        (<code>repo.ts:1423</code>). Closes O7 exactly, and the columns sit on the
+        low-volume per-tx table — but it is persisted state provisioned for a reader
+        that does not exist yet (I6).</li>
       <li><em>(b) Restrict <strong>who may be tagged</strong> — dedicated
         non-undoable UI-state storage blocks only</em>. Nothing about the mechanism
         changes: the sweeper still keys on the block's <code>no-history</code> type
