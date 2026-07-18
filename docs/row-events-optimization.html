@@ -1225,10 +1225,16 @@ just panels.
     <code>ui-state/layout-sessions/{id}</code> through the <em>same</em>
     <code>ensureUiChild</code> primitive (<code>stateBlocks.ts:368-374</code>) and
     hot-activation writes land selection/history events on those blocks
-    (<code>panelLayoutProjection.ts:605-620</code>). Walking the subtree and
-    tagging every descendant is both simpler and complete; because creation-time
-    stamping threads through that shared <code>ensureUiChild</code> primitive,
-    <em>new</em> descendants (of whatever future kind) are covered automatically —
+    (<code>panelLayoutProjection.ts:605-620</code>). Walking the subtree is how
+    candidates are <em>found</em>; what gets <em>tagged</em> is only those the
+    authorization rule above admits — provenance or identity-confirmed — with
+    ambiguous descendants reported instead (review finding: "tag every descendant"
+    is ancestry-based authorization by another name, and because the type
+    <em>persists</em>, a content block moved under <code>ui-state</code> and tagged
+    here becomes destructive the moment B2/O7 honours user tags, long after the
+    move is forgotten). For the descendants that do qualify, creation-time
+    stamping threads through the shared <code>ensureUiChild</code> primitive, so
+    <em>new</em> ones (of whatever future kind) are covered automatically —
     <em>provided the creating client is upgraded</em>.
     <strong>It is therefore a recurring reconciliation, not a one-time
     backfill</strong> (review finding): an older tab or device can still create (or
@@ -1953,23 +1959,25 @@ block with any <code>v IS NULL</code> event:
     no create, so slice A logs its first-ever edit as a <em>compact</em> patch
     (§4.1/I6: the v2 trigger has no predecessor probe), and a stale tab can then
     append the first <code>v IS NULL</code> row after it. The stream therefore
-    starts with a patch and no base to apply it to. Rule: <strong>seed
-    <code>runningState</code> by reconstructing that point via §4.3 from the newer
-    side</strong> (which always terminates), then proceed normally.
-    <strong>This seeding is required, not the optional refinement an earlier draft
-    called it</strong> (review finding): "leave <code>runningState</code> unset and
-    skip divergence classification until the first full row" hides exactly the gap
-    the classification exists to catch. The later v1 row's full
-    <code>before_json</code> becomes the newer-side base for reconstructing the
-    compact prefix, so an unlogged <em>content</em> write between the prefix and
-    that row would be spliced silently into the prefix's history without ever
-    tripping the field-wise I9 check — a gap laundered by the very row that should
-    have exposed it. Seeding from the newer side gives the seam a real base to be
-    compared against, so it is classified like any other. It also avoids the extra
-    <code>full=1</code> chain-start row. If the seed cannot be reconstructed at all,
-    the seam cannot be classified, so the block takes the same conservative path
-     as a content divergence below: migrate it with every event full, none
-     compact.</li>
+    starts with a patch and no base to apply it to. Rule: seed
+    <code>runningState</code> from an <strong>older-side</strong> full state if one
+    exists (forward-walk from it, which cannot cross a newer gap) and proceed
+    normally. <strong>Where no older-side base exists, the seam is
+    <em>unclassifiable</em> and the block takes the conservative all-full path
+    below</strong> — it must <em>not</em> be seeded from the newer side.
+    Two review findings landed here in sequence and the second corrects the first.
+    Leaving <code>runningState</code> unset and skipping classification hides the
+    gap, which is why an earlier draft made newer-side seeding mandatory. But
+    newer-side seeding is <em>worse</em>, not better: reconstructing that point
+    walks backward from the live row <em>through the very gap being tested for</em>,
+    so the seed arrives already carrying post-gap values in the unchanged fields.
+    The later <code>before_json ≠ runningState</code> comparison then comes out
+    <em>equal</em> and reports nothing — the seam is laundered by the check meant to
+    expose it. An older-side base is safe because the gap lies newer than it; a
+    newer-side one is not, for exactly the same reason. When neither exists there is
+    no honest way to classify the seam, so the block is migrated with every event
+    full, none compact — the same resolution as a detected content divergence, and
+    for the same reason: a full event never walks.</li>
   <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
     Reset <code>pos</code>. (A create opens a chain — nothing logged is older.)</li>
   <li><code>delete</code>: stamp <code>v=2, full=1</code>, payload unchanged
@@ -2835,8 +2843,21 @@ into is smaller).
         <code>blocks</code> while the row-event trigger is absent, creating exactly
         the content gap the no-wall reconstruction design assumes cannot happen —
         <a href="#invariants">I9</a>); tests pinning I1/I2/I4/I6/I9 — the I1/I2
-        properties as a fast-check stateful fuzz suite (note below). All new events
-        compact from here.</td>
+        properties as a fast-check stateful fuzz suite (note below).
+        <strong>Compaction itself is gated on the I9 fleet precondition</strong>
+        (review finding): until no pre-A client can still run the standalone
+        trigger DROP/CREATE, slice A writes events <em>full</em>
+        (<code>v = 2, full = 1</code>) rather than compact. The reason is that a
+        compact event <em>cannot expose a gap</em> — it carries only changed
+        fields, so the unchanged content that would reveal a divergence is simply
+        absent, and a post-gap compact row leaves <code>stateAt</code> free to walk
+        across the seam with post-gap values. Writing full during the window makes
+        every event self-contained, so a gap opened by a pre-A tab is inert rather
+        than undetectable (the same "a full event never walks" property §8.1 leans
+        on). The client flips to compact once the same body/version probe that arms
+        the §5.1 reconciliation reports no pre-A recreators. Cost is bytes for the
+        rollout window only; correctness is not conditional on the fleet having
+        already converged.</td>
       <td>—</td>
     </tr>
     <tr>
