@@ -1062,8 +1062,16 @@ just panels.
     (<code>stateBlocks.ts:376-397</code> — a distinct seam, easy to miss), and
     panels via <code>panelLayoutProjection</code>. Each stamps
     <code>no-history</code> into <code>types</code>; the clean implementation
-    threads it through the shared child-creation primitive so a future UI-state
-    block cannot be added without it. A one-time backfill adds it to
+    threads it through the <code>ChangeScope.UiState</code> child wrapper
+    (<code>ensureUiChild</code>, <code>stateBlocks.ts:180-188</code>) so a future
+    UI-state block cannot be added without it — <strong>gated on
+    <code>ChangeScope.UiState</code>, not stamped in the shared
+    <code>ensureStateChild</code></strong> one layer down (review finding):
+    <code>ensureStateChild</code> also builds <code>UserPrefs</code> blocks
+    (<code>ensureUserPrefsChild</code>, <code>getPluginPrefsBlock</code>,
+    <code>stateBlocks.ts:190-198</code>/<code>:322-338</code>), and tagging those
+    would make real preference history a retention candidate — the sweeper must
+    never touch prefs. A one-time backfill adds it to
     <em>every existing block in the <code>ui-state</code> subtree</em>, walked
     from the per-workspace root — not an enumerated by-kind list (panels only)
     that a review finding showed misses the <code>layout-sessions</code> children
@@ -1089,11 +1097,21 @@ just panels.
     (review finding): the user is a member but not a writer, so the server
     <code>blocks_write</code> policy rejects the tag write
     (<code>is_workspace_writer</code>, <code>consolidated_initial.sql:630</code>).
-    But it doesn't need to ride sync — UI-state in a read-only workspace never
-    uploaded in the first place, so it is already per-device local; each device
-    tags its own local UI-state at creation and backfills its own local pre-slice
-    rows (a local-only <code>UiState</code> write, which <em>is</em> allowed even
-    when the workspace is read-only). The only residual is
+    But it doesn't need to ride sync — with one correction to how (review
+    finding): <code>UiState</code> is <em>not</em> a local-only scope. It
+    <code>source = 'user'</code> and <em>uploads</em> like any other write; on a
+    read-only workspace its <code>readOnly: 'allow'</code> policy keeps the local
+    write but the server rejects the upload into the rejection <em>quarantine</em>
+    (<code>changeScope.ts:8-13</code>/<code>:61-64</code>), so it doesn't block the
+    queue but it isn't free either. So the pre-slice UI-state there is
+    already effectively per-device (its uploads were always quarantined), and each
+    device tags its own copy at creation — but the <strong>backfill on a read-only
+    workspace must suppress the upload</strong> (a genuinely local-only write
+    path), or it enqueues one quarantined reject per tagged block. This is a real
+    corner needing a local-only write path, not the "harmlessly local" hand-wave
+    the previous draft claimed; it is also <em>moot for this fleet</em>, which has
+    no read-only shared workspaces today, so the path is specified-and-deferred.
+    The only residual is
     a workspace <em>no</em> device ever opens again post-ship, whose legacy panels
     stay untagged; that workspace is also not generating new UI-state, and the
     first open backfills it (acceptable for this fleet, review finding).
@@ -1253,24 +1271,27 @@ just panels.
     rewrite), and it may delete <em>any</em> event on a
     <code>no-history</code>-typed block keeping the newest K — never any
     event on a block without that type.</li>
-  <li><strong>Pruning an <em>undoable</em> no-history block stays undo-safe.</strong>
-    <a href="#s16">[1000]</a> lets a user tag their own ordinary
-    (undoable-scope) block <code>no-history</code>, not just non-undoable
-    UI-state — so the sweeper can fully delete the <code>row_events</code> of a tx
-    whose only write was that block, <code>group_id</code> included
-    (<code>group_id</code> lives on <code>row_events</code>, never on
-    <code>command_events</code>). A future undo-from-history reader (§10) must not
-    let that erase a tx boundary and merge two grouped actions on <em>other</em>
-    blocks across the gap (review finding). It doesn't, because §10 derives the tx
-    sequence from <code>command_events</code> — the complete per-tx ledger, one
-    row per <code>repo.tx</code> (<code>scope</code> <code>NOT NULL</code>, never
-    pruned) — not from surviving <code>row_events</code>. A fully-pruned tx still
-    owns its <code>command_events</code> row, so it still stands between the two
-    groups; with no readable <code>group_id</code> it can't equal the selection's
-    and so counts as a boundary (a tx we can't prove is same-group splits, never
-    merges — the safe direction). This is why keying retention on the block
-    <em>doesn't</em> force retention to non-undoable scopes, the other fix the
-    review floated; §10 carries the correction.</li>
+  <li><strong>Pruning an <em>undoable</em> no-history block has an open
+    undo-boundary cost.</strong> <a href="#s16">[1000]</a> lets a user tag their
+    own ordinary (undoable-scope) block <code>no-history</code>, not just
+    non-undoable UI-state — so the sweeper can fully delete the
+    <code>row_events</code> of a tx whose only write was that block,
+    <code>group_id</code> included (<code>group_id</code> lives on
+    <code>row_events</code>, never on <code>command_events</code>). A future
+    undo-from-history reader (§10) must not let that erase a tx boundary and merge
+    two grouped actions on <em>other</em> blocks across the gap. An earlier draft
+    claimed <code>command_events</code> alone closes this; two review findings
+    showed it does not (§10): the ledger has no DB-wide monotonic order (a
+    same-millisecond boundary tx can be misplaced and cause a wrong <em>merge</em>)
+    and can't distinguish a fully-pruned <em>writing</em> tx from a harmless
+    zero-write one. Closing it needs durable per-tx state (persisted
+    <code>tx_seq</code> + a wrote-a-row flag on <code>command_events</code>) —
+    provisioning an unbuilt reader (I6) — <em>or</em> restricting retention to
+    non-undoable scopes, <em>or</em> deferring §10's guarantee. This is now
+    <a href="#s16">O7</a>, open. Note it does <em>not</em> touch the dominant case:
+    UI-state blocks are non-undoable (<code>ChangeScope.UiState</code>), so pruning
+    them — the entire 35&nbsp;MB motivation — has zero undo interaction; the gap is
+    only the user-marked-undoable-block corner [1000] opened.</li>
   <li><strong>Scope is kept, but only as provenance.</strong> The
     <code>scope</code> stamp (§3) still rides on each event for forensics and for
     the #210 provenance story — "what edit scope produced this" — but it no longer
@@ -1887,26 +1908,45 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         split happens on the <em>stack</em>, which is per scope and spans every
         block, so a group of edits to block A separated by a same-scope undoable
         tx that wrote only block B <em>is</em> split — even though B's tx never
-        touched A. Defined precisely: take the sequence of <em>undoable, writing txs in
-        the selection's scope</em> from <code>command_events</code> — the complete
-        per-tx ledger (one row per <code>repo.tx</code>, <code>scope</code>
-        <code>NOT NULL</code>, which the retention sweeper never prunes) —
-        <em>not</em> from surviving <code>row_events</code>, whose per-block rows a
-        <code>no-history</code> prune can delete out from under a tx (§5.1, review
-        finding: a tx whose only block was a user-tagged <code>no-history</code>
-        block leaves no <code>row_events</code> at all, so an events-only scan
-        would drop it as a boundary and re-merge its neighbours). Order is commit
-        order — <code>row_events.id</code> for txs that kept events,
-        <code>command_events.created_at</code> placing any fully-pruned tx among
-        them; a <code>created_at</code> tie can only misplace a <em>boundary</em>
-        tx within its immediate neighbourhood, which at worst adds a split (safe).
-        Each surviving tx's <code>group_id</code> and per-field diffs come from its
-        <code>row_events</code> (joined on <code>tx_id</code>). From the selected
-        tx, extend across adjacent such txs while their <code>group_id</code>
-        equals the selection's, stopping at the first whose <code>group_id</code>
-        differs — <strong>a tx whose <code>row_events</code> were fully pruned has
-        no readable <code>group_id</code>, so it cannot equal the selection's and
-        is a boundary</strong> (an unprovable-same-group tx splits, never merges).
+        touched A. The <em>intent</em>: over commit order, take the sequence of
+        <em>undoable, writing txs in the selection's scope</em>; from the selected
+        tx extend across adjacent such txs while their <code>group_id</code> equals
+        the selection's, stopping at the first that differs;
+        <code>group_id</code> and per-field diffs join from <code>row_events</code>
+        on <code>tx_id</code>. <strong>But this revision surfaces a correctness gap
+        rather than hiding it</strong> (review findings): a <code>no-history</code>
+        prune (§5.1) can delete a tx's <code>row_events</code> out from under it,
+        and <code>command_events</code> — the only per-tx ledger that survives the
+        prune — <strong>cannot reconstruct this sequence on its own</strong>, two
+        ways.
+        <em>(1) No durable order.</em> <code>command_events</code> carries only a
+        millisecond <code>created_at</code> and a session-seeded, non-persisted
+        <code>tx_seq</code> (<code>let seq = Date.now(); () =&gt; ++seq</code>,
+        <code>repo.ts:751-756</code>) — neither a DB-wide monotonic key like
+        <code>row_events.id</code>. When A(g), B(other group, only a pruned
+        <code>no-history</code> block), C(g) commit in one millisecond, B can be
+        placed <em>outside</em> A–C, so A and C look adjacent and same-group and
+        <strong>merge across a real boundary</strong> — the unsafe direction, not
+        the "extra split" an earlier draft wrongly claimed.
+        <em>(2) No write signal.</em> <code>command_events</code> inserts a row for
+        <em>every</em> <code>repo.tx</code> including zero-write ones
+        (<code>commitPipeline.ts:351-368</code>), which live undo ignores
+        (<code>undoManager.ts:102-104</code>); so "a tx with no surviving
+        <code>row_events</code> is a boundary" also fires for a harmless zero-write
+        tx and splits a group live-undo keeps, while filtering to
+        txs-that-kept-events drops the fully-pruned <em>writing</em> tx we needed as
+        a boundary. The ledger alone can't tell the two apart.
+        The honest fix is <strong>durable per-tx state that survives the prune</strong>:
+        a DB-wide monotonic tx sequence (persist the already-computed
+        <code>tx_seq</code> on <code>command_events</code>) plus a wrote-a-row
+        flag/count, so order and boundaries reconstruct with no surviving
+        <code>row_events</code>. That is new persisted state
+        <em>provisioned for a reader that does not exist yet</em> (I6: nothing reads
+        <code>row_events</code> at runtime) — the exact scope tension in the
+        retention-vs-undo question (§16 open): pay it now, or <em>restrict retention
+        to non-undoable scopes</em> so no undoable tx is ever pruned and undo never
+        depends on one, or defer §10's guarantee until the reader is built. Flagged
+        as open, not asserted as safe.
         The run is that maximal tx interval, and the folded target is every
         surviving event of those txs on every block they touched. Per-block walking
         would miss the block-B splitter; the boundary test lives at the scope-tx
@@ -2597,6 +2637,35 @@ generator, which is how both were found.
     backward from the live row, never crossing the hole — §4.3), so no full-writes,
     no order-free machinery, no candidate index, and <code>scope</code> demotes to
     pure provenance. Plateau ~K &times; 1.4&nbsp;KB ≈ 11&nbsp;KB per panel.</li>
+  <li><strong>O7 — OPEN (raised 2026-07-18, review): undo-boundary durability
+    when an <em>undoable</em> no-history block is pruned.</strong> [1000] lets a
+    user tag an ordinary undoable block <code>no-history</code>. Fully pruning such
+    a tx's <code>row_events</code> (with its <code>group_id</code>) can leave a
+    future undo-from-history reader (§10) unable to reconstruct the tx boundary:
+    <code>command_events</code> survives the prune but has no DB-wide monotonic
+    order (only ms <code>created_at</code> + a session-seeded, non-persisted
+    <code>tx_seq</code>) and no wrote-a-row signal (it logs zero-write txs too), so
+    a same-millisecond boundary tx can be misplaced into a wrong <em>merge</em>,
+    and a fully-pruned writing tx is indistinguishable from a zero-write one. Three
+    candidate resolutions, none yet chosen:
+    <ul>
+      <li><em>(a) Provision durable per-tx state now</em> — persist the
+        already-computed <code>tx_seq</code> plus a wrote-a-row flag/count on
+        <code>command_events</code>. Closes it exactly, but adds persisted state
+        for a reader that does not exist yet (I6).</li>
+      <li><em>(b) Restrict retention to non-undoable scopes</em> — the sweeper
+        prunes only <code>ChangeScope.UiState</code>/other non-undoable history, so
+        no undoable tx is ever pruned and undo never depends on one. Costs [1000]'s
+        "mark my own (undoable) block transient" affordance; the 35&nbsp;MB
+        UI-state motivation is unaffected (UI-state is non-undoable).</li>
+      <li><em>(c) Defer §10's guarantee</em> — ship retention; record that
+        undo-from-history over a pruned undoable tx is best-effort until the reader
+        is actually built, at which point (a) or (b) is decided with a concrete
+        consumer in hand.</li>
+    </ul>
+    Bundled with the broader "are we over-hardening the unbuilt §10 reader"
+    simplification question. Only the undoable corner is affected — non-undoable
+    UI-state pruning (the dominant case) is unaffected.</li>
 </ol>
 
 <hr>
