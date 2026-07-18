@@ -1112,13 +1112,23 @@ just panels.
     <code>ensureUiChild</code>, the <em>plugin</em> UI-state children via
     <code>getPluginUIStateBlock</code> / <code>ensureStateChild</code>
     (<code>stateBlocks.ts:376-397</code> — a distinct seam, easy to miss), and
-    panels via <code>panelLayoutProjection</code>. Each stamps
-    <code>no-history</code> into <code>types</code>; the clean implementation
-    threads it through the <code>ChangeScope.UiState</code> child wrapper
-    (<code>ensureUiChild</code>, <code>stateBlocks.ts:180-188</code>) so a future
-    UI-state block cannot be added without it — <strong>gated on
-    <code>ChangeScope.UiState</code>, not stamped in the shared
-    <code>ensureStateChild</code></strong> one layer down (review finding):
+    panels via <code>panelLayoutProjection</code>, and <em>panel-stack</em> rows
+    via <code>createPanelStackRowInTx</code> (<code>tx.create</code> +
+    <code>addTypeInTx</code> directly, <em>not</em> through
+    <code>ensureUiChild</code> — review finding). Each stamps
+    <code>no-history</code> into <code>types</code>. Two implementation constraints
+    (review findings): <em>(a)</em> <code>no-history</code> must be a
+    <strong>registered <code>TypeContribution</code></strong> (a kernel type, like
+    <code>panel</code>) before anything stamps it — <code>addTypeInTx</code> throws
+    on an unknown type id, so an unregistered marker would abort creation,
+    backfill, and the promised user assignment rather than tag. <em>(b)</em> there
+    is no single factory: the <code>ensureStateChild</code>-based seams
+    (<code>getUIStateBlock</code>, <code>getPluginUIStateBlock</code>) can be
+    covered by threading through the <code>ChangeScope.UiState</code> wrapper
+    <code>ensureUiChild</code> (<code>stateBlocks.ts:180-188</code>), but the panel
+    and panel-stack seams do <em>not</em> go through it and must stamp explicitly.
+    The stamping is <strong>gated on <code>ChangeScope.UiState</code>, never in the
+    shared <code>ensureStateChild</code></strong> one layer down:
     <code>ensureStateChild</code> also builds <code>UserPrefs</code> blocks
     (<code>ensureUserPrefsChild</code>, <code>getPluginPrefsBlock</code>,
     <code>stateBlocks.ts:190-198</code>/<code>:322-338</code>), and tagging those
@@ -1338,6 +1348,29 @@ just panels.
     panel to newest-K on its type alone. The measured 14.7k-event panel is bounded
     on the first sweep after migration, not only for future traffic. Pruned bytes
     return at VACUUM (§9); the point is bounding growth, not reclaiming it.</li>
+  <li><strong>What this does <em>not</em> bound — UI-state props on content
+    blocks (review finding, scope honestly narrowed).</strong>
+    <code>ChangeScope.UiState</code> is a <em>scope</em>, not a set of blocks:
+    some UiState writes land on ordinary content blocks, not on dedicated
+    UI-state storage. Toggling the properties panel writes
+    <code>showProperties</code> — a <code>ChangeScope.UiState</code> property
+    (<code>properties.ts:30-35</code>) — straight onto the target content block
+    (<code>blockActions.ts:321-322</code>). Whole-block <code>no-history</code>
+    <strong>cannot</strong> prune these: the block also holds real content history,
+    and the sweeper only ever deletes a block's <em>whole</em> oldest prefix, never
+    a scope-subset of its events (scope is NULL on sync anyway — the reason keying
+    moved to the block). So the honest guarantee is <strong>"bounds the dedicated
+    UI-state storage blocks"</strong> (panels, layout-sessions, panel-stack,
+    plugin UI-state — where the 14.7k flagship and every top-churn block on prod
+    live), <em>not</em> "bounds all UiState-scoped churn". Measured residual on
+    prod: 315 content blocks carry <code>showProperties</code>, 9,450
+    <code>row_events</code> among them, max <strong>7,101 on one</strong> — smaller
+    than the panel class but not nil, and genuinely outside this mechanism. The
+    clean fix is a data-model one (out of scope here, flagged as follow-up): move
+    UI-state properties off content blocks onto per-(block,user) UI-state storage
+    that <em>is</em> <code>no-history</code>-typed and prunable, or bound those
+    specific properties another way. Until then this is a named, measured
+    limitation, not a silent one.</li>
 </ul>
 
 <h2 id="s6">6. Sync-source logging: kept for every workspace (revised)</h2>
@@ -1870,7 +1903,21 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         i.e. carries the parent edge outright. This is the second I8 exception
         (historical gaps) showing up as a concrete reader rule, not a new
         crutch: the boundary comes from the log, not from
-        <code>blocks</code>. Per-member
+        <code>blocks</code>. <strong>The §5.1 retention sweeper is the one case
+        that breaks the full-first guarantee</strong> (review finding): after a
+        <code>no-history</code> block is pruned to its newest K, its
+        <em>first surviving</em> event is whatever survived the cut — usually a
+        compact update with no <code>parentId</code> — because §8.1's guarantee is
+        about migration output, not post-prune state. The builder cannot open a
+        historical interval for such a block from the log, and that is
+        <em>by design</em>: retention deliberately discarded that block's older
+        structure, so a subtree-at-T query over a <code>no-history</code> block can
+        only report its <em>current</em> parent (from the live <code>blocks</code>
+        row) — the one legitimate live-row fallback, scoped exactly to blocks whose
+        history was chosen not to be kept. For UI-state blocks it is moot (they are
+        not in the content tree a subtree reader walks); for a user-marked
+        <code>no-history</code> content block it is the declared consequence of the
+        tag. Per-member
         state is §4.3 <code>stateAt</code>; deleted-at-T members reconstruct fine
         (delete events carry full before). Per-block time-seek: the retained
         <code>(block_id, created_at DESC)</code> index (§3), read
@@ -1966,10 +2013,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         txs-that-kept-events drops the fully-pruned <em>writing</em> tx we needed as
         a boundary. The ledger alone can't tell the two apart.
         The honest fix is <strong>durable per-tx state that survives the prune</strong>:
-        a DB-wide monotonic tx sequence (persist the already-computed
-        <code>tx_seq</code> on <code>command_events</code>) plus a wrote-a-row
-        flag/count, so order and boundaries reconstruct with no surviving
-        <code>row_events</code>. That is new persisted state
+        a <em>real</em> DB-wide monotonic tx sequence plus a wrote-a-row
+        flag/count on <code>command_events</code>, so order and boundaries
+        reconstruct with no surviving <code>row_events</code>. Note the existing
+        <code>tx_context.tx_seq</code> is <em>not</em> that sequence (review
+        finding): it is seeded from <code>Date.now()</code> per <code>Repo</code>
+        and incremented in-memory (<code>repo.ts:751-756</code>), so a clock
+        rollback or a second session can place a later tx below an earlier one —
+        persisting it would not give a total order. (a) needs a SQLite-allocated
+        monotonic value (a dedicated <code>AUTOINCREMENT</code> sequence, the way
+        <code>row_events.id</code> is DB-wide monotonic), not the session counter. That is new persisted state
         <em>provisioned for a reader that does not exist yet</em> (I6: nothing reads
         <code>row_events</code> at runtime) — the exact scope tension in the
         retention-vs-undo question (§16 open): pay it now, or <em>restrict retention
@@ -2474,26 +2527,45 @@ generator, which is how both were found.
     </tr>
     <tr>
       <td>I9</td>
-      <td><strong>Every unlogged <code>blocks</code> write is metadata-only.</strong>
-        The only write path that mutates <code>blocks</code> without firing the
-        row-event trigger is a trigger-suspended write, and such a write may touch
-        only engine-metadata columns (<code>updated_at</code> /
-        <code>user_updated_at</code> / <code>updated_by</code>), never content or
-        structure. Today there is exactly one such site
-        (<code>ensureBlockUserUpdatedAtColumn</code>, a one-time
-        <code>user_updated_at</code> backfill; git-confirmed as the sole
-        <code>withTriggerSuspended</code> content across all history). This is what
-        makes content/structure <em>continuous</em> across every unlogged gap, so
-        <code>stateAt</code> needs no discontinuity walls, no terminal-gap
-        detection, and no reconciliation inserts (§3/§4.3/§5.1). A future
-        content-mutating suspend site would break I9 and must instead fire the
-        trigger or reintroduce a discontinuity marker — none exists, so none is
+      <td><strong>No content <code>blocks</code> write ever bypasses the
+        row-event trigger.</strong> Two ways a write could bypass — both must be
+        content-safe:
+        <ul>
+          <li><em>Trigger suspension</em> (<code>withTriggerSuspended</code>): may
+            touch only engine-metadata columns (<code>updated_at</code> /
+            <code>user_updated_at</code> / <code>updated_by</code>), never content
+            or structure. One site today
+            (<code>ensureBlockUserUpdatedAtColumn</code>, a one-time
+            <code>user_updated_at</code> backfill; git-confirmed as the sole
+            <code>withTriggerSuspended</code> UPDATE across all history).</li>
+          <li><em>Trigger recreation</em> (review finding): boot drops and
+            recreates every trigger body to pick up new column references
+            (<code>withTriggerRecreate</code>, <code>clientSchema.ts:1170</code>) —
+            as <em>separate autocommit</em> <code>DROP</code>/<code>CREATE</code>
+            statements, so on that connection the trigger is briefly absent. Safe
+            only while no <em>other</em> connection writes content during the
+            window. This holds today because bootstrap runs before the Repo serves
+            writes and the wa-sqlite/OPFS writer is single-connection, but the
+            invariant must not <em>depend</em> on that: slice A wraps each
+            DROP+CREATE pair (and the <code>withTriggerSuspended</code> bracket) in
+            a write transaction so the swap is atomic to every connection —
+            SQLite DDL in a transaction is isolated, so a concurrent writer sees
+            old-or-new, never absent. A multi-tab boot that wrote content mid-swap
+            is the one way a genuine <em>content</em> gap could arise; making the
+            swap transactional closes it by construction.</li>
+        </ul>
+        Together these keep content/structure <em>continuous</em> across every
+        unlogged gap, so <code>stateAt</code> needs no discontinuity walls, no
+        terminal-gap detection, and no reconciliation inserts (§3/§4.3/§5.1). A
+        future content-mutating suspend site would break I9 and must instead fire
+        the trigger or reintroduce a discontinuity marker — none exists, so none is
         built.</td>
       <td><a href="#s3">§3</a>/<a href="#s4">§4.3</a></td>
-      <td>Every <code>withTriggerSuspended</code> call site; §8 rewriter</td>
+      <td>Every <code>withTriggerSuspended</code> / <code>withTriggerRecreate</code>
+        site; §8 rewriter</td>
       <td>Review rule on <code>withTriggerSuspended</code> usage (metadata columns
-        only); fuzz I5 pins that a metadata-only gap leaves content
-        <code>stateAt</code> identical across it (§13).</td>
+        only) + transactional trigger recreation; fuzz I5 pins that a metadata-only
+        gap leaves content <code>stateAt</code> identical across it (§13).</td>
     </tr>
   </tbody>
 </table>
@@ -2696,10 +2768,14 @@ generator, which is how both were found.
     and a fully-pruned writing tx is indistinguishable from a zero-write one. Three
     candidate resolutions, none yet chosen:
     <ul>
-      <li><em>(a) Provision durable per-tx state now</em> — persist the
-        already-computed <code>tx_seq</code> plus a wrote-a-row flag/count on
-        <code>command_events</code>. Closes it exactly, but adds persisted state
-        for a reader that does not exist yet (I6).</li>
+      <li><em>(a) Provision durable per-tx state now</em> — a
+        <strong>SQLite-allocated</strong> DB-wide monotonic tx sequence (a
+        dedicated <code>AUTOINCREMENT</code>, like <code>row_events.id</code>) plus
+        a wrote-a-row flag/count on <code>command_events</code>. <strong>Not</strong>
+        the existing <code>tx_context.tx_seq</code>, which is
+        <code>Date.now()</code>-seeded per session (<code>repo.ts:751-756</code>)
+        and so not a durable total order (review finding). Closes it exactly, but
+        adds persisted state for a reader that does not exist yet (I6).</li>
       <li><em>(b) Restrict retention to non-undoable scopes</em> — the sweeper
         prunes only <code>ChangeScope.UiState</code>/other non-undoable history, so
         no undoable tx is ever pruned and undo never depends on one. Costs [1000]'s
