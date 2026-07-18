@@ -270,6 +270,30 @@ describe('backlinksDataExtension query', () => {
       expect(filtered).toEqual(['Q'])
     })
 
+    it('keeps a field row as a source for its OWN definition (the "used by" edge)', async () => {
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'O'})
+      // The field row references its own definition — post-suppression-removal
+      // this is the edge that answers "which blocks use property `status`?".
+      await createIn({
+        id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D',
+        references: [{id: 'D', alias: 'D'}],
+      })
+      // An INTERIOR row that also points at D is still machinery: its backlink
+      // would duplicate the owner's reprojected edge and be sourced from a
+      // hidden row.
+      await createIn({id: 'V', parentId: 'F', references: [{id: 'D', alias: 'D'}]})
+
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'D'}).load())
+      expect(out).toEqual(['F'])
+    })
+
     it('unions machinery across chunk boundaries (SQLite variable-cap safety)', async () => {
       await seedFlipped()
       await createIn({id: 'D', content: 'status'})

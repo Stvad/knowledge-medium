@@ -21,19 +21,21 @@ export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
  *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
 const MACHINERY_SOURCE_CHUNK = 500
 
-/** Which of `sourceIds` are property-subtree machinery — a field row, a value
- *  child, or a row deeper inside a property subtree (its parent chain passes
- *  through a §9 field row). Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`:
- *  a workspace-scoped `block_types = 'property-schema'` probe on a non-null
+/** Which of `sourceIds` are property-subtree INTERIOR machinery — a value child,
+ *  or a row deeper inside a property subtree, whose parent chain passes through
+ *  a §9 field row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`: a
+ *  workspace-scoped `block_types = 'property-schema'` probe on a non-null
  *  `reference_target_id`, root rows exempt via `parent_id IS NOT NULL`.
  *
- *  Matches BOTH field rows and value rows. Field rows reference their own
- *  definition (the "used by" edge) and value rows carry the user's ref — either
- *  way the source is hidden machinery, and the backlink the panel should show
- *  is the owning block's, via cell reprojection. (Field rows used to be
- *  suppressed from `block_references` at parse time; that suppression was
- *  removed, so they now enter the index like any other row — which is what lets
- *  definition merge/rename retarget reach them.)
+ *  STRICTLY INTERIOR (`depth > 0`): the field row ITSELF is deliberately NOT
+ *  matched. The de-dup this filter exists for only applies to interiors — a
+ *  value row's `[[X]]` duplicates the owner's reprojected `O --prop--> X`, so
+ *  showing both would state one fact twice and attribute a copy to a hidden
+ *  row. A field row has no such duplicate: its only edge is to its OWN
+ *  definition, which is the "used by" backlink (every block using this
+ *  property), and nothing else projects that edge. Suppressing it would make a
+ *  property definition's backlinks empty — the opposite of why field rows were
+ *  put in `block_references` in the first place.
  *
  *  PRECONDITION — the caller MUST flip-gate this. There is no internal
  *  `properties_migration` check (unlike `VISIBLE_CHILD_PREDICATE_SQL`, which
@@ -61,7 +63,8 @@ export const propertyMachinerySourceIds = async (
        )
        SELECT DISTINCT up.start_id AS id
          FROM up
-        WHERE up.reference_target_id IS NOT NULL
+        WHERE up.depth > 0
+          AND up.reference_target_id IS NOT NULL
           AND up.parent_id IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM block_types bt
