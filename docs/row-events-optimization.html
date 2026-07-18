@@ -680,8 +680,16 @@ must say so.</p>
 Columns not listed are <code>NOT NULL</code> by schema:
 <code>row_events</code> <code>id</code>/<code>block_id</code>/<code>kind</code>/<code>source</code>/<code>created_at</code>,
 and <code>command_events</code> <code>tx_id</code>/<code>scope</code>/<code>user_id</code>/<code>mutator_calls</code>/<code>source</code>/<code>created_at</code>
-(§10's undo reader leans on <code>command_events.scope</code> being <code>NOT NULL</code> and
-<code>mutator_calls</code> distinguishing zero-write from writing txs — O7).
+(§10's undo reader leans on <code>command_events.scope</code> being
+<code>NOT NULL</code>.) <strong><code>mutator_calls</code> is <em>not</em> a
+write signal</strong> (review finding — an earlier draft of this note claimed it
+was): <code>commitPipeline.ts:351-368</code> serializes the <code>tx.run</code>
+<em>call list</em>, not whether any row was written, so a mutator invoked to no
+effect looks like a writing tx, while a raw <code>repo.tx</code> that wrote
+without <code>tx.run</code> records <code>'[]'</code> exactly like a zero-write
+tx. An undo-boundary reader keying on it would both split harmless zero-write txs
+and drop fully-pruned writing txs — which is precisely why O7(a) calls for a
+<em>separate persisted</em> wrote-a-row flag/count rather than reusing this column.
 </p>
 
 <p>
@@ -1281,7 +1289,24 @@ just panels.
         than patched. The partial index holds only flagged rows, so this is
         <em>not</em> the rejected "blocks with &gt; K events" full aggregate (a full
         scan of the whole table); it touches only the <code>no-history</code>
-        partition.</li>
+        partition. <strong>Union'd with the live type index as a safety net</strong>
+        (review finding): the flag partition alone is not a complete discovery
+        source, because a block tagged <em>during</em> a downgrade window (below)
+        has <em>every</em> event defaulted to <code>no_history = 0</code> and so
+        never appears in the scan at all — the status fallback can't rescue a block
+        it never discovered. So discovery is the flag partition <strong>∪ the live
+        <code>block_types</code> lookup for <code>type = 'no-history'</code></strong>
+        (already indexed, <code>clientSchema.ts:861-865</code>). The two are
+        complementary and each is a cheap indexed read: <code>block_types</code>
+        covers live tagged blocks whatever their events look like, the flag
+        partition covers deleted ones (which <code>block_types</code> drops). This
+        is not a return to the three-source enumeration — there is no
+        delete-surviving side table and no delete-event watermark; it is one extra
+        indexed lookup. <strong>Slice-B ordering requirement:</strong> the
+        trigger-version guard (below) must ship in a release <em>before</em> slice
+        B's type stamping/backfill begins, so that by the time blocks are being
+        tagged, no client in the fleet will install a body that can't stamp the
+        flag.</li>
       <li><em>Current status is read from the log, not the block — so the flag
         needs no retroactive backfill.</em> A block's current
         <code>no-history</code> status <em>is</em> its latest event's flag: any tag
@@ -2565,15 +2590,30 @@ generator, which is how both were found.
         with both). The <strong>~1/64 sampled-anchor</strong> write is the one
         exception (review finding): it writes full before+after like v1 <em>plus</em>
         the coin and the diff/shape work, so it is marginally heavier than v1 on
-        that write. So the claim is precisely: never slower on the common path, an
-        amortized ~+25&nbsp;B/update tail on the anchor path (§4.4) — the bench
-        must sample enough writes to include anchors, not assert on the compact
-        path alone.</td>
+        that write. <strong>And the index set is part of the write cost, not just
+        the trigger body</strong> (review finding): slices B and C add two
+        <code>row_events</code> indexes — the full <code>(block_id, id)</code> and
+        the partial <code>(no_history, …)</code> — and every insert maintains every
+        index, which a trigger-body-only benchmark ("v1 minus snapshot sides, plus
+        patches and one <code>random()</code>") does not capture. The partial index
+        is cheap (it admits only flagged rows), but the full
+        <code>(block_id, id)</code> B-tree is maintained on <em>every</em> event.
+        So the claim is precisely: <em>the trigger body</em> never reads history and
+        is a strict win on the common path, with an amortized ~+25&nbsp;B/update
+        tail on the anchor path (§4.4) — but <em>end-to-end</em> insert cost after
+        B/C includes one extra full index, so the invariant is asserted against the
+        <strong>final index set</strong>, not the slice-A shape. If the measurement
+        shows it binding, the lever is index count: <code>row_events</code> would
+        then carry both <code>(block_id, id)</code> and
+        <code>(block_id, created_at DESC)</code> (§3 retains the latter for
+        time-seek), and whether both per-block indexes earn their keep is exactly
+        what the bench should settle.</td>
       <td><a href="#s7">§7</a></td>
-      <td>v2 trigger; the 1/64 anchor path</td>
+      <td>v2 trigger; the 1/64 anchor path; the B/C index set</td>
       <td>Bench note in slice A (write-tx tail latency before/after, sampled
-        across enough writes to cover the anchor path); review rule for trigger
-        SQL.</td>
+        across enough writes to cover the anchor path) <strong>and re-run at B/C
+        with the final index set</strong> — a slice-A-only bench cannot see the
+        index-maintenance cost; review rule for trigger SQL.</td>
     </tr>
     <tr>
       <td>I7</td>
@@ -2879,11 +2919,24 @@ generator, which is how both were found.
         <code>Date.now()</code>-seeded per session (<code>repo.ts:751-756</code>)
         and so not a durable total order (review finding). Closes it exactly, but
         adds persisted state for a reader that does not exist yet (I6).</li>
-      <li><em>(b) Restrict retention to non-undoable scopes</em> — the sweeper
-        prunes only <code>ChangeScope.UiState</code>/other non-undoable history, so
-        no undoable tx is ever pruned and undo never depends on one. Costs [1000]'s
-        "mark my own (undoable) block transient" affordance; the 35&nbsp;MB
-        UI-state motivation is unaffected (UI-state is non-undoable).</li>
+      <li><em>(b) Restrict <strong>who may be tagged</strong> — dedicated
+        non-undoable UI-state storage blocks only</em>. Nothing about the mechanism
+        changes: the sweeper still keys on the block's <code>no-history</code> type
+        (which survives sync), it simply never gets applied to a block whose writes
+        are undoable. No undoable tx is ever pruned, so undo never depends on one.
+        Costs [1000]'s "mark my own (undoable) block transient" affordance; the
+        35&nbsp;MB UI-state motivation is unaffected.
+        <strong>Note this is a policy restriction on tagging, not a scope filter on
+        events</strong> (review finding): an earlier draft phrased (b) as "prune
+        only <code>ChangeScope.UiState</code> history", which would have
+        reintroduced exactly the sync blind spot §5.1 removed —
+        <code>scope</code> is NULL on sync-applied events (§3) and a receiving
+        device has no <code>command_events</code> row for the originating tx, so it
+        cannot tell a remote UiState write from a remote undoable one. That version
+        of (b) would either leave sync-authored UI-state churn unbounded again
+        (measured: 0 of the 14,768-event flagship panel prunable) or prune remote
+        undoable boundaries without solving O7 at all. Keyed on the block, (b) is
+        coherent; keyed on event scope, it is not.</li>
       <li><em>(c) Defer §10's guarantee</em> — ship retention; record that
         undo-from-history over a pruned undoable tx is best-effort until the reader
         is actually built, at which point (a) or (b) is decided with a concrete
