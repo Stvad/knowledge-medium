@@ -55,6 +55,7 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureRowEventsV2Columns,
   ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
@@ -357,6 +358,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // the CLIENT_SCHEMA_STATEMENTS loop. Fresh DBs skip it (tables don't
   // exist yet; the CREATEs carry the column).
   await ensureUndoGroupIdColumns(powerSyncDb)
+  // Idempotent local migration: add the row_events v2 format columns
+  // (`v`, `full`, `scope`). Same ordering constraint as above — the
+  // recreated row_events trigger bodies (CLIENT_SCHEMA_STATEMENTS loop AND
+  // the `withTriggerSuspended` bracket in `ensureBlockUserUpdatedAtColumn`
+  // below) reference these columns, and SQLite only fails at fire time.
+  await ensureRowEventsV2Columns(powerSyncDb)
   // Idempotent local migration: add `user_updated_at` to an existing
   // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
   // EXISTS above is a no-op when the table already exists) + one-shot

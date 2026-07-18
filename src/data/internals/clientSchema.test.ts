@@ -48,6 +48,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureRowEventsV2Columns,
   ensureUndoGroupIdColumns,
   getBlocksStatEstimate,
   runAnalyzeIfStale,
@@ -1313,17 +1314,21 @@ describe('ensureUndoGroupIdColumns — local migration (issue #306)', () => {
     old.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
 
     // App startup on the upgraded build: ensure columns FIRST (the
-    // recreated triggers reference group_id), then the schema statements.
+    // recreated triggers reference group_id and the v2 format columns),
+    // then the schema statements — mirrors initializePowerSyncDb's order.
     const dbFacade = {
       execute: async (sql: string) => { old.exec(sql) },
       getAll: async <T,>(sql: string): Promise<T[]> => old.prepare(sql).all() as T[],
     }
     await ensureUndoGroupIdColumns(dbFacade)
+    await ensureRowEventsV2Columns(dbFacade)
     for (const stmt of CLIENT_SCHEMA_STATEMENTS) old.exec(stmt)
 
-    // History intact; the historic row reads back with NULL group_id.
+    // History intact; the historic row reads back with NULL group_id and
+    // NULL v — the v1 format tag (readers treat it as a full snapshot; the
+    // slice-C rewriter uses it as the work queue).
     const historic = old.prepare('SELECT * FROM row_events WHERE block_id = ?').get('b-old') as Record<string, unknown>
-    expect(historic).toMatchObject({tx_id: 'tx-historic', kind: 'update', group_id: null})
+    expect(historic).toMatchObject({tx_id: 'tx-historic', kind: 'update', group_id: null, v: null, full: null, scope: null})
 
     // New grouped writes stamp group_id through the recreated triggers.
     old.exec(`UPDATE tx_context SET tx_id = 'tx-new', tx_seq = 1, user_id = 'u1', scope = 'block-default', source = 'user', group_id = 'grp-new' WHERE id = 1`)

@@ -53,20 +53,37 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
 `
 
 /** Per-row audit / change-history log. Trigger-written on every write to
- *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
- *  — capturing the full before/after row state of each change. `tx_id` = NULL
- *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
- *  below); `source` distinguishes 'user' from 'sync'.
+ *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike.
+ *  `tx_id` = NULL for sync-applied writes (see the COALESCE / CASE in the
+ *  row_events triggers below); `source` distinguishes 'user' from 'sync'.
  *
  *  This is the substrate for local change history / time-travel, and the ONLY
  *  place an INCOMING sync change is durably recorded — `command_events` covers
  *  local `repo.tx` operations only (mutator-grain), never sync apply. Nothing
- *  reads `row_events` at runtime: the Layout B observer owns invalidation, so
- *  this is a write-only history log.
+ *  reads `row_events` at runtime except the `stateAt` reader utility
+ *  (rowEventsHistory.ts): the Layout B observer owns invalidation, so this is
+ *  a write-mostly history log.
+ *
+ *  Event format (docs/row-events-optimization.html §3):
+ *  - v1 (`v IS NULL`, pre-existing rows): full before/after row snapshots per
+ *    event — create → after only, update/soft-delete → both sides, delete →
+ *    before only. No identical-update gate.
+ *  - v2 (`v = 2`): compact invertible patches. A non-anchor update stores the
+ *    CHANGED domain fields only, old values in `before_json` and new values in
+ *    `after_json` with equal key sets, so every event applies forward and
+ *    un-applies backward on its own (invariant I1). `full = 1` rows carry
+ *    complete row state on the sides present: creates (after), hard deletes
+ *    (before), and sampled anchors (both — one in-trigger `random()` coin at
+ *    p = 1/{@link ROW_EVENTS_ANCHOR_MODULUS}; anchors are read-acceleration +
+ *    corruption bounding only, no correctness property depends on them).
+ *    Identical updates (no domain field changed) write no event. `scope`
+ *    copies the writing tx's ChangeScope through the same source gate as
+ *    tx_id/group_id (NULL on sync-applied/raw writes).
  *
  *  Intentionally unbounded — full history is kept and never auto-trimmed. Any
  *  retention policy is a future opt-in, never a silent drop (preserving user
- *  history is paramount). Client-only; never synced. */
+ *  history is paramount). History rows are immutable once written (invariant
+ *  I7). Client-only; never synced. */
 export const CREATE_ROW_EVENTS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS row_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +94,10 @@ export const CREATE_ROW_EVENTS_TABLE_SQL = `
     after_json  TEXT,
     source      TEXT NOT NULL,
     created_at  INTEGER NOT NULL,
-    group_id    TEXT
+    group_id    TEXT,
+    v           INTEGER,
+    full        INTEGER,
+    scope       TEXT
   )
 `
 
@@ -370,36 +390,122 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // ============================================================================
 // row_events triggers (3) — the per-row audit / change-history log. Fire for
 // BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
-// `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
-// row_events at runtime — the Layout B observer owns invalidation — so this is
-// a write-only history substrate (local change-history / time-travel; the only
-// durable record of incoming sync changes).
+// `blocks`; the COALESCE-to-'sync' tag distinguishes them. Only the stateAt
+// reader utility (rowEventsHistory.ts) reads row_events at runtime — the
+// Layout B observer owns invalidation — so this is a write-mostly history
+// substrate (local change-history / time-travel; the only durable record of
+// incoming sync changes).
 //
 // Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
 // fires the UPDATE trigger. The body inspects whether `deleted` transitioned
 // from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
+//
+// v2 format (docs/row-events-optimization.html §3/§4): updates write compact
+// invertible patches (changed domain fields only, old values in before_json /
+// new values in after_json, equal key sets) unless the sampled anchor coin
+// hits — then a full before+after pair. Identical updates write nothing.
+// I6 (write-path budget): no trigger body may read row_events or scan history
+// — the only reads allowed here are the 1-row tx_context probes and the
+// single random() coin.
 // ============================================================================
 
-/** Serializes a blocks row (NEW or OLD) to the JSON snapshot stored in
- *  `row_events.{before,after}_json`. NEW / OLD references resolve at
- *  trigger time. */
-const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
+/** One row_events payload field: how to emit its domain-shaped value from a
+ *  row reference, and how to detect that it changed between OLD and NEW.
+ *
+ *  This spec is the single source of truth for the row_events serialization —
+ *  the full-snapshot serializer ({@link blockJsonObjectSql}), the compact-patch
+ *  builders, and the identical-update gate are all generated from it, so they
+ *  cannot diverge. It is a hand-maintained projection of
+ *  `BLOCK_STORAGE_COLUMNS` (blockSchema.ts) into domain keys — extend BOTH in
+ *  lockstep when adding a `blocks` column (same rule as
+ *  {@link BLOCK_UPLOAD_COLUMNS} below). */
+interface RowEventColumnSpec {
+  /** Domain-shaped key used in payload JSON (matches BlockData naming). */
+  readonly key: string
+  /** SQL expression producing the domain value for a row reference. Used by
+   *  both the full-snapshot serializer and the compact-patch emit, so a
+   *  projected field (userUpdatedAt) reads identically in v1 and v2 rows. */
+  readonly emit: (rowRef: string) => string
+  /** SQL predicate over OLD/NEW: did the domain value change? Storage-column
+   *  `IS NOT` compare by default; a projected field must diff the PROJECTION
+   *  (design §3) — when user_updated_at is NULL, an update that changes only
+   *  updated_at changes the domain value while the storage column is
+   *  untouched, and a storage-only key set would replay it stale. */
+  readonly changed: string
+}
+
+const storageChanged = (column: string) => `OLD.${column} IS NOT NEW.${column}`
+
+/** `id` is deliberately IN this spec even though a key is "never patched"
+ *  (and BLOCK_UPLOAD_COLUMNS omits it): a raw `UPDATE … SET id` (the
+ *  unguarded out-of-band path, design §2.1) would otherwise diff as
+ *  all-identical and vanish under the no-op skip, where v1 recorded the move.
+ *  An id change forces `full = 1` (see the update trigger), recorded under
+ *  the NEW id. */
+const ROW_EVENT_COLUMNS: readonly RowEventColumnSpec[] = [
+  {key: 'id', emit: r => `${r}.id`, changed: storageChanged('id')},
+  {key: 'workspaceId', emit: r => `${r}.workspace_id`, changed: storageChanged('workspace_id')},
+  {key: 'parentId', emit: r => `${r}.parent_id`, changed: storageChanged('parent_id')},
+  {key: 'orderKey', emit: r => `${r}.order_key`, changed: storageChanged('order_key')},
+  {key: 'content', emit: r => `${r}.content`, changed: storageChanged('content')},
+  {key: 'properties', emit: r => `json(${r}.properties_json)`, changed: storageChanged('properties_json')},
+  {key: 'references', emit: r => `json(${r}.references_json)`, changed: storageChanged('references_json')},
+  {key: 'createdAt', emit: r => `${r}.created_at`, changed: storageChanged('created_at')},
+  {key: 'updatedAt', emit: r => `${r}.updated_at`, changed: storageChanged('updated_at')},
+  {
+    key: 'userUpdatedAt',
+    emit: r => `coalesce(${r}.user_updated_at, ${r}.updated_at)`,
+    changed:
+      'coalesce(OLD.user_updated_at, OLD.updated_at) IS NOT coalesce(NEW.user_updated_at, NEW.updated_at)',
+  },
+  {key: 'createdBy', emit: r => `${r}.created_by`, changed: storageChanged('created_by')},
+  {key: 'updatedBy', emit: r => `${r}.updated_by`, changed: storageChanged('updated_by')},
+  {
+    key: 'deleted',
+    emit: r => `json(CASE WHEN ${r}.deleted THEN 'true' ELSE 'false' END)`,
+    changed: storageChanged('deleted'),
+  },
+]
+
+/** Serializes a blocks row (NEW / OLD in a trigger, or any table alias) to
+ *  the full-snapshot JSON stored in `row_events.{before,after}_json`.
+ *  Exported for the stateAt reader (rowEventsHistory.ts), which needs the
+ *  live `blocks` row in the exact same domain shape. */
+export const blockJsonObjectSql = (rowRef: string) => `
       json_object(
-        'id', ${rowRef}.id,
-        'workspaceId', ${rowRef}.workspace_id,
-        'parentId', ${rowRef}.parent_id,
-        'orderKey', ${rowRef}.order_key,
-        'content', ${rowRef}.content,
-        'properties', json(${rowRef}.properties_json),
-        'references', json(${rowRef}.references_json),
-        'createdAt', ${rowRef}.created_at,
-        'updatedAt', ${rowRef}.updated_at,
-        'userUpdatedAt', coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at),
-        'createdBy', ${rowRef}.created_by,
-        'updatedBy', ${rowRef}.updated_by,
-        'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
+${ROW_EVENT_COLUMNS.map(c => `        '${c.key}', ${c.emit(rowRef)}`).join(',\n')}
       )
 `.trim()
+
+/** Compact invertible-patch side (v2 non-anchor updates): changed domain
+ *  fields only. Key present ⇔ the field changed (JSON null = cleared); the
+ *  same `changed` predicates drive both sides, so before/after key sets are
+ *  equal by construction (invariant I1's shape half). Same
+ *  json_set/json_remove('$.__noop') idiom as {@link blockUploadPatchJsonSql}.
+ *
+ *  Note: json_set evaluates ALL value arguments eagerly — the CASE only
+ *  picks the path — so `json(properties_json)` runs on every logged update
+ *  even when that column didn't change, and a malformed JSON cell (only
+ *  reachable via raw writes with triggers suspended; the insert trigger
+ *  json()s the same cells) aborts the UPDATE. Same exposure as v1's full
+ *  snapshots, minus the identical updates the WHEN gate now skips. */
+const blockPatchJsonSql = (rowRef: 'NEW' | 'OLD') => `
+      json_remove(
+        json_set(
+          '{}',
+${ROW_EVENT_COLUMNS.map(c =>
+  `          CASE WHEN ${c.changed} THEN '$.${c.key}' ELSE '$.__noop' END, ${c.emit(rowRef)}`,
+).join(',\n')}
+        ),
+        '$.__noop'
+      )
+`.trim()
+
+/** Identical-update gate: any domain field changed. Mirrors the server
+ *  trigger's skip (blocks_history); the v1 trigger had no such gate, so
+ *  same-value UPDATEs (LWW echoes, clamp no-ops) logged two full snapshots
+ *  each. */
+const rowEventAnyChangeSql = ROW_EVENT_COLUMNS.map(c => c.changed).join('\n    OR ')
 
 /** Belt-and-suspenders source gate for tx_context projections: the column
  *  is the active local tx's value only when source IS NOT NULL. Sync-applied
@@ -409,7 +515,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
  *  row_events row. The TxEngine clears all fields at end-of-tx; the trigger
  *  logic is the load-bearing correctness check. One template for both
  *  columns so the gate can't silently diverge between them. */
-const triggerCtxColumnSql = (column: 'tx_id' | 'group_id') => `
+const triggerCtxColumnSql = (column: 'tx_id' | 'group_id' | 'scope') => `
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
           THEN NULL
@@ -424,12 +530,42 @@ const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1),
 /** Undo-group token (issue #306) — same source-gated projection as tx_id. */
 const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
+/** ChangeScope stamp (v2 `scope` column) — same source-gated projection as
+ *  tx_id/group_id. The gate is mandatory, not hygiene (design §3): a raw or
+ *  sync-applied write while `tx_context.scope` is stale/poisoned must still
+ *  stamp NULL, because a mislabeled 'local-ui' event becomes retention-
+ *  sweeper-prunable, i.e. deletable content history. */
+const triggerScopeSql = triggerCtxColumnSql('scope')
+
+/** Current row_events format version, stamped on every trigger-written row.
+ *  `v IS NULL` = legacy v1 full snapshots. */
+export const ROW_EVENTS_FORMAT_VERSION = 2
+
+/** Anchor sampling modulus: each logged v2 update flips one in-trigger coin
+ *  `(random() % M) = 0`, p = 1/64 (design §4.4: p ≈ 4.6/L for a p99
+ *  corruption-loss window of L events; 64 → p99 ≈ 295 at +6% update bytes).
+ *  Anchors carry NO correctness weight — readers key on `full`, never on
+ *  cadence — so mixed rates coexist freely and the constant is boot-tunable
+ *  via trigger recreation. No abs(): `abs(random())` raises an
+ *  integer-overflow error on −2⁶³ and would abort the user's tx from inside
+ *  the trigger; plain `random() % 64` hits 0 at exactly 1/64 (negative
+ *  multiples included). */
+export const ROW_EVENTS_ANCHOR_MODULUS = 64
+
+const defaultAnchorCoinSql = `(random() % ${ROW_EVENTS_ANCHOR_MODULUS}) = 0`
+
+/** Deterministic coin overrides for tests (p = 1 / p = 0), so both the
+ *  anchor and the compact path are exercised on every fuzz seed regardless
+ *  of SQLite's unseedable random(). */
+export const ANCHOR_COIN_ALWAYS_SQL = '1'
+export const ANCHOR_COIN_NEVER_SQL = '0'
+
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id, v, full, scope
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -438,42 +574,79 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql('NEW')},
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
-      ${triggerGroupIdSql}
+      ${triggerGroupIdSql},
+      ${ROW_EVENTS_FORMAT_VERSION},
+      1,
+      ${triggerScopeSql}
     );
   END
 `
 
-export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
+/** v2 update/soft-delete writer. Three load-bearing details (design §4.1):
+ *
+ *  - ONE coin per event: the anchor decision feeds three value positions
+ *    (before side, after side, `full`), so it is computed once in the
+ *    FROM-subquery and referenced — three separate random() calls would
+ *    disagree (e.g. a full before paired with a compact after). SQLite does
+ *    not re-evaluate the subquery per reference site (verified empirically;
+ *    pinned by the shape test). Porting trap: in a multi-row INSERT…SELECT
+ *    cross-joined against the coin subquery SQLite freezes ONE coin for the
+ *    whole statement — never reuse this shape for batch rewrites.
+ *  - An `id` change forces `full = 1` (deterministic, so recomputing the
+ *    predicate alongside the frozen coin stays consistent): a raw key rewrite
+ *    is recorded under the NEW id as a full pair, preserving v1 parity. The
+ *    old id's chain loses its newer-side terminator either way (design §3's
+ *    asterisk) — that is the raw write's doing, not the format's.
+ *  - The WHEN gate skips identical updates entirely (no event row). The
+ *    predicate must cover EVERY spec field or a real change could be silently
+ *    dropped — it is generated from the same spec as the payloads, so it
+ *    cannot drift. */
+export const buildBlocksUpdateRowEventTriggerSql = (
+  anchorCoinSql: string = defaultAnchorCoinSql,
+): string => {
+  const isFullSql = `(coin.anchor OR OLD.id IS NOT NEW.id)`
+  return `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
+  WHEN ${rowEventAnyChangeSql}
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
-    ) VALUES (
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id, v, full, scope
+    )
+    SELECT
       ${triggerTxIdSql},
       NEW.id,
       CASE
-        WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
+        WHEN NOT OLD.deleted AND NEW.deleted THEN 'soft-delete'
         ELSE 'update'
       END,
-      ${blockJsonObjectSql('OLD')},
-      ${blockJsonObjectSql('NEW')},
+      CASE WHEN ${isFullSql} THEN ${blockJsonObjectSql('OLD')} ELSE ${blockPatchJsonSql('OLD')} END,
+      CASE WHEN ${isFullSql} THEN ${blockJsonObjectSql('NEW')} ELSE ${blockPatchJsonSql('NEW')} END,
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
-      ${triggerGroupIdSql}
-    );
+      ${triggerGroupIdSql},
+      ${ROW_EVENTS_FORMAT_VERSION},
+      CASE WHEN ${isFullSql} THEN 1 ELSE 0 END,
+      ${triggerScopeSql}
+    FROM (SELECT ${anchorCoinSql} AS anchor) AS coin;
   END
 `
+}
+
+export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = buildBlocksUpdateRowEventTriggerSql()
 
 /** DELETE row_event writer captures hard purges. Hard deletes do not sync —
  *  PowerSync sees the row vanish locally; soft-delete via the synced
- *  `deleted` column is what propagates "this row is gone" through sync. */
+ *  `deleted` column is what propagates "this row is gone" through sync.
+ *  Always full (`full = 1`, before side): the delete event is a chain's
+ *  newer-side terminator (invariant I2) — every older state of the block
+ *  reconstructs backward from this tombstone. */
 export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_delete
   AFTER DELETE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id, v, full, scope
     ) VALUES (
       ${triggerTxIdSql},
       OLD.id,
@@ -482,7 +655,10 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       NULL,
       ${triggerSourceSql},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
-      ${triggerGroupIdSql}
+      ${triggerGroupIdSql},
+      ${ROW_EVENTS_FORMAT_VERSION},
+      1,
+      ${triggerScopeSql}
     );
   END
 `
@@ -1404,6 +1580,39 @@ export const ensureUndoGroupIdColumns = async (db: {
     if (columns.length === 0) continue
     if (!columns.some(c => c.name === 'group_id')) {
       await db.execute(`ALTER TABLE ${table} ADD COLUMN group_id TEXT`)
+    }
+  }
+}
+
+/**
+ * Idempotent local-schema migration for the row_events v2 format
+ * (docs/row-events-optimization.html §3): add `v`, `full`, `scope` to an
+ * existing device's `row_events`. Same mold — and same ordering footgun — as
+ * {@link ensureUndoGroupIdColumns}: MUST run before ANY re-creation of the
+ * row_events trigger bodies (the `CLIENT_SCHEMA_STATEMENTS` loop AND the
+ * `withTriggerSuspended` bracket inside {@link ensureBlockUserUpdatedAtColumn},
+ * which re-installs `blocks_row_event_update` from the new body). SQLite
+ * accepts a CREATE TRIGGER referencing a missing column and fails only at
+ * fire time, so a wrong ordering surfaces as "no such column: v" on a
+ * concurrent old-tab write, not at bootstrap.
+ *
+ * A missing table is skipped — the CREATE that follows carries the columns
+ * (appended LAST, in this same order, so fresh and ALTER-upgraded layouts
+ * match). No backfill: NULL `v` IS the v1 format tag (readers treat
+ * `v IS NULL` as full-snapshot rows), NULL `full`/`scope` are correct for
+ * every pre-existing row, and the slice-C stock rewriter uses `v IS NULL` as
+ * its work queue. No trigger suspension: ALTER TABLE fires no row triggers.
+ */
+export const ensureRowEventsV2Columns = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{name: string}>('PRAGMA table_info(row_events)')
+  if (columns.length === 0) return
+  const present = new Set(columns.map(c => c.name))
+  for (const [name, type] of [['v', 'INTEGER'], ['full', 'INTEGER'], ['scope', 'TEXT']] as const) {
+    if (!present.has(name)) {
+      await db.execute(`ALTER TABLE row_events ADD COLUMN ${name} ${type}`)
     }
   }
 }
