@@ -1177,7 +1177,7 @@ just panels.
     (<code>ensureUserPrefsChild</code>, <code>getPluginPrefsBlock</code>,
     <code>stateBlocks.ts:190-198</code>/<code>:322-338</code>), and tagging those
     would make real preference history a retention candidate — the sweeper must
-    never touch prefs. A one-time backfill adds it to
+    never touch prefs. A backfill pass adds it to
     <em>every existing block in the <code>ui-state</code> subtree</em>, walked
     from the per-workspace root — not an enumerated by-kind list (panels only)
     that a review finding showed misses the <code>layout-sessions</code> children
@@ -1188,9 +1188,24 @@ just panels.
     (<code>panelLayoutProjection.ts:605-620</code>). Walking the subtree and
     tagging every descendant is both simpler and complete; because creation-time
     stamping threads through that shared <code>ensureUiChild</code> primitive,
-    <em>new</em> descendants (of whatever future kind) are covered automatically,
-    so the backfill only owes the pre-slice rows (~857 panels + the root/plugin +
-    the layout-sessions subtree). <strong>The walk must not filter out
+    <em>new</em> descendants (of whatever future kind) are covered automatically —
+    <em>provided the creating client is upgraded</em>.
+    <strong>It is therefore a recurring reconciliation, not a one-time
+    backfill</strong> (review finding): an older tab or device can still create (or
+    sync in) a panel / layout-session / plugin UI-state block <em>after</em> the
+    one-shot marker has run, and that row carries no <code>no-history</code> type at
+    all — so a backfill that believed it only owed pre-slice rows would leave a
+    brand-new hot UI-state block with neither type nor flag, invisible to the
+    sweeper and growing unbounded. Two consequences: the subtree tagging pass
+    re-runs (cheaply — the <code>ui-state</code> subtree is ~857 panels plus the
+    root/plugin/layout-sessions rows, not the whole DB) rather than latching a
+    completion marker; and, more importantly, <strong>B1's discovery of live
+    UI-state blocks is <em>structural</em>, not tag-dependent</strong> — the
+    sweeper already has to confirm dedicated-UI-state membership before pruning
+    anything in B1 (§13), so it discovers those blocks by subtree membership
+    directly and an untagged old-client creation is found anyway. The type and flag
+    stay load-bearing for the cases structure cannot reach: deleted blocks, and
+    (post-O7) user-tagged blocks outside the subtree. <strong>The walk must not filter out
     <code>deleted = 1</code></strong> (review finding): a UI-state block
     soft-deleted <em>before</em> slice B has no live tag event to set the flag, so
     the partial-index sweeper would never discover it and its history would sit
@@ -2388,6 +2403,34 @@ into is smaller).
 
 <h2 id="s13">13. Rollout slices (every slice lands green)</h2>
 
+<div class="callout warn">
+  <strong>Rollout principle — a rule shipped in slice N binds only clients that
+  have run slice N.</strong> Several findings in review were the same mistake in
+  different places: a mechanism was specified as if all clients would honour it
+  the moment it shipped. They cannot. The bootstrap re-installs trigger bodies
+  from <em>whichever client booted last</em> (<code>withTriggerRecreate</code>),
+  old code will not consult a marker it does not contain, and an old tab can
+  create or delete rows at any time during the mixed-version window. So every
+  mechanism whose correctness depends on upgraded code must name one of three
+  things, explicitly:
+  <ul>
+    <li>a <strong>reconciliation backstop</strong> that repairs what an old client
+      did (§5.1's one-shot tombstone scan per version transition; the recurring
+      UI-state subtree pass);</li>
+    <li>a <strong>structural fallback</strong> that does not depend on the new
+      mechanism at all (B1 discovering UI-state blocks by subtree membership
+      rather than by tag);</li>
+    <li>or an explicit <strong>fleet precondition</strong> — the invariant holds
+      once no pre-slice client can still run (<a href="#invariants">I9</a>, whose
+      transactional trigger swap only binds clients at ≥ A). A precondition is a
+      migration consideration, legitimate to rely on for this fleet, but it must
+      be <em>stated</em> rather than assumed — and where possible paired with
+      detection, as §8.1's content-level divergence check does for I9.</li>
+  </ul>
+  "It ships in slice A/B" is not by itself an answer to "what about the tab that
+  hasn't upgraded".
+</div>
+
 <div class="table-scroll">
 <table>
   <thead><tr><th>Slice</th><th>Contents</th><th>Gates / gated by</th></tr></thead>
@@ -2549,11 +2592,29 @@ any pruned event, and <code>stateAt</code> stays exact for every survivor
 is safe without full-writes; <strong>the prune decision tracks the authoritative
 type, never an event flag</strong> — tag then untag interleaved with edits leaves
 the block skipped, create-then-tag prunes the whole block including its unflagged
-create, and (the case that killed the latest-event rule) a block written by a
-<em>stale trigger body</em> that could not stamp <code>no_history</code> — including
-a slice-A body emitting <code>v = 2</code> rows without the column — is still
-pruned, because the decision reads the type; untyped blocks are never touched, and
-a typed block with a foreign-typed sibling in the same tx does not drag it in.
+create, and a block written by a <em>stale trigger body</em> that could not stamp
+<code>no_history</code> — including a slice-A body emitting <code>v = 2</code> rows
+without the column — is still pruned, because the decision reads the type;
+untouched blocks are never pruned, and a pruned block with a foreign-typed sibling
+in the same tx does not drag it in.
+<strong>Scoped to what the shipping slice actually does</strong> (review finding):
+this is the <em>B1</em> suite, so it generates <em>dedicated UI-state storage</em>
+and asserts B1 semantics — a user-applied <code>no-history</code> on an ordinary
+content block must be <strong>inert</strong>, not pruned. Asserting generic
+typed-block pruning here would either fail a correct B1 implementation or pressure
+it into shipping the gated, irreversible B2 behaviour early; arbitrary typed-block
+pruning is B2's oracle, behind O7.
+<strong>And discovery is tested, not just the decision</strong> (review finding):
+reading the authoritative type only settles <em>whether</em> to prune a candidate
+already in hand — it cannot make an undiscoverable block discoverable. So the
+suite includes the compound stale-body case — a block tagged while a stale body is
+installed (no event carries the flag) and <em>then deleted</em> (so
+<code>block_types</code> has dropped it) — and asserts it is reached by the
+one-shot tombstone reconciliation (§5.1), not by the partial-index scan. Without
+that case the tests would bless a sweeper that permanently misses deleted
+stale-body candidates. Live UI-state blocks are additionally asserted discoverable
+<em>structurally</em> (subtree membership), so an untagged old-client creation is
+still found.
 Plus a <em>progress</em> oracle, because a never-prunes
 sweeper passes safety trivially: a currently-typed block with &gt; K events ends
 the sweep with exactly K). Slice C's I5
@@ -2813,15 +2874,35 @@ generator, which is how both were found.
             a write transaction so the swap is atomic to every connection —
             SQLite DDL in a transaction is isolated, so a concurrent writer sees
             old-or-new, never absent. A multi-tab boot that wrote content mid-swap
-            is the one way a genuine <em>content</em> gap could arise; making the
-            swap transactional closes it by construction.</li>
+            is the one way a genuine <em>content</em> gap could arise.
+            <strong>But wrapping it in slice A only binds clients that have
+            <em>run</em> slice A</strong> (review finding): a pre-A tab still
+            executes today's standalone <code>DROP</code>/<code>CREATE</code>
+            bootstrap, and old code cannot be made to honour a rule it does not
+            contain. So I9 carries an explicit <strong>rollout precondition — it
+            holds once no pre-A client can still run trigger recreation</strong>,
+            i.e. after the fleet is at ≥ A. That is a migration consideration, not a
+            design justification, and it is achievable for this fleet; what matters
+            is that it is <em>stated</em>, because I9 is what licenses removing
+            walls.</li>
         </ul>
         Together these keep content/structure <em>continuous</em> across every
         unlogged gap, so <code>stateAt</code> needs no discontinuity walls, no
-        terminal-gap detection, and no reconciliation inserts (§3/§4.3/§5.1). A
-        future content-mutating suspend site would break I9 and must instead fire
-        the trigger or reintroduce a discontinuity marker — none exists, so none is
-        built.</td>
+        terminal-gap detection, and no reconciliation inserts (§3/§4.3/§5.1).
+        <strong>And the assumption is checkable rather than merely asserted:</strong>
+        §8.1's rewriter already compares each event's <code>before_json</code> to
+        its <code>runningState</code>. A <em>metadata-only</em> divergence is the
+        expected, benign case (the <code>user_updated_at</code> backfill). A
+        <em>content-level</em> divergence would be positive evidence that some write
+        bypassed the trigger — an actual I9 violation, most plausibly from a
+        pre-A mixed-version window — so the rewriter classifies the divergence and
+        <strong>reports content-level ones loudly rather than silently rewriting
+        them compact</strong>. If any are found, those specific seams need a
+        non-crossable marker and the wall mechanism returns for exactly them. The
+        expectation is zero; the point is that the migration would tell us, instead
+        of the design quietly assuming. A future content-mutating suspend site would
+        break I9 the same way and must instead fire the trigger or reintroduce a
+        marker — none exists, so none is built.</td>
       <td><a href="#s3">§3</a>/<a href="#s4">§4.3</a></td>
       <td>Every <code>withTriggerSuspended</code> / <code>withTriggerRecreate</code>
         site; §8 rewriter</td>
