@@ -20,8 +20,8 @@ import {
   addBlockTypeToProperties,
 } from '@/data/properties'
 import {BLOCK_TYPE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
-import {propertiesPageBlockId} from '@/data/propertiesPage'
-import {typesPageBlockId} from '@/data/typesPage'
+import {propertiesPageBlockId, getOrCreatePropertiesPage} from '@/data/propertiesPage'
+import {typesPageBlockId, getOrCreateTypesPage} from '@/data/typesPage'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
 
@@ -198,7 +198,21 @@ const throwIfPropertySeedAccessAborted = (signal?: AbortSignal): void => {
  * behind server RLS but would otherwise enqueue every seed create as a viewer.
  *
  * The captured workspace is rechecked after the wait so a parked task cannot
- * write after the user switches away. Abort is owned by the trigger generation. */
+ * write after the user switches away. Abort is owned by the trigger generation.
+ *
+ * DELIBERATELY NOT gated on §6 e2ee materializability (decision on PR #397, Codex
+ * "defer seed scheduling until workspace access is known"). A `setActiveWorkspaceId`
+ * reschedule can fire this pass before App's `resolveWorkspaceEntry` marks a locked
+ * e2ee workspace read-only, so an owner could briefly write seed rows into a locked
+ * workspace. We accept it: (1) it's not a leak — the local DB is plaintext regardless,
+ * and an e2ee workspace's UPLOAD seals content via `requireCek`, which THROWS without
+ * the key (`sync/transform.ts`), so a seed row is never uploaded plaintext; (2) the
+ * rows are deterministic + idempotent, so they normalize once the workspace unlocks
+ * and its real blocks materialize; (3) the PROPERTY seed path has the identical gate
+ * (this same function) — it's a shared, pre-existing behavior, not type-specific — and
+ * once App sets read-only, both the gate and the pass's final `isReadOnly` recheck stop
+ * further writes. If this ever needs closing, add the materializability check HERE (the
+ * shared gate) so both kinds benefit, not a type-only patch. */
 export const awaitPropertySeedMaterializationAccess = async (
   repo: Repo,
   workspaceId: string,
@@ -303,6 +317,11 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
   readonly idFor: (workspaceId: string, seedKey: string) => string
   /** Deterministic parent page id (Properties / Types). */
   readonly parentFor: (workspaceId: string) => string
+  /** Ensure the parent page (Properties / Types) exists before minting children.
+   *  Idempotent + deterministic-id; called only when there's pending work, so the
+   *  pass is self-sufficient rather than dependent on bootstrap ordering (see
+   *  `materializeSeeds`). */
+  readonly ensureParent: (repo: Repo, workspaceId: string) => Promise<unknown>
   readonly contentFor: (seed: S) => string
   readonly propertiesFor: (seed: S) => Record<string, unknown>
   readonly txDescription: string
@@ -310,6 +329,16 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
    *  guards and before the probe. Types drop contested-`id` seeds here; the
    *  property side has no analog (its registry handles name collisions upstream). */
   readonly preFilter?: (seeds: readonly S[]) => readonly S[]
+  /** Optional per-seed declaration recheck, consulted INSIDE the write tx right
+   *  before each seed's create/restore. The seed array is a snapshot taken before
+   *  the pass's awaits (probe / ensure / tx setup); a facet change since may have
+   *  removed a seed or made it contested (by key OR — types only — by membership
+   *  id). Returning false skips it — create/restore is irreversible, so a stale
+   *  write would leave a retired row the registry later republishes as a phantom
+   *  block-id type. Receives the whole seed so the type side can check its id. Only
+   *  the scheduled path wires this (against the live registry); direct callers pass
+   *  an explicit array and omit it. */
+  readonly stillMaterializable?: (seed: S) => boolean
 }
 
 /** Isolated create/restore-only seed materialization pass — the ONE copy of the
@@ -323,14 +352,17 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
  * deterministic id before entering the write transaction; one poisoned id
  * intentionally aborts the whole batch rather than partially materializing a
  * declaration set whose identity is suspect. Missing definitions are minted
- * beneath the already-ensured deterministic parent page in one Automation
- * transaction with pristine systemMint timestamps. The kind's specifics
- * (id / parent / content / bag / label / pre-filter) come through `config`. */
+ * beneath the deterministic parent page — which the pass ensures exists first
+ * (`config.ensureParent`), so it doesn't depend on bootstrap having created it —
+ * in one Automation transaction with pristine systemMint timestamps. The kind's
+ * specifics (id / parent / ensure / content / bag / label / pre-filter) come
+ * through `config`. */
 const materializeSeeds = async <S extends {readonly seedKey: string; readonly revision: number}>(
   repo: Repo,
   workspaceId: string,
   seeds: readonly S[],
   config: SeedMaterializationConfig<S>,
+  signal?: AbortSignal,
 ): Promise<SeedMaterializationResult> => {
   assertUniqueSeedKeys(config.label, seeds)
   if (repo.isReadOnly) return {created: 0, restored: 0, skippedReadOnly: true}
@@ -370,10 +402,36 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   })
   if (pending.length === 0) return {created: 0, restored: 0, skippedReadOnly: false}
 
+  // The probe above awaited; if the generation aborted since (the user switched
+  // workspaces — `setActiveWorkspaceId` aborts it), don't ensure the page or open
+  // the write tx. `repo.tx` pins writes by the row's own workspace, so materializing
+  // here would create backing blocks in the workspace the user just left, past the
+  // caller's pre-probe abort check. The write is idempotent and scope-correct, but
+  // the active-workspace guard exists to not do it — so honor the abort at the last
+  // point before the tx.
+  if (signal?.aborted) return {created: 0, restored: 0, skippedReadOnly: false}
+
+  // Ensure the parent system page exists before minting children. `tx.create`
+  // enforces `requireParentInWorkspace`, so a create beneath a not-yet-materialized
+  // Properties/Types page throws `ParentNotFoundError`. That's reachable: a
+  // `setActiveWorkspaceId`-driven reschedule (esp. for TYPE seeds, whose registry
+  // has no priming gate) can fire this pass before bootstrap's `ensureSystemPages`
+  // runs. Ensuring here — idempotent, deterministic-id, a cached read once the page
+  // exists, and concurrency-safe against bootstrap's own ensure (it re-checks
+  // existence inside its tx) — makes the pass self-sufficient rather than a
+  // spurious throw that waits for the next open/seed change.
+  await config.ensureParent(repo, workspaceId)
+
   let created = 0
   let restored = 0
   const parentId = config.parentFor(workspaceId)
   await repo.tx(async tx => {
+    // `ensureParent` (and `repo.tx`'s own tx_context setup) awaited since the check
+    // above; a switch-away can land in that window. Early-out here so an aborted
+    // generation skips even the read-only revalidation below (whose asserts would
+    // otherwise log a spurious non-abort failure); the atomic write guard is the
+    // second recheck, immediately before the write loop.
+    if (signal?.aborted) return
     const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
     // Revalidate the complete declaration set under the same write lock before
     // the first mutation. The outside batch is only a fast no-work probe; it
@@ -388,8 +446,26 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
       }
       currentById.set(id, current)
     }
+    // The revalidation reads above are each awaited; a switch-away OR a role
+    // demotion can land during one of them. Recheck once more here — the last
+    // read-only point before the write loop — so neither writes anything. This is
+    // the atomic guard: the write loop below is the mutation unit (returning from
+    // inside it would commit the partial writes already made), so this is the
+    // correct final checkpoint, not a per-write check.
+    //
+    // `repo.isReadOnly`: the top-of-fn check and the access gate both ran before
+    // these awaits, but the seed write is `ChangeScope.Automation`, which
+    // `scopeAllowedInReadOnly` PERMITS — so a flip to viewer mid-pass would
+    // otherwise create/restore backing rows for a viewer and enqueue RLS-rejected
+    // writes. Re-read it at the last moment.
+    if (signal?.aborted || repo.isReadOnly) return
     for (const seed of materializable) {
       const id = config.idFor(workspaceId, seed.seedKey)
+      // Declaration recheck (scheduled path): the seed array was snapshotted before
+      // the awaits above; if a facet change since removed this seed or made it
+      // contested, skip it. create/restore-only can't undo a write, so a stale
+      // create would strand a retired row the registry republishes as a phantom.
+      if (config.stillMaterializable && !config.stillMaterializable(seed)) continue
       const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
       if (current?.deleted) {
@@ -412,21 +488,33 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   return {created, restored, skippedReadOnly: false}
 }
 
-/** Create/restore-only PROPERTY seed pass — missing definitions minted beneath
- * the already-ensured deterministic Properties page. See `materializeSeeds`. */
+/** Create/restore-only PROPERTY seed pass — missing definitions minted beneath the
+ * Properties page, which the pass ensures exists first. See `materializeSeeds`. */
 export const materializePropertySeeds = (
   repo: Repo,
   workspaceId: string,
   seeds: readonly AnyPropertySeedDeclaration[],
+  signal?: AbortSignal,
+  revalidateAgainstRegistry = false,
 ): Promise<SeedMaterializationResult> =>
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializePropertySeeds',
     idFor: propertyDefinitionBlockId,
     parentFor: propertiesPageBlockId,
+    ensureParent: getOrCreatePropertiesPage,
     contentFor: seed => seed.name,
     propertiesFor: canonicalPropertySeedProperties,
     txDescription: 'materialize property definitions',
-  })
+    stillMaterializable: revalidateAgainstRegistry
+      ? seed => {
+          const reg = repo.propertyDefinitions
+          // Not the live registry for this workspace (direct caller with an explicit
+          // array, or a switch-away the abort guard already handles) → trust the array.
+          if (reg?.workspaceId !== workspaceId) return true
+          return reg.seedsByKey.has(seed.seedKey)
+        }
+      : undefined,
+  }, signal)
 
 /** Exclude EVERY seed whose membership `id` is claimed by more than one seed in
  * the batch (returning the uncontested rest). Two seeds sharing an `id` are an
@@ -469,8 +557,8 @@ const uncontestedTypeSeeds = (
 }
 
 /** Create/restore-only TYPE seed pass — missing definitions minted beneath the
- * already-ensured deterministic Types page. Unlike the property pass it drops
- * contested-`id` seeds first (`uncontestedTypeSeeds`, via `preFilter`) so a
+ * Types page, which the pass ensures exists first. Unlike the property pass it
+ * drops contested-`id` seeds first (`uncontestedTypeSeeds`, via `preFilter`) so a
  * membership collision never materializes an order-dependent, orphan-prone
  * backing row; the property side folds its collision handling into the registry
  * upstream. Its `block-type` backing rows are kept bare (no PAGE_TYPE / alias) by
@@ -479,13 +567,39 @@ export const materializeTypeSeeds = (
   repo: Repo,
   workspaceId: string,
   seeds: readonly TypeSeedDeclaration[],
+  signal?: AbortSignal,
+  revalidateAgainstRegistry = false,
 ): Promise<SeedMaterializationResult> =>
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializeTypeSeeds',
     idFor: typeDefinitionBlockId,
     parentFor: typesPageBlockId,
+    ensureParent: getOrCreateTypesPage,
     contentFor: seed => seed.label,
     propertiesFor: canonicalTypeSeedProperties,
     txDescription: 'materialize type definitions',
     preFilter: uncontestedTypeSeeds,
-  })
+    stillMaterializable: revalidateAgainstRegistry
+      ? seed => {
+          const reg = repo.typeDefinitions
+          // Not the live registry for this workspace (direct caller with an explicit
+          // array, or a switch-away the abort guard already handles) → trust the array.
+          if (reg?.workspaceId !== workspaceId) return true
+          const current = reg.seedsByKey.get(seed.seedKey)
+          // Withhold a seed the live registry no longer declares OR now flags
+          // contested by key OR by membership id, matching `workspaceSeeds`' filter.
+          if (!current
+            || reg.contestedSeedKeys.has(seed.seedKey)
+            || reg.contestedTypeIds.has(seed.id)) return false
+          // The live declaration for this key must still carry the same membership
+          // ID we snapshotted. A same-key id REPLACEMENT (an id de-collision, a
+          // plugin update) would otherwise write the stale id to the deterministic
+          // block; create/restore-only never repairs it, so the registry would bind
+          // the NEW id to a row claiming the OLD one. Compare ID only — NOT revision:
+          // a revision bump is a payload-version change materialization deliberately
+          // doesn't chase (the reschedule diff ignores it too, §4.3/§6.1), so gating
+          // on it here would reject the snapshot with no dirty re-run to replace it.
+          return current.id === seed.id
+        }
+      : undefined,
+  }, signal)

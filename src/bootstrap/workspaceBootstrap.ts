@@ -230,13 +230,13 @@ export const bootstrapWorkspace = async ({
   // `freshlyCreated` lets a fresh workspace skip the membership-row wait its
   // access gate otherwise performs.
   //
-  // MUST run after `ensureSystemPages`: the materializer creates each definition
-  // block parented to `propertiesPageBlockId(workspaceId)`, and `tx.create`
-  // enforces `requireParentInWorkspace`. On a fresh workspace in a runtime with no
-  // `requestIdleCallback` (Node/jsdom, some webviews) the deferred pass falls back
-  // to `setTimeout(0)`, so scheduling it before the Properties page exists would
-  // let it fire mid-bootstrap and throw on the missing parent (retrying only on
-  // the next open/seed change). Scheduling here means the page is already created.
+  // Kept after `ensureSystemPages` so the pages already exist when the pass runs:
+  // the materializer parents each definition block to `propertiesPageBlockId` /
+  // `typesPageBlockId`, and `tx.create` enforces `requireParentInWorkspace`. The
+  // pass now ensures its own parent (`config.ensureParent`), so an earlier fire —
+  // e.g. the `setActiveWorkspaceId` reschedule, which for type seeds has no priming
+  // gate and can precede this — no longer throws on a missing parent; scheduling
+  // here just means that ensure is a cheap no-op rather than the page-creating path.
   repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
 
   const layoutSessionBlock = await resolveLayoutSession()

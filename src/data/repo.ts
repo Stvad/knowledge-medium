@@ -129,6 +129,7 @@ import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegis
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
 import {
   materializePropertySeeds,
+  materializeTypeSeeds,
   awaitPropertySeedMaterializationAccess,
 } from './definitionSeeds'
 import {
@@ -239,6 +240,25 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
 const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
   `${workspaceId}:${id}`
 
+/** Equal iff `a` and `b` have the same key set AND `eq` holds for every shared
+ *  key's values. An absent map is the empty map; the default `eq` compares keys
+ *  only. `b.has(key)` gates the `b.get(key)!`, so a legitimately-undefined value
+ *  isn't mistaken for a missing key. */
+const sameKeyedMap = <T>(
+  a: ReadonlyMap<string, T> | undefined,
+  b: ReadonlyMap<string, T> | undefined,
+  eq: (av: T, bv: T) => boolean = () => true,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const [key, value] of a) {
+    if (!b.has(key) || !eq(value, b.get(key)!)) return false
+  }
+  return true
+}
+
 /** True when two registry snapshots carry the same SET of seed keys (ignoring
  *  order, revisions, and everything else). Used to fire seed materialization
  *  only when the active workspace's declared seeds actually change — a new
@@ -248,12 +268,36 @@ const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
 const sameSeedKeySet = (
   a: ReadonlyMap<string, unknown> | undefined,
   b: ReadonlyMap<string, unknown> | undefined,
+): boolean => sameKeyedMap(a, b)
+
+/** Like {@link sameSeedKeySet}, but also compares each type seed's membership
+ *  `id`. `materializeTypeSeeds` skips EVERY seed in a duplicate-`id` group
+ *  (`uncontestedTypeSeeds`), so a declaration that de-collides an id — without
+ *  adding or removing a key — still changes what is materializable, and the
+ *  reschedule trigger must see it. Property seeds carry no such id-collision
+ *  filter, so their key-set diff alone suffices. */
+const sameTypeSeedIdentities = (
+  a: ReadonlyMap<string, {id: string}> | undefined,
+  b: ReadonlyMap<string, {id: string}> | undefined,
+): boolean => sameKeyedMap(a, b, (x, y) => x.id === y.id)
+
+/** Equal iff two string sets carry the same members. Absent set = empty. Used to
+ *  reschedule type-seed materialization when the CONTESTED seed-key set changes:
+ *  `workspaceSeeds` withholds contested keys (`contestedSeedKeys`), and the
+ *  keep-first winner they leave in `seedsByKey` may be byte-identical across a
+ *  de-collision, so `sameTypeSeedIdentities` alone wouldn't see that a withheld
+ *  key became materializable. */
+const sameStringSet = (
+  a: ReadonlySet<string> | undefined,
+  b: ReadonlySet<string> | undefined,
 ): boolean => {
   const sizeA = a?.size ?? 0
   const sizeB = b?.size ?? 0
   if (sizeA !== sizeB) return false
   if (!a || !b) return true
-  for (const key of a.keys()) if (!b.has(key)) return false
+  for (const value of a) {
+    if (!b.has(value)) return false
+  }
   return true
 }
 
@@ -789,12 +833,19 @@ export class Repo {
       ) => {
         this._types = types
         this._propertySchemas = propertySchemas
-        this._typeDefinitionRegistry = typeDefinitions
         // Retain the outgoing workspace's faithful snapshot when pinning a
         // DIFFERENT workspace, so an in-flight read/tx that began for it still
         // resolves against real definitions. A same-workspace rebuild (contribution
         // change) or a re-prime doesn't rotate the slot.
-        const incomingWorkspaceId = propertyDefinitions?.workspaceId ?? null
+        //
+        // Derive the incoming workspace from EITHER registry: `typeDefinitions` is
+        // built without the property registry's priming gate (facetBridge), so a
+        // type-only seed change can land while `propertyDefinitions` is still null.
+        // Falling back to the type registry's workspace keeps both the retention
+        // check and the reschedule guard below from mistaking that window for "no
+        // workspace" and skipping a type-seed materialization pass.
+        const incomingWorkspaceId =
+          propertyDefinitions?.workspaceId ?? typeDefinitions?.workspaceId ?? null
         const currentWorkspaceId = this._propertyDefinitionRegistry?.workspaceId ?? null
         if (this._propertyDefinitionRegistry && incomingWorkspaceId !== currentWorkspaceId) {
           this._previousPropertyDefinitionRegistry = this._propertyDefinitionRegistry
@@ -802,14 +853,25 @@ export class Repo {
         // Seed materialization (§4.3): plugin/dynamic seeds first appear when the
         // toggle-aware app runtime installs in a post-paint effect, long after
         // bootstrap ran — so re-run the create/restore pass whenever this active
-        // workspace's seedKey SET changes (not on every type/preset rebuild).
-        const seedKeysChanged = !sameSeedKeySet(
-          this._propertyDefinitionRegistry?.seedsByKey,
-          propertyDefinitions?.seedsByKey,
-        )
+        // workspace's materializable seed set changes (not on every type/preset
+        // rebuild). Diff BOTH registries against their PRIOR value (so assign them
+        // AFTER): a type seed (a `seedType` contribution) can appear post-bootstrap
+        // on its own, with no property-seed change to piggyback the reschedule on.
+        // The type diff is id-aware (`sameTypeSeedIdentities`): materializability
+        // there also depends on membership-id collisions, so an id that de-collides
+        // without a key change must still reschedule. It is also contested-key-aware
+        // (`sameStringSet` over `contestedSeedKeys`): a withheld duplicate-key seed
+        // leaves a byte-identical keep-first winner in `seedsByKey`, so a de-collision
+        // that makes it materializable again must reschedule even though the id diff
+        // sees no change.
+        const seedsChanged =
+          !sameSeedKeySet(this._propertyDefinitionRegistry?.seedsByKey, propertyDefinitions?.seedsByKey) ||
+          !sameTypeSeedIdentities(this._typeDefinitionRegistry?.seedsByKey, typeDefinitions?.seedsByKey) ||
+          !sameStringSet(this._typeDefinitionRegistry?.contestedSeedKeys, typeDefinitions?.contestedSeedKeys)
         this._propertyDefinitionRegistry = propertyDefinitions
+        this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
-        if (seedKeysChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
+        if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
       },
@@ -2230,11 +2292,39 @@ export class Repo {
    * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
    * read-only session; the gate is the authoritative check.
    */
+  /** The current property + type seed declarations for `workspaceId`, or empty
+   *  arrays when a registry is absent or pinned to a different workspace. Read
+   *  live (not snapshotted) so a coalesced pass materializes the latest set. */
+  private workspaceSeeds(workspaceId: string) {
+    const propertyRegistry = this._propertyDefinitionRegistry
+    const typeRegistry = this._typeDefinitionRegistry
+    return {
+      propertySeeds: propertyRegistry?.workspaceId === workspaceId
+        ? [...propertyRegistry.seedsByKey.values()]
+        : [],
+      // Withhold contested seeds from materialization: `seedsByKey` kept a
+      // contribution-order-dependent first-winner, but the backing pass is
+      // create/restore-only, so persisting one would strand a stale mirror on a
+      // later reorder. Drop BOTH a contested KEY and a contested membership ID
+      // using the registry's authoritative sets — filtering ids here (not leaving
+      // it to `materializeTypeSeeds`' `uncontestedTypeSeeds`) is what keeps a
+      // contested-key drop from making a surviving id-loser look uncontested. The
+      // type stays resolvable in-memory; only its backing block defers until the
+      // duplicate is resolved.
+      typeSeeds: typeRegistry?.workspaceId === workspaceId
+        ? [...typeRegistry.seedsByKey.values()].filter(
+            seed => !typeRegistry.contestedSeedKeys.has(seed.seedKey)
+              && !typeRegistry.contestedTypeIds.has(seed.id),
+          )
+        : [],
+    }
+  }
+
   scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
     if (this.isReadOnly || !workspaceId) return
-    const registry = this._propertyDefinitionRegistry
-    if (!registry || registry.workspaceId !== workspaceId) return
-    if (registry.seedsByKey.size === 0) return
+    // Gate on EITHER registry: a type-seed-only change must still schedule a pass.
+    const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+    if (propertySeeds.length === 0 && typeSeeds.length === 0) return
     // Coalesce: one pending pass per workspace. Repeated seed-set changes while a
     // pass is parked on the membership wait would otherwise stack a job + a
     // `workspace_members` subscription each; the pending pass reads the latest
@@ -2282,23 +2372,48 @@ export class Repo {
     try {
       const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
       if (!access.allowed) return
-      // Read the CURRENT seed set at run time: coalesced schedules mean it may
-      // have grown since this pass was queued, and re-checking the projected
-      // workspace skips a pass whose workspace is no longer active/projected
-      // (closing the post-gate switch-away window too).
-      const registry = this._propertyDefinitionRegistry
-      if (!registry || registry.workspaceId !== workspaceId) return
-      const seeds = [...registry.seedsByKey.values()]
-      if (seeds.length === 0) return
-      await materializePropertySeeds(this, workspaceId, seeds)
     } catch (err) {
       // A superseded generation (the user switched workspaces) aborts the parked
       // access wait — expected, not a failure to log or retry. Gate on OUR signal
-      // so an unrelated AbortError-named failure inside the pass still surfaces.
+      // so an unrelated AbortError-named failure still surfaces.
+      if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[seedMaterialization] workspace ${workspaceId} access wait failed: ${reason}`)
+      return
+    }
+    // Property and type seeds back INDEPENDENT pages (Properties / Types), so run
+    // each kind as its own isolated pass: a failure materializing one (e.g. a
+    // deterministic id occupied by a foreign row) must NOT suppress the other, and
+    // each rechecks the abort signal first so a switch-away landing between the two
+    // can't create backing blocks in the workspace the user just left.
+    await this.materializeSeedKind(workspaceId, signal, 'property')
+    await this.materializeSeedKind(workspaceId, signal, 'type')
+  }
+
+  private async materializeSeedKind(
+    workspaceId: string,
+    signal: AbortSignal,
+    kind: 'property' | 'type',
+  ): Promise<void> {
+    if (signal.aborted) return
+    try {
+      // `workspaceSeeds` reads live (see its doc); one extra consequence here is
+      // that a registry rotated by a switch-away yields an empty set for the
+      // departed workspace, making this a cheap no-op.
+      const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+      // Pass `revalidateAgainstRegistry: true`: this snapshot can go stale during the
+      // materializer's awaits (probe / ensure / tx setup), so the write path rechecks
+      // each seed against the live registry before committing (§4.3 phantom guard).
+      if (kind === 'property') {
+        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds, signal, true)
+      } else if (typeSeeds.length > 0) {
+        await materializeTypeSeeds(this, workspaceId, typeSeeds, signal, true)
+      }
+    } catch (err) {
       if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
       const reason = err instanceof Error ? err.message : String(err)
       console.error(
-        `[seedMaterialization] workspace ${workspaceId} failed (will retry next open/seed change): ${reason}`,
+        `[seedMaterialization] workspace ${workspaceId} ${kind} seeds failed (will retry next open/seed change): ${reason}`,
       )
     }
   }

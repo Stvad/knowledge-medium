@@ -206,18 +206,64 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.get(backingId)).toMatchObject({id: backingId, label: 'Poison'})
   })
 
-  it('indexes declared seeds by key, keeping the first on a duplicate key', () => {
+  it('indexes declared seeds by key, keeping the first on a duplicate key and recording it as contested', () => {
+    const TODO_KEY = 'system:kernel-data/type/todo'
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: new Map(),
       seeds: [
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'}),
-        seedType({seedKey: 'system:kernel-data/type/todo', revision: 1, id: 'todo', label: 'Todo'}),
+        seedType({seedKey: TODO_KEY, revision: 1, id: 'todo', label: 'Todo'}),
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Duplicate'}),
       ],
     })
     expect(reg.seedsByKey.size).toBe(2)
     expect(reg.seedsByKey.get(PAGE_KEY)?.label).toBe('Page')
+    // In-memory resolution keeps the first (transient, rebuilt each load)...
     expect(reg.typesById.get('page')).toMatchObject({label: 'Page'})
+    // ...but the contested key is flagged so the create/restore-only materializer
+    // withholds its order-dependent backing row; the uncontested key is not.
+    expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
+    expect(reg.contestedSeedKeys.has(TODO_KEY)).toBe(false)
+  })
+
+  it('refuses getTypeBlockId for an already-mirrored seed whose KEY is now contested', () => {
+    // A backing row exists (materialized when the key was uncontested); a later
+    // load adds a second contribution with the same key. The materializer can't
+    // delete the row, so `getTypeBlockId` must fail closed rather than point at the
+    // stale, order-dependent mirror.
+    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([projected({blockId: backingId, seedKey: PAGE_KEY, label: 'First'})]),
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'first', label: 'First'}),
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'second', label: 'Second'}),
+      ],
+    })
+    expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
+    // Provenance is retained (the read-only gate still recognizes the row)...
+    expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
+    // ...but the block-id binding is refused until the duplicate key is removed.
+    expect(reg.blockIdByTypeId.has('first')).toBe(false)
+  })
+
+  it('refuses getTypeBlockId for an already-mirrored seed whose membership ID is now contested', () => {
+    const KEY_B = 'system:kernel-data/type/todo'
+    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([projected({blockId: backingId, seedKey: PAGE_KEY, label: 'A'})]),
+      // Distinct keys, same membership id → id-contested.
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+        seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+      ],
+    })
+    expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
+    expect(reg.blockIdByTypeId.has('shared')).toBe(false)
+    // The contested id is exposed on the snapshot so the scheduled materialization
+    // path can withhold it authoritatively (not recompute from a filtered snapshot).
+    expect(reg.contestedTypeIds.has('shared')).toBe(true)
   })
 })

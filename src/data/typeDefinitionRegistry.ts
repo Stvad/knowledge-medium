@@ -26,6 +26,20 @@ export interface TypeDefinitionRegistrySnapshot {
   readonly definitionsByBlockId: ReadonlyMap<string, TypeDefinitionMetadata>
   readonly blockIdByTypeId: ReadonlyMap<string, string>
   readonly seedsByKey: ReadonlyMap<string, TypeSeedDeclaration>
+  /** Seed keys contributed more than once this rebuild. The keep-first winner
+   *  still publishes in-memory (see `indexSeedsByKey`), but a contested key must
+   *  be withheld from MATERIALIZATION: its winner is contribution-order-dependent
+   *  and the backing pass is create/restore-only, so persisting one would strand a
+   *  stale mirror on a later reorder. `getTypeBlockId` stays undefined until the
+   *  duplicate is resolved — the same fail-closed stance as a contested id. */
+  readonly contestedSeedKeys: ReadonlySet<string>
+  /** Membership `id`s claimed by more than one key-deduped seed this rebuild. The
+   *  authoritative id-collision set (`materializeTypeSeeds`' `uncontestedTypeSeeds`
+   *  recomputes the same thing for direct callers, but the SCHEDULED path filters
+   *  against THIS so it can't miscount after `workspaceSeeds` drops a contested-key
+   *  winner). Every seed carrying a contested id is withheld from materialization,
+   *  same fail-closed stance as `contestedSeedKeys`. */
+  readonly contestedTypeIds: ReadonlySet<string>
 }
 
 export interface BuildTypeDefinitionRegistryArgs {
@@ -69,19 +83,28 @@ const contributionFromProjection = (def: ProjectedTypeDefinition): TypeContribut
 /** Index the declared type seeds by key. Duplicate keys are a code-owned
  * invariant violation (the deterministic-id namespace assumes unique keys); we
  * keep the first and warn rather than throw, because this runs on every facet
- * rebuild and one malformed dynamic contribution must not abort the pass. */
+ * rebuild and one malformed dynamic contribution must not abort the pass. Every
+ * key seen more than once is recorded in `contestedSeedKeys` so the materializer
+ * can withhold it: the keep-first winner publishes in-memory (transient, rebuilt
+ * each load) but must NOT become a create/restore-only backing row, whose winner
+ * would be frozen contribution-order-dependent and stranded on a later reorder. */
 const indexSeedsByKey = (
   seeds: readonly TypeSeedDeclaration[],
-): Map<string, TypeSeedDeclaration> => {
-  const byKey = new Map<string, TypeSeedDeclaration>()
+): {seedsByKey: Map<string, TypeSeedDeclaration>; contestedSeedKeys: Set<string>} => {
+  const seedsByKey = new Map<string, TypeSeedDeclaration>()
+  const contestedSeedKeys = new Set<string>()
   for (const seed of seeds) {
-    if (byKey.has(seed.seedKey)) {
-      console.warn(`[buildTypeDefinitionRegistry] duplicate type seed key ${seed.seedKey}; keeping first`)
+    if (seedsByKey.has(seed.seedKey)) {
+      console.warn(
+        `[buildTypeDefinitionRegistry] duplicate type seed key ${seed.seedKey}; ` +
+        'keeping first (withheld from materialization until deduped)',
+      )
+      contestedSeedKeys.add(seed.seedKey)
       continue
     }
-    byKey.set(seed.seedKey, seed)
+    seedsByKey.set(seed.seedKey, seed)
   }
-  return byKey
+  return {seedsByKey, contestedSeedKeys}
 }
 
 /** Build the workspace's type-definition registry from projected user rows +
@@ -113,7 +136,7 @@ const indexSeedsByKey = (
 export const buildTypeDefinitionRegistry = (
   args: BuildTypeDefinitionRegistryArgs,
 ): TypeDefinitionRegistrySnapshot => {
-  const seedsByKey = indexSeedsByKey(args.seeds)
+  const {seedsByKey, contestedSeedKeys} = indexSeedsByKey(args.seeds)
   const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
   const typesById = new Map<string, TypeContribution>()
   const blockIdByTypeId = new Map<string, string>()
@@ -122,6 +145,7 @@ export const buildTypeDefinitionRegistry = (
   //    materialized row. Dedup by membership id (fail closed). blockIdByTypeId
   //    is deferred to step 2, bound only from an actual valid mirror.
   const seedKeyById = new Map<string, string>()
+  const contestedTypeIds = new Set<string>()
   for (const seed of seedsByKey.values()) {
     const priorKey = seedKeyById.get(seed.id)
     if (priorKey !== undefined) {
@@ -129,6 +153,7 @@ export const buildTypeDefinitionRegistry = (
         `[buildTypeDefinitionRegistry] duplicate type seed id ${seed.id} ` +
         `(keys ${priorKey} + ${seed.seedKey}); keeping first`,
       )
+      contestedTypeIds.add(seed.id)
       continue
     }
     seedKeyById.set(seed.id, seed.seedKey)
@@ -150,7 +175,19 @@ export const buildTypeDefinitionRegistry = (
       // (it lost the membership-id dedup to another seed), the mirror is still
       // code-owned: retain it only in `definitionsByBlockId` (above) for
       // provenance — never republish it as a user-selectable type.
-      if (seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey) {
+      //
+      // Refuse the binding when the seed's key OR id is CONTESTED (duplicated
+      // this rebuild). The materializer withholds contested seeds from NEW writes,
+      // but it can't delete a row created while the seed was uncontested — so an
+      // already-materialized mirror survives a later collision. Its stored content
+      // is frozen contribution-order-dependent (which duplicate first materialized),
+      // so keep `getTypeBlockId` UNDEFINED until the collision is resolved rather
+      // than pointing a link/repair consumer at that stale, order-dependent block.
+      if (
+        seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey &&
+        !contestedSeedKeys.has(declaredSeed.seedKey) &&
+        !contestedTypeIds.has(declaredSeed.id)
+      ) {
         blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
       }
       continue
@@ -172,5 +209,7 @@ export const buildTypeDefinitionRegistry = (
     definitionsByBlockId,
     blockIdByTypeId,
     seedsByKey,
+    contestedSeedKeys,
+    contestedTypeIds,
   }
 }
