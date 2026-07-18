@@ -1200,8 +1200,16 @@ just panels.
     (<code>ensureUserPrefsChild</code>, <code>getPluginPrefsBlock</code>,
     <code>stateBlocks.ts:190-198</code>/<code>:322-338</code>), and tagging those
     would make real preference history a retention candidate — the sweeper must
-    never touch prefs. A backfill pass adds it to
-    <em>every existing block in the <code>ui-state</code> subtree</em>, walked
+    never touch prefs.
+    <strong>The backfill tags on the same authorization the sweeper uses, never on
+    ancestry alone</strong> (review finding): writing the visible
+    <code>no-history</code> type onto a block merely because it sits under
+    <code>ui-state</code> is the mutable-parentage gate §13 rejects — and worse than
+    an inert misclassification, because the tag <em>persists</em> and turns
+    destructive the moment B2/O7 honours user tags. So the pass tags
+    provenance/identity-confirmed state rows and <em>reports</em> ambiguous
+    descendants rather than tagging them. With that constraint, it walks
+    <em>every existing block in the <code>ui-state</code> subtree</em>, from
     from <strong>every workspace member's</strong> root — <em>not</em> just the
     active user's (review finding): UI-state roots are <em>per user</em>
     (<code>getUIStateBlock</code> puts <code>ui-state</code> under that user's
@@ -1505,7 +1513,13 @@ just panels.
         <em>stronger</em> signal than the type: it proves the block <em>is</em>
         dedicated UI-state storage by construction, whereas the type is a
         user-editable assertion that it is. So: typed <em>or</em>
-        identity-confirmed ⇒ prune. Otherwise ⇒ skip;
+        identity-confirmed ⇒ prune — <strong>but only within whatever B1 gate has
+        been resolved</strong> (review finding): stated unconditionally, this rule
+        would let an implementer delete undoable content history before that
+        decision is made, either for a user-tagged content block or for a squatted
+        computed id. The gate (§13) is what narrows "identity-confirmed" to
+        something unforgeable; until it is chosen, this rule authorizes nothing on
+        blocks outside dedicated UI-state storage. Otherwise ⇒ skip;
         already-pruned events stay gone (retention is one-way), nothing further is
         cut. <strong>In B1 the structural gate applies to tombstones too</strong>
         (review finding): "typed ⇒ prune" read alone would let a user apply the
@@ -2101,7 +2115,14 @@ block with any <code>v IS NULL</code> event:
   events, and every non-derivable <code>before</code> is retained as an anchor.
   Pinned by an equivalence test: seed a DB with randomized edit histories
   (including deliberate gaps), snapshot <code>stateAt</code> for every event,
-  migrate, compare.
+  migrate, compare — <strong>comparing content/structure, not raw bytes, across
+  the one metadata gap</strong> (review finding, matching I5's own narrowing):
+  the seeded histories include the trigger-suspended <code>user_updated_at</code>
+  backfill, and after walls were retired a pre-gap event reconstructs its
+  <em>metadata</em> from the post-backfill base. A full-row byte comparison would
+  therefore fail a correct no-wall implementation, or push it to reintroduce
+  markers purely to satisfy an assertion about fields no reader reconstructs by
+  walking.
 </div>
 
 <h3>8.2 Resumability, scheduling, coexistence</h3>
@@ -2538,8 +2559,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         and incremented in-memory (<code>repo.ts:751-756</code>), so a clock
         rollback or a second session can place a later tx below an earlier one —
         persisting it would not give a total order. (a) needs a SQLite-allocated
-        monotonic value (a dedicated <code>AUTOINCREMENT</code> sequence, the way
-        <code>row_events.id</code> is DB-wide monotonic), not the session counter. That is new persisted state
+        monotonic value, the way <code>row_events.id</code> is DB-wide monotonic —
+        not the session counter. <strong>It cannot simply be a new
+        <code>AUTOINCREMENT</code> column on <code>command_events</code></strong>
+        (review finding): that table already has <code>tx_id TEXT PRIMARY KEY</code>
+        (<code>clientSchema.ts:103-113</code>), and SQLite ties
+        <code>AUTOINCREMENT</code> to an <code>INTEGER PRIMARY KEY</code>, so an
+        in-place <code>ALTER</code> either fails or degrades to a hand-rolled value
+        that loses the very ordering guarantee this depends on. Specify one of: a
+        small side sequence table the insert draws from, or a table rebuild making
+        the sequence the rowid. That is new persisted state
         <em>provisioned for a reader that does not exist yet</em> (I6: nothing reads
         <code>row_events</code> at runtime) — the exact scope tension in the
         retention-vs-undo question (§16 open): pay it now, or <em>restrict retention
@@ -2914,13 +2943,32 @@ into is smaller).
         blocks have <strong>computable ids</strong>:
         <code>userPageBlockId = uuidv5(workspaceId:userId)</code> and
         <code>stateChildBlockId = uuidv5(parentId:namespace)</code>
-        (<code>stateBlocks.ts:54-58</code>), so the whole
-        <code>ui-state</code> → <code>layout-sessions</code> → session /
-        plugin-UI-state chain is derivable offline. The sweeper computes that id
-        set and gates on membership in it. A <em>moved</em> content block cannot
+        (<code>stateBlocks.ts:54-58</code>). A <em>moved</em> content block cannot
         acquire one of those ids — they are already occupied by the real state
-        blocks — so this is strictly stronger than parentage. It is <em>not</em>
-        sufficient on its own, though: see the open problem below (an id can be
+        blocks — so this is strictly stronger than parentage.
+        <strong>But only the fixed-namespace links are derivable offline</strong>
+        (review finding — an earlier draft claimed the whole chain was, and had the
+        sweeper "compute that id set"): the user page, its <code>ui-state</code>
+        child, <code>layout-sessions</code>, and the per-plugin
+        <code>ui-state</code> child all key on constants or the plugin type id, so
+        they <em>are</em> computable. Their <em>children</em> are not: a layout
+        session keys on a <code>layoutSessionId</code> minted from browser storage
+        (<code>layoutSessionId.ts:60-72</code>) and a plugin child on a
+        caller-supplied key (<code>getPluginUIStateChild</code>,
+        <code>stateBlocks.ts:403-410</code>). Neither is derivable from anything
+        this device holds, so another device's untyped layout-session or plugin
+        child in a synced-but-unopened workspace would simply never appear in a
+        computed set. Those are found by <em>traversing</em> the children of the
+        computed parents — which is <em>discovery</em>, not authorization, since
+        parentage is mutable.
+        For authorization there is a narrower check that does survive: where the
+        child's key <em>is</em> its content — the <code>ensureUiChild</code> default,
+        which covers layout sessions — <code>id = stateChildBlockId(parentId,
+        content)</code> is re-derivable per block and authorizes on its own. Where a
+        caller passed a custom display <code>content</code> (the
+        <code>getPluginUIStateChild</code> signature permits it), even that fails and
+        only persisted provenance would do. It is also <em>not</em>
+        sufficient in general: see the open problem below (an id can be
         squatted before the real state block is lazily created).
         (<code>systemMint</code> looks like the other candidate signal but is a
         tx-time attribution option, not a persisted per-block flag, so it cannot be
@@ -3308,8 +3356,13 @@ generator, which is how both were found.
     <tr>
       <td>I7</td>
       <td><strong>History rows are immutable</strong> once written — just two
-        sanctioned exceptions, both narrow: (1) the §8 one-time rewrite (v1→v2,
-        reconstruction-lossless); (2) the §5.1 retention sweeper <em>deleting</em>
+        sanctioned exceptions, both narrow: (1) the §8 one-time rewrite —
+        v1→v2, reconstruction-lossless, <em>and</em> the conservative
+        <strong>v2→v2 promotion</strong> of already-compact rows to full when a
+        content-level divergence is detected (review finding: limiting the
+        exception to v1→v2 would have an implementation or test reject exactly the
+        promotion §8.1 requires, leaving the mixed stream open to the splice that
+        path exists to prevent); (2) the §5.1 retention sweeper <em>deleting</em>
         whole oldest-prefix events of a prunable block, keeping the newest K.
         <strong>"Prunable" is the type <em>or</em> confirmed dedicated-UI-state
         identity</strong> (review finding — this invariant previously said "never
@@ -3655,8 +3708,11 @@ generator, which is how both were found.
     <ul>
       <li><em>(a) Provision durable per-tx state now</em> — on
         <code>command_events</code>, four values all already computed at commit
-        time: a <strong>SQLite-allocated</strong> DB-wide monotonic tx sequence (a
-        dedicated <code>AUTOINCREMENT</code>, like <code>row_events.id</code>), the
+        time: a <strong>SQLite-allocated</strong> DB-wide monotonic tx sequence
+        (monotonic the way <code>row_events.id</code> is — but <em>not</em> a plain
+        <code>AUTOINCREMENT</code> column added to <code>command_events</code>,
+        which its <code>tx_id TEXT PRIMARY KEY</code> forecloses; a side sequence
+        table or a rowid-making rebuild, per §10), the
         <strong><code>group_id</code></strong>, a <strong>wrote-a-row
         flag/count</strong>, and <strong><code>is_replay</code></strong>. All four
         are load-bearing, each for a distinct failure the review surfaced:
