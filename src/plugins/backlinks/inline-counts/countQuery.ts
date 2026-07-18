@@ -4,6 +4,8 @@ import {
   TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksStructureKey,
 } from '@/data/invalidation'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { BACKLINKS_FOR_BLOCK_QUERY } from '../query.ts'
 
 export const BACKLINKS_COUNT_FOR_BLOCK_QUERY = 'backlinks.countForBlock'
 
@@ -18,10 +20,21 @@ const numberSchema: Schema<number> = {
  *  excludes the self-reference in SQL with a self-scope `exclude` predicate —
  *  the SQL analogue of `forBlock`'s `ids.filter(s => s !== id)`.
  *
- *  Intentionally UNFILTERED, even though the expanded `LinkedReferences` may
- *  apply a page / daily-note backlink filter (rendered as "matched / total").
- *  The badge tracks the *total* — i.e. the denominator the user sees on
- *  expand — so "5" on the badge and "2 / 5" in the expanded header agree.
+ *  Intentionally unfiltered with respect to the USER filter, even though the
+ *  expanded `LinkedReferences` may apply a page / daily-note backlink filter
+ *  (rendered as "matched / total"). The badge tracks the *total* — i.e. the
+ *  denominator the user sees on expand — so "5" on the badge and "2 / 5" in the
+ *  expanded header agree.
+ *
+ *  The property-machinery exclusion is a DIFFERENT axis and must apply here: it
+ *  is source de-duplication, not a user filter, so a hidden value row's
+ *  `[[Target]]` must not inflate the badge past the list the user gets on
+ *  expand. That exclusion is a post-filter on ids, so counting it means
+ *  materialising them — which is exactly what this query exists to avoid.
+ *  Hence two paths: an un-flipped workspace has no machinery at all, so it
+ *  keeps the pure `core.typedBlockCount` aggregate (all of prod, no
+ *  regression); a child-backed workspace defers to `backlinks.forBlock` and
+ *  takes its length, making badge and list agree by construction.
  *
  *  Explicit const type (like `backlinksForBlockQuery`) so `typeof` is knowable
  *  without inferring this initializer, which would loop through QueryRegistry
@@ -46,6 +59,9 @@ export const backlinksCountForBlockQuery: Query<
       channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
       key: typedBlocksStructureKey(workspaceId, id),
     })
+    if (await readIsChildBackedWorkspace(ctx.db, workspaceId)) {
+      return (await ctx.run(BACKLINKS_FOR_BLOCK_QUERY, { workspaceId, id })).length
+    }
     return ctx.run('core.typedBlockCount', {
       workspaceId,
       referencedBy: { id },
