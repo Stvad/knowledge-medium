@@ -1177,7 +1177,22 @@ just panels.
     stamping threads through that shared <code>ensureUiChild</code> primitive,
     <em>new</em> descendants (of whatever future kind) are covered automatically,
     so the backfill only owes the pre-slice rows (~857 panels + the root/plugin +
-    the layout-sessions subtree). The backfill is
+    the layout-sessions subtree). <strong>The walk must not filter out
+    <code>deleted = 1</code></strong> (review finding): a UI-state block
+    soft-deleted <em>before</em> slice B has no live tag event to set the flag, so
+    the partial-index sweeper would never discover it and its history would sit
+    unbounded forever — contradicting the "deleted flagged blocks are bounded"
+    claim below. A soft-deleted block is still a <code>blocks</code> row with its
+    parent pointer, so subtree membership — the <em>same</em> signal used for live
+    ones, not a reintroduction of structural <code>panel</code> keying — reaches it.
+    (Implementation note: the strict type path rejects tombstones, so this needs a
+    tagging path that tolerates <code>deleted = 1</code>.) Measured legacy stock on
+    prod: <strong>365 soft-deleted UI-state blocks holding 8,908 events</strong>
+    (max 3,116 on one) — static, already-deleted, ~12&nbsp;MB. <em>Hard</em>-deleted
+    legacy blocks are genuinely unreachable — no row to tag, and their v1 snapshots
+    predate the <code>no-history</code> type so there is nothing to match on — but
+    the measured count is <strong>0</strong> on prod, so the residual is currently
+    empty and, being already-deleted, cannot grow. Named, not silent. The backfill is
     <strong>per-workspace, run when a workspace is active</strong> — it must not
     write blocks in workspaces the user hasn't opened (the sync-queue-flood rule
     the rest of the system holds to). For a <strong>writable, synced</strong>
@@ -1283,6 +1298,28 @@ just panels.
         no tag-time UPDATE of past rows, so I7 keeps its two exceptions and event
         <em>payloads</em> stay immutable. A hard-deleted block's status is frozen at
         its delete event's flag (the type as of deletion) — exactly right.</li>
+      <li><em>…with one guard: an event that <strong>could not</strong> have
+        stamped the flag doesn't get to answer the question</em> (review finding).
+        A stale tab is the hazard: boot-time <code>withTriggerRecreate</code>
+        reinstalls every trigger body from <em>whichever client booted last</em>, so
+        an older tab rebooting after slice B reinstalls a pre-slice-B body whose
+        <code>INSERT INTO row_events</code> column list has no
+        <code>no_history</code> (<code>clientSchema.ts:450-463</code> is that
+        shape). Writes to a tagged panel then default the latest event's flag to 0,
+        and a naive latest-event rule would read the block as untagged and silently
+        stop bounding it. Two defences, both worth having: <strong>(1) version-guard
+        the recreation</strong> — the bootstrap records a trigger-body version and
+        an older client does <em>not</em> downgrade newer bodies, which protects
+        every v2 stamp (<code>v</code>, <code>full</code>,
+        <code>workspace_id</code>, <code>scope</code>), not just this flag;
+        <strong>(2) make the reader defensive anyway</strong> — status comes from
+        the latest event <em>that could have carried it</em>, i.e. the latest
+        <code>v = 2</code> event. If the latest event is v1-shaped
+        (<code>v IS NULL</code> — a downgrade-window write), the sweeper falls back
+        to the authoritative type itself: the live <code>blocks</code> row for a
+        live or soft-deleted block, or the delete event's snapshot for a
+        hard-deleted one. The fallback only engages during a downgrade window, and
+        it fails <em>safe</em> (it consults the source of truth, never guesses).</li>
     </ul>
     Deleted blocks are pruned deliberately: a panel deleted <em>before</em> a sweep
     capped it would otherwise keep its whole pre-delete history (up to the full
@@ -1932,13 +1969,25 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         on create/restore would drop those blocks from subtree-at-time results
         until their first logged parent move, or forever if they never move. So
         it opens an interval on <em>the first event of a block's surviving
-        history</em> — which §8.1 guarantees is full (a create, a pre-log
-        chain-start, or a cadence anchor — all <code>full=1</code>),
-        i.e. carries the parent edge outright. This is the second I8 exception
-        (historical gaps) showing up as a concrete reader rule, not a new
-        crutch: the boundary comes from the log, not from
-        <code>blocks</code>. <strong>The §5.1 retention sweeper is the one case
-        that breaks the full-first guarantee</strong> (review finding): after a
+        history</em> — which §8.1 makes full (a create, a pre-log
+        chain-start, or a cadence anchor — all <code>full=1</code>) for every block
+        the rewriter touches, i.e. it carries the parent edge outright. This is the
+        second I8 exception (historical gaps) showing up as a concrete reader rule,
+        not a new crutch: the boundary comes from the log, not from
+        <code>blocks</code>. <strong>Two cases fall outside that guarantee, and the
+        builder must resolve the opening parent by reconstruction rather than
+        assuming the event carries it.</strong> <em>(i) Zero-history pre-log
+        stock</em> (review finding): a block that predates logging and has
+        <em>no</em> <code>row_events</code> at all is never seen by the §8 rewriter
+        — §8.1's rule only shapes rows it rewrites — so its first-ever logged write,
+        landing live after slice A, is whatever the v2 trigger produces: a
+        <em>compact</em> patch, since §4.1/I6 deliberately removed any
+        predecessor/history probe. That patch may omit <code>parentId</code>
+        entirely. The builder resolves the edge with §4.3 <code>stateAt</code> at
+        that event (which walks backward from the live row), rather than requiring
+        the first event to be full — no format change and no anchor-backfill of
+        that stock. <em>(ii)</em> <strong>The §5.1 retention sweeper</strong>
+        (review finding): after a
         <code>no-history</code> block is pruned to its newest K, its
         <em>first surviving</em> event is whatever survived the cut — usually a
         compact update with no <code>parentId</code> — because §8.1's guarantee is
@@ -2288,10 +2337,16 @@ into is smaller).
         stamped on <em>every</em> UI-state block at creation — panels, panel-stack
         rows, the root <code>ui-state</code> child, and plugin UI-state blocks,
         §5.1 — + a one-time backfill onto the existing <code>ui-state</code>
-        subtree) + the <code>row_events.no_history</code> column the trigger
-        denormalizes from that type + a partial index
-        <code>(no_history, block_id, id) WHERE no_history = 1</code> + the §5.1
-        retention sweeper (whole-block newest-K, cut by <code>id</code>, no
+        subtree, <em>including its soft-deleted members</em>) + the
+        <code>row_events.no_history</code> column the trigger denormalizes from
+        that type + a partial index
+        <code>(no_history, block_id, id) WHERE no_history = 1</code> for discovery
+        <strong>+ the full <code>(block_id, id)</code> index</strong>, created
+        idempotently here too (review finding): the sweeper needs it for each
+        candidate's latest-flag lookup, count, and prefix cut, and B may ship before
+        C — without it those run against <code>(block_id, created_at DESC)</code>
+        and re-scan/sort hot panel histories every deep idle. Plus the §5.1
+        retention sweeper itself (whole-block newest-K, cut by <code>id</code>, no
         full-writes); <code>scope</code> stamped as
         provenance only; tests pinning I3 (incl. raw-write labeling + logging)
         and I8 (no write path is exempt — every kind logs) — plus the fuzzed
