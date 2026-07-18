@@ -332,11 +332,13 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
   /** Optional per-seed declaration recheck, consulted INSIDE the write tx right
    *  before each seed's create/restore. The seed array is a snapshot taken before
    *  the pass's awaits (probe / ensure / tx setup); a facet change since may have
-   *  removed a seed or made it contested. Returning false skips it — create/restore
-   *  is irreversible, so a stale write would leave a retired row the registry later
-   *  republishes as a phantom block-id type. Only the scheduled path wires this
-   *  (against the live registry); direct callers pass an explicit array and omit it. */
-  readonly stillMaterializable?: (seedKey: string) => boolean
+   *  removed a seed or made it contested (by key OR — types only — by membership
+   *  id). Returning false skips it — create/restore is irreversible, so a stale
+   *  write would leave a retired row the registry later republishes as a phantom
+   *  block-id type. Receives the whole seed so the type side can check its id. Only
+   *  the scheduled path wires this (against the live registry); direct callers pass
+   *  an explicit array and omit it. */
+  readonly stillMaterializable?: (seed: S) => boolean
 }
 
 /** Isolated create/restore-only seed materialization pass — the ONE copy of the
@@ -463,7 +465,7 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
       // the awaits above; if a facet change since removed this seed or made it
       // contested, skip it. create/restore-only can't undo a write, so a stale
       // create would strand a retired row the registry republishes as a phantom.
-      if (config.stillMaterializable && !config.stillMaterializable(seed.seedKey)) continue
+      if (config.stillMaterializable && !config.stillMaterializable(seed)) continue
       const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
       if (current?.deleted) {
@@ -504,12 +506,12 @@ export const materializePropertySeeds = (
     propertiesFor: canonicalPropertySeedProperties,
     txDescription: 'materialize property definitions',
     stillMaterializable: revalidateAgainstRegistry
-      ? seedKey => {
+      ? seed => {
           const reg = repo.propertyDefinitions
           // Not the live registry for this workspace (direct caller with an explicit
           // array, or a switch-away the abort guard already handles) → trust the array.
           if (reg?.workspaceId !== workspaceId) return true
-          return reg.seedsByKey.has(seedKey)
+          return reg.seedsByKey.has(seed.seedKey)
         }
       : undefined,
   }, signal)
@@ -578,14 +580,16 @@ export const materializeTypeSeeds = (
     txDescription: 'materialize type definitions',
     preFilter: uncontestedTypeSeeds,
     stillMaterializable: revalidateAgainstRegistry
-      ? seedKey => {
+      ? seed => {
           const reg = repo.typeDefinitions
           // Not the live registry for this workspace (direct caller with an explicit
           // array, or a switch-away the abort guard already handles) → trust the array.
           if (reg?.workspaceId !== workspaceId) return true
           // Withhold a seed the live registry no longer declares OR now flags
-          // contested (duplicate key/id), matching `workspaceSeeds`' own filter.
-          return reg.seedsByKey.has(seedKey) && !reg.contestedSeedKeys.has(seedKey)
+          // contested by key OR by membership id, matching `workspaceSeeds`' filter.
+          return reg.seedsByKey.has(seed.seedKey)
+            && !reg.contestedSeedKeys.has(seed.seedKey)
+            && !reg.contestedTypeIds.has(seed.id)
         }
       : undefined,
   }, signal)

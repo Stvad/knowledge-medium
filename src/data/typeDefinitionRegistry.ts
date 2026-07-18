@@ -33,6 +33,13 @@ export interface TypeDefinitionRegistrySnapshot {
    *  stale mirror on a later reorder. `getTypeBlockId` stays undefined until the
    *  duplicate is resolved — the same fail-closed stance as a contested id. */
   readonly contestedSeedKeys: ReadonlySet<string>
+  /** Membership `id`s claimed by more than one key-deduped seed this rebuild. The
+   *  authoritative id-collision set (`materializeTypeSeeds`' `uncontestedTypeSeeds`
+   *  recomputes the same thing for direct callers, but the SCHEDULED path filters
+   *  against THIS so it can't miscount after `workspaceSeeds` drops a contested-key
+   *  winner). Every seed carrying a contested id is withheld from materialization,
+   *  same fail-closed stance as `contestedSeedKeys`. */
+  readonly contestedTypeIds: ReadonlySet<string>
 }
 
 export interface BuildTypeDefinitionRegistryArgs {
@@ -203,5 +210,6 @@ export const buildTypeDefinitionRegistry = (
     blockIdByTypeId,
     seedsByKey,
     contestedSeedKeys,
+    contestedTypeIds,
   }
 }

@@ -2302,15 +2302,20 @@ export class Repo {
       propertySeeds: propertyRegistry?.workspaceId === workspaceId
         ? [...propertyRegistry.seedsByKey.values()]
         : [],
-      // Withhold a contested seed key from materialization: `seedsByKey` kept a
+      // Withhold contested seeds from materialization: `seedsByKey` kept a
       // contribution-order-dependent first-winner, but the backing pass is
       // create/restore-only, so persisting one would strand a stale mirror on a
-      // later reorder (the type analog of the `uncontestedTypeSeeds` id filter).
-      // The type stays resolvable in-memory; only its backing block is deferred
-      // until the duplicate key is removed.
+      // later reorder. Drop BOTH a contested KEY and a contested membership ID
+      // using the registry's authoritative sets — filtering ids here (not leaving
+      // it to `materializeTypeSeeds`' `uncontestedTypeSeeds`) is what keeps a
+      // contested-key drop from making a surviving id-loser look uncontested. The
+      // type stays resolvable in-memory; only its backing block defers until the
+      // duplicate is resolved.
       typeSeeds: typeRegistry?.workspaceId === workspaceId
-        ? [...typeRegistry.seedsByKey.values()]
-            .filter(seed => !typeRegistry.contestedSeedKeys.has(seed.seedKey))
+        ? [...typeRegistry.seedsByKey.values()].filter(
+            seed => !typeRegistry.contestedSeedKeys.has(seed.seedKey)
+              && !typeRegistry.contestedTypeIds.has(seed.id),
+          )
         : [],
     }
   }

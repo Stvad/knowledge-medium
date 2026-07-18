@@ -25,6 +25,7 @@ const registryWith = (types: readonly TypeContribution[]): TypeDefinitionRegistr
   blockIdByTypeId: new Map(),
   seedsByKey: new Map(),
   contestedSeedKeys: new Set(),
+  contestedTypeIds: new Set(),
 })
 
 describe('mergeCodeAndRegistryTypes', () => {

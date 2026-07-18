@@ -262,5 +262,8 @@ describe('buildTypeDefinitionRegistry', () => {
     })
     expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
     expect(reg.blockIdByTypeId.has('shared')).toBe(false)
+    // The contested id is exposed on the snapshot so the scheduled materialization
+    // path can withhold it authoritatively (not recompute from a filtered snapshot).
+    expect(reg.contestedTypeIds.has('shared')).toBe(true)
   })
 })
