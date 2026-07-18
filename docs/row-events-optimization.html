@@ -250,12 +250,16 @@
   continuous across every unlogged gap. That removed the reader's terminal-gap
   detection (§4.3), the retention cut's wall-clamp and its synthetic
   reconciliation <em>insert</em> (§5.1, so the sweeper is now delete-only — I7
-  drops an exception), and the migration's discontinuity marker (§8.1). Two more
-  endorsed simplifications are in flight on this branch: a NULL-column matrix
-  (proposal 3) and denormalizing the <code>no-history</code> flag onto
-  <code>row_events</code> to collapse the sweeper's candidate enumeration
-  (proposal 1). One design decision is open — <a href="#s16">O7</a> (undo-boundary
-  durability when a user prunes an <em>undoable</em> block).
+  drops an exception), and the migration's discontinuity marker (§8.1). Two
+  companion simplifications also landed: the NULL-column matrix (proposal 3, §3)
+  and a denormalized <code>no_history</code> flag on <code>row_events</code>
+  (proposal 1, §3/§5.1) — the trigger caches the block's <code>no-history</code>
+  type on each event, so the sweeper's candidate set is one partial-index query
+  across live/soft/hard-deleted blocks, retiring the three-source enumeration, the
+  delete-surviving side index, and the delete-event watermark. One design decision
+  is open — <a href="#s16">O7</a> (undo-boundary durability when a user prunes an
+  <em>undoable</em> block; recommendation is a SQLite-allocated tx sequence +
+  write-flag on <code>command_events</code>, keeping the [1000] affordance).
   §12's arithmetic was re-grounded 2026-07-15 against live measurements of two
   client instances of the same workspace via the agent bridge (a 63-day dev
   profile, 1.94M events, and a 23-day prod profile, 401k events); measured
@@ -605,6 +609,25 @@ trigger-recreation ordering):
         <code>tx_context.scope</code> is artificially non-NULL still stamps
         <code>scope = NULL</code>.</td>
     </tr>
+    <tr>
+      <td><code>no_history INTEGER</code></td>
+      <td>Slice B (retention). <code>1</code> iff the block carried the
+        <code>no-history</code> type at this event's write time; <code>0</code>
+        otherwise (<code>NOT NULL</code>, default 0). The trigger sets it with a
+        JSON check on <code>NEW</code>'s (or <code>OLD</code>'s, on delete)
+        <code>properties_json.types</code> — the block type stays the
+        authoritative, synced signal; this column is a <em>denormalized cache</em>
+        of it so the §5.1 sweeper's candidate set is one partial-index scan over
+        <code>WHERE no_history = 1</code> instead of a live/soft/hard three-source
+        enumeration. Set from the synced row, so sync-applied writes to a
+        <code>no-history</code> block are flagged too (the completeness scope
+        lacked). <strong>Write-time-only — never backfilled</strong>: because a tag
+        or untag is itself a logged write (I9: no unlogged type change), a block's
+        <em>current</em> status is its latest event's flag, so §5.1 reads status
+        from the log without ever rewriting past rows (I7 intact). NULL is
+        impossible on v2 rows; on v1 rows it is absent until slice B's
+        <code>ALTER</code>, read as 0 (v1 predates <code>no-history</code>).</td>
+    </tr>
   </tbody>
 </table>
 </div>
@@ -698,16 +721,24 @@ corruption" carries this one raw-write asterisk (slice-B raw-write test).
 
 <p>Index changes — <strong>nothing the v2 triggers need</strong>: the v2
 trigger reads no history (§4.1/I6), so slice A ships no index work at all.
-Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper enumerates the
-<code>no-history</code>-typed blocks (live and deleted, §5.1) and prunes each to
-its newest K events <em>by <code>id</code></em> —
-which is what makes the cut a safe oldest-prefix delete (<code>created_at</code>
-is not reliably monotone in <code>id</code>, so ordering the cut by timestamp
-could hole a survivor, §5.1). The earlier partial <code>WHERE scope =
-'local-ui'</code> index (and its per-UiState-write insert cost) is gone;
-<code>(block_id, id)</code> replaces it and is the same index slice C's reader
-walks and the §8 rewriter need; each creates it idempotently
-(<code>CREATE INDEX IF NOT EXISTS</code>) so neither slice depends on the other's
+Slice B adds, for §5.1 retention: the <code>no_history</code> column (the trigger
+stamps it from the block's type, §5.1) and a <strong>partial index
+<code>(no_history, block_id, id) WHERE no_history = 1</code></strong>. The sweeper
+<em>discovers</em> candidates off the partial index
+(<code>SELECT DISTINCT block_id … WHERE no_history = 1</code> — only flagged rows,
+reaching live/soft/hard-deleted blocks alike), replacing both the earlier
+<code>WHERE scope = 'local-ui'</code> partial index <em>and</em> the
+delete-surviving side table a prior draft needed for deleted candidates. It then
+uses the <strong>full <code>(block_id, id)</code></strong> index per candidate to
+read the latest event's flag (current status, §5.1), count events, and cut the
+oldest prefix <em>by <code>id</code></em> — the latest event may be
+<em>un</em>flagged (an untagged block), so this step needs the all-events index,
+not the partial one. Ordering the cut by <code>id</code> (not
+<code>created_at</code>, which is not reliably monotone in <code>id</code>) is
+what makes it a safe oldest-prefix delete (§5.1). That full
+<code>(block_id, id)</code> index is the same one slice C's reader walks and the
+§8 rewriter need; whichever of B/C ships first creates it idempotently
+(<code>CREATE INDEX IF NOT EXISTS</code>), so neither depends on the other's
 ordering (slice B is independent of C). <code>id</code> is
 AUTOINCREMENT-monotonic and is the authoritative per-block order
 (same-millisecond events in one tx tie on <code>created_at</code>). The
@@ -1195,9 +1226,11 @@ just panels.
         block's replicated <code>properties</code>, so it is present and identical
         on every device (the completeness the scope key lacked). No new synced
         column, no <code>sync-config.yaml</code> change, no migration on the hot
-        <code>blocks</code> table — and the derived <code>block_types</code> index
-        (<code>clientSchema.ts:861-865</code>) makes "find the
-        <code>no-history</code> blocks" a cheap indexed lookup.</li>
+        <code>blocks</code> table. The sweeper doesn't scan the type at all: the
+        trigger denormalizes it onto <code>row_events.no_history</code> at write
+        time, and a partial index over that flag makes "find the
+        <code>no-history</code> blocks to prune" a cheap local lookup that also
+        reaches deleted blocks (below).</li>
     </ul>
     The residual data-loss surface is a genuinely churning block (§below: only
     blocks with &gt; K events are ever touched) that a user <em>explicitly</em>
@@ -1205,54 +1238,56 @@ just panels.
     deliberate destructive action, and far narrower than an accidental structural
     tag. No paternalistic guard second-guesses the mark; the explicit type
     <em>is</em> the safety.</li>
-  <li><strong>The sweeper keys on the synced block, so every device agrees.</strong>
-    A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) takes its
-    candidates from the <code>no-history</code> set, not from an event-count scan,
-    from <strong>three sources — because <code>block_types</code> holds only live
-    rows</strong> (its triggers gate on <code>deleted = 0</code> and drop a
-    block's rows on delete, <code>clientSchema.ts:878-905</code>, review finding):
-    <em>(1)</em> live blocks off the <code>block_types</code> index
-    (<code>WHERE type = 'no-history'</code>); <em>(2)</em> soft-deleted blocks,
-    which are still <code>blocks</code> rows (<code>deleted = 1</code>) carrying
-    their <code>properties_json</code>. Source (2) must <em>not</em> be a
-    scan-and-JSON-parse of the tombstone population to fish out its rare
-    <code>no-history</code> rows (review finding): that set is 20,825 rows on prod
-    today and only grows, the sweeper re-arms every deep idle, and
-    <code>block_types</code> is no help here — its triggers drop a block's rows on
-    <code>deleted = 1</code> (<code>clientSchema.ts:878-905</code>). So
-    <code>no-history</code> membership is mirrored into a small
-    <strong>delete-surviving index</strong>: a <code>block_id</code>-keyed derived
-    table the same block-write trigger maintains, but <em>retained through
-    soft-delete</em> and cleared only when the <code>blocks</code> row is
-    hard-deleted — the delete-agnostic sibling of <code>block_types</code> for
-    this one type, deliberately <em>not</em> a change to <code>block_types</code>'
-    live-only invariant that other consumers (backlink counts, type queries) rely
-    on. Sources (1)+(2) then collapse to one indexed lookup joined to
-    <code>blocks</code> for the live/soft-deleted split. <em>(3)</em> hard-deleted
-    / stream-exited blocks (no <code>blocks</code> row at all, so outside that
-    index) from their delete events (<code>kind = 'delete'</code> whose
-    before-snapshot carried <code>no-history</code>). All three cases must be
-    gathered explicitly: a <code>block_types</code>-only pass would silently skip
-    exactly the block that can no longer shrink. Source (3) is discovered <strong>incrementally, not by
-    rescanning every delete</strong> (review finding — hard deletes are 16% of the
-    dev log, ~310k rows, far too many to JSON-parse each sweep): the sweeper keeps
-    a high-watermark of the last delete <code>id</code> it examined and only reads
-    delete events newer than it, and it prunes a hard-deleted block's fixed history
-    <em>once</em> (a deleted block gets no new events, so there is nothing to
-    revisit). The watermark <strong>advances only when the prune commits, in the
-    same transaction as the deletes</strong> (review finding): a hard-deleted
-    block gets no future events, so if the watermark moved past a delete
-    <code>id</code> the moment it was <em>examined</em> and a crash or error hit
-    before that block's prune committed, the candidate would sit forever below the
-    watermark and never be reconsidered — permanently unbounded, the exact failure
-    retention exists to prevent. Advancing the watermark and deleting the rows in
-    one transaction makes the pair atomic: a crash rolls both back and the next
-    sweep re-reads the same delete events. New deletions since the last sweep are few. Starting from the small tagged set (rather than "blocks
-    with &gt; K events" — 502 blocks on prod at K = 8, a full aggregate that also
-    misses deletes) is both cheaper and complete. Deleted blocks are included
-    deliberately: a panel deleted <em>before</em> a sweep capped it would otherwise
-    keep its whole pre-delete history (up to the full delete-before snapshot,
-    multi-MB) forever. For each candidate it then deletes all but its newest K
+  <li><strong>The sweeper keys on a denormalized <code>no_history</code> flag the
+    trigger stamps onto each event — one indexed query, uniform across every
+    deletion state.</strong> The block's <code>no-history</code> <em>type</em>
+    stays the authoritative, synced, user-editable signal (above); the row-event
+    trigger copies it onto a <code>row_events.no_history</code> column (0/1) at
+    write time — a cheap JSON check on the <code>NEW</code> row the trigger already
+    holds, and it fires for sync-applied writes too, so a panel that synced in from
+    another device is flagged identically to a locally-created one (the exact
+    completeness the scope key lacked — <code>scope</code> is NULL on sync). This is
+    a <em>derived cache</em> of the block type, not a second source of truth: the
+    type decides, the flag indexes.
+    <ul>
+      <li><em>Candidate discovery = one partial-index scan, all deletion states at
+        once.</em> A deep-idle job (same <code>PendingIdleJobs</code> machinery as
+        §8) reads the blocks carrying any flagged event —
+        <code>SELECT DISTINCT block_id FROM row_events WHERE no_history = 1</code>,
+        served by a partial index <code>(no_history, block_id, id) WHERE
+        no_history = 1</code> (slice B). Because the flag lives on the
+        <em>event</em>, this reaches live, soft-deleted, <em>and</em> hard-deleted
+        blocks in one query — a hard-deleted block's events still carry the flag.
+        That <strong>retires the whole three-source enumeration</strong> the
+        earlier draft needed (live via <code>block_types</code>, soft-deleted via a
+        delete-surviving side index, hard-deleted via a delete-event
+        high-watermark) and, with it, the watermark's advance-after-prune atomicity
+        concern — every review finding against the enumeration, dissolved rather
+        than patched. The partial index holds only flagged rows, so this is
+        <em>not</em> the rejected "blocks with &gt; K events" full aggregate (a full
+        scan of the whole table); it touches only the <code>no-history</code>
+        partition.</li>
+      <li><em>Current status is read from the log, not the block — so the flag
+        needs no retroactive backfill.</em> A block's current
+        <code>no-history</code> status <em>is</em> its latest event's flag: any tag
+        or untag is a write to <code>properties.types</code>, hence itself a logged
+        event carrying the new status (I9 guarantees no unlogged type change —
+        suspended writes are metadata-only). So per candidate the sweeper checks two
+        indexed lookups on <code>(block_id, id)</code>: is the latest event
+        (<code>MAX(id)</code>) flagged, and are there &gt; K events? Latest flagged
+        ⇒ currently <code>no-history</code> ⇒ prune its <em>whole</em> history to
+        newest-K — all events, flagged or not (e.g. a <code>create</code> written
+        before an <code>addTypeInTx</code> tag). Latest unflagged ⇒ the user
+        untagged it ⇒ skip; already-pruned events stay gone (retention is one-way),
+        nothing further is cut. This keeps the flag <strong>write-time-only</strong>:
+        no tag-time UPDATE of past rows, so I7 keeps its two exceptions and event
+        <em>payloads</em> stay immutable. A hard-deleted block's status is frozen at
+        its delete event's flag (the type as of deletion) — exactly right.</li>
+    </ul>
+    Deleted blocks are pruned deliberately: a panel deleted <em>before</em> a sweep
+    capped it would otherwise keep its whole pre-delete history (up to the full
+    delete-before snapshot, multi-MB) forever — and the event flag reaches them
+    where a live-type lookup could not. For each pruned candidate it then deletes all but its newest K
     <code>row_events</code> ordered by
     <strong><code>id</code>, not <code>created_at</code></strong>: <code>id</code>
     is the authoritative per-block order (§3), and because <code>created_at</code>
@@ -1273,15 +1308,14 @@ just panels.
     known metadata-only, the survivors' live-row base is always content-valid, so
     both mechanisms are unnecessary. This also retires the sweeper's one sanctioned
     <code>row_events</code> <em>insert</em> — it now only <em>deletes</em> (I7).
-    Served by the <code>(block_id, id)</code> index slice B adds for this (§3).
-    Because the key
-    is the block's <code>no-history</code> <em>type</em> — read from the synced
-    row on every device — a panel that synced in from another device is
-    recognised identically to a locally-created one. That is exactly the blind
-    spot the scope-keyed draft had: <code>scope</code> is NULL on sync arrivals,
-    so it could only ever bound the events a device authored itself, a minority
-    of a hot shared panel's traffic. Not in-trigger: pruning from the trigger
-    would put a read + DELETE on the hottest write path (rejected, §15). The
+    Discovery uses the partial <code>(no_history, block_id, id)</code> index; the
+    per-candidate latest-flag check, count, and cut use the full
+    <code>(block_id, id)</code> index (the cut deletes flagged <em>and</em>
+    unflagged rows of the whole block, and the latest event may be unflagged, so
+    the partial index alone won't serve them — §3).
+    Not in-trigger: pruning from the trigger
+    would put a read + DELETE on the hottest write path (rejected, §15) — the flag
+    <em>set</em> is a single column write, the DELETE stays at idle. The
     bound is eventual, enforced at idle. It shares §8's <em>machinery</em> but not
     its lifecycle (review finding): §8 is a one-shot that flips <code>v=2</code>
     and never runs again, whereas the retention sweeper is <strong>recurring</strong> —
@@ -2250,12 +2284,14 @@ into is smaller).
         three-way <code>source</code> tag (§6.2 — labeling only; the policy
         table and drop gates left with the §6 revision, the
         <code>history_mode</code> gate with the §5 revision); the
-        <code>no-history</code> type (stamped on <em>every</em> UI-state block at
-        creation — panels, the root <code>ui-state</code> child, and plugin
-        UI-state blocks, §5.1 — + a one-time backfill onto all existing ones, not
-        just panels) + the §5.1 retention
-        sweeper (whole-block newest-K, keyed on that type, cut by
-        <code>id</code> via a new <code>(block_id, id)</code> index — no
+        <code>no-history</code> type (a registered <code>TypeContribution</code>,
+        stamped on <em>every</em> UI-state block at creation — panels, panel-stack
+        rows, the root <code>ui-state</code> child, and plugin UI-state blocks,
+        §5.1 — + a one-time backfill onto the existing <code>ui-state</code>
+        subtree) + the <code>row_events.no_history</code> column the trigger
+        denormalizes from that type + a partial index
+        <code>(no_history, block_id, id) WHERE no_history = 1</code> + the §5.1
+        retention sweeper (whole-block newest-K, cut by <code>id</code>, no
         full-writes); <code>scope</code> stamped as
         provenance only; tests pinning I3 (incl. raw-write labeling + logging)
         and I8 (no write path is exempt — every kind logs) — plus the fuzzed
@@ -2329,13 +2365,18 @@ write, I9)</em>
 (safety oracle: after a sweep, a flagged block retains its newest K events by
 <code>id</code> <em>whatever their source</em> — a plain oldest-prefix cut, no
 wall-clamp, which I9 makes unconditionally safe; a deleted flagged block is swept
-via its snapshot type, no survivor is older than any pruned event, and
-<code>stateAt</code> stays exact for every survivor <em>including compact
-ones</em> — the property that proves oldest-prefix deletion is safe without
-full-writes; non-flagged blocks are never touched, and a flagged block with a
-foreign-typed sibling in the same tx does not drag it in. Plus a
-<em>progress</em> oracle, because a never-prunes sweeper passes safety trivially:
-a flagged block with &gt; K events ends the sweep with exactly K). Slice C's I5
+via the <code>no_history</code> flag its events still carry (live, soft-deleted,
+and hard-deleted all found by one partial-index query), no survivor is older than
+any pruned event, and <code>stateAt</code> stays exact for every survivor
+<em>including compact ones</em> — the property that proves oldest-prefix deletion
+is safe without full-writes; <strong>current status = latest event's flag</strong>
+— tag then untag interleaved with edits leaves the block skipped (latest
+unflagged) with no rewrite of past rows, and create-then-tag prunes the whole
+block including the unflagged create (latest flagged); non-flagged-latest blocks
+are never touched, and a flagged block with a foreign-typed sibling in the same tx
+does not drag it in. Plus a <em>progress</em> oracle, because a never-prunes
+sweeper passes safety trivially: a latest-flagged block with &gt; K events ends
+the sweep with exactly K). Slice C's I5
 equivalence suite is the same
 generator aimed at v1 histories (metadata-only gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
@@ -2482,15 +2523,18 @@ generator, which is how both were found.
     <tr>
       <td>I7</td>
       <td><strong>History rows are immutable</strong> once written — just two
-        sanctioned exceptions, both narrow: (1) the §8 one-time rewrite; (2) the
-        §5.1 retention sweeper <em>deleting</em> any event on a
-        <code>no-history</code>-typed block, keeping the newest K, and never
-        touching a block without that type. The sweeper only deletes — it authors
-        no synthetic rows (the earlier <code>full=2</code> reconciliation
-        <em>insert</em> is gone with the walls it served, I9/§5.1). All other
-        runtime code never UPDATEs, DELETEs, or writes synthetic
-        <code>row_events</code>; every legitimate <code>row_events</code> row is
-        authored by a <code>blocks</code> trigger.</td>
+        sanctioned exceptions, both narrow: (1) the §8 one-time rewrite (v1→v2,
+        reconstruction-lossless); (2) the §5.1 retention sweeper <em>deleting</em>
+        whole oldest-prefix events of a <code>no-history</code> block, keeping the
+        newest K, never touching a block that isn't currently
+        <code>no-history</code>. The sweeper only deletes — it authors no synthetic
+        rows and updates none (the <code>no_history</code> flag is written once by
+        the trigger at event time and never backfilled — §5.1 reads current status
+        from the latest event, not by rewriting old ones; the earlier
+        <code>full=2</code> reconciliation <em>insert</em> is gone with the walls it
+        served, I9/§5.1). All other runtime code never UPDATEs, DELETEs, or writes
+        synthetic <code>row_events</code>; every legitimate row is authored by a
+        <code>blocks</code> trigger.</td>
       <td><a href="#s1">§1</a>/<a href="#s8">§8</a></td>
       <td>All future code</td>
       <td>Review rule (no test — restating it in a test would just duplicate
@@ -2753,9 +2797,13 @@ generator, which is how both were found.
     prune an explicit, legible opt-out rather than a silent consequence of a
     structural tag (the review finding against keying on <code>panel</code>). And because keep-newest-K deletes a clean
     oldest prefix, it is safe for <em>compact</em> events (survivors reconstruct
-    backward from the live row, never crossing the hole — §4.3), so no full-writes,
-    no order-free machinery, no candidate index, and <code>scope</code> demotes to
-    pure provenance. Plateau ~K &times; 1.4&nbsp;KB ≈ 11&nbsp;KB per panel.</li>
+    backward from the live row, never crossing the hole — §4.3), so no full-writes
+    and no order-free machinery, and <code>scope</code> demotes to pure
+    provenance. Plateau ~K &times; 1.4&nbsp;KB ≈ 11&nbsp;KB per panel. (Update
+    2026-07-18, proposal 1: the sweeper's candidate set is a denormalized
+    <code>row_events.no_history</code> flag + partial index — one query across
+    live/soft/hard-deleted blocks — replacing the earlier three-source
+    enumeration; see the revised §5.1.)</li>
   <li><strong>O7 — OPEN (raised 2026-07-18, review): undo-boundary durability
     when an <em>undoable</em> no-history block is pruned.</strong> [1000] lets a
     user tag an ordinary undoable block <code>no-history</code>. Fully pruning such
