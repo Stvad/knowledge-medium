@@ -758,7 +758,13 @@ stamps it from the block's type, §5.1) and a <strong>partial index
 (<code>SELECT DISTINCT block_id … WHERE no_history = 1</code> — only flagged rows,
 reaching live/soft/hard-deleted blocks alike), replacing both the earlier
 <code>WHERE scope = 'local-ui'</code> partial index <em>and</em> the
-delete-surviving side table a prior draft needed for deleted candidates. It then
+delete-surviving side table a prior draft needed for deleted candidates.
+<strong>The partial index is not the whole discovery contract</strong> (review
+finding — stating it alone here would under-serve §5.1/§13): a pre-B client can
+create or sync a <em>live</em> UI-state block with no type and no flagged events,
+which no flag-only query reaches. Discovery is the flag partition ∪ live
+<code>block_types</code> ∪ <em>computed identity</em> (§5.1); this paragraph
+specifies the index that serves the first of those, not the set of sources. It then
 uses the <strong>full <code>(block_id, id)</code></strong> index per candidate to
 count events and cut the oldest prefix <em>by <code>id</code></em> (the prune
 <em>decision</em> comes from the authoritative type, not from any event flag —
@@ -1799,7 +1805,18 @@ writer is a direct <code>repo.db.execute</code>
 sync apply</em> — the I3 promise that raw writes are labeled truthfully would be
 vacuous. Slice B therefore brackets those paths with
 <code>apply_kind = 'raw'</code> (same set/clear discipline as the sync marker:
-cleared in the same transaction, so a crash can't leave it sticky). The set is
+cleared in the same transaction, so a crash can't leave it sticky).
+<strong>Bracket every mutating SQL <em>mode</em>, not just <code>execute</code></strong>
+(review finding): the bridge exposes <code>all|get|optional|execute</code>
+(<code>agent-cli/src/protocol.ts:106</code>) and dispatches the non-<code>execute</code>
+modes to <code>repo.db.get</code>/<code>getAll</code>
+(<code>agent-runtime/commands.ts:168-173</code>) — its own read-only classifier
+already treats a mutating statement in those modes as a write
+(<code>agent-cli/src/server.ts:304-310</code>). So
+<code>sql all "UPDATE … RETURNING"</code> is a raw block write that a
+<code>execute</code>-only bracket would miss, leaving it mislabeled
+<code>'sync'</code>. Bracket on <em>mutation</em>, not on mode name — or restrict
+mutations to <code>execute</code> and reject them elsewhere. The set is
 small and enumerable, which is what makes this tractable; any <em>new</em> raw
 path must bracket itself, and that is the I3 review rule. Residual, named: during that window a genuine raw
 write from a pre-B client reads as <code>'sync'</code>. That is provenance
@@ -1923,8 +1940,9 @@ block with any <code>v IS NULL</code> event:
     have exposed it. Seeding from the newer side gives the seam a real base to be
     compared against, so it is classified like any other. It also avoids the extra
     <code>full=1</code> chain-start row. If the seed cannot be reconstructed at all,
-    the block is not safely migratable: abort its transaction and leave it wholly
-    v1, per the content-divergence rule below.</li>
+    the seam cannot be classified, so the block takes the same conservative path
+     as a content divergence below: migrate it with every event full, none
+     compact.</li>
   <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
     Reset <code>pos</code>. (A create opens a chain — nothing logged is older.)</li>
   <li><code>delete</code>: stamp <code>v=2, full=1</code>, payload unchanged
@@ -1938,10 +1956,11 @@ block with any <code>v IS NULL</code> event:
     <code>stateAt</code> walks splice post-gap content into pre-gap history — the
     same corruption the update branch now stops, arriving through the delete door.
     So: metadata-only divergence ⇒ the delete's <code>before</code> is a crossable
-    base as usual; content-level divergence ⇒ abort this block's migration and
-    report, leaving it wholly v1 (the same resolution as the update branch below —
-    there is no marker to make a seam non-crossable, and an unmigrated block cannot
-    splice because v1 events are full). Reset <code>pos</code>.</li>
+    base as usual; content-level divergence ⇒ migrate the block conservatively
+    (every event full, none compact) and report — the same resolution as the update
+    branch below, which explains why neither a marker nor an abort suffices and why
+    a full event is the thing that actually cannot splice. Reset
+    <code>pos</code>.</li>
   <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
     comparing the event's <em>own</em> before/after JSON (exact — no cross-event
     inference), then keep it <strong><code>full=1</code></strong> if either of the
@@ -1983,23 +2002,38 @@ block with any <code>v IS NULL</code> event:
     cross the seam and splice post-gap values into pre-gap history — silently, and
     exactly the corruption walls were retired on the premise that it cannot happen.
     So the rewriter compares the divergence field-wise: metadata-only ⇒ proceed;
-    any content or structure field ⇒ <strong>abort this block's migration and
-    report</strong>.
-    <strong>"Mark the seam non-crossable" is not available and was incoherent to
-    write</strong> (review finding): <code>full=2</code> was retired and no
-    replacement marker exists, so there is nothing to mark <em>with</em>. The
-    resolution needs no marker, because <strong>an unmigrated block cannot splice
-    at all</strong> — v1 events are full snapshots (§2.1), so reconstructing any
-    state reads one row and never walks, and the corruption this branch guards
-    against is a property of <em>compact</em> walks. So: <em>per-block migration is
-    atomic</em> — a block is rewritten in one transaction — and a content-level
-    divergence aborts that transaction, leaving the block <strong>wholly v1</strong>
-    rather than half-compacted around a real gap. Atomicity is what makes this
-    sound; a partially-rewritten block would be mixed v1/v2 and could walk within
-    its v2 span. The block stays readable (v1 is readable-as-full), simply
-    uncompacted, and the migration reports it. Expected count is zero — it means
-    I9's fleet precondition was violated — so the operator should see it rather
-    than have the rewriter quietly compact through a genuine gap.
+    any content or structure field ⇒ <strong>migrate the block
+    <em>conservatively</em>: every event full, none compact</strong>, then report.
+    <strong>Neither a marker nor an abort works here</strong> (two review findings,
+    the second correcting the first). Marking the seam non-crossable is not
+    available: <code>full=2</code> was retired and there is nothing to mark
+    <em>with</em>. But aborting — "leave the block wholly v1" — does not hold
+    either, because a block can <em>already</em> carry compact v2 rows written live
+    by slice A before the later v1 row exposes the gap; a future
+    <code>stateAt</code> for one of those could still pick the v1 row's full
+    <code>before_json</code> as its newer-side base and splice straight across the
+    gap. Abort cannot un-write those rows.
+    The property that actually delivers safety is simpler than either: <strong>a
+    <em>full</em> event never walks</strong>. So the rewriter makes the whole block
+    walk-free — a v1 row is <em>already</em> a full snapshot, so it migrates
+    trivially (stamp <code>v = 2, full = 1</code>, payload untouched, no
+    reconstruction needed); every compact v2 row is <em>promoted</em> to full, each
+    reconstructed from whichever side does not cross the gap (§4.3): rows newer than
+    the gap from the live row backward, rows older than it forward from the nearest
+    older full. Neither walk crosses the seam, and
+    once every event is self-contained nothing ever needs to. The gap becomes
+    inert rather than guarded.
+    This also keeps the block <em>migrated</em> — <code>v = 2</code> is stamped, so
+    it leaves the work queue normally and the completion marker stays reachable
+    (review finding: an abort would have left it permanently claimable under
+    <code>WHERE v IS NULL</code>, either looping forever or pressuring an
+    implementer to compact through the gap to make progress). The only thing
+    forfeited is compaction <em>for that block</em>. Expected count is zero — it
+    means I9's fleet precondition was violated — so it is reported rather than
+    silently handled, and a rare block keeping full events costs nothing measurable.
+    If some compact row has no valid base on <em>either</em> side, that single event
+    is unreconstructable (a pre-existing condition, not one this creates): report it
+    specifically rather than guessing.
     Otherwise rewrite compact: <code>before_json</code> = changed fields' old
     values, <code>after_json</code> = changed fields' new values (equal key
     sets — the invertible-patch shape of §3), <code>v=2, full=0</code>, and
@@ -2502,9 +2536,18 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         The run is that maximal tx interval, and the folded target is every
         surviving event of those txs on every block they touched. Per-block walking
         would miss the block-B splitter; the boundary test lives at the scope-tx
-        level. Well-defined from the ledgers alone (<code>command_events</code> for
-        the tx sequence + <code>scope</code>, joined <code>row_events</code> for
-        <code>group_id</code> / diffs), no undo-stack read.
+        level. Well-defined from the ledgers alone, no undo-stack read — but
+        <strong>which ledger supplies <code>group_id</code> depends on how O7
+        resolves</strong> (review finding): reading it from joined
+        <code>row_events</code>, as an earlier draft said unconditionally, fails for
+        exactly the txs O7(a) exists to rescue — in the A(g), B(g, touching only a
+        pruned block), C(g) case, B has no surviving <code>row_events</code> to join,
+        so its membership is lost and the fold diverges from live undo despite the
+        durable columns being present. So under O7(a), <code>command_events</code>
+        supplies the tx sequence, <code>scope</code>, <code>group_id</code>,
+        write-ness and <code>is_replay</code>, and <code>row_events</code> supplies
+        only the surviving per-field diffs. (Under O7(b) the question does not arise:
+        no undoable tx is ever pruned, so every tx still has its events.)
         Two per-kind carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
         (soft-delete/tombstone), with redo re-applying <strong>the folded final
@@ -3364,9 +3407,11 @@ generator, which is how both were found.
         pre-A mixed-version window — so the rewriter classifies the divergence and
         <strong>reports content-level ones loudly rather than silently rewriting
         them compact</strong>. If any are found, the affected block's migration is
-        <em>aborted</em> and it is left wholly v1 (§8.1) — walls do <em>not</em>
-        return, because none are needed: v1 events are full, so an unmigrated block
-        has no compact walk to splice across. The
+        migrated <em>conservatively</em> — every event full, none compact (§8.1) —
+        so walls do <em>not</em> return and none are needed: a full event never
+        walks, so the gap becomes inert rather than something readers must be
+        warned off. (Merely aborting would not have sufficed: a block can already
+        carry compact v2 rows written before the gap was detected.) The
         expectation is zero; the point is that the migration would tell us, instead
         of the design quietly assuming. A future content-mutating suspend site would
         break I9 the same way and must instead fire the trigger or reintroduce a
