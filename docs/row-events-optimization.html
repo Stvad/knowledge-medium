@@ -1901,11 +1901,18 @@ block with any <code>v IS NULL</code> event:
   <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
     Reset <code>pos</code>. (A create opens a chain — nothing logged is older.)</li>
   <li><code>delete</code>: stamp <code>v=2, full=1</code>, payload unchanged
-    (a hard delete carries a full <code>before</code> by nature). No wall check:
-    a <code>before_json ≠ runningState</code> divergence before a purge is
-    metadata-only (I9, verified in §8.1's update rule), so the delete's full
-    <code>before</code> is a crossable newer-side base like any other. Reset
-    <code>pos</code>.</li>
+    (a hard delete carries a full <code>before</code> by nature).
+    <strong>Run the same field-wise divergence classification as the update
+    branch</strong> (review finding — an earlier draft exempted deletes on the
+    assumption that any pre-purge divergence is metadata-only, which is precisely
+    the assumption I9 no longer makes unconditionally): if the first logged event
+    after a pre-A unlogged <em>content</em> write happens to be a hard delete,
+    treating its full <code>before</code> as a crossable newer-side base lets older
+    <code>stateAt</code> walks splice post-gap content into pre-gap history — the
+    same corruption the update branch now stops, arriving through the delete door.
+    So: metadata-only divergence ⇒ the delete's <code>before</code> is a crossable
+    base as usual; content-level divergence ⇒ stop and report, and do not treat it
+    as crossable. Reset <code>pos</code>.</li>
   <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
     comparing the event's <em>own</em> before/after JSON (exact — no cross-event
     inference), then keep it <strong><code>full=1</code></strong> if either of the
@@ -2276,7 +2283,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         <code>before_json</code> carries its <code>parentId</code>. The builder
         therefore opens the interval from that <code>before_json</code> and closes
         it at the same event: the block correctly appears under its parent for all T
-        before the purge, and vanishes after. <strong>Two cases fall outside that guarantee, and the
+        before the purge, and vanishes after.
+        <strong>Subject to the same <code>deleted</code> guard as a create</strong>
+        (review finding): open this synthetic interval only when the delete's
+        <code>before_json.deleted</code> is <em>false</em>. A pre-log row can have
+        been soft-deleted long before it was finally purged, in which case its
+        delete snapshot carries <code>deleted = 1</code> and it was <em>not</em>
+        live immediately before the purge — opening from it would resurrect a
+        historical tombstone into every subtree-at-T result in that span. Mirroring
+        the create rule keeps both bookends honest about liveness rather than just
+        about existence. <strong>Two cases fall outside that guarantee, and the
         builder must resolve the opening parent by reconstruction rather than
         assuming the event carries it.</strong> <em>(i) Zero-history pre-log
         stock</em> (review finding): a block that predates logging and has
@@ -2758,11 +2774,18 @@ into is smaller).
         longer waits on it (§11 revised); the two are unordered.
         <strong>B splits on <a href="#s16">O7</a></strong> (review finding):
         <em>B1</em> — tagging <em>dedicated UI-state storage blocks</em> + the
-        sweeper — ships freely, because those blocks are non-undoable and pruning
-        them has no undo interaction at all; that is where the entire 35&nbsp;MB
-        motivation lives. <em>B2</em> — the <strong>user-assignable</strong>
-        affordance ([1000]: marking one's own, possibly undoable, block) — is
-        <strong>gated on O7</strong>.
+        sweeper — is where the entire 35&nbsp;MB motivation lives, and pruning
+        genuinely non-undoable UI-state has no undo interaction at all.
+        <strong>But B1 does <em>not</em> ship freely</strong> (review finding — an
+        earlier draft said it did, which this section's own open problem below then
+        contradicted): the sweeper is destructive, and shipping it requires having
+        <em>chosen</em> how it identifies dedicated UI-state storage, because no
+        signal in the current data model does so soundly. So B1 is gated on
+        resolving that — persisted (synced) provenance, or a knowingly weaker gate
+        accepted on the record. An implementer following this checklist must not
+        ship the sweeper before that call is made. <em>B2</em> — the
+        <strong>user-assignable</strong> affordance ([1000]: marking one's own,
+        possibly undoable, block) — is <strong>additionally gated on O7</strong>.
         <strong>The gate must live in the sweeper, not in the UI</strong> (review
         finding): B1 has to register <code>no-history</code> as a
         <code>TypeContribution</code> for creation-time stamping to work at all,
@@ -3178,14 +3201,25 @@ generator, which is how both were found.
       <td><strong>History rows are immutable</strong> once written — just two
         sanctioned exceptions, both narrow: (1) the §8 one-time rewrite (v1→v2,
         reconstruction-lossless); (2) the §5.1 retention sweeper <em>deleting</em>
-        whole oldest-prefix events of a <code>no-history</code> block, keeping the
-        newest K, never touching a block that isn't currently
-        <code>no-history</code>. The sweeper only deletes — it authors no synthetic
+        whole oldest-prefix events of a prunable block, keeping the newest K.
+        <strong>"Prunable" is the type <em>or</em> confirmed dedicated-UI-state
+        identity</strong> (review finding — this invariant previously said "never
+        touching a block that isn't currently <code>no-history</code>", which
+        forbids exactly what §5.1's reconciliation backstop requires): an old
+        client can create a UI-state row <em>untyped</em>, churn it and delete it,
+        and the structural scan exists to reach precisely those. A test suite
+        following the narrower wording would skip them and make the backstop
+        inert. The identity confirmation is the stronger claim of the two — it
+        <em>proves</em> the block is dedicated UI-state storage, where the type
+        merely asserts it — so it stands on its own; what remains forbidden, and is
+        the actual content of this invariant, is touching a block that is
+        <em>neither</em> typed nor identity-confirmed. The sweeper only deletes — it
+        authors no synthetic
         rows and updates none (the <code>no_history</code> flag is written once by
         the trigger at event time and never backfilled — it is
         <strong>discovery-only and advisory</strong>, and the prune <em>decision</em>
-        reads the authoritative block type, so no past row ever needs rewriting
-        (§5.1); the earlier <code>full=2</code> reconciliation <em>insert</em> is
+        reads the authoritative type or identity, so no past row ever needs
+        rewriting (§5.1); the earlier <code>full=2</code> reconciliation <em>insert</em> is
         gone with the walls it served, I9/§5.1). All other runtime code never UPDATEs, DELETEs, or writes
         synthetic <code>row_events</code>; every legitimate row is authored by a
         <code>blocks</code> trigger.</td>
