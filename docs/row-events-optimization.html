@@ -1249,7 +1249,22 @@ just panels.
     <em>because the type rides sync</em>: whichever device opens a workspace
     stamps <code>no-history</code> once, it replicates to every device, and each
     device's sweeper then prunes its own local <code>row_events</code> off the
-    synced type — no device needs to run the backfill itself. A
+    synced type — no device needs to run the backfill itself.
+    <strong>But nothing guarantees any upgraded device ever opens it</strong>
+    (review finding): PowerSync downloads every block for all
+    <code>user_workspaces</code> (<code>sync-config.yaml:64-76</code>), so a legacy
+    collaborator's UI-state churn materializes into <em>this</em> DB — and grows
+    here — for a workspace this client never activates and therefore never tags.
+    The resolution turns on a distinction the "don't touch unopened workspaces"
+    rule already draws: that rule forbids <em>writing blocks</em> into a workspace
+    the user hasn't opened, because that floods the sync queue. Pruning
+    <code>row_events</code> writes <em>no blocks and uploads nothing</em> — it is
+    purely local bookkeeping. So the two halves scope differently:
+    <strong>tagging stays active-workspace-only</strong> (it is a block write that
+    syncs), while <strong>discovery and pruning run locally across every synced
+    workspace</strong>, keyed on whatever signal is available there. That bounds
+    remote-authored churn in workspaces this device never opens without violating
+    the flood rule at all. A
     <strong>read-only workspace</strong> is the one case the tag can't ride sync
     (review finding): the user is a member but not a writer, so the server
     <code>blocks_write</code> policy rejects the tag write
@@ -1307,12 +1322,23 @@ just panels.
     deletion state.</strong> The block's <code>no-history</code> <em>type</em>
     stays the authoritative, synced, user-editable signal (above); the row-event
     trigger copies it onto a <code>row_events.no_history</code> column (0/1) at
-    write time — a cheap JSON check on the <code>NEW</code> row the trigger already
+    write time — a JSON check on the <code>NEW</code> row the trigger already
     holds, and it fires for sync-applied writes too, so a panel that synced in from
     another device is flagged identically to a locally-created one (the exact
     completeness the scope key lacked — <code>scope</code> is NULL on sync). This is
     a <em>derived cache</em> of the block type, not a second source of truth: the
     type decides, the flag indexes.
+    <strong>"Cheap" is an assumption the bench must check, not a given</strong>
+    (review finding): after slice B <em>every</em> row-event trigger extracts from
+    <code>properties_json</code> to compute this flag — including
+    content-or-reference-only updates, which slice A's compact format otherwise
+    lets skip the properties blob entirely. On a block with a large
+    <code>properties</code> value that is a per-write tail cost on the hottest
+    path, so it belongs in <a href="#invariants">I6</a>'s final-index-set benchmark
+    alongside the index maintenance, not in prose. If it does bind, the escape is
+    the same change §13's open problem already wants for soundness: a
+    <em>persisted provenance column</em> is a column read rather than a JSON parse,
+    so it would fix the gate and this write-tail cost together.
     <ul>
       <li><em>Candidate discovery = one partial-index scan, all deletion states at
         once.</em> A deep-idle job (same <code>PendingIdleJobs</code> machinery as
@@ -1711,9 +1737,15 @@ pins this). The upload and workspace-invariant trigger gates key on
 only the row_events triggers' <em>label projection</em> reads
 <code>apply_kind</code>: the v1 <code>COALESCE(source, 'sync')</code>
 (<code>clientSchema.ts:422</code>) retires in favor of a truthful three-way
-<code>source</code> tag — <code>'user'</code> (repo.tx), <code>'sync'</code>
-(marker present), <code>'raw'</code> (neither — the unguarded paths, always
-logged, I3).
+<code>source</code> tag — <code>'user'</code> (repo.tx),
+<code>'raw'</code> (<em>positive</em> <code>apply_kind = 'raw'</code> marker — the
+unguarded paths, always logged, I3), and <code>'sync'</code> for
+<strong>everything else with a NULL source</strong>, marker or not. Stating it in
+that order matters (review finding): defining <code>'raw'</code> as "neither
+source nor marker" reads naturally but is wrong, because a pre-B materializer
+writes exactly <code>source = NULL</code> with no <code>apply_kind</code> — so
+"neither" is the <em>sync</em> case during any mixed-version window, and an
+implementer copying that phrasing would mislabel every old-client server change.
 <strong>The NULL/NULL default must stay <code>'sync'</code>, not
 <code>'raw'</code></strong> (review finding): in a mixed-version session a B
 client installs this trigger while an older tab still runs the current
@@ -2180,7 +2212,17 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         is a <code>deleted = 1</code> UPDATE (<code>kind='soft-delete'</code>)
         that does not touch <code>parentId</code>, so a parentId-transition-only
         builder would leave a deleted block enumerated forever — it keys on the
-        <code>deleted</code> flag and create/hard-delete boundaries too. Every
+        <code>deleted</code> flag and create/hard-delete boundaries too.
+        <strong>Reopening on restore needs the parent <em>reconstructed</em>, not
+        read off the event</strong> (review finding): <code>tx.restore</code> is
+        symmetric — a <code>deleted = 1 → 0</code> UPDATE that likewise does not
+        rewrite <code>parent_id</code> — so a compact restore event carries only
+        <code>deleted</code> plus metadata and <em>no</em> <code>parentId</code>
+        at all. A builder keying on the event payload can therefore close the
+        interval on soft-delete and then have no edge to reopen with. It resolves
+        the edge the same way it does for the other payload-less cases (§4.3
+        <code>stateAt</code> at that event, which walks back from the live row),
+        rather than requiring restore events to carry a redundant parent edge. Every
         block <em>written since the log era</em> has a create event to open its
         interval from (§5 revised — with no skip exemption the index is fully
         log-derivable for that stock and needs no live-<code>blocks</code>
@@ -2744,7 +2786,22 @@ into is smaller).
               user-settable. Note this is now the <em>only</em> form (i) can take:
               deterministic panel ids alone would not do it, since computed ids are
               squattable (above). A code change in the state-block creation path,
-              and the only option that makes B1 <em>sound</em> on its own.</li>
+              and the only option that makes B1 <em>sound</em> on its own. It also
+              pays a second dividend — a column read replaces the per-write
+              <code>properties_json</code> extraction §5.1's flag needs (I6).
+              <strong>But a creation-time flag does not exist on the stock</strong>
+              (review finding), including the 14.7k-event panel that motivates the
+              whole project, and the only signals available to backfill it are the
+              unsound ones. The honest resolution is the ordinary
+              trust-on-migration split: classify <em>existing</em> rows once using
+              structure + type + computed id, and be sound for everything
+              <em>created after</em>. That is defensible precisely because the
+              stock predates the mechanism — no one could have squatted an id to
+              defeat a gate that did not exist — but it is a judgement call, not a
+              proof, so the migration should report its classified count for review
+              before it runs rather than silently tagging. Alternatively, name the
+              stock as an explicit residual and bound only new churn — which
+              forfeits the measured 35&nbsp;MB and most of the motivation.</li>
             <li><em>(ii)</em> accept a weaker gate — admit runtime rows on
               parent-plus-type and accept that a deliberate forgery (move a content
               block under a layout-session <em>and</em> apply the type) gets its
@@ -3050,11 +3107,17 @@ generator, which is how both were found.
         time-seek), and whether both per-block indexes earn their keep is exactly
         what the bench should settle.</td>
       <td><a href="#s7">§7</a></td>
-      <td>v2 trigger; the 1/64 anchor path; the B/C index set</td>
+      <td>v2 trigger; the 1/64 anchor path; the B/C index set; slice B's
+        per-write <code>no_history</code> JSON extraction</td>
       <td>Bench note in slice A (write-tx tail latency before/after, sampled
         across enough writes to cover the anchor path) <strong>and re-run at B/C
         with the final index set</strong> — a slice-A-only bench cannot see the
-        index-maintenance cost; review rule for trigger SQL.</td>
+        index-maintenance cost. <strong>The B run must include blocks with large
+        <code>properties</code> values</strong> (review finding): slice B makes
+        every trigger extract from <code>properties_json</code> to compute
+        <code>no_history</code>, including content-only updates that slice A's
+        compact path lets skip the blob — a regression a small-properties bench
+        would miss entirely. Review rule for trigger SQL.</td>
     </tr>
     <tr>
       <td>I7</td>
