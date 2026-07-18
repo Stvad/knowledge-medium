@@ -568,7 +568,19 @@ trigger-recreation ordering):
         (stamped <code>NEW</code>), each visible from its own side. The single
         constraint this puts on any future workspace-move feature: model it as
         delete+create (or dual-stamp), never as an in-place <code>workspace_id</code>
-        UPDATE, which would indeed record only the destination. Without the column, a workspace-scoped history or
+        UPDATE, which would indeed record only the destination.
+        <strong>One path can already do that today: raw SQL</strong> (review
+        finding). A direct <code>UPDATE blocks SET workspace_id = …</code> runs with
+        <code>tx_context.source IS NULL</code>, so it bypasses the
+        workspace-invariant triggers that would otherwise reject it, and this stamp
+        records the event under <code>NEW.workspace_id</code> only — the
+        <em>source</em> workspace's history query never sees the row leave. That is
+        the same class as the raw <code>UPDATE … SET id</code> rewrite below, and it
+        gets the same treatment: named as an <strong>unsupported raw boundary</strong>
+        rather than silently mis-stamped. A recovery reading the source workspace's
+        history must know the row can vanish without a logged departure; dual-stamping
+        would fix it if raw workspace moves ever became a supported operation, which
+        they are not. Without the column, a workspace-scoped history or
         recovery query would have to reconstruct arbitrary compact events just
         to learn membership — and for a <em>hard-deleted</em> block there is no
         live <code>blocks</code> row left to join, so it would miss those rows
@@ -1359,7 +1371,16 @@ just panels.
         old clients cooperating with a marker they don't know about — so the client
         reinstalls the current body <em>and</em> runs the reconciliation. Cost stays
         bounded because the probe is one row read and the scan only follows an
-        actual regression; it stops entirely once no pre-guard client remains.
+        actual regression.
+        <strong>A downgrade is not the only arming condition</strong> (review
+        finding): a <em>post</em>-guard but pre-B client leaves the current trigger
+        body untouched — so the probe sees nothing wrong — while still creating
+        UI-state rows without the <code>no-history</code> type, because it predates
+        the stamping. If it creates, churns and hard-deletes such a row before the
+        recurring subtree pass sees it, there is no flag, no type, and no downgrade
+        evidence. So the structural scan stays armed through the whole
+        <em>old-creator</em> window, not merely after a body regression; both
+        conditions retire together once no pre-B client remains.
         <strong>Ordering is load-bearing: the probe must run <em>before</em> the
         schema bootstrap recreates triggers</strong> (review finding) — that
         bootstrap expands to <code>DROP TRIGGER IF EXISTS</code> +
@@ -1402,7 +1423,17 @@ just panels.
         always keeps the newest K, so a hard-deleted block's delete event is never
         pruned away). Currently typed ⇒ prune its <em>whole</em> history to
         newest-K — all events, flagged or not (e.g. a <code>create</code> written
-        before an <code>addTypeInTx</code> tag). Not currently typed ⇒ skip;
+        before an <code>addTypeInTx</code> tag).
+        <strong>Computed identity authorizes a prune on its own, without the
+        type</strong> (review finding): the structural scan deliberately collects
+        UI-state rows an old client created <em>untyped</em>, so a type-only
+        decision would find them and then skip them, leaving exactly the histories
+        the scan exists to repair unbounded. This is not a loophole — a computed
+        id (<code>stateChildBlockId</code>/<code>userPageBlockId</code>) is a
+        <em>stronger</em> signal than the type: it proves the block <em>is</em>
+        dedicated UI-state storage by construction, whereas the type is a
+        user-editable assertion that it is. So: typed <em>or</em>
+        identity-confirmed ⇒ prune. Otherwise ⇒ skip;
         already-pruned events stay gone (retention is one-way), nothing further is
         cut. <strong>In B1 the structural gate applies to tombstones too</strong>
         (review finding): "typed ⇒ prune" read alone would let a user apply the
@@ -1692,7 +1723,18 @@ materializer, which sets only <code>source = NULL</code> and never
 change until the last writer upgrades — the common case losing to the rare one.
 So <code>'raw'</code> requires <em>positive</em> evidence (a marker written by a
 raw path), and an unmarked NULL-source write keeps the historical
-<code>'sync'</code> reading. Residual, named: during that window a genuine raw
+<code>'sync'</code> reading.
+<strong>Which means the raw paths must actually set that marker, or the
+<code>'raw'</code> label never appears</strong> (review finding): the known raw
+writer is a direct <code>repo.db.execute</code>
+(<code>agent-runtime/commands.ts:170-172</code>), and with the default flipped to
+<code>'sync'</code> an unbracketed raw write is now <em>indistinguishable from a
+sync apply</em> — the I3 promise that raw writes are labeled truthfully would be
+vacuous. Slice B therefore brackets those paths with
+<code>apply_kind = 'raw'</code> (same set/clear discipline as the sync marker:
+cleared in the same transaction, so a crash can't leave it sticky). The set is
+small and enumerable, which is what makes this tractable; any <em>new</em> raw
+path must bracket itself, and that is the I3 review rule. Residual, named: during that window a genuine raw
 write from a pre-B client reads as <code>'sync'</code>. That is provenance
 imprecision in the direction of the truth-preserving default, and it gates
 nothing — <code>source</code>/<code>scope</code> are provenance only, never a
@@ -2525,8 +2567,13 @@ into is smaller).
   things, explicitly:
   <ul>
     <li>a <strong>reconciliation backstop</strong> that repairs what an old client
-      did (§5.1's one-shot tombstone scan per version transition; the recurring
-      UI-state subtree pass);</li>
+      did (§5.1's structural tombstone scan and the recurring UI-state subtree
+      pass). Note the arming condition is <em>not</em> a version transition
+      (review finding): a scan keyed to a version bump misses a downgrade that
+      happens after it, and it also misses a <em>post-guard</em> client that keeps
+      the current trigger body while still creating untyped UI-state rows. The
+      scan is armed by the pre-recreate body probe <em>and</em> stays active
+      through the old-creator window;</li>
     <li>a <strong>structural fallback</strong> that does not depend on the new
       mechanism at all (B1 discovering UI-state blocks by computed deterministic id
       rather than by tag);</li>
@@ -2658,9 +2705,45 @@ into is smaller).
         gate is unforgeable rather than merely conventional.
         (<code>systemMint</code> looks like the other candidate signal but is a
         tx-time attribution option, not a persisted per-block flag, so it cannot be
-        gated on.) Panels and panel-stack rows carry runtime ids and are covered by
-        their <em>parent</em> being a computed id; where a whole runtime-id chain is
-        hard-deleted, see §5.1's named residual. Hiding the type from the property
+        gated on.)
+        <div class="callout warn">
+          <strong>Open problem: the gate is sound for computed-id blocks and
+          <em>not</em> for panels</strong> (review finding, unresolved). Panels and
+          panel-stack rows carry <em>runtime</em> ids, so the only signals available
+          are their <em>parent</em> being a computed id — but parentage is exactly
+          the mutable structure this gate was rewritten to stop trusting
+          (<code>tx.move</code>) — or the <code>panel</code> type, which is
+          user-editable ([1000]). <code>systemMint</code> is not persisted. So in
+          the current data model <strong>there is no immutable signal identifying a
+          panel</strong>, and panels are the entire 35&nbsp;MB motivation. Three
+          ways out, and this is a decision, not an oversight:
+          <ul>
+            <li><em>(i)</em> make panel identity immutable — derive panel /
+              panel-stack ids deterministically, or persist a creation-provenance
+              flag. A code change in <code>panelLayoutProjection</code>, and the
+              only option that makes B1 <em>sound</em> on its own.</li>
+            <li><em>(ii)</em> accept a weaker gate — admit runtime rows on
+              parent-plus-type and accept that a deliberate forgery (move a content
+              block under a layout-session <em>and</em> apply the type) gets its
+              history pruned. Bounded by requiring two deliberate steps, but it is
+              real data loss and [1000] is what makes the type reachable.</li>
+            <li><em>(iii)</em> resolve <a href="#s16">O7</a> — then B1/B2 and this
+              gate cease to exist, because the gate is <em>only</em> scaffolding for
+              deferring O7.</li>
+          </ul>
+          <strong>This corrects an earlier claim in this doc that O7 "blocks
+          nothing".</strong> It blocks shipping the sweeper <em>soundly</em>: the
+          byte win is real and B1 still delivers it, but only under (i) or (ii).
+          <em>And the deferral is not free either</em> (review finding): B1-era tags
+          on ordinary content produce histories that, if B2 later enables the
+          affordance under O7(a), lack the durable
+          <code>tx_seq</code>/<code>group_id</code>/write-count/<code>is_replay</code>
+          state O7(a) requires — and for hard-deleted ones only
+          <code>row_events</code> ever carried that boundary data. So B2 must
+          first backfill or <em>exclude</em> pre-O7 tagged content histories, or
+          enabling the affordance later prunes exactly the undo metadata the gate
+          was built to protect.
+        </div> Hiding the type from the property
         panel until B2 is worth doing too, but it is the cosmetic half — the
         sweeper-side restriction is the enforceable one, because it does not depend
         on a type-registry capability that does not exist today. The reason is asymmetry, not caution:
@@ -3310,9 +3393,19 @@ generator, which is how both were found.
     Bundled with the broader "are we over-hardening the unbuilt §10 reader"
     simplification question. Only the undoable corner is affected — non-undoable
     UI-state pruning (the dominant case) is unaffected.
-    <strong>This does not block shipping</strong> (review finding, §13): slice B
-    splits, with B1 (tagging dedicated UI-state storage + the sweeper) free to ship
-    and only B2 (the user-assignable affordance) gated on this decision. The gate
+    <strong>Correction (2026-07-18): this partly <em>does</em> block shipping.</strong>
+    An earlier revision claimed the B1/B2 split made O7 cost-free to defer. Two
+    review rounds since have shown the split cannot be made <em>sound</em> in the
+    current data model (§13's callout): the B1 gate keys on computed identity, which
+    is unforgeable for the <code>ensureStateChild</code> family but unavailable for
+    panels and panel-stack rows, whose ids are runtime and whose parentage and type
+    are both mutable — and panels are the whole byte motivation. So B1 ships only
+    under a code change that makes panel identity immutable, or under a knowingly
+    weaker gate. Deferring also has its own cost: B1-era tags on content blocks
+    produce histories lacking the durable state O7(a) needs, so B2 would have to
+    backfill or exclude them. The split still <em>sequences</em> the work — B1
+    (tagging dedicated UI-state storage + the sweeper) before B2 (the
+    user-assignable affordance) — but it does not make this decision free. The gate
     exists because retention is <em>one-way</em> — shipping B2 before deciding lets
     a prune permanently destroy the <code>group_id</code>/boundary data that (a) and
     (c) both depend on, and no later choice can recover it, while deferring B2 costs
