@@ -258,8 +258,11 @@
   across live/soft/hard-deleted blocks, retiring the three-source enumeration, the
   delete-surviving side index, and the delete-event watermark. One design decision
   is open — <a href="#s16">O7</a> (undo-boundary durability when a user prunes an
-  <em>undoable</em> block; recommendation is a SQLite-allocated tx sequence +
-  write-flag on <code>command_events</code>, keeping the [1000] affordance).
+  <em>undoable</em> block; recommendation is four durable per-tx columns on
+  <code>command_events</code> — a SQLite-allocated sequence, <code>group_id</code>,
+  a wrote-a-row flag, and <code>is_replay</code> — keeping the [1000] affordance).
+  A second decision now sits beside it: how B1 identifies dedicated UI-state
+  storage at all (§13's open problem).
   §12's arithmetic was re-grounded 2026-07-15 against live measurements of two
   client instances of the same workspace via the agent bridge (a 63-day dev
   profile, 1.94M events, and a 23-day prod profile, 401k events); measured
@@ -310,7 +313,9 @@
       deleted, which is what makes the log self-sufficient (I8). UI-state churn — measured at
       roughly half of a working device's update events — is logged but
       <strong>hard-bounded</strong>: a retention sweeper prunes each
-      <code>no-history</code>-typed block (panels carry the type) to its newest K events.
+      <code>no-history</code>-typed <em>or identity-confirmed</em> block (panels
+      carry the type; identity covers rows an old client created untagged) to its
+      newest K events.
       The events stay compact like any other update; keeping the newest K is a
       clean oldest-prefix delete, which is safe for compact events, so no
       full-writes are needed (user call, <a href="#s16">O6</a>/§5.1).</li>
@@ -1370,6 +1375,17 @@ just panels.
         is not a return to the three-source enumeration — there is no
         delete-surviving side table and no delete-event watermark; it is one extra
         indexed lookup.
+        <strong>Plus the structural identity scan, which this union previously
+        omitted</strong> (review finding): in the old-creator window a pre-B client
+        can create and keep churning a <em>live</em> computed UI-state row — a
+        plugin or layout-session child — that has no <code>no_history</code> events
+        and no <code>no-history</code> type, and active-workspace tagging may never
+        run for a synced-but-unopened workspace. Neither the flag partition nor
+        <code>block_types</code> would ever enqueue it, so an implementation copying
+        just those two would leave a hot live row growing forever. The union is
+        therefore flag partition ∪ live <code>block_types</code> ∪ <em>computed
+        identity</em> (§13's gate set, derived not traversed), which is the same
+        signal B1 already needs to authorize the prune.
         <strong>One residual hole, and the ordering requirement does not close
         it</strong> (review finding — an earlier draft claimed it did): shipping the
         trigger-version guard before slice B only binds clients that <em>have</em>
@@ -1563,8 +1579,12 @@ just panels.
     panel events; naming it so it can be vetoed. I7 is amended to match: the
     sweeper is the second sanctioned <code>row_events</code> mutation (with the §8
     rewrite), and it may delete <em>any</em> event on a
-    <code>no-history</code>-typed block keeping the newest K — never any
-    event on a block without that type.</li>
+    <code>no-history</code>-typed <em>or identity-confirmed</em> block keeping the
+    newest K — never any event on a block that is <strong>neither</strong> (review
+    finding — this previously said "without that type", which forbids the very
+    backstop §5.1/I7 now require: an old client can create a UI-state row untyped,
+    churn it and delete it, and the structural scan reaches it only by computed
+    identity).</li>
   <li><strong>Pruning an <em>undoable</em> no-history block has an open
     undo-boundary cost.</strong> <a href="#s16">[1000]</a> lets a user tag their
     own ordinary (undoable-scope) block <code>no-history</code>, not just
@@ -1579,7 +1599,9 @@ just panels.
     same-millisecond boundary tx can be misplaced and cause a wrong <em>merge</em>)
     and can't distinguish a fully-pruned <em>writing</em> tx from a harmless
     zero-write one. Closing it needs durable per-tx state (persisted
-    <code>tx_seq</code> + a wrote-a-row flag on <code>command_events</code>) —
+    four columns on <code>command_events</code>: a SQLite-allocated sequence —
+    <em>not</em> the session-seeded <code>tx_seq</code> — plus
+    <code>group_id</code>, a wrote-a-row flag, and <code>is_replay</code>) —
     provisioning an unbuilt reader (I6) — <em>or</em> restricting retention to
     non-undoable scopes, <em>or</em> deferring §10's guarantee. This is now
     <a href="#s16">O7</a>, open. Note it does <em>not</em> touch the dominant case:
@@ -1887,17 +1909,22 @@ block with any <code>v IS NULL</code> event:
     no create, so slice A logs its first-ever edit as a <em>compact</em> patch
     (§4.1/I6: the v2 trigger has no predecessor probe), and a stale tab can then
     append the first <code>v IS NULL</code> row after it. The stream therefore
-    starts with a patch and no base to apply it to. Rule: <code>runningState</code>
-    stays <strong>unset</strong> until an event supplies full state, and while it is
-    unset the rewriter (a) skips divergence classification entirely — nothing can
-    diverge from nothing, so no false I9 report — and (b) treats the first v1 row it
-    must rewrite as the <em>no-<code>runningState</code> chain start</em>
-    (<code>full=1</code>), which is an existing rule below, not a new one. The
-    compact v2 prefix needs no base because it is already migrated and the rewriter
-    does not touch it. Optional refinement where exactness is wanted over
-    simplicity: seed <code>runningState</code> by reconstructing that point via §4.3
-    from the newer side (which always terminates), avoiding the one extra
-    <code>full=1</code> row.</li>
+    starts with a patch and no base to apply it to. Rule: <strong>seed
+    <code>runningState</code> by reconstructing that point via §4.3 from the newer
+    side</strong> (which always terminates), then proceed normally.
+    <strong>This seeding is required, not the optional refinement an earlier draft
+    called it</strong> (review finding): "leave <code>runningState</code> unset and
+    skip divergence classification until the first full row" hides exactly the gap
+    the classification exists to catch. The later v1 row's full
+    <code>before_json</code> becomes the newer-side base for reconstructing the
+    compact prefix, so an unlogged <em>content</em> write between the prefix and
+    that row would be spliced silently into the prefix's history without ever
+    tripping the field-wise I9 check — a gap laundered by the very row that should
+    have exposed it. Seeding from the newer side gives the seam a real base to be
+    compared against, so it is classified like any other. It also avoids the extra
+    <code>full=1</code> chain-start row. If the seed cannot be reconstructed at all,
+    the block is not safely migratable: abort its transaction and leave it wholly
+    v1, per the content-divergence rule below.</li>
   <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
     Reset <code>pos</code>. (A create opens a chain — nothing logged is older.)</li>
   <li><code>delete</code>: stamp <code>v=2, full=1</code>, payload unchanged
@@ -1911,8 +1938,10 @@ block with any <code>v IS NULL</code> event:
     <code>stateAt</code> walks splice post-gap content into pre-gap history — the
     same corruption the update branch now stops, arriving through the delete door.
     So: metadata-only divergence ⇒ the delete's <code>before</code> is a crossable
-    base as usual; content-level divergence ⇒ stop and report, and do not treat it
-    as crossable. Reset <code>pos</code>.</li>
+    base as usual; content-level divergence ⇒ abort this block's migration and
+    report, leaving it wholly v1 (the same resolution as the update branch below —
+    there is no marker to make a seam non-crossable, and an unmigrated block cannot
+    splice because v1 events are full). Reset <code>pos</code>.</li>
   <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
     comparing the event's <em>own</em> before/after JSON (exact — no cross-event
     inference), then keep it <strong><code>full=1</code></strong> if either of the
@@ -1954,11 +1983,23 @@ block with any <code>v IS NULL</code> event:
     cross the seam and splice post-gap values into pre-gap history — silently, and
     exactly the corruption walls were retired on the premise that it cannot happen.
     So the rewriter compares the divergence field-wise: metadata-only ⇒ proceed;
-    any content or structure field ⇒ <strong>stop and report</strong>, and mark
-    that seam non-crossable rather than compacting it. The expected count is zero,
-    which is what makes "stop and report" an affordable default rather than a
-    routine branch — if it fires, the fleet precondition was violated and the
-    operator should know before the migration rewrites anything further.
+    any content or structure field ⇒ <strong>abort this block's migration and
+    report</strong>.
+    <strong>"Mark the seam non-crossable" is not available and was incoherent to
+    write</strong> (review finding): <code>full=2</code> was retired and no
+    replacement marker exists, so there is nothing to mark <em>with</em>. The
+    resolution needs no marker, because <strong>an unmigrated block cannot splice
+    at all</strong> — v1 events are full snapshots (§2.1), so reconstructing any
+    state reads one row and never walks, and the corruption this branch guards
+    against is a property of <em>compact</em> walks. So: <em>per-block migration is
+    atomic</em> — a block is rewritten in one transaction — and a content-level
+    divergence aborts that transaction, leaving the block <strong>wholly v1</strong>
+    rather than half-compacted around a real gap. Atomicity is what makes this
+    sound; a partially-rewritten block would be mixed v1/v2 and could walk within
+    its v2 span. The block stays readable (v1 is readable-as-full), simply
+    uncompacted, and the migration reports it. Expected count is zero — it means
+    I9's fleet precondition was violated — so the operator should see it rather
+    than have the rewriter quietly compact through a genuine gap.
     Otherwise rewrite compact: <code>before_json</code> = changed fields' old
     values, <code>after_json</code> = changed fields' new values (equal key
     sets — the invertible-patch shape of §3), <code>v=2, full=0</code>, and
@@ -2434,10 +2475,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         So "unprovable ⇒ boundary" is not a safe default either: it over-splits as
         readily as the alternative under-splits.
         The honest fix is <strong>durable per-tx state that survives the prune</strong>
-        — on <code>command_events</code>, all three values already computed at
-        commit time: a <em>real</em> DB-wide monotonic tx sequence, the
-        <code>group_id</code>, and a wrote-a-row flag/count. With those, order,
-        membership, and write-ness all reconstruct with no surviving
+        — on <code>command_events</code>, all <strong>four</strong> values already
+        computed at commit time: a <em>real</em> DB-wide monotonic tx sequence, the
+        <code>group_id</code>, a wrote-a-row flag/count, and
+        <strong><code>is_replay</code></strong> (review finding — an earlier draft
+        listed only the first three, even though this same contract had just
+        established that replay txs must be excluded and that <code>isReplay</code>
+        is not persisted today; an implementation following the three-column list
+        would let undo/redo replay commits appear as ordinary undoable writing txs,
+        becoming false stack entries or group boundaries). With those, order,
+        membership, write-ness, and replay status all reconstruct with no surviving
         <code>row_events</code> at all. Note the existing
         <code>tx_context.tx_seq</code> is <em>not</em> that sequence (review
         finding): it is seeded from <code>Date.now()</code> per <code>Repo</code>
@@ -2970,7 +3017,9 @@ from its create with the <code>blocks</code> table ignored entirely: I3/I8,
 excepting the raw <code>UPDATE&nbsp;…&nbsp;SET&nbsp;id</code> case below),
 and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same
-<code>no-history</code>-typed blocks — <em>including deleted flagged blocks and
+<code>no-history</code>-typed blocks — <em>including deleted flagged blocks,
+identity-confirmed rows an old client created <strong>untyped</strong> (the
+structural-backstop case, which a type-only generator would never produce), and
 metadata-only unlogged gaps (a trigger-suspended <code>user_updated_at</code>
 write, I9)</em>
 (safety oracle: after a sweep, a flagged block retains its newest K events by
@@ -3314,8 +3363,10 @@ generator, which is how both were found.
         bypassed the trigger — an actual I9 violation, most plausibly from a
         pre-A mixed-version window — so the rewriter classifies the divergence and
         <strong>reports content-level ones loudly rather than silently rewriting
-        them compact</strong>. If any are found, those specific seams need a
-        non-crossable marker and the wall mechanism returns for exactly them. The
+        them compact</strong>. If any are found, the affected block's migration is
+        <em>aborted</em> and it is left wholly v1 (§8.1) — walls do <em>not</em>
+        return, because none are needed: v1 events are full, so an unmigrated block
+        has no compact walk to splice across. The
         expectation is zero; the point is that the migration would tell us, instead
         of the design quietly assuming. A future content-mutating suspend site would
         break I9 the same way and must instead fire the trigger or reintroduce a
