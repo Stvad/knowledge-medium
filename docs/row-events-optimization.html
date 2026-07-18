@@ -1088,19 +1088,22 @@ just panels.
     tag. No paternalistic guard second-guesses the mark; the explicit type
     <em>is</em> the safety.</li>
   <li><strong>The sweeper keys on the synced block, so every device agrees.</strong>
-    A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) takes as
-    candidates from the <code>no-history</code> set, not from an event-count
-    scan: the live/soft-deleted ones straight off the <code>block_types</code>
-    index (<code>WHERE type = 'no-history'</code> — soft-deletes are still
-    <code>blocks</code> rows), plus the hard-deleted / stream-exited ones from
-    their delete events (<code>kind = 'delete'</code> whose before-snapshot carried
-    <code>no-history</code> — few, and <strong>this is why deleted candidates must
-    be classified before, not after, a live-type filter</strong>, review finding:
-    a hard delete drops the <code>block_types</code> row, so a
-    <code>block_types</code>-only pass would silently skip exactly the panel that
-    can no longer shrink). Starting from the small tagged set (rather than "blocks
+    A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) takes its
+    candidates from the <code>no-history</code> set, not from an event-count scan,
+    from <strong>three sources — because <code>block_types</code> holds only live
+    rows</strong> (its triggers gate on <code>deleted = 0</code> and drop a
+    block's rows on delete, <code>clientSchema.ts:878-905</code>, review finding):
+    <em>(1)</em> live blocks off the <code>block_types</code> index
+    (<code>WHERE type = 'no-history'</code>); <em>(2)</em> soft-deleted blocks,
+    which are still <code>blocks</code> rows (<code>deleted = 1</code>) carrying
+    their <code>properties_json</code> — read the type straight off the row, not
+    the index; <em>(3)</em> hard-deleted / stream-exited blocks from their delete
+    events (<code>kind = 'delete'</code> whose before-snapshot carried
+    <code>no-history</code> — few). Both deleted cases must be gathered explicitly:
+    a <code>block_types</code>-only pass would silently skip exactly the block that
+    can no longer shrink. Starting from the small tagged set (rather than "blocks
     with &gt; K events" — 502 blocks on prod at K = 8, a full aggregate that also
-    misses hard-deletes) is both cheaper and complete. Deleted blocks are included
+    misses deletes) is both cheaper and complete. Deleted blocks are included
     deliberately: a panel deleted <em>before</em> a sweep capped it would otherwise
     keep its whole pre-delete history (up to the full delete-before snapshot,
     multi-MB) forever. For each candidate it then deletes all but its newest K
@@ -1110,8 +1113,12 @@ just panels.
     can tie within a tx or step under wall-clock skew, a cut by timestamp could
     retain an earlier-<code>id</code> event while deleting a later one — holing a
     survivor's backward walk, the exact corruption this is meant to avoid. The cut
-    is <code>id &lt; max(K-th largest id, latest full=2 wall id)</code>
-    — and that clamp on a wall (§3/§8.1) is load-bearing on upgraded DBs: a
+    is <code>id &lt; max(K-th largest id, COALESCE(latest full=2 wall id, 0))</code>
+    — the <code>COALESCE</code> is not decorative: SQLite's scalar
+    <code>max(x, NULL)</code> returns <code>NULL</code> (verified), so without it
+    the common no-wall case (<code>latest wall id</code> is NULL) would compute
+    <code>id &lt; NULL</code> and prune <em>nothing</em>. That clamp on a wall
+    (§3/§8.1) is otherwise load-bearing on upgraded DBs: a
     discontinuity anchor sitting <em>among</em> the newest K would otherwise let
     the prune delete the older create/anchor that a pre-wall survivor needs, while
     §4.3 forbids the live-row walk from crossing the wall to reach it — leaving
@@ -1126,10 +1133,17 @@ just panels.
     compact newest-K survivors would have no valid base — §4.3 rejects the live row
     across a terminal gap. The sweeper detects it the same way a reader does (the
     latest event's reconstructed <code>after</code> ≠ the live row) and
-    <em>defers</em> that block for the round rather than pruning past its last full
-    base. On a <code>no-history</code> block this self-heals almost immediately —
-    the next view-state write plants a fresh event making the live row a valid base
-    again — so deferring costs a cycle, not the bound. Because the key
+    <strong>resolves it before pruning rather than deferring</strong>: it writes a
+    <code>full=2</code> reconciliation anchor capturing the current live-row state,
+    which both records the post-gap truth and marks the gap as a wall, then prunes
+    as normal (the new anchor is now the latest wall the cut clamps on). Deferring
+    and waiting for the block's next write to self-heal was the first draft and is
+    <em>not</em> safe (review finding): a <code>no-history</code> block that was
+    deleted or simply went idle would never be written again, so it would be
+    deferred forever and never bounded — the exact unbounded case retention
+    exists to prevent. The reconciliation anchor depends on no future trigger
+    firing. (Hard-deleted blocks have no live row and no terminal gap — their delete
+    event's full <code>before</code> is already the terminal base.) Because the key
     is the block's <code>no-history</code> <em>type</em> — read from the synced
     row on every device — a panel that synced in from another device is
     recognised identically to a locally-created one. That is exactly the blind
@@ -1390,8 +1404,16 @@ block with any <code>v IS NULL</code> event:
     reconstructed after of the previous kept event) and <code>pos</code> (compact
     count since the last full event — a rewriter-local counter; nothing in the
     output encodes it).</li>
-  <li><code>create</code>/<code>delete</code>: stamp <code>v=2,
-    full=1</code>, payload unchanged. Reset <code>pos</code>.</li>
+  <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
+    Reset <code>pos</code>. (A create opens a chain — nothing logged is older, so
+    it is never a wall.)</li>
+  <li><code>delete</code>: stamp <code>v=2</code>, payload unchanged, and check
+    for a gap the same way an update does — <code>full=2</code> if the delete's
+    <code>before_json</code> ≠ <code>runningState</code> (an unlogged change
+    preceded the purge), else <code>full=1</code> (review finding). A delete's
+    full <code>before</code> is a newer-side base for reconstructing older events
+    (§4.3), so a delete that follows a gap must be a wall too, or a reader walks
+    back across the gap. Reset <code>pos</code>.</li>
   <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
     comparing the event's <em>own</em> before/after JSON (exact — no cross-event
     inference), then keep it <strong>full</strong> if any of the following — and
@@ -1973,8 +1995,10 @@ into is smaller).
         three-way <code>source</code> tag (§6.2 — labeling only; the policy
         table and drop gates left with the §6 revision, the
         <code>history_mode</code> gate with the §5 revision); the
-        <code>no-history</code> type (stamped on panels at creation + a one-time
-        backfill onto existing panel/panel-stack blocks) + the §5.1 retention
+        <code>no-history</code> type (stamped on <em>every</em> UI-state block at
+        creation — panels, the root <code>ui-state</code> child, and plugin
+        UI-state blocks, §5.1 — + a one-time backfill onto all existing ones, not
+        just panels) + the §5.1 retention
         sweeper (whole-block newest-K, keyed on that type, cut by
         <code>id</code> via a new <code>(block_id, id)</code> index — no
         full-writes); <code>scope</code> stamped as
@@ -2045,17 +2069,21 @@ excepting the raw <code>UPDATE&nbsp;…&nbsp;SET&nbsp;id</code> case below),
 and randomized §5.1 retention sweeps interleaved
 with UiState, user, AND sync-applied writers hitting the same
 <code>no-history</code>-typed blocks — <em>including generated
-<code>full=2</code> discontinuities among the newest K</em> (safety oracle: after
-a sweep, a flagged block retains its newest K events <em>whatever their
-source</em>, the cut never crosses the latest <code>full=2</code> wall (so a
-recent gap retains fewer than K rather than orphaning a pre-wall survivor), no
-survivor is older than any pruned event, and <code>stateAt</code> stays exact for
-every survivor <em>including compact ones</em> — the property that proves
-oldest-prefix deletion is safe without full-writes; non-flagged blocks are never
-touched, and a flagged block with a foreign-typed sibling in the same tx does not
-drag it in. Plus a <em>progress</em> oracle, because a never-prunes sweeper passes
-safety trivially: a flagged block with &gt; K events and no wall among them ends
-the sweep with exactly K). Slice C's I5
+<code>full=2</code> discontinuities among the newest K, terminal gaps (a
+trigger-suspended write past the last event), and deleted flagged blocks</em>
+(safety oracle: after a sweep, a flagged block retains its newest K events
+<em>whatever their source</em>, the cut never crosses the latest
+<code>full=2</code> wall (so a recent gap retains fewer than K rather than
+orphaning a pre-wall survivor), a terminal gap plants a reconciliation anchor
+before any prune (never defers indefinitely), a deleted flagged block is swept
+via its snapshot type, no survivor is older than any pruned event, and
+<code>stateAt</code> stays exact for every survivor <em>including compact
+ones</em> — the property that proves oldest-prefix deletion is safe without
+full-writes; non-flagged blocks are never touched, and a flagged block with a
+foreign-typed sibling in the same tx does not drag it in. Plus a
+<em>progress</em> oracle, because a never-prunes sweeper passes safety trivially:
+a flagged block with &gt; K events and no wall among them ends the sweep with
+exactly K). Slice C's I5
 equivalence suite is the same
 generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
