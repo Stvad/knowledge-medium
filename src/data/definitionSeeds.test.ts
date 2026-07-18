@@ -1122,13 +1122,14 @@ describe('type definition materialization', () => {
       [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
   })
 
-  it('with revalidation on, skips when the live declaration for the key was replaced', async () => {
+  it('with revalidation on, skips when the live declaration for the key has a new membership id', async () => {
     // The snapshot has typeSeed (id=test-widget). The live registry now maps that
-    // SAME key to a replacement declaration with a new id/revision. Writing the stale
-    // snapshot would put the old id into the deterministic block; create/restore-only
-    // never repairs it, so the registry would bind the new id to a row claiming the
-    // old one. Skip — the dirty re-run materializes the current declaration.
-    const replaced = seedType({seedKey: typeSeed.seedKey, revision: 2, id: 'new-widget', label: 'Renamed'})
+    // SAME key to a replacement declaration with a new membership id (revision left
+    // unchanged, so this isolates the id identity check). Writing the stale snapshot
+    // would put the old id into the deterministic block; create/restore-only never
+    // repairs it, so the registry would bind the new id to a row claiming the old
+    // one. Skip — the dirty re-run materializes the current declaration.
+    const replaced = seedType({seedKey: typeSeed.seedKey, revision: typeSeed.revision, id: 'new-widget', label: 'Renamed'})
     const replacedRegistry = buildTypeDefinitionRegistry({
       workspaceId: WS, projectedDefinitions: new Map(), seeds: [replaced],
     })

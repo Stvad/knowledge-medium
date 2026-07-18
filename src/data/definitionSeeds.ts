@@ -591,13 +591,15 @@ export const materializeTypeSeeds = (
           if (!current
             || reg.contestedSeedKeys.has(seed.seedKey)
             || reg.contestedTypeIds.has(seed.id)) return false
-          // The live declaration for this key must still be the one we snapshotted.
-          // A same-key REPLACEMENT (an id de-collision, a plugin update) would
-          // otherwise write the stale snapshot's id + payload to the deterministic
-          // block; create/restore-only never repairs it, so the registry would then
-          // bind the NEW type id to a row claiming the OLD one. Compare identity
-          // (id + revision) — the dirty re-run materializes the current declaration.
-          return current.id === seed.id && current.revision === seed.revision
+          // The live declaration for this key must still carry the same membership
+          // ID we snapshotted. A same-key id REPLACEMENT (an id de-collision, a
+          // plugin update) would otherwise write the stale id to the deterministic
+          // block; create/restore-only never repairs it, so the registry would bind
+          // the NEW id to a row claiming the OLD one. Compare ID only — NOT revision:
+          // a revision bump is a payload-version change materialization deliberately
+          // doesn't chase (the reschedule diff ignores it too, §4.3/§6.1), so gating
+          // on it here would reject the snapshot with no dirty re-run to replace it.
+          return current.id === seed.id
         }
       : undefined,
   }, signal)
