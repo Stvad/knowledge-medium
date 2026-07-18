@@ -198,7 +198,21 @@ const throwIfPropertySeedAccessAborted = (signal?: AbortSignal): void => {
  * behind server RLS but would otherwise enqueue every seed create as a viewer.
  *
  * The captured workspace is rechecked after the wait so a parked task cannot
- * write after the user switches away. Abort is owned by the trigger generation. */
+ * write after the user switches away. Abort is owned by the trigger generation.
+ *
+ * DELIBERATELY NOT gated on §6 e2ee materializability (decision on PR #397, Codex
+ * "defer seed scheduling until workspace access is known"). A `setActiveWorkspaceId`
+ * reschedule can fire this pass before App's `resolveWorkspaceEntry` marks a locked
+ * e2ee workspace read-only, so an owner could briefly write seed rows into a locked
+ * workspace. We accept it: (1) it's not a leak — the local DB is plaintext regardless,
+ * and an e2ee workspace's UPLOAD seals content via `requireCek`, which THROWS without
+ * the key (`sync/transform.ts`), so a seed row is never uploaded plaintext; (2) the
+ * rows are deterministic + idempotent, so they normalize once the workspace unlocks
+ * and its real blocks materialize; (3) the PROPERTY seed path has the identical gate
+ * (this same function) — it's a shared, pre-existing behavior, not type-specific — and
+ * once App sets read-only, both the gate and the pass's final `isReadOnly` recheck stop
+ * further writes. If this ever needs closing, add the materializability check HERE (the
+ * shared gate) so both kinds benefit, not a type-only patch. */
 export const awaitPropertySeedMaterializationAccess = async (
   repo: Repo,
   workspaceId: string,
@@ -315,6 +329,14 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
    *  guards and before the probe. Types drop contested-`id` seeds here; the
    *  property side has no analog (its registry handles name collisions upstream). */
   readonly preFilter?: (seeds: readonly S[]) => readonly S[]
+  /** Optional per-seed declaration recheck, consulted INSIDE the write tx right
+   *  before each seed's create/restore. The seed array is a snapshot taken before
+   *  the pass's awaits (probe / ensure / tx setup); a facet change since may have
+   *  removed a seed or made it contested. Returning false skips it — create/restore
+   *  is irreversible, so a stale write would leave a retired row the registry later
+   *  republishes as a phantom block-id type. Only the scheduled path wires this
+   *  (against the live registry); direct callers pass an explicit array and omit it. */
+  readonly stillMaterializable?: (seedKey: string) => boolean
 }
 
 /** Isolated create/restore-only seed materialization pass — the ONE copy of the
@@ -437,6 +459,11 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
     if (signal?.aborted || repo.isReadOnly) return
     for (const seed of materializable) {
       const id = config.idFor(workspaceId, seed.seedKey)
+      // Declaration recheck (scheduled path): the seed array was snapshotted before
+      // the awaits above; if a facet change since removed this seed or made it
+      // contested, skip it. create/restore-only can't undo a write, so a stale
+      // create would strand a retired row the registry republishes as a phantom.
+      if (config.stillMaterializable && !config.stillMaterializable(seed.seedKey)) continue
       const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
       if (current?.deleted) {
@@ -466,6 +493,7 @@ export const materializePropertySeeds = (
   workspaceId: string,
   seeds: readonly AnyPropertySeedDeclaration[],
   signal?: AbortSignal,
+  revalidateAgainstRegistry = false,
 ): Promise<SeedMaterializationResult> =>
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializePropertySeeds',
@@ -475,6 +503,15 @@ export const materializePropertySeeds = (
     contentFor: seed => seed.name,
     propertiesFor: canonicalPropertySeedProperties,
     txDescription: 'materialize property definitions',
+    stillMaterializable: revalidateAgainstRegistry
+      ? seedKey => {
+          const reg = repo.propertyDefinitions
+          // Not the live registry for this workspace (direct caller with an explicit
+          // array, or a switch-away the abort guard already handles) → trust the array.
+          if (reg?.workspaceId !== workspaceId) return true
+          return reg.seedsByKey.has(seedKey)
+        }
+      : undefined,
   }, signal)
 
 /** Exclude EVERY seed whose membership `id` is claimed by more than one seed in
@@ -529,6 +566,7 @@ export const materializeTypeSeeds = (
   workspaceId: string,
   seeds: readonly TypeSeedDeclaration[],
   signal?: AbortSignal,
+  revalidateAgainstRegistry = false,
 ): Promise<SeedMaterializationResult> =>
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializeTypeSeeds',
@@ -539,4 +577,15 @@ export const materializeTypeSeeds = (
     propertiesFor: canonicalTypeSeedProperties,
     txDescription: 'materialize type definitions',
     preFilter: uncontestedTypeSeeds,
+    stillMaterializable: revalidateAgainstRegistry
+      ? seedKey => {
+          const reg = repo.typeDefinitions
+          // Not the live registry for this workspace (direct caller with an explicit
+          // array, or a switch-away the abort guard already handles) → trust the array.
+          if (reg?.workspaceId !== workspaceId) return true
+          // Withhold a seed the live registry no longer declares OR now flags
+          // contested (duplicate key/id), matching `workspaceSeeds`' own filter.
+          return reg.seedsByKey.has(seedKey) && !reg.contestedSeedKeys.has(seedKey)
+        }
+      : undefined,
   }, signal)

@@ -32,6 +32,7 @@ import {
 import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {typesPageBlockId} from '@/data/typesPage'
 import {seedType} from '@/data/typeSeeds'
+import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import {typeSeedsFacet} from '@/data/facets'
 import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
@@ -1046,6 +1047,29 @@ describe('type definition materialization', () => {
       .toEqual({created: 0, restored: 0, skippedReadOnly: false})
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
+  })
+
+  it('with revalidation on, skips a seed the live registry no longer declares (stale-snapshot guard)', async () => {
+    // The scheduled path snapshots the seed set, then awaits (probe / ensure / tx
+    // setup); a facet change during that window can drop a seed. The write path must
+    // recheck the live registry and skip it — create/restore-only can't undo a stale
+    // write, so a retired row would be republished later as a phantom block-id type.
+    // Simulate the post-await state: the live registry no longer declares typeSeed.
+    const emptyRegistry = buildTypeDefinitionRegistry({
+      workspaceId: WS, projectedDefinitions: new Map(), seeds: [],
+    })
+    vi.spyOn(repo, 'typeDefinitions', 'get').mockReturnValue(emptyRegistry)
+
+    // `revalidateAgainstRegistry: true` is what the scheduled path passes; the
+    // snapshot argument still lists typeSeed, but the live registry no longer does.
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed], undefined, true))
+      .toEqual({created: 0, restored: 0, skippedReadOnly: false})
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
+
+    // Control: a direct caller (revalidation OFF) trusts its explicit array and still
+    // materializes, proving the guard is scoped to the scheduled path.
+    expect((await materializeTypeSeeds(repo, WS, [typeSeed])).created).toBe(1)
   })
 
   it('typeify still completes a NON-seed block-type block into a page + alias (carve-out is narrow)', async () => {

@@ -2396,10 +2396,13 @@ export class Repo {
       // that a registry rotated by a switch-away yields an empty set for the
       // departed workspace, making this a cheap no-op.
       const {propertySeeds, typeSeeds} = this.workspaceSeeds(workspaceId)
+      // Pass `revalidateAgainstRegistry: true`: this snapshot can go stale during the
+      // materializer's awaits (probe / ensure / tx setup), so the write path rechecks
+      // each seed against the live registry before committing (§4.3 phantom guard).
       if (kind === 'property') {
-        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds, signal)
+        if (propertySeeds.length > 0) await materializePropertySeeds(this, workspaceId, propertySeeds, signal, true)
       } else if (typeSeeds.length > 0) {
-        await materializeTypeSeeds(this, workspaceId, typeSeeds, signal)
+        await materializeTypeSeeds(this, workspaceId, typeSeeds, signal, true)
       }
     } catch (err) {
       if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
