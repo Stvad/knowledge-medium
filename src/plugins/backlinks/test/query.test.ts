@@ -30,6 +30,7 @@ import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,
   mergeBacklinksFilters,
+  propertyMachinerySourceIds,
 } from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
@@ -267,6 +268,27 @@ describe('backlinksDataExtension query', () => {
       const filtered = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
         {workspaceId: FLIP_WS, id: 'Foo'}).load())
       expect(filtered).toEqual(['Q'])
+    })
+
+    it('unions machinery across chunk boundaries (SQLite variable-cap safety)', async () => {
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D'})
+      // Two value children (machinery) and one ordinary block; with chunkSize 1
+      // each source is its own query, so a union bug would drop all but the last.
+      await createIn({id: 'V1', parentId: 'F'})
+      await createIn({id: 'V2', parentId: 'F'})
+      await createIn({id: 'Q'})
+
+      const machinery = await propertyMachinerySourceIds(
+        env.h.db, ['V1', 'Q', 'V2'], 1,
+      )
+      expect([...machinery].sort()).toEqual(['V1', 'V2'])
     })
 
     it('does not filter in an un-flipped workspace (no machinery exists)', async () => {

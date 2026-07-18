@@ -15,6 +15,12 @@ import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
+/** The seed `IN (?, …)` list binds one variable per source id, so a heavily
+ *  backlinked block must be chunked under SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
+ *  (999 on older builds, 32766 since 3.32) — the same discipline the sync
+ *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
+const MACHINERY_SOURCE_CHUNK = 500
+
 /** Which of `sourceIds` are property-subtree machinery — a value child (or a
  *  row deeper inside a property subtree) whose chain passes through a §9 field
  *  row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL` (flip-gated by the
@@ -24,34 +30,39 @@ export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
  *  by the references processor, so in practice this matches property VALUE
  *  rows that carry a wikilink/ref — the sources that would otherwise mint a
  *  backlink attributed to hidden machinery rather than to the owning block. */
-const propertyMachinerySourceIds = async (
+export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
+  chunkSize: number = MACHINERY_SOURCE_CHUNK,
 ): Promise<Set<string>> => {
-  if (sourceIds.length === 0) return new Set()
-  const placeholders = sourceIds.map(() => '?').join(', ')
-  const rows = await db.getAll<{ id: string }>(
-    `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, depth) AS (
-       SELECT id, id, reference_target_id, parent_id, workspace_id, 0
-         FROM blocks WHERE id IN (${placeholders})
-       UNION ALL
-       SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
-         FROM blocks AS b JOIN up ON b.id = up.parent_id
-        WHERE up.depth < 100
-     )
-     SELECT DISTINCT up.start_id AS id
-       FROM up
-      WHERE up.reference_target_id IS NOT NULL
-        AND up.parent_id IS NOT NULL
-        AND EXISTS (
-          SELECT 1 FROM block_types bt
-           WHERE bt.block_id = up.reference_target_id
-             AND bt.type = 'property-schema'
-             AND bt.workspace_id = up.workspace_id
-        )`,
-    [...sourceIds],
-  )
-  return new Set(rows.map(r => r.id))
+  const machinery = new Set<string>()
+  for (let i = 0; i < sourceIds.length; i += chunkSize) {
+    const chunk = sourceIds.slice(i, i + chunkSize)
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = await db.getAll<{ id: string }>(
+      `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, depth) AS (
+         SELECT id, id, reference_target_id, parent_id, workspace_id, 0
+           FROM blocks WHERE id IN (${placeholders})
+         UNION ALL
+         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+           FROM blocks AS b JOIN up ON b.id = up.parent_id
+          WHERE up.depth < 100
+       )
+       SELECT DISTINCT up.start_id AS id
+         FROM up
+        WHERE up.reference_target_id IS NOT NULL
+          AND up.parent_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM block_types bt
+             WHERE bt.block_id = up.reference_target_id
+               AND bt.type = 'property-schema'
+               AND bt.workspace_id = up.workspace_id
+          )`,
+      [...chunk],
+    )
+    for (const r of rows) machinery.add(r.id)
+  }
+  return machinery
 }
 
 /** Filter applied on top of the base "blocks that reference target X"
