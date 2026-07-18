@@ -2157,7 +2157,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         treating them all as two-sided diffs is a bug (review finding): a
         <strong>create</strong> has <code>before_json = NULL</code> (§3) — it
         <em>opens</em> the parent edge at <code>after_json.parentId</code>, no
-        diff; a <strong>hard delete</strong> has <code>after_json = NULL</code> —
+        diff, <strong>but only when <code>after_json.deleted</code> is false</strong>
+        (review finding): a create can arrive already-deleted. The sync rule selects
+        <code>blocks_synced.deleted</code> with no <code>deleted = 0</code> filter
+        (<code>sync-config.yaml:64-76</code>, verified), so an
+        already-soft-deleted server row materializes locally as a first-time UPSERT
+        and the INSERT trigger records it as <code>kind='create'</code> carrying
+        <code>deleted = 1</code>. Opening an interval on it would place a block that
+        was <em>never live on this device</em> under its parent in every
+        subtree-at-T result until some later delete transition — which may never
+        come, since it arrived deleted. Such a create opens nothing; a <strong>hard delete</strong> has <code>after_json = NULL</code> —
         it <em>closes</em> the edge, no diff; only a genuine <strong>anchor</strong>
         (sampled or migration, both sides full) is diffed
         <code>before_json.parentId</code> vs <code>after_json.parentId</code>
@@ -2700,9 +2709,11 @@ into is smaller).
         (<code>stateBlocks.ts:54-58</code>), so the whole
         <code>ui-state</code> → <code>layout-sessions</code> → session /
         plugin-UI-state chain is derivable offline. The sweeper computes that id
-        set and gates on membership in it. A moved content block cannot acquire one
-        of those ids — they are already occupied by the real state blocks — so the
-        gate is unforgeable rather than merely conventional.
+        set and gates on membership in it. A <em>moved</em> content block cannot
+        acquire one of those ids — they are already occupied by the real state
+        blocks — so this is strictly stronger than parentage. It is <em>not</em>
+        sufficient on its own, though: see the open problem below (an id can be
+        squatted before the real state block is lazily created).
         (<code>systemMint</code> looks like the other candidate signal but is a
         tx-time attribution option, not a persisted per-block flag, so it cannot be
         gated on.)
@@ -2713,15 +2724,27 @@ into is smaller).
           are their <em>parent</em> being a computed id — but parentage is exactly
           the mutable structure this gate was rewritten to stop trusting
           (<code>tx.move</code>) — or the <code>panel</code> type, which is
-          user-editable ([1000]). <code>systemMint</code> is not persisted. So in
-          the current data model <strong>there is no immutable signal identifying a
-          panel</strong>, and panels are the entire 35&nbsp;MB motivation. Three
-          ways out, and this is a decision, not an oversight:
+          user-editable ([1000]). <code>systemMint</code> is not persisted.
+          <strong>And computed identity is not unforgeable either</strong> (review
+          finding, which removes the last candidate signal): <code>tx.create</code>
+          accepts a caller-supplied id (<code>const id = data.id ?? newId()</code>,
+          <code>txEngine.ts:340-344</code>), and raw SQL can insert any id, so a
+          plugin can <em>squat</em> a computed UI-state id <em>before</em> the real
+          state block is lazily created — <code>DuplicateIdError</code> only
+          prevents colliding with one that already exists. A content block with real
+          history sitting at that id would then be classified as dedicated UI-state
+          storage and pruned. So in
+          the current data model <strong>no signal — parentage, type,
+          <code>systemMint</code>, or computed id — soundly identifies dedicated
+          UI-state storage</strong>, and panels are the entire 35&nbsp;MB
+          motivation. Three ways out, and this is a decision, not an oversight:
           <ul>
-            <li><em>(i)</em> make panel identity immutable — derive panel /
-              panel-stack ids deterministically, or persist a creation-provenance
-              flag. A code change in <code>panelLayoutProjection</code>, and the
-              only option that makes B1 <em>sound</em> on its own.</li>
+            <li><em>(i)</em> <strong>persist creation provenance</strong> — a
+              durable "system-minted state block" flag written at creation and not
+              user-settable. Note this is now the <em>only</em> form (i) can take:
+              deterministic panel ids alone would not do it, since computed ids are
+              squattable (above). A code change in the state-block creation path,
+              and the only option that makes B1 <em>sound</em> on its own.</li>
             <li><em>(ii)</em> accept a weaker gate — admit runtime rows on
               parent-plus-type and accept that a deliberate forgery (move a content
               block under a layout-session <em>and</em> apply the type) gets its
@@ -2944,9 +2967,18 @@ generator, which is how both were found.
       <td><a href="#s5">§5</a>/<a href="#s6">§6.2</a></td>
       <td>Trigger WHEN gates</td>
       <td>Test: a sync-applied write produces a <code>'sync'</code>-labeled
-        event; a raw (no-tx, no-marker) write produces a <code>'raw'</code>
-        event — including immediately after an interrupted sync bracket
-        (crash before the §6.2 <code>apply_kind</code> clear).</td>
+        event; a raw write <em>that sets <code>apply_kind = 'raw'</code></em>
+        produces a <code>'raw'</code> event — including immediately after an
+        interrupted sync bracket (crash before the §6.2 <code>apply_kind</code>
+        clear). <strong>And the converse must be pinned too</strong> (review
+        finding — this test previously contradicted §6.2): an
+        <em>unmarked</em> NULL-source write must stay labeled
+        <code>'sync'</code>, not <code>'raw'</code>, because a pre-B materializer
+        sets only <code>source = NULL</code>; asserting <code>'raw'</code> for the
+        no-marker case would either mislabel every old-client sync apply or fail a
+        correct mixed-version implementation. <code>'raw'</code> requires positive
+        evidence — which is exactly why §6.2 makes bracketing the known raw paths a
+        slice-B deliverable.</td>
     </tr>
     <tr>
       <td>I4</td>
@@ -3397,10 +3429,14 @@ generator, which is how both were found.
     An earlier revision claimed the B1/B2 split made O7 cost-free to defer. Two
     review rounds since have shown the split cannot be made <em>sound</em> in the
     current data model (§13's callout): the B1 gate keys on computed identity, which
-    is unforgeable for the <code>ensureStateChild</code> family but unavailable for
-    panels and panel-stack rows, whose ids are runtime and whose parentage and type
-    are both mutable — and panels are the whole byte motivation. So B1 ships only
-    under a code change that makes panel identity immutable, or under a knowingly
+    beats parentage but is unavailable for panels and panel-stack rows (runtime ids,
+    mutable parentage and type) and is not even sound for the
+    <code>ensureStateChild</code> family, since <code>tx.create</code> accepts a
+    caller-supplied id and a computed id can be squatted before the real state block
+    is lazily created. No signal in the current model — parentage, type,
+    <code>systemMint</code>, or computed id — soundly identifies dedicated UI-state
+    storage, and panels are the whole byte motivation. So B1 ships only
+    under a code change persisting creation provenance, or under a knowingly
     weaker gate. Deferring also has its own cost: B1-era tags on content blocks
     produce histories lacking the durable state O7(a) needs, so B2 would have to
     backfill or exclude them. The split still <em>sequences</em> the work — B1
