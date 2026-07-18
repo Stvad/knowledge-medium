@@ -1697,7 +1697,16 @@ block with any <code>v IS NULL</code> event:
     <ul>
       <li><em>cadence</em> — <code>pos ≥ 63</code> (deterministic every-64th in
         the rewriter — it runs offline, no coin needed, and readers key on
-        <code>full</code>, never on spacing). Crossable base.</li>
+        <code>full</code>, never on spacing). Crossable base. <strong>Reset
+        <code>pos = 0</code> after emitting it</strong> (review finding): the
+        counter's contract is "compact events since the last full event", so
+        <em>every</em> full event resets it — create, delete, this cadence anchor,
+        and the no-<code>runningState</code> chain start — while each compact
+        rewrite increments it. Stating the reset only for create/delete is the bug:
+        a literal implementation leaves <code>pos ≥ 63</code> after the first
+        cadence hit, so every subsequent update on that block is kept full and the
+        compaction is wiped out for exactly the hot histories this migration
+        targets.</li>
       <li><em>no <code>runningState</code></em> — the block's history doesn't open
         with a create (pre-log era). A chain <em>start</em>: nothing logged is
         older, so there is nothing to splice across.</li>
@@ -1713,10 +1722,11 @@ block with any <code>v IS NULL</code> event:
     checkpoint, but it is a crossable anchor, never a wall.
     Otherwise rewrite compact: <code>before_json</code> = changed fields' old
     values, <code>after_json</code> = changed fields' new values (equal key
-    sets — the invertible-patch shape of §3), <code>v=2, full=0</code>. An
+    sets — the invertible-patch shape of §3), <code>v=2, full=0</code>, and
+    <strong><code>pos += 1</code></strong>. An
     all-fields-identical v1 update (the v1 trigger logged no-ops) becomes an
     empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
-    timing.</li>
+    timing (it still counts toward <code>pos</code>, being a compact row).</li>
   <li><strong>Stamp <code>workspace_id</code> while rewriting</strong> — from
     whichever snapshot side is non-null:
     <code>COALESCE(after_json&nbsp;-&gt;&gt;&nbsp;'workspaceId',
@@ -2659,10 +2669,11 @@ generator, which is how both were found.
         newest K, never touching a block that isn't currently
         <code>no-history</code>. The sweeper only deletes — it authors no synthetic
         rows and updates none (the <code>no_history</code> flag is written once by
-        the trigger at event time and never backfilled — §5.1 reads current status
-        from the latest event, not by rewriting old ones; the earlier
-        <code>full=2</code> reconciliation <em>insert</em> is gone with the walls it
-        served, I9/§5.1). All other runtime code never UPDATEs, DELETEs, or writes
+        the trigger at event time and never backfilled — it is
+        <strong>discovery-only and advisory</strong>, and the prune <em>decision</em>
+        reads the authoritative block type, so no past row ever needs rewriting
+        (§5.1); the earlier <code>full=2</code> reconciliation <em>insert</em> is
+        gone with the walls it served, I9/§5.1). All other runtime code never UPDATEs, DELETEs, or writes
         synthetic <code>row_events</code>; every legitimate row is authored by a
         <code>blocks</code> trigger.</td>
       <td><a href="#s1">§1</a>/<a href="#s8">§8</a></td>
@@ -2697,7 +2708,15 @@ generator, which is how both were found.
       <td>Test: for a generated workload containing every write class (user,
         sync, raw, derived, bulk), reconstructing each block forward from its
         create — with the <code>blocks</code> table ignored entirely — equals
-        the actually-written state at every event.</td>
+        the actually-written state at every event. <strong>One exception the
+        oracle must encode, not paper over</strong> (review finding): a raw
+        <code>UPDATE … SET id</code> (§2.1/§3) records the event under the
+        <em>new</em> id, which therefore has no <code>create</code> of its own
+        while the old id's chain is orphaned. Forward-from-create cannot hold for
+        that pair, so the generator asserts the documented <em>rename-boundary</em>
+        shape instead — old id reconstructs up to the rename, new id from the
+        rename's full snapshot forward — matching §3's asterisk rather than
+        pressuring the implementation to hide it.</td>
     </tr>
     <tr>
       <td>I9</td>
