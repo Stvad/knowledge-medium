@@ -221,7 +221,9 @@
   lives in <code>docs/properties-as-blocks-migration.html</code> §12 (PR #288
   branch <code>claude/properties-as-blocks-migration-4b60xg</code>, verified at
   <code>a6407ed4</code>) — this doc is the "dedicated design task" that bullet
-  names, and it gates that project's slice C.
+  names. It <strong>no longer gates</strong> #288's slice C: deleting the
+  <code>history_mode</code> skip removed the only thing slice C needed from here,
+  so the two are decoupled and unordered (§11, revised 2026-07-17).
   Supersedes the prune-based design in <code>docs/row-events-retention.md</code>
   (re-stamped in this PR). Direction fixed by the user: history is <em>kept</em>,
   never pruned; events shrink. Two format decisions revised 2026-07-15 per user
@@ -1058,7 +1060,17 @@ just panels.
     <code>ensureUiChild</code>) and <code>panelLayoutProjection</code> stamp
     <code>no-history</code> into <code>types</code>, so the whole class is covered
     from one seam. A one-time backfill adds it to existing UI-state blocks
-    (panels ~857 + the per-workspace root/plugin ones, active-workspace-scoped).
+    (panels ~857 + the per-workspace root/plugin ones). The backfill is
+    <strong>per-workspace, run when a workspace is active</strong> — it must not
+    write blocks in workspaces the user hasn't opened (the sync-queue-flood rule
+    the rest of the system holds to). That is sufficient, not a coverage gap,
+    <em>because the type rides sync</em>: whichever device opens a workspace
+    stamps <code>no-history</code> once, it replicates to every device, and each
+    device's sweeper then prunes its own local <code>row_events</code> off the
+    synced type — no device needs to run the backfill itself. The only residual is
+    a workspace <em>no</em> device ever opens again post-ship, whose legacy panels
+    stay untagged; that workspace is also not generating new UI-state, and the
+    first open backfills it (acceptable for this fleet, review finding).
     Two reasons this is the right signal, and both answer the review finding that
     keying on <code>panel</code> was unsafe:
     <ul>
@@ -1099,9 +1111,15 @@ just panels.
     their <code>properties_json</code> — read the type straight off the row, not
     the index; <em>(3)</em> hard-deleted / stream-exited blocks from their delete
     events (<code>kind = 'delete'</code> whose before-snapshot carried
-    <code>no-history</code> — few). Both deleted cases must be gathered explicitly:
-    a <code>block_types</code>-only pass would silently skip exactly the block that
-    can no longer shrink. Starting from the small tagged set (rather than "blocks
+    <code>no-history</code>). Both deleted cases must be gathered explicitly: a
+    <code>block_types</code>-only pass would silently skip exactly the block that
+    can no longer shrink. Source (3) is discovered <strong>incrementally, not by
+    rescanning every delete</strong> (review finding — hard deletes are 16% of the
+    dev log, ~310k rows, far too many to JSON-parse each sweep): the sweeper keeps
+    a high-watermark of the last delete <code>id</code> it examined and only reads
+    delete events newer than it, and it prunes a hard-deleted block's fixed history
+    <em>once</em> (a deleted block gets no new events, so there is nothing to
+    revisit). New deletions since the last sweep are few. Starting from the small tagged set (rather than "blocks
     with &gt; K events" — 502 blocks on prod at K = 8, a full aggregate that also
     misses deletes) is both cheaper and complete. Deleted blocks are included
     deliberately: a panel deleted <em>before</em> a sweep capped it would otherwise
@@ -1779,7 +1797,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         takes one undo — and panel churn landing between two grouped edits is the
         everyday case, not a corner. The boundary is an <strong>undoable,
         writing tx on the same scope's stack carrying a different
-        <code>group_id</code></strong>.
+        <code>group_id</code></strong>. <strong>Contiguity is defined over
+        row-event <code>id</code> order</strong>, the log's own total order (the
+        stack is built in commit order = <code>id</code> order): from the selected
+        tx, walk the block's events outward by <code>id</code> in both directions,
+        admitting a neighbouring tx only while its <code>group_id</code> equals the
+        selection's and no <em>boundary</em> tx (as defined above) sits between —
+        the run is the maximal such <code>id</code>-interval. This is well-defined
+        without reading the undo stack: <code>group_id</code>, <code>tx_id</code>,
+        <code>scope</code>, and <code>source</code> on the events carry everything
+        the boundary test needs.
         Two per-kind carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
         (soft-delete/tombstone), with redo re-applying <strong>the folded final
@@ -2229,12 +2256,19 @@ generator, which is how both were found.
     </tr>
     <tr>
       <td>I7</td>
-      <td><strong>History rows are immutable</strong> once written — two
-        narrowly sanctioned exceptions: the §8 one-time rewrite, and the §5.1
-        retention sweeper, which may delete any event on a
-        <code>no-history</code>-typed block keeping the newest K, and never
-        touches a block without that type. All other runtime code never UPDATEs
-        or DELETEs <code>row_events</code>.</td>
+      <td><strong>History rows are immutable</strong> once written — sanctioned
+        exceptions, all narrow: (1) the §8 one-time rewrite; (2) the §5.1
+        retention sweeper deleting any event on a <code>no-history</code>-typed
+        block, keeping the newest K, and never touching a block without that
+        type; (3) that same sweeper <em>inserting</em> a synthetic
+        <code>full=2</code> reconciliation anchor when it finds a terminal gap
+        (§5.1) — an INSERT, not a mutation of an existing row, and honest (it
+        records the true current live-row state that a trigger-suspended backfill
+        left unlogged). All other runtime code never UPDATEs, DELETEs, or writes
+        synthetic <code>row_events</code>. The reconciliation insert is the one
+        place a <code>row_events</code> row is authored outside a
+        <code>blocks</code> trigger; it is deliberate, sweeper-only, and fuzz-pinned
+        (§13).</td>
       <td><a href="#s1">§1</a>/<a href="#s8">§8</a></td>
       <td>All future code</td>
       <td>Review rule (no test — restating it in a test would just duplicate
