@@ -1307,11 +1307,26 @@ just panels.
         partition covers deleted ones (which <code>block_types</code> drops). This
         is not a return to the three-source enumeration — there is no
         delete-surviving side table and no delete-event watermark; it is one extra
-        indexed lookup. <strong>Slice-B ordering requirement:</strong> the
-        trigger-version guard (below) must ship in a release <em>before</em> slice
-        B's type stamping/backfill begins, so that by the time blocks are being
-        tagged, no client in the fleet will install a body that can't stamp the
-        flag.</li>
+        indexed lookup.
+        <strong>One residual hole, and the ordering requirement does not close
+        it</strong> (review finding — an earlier draft claimed it did): shipping the
+        trigger-version guard before slice B only binds clients that <em>have</em>
+        the guard. A client older than that release runs the unconditional
+        <code>DROP</code>+<code>CREATE</code> expansion
+        (<code>clientSchema.ts:1168-1175</code>) and will never consult a body-version
+        marker — you cannot retroactively make old code check something. The
+        surviving failure is narrow but real: a block tagged <em>while a stale body
+        is installed</em> (so none of its events carry the flag) that is then
+        <em>deleted</em> (so <code>block_types</code> drops it) is invisible to
+        <em>both</em> discovery paths, permanently. The closer is a <strong>bounded
+        backstop, not a permanent side index</strong>: on the first boot of a client
+        whose trigger-body version exceeds the recorded one — i.e. exactly once per
+        version transition, after any window in which a downgrade could have
+        occurred — run a one-shot reconciliation scan of tombstones for the
+        <code>no-history</code> type. That is the 20,825-row scan §5.1 refuses to do
+        <em>every deep idle</em>, which is affordable <em>once per upgrade</em>; it
+        targets the transient condition that causes the hole rather than paying for
+        it forever.</li>
       <li><em>The prune decision reads the <strong>authoritative type</strong>, never
         an event flag.</em> The flag's whole job is <em>discovery</em>; once a
         candidate is in hand, whether to prune it is answered from the type itself:
@@ -2006,7 +2021,16 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         the rewriter touches, i.e. it carries the parent edge outright. This is the
         second I8 exception (historical gaps) showing up as a concrete reader rule,
         not a new crutch: the boundary comes from the log, not from
-        <code>blocks</code>. <strong>Two cases fall outside that guarantee, and the
+        <code>blocks</code>. <strong>A first event that is a <em>hard delete</em>
+        both opens and closes</strong> (review finding): an upgraded block that
+        predates <code>row_events</code> and was then purged has a delete as its
+        only surviving event, and the delete rule above says only that a hard delete
+        <em>closes</em> an edge — so a subtree-at-T <em>before</em> the purge would
+        omit the block entirely, even though the delete's full
+        <code>before_json</code> carries its <code>parentId</code>. The builder
+        therefore opens the interval from that <code>before_json</code> and closes
+        it at the same event: the block correctly appears under its parent for all T
+        before the purge, and vanishes after. <strong>Two cases fall outside that guarantee, and the
         builder must resolve the opening parent by reconstruction rather than
         assuming the event carries it.</strong> <em>(i) Zero-history pre-log
         stock</em> (review finding): a block that predates logging and has
@@ -2427,7 +2451,25 @@ into is smaller).
         them has no undo interaction at all; that is where the entire 35&nbsp;MB
         motivation lives. <em>B2</em> — the <strong>user-assignable</strong>
         affordance ([1000]: marking one's own, possibly undoable, block) — is
-        <strong>gated on O7</strong>. The reason is asymmetry, not caution:
+        <strong>gated on O7</strong>.
+        <strong>The gate must live in the sweeper, not in the UI</strong> (review
+        finding): B1 has to register <code>no-history</code> as a
+        <code>TypeContribution</code> for creation-time stamping to work at all,
+        and the type API has no system-only contribution — even
+        <code>hideFromCompletion</code> types stay "fully visible and removable in
+        the property panel" (<code>blockType.ts:12-25</code>). So merely shipping
+        B1 would expose the type to ordinary content blocks through the property
+        panel and let users create undoable candidates before the gate resolves —
+        silently defeating the split. Therefore <em>in B1 the sweeper prunes only
+        blocks it can independently confirm are dedicated UI-state storage</em>
+        (membership in the <code>ui-state</code> subtree / the known UI-state
+        creation seams), <strong>regardless of who applied the type</strong>. A
+        user-applied <code>no-history</code> on a content block is then inert
+        rather than destructive, and B2 is exactly the step that relaxes the
+        sweeper to honour the type anywhere. Hiding the type from the property
+        panel until B2 is worth doing too, but it is the cosmetic half — the
+        sweeper-side restriction is the enforceable one, because it does not depend
+        on a type-registry capability that does not exist today. The reason is asymmetry, not caution:
         retention is <em>one-way</em>, so shipping B2 first lets a prune
         permanently erase the only boundary data (<code>group_id</code> and
         friends) that O7(a) or (c) would later need, and no subsequent decision can
@@ -2628,10 +2670,24 @@ generator, which is how both were found.
       <td><strong>The migration is reconstruction-lossless.</strong>
         <code>stateAt(e)</code> identical before/after the rewrite for every
         event; every non-derivable <code>before</code> survives as a full
-        (<code>full=1</code>) anchor; nothing is deleted.</td>
+        (<code>full=1</code>) anchor; nothing is deleted.
+        <strong>Scoped to content/structure across the one metadata gap</strong>
+        (review finding): <code>userUpdatedAt</code> is part of the serialized row
+        state (<code>blockJsonObjectSql</code>), and the trigger-suspended
+        <code>user_updated_at</code> backfill changes it with no event
+        (<code>clientSchema.ts:1364-1369</code>). Since §8.1 now rewrites a
+        <code>before_json ≠ runningState</code> seam as an ordinary compact event
+        (no marker — I9), a reader reconstructing a <em>pre</em>-gap event from a
+        newer-side base picks up the <em>post</em>-backfill metadata, so
+        <code>stateAt</code> is not byte-for-byte identical there. That is the
+        known, bounded consequence of retiring walls — engine-metadata columns
+        only, across one historical point, in fields no reader reconstructs by
+        walking (§4.3/§10) — so the invariant and its test compare
+        content/structure fields across that gap, not raw bytes.</td>
       <td><a href="#s8">§8.1</a></td>
       <td>§8 rewriter</td>
-      <td>Equivalence test over seeded histories with deliberate gaps;
+      <td>Equivalence test over seeded histories with deliberate gaps
+        (content/structure comparison across the metadata gap, per the scoping);
         resumability test (interrupt + rerun ⇒ identical outcome).</td>
     </tr>
     <tr>
