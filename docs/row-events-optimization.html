@@ -625,6 +625,42 @@ trigger-recreation ordering):
 </table>
 </div>
 
+<p><strong>NULL matrix — the single reference every predicate checks against.</strong>
+A recurring class of review findings came from re-deriving, ad hoc at each
+predicate, when a column is NULL (a workspace stamp read from the wrong side, a
+<code>max(x, NULL)</code> that silently returns NULL, a scope treated as
+present on a sync row). This table is canonical; any SQL touching these columns
+states which NULL cases it handles. SQLite three-valued logic applies
+throughout — <code>x = NULL</code> and <code>x &lt;&gt; NULL</code> are both
+<code>NULL</code> (never true), and scalar <code>max</code>/<code>min</code>
+with a NULL argument return NULL — so a predicate that can meet a NULL here
+must say so.</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Column</th><th>NULL when…</th><th>Consequence for readers/predicates</th></tr></thead>
+  <tbody>
+    <tr><td><code>row_events.tx_id</code></td><td>sync-applied and raw writes (only local <code>repo.tx</code> stamps it)</td><td>a <code>tx_id</code> join to <code>command_events</code> yields nothing for sync/raw events — expected, not a gap (those never went through <code>repo.tx</code>).</td></tr>
+    <tr><td><code>row_events.before_json</code></td><td><code>kind = 'create'</code></td><td>a create opens a chain; a workspace/scope backfill must read the <em>after</em> side (§8.1 COALESCE), never assume both sides exist.</td></tr>
+    <tr><td><code>row_events.after_json</code></td><td><code>kind = 'delete'</code> (hard purge)</td><td>symmetric: a hard delete's stamp reads the <em>before</em> side; the newer-side base is its full <code>before</code>.</td></tr>
+    <tr><td><code>row_events.group_id</code></td><td>ungrouped txs, and all sync/raw writes</td><td>undo folding treats NULL as "stands alone" — never fold by <code>group_id = ?</code> across a NULL (§10); NULL ≠ NULL, so two ungrouped txs never merge.</td></tr>
+    <tr><td><code>row_events.v</code></td><td>legacy v1 rows</td><td>NULL is <em>meaningful</em>: <code>v IS NULL</code> ⇒ full v1 snapshot. Readers branch on it before reading <code>full</code>.</td></tr>
+    <tr><td><code>row_events.full</code></td><td>all v1 rows (<code>v IS NULL</code>)</td><td>treat <code>v IS NULL</code> as full; on v2 rows <code>full</code> is always 0 or 1 (never NULL, never 2 — I9).</td></tr>
+    <tr><td><code>row_events.workspace_id</code></td><td>v1 rows the §8 rewriter hasn't reached yet; never on v2 rows for a real block</td><td>a workspace-scoped read treats NULL as "unknown, fall back to payload/join", not "no workspace"; stamped from <code>COALESCE(after.workspaceId, before.workspaceId)</code> (§8.1).</td></tr>
+    <tr><td><code>row_events.scope</code></td><td>all v1 rows; sync-applied and raw writes (source-gated)</td><td>provenance only, never a gate (§3/§5.1). A NULL scope is "not a local user write", not deletable content.</td></tr>
+    <tr><td><code>command_events.workspace_id</code></td><td>zero-write txs</td><td>a per-tx workspace read must tolerate NULL (a tx that wrote nothing pinned no workspace).</td></tr>
+    <tr><td><code>command_events.description</code></td><td>txs opened without one</td><td>cosmetic; forensics tools show "(no description)".</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+Columns not listed are <code>NOT NULL</code> by schema:
+<code>row_events</code> <code>id</code>/<code>block_id</code>/<code>kind</code>/<code>source</code>/<code>created_at</code>,
+and <code>command_events</code> <code>tx_id</code>/<code>scope</code>/<code>user_id</code>/<code>mutator_calls</code>/<code>source</code>/<code>created_at</code>
+(§10's undo reader leans on <code>command_events.scope</code> being <code>NOT NULL</code> and
+<code>mutator_calls</code> distinguishing zero-write from writing txs — O7).
+</p>
+
 <p>
 Change detection compares storage columns
 (<code>OLD.x IS NOT NEW.x</code> — the exact predicate the upload trigger
