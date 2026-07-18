@@ -1747,7 +1747,24 @@ block with any <code>v IS NULL</code> event:
     or not) and <code>pos</code> (compact count since the last full event — a
     rewriter-local counter; nothing in the output encodes it; already-v2 rows
     advance it according to their own <code>full</code> value, so cadence stays
-    consistent across the interleave).</li>
+    consistent across the interleave).
+    <strong>Initialization, because the stream can <em>open</em> with a compact v2
+    row</strong> (review finding — distinct from the interleave case above, where a
+    v1 full precedes it): a block that predates <code>row_events</code> entirely has
+    no create, so slice A logs its first-ever edit as a <em>compact</em> patch
+    (§4.1/I6: the v2 trigger has no predecessor probe), and a stale tab can then
+    append the first <code>v IS NULL</code> row after it. The stream therefore
+    starts with a patch and no base to apply it to. Rule: <code>runningState</code>
+    stays <strong>unset</strong> until an event supplies full state, and while it is
+    unset the rewriter (a) skips divergence classification entirely — nothing can
+    diverge from nothing, so no false I9 report — and (b) treats the first v1 row it
+    must rewrite as the <em>no-<code>runningState</code> chain start</em>
+    (<code>full=1</code>), which is an existing rule below, not a new one. The
+    compact v2 prefix needs no base because it is already migrated and the rewriter
+    does not touch it. Optional refinement where exactness is wanted over
+    simplicity: seed <code>runningState</code> by reconstructing that point via §4.3
+    from the newer side (which always terminates), avoiding the one extra
+    <code>full=1</code> row.</li>
   <li><code>create</code>: stamp <code>v=2, full=1</code>, payload unchanged.
     Reset <code>pos</code>. (A create opens a chain — nothing logged is older.)</li>
   <li><code>delete</code>: stamp <code>v=2, full=1</code>, payload unchanged
