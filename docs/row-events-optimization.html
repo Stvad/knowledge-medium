@@ -1334,14 +1334,32 @@ just panels.
         is installed</em> (so none of its events carry the flag) that is then
         <em>deleted</em> (so <code>block_types</code> drops it) is invisible to
         <em>both</em> discovery paths, permanently. The closer is a <strong>bounded
-        backstop, not a permanent side index</strong>: on the first boot of a client
-        whose trigger-body version exceeds the recorded one — i.e. exactly once per
-        version transition, after any window in which a downgrade could have
-        occurred — run a one-shot reconciliation scan of tombstones for the
-        <code>no-history</code> type. That is the 20,825-row scan §5.1 refuses to do
-        <em>every deep idle</em>, which is affordable <em>once per upgrade</em>; it
-        targets the transient condition that causes the hole rather than paying for
-        it forever.</li>
+        backstop, not a permanent side index</strong>: a reconciliation scan of
+        tombstones — the 20,825-row scan §5.1 refuses to run <em>every deep
+        idle</em>, affordable occasionally.
+        <strong>Armed by evidence of a downgrade, not by a version bump</strong>
+        (review finding): "once, on the first boot whose version exceeds the
+        recorded one" misses the case it exists for — an upgraded client boots and
+        scans, <em>then</em> a pre-guard tab opens, reinstalls the old body, and
+        deletes a tagged block; that tombstone is created after the only scan and no
+        later version transition rescans it. Instead, every boot <em>probes the
+        installed trigger body</em> (<code>SELECT sql FROM sqlite_master WHERE
+        name = 'blocks_row_event_update'</code>) for
+        <code>no_history</code> capability. A body lacking it is direct evidence
+        that a pre-guard client ran since last boot — the probe does not depend on
+        old clients cooperating with a marker they don't know about — so the client
+        reinstalls the current body <em>and</em> runs the reconciliation. Cost stays
+        bounded because the probe is one row read and the scan only follows an
+        actual regression; it stops entirely once no pre-guard client remains.
+        <strong>And the scan is <em>structural</em>, not type-keyed</strong>
+        (review finding): it also collects tombstones whose delete snapshot shows
+        <code>ui-state</code>-subtree parentage regardless of type or flag —
+        because delete events are <code>full=1</code> they carry
+        <code>parentId</code>. That is the only thing that reaches a UI-state block
+        an old client created untagged, churned, and hard-deleted before any
+        upgraded reconciliation saw it: no <code>blocks</code> row for structural
+        discovery, no type or flag for a type-keyed scan, and otherwise invisible
+        forever.</li>
       <li><em>The prune decision reads the <strong>authoritative type</strong>, never
         an event flag.</em> The flag's whole job is <em>discovery</em>; once a
         candidate is in hand, whether to prune it is answered from the type itself:
@@ -1354,7 +1372,15 @@ just panels.
         newest-K — all events, flagged or not (e.g. a <code>create</code> written
         before an <code>addTypeInTx</code> tag). Not currently typed ⇒ skip;
         already-pruned events stay gone (retention is one-way), nothing further is
-        cut. The flag is therefore <strong>write-time-only and advisory</strong>: no
+        cut. <strong>In B1 the structural gate applies to tombstones too</strong>
+        (review finding): "typed ⇒ prune" read alone would let a user apply the
+        (visible, §13) type to an ordinary content block, hard-delete it, and have
+        B1 prune undoable history — exactly what the B1/B2 split forbids. Since the
+        delete snapshot carries <code>parentId</code>, the same
+        dedicated-UI-state confirmation is available for a tombstone and is
+        required before pruning it; a hard-deleted candidate that <em>cannot</em> be
+        structurally confirmed is skipped until B2 resolves O7. After B2 the type
+        alone suffices, which is precisely what B2 unlocks. The flag is therefore <strong>write-time-only and advisory</strong>: no
         retroactive backfill, so I7 keeps its two exceptions and event
         <em>payloads</em> stay immutable.
         <strong>This is deliberately <em>not</em> "status = the latest event's
@@ -1968,7 +1994,17 @@ Marker and bookkeeping writes (<code>client_schema_state</code> completion
 flags, <code>command_events</code>) and PowerSync's <code>blocks_synced</code>
 applies likewise advance the file without inserting a single row_events row. In
 every one of those cases the swap would pass its fence and silently discard the
-work. The fence value and the pending-swap state must live
+work. <strong>Capture the fence <em>before</em> starting the snapshot, not after
+it finishes</strong> (review finding — the ordering is itself a data-loss path):
+<code>VACUUM INTO</code> takes minutes on the multi-GB DBs this route serves, and
+a write committing <em>after</em> the snapshot's read view but <em>before</em> the
+fence is recorded would be baked into the fence while being absent from the
+staging file. The next-boot check then compares equal, passes, and swaps in a
+database missing that write — the precise failure the fence exists to prevent,
+reintroduced by recording it a moment too late. Read the change counter first,
+then snapshot; the swap is valid only if the live counter still equals the
+pre-snapshot value (equivalently: quiesce writes until both the snapshot and the
+fence record are complete). The fence value and the pending-swap state must live
 beside the staging file (or inside it), <em>never</em> in the live DB — an
 in-DB marker in this section's usual <code>client_schema_state</code> idiom
 would itself advance the counter and deterministically invalidate every
@@ -2490,13 +2526,18 @@ into is smaller).
         to retention. Paired with B1's <strong>structural</strong> discovery of live
         UI-state blocks (subtree membership, §5.1), which is what makes an untagged
         old-client creation safe rather than merely unlikely)
-        + <strong>the one-shot stale-tombstone reconciliation</strong> — a
-        tombstone scan for the <code>no-history</code> type on the first boot of a
-        client whose trigger-body version exceeds the recorded one (review
-        finding): a pre-guard client can reinstall an old body and then delete a
-        tagged block, leaving neither a flag nor a <code>block_types</code> row, and
-        those candidates are otherwise permanently undiscoverable — so it is a
-        shipped deliverable here, not just narrative and tests.
+        + <strong>the stale-tombstone reconciliation</strong> — a tombstone scan
+        armed by <em>evidence of a downgrade</em>: every boot probes the installed
+        trigger body (<code>sqlite_master.sql</code>) for <code>no_history</code>
+        capability, and a body lacking it means a pre-guard client ran since last
+        boot, so the client reinstalls and reconciles (review finding — a one-shot
+        keyed to a version bump misses a downgrade that happens <em>after</em> that
+        boot). The scan is <strong>structural as well as type-keyed</strong>: it
+        collects tombstones whose delete snapshot shows <code>ui-state</code>
+        parentage regardless of type/flag, which is the only path that reaches a
+        UI-state block an old client created untagged and hard-deleted. Without it
+        those candidates are permanently undiscoverable — so it is a shipped
+        deliverable here, not just narrative and tests.
         Plus the
         <code>row_events.no_history</code> column the trigger denormalizes from
         that type, a partial index
