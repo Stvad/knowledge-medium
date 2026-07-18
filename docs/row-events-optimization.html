@@ -1063,15 +1063,37 @@ just panels.
     panels via <code>panelLayoutProjection</code>. Each stamps
     <code>no-history</code> into <code>types</code>; the clean implementation
     threads it through the shared child-creation primitive so a future UI-state
-    block cannot be added without it. A one-time backfill adds it to existing UI-state blocks
-    (panels ~857 + the per-workspace root/plugin ones). The backfill is
+    block cannot be added without it. A one-time backfill adds it to
+    <em>every existing block in the <code>ui-state</code> subtree</em>, walked
+    from the per-workspace root — not an enumerated by-kind list (panels only)
+    that a review finding showed misses the <code>layout-sessions</code> children
+    and their descendants: <code>getLayoutSessionBlock</code> creates
+    <code>ui-state/layout-sessions/{id}</code> through the <em>same</em>
+    <code>ensureUiChild</code> primitive (<code>stateBlocks.ts:368-374</code>) and
+    hot-activation writes land selection/history events on those blocks
+    (<code>panelLayoutProjection.ts:605-620</code>). Walking the subtree and
+    tagging every descendant is both simpler and complete; because creation-time
+    stamping threads through that shared <code>ensureUiChild</code> primitive,
+    <em>new</em> descendants (of whatever future kind) are covered automatically,
+    so the backfill only owes the pre-slice rows (~857 panels + the root/plugin +
+    the layout-sessions subtree). The backfill is
     <strong>per-workspace, run when a workspace is active</strong> — it must not
     write blocks in workspaces the user hasn't opened (the sync-queue-flood rule
-    the rest of the system holds to). That is sufficient, not a coverage gap,
+    the rest of the system holds to). For a <strong>writable, synced</strong>
+    workspace that is sufficient, not a coverage gap,
     <em>because the type rides sync</em>: whichever device opens a workspace
     stamps <code>no-history</code> once, it replicates to every device, and each
     device's sweeper then prunes its own local <code>row_events</code> off the
-    synced type — no device needs to run the backfill itself. The only residual is
+    synced type — no device needs to run the backfill itself. A
+    <strong>read-only workspace</strong> is the one case the tag can't ride sync
+    (review finding): the user is a member but not a writer, so the server
+    <code>blocks_write</code> policy rejects the tag write
+    (<code>is_workspace_writer</code>, <code>consolidated_initial.sql:630</code>).
+    But it doesn't need to ride sync — UI-state in a read-only workspace never
+    uploaded in the first place, so it is already per-device local; each device
+    tags its own local UI-state at creation and backfills its own local pre-slice
+    rows (a local-only <code>UiState</code> write, which <em>is</em> allowed even
+    when the workspace is read-only). The only residual is
     a workspace <em>no</em> device ever opens again post-ship, whose legacy panels
     stay untagged; that workspace is also not generating new UI-state, and the
     first open backfills it (acceptable for this fleet, review finding).
@@ -1112,18 +1134,40 @@ just panels.
     <em>(1)</em> live blocks off the <code>block_types</code> index
     (<code>WHERE type = 'no-history'</code>); <em>(2)</em> soft-deleted blocks,
     which are still <code>blocks</code> rows (<code>deleted = 1</code>) carrying
-    their <code>properties_json</code> — read the type straight off the row, not
-    the index; <em>(3)</em> hard-deleted / stream-exited blocks from their delete
-    events (<code>kind = 'delete'</code> whose before-snapshot carried
-    <code>no-history</code>). Both deleted cases must be gathered explicitly: a
-    <code>block_types</code>-only pass would silently skip exactly the block that
-    can no longer shrink. Source (3) is discovered <strong>incrementally, not by
+    their <code>properties_json</code>. Source (2) must <em>not</em> be a
+    scan-and-JSON-parse of the tombstone population to fish out its rare
+    <code>no-history</code> rows (review finding): that set is 20,825 rows on prod
+    today and only grows, the sweeper re-arms every deep idle, and
+    <code>block_types</code> is no help here — its triggers drop a block's rows on
+    <code>deleted = 1</code> (<code>clientSchema.ts:878-905</code>). So
+    <code>no-history</code> membership is mirrored into a small
+    <strong>delete-surviving index</strong>: a <code>block_id</code>-keyed derived
+    table the same block-write trigger maintains, but <em>retained through
+    soft-delete</em> and cleared only when the <code>blocks</code> row is
+    hard-deleted — the delete-agnostic sibling of <code>block_types</code> for
+    this one type, deliberately <em>not</em> a change to <code>block_types</code>'
+    live-only invariant that other consumers (backlink counts, type queries) rely
+    on. Sources (1)+(2) then collapse to one indexed lookup joined to
+    <code>blocks</code> for the live/soft-deleted split. <em>(3)</em> hard-deleted
+    / stream-exited blocks (no <code>blocks</code> row at all, so outside that
+    index) from their delete events (<code>kind = 'delete'</code> whose
+    before-snapshot carried <code>no-history</code>). All three cases must be
+    gathered explicitly: a <code>block_types</code>-only pass would silently skip
+    exactly the block that can no longer shrink. Source (3) is discovered <strong>incrementally, not by
     rescanning every delete</strong> (review finding — hard deletes are 16% of the
     dev log, ~310k rows, far too many to JSON-parse each sweep): the sweeper keeps
     a high-watermark of the last delete <code>id</code> it examined and only reads
     delete events newer than it, and it prunes a hard-deleted block's fixed history
     <em>once</em> (a deleted block gets no new events, so there is nothing to
-    revisit). New deletions since the last sweep are few. Starting from the small tagged set (rather than "blocks
+    revisit). The watermark <strong>advances only when the prune commits, in the
+    same transaction as the deletes</strong> (review finding): a hard-deleted
+    block gets no future events, so if the watermark moved past a delete
+    <code>id</code> the moment it was <em>examined</em> and a crash or error hit
+    before that block's prune committed, the candidate would sit forever below the
+    watermark and never be reconsidered — permanently unbounded, the exact failure
+    retention exists to prevent. Advancing the watermark and deleting the rows in
+    one transaction makes the pair atomic: a crash rolls both back and the next
+    sweep re-reads the same delete events. New deletions since the last sweep are few. Starting from the small tagged set (rather than "blocks
     with &gt; K events" — 502 blocks on prod at K = 8, a full aggregate that also
     misses deletes) is both cheaper and complete. Deleted blocks are included
     deliberately: a panel deleted <em>before</em> a sweep capped it would otherwise
@@ -1209,6 +1253,24 @@ just panels.
     rewrite), and it may delete <em>any</em> event on a
     <code>no-history</code>-typed block keeping the newest K — never any
     event on a block without that type.</li>
+  <li><strong>Pruning an <em>undoable</em> no-history block stays undo-safe.</strong>
+    <a href="#s16">[1000]</a> lets a user tag their own ordinary
+    (undoable-scope) block <code>no-history</code>, not just non-undoable
+    UI-state — so the sweeper can fully delete the <code>row_events</code> of a tx
+    whose only write was that block, <code>group_id</code> included
+    (<code>group_id</code> lives on <code>row_events</code>, never on
+    <code>command_events</code>). A future undo-from-history reader (§10) must not
+    let that erase a tx boundary and merge two grouped actions on <em>other</em>
+    blocks across the gap (review finding). It doesn't, because §10 derives the tx
+    sequence from <code>command_events</code> — the complete per-tx ledger, one
+    row per <code>repo.tx</code> (<code>scope</code> <code>NOT NULL</code>, never
+    pruned) — not from surviving <code>row_events</code>. A fully-pruned tx still
+    owns its <code>command_events</code> row, so it still stands between the two
+    groups; with no readable <code>group_id</code> it can't equal the selection's
+    and so counts as a boundary (a tx we can't prove is same-group splits, never
+    merges — the safe direction). This is why keying retention on the block
+    <em>doesn't</em> force retention to non-undoable scopes, the other fix the
+    review floated; §10 carries the correction.</li>
   <li><strong>Scope is kept, but only as provenance.</strong> The
     <code>scope</code> stamp (§3) still rides on each event for forensics and for
     the #210 provenance story — "what edit scope produced this" — but it no longer
@@ -1303,9 +1365,18 @@ records those changes. Read against
       asymmetry to negotiate — G2 in <a href="#s11">§11</a> is now simply
       priced, with no exemption offered or needed.</li>
     <li>The comment at <code>clientSchema.ts:55-69</code> ("the ONLY place an
-      INCOMING sync change is durably recorded") stays unconditionally true —
-      no update needed for this section (slice B touches it only for the
-      format/provenance notes).</li>
+      INCOMING sync change is durably recorded") holds for every incoming sync
+      change that <em>materializes</em> — but a delivery that loses the LWW gate
+      (<code>skippedStale</code> returns before Phase 2) writes no
+      <code>blocks</code> row and fires no trigger, so it is an incoming delivery
+      that is deliberately <em>not</em> recorded (review finding). That is
+      consistent, not a gap — <code>row_events</code> logs state
+      <em>transitions</em>, and a skipped-stale delivery changes no local state
+      (§6.1 already notes skip decisions are recorded nowhere either way) — but
+      the word "unconditionally" would overclaim to a future forensics reader
+      treating <code>row_events</code> as a complete incoming-sync audit. So slice
+      B narrows the comment's wording to "materialized incoming sync change." No
+      mechanism change; a one-line comment tightening.</li>
     <li>Raw out-of-band local writes (agent-bridge <code>sql execute</code>,
       dev tools — a live path, §2.1) also keep logging, labeled truthfully via
       the §6.2 marker — a raw write never uploads, so its row_event is the only
@@ -1816,18 +1887,32 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         split happens on the <em>stack</em>, which is per scope and spans every
         block, so a group of edits to block A separated by a same-scope undoable
         tx that wrote only block B <em>is</em> split — even though B's tx never
-        touched A. Defined precisely: over row-event <code>id</code> order (the
-        log's total order, = commit order = stack order), take the sequence of
-        <em>undoable, writing txs in the selection's scope</em> (distinct
-        <code>tx_id</code>s, each classified from its events' <code>scope</code> /
-        <code>source</code>); from the selected tx, extend across adjacent such txs
-        while their <code>group_id</code> equals the selection's, stopping at the
-        first whose <code>group_id</code> differs — the run is that maximal tx
-        interval, and the folded target is every event of those txs on every block
-        they touched. Per-block walking would miss the block-B splitter; the
-        boundary test lives at the scope-tx level. Well-defined from the events
-        alone (<code>group_id</code>, <code>tx_id</code>, <code>scope</code>,
-        <code>source</code>), no undo-stack read.
+        touched A. Defined precisely: take the sequence of <em>undoable, writing txs in
+        the selection's scope</em> from <code>command_events</code> — the complete
+        per-tx ledger (one row per <code>repo.tx</code>, <code>scope</code>
+        <code>NOT NULL</code>, which the retention sweeper never prunes) —
+        <em>not</em> from surviving <code>row_events</code>, whose per-block rows a
+        <code>no-history</code> prune can delete out from under a tx (§5.1, review
+        finding: a tx whose only block was a user-tagged <code>no-history</code>
+        block leaves no <code>row_events</code> at all, so an events-only scan
+        would drop it as a boundary and re-merge its neighbours). Order is commit
+        order — <code>row_events.id</code> for txs that kept events,
+        <code>command_events.created_at</code> placing any fully-pruned tx among
+        them; a <code>created_at</code> tie can only misplace a <em>boundary</em>
+        tx within its immediate neighbourhood, which at worst adds a split (safe).
+        Each surviving tx's <code>group_id</code> and per-field diffs come from its
+        <code>row_events</code> (joined on <code>tx_id</code>). From the selected
+        tx, extend across adjacent such txs while their <code>group_id</code>
+        equals the selection's, stopping at the first whose <code>group_id</code>
+        differs — <strong>a tx whose <code>row_events</code> were fully pruned has
+        no readable <code>group_id</code>, so it cannot equal the selection's and
+        is a boundary</strong> (an unprovable-same-group tx splits, never merges).
+        The run is that maximal tx interval, and the folded target is every
+        surviving event of those txs on every block they touched. Per-block walking
+        would miss the block-B splitter; the boundary test lives at the scope-tx
+        level. Well-defined from the ledgers alone (<code>command_events</code> for
+        the tx sequence + <code>scope</code>, joined <code>row_events</code> for
+        <code>group_id</code> / diffs), no undo-stack read.
         Two per-kind carve-outs: a <code>create</code>
         (<code>before_json = NULL</code>) undoes to <em>absence</em>
         (soft-delete/tombstone), with redo re-applying <strong>the folded final
