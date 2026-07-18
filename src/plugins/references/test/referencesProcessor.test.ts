@@ -1677,13 +1677,22 @@ describe('parseReferences — workspace-switch reprojection', () => {
   })
 })
 
-describe('parseReferences — property field rows are machinery, not alias sources (§9, PR #386 review)', () => {
-  // A flipped (child-backed) workspace: `setProperty` dual-writes a
-  // `[[status]]` field row alongside the cell. Its content is a RECOGNITION
-  // token, not a wikilink — the references processor must suppress content
-  // marks on it (isPropertyMachineryRow) so it never mints a user-visible
-  // alias page named "status" or backlinks from the hidden row.
-  const FIELD_ID = 'field-status-refs'
+describe('parseReferences — property field rows reference their definition, never mint a phantom page (§9, PR #386 review)', () => {
+  // A flipped (child-backed) workspace: `setProperty` dual-writes a field row
+  // whose content is `((fieldId))` — a by-id ref to the property DEFINITION.
+  // It parses like any other block ref, so the field row carries a reference
+  // to its definition: the "used by" edge (a definition's backlinks become
+  // every block that uses the property — desirable, and it keeps field rows
+  // in `block_references` so definition merge/rename retarget reaches them).
+  // Because the content is `((id))`, not `[[name]]`, it can never mint a
+  // user-visible alias page — that guarantee is the id-addressing FORM, not
+  // any parse-level suppression. (The former `isPropertyMachineryRow` was
+  // dropped: recognition-based suppression is unnecessary here and its
+  // per-workspace resolver failed closed in background workspaces — #389 B.)
+  // A real fieldId is the definition block's UUID; `((uuid))` is what
+  // parseBlockRefs recognizes (a non-UUID synthetic id would never parse into
+  // a block ref, masking the un-suppressed behavior this test asserts).
+  const FIELD_ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
   const statusSchema = defineProperty('status', {
     codec: codecs.string,
     defaultValue: '',
@@ -1716,12 +1725,10 @@ describe('parseReferences — property field rows are machinery, not alias sourc
     )
   })
 
-  it('setProperty creates a [[status]] field row; no alias target is minted and the field row stays reference-free', async () => {
-    // The suppression this test targets (isPropertyMachineryRow) must run
-    // to completion rather than be short-circuited by an unrelated
-    // processor crash — spy on console.error so a swallowed
-    // `[processorRunner] processor "..." failed` makes this test fail
-    // loudly instead of vacuously "passing" because nothing ran.
+  it('setProperty creates a field row that references its definition; no phantom alias page is minted', async () => {
+    // Guard against a swallowed `[processorRunner] processor "..." failed`
+    // making this pass vacuously: spy on console.error so a processor crash
+    // fails the test loudly instead.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await env.repo.tx(async tx => {
@@ -1737,28 +1744,30 @@ describe('parseReferences — property field rows are machinery, not alias sourc
       .not.toHaveBeenCalled()
     errorSpy.mockRestore()
 
-    // No alias-target page named "status" was created — the field row's
-    // `[[status]]` content never reached the alias parser.
+    // No alias-target page named "status" — the `((fieldId))` content is a
+    // by-id ref, so it can never mint a page (the guarantee is the addressing
+    // form, not parse suppression).
     expect(await env.read(aliasId('status'))).toBeNull()
 
-    // The field row itself carries no derived references (content marks
-    // suppressed) and is not itself referenced by anything.
+    // The field row now carries a reference to its definition — the "used by"
+    // edge (under the dropped isPropertyMachineryRow this was suppressed to []).
     const field = await env.h.db.getOptional<{id: string; references_json: string}>(
       `SELECT id, references_json FROM blocks
         WHERE parent_id = 'host' AND reference_target_id = ? AND deleted = 0`,
       [FIELD_ID],
     )
     expect(field).not.toBeNull()
-    expect(JSON.parse(field!.references_json)).toEqual([])
+    const refs = JSON.parse(field!.references_json) as Array<{id: string}>
+    expect(refs.map(r => r.id)).toEqual([FIELD_ID])
   })
 
-  it('a ROOT row with content [[status]] is parsed as a normal wikilink, not suppressed as property machinery', async () => {
-    // Twin of the test above, root position instead of child position: a
-    // workspace-root row (parentId === null) is never a field row no matter
-    // what its reference_target_id stamp resolves to (§9 root half in
-    // isPropertyMachineryRow). Its `[[status]]` content is ordinary user
-    // content, so — unlike the non-root field row above — a normal alias
-    // target IS minted and the row DOES get a normal alias backlink.
+  it('a ROOT row with content [[status]] is parsed as a normal wikilink (user content, not machinery)', async () => {
+    // A workspace-root row (parentId === null) is never a field row (§9 root
+    // half), so its `[[status]]` content is ordinary user content: a normal
+    // alias target IS minted and the row gets a normal alias backlink — even
+    // though "status" is a property schema name in this flipped workspace.
+    // (Held under the dropped isPropertyMachineryRow via its root exemption,
+    // and still holds now that parse suppression is gone entirely.)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await env.repo.tx(

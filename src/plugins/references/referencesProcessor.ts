@@ -69,7 +69,6 @@ import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -147,50 +146,14 @@ interface SourcePlan {
  *  state lookup, and produce a SourcePlan describing what the write
  *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
  *  hits committed state. */
-/** In a child-backed workspace, a row whose `reference_target_id` resolves
- *  (or is shadow-parked) as a property field definition is §9 property
- *  machinery: its `[[schema name]]` content is a RECOGNITION token, not a
- *  wikilink — parsing it would mint a user-visible alias page named after
- *  the property plus a backlink from a hidden row, on every value write
- *  (PR #386 review). Interior rows with a definition-resolving stamp
- *  (ref-typed values POINTING at a definition) suppress too — hidden
- *  machinery is never a backlink source. Dormant pre-flip: the flip probe
- *  short-circuits false. */
-const isPropertyMachineryRow = async (
-  ctx: ProcessorCtx,
-  source: BlockData,
-  flipCache: Map<string, boolean>,
-): Promise<boolean> => {
-  const targetId = source.referenceTargetId ?? null
-  if (targetId === null) return false
-  // §9 root half: a workspace-root row is never a field row no matter what
-  // its stamp resolves to — it's ordinary user content, and its `[[status]]`
-  // must keep normal wikilink/backlink behavior (PR #386 review wave 2).
-  // Twin of the parentId exemption in `isPropertyFieldInstance` + the SQL.
-  if (source.parentId === null) return false
-  let flipped = flipCache.get(source.workspaceId)
-  if (flipped === undefined) {
-    flipped = await readIsChildBackedWorkspace(ctx.db, source.workspaceId)
-    flipCache.set(source.workspaceId, flipped)
-  }
-  if (!flipped) return false
-  const resolution = ctx.repo.propertySchemaResolverFor(source.workspaceId).resolveField(targetId)
-  return resolution.status === 'resolved'
-    || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-}
 
 const buildSourcePlan = async (
   ctx: ProcessorCtx,
   source: BlockData,
   before: BlockData | null,
-  opts?: {suppressContentMarks?: boolean},
 ): Promise<SourcePlan> => {
-  // Suppressed content marks (property machinery rows) still flow through
-  // the full reconcile below: refs the row carried from a pre-machinery
-  // life get dropped, property refs and retained absentees survive — only
-  // the content parse (and its alias-seat minting) is off.
-  const aliasMarks = opts?.suppressContentMarks ? [] : parseAliasMarks(source.content)
-  const blockRefMarks = opts?.suppressContentMarks ? [] : parseBlockRefs(source.content)
+  const aliasMarks = parseAliasMarks(source.content)
+  const blockRefMarks = parseBlockRefs(source.content)
 
   const aliasRefs: BlockReference[] = []
   const dateRefs: BlockReference[] = []
@@ -546,15 +509,12 @@ export const parseReferencesProcessor = definePostCommitProcessor({
     // contention. Each plan describes what the write phase needs to do
     // (or nothing, if the parse came out idempotent).
     const plans: SourcePlan[] = []
-    const flipCache = new Map<string, boolean>()
     for (const row of event.changedRows) {
       // Skip hard-deletes (after === null) — nothing to parse.
       if (row.after === null) continue
       // Skip soft-deletes (after.deleted === true) — same reason.
       if (row.after.deleted) continue
-      plans.push(await buildSourcePlan(ctx, row.after, row.before, {
-        suppressContentMarks: await isPropertyMachineryRow(ctx, row.after, flipCache),
-      }))
+      plans.push(await buildSourcePlan(ctx, row.after, row.before))
     }
     if (!plans.some(planNeedsWrite)) return
 
