@@ -585,11 +585,19 @@ export const materializeTypeSeeds = (
           // Not the live registry for this workspace (direct caller with an explicit
           // array, or a switch-away the abort guard already handles) → trust the array.
           if (reg?.workspaceId !== workspaceId) return true
+          const current = reg.seedsByKey.get(seed.seedKey)
           // Withhold a seed the live registry no longer declares OR now flags
           // contested by key OR by membership id, matching `workspaceSeeds`' filter.
-          return reg.seedsByKey.has(seed.seedKey)
-            && !reg.contestedSeedKeys.has(seed.seedKey)
-            && !reg.contestedTypeIds.has(seed.id)
+          if (!current
+            || reg.contestedSeedKeys.has(seed.seedKey)
+            || reg.contestedTypeIds.has(seed.id)) return false
+          // The live declaration for this key must still be the one we snapshotted.
+          // A same-key REPLACEMENT (an id de-collision, a plugin update) would
+          // otherwise write the stale snapshot's id + payload to the deterministic
+          // block; create/restore-only never repairs it, so the registry would then
+          // bind the NEW type id to a row claiming the OLD one. Compare identity
+          // (id + revision) — the dirty re-run materializes the current declaration.
+          return current.id === seed.id && current.revision === seed.revision
         }
       : undefined,
   }, signal)

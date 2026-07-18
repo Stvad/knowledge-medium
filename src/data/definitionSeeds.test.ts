@@ -1122,6 +1122,23 @@ describe('type definition materialization', () => {
       [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
   })
 
+  it('with revalidation on, skips when the live declaration for the key was replaced', async () => {
+    // The snapshot has typeSeed (id=test-widget). The live registry now maps that
+    // SAME key to a replacement declaration with a new id/revision. Writing the stale
+    // snapshot would put the old id into the deterministic block; create/restore-only
+    // never repairs it, so the registry would bind the new id to a row claiming the
+    // old one. Skip — the dirty re-run materializes the current declaration.
+    const replaced = seedType({seedKey: typeSeed.seedKey, revision: 2, id: 'new-widget', label: 'Renamed'})
+    const replacedRegistry = buildTypeDefinitionRegistry({
+      workspaceId: WS, projectedDefinitions: new Map(), seeds: [replaced],
+    })
+    vi.spyOn(repo, 'typeDefinitions', 'get').mockReturnValue(replacedRegistry)
+
+    expect((await materializeTypeSeeds(repo, WS, [typeSeed], undefined, true)).created).toBe(0)
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
+  })
+
   it('typeify still completes a NON-seed block-type block into a page + alias (carve-out is narrow)', async () => {
     const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
     await repo.tx(async tx => {
