@@ -21,15 +21,26 @@ export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
  *  observer's staging reads use (`materialize.ts`). 500 keeps a wide margin. */
 const MACHINERY_SOURCE_CHUNK = 500
 
-/** Which of `sourceIds` are property-subtree machinery — a value child (or a
- *  row deeper inside a property subtree) whose chain passes through a §9 field
- *  row. Same recognition as `VISIBLE_CHILD_PREDICATE_SQL` (flip-gated by the
- *  caller; a workspace-scoped `block_types = 'property-schema'` probe on a
- *  non-null `reference_target_id`; root rows exempt via `parent_id IS NOT
- *  NULL`). Field rows themselves are already suppressed from `block_references`
- *  by the references processor, so in practice this matches property VALUE
- *  rows that carry a wikilink/ref — the sources that would otherwise mint a
- *  backlink attributed to hidden machinery rather than to the owning block. */
+/** Which of `sourceIds` are property-subtree machinery — a field row, a value
+ *  child, or a row deeper inside a property subtree (its parent chain passes
+ *  through a §9 field row). Same recognition as `VISIBLE_CHILD_PREDICATE_SQL`:
+ *  a workspace-scoped `block_types = 'property-schema'` probe on a non-null
+ *  `reference_target_id`, root rows exempt via `parent_id IS NOT NULL`.
+ *
+ *  Matches BOTH field rows and value rows. Field rows reference their own
+ *  definition (the "used by" edge) and value rows carry the user's ref — either
+ *  way the source is hidden machinery, and the backlink the panel should show
+ *  is the owning block's, via cell reprojection. (Field rows used to be
+ *  suppressed from `block_references` at parse time; that suppression was
+ *  removed, so they now enter the index like any other row — which is what lets
+ *  definition merge/rename retarget reach them.)
+ *
+ *  PRECONDITION — the caller MUST flip-gate this. There is no internal
+ *  `properties_migration` check (unlike `VISIBLE_CHILD_PREDICATE_SQL`, which
+ *  embeds one), because `reference_target_id` derivation and `property-schema`
+ *  types both exist independent of the flip. Calling it for an UN-flipped
+ *  workspace would misclassify an ordinary `((definitionId))` reference as
+ *  machinery and silently drop a real backlink. */
 export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
