@@ -641,10 +641,9 @@ corruption" carries this one raw-write asterisk (slice-B raw-write test).
 
 <p>Index changes — <strong>nothing the v2 triggers need</strong>: the v2
 trigger reads no history (§4.1/I6), so slice A ships no index work at all.
-Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper takes the block ids
-with &gt; K events (a bounded index-only aggregate over this index — ~50–80
-blocks, §12), keeps the <code>no-history</code>-typed ones (live or
-deleted, §5.1), then prunes each to its newest K events <em>by <code>id</code></em> —
+Slice B adds <code>(block_id, id)</code>: the §5.1 sweeper enumerates the
+<code>no-history</code>-typed blocks (live and deleted, §5.1) and prunes each to
+its newest K events <em>by <code>id</code></em> —
 which is what makes the cut a safe oldest-prefix delete (<code>created_at</code>
 is not reliably monotone in <code>id</code>, so ordering the cut by timestamp
 could hole a survivor, §5.1). The earlier partial <code>WHERE scope =
@@ -1013,16 +1012,22 @@ whole design. By <strong>provenance</strong>: these writes go through
 ("Selection / focus / chrome state", explicitly <em>not undoable</em> —
 <code>changeScope.ts</code>), and <code>tx_context.scope</code> is populated per
 tx (<code>commitPipeline.ts:263-264</code>). And by <strong>the block
-itself</strong>: they only ever touch panel / panel-stack blocks
-(<code>types: ["panel"]</code>), typed at creation and never written under any
-other scope (<code>panelLayoutProjection.ts</code>,
-<code>workspaceBootstrap.ts:208</code>). The difference is decisive: scope is
-per-tx and lives in <code>tx_context</code>, which is <em>NULL on every sync
-arrival</em> (§3) — so keying retention on it strands ~half of a hot panel's
-events (the sync-authored ones) unprunable, the defect the earlier draft of this
-section carried. The block's <em>type</em> has no such blind spot: it is part of
-the block's replicated state, so it is present and identical on every device.
-Retention keys on the type.
+itself</strong>: UiState writes land on a small, known set of view-state blocks —
+panels and panel-stacks (<code>panelLayoutProjection.ts</code>), but also the
+user-level <code>ui-state</code> child outside a panel
+(<code>getUIStateBlock</code>, <code>stateBlocks.ts:344-362</code>) and
+plugin-specific UI-state blocks (<code>stateBlocks.ts:376-397</code>; e.g.
+QuickFind's <code>quick-find-ui-state</code>) — each created by the UI-state
+machinery, not by the user (review finding: it is <em>not</em> panels only).
+The difference is decisive: scope is per-tx and lives in
+<code>tx_context</code>, which is <em>NULL on every sync arrival</em> (§3) — so
+keying retention on it strands ~half of a hot block's events (the sync-authored
+ones) unprunable, the defect the earlier draft of this section carried. The
+block's <em>type</em> has no such blind spot: it is part of the block's
+replicated state, present and identical on every device. Retention keys on the
+type — and every one of these view-state blocks gets tagged
+<code>no-history</code> (below), so the guarantee covers the whole class, not
+just panels.
 </p>
 
 <div class="callout good">
@@ -1047,10 +1052,13 @@ Retention keys on the type.
     <code>panel</code>, and not a per-event flag or per-block column: a distinct,
     purpose-built type whose <em>name is its contract</em> — a block tagged
     <code>no-history</code> is declaring "don't keep my history", and the sweeper
-    prunes exactly those. Panels get it at creation
-    (<code>panelLayoutProjection</code> / the UI-state extensions stamp
-    <code>types: ["panel", "no-history"]</code>), and a one-time backfill adds it
-    to existing panel/panel-stack blocks (~857, scoped to the active workspace).
+    prunes exactly those. Every UI-state block gets it at creation — not just
+    panels but the root <code>ui-state</code> child and plugin UI-state blocks
+    (§above): the one UI-state-block factory (<code>getUIStateBlock</code> /
+    <code>ensureUiChild</code>) and <code>panelLayoutProjection</code> stamp
+    <code>no-history</code> into <code>types</code>, so the whole class is covered
+    from one seam. A one-time backfill adds it to existing UI-state blocks
+    (panels ~857 + the per-workspace root/plugin ones, active-workspace-scoped).
     Two reasons this is the right signal, and both answer the review finding that
     keying on <code>panel</code> was unsafe:
     <ul>
@@ -1081,18 +1089,21 @@ Retention keys on the type.
     <em>is</em> the safety.</li>
   <li><strong>The sweeper keys on the synced block, so every device agrees.</strong>
     A deep-idle job (same <code>PendingIdleJobs</code> machinery as §8) takes as
-    candidates the block ids with <em>more than K events</em> (a bounded
-    index-only aggregate over <code>(block_id, id)</code> — measured ~50–80 such
-    blocks on either instance, §12, so the set is tiny) and keeps those carrying
-    the <code>no-history</code> type (a <code>block_types</code> lookup for live
-    blocks). <strong>Deleted blocks are in
-    the set, deliberately</strong> (review finding): a soft-deleted panel is still
-    a <code>blocks</code> row (<code>deleted=1</code>), and a hard-deleted or
-    stream-exited one is classified from its most-recent event's snapshot — so a
-    panel deleted <em>before</em> a sweep capped it does not keep its whole
-    pre-delete history (up to the full delete-before snapshot, potentially
-    multi-MB) forever. Enumerating live blocks by type alone would miss exactly
-    those. For each candidate it then deletes all but its newest K
+    candidates from the <code>no-history</code> set, not from an event-count
+    scan: the live/soft-deleted ones straight off the <code>block_types</code>
+    index (<code>WHERE type = 'no-history'</code> — soft-deletes are still
+    <code>blocks</code> rows), plus the hard-deleted / stream-exited ones from
+    their delete events (<code>kind = 'delete'</code> whose before-snapshot carried
+    <code>no-history</code> — few, and <strong>this is why deleted candidates must
+    be classified before, not after, a live-type filter</strong>, review finding:
+    a hard delete drops the <code>block_types</code> row, so a
+    <code>block_types</code>-only pass would silently skip exactly the panel that
+    can no longer shrink). Starting from the small tagged set (rather than "blocks
+    with &gt; K events" — 502 blocks on prod at K = 8, a full aggregate that also
+    misses hard-deletes) is both cheaper and complete. Deleted blocks are included
+    deliberately: a panel deleted <em>before</em> a sweep capped it would otherwise
+    keep its whole pre-delete history (up to the full delete-before snapshot,
+    multi-MB) forever. For each candidate it then deletes all but its newest K
     <code>row_events</code> ordered by
     <strong><code>id</code>, not <code>created_at</code></strong>: <code>id</code>
     is the authoritative per-block order (§3), and because <code>created_at</code>
@@ -1108,7 +1119,17 @@ Retention keys on the type.
     wall itself (full state) as the segment's reconstructable base and simply
     retains fewer than K when a gap sits that recently: correctness over hitting
     exactly K. Served by the <code>(block_id, id)</code> index slice B adds for
-    this (§3). Because the key
+    this (§3). <strong>One more gap the wall clamp can't see — a
+    <em>terminal</em> gap</strong> (review finding): a trigger-suspended backfill
+    (§4.3, <code>ensureBlockUserUpdatedAtColumn</code>) can change the live row
+    after its last event with no later event to mark <code>full=2</code>, so the
+    compact newest-K survivors would have no valid base — §4.3 rejects the live row
+    across a terminal gap. The sweeper detects it the same way a reader does (the
+    latest event's reconstructed <code>after</code> ≠ the live row) and
+    <em>defers</em> that block for the round rather than pruning past its last full
+    base. On a <code>no-history</code> block this self-heals almost immediately —
+    the next view-state write plants a fresh event making the live row a valid base
+    again — so deferring costs a cycle, not the bound. Because the key
     is the block's <code>no-history</code> <em>type</em> — read from the synced
     row on every device — a panel that synced in from another device is
     recognised identically to a locally-created one. That is exactly the blind
@@ -1116,7 +1137,11 @@ Retention keys on the type.
     so it could only ever bound the events a device authored itself, a minority
     of a hot shared panel's traffic. Not in-trigger: pruning from the trigger
     would put a read + DELETE on the hottest write path (rejected, §15). The
-    bound is eventual, enforced at idle.</li>
+    bound is eventual, enforced at idle. It shares §8's <em>machinery</em> but not
+    its lifecycle (review finding): §8 is a one-shot that flips <code>v=2</code>
+    and never runs again, whereas the retention sweeper is <strong>recurring</strong> —
+    it re-arms every deep idle, because churn keeps accumulating; there is no
+    completion marker to set.</li>
   <li><strong>Whole-block newest-K is a clean oldest-prefix delete — safe for
     <em>compact</em> events, so no full-writes are needed.</strong> Keeping the
     newest K deletes a contiguous <em>oldest prefix</em> of the block's events.
@@ -1702,8 +1727,17 @@ wasteful, swap immediately after <code>INTO</code> under a quiesced writer
         the live manager already merges them into one entry by exactly this rule
         — earliest before, latest after, per block
         (<code>undoManager.ts:84-90</code>, issue #306) — so a tx-scoped fold
-        would split one user-perceived action into several undos. Collect via
-        <code>group_id</code>, <strong>but only the contiguous run</strong>:
+        would split one user-perceived action into several undos.
+        <strong>Only when <code>group_id</code> is non-null</strong> (review
+        finding): the live manager merges only when
+        <code>entry.groupId !== undefined</code>
+        (<code>undoManager.ts:84-90</code>), so two adjacent <em>ungrouped</em>
+        txs stay two entries even though both their group ids are NULL — a reader
+        that expanded by "same <code>group_id</code>" would fold consecutive
+        ungrouped txs into one. So: a NULL <code>group_id</code> tx stands alone
+        (restore only its own <code>tx_id</code>); grouping applies only to a
+        non-null id. Collect via that id, <strong>but only the contiguous
+        run</strong>:
         merging targets the top-of-stack entry only
         (<code>undoManager.ts:107</code>), so a foreign tx landing mid-group
         <em>splits</em> the group rather than letting undo reorder history —
@@ -1947,7 +1981,9 @@ into is smaller).
         provenance only; tests pinning I3 (incl. raw-write labeling + logging)
         and I8 (no write path is exempt — every kind logs) — plus the fuzzed
         writer-interleaving suite (note below).</td>
-      <td>Independent — #288 slice C no longer waits on it (§11 revised)</td>
+      <td>Requires A (it stamps <code>scope</code>, which is A's column, and
+        prunes by <code>id</code>). Independent <em>of #288</em> — slice C no
+        longer waits on it (§11 revised); the two are unordered.</td>
     </tr>
     <tr>
       <td><strong>C — stock migration</strong></td>
@@ -2144,16 +2180,24 @@ generator, which is how both were found.
       <td><strong>The log never gets slower than today.</strong> <em>No trigger
         body may read <code>row_events</code> or scan history on the write
         path</em> (the only reads are 1-row <code>tx_context</code> probes) — and
-        v2 per-write work = v1 minus the full snapshot sides, plus changed-field
-        patches and one <code>random()</code>. This now holds for <em>every</em>
-        class including UiState: those events are compact like any other update
-        (§5.1 keys retention on the block's type, not on writing them full), and
-        the earlier local-ui write-path regression — full snapshots plus a
-        per-write partial index — is gone with the full-writes and that index.</td>
+        for the <em>non-anchor</em> update — ~63/64 of them — v2 per-write work =
+        v1 minus the full snapshot sides, plus changed-field patches and one
+        <code>random()</code>: a strict win, and it holds for every class
+        including UiState (those events are compact like any other update — §5.1
+        keys retention on the block's type, not on writing them full; the earlier
+        local-ui regression of full snapshots + a per-write partial index is gone
+        with both). The <strong>~1/64 sampled-anchor</strong> write is the one
+        exception (review finding): it writes full before+after like v1 <em>plus</em>
+        the coin and the diff/shape work, so it is marginally heavier than v1 on
+        that write. So the claim is precisely: never slower on the common path, an
+        amortized ~+25&nbsp;B/update tail on the anchor path (§4.4) — the bench
+        must sample enough writes to include anchors, not assert on the compact
+        path alone.</td>
       <td><a href="#s7">§7</a></td>
-      <td>v2 trigger</td>
-      <td>Bench note in slice A (write-tx tail latency before/after); review rule
-        for trigger SQL.</td>
+      <td>v2 trigger; the 1/64 anchor path</td>
+      <td>Bench note in slice A (write-tx tail latency before/after, sampled
+        across enough writes to cover the anchor path); review rule for trigger
+        SQL.</td>
     </tr>
     <tr>
       <td>I7</td>
