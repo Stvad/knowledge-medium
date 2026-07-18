@@ -8,7 +8,8 @@ import{defineQuery as e}from"../../data/api/query.js";import{boolean as t,object
        )
        SELECT DISTINCT up.start_id AS id
          FROM up
-        WHERE up.reference_target_id IS NOT NULL
+        WHERE up.depth > 0
+          AND up.reference_target_id IS NOT NULL
           AND up.parent_id IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM block_types bt
