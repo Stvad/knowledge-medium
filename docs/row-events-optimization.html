@@ -1462,18 +1462,29 @@ just panels.
         <code>parentId</code> is <em>not</em> sufficient for nested rows, since
         layout-session descendants nest through
         <code>ui-state/layout-sessions/{id}</code> and panels may sit under
-        panel-stack rows): <em>(1)</em> the tombstone's own id is in the computed
-        deterministic set — decisive, no ancestry needed; <em>(2)</em> its
-        <code>parentId</code> is in that set — decisive for a panel or
-        layout-session child; <em>(3)</em> its <code>parentId</code> is a runtime id,
-        so walk up through surviving <code>blocks</code> rows <em>and</em> other
-        tombstones' delete snapshots until the chain reaches a computed id.
-        <strong>Named residual:</strong> if an old client hard-deleted an entire
-        runtime-id chain (panel <em>and</em> its panel-stack row) so no link
-        survives in either place, that tombstone cannot be classified and its
-        history stays unbounded. It is bounded in size (already deleted, cannot
-        grow), requires the compound mixed-version case to occur, and disappears
-        once no pre-guard client remains — recorded rather than papered over.</li>
+        panel-stack rows). <strong>But these tiers must be split by what they are
+        allowed to <em>do</em></strong> (review finding): ancestry may
+        <em>discover</em> a candidate; only unforgeable identity may
+        <em>authorize</em> the destructive prune. Treating "a
+        <code>parentId</code> in the computed set" as decisive would reintroduce the
+        exact mutable-parentage gate §13 rejects — a content block can be moved
+        under the <code>ui-state</code> subtree with <code>tx.move</code> and then
+        hard-deleted, leaving a delete snapshot with that parent, and B1 would
+        classify it as dedicated UI-state and prune undoable history. So:
+        <em>(1)</em> the tombstone's own id is in the computed deterministic set —
+        <strong>authorizes</strong> the prune, no ancestry needed; <em>(2)</em> its
+        <code>parentId</code> (or a chain walked up through surviving rows and other
+        tombstones' snapshots) reaches the computed set — <strong>enqueues</strong>
+        it as a candidate, but is a <em>clue, not a certificate</em>; on its own it
+        does not authorize deletion.
+        <strong>Consequence, named rather than hidden:</strong> a tombstone whose
+        own id is a runtime id — every panel and panel-stack row — has no
+        authorizing signal in B1, so B1 cannot prune it. That is the panel problem
+        (§13) reappearing on the tombstone path, and it is resolved by the same
+        thing: persisted provenance, or an accepted weaker gate. Until then those
+        histories stay unbounded, along with the narrower residual where an old
+        client hard-deleted an entire runtime-id chain so no link survives at
+        all.</li>
       <li><em>The prune decision reads the <strong>authoritative type</strong>, never
         an event flag.</em> The flag's whole job is <em>discovery</em>; once a
         candidate is in hand, whether to prune it is answered from the type itself:
@@ -1608,8 +1619,10 @@ just panels.
     four columns on <code>command_events</code>: a SQLite-allocated sequence —
     <em>not</em> the session-seeded <code>tx_seq</code> — plus
     <code>group_id</code>, a wrote-a-row flag, and <code>is_replay</code>) —
-    provisioning an unbuilt reader (I6) — <em>or</em> restricting retention to
-    non-undoable scopes, <em>or</em> deferring §10's guarantee. This is now
+    provisioning an unbuilt reader (I6) — <em>or</em> restricting what the sweeper
+    will act on to dedicated non-undoable storage (a sweeper-side check, not a
+    scope filter and not a tagging policy — §16 O7(b)), <em>or</em> deferring §10's
+    guarantee. This is now
     <a href="#s16">O7</a>, open. Note it does <em>not</em> touch the dominant case:
     UI-state blocks are non-undoable (<code>ChangeScope.UiState</code>), so pruning
     them — the entire 35&nbsp;MB motivation — has zero undo interaction; the gap is
@@ -2999,7 +3012,11 @@ into is smaller).
         friends) that O7(a) or (c) would later need, and no subsequent decision can
         recover it — whereas shipping B1 first and adding B2 after O7 resolves
         costs nothing. Until O7 is decided the shipping default is therefore
-        (b)-shaped, which is the safe direction.</td>
+        (b)-shaped — the safe <em>direction</em>, but note it is not a free one:
+        (b) is itself a sweeper-side dedicated-storage check, so it needs the same
+        sound identification this section's open problem is about (review finding).
+        The default protects the irreversible thing (boundary data) without by
+        itself making B1 sound.</td>
     </tr>
     <tr>
       <td><strong>C — stock migration</strong></td>
@@ -3600,8 +3617,16 @@ generator, which is how both were found.
     user and recorded in §15: scope-keyed prefix-cut over compact events
     (rule R1) → scope-keyed with local-ui events written <code>full</code> →
     keyed on the structural <code>panel</code> type → and finally an explicit,
-    dedicated <strong><code>no-history</code> type</strong> (stamped on panels,
-    user-assignable to any block) with the whole block pruned to newest-K. The
+    dedicated <strong><code>no-history</code> type</strong> (stamped on panels)
+    with the whole block pruned to newest-K.
+    <strong>O6 does not settle the user-assignable half</strong> (review finding —
+    this summary previously said "user-assignable to any block", which
+    pre-resolves what O7/§13 exist to decide): what O6 fixed is the <em>keying</em>
+    for dedicated UI-state retention (B1). Arbitrary user-assigned tags on ordinary
+    content are B2, deferred behind <a href="#s16">O7</a>'s undo-boundary decision —
+    an implementer treating this summary as canonical could otherwise expose
+    generic content tagging early and permanently delete the
+    <code>group_id</code>/boundary data that gate exists to preserve. The
     last move is the one that works: scope is NULL on sync arrivals, so any
     scope-keyed rule bounds only self-authored events (measured: 0 of the
     14,768-event flagship panel prunable); the block's type survives sync, so
@@ -3646,13 +3671,23 @@ generator, which is how both were found.
         (<code>repo.ts:1423</code>). Closes O7 exactly, and the columns sit on the
         low-volume per-tx table — but it is persisted state provisioned for a reader
         that does not exist yet (I6).</li>
-      <li><em>(b) Restrict <strong>who may be tagged</strong> — dedicated
-        non-undoable UI-state storage blocks only</em>. Nothing about the mechanism
-        changes: the sweeper still keys on the block's <code>no-history</code> type
-        (which survives sync), it simply never gets applied to a block whose writes
-        are undoable. No undoable tx is ever pruned, so undo never depends on one.
-        Costs [1000]'s "mark my own (undoable) block transient" affordance; the
-        35&nbsp;MB UI-state motivation is unaffected.
+      <li><em>(b) Restrict what the <strong>sweeper will act on</strong> —
+        dedicated non-undoable UI-state storage only</em>. No undoable tx is ever
+        pruned, so undo never depends on one. Costs [1000]'s "mark my own
+        (undoable) block transient" affordance; the 35&nbsp;MB UI-state motivation
+        is unaffected.
+        <strong>This must be enforced in the sweeper, not as a rule about who may
+        tag</strong> (review finding — an earlier draft framed (b) as a tagging
+        policy): <code>no-history</code> is a registered
+        <code>TypeContribution</code> and stays manageable in the property panel, so
+        "only these blocks may be tagged" is unenforceable. A user tagging an
+        undoable content block would still get its <code>row_events</code> pruned —
+        destroying precisely the undo-boundary data (b) exists to avoid needing.
+        <strong>Which means (b) is not the free option it appeared to be:</strong>
+        a sweeper-side dedicated-storage check requires the <em>same</em> sound
+        identification mechanism §13's open problem is about. (b) and that problem
+        are therefore one decision, not two — either a system-only type / persisted
+        provenance serves both, or a knowingly weaker gate is accepted for both.
         <strong>Note this is a policy restriction on tagging, not a scope filter on
         events</strong> (review finding): an earlier draft phrased (b) as "prune
         only <code>ChangeScope.UiState</code> history", which would have
