@@ -2766,16 +2766,30 @@ export class Repo {
     // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
     // is user content (never a field row); retitling it would rewrite the
     // user's text.
+    // Chunked like the parent pass below: one bound variable per changed field
+    // would otherwise blow SQLITE_MAX_VARIABLE_NUMBER on a big registry rebuild
+    // (a large sync or scripted schema change), and the caller only LOGS the
+    // throw — so every affected cell would silently stay unmigrated.
+    // The Set is load-bearing, not tidiness: `SELECT DISTINCT` only dedupes
+    // WITHIN one statement, so a parent holding field rows for two changed
+    // definitions that land in different chunks would otherwise be migrated
+    // twice.
     const fieldIds = plans.map(plan => plan.change.fieldId)
-    const candidates = await this.db.getAll<{parent_id: string | null}>(
-      `SELECT DISTINCT parent_id FROM blocks
-        WHERE workspace_id = ? AND reference_target_id IN (${fieldIds.map(() => '?').join(', ')})
-          AND deleted = 0 AND parent_id IS NOT NULL`,
-      [workspaceId, ...fieldIds],
-    )
-    const parentIds = candidates
-      .map(row => row.parent_id)
-      .filter((id): id is string => id !== null)
+    const FIELD_PROBE_CHUNK = 500
+    const parentIdSet = new Set<string>()
+    for (let i = 0; i < fieldIds.length; i += FIELD_PROBE_CHUNK) {
+      const fieldChunk = fieldIds.slice(i, i + FIELD_PROBE_CHUNK)
+      const candidates = await this.db.getAll<{parent_id: string | null}>(
+        `SELECT DISTINCT parent_id FROM blocks
+          WHERE workspace_id = ? AND reference_target_id IN (${fieldChunk.map(() => '?').join(', ')})
+            AND deleted = 0 AND parent_id IS NOT NULL`,
+        [workspaceId, ...fieldChunk],
+      )
+      for (const row of candidates) {
+        if (row.parent_id !== null) parentIdSet.add(row.parent_id)
+      }
+    }
+    const parentIds = [...parentIdSet]
     if (parentIds.length === 0) return
 
     // Per changed definition, for the user-facing unparseable-values report.
