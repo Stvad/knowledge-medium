@@ -12,6 +12,8 @@ import {
 import { typesProp } from '@/data/properties'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
+import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import {seedProperty} from '@/data/propertySeeds'
 import { buildPropertyPanelModel } from './model'
 
@@ -39,6 +41,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: schemasMap([visibleProp, typesProp]),
       propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -77,6 +80,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: schemasMap([visibleProp, internalProp]),
       propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([
         definePropertyEditorOverride(internalProp, {
           label: 'Internal',
@@ -121,6 +125,7 @@ describe('buildPropertyPanelModel', () => {
       properties: {},
       schemas: schemasMap([dateProp]),
       propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -163,6 +168,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: schemasMap([uiStateProp, systemProp]),
       propertyDefinitions: null,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -206,6 +212,7 @@ describe('buildPropertyPanelModel', () => {
       properties: {[schema.name]: 'private'},
       schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
       propertyDefinitions,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -239,6 +246,7 @@ describe('buildPropertyPanelModel', () => {
       properties: {[typesProp.name]: typesProp.codec.encode(['test'])},
       schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
       propertyDefinitions,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map([['test', {id: 'test', properties: [hidden]}]]),
@@ -277,6 +285,7 @@ describe('buildPropertyPanelModel', () => {
       properties: {[metadataOnly.name]: encodedValue},
       schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
       propertyDefinitions,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -326,6 +335,7 @@ describe('buildPropertyPanelModel', () => {
       properties: {[metadataOnly.name]: {enabled: true}},
       schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
       propertyDefinitions,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -368,6 +378,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: new Map([[typesProp.name, typesProp]]),
       propertyDefinitions,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -417,6 +428,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: new Map([[typesProp.name, typesProp]]),
       propertyDefinitions,
+      typeDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -427,6 +439,93 @@ describe('buildPropertyPanelModel', () => {
       .find(row => row.name === 'property-schema:preset')
     expect(presetRow?.readOnly).toBe(false)
     expect(presetRow?.canDelete).toBe(true)
+  })
+
+  it('locks every row when the panel is for a materialized TYPE-seed definition block', () => {
+    // Panel opened ON a code-owned type-seed backing block. Its provenance lives
+    // in the TYPE registry (definitionsByBlockId), NOT the property registry, so
+    // the panel must consult typeDefinitions to lock the whole bag — otherwise a
+    // user could mutate a code-owned type definition through the property panel.
+    const seeded: TypeDefinitionMetadata = {
+      typeId: 'test-widget',
+      blockId: 'type-seed-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      label: 'Widget',
+      hideFromCompletion: false,
+      hideFromBlockDisplay: false,
+      seedKey: 'system:test/type/widget',
+    }
+    const typeDefinitions = buildTypeDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[seeded.blockId, {metadata: seeded, properties: []}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: seeded.blockId,
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'block-type:label': 'Widget',
+        [typesProp.name]: typesProp.codec.encode(['block-type']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions: null,
+      typeDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const rows = [
+      ...model.pinnedRows,
+      ...model.sections.flatMap(section => section.rows),
+      ...model.hiddenSection.rows,
+    ]
+    const labelRow = rows.find(row => row.name === 'block-type:label')
+    expect(labelRow).toMatchObject({readOnly: true, canRename: false, canDelete: false})
+    // Even the normally-editable pinned type-membership row is locked.
+    expect(model.pinnedRows.find(row => row.name === typesProp.name)?.readOnly).toBe(true)
+  })
+
+  it('leaves a user-created type definition block editable (no seed provenance)', () => {
+    const userType: TypeDefinitionMetadata = {
+      typeId: 'user-type-block',
+      blockId: 'user-type-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      label: 'My Type',
+      hideFromCompletion: false,
+      hideFromBlockDisplay: false,
+      // no seedKey — a user-built type, freely editable
+    }
+    const typeDefinitions = buildTypeDefinitionRegistry({
+      workspaceId: 'ws',
+      projectedDefinitions: new Map([[userType.blockId, {metadata: userType, properties: []}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: userType.blockId,
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'block-type:label': 'My Type',
+        [typesProp.name]: typesProp.codec.encode(['block-type']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions: null,
+      typeDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const labelRow = model.sections
+      .flatMap(section => section.rows)
+      .find(row => row.name === 'block-type:label')
+    expect(labelRow?.readOnly).toBe(false)
   })
 
 })
