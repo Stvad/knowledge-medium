@@ -9,6 +9,7 @@ import { keysBetween } from './orderKey'
 import { getPropertyFieldTargetId } from './propertyChildren'
 import { collapseDuplicateFieldRow } from './internals/propertyChildrenProcessor'
 import { mergeProperties } from './mergeProperties'
+import { deleteSubtreeInTx } from './subtreeDelete'
 
 export type ContentStrategy = 'concat' | 'keepTarget' | { separator: string }
 
@@ -124,14 +125,31 @@ export const mergeBlocksInTx = async (
     const intoField = fieldId !== undefined ? intoFieldByFieldId.get(fieldId) : undefined
     if (intoField) {
       // Merges into `into`'s existing field row for this property, deleting
-      // `fromField` and preserving every `from` value (folded or nested).
+      // `fromField` and preserving every `from` value (folded or nested). When
+      // the merged bag drops a key `into` HAD, the `properties` write below is
+      // a real change for it, so MATERIALIZE reconciles `into`'s own children
+      // away — no special handling needed here.
       await collapseDuplicateFieldRow(tx, intoField.id, fromField)
-    } else {
-      const [key] = keysBetween(intoAnchor, null, 1)
-      await tx.move(fromField.id, {parentId: into.id, orderKey: key})
-      intoAnchor = key
-      if (fieldId !== undefined) intoFieldByFieldId.set(fieldId, fromField)
+      continue
     }
+    // `into` lacks this field. Adopt it only if the merged bag actually keeps
+    // the property: a custom `mergeProperties` strategy can deliberately drop a
+    // source-only key, and since `into` never had it the final `properties`
+    // write is a no-op for that key — so MATERIALIZE wouldn't remove a moved
+    // field row, and its projection would add the property back, overriding the
+    // strategy. Orphan/unresolvable field rows (no schema) don't project, so
+    // they ride along harmlessly.
+    const schema = fieldId !== undefined
+      ? tx.resolvePropertyFieldSchema(from.workspaceId, fieldId)
+      : null
+    if (schema !== null && !Object.prototype.hasOwnProperty.call(mergedProperties, schema.name)) {
+      await deleteSubtreeInTx(tx, fromField.id)
+      continue
+    }
+    const [key] = keysBetween(intoAnchor, null, 1)
+    await tx.move(fromField.id, {parentId: into.id, orderKey: key})
+    intoAnchor = key
+    if (fieldId !== undefined) intoFieldByFieldId.set(fieldId, fromField)
   }
 
   // Delete before merging properties so aliases held by `from` are

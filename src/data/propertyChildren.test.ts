@@ -516,6 +516,32 @@ describe('merge integration (§9, slice B3)', () => {
     expect(strandedLive).toEqual([])
   })
 
+  it('honors a custom mergeProperties that drops a source-only property (no reproject-back)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-only'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      // Strategy keeps ONLY into's bag → deliberately drops from's `status`.
+      await mergeBlocksInTx(tx, {into: into!, from: from!, mergeProperties: intoProps => intoProps})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The dropped property must NOT reappear via a moved-and-reprojected field
+    // row — the merge honors the strategy.
+    expect(await cellValue('into')).toBeUndefined()
+    expect(await liveFieldRows('into')).toEqual([])
+    const ff = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [fromField!.id],
+    )
+    expect(ff.deleted).toBe(1)
+  })
+
   it('preserves user-authored descendants of the source value child', async () => {
     await seedWorkspace('children')
     const repo = setup()
