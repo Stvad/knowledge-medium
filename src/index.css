@@ -385,6 +385,56 @@
     word-break: normal;
   }
 
+  .block-content::after {
+    clear: both;
+    content: "";
+    display: block;
+  }
+
+  .block-line-end-accessories {
+    float: right;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    max-width: min(45%, 10rem);
+    margin-left: 0.25rem;
+    margin-bottom: 0.125rem;
+  }
+
+  .block-line-end-accessories:empty {
+    display: none;
+  }
+
+  .block-line-end-accessories > :nth-child(n + 5) {
+    display: none;
+  }
+
+  .block-line-end-accessories:has(> :nth-child(5))::after {
+    content: "+";
+    display: inline-flex;
+    min-width: 1.25rem;
+    min-height: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+    font-size: 0.6875rem;
+    line-height: 1;
+    padding-inline: 0.25rem;
+  }
+
+  .block-line-end-accessory {
+    display: inline-flex;
+    min-width: 1.25rem;
+    max-width: 100%;
+    min-height: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
   .srs-review-block--archived {
     background-image:
       repeating-linear-gradient(

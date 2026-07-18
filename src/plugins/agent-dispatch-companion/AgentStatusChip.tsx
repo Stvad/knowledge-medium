@@ -1,20 +1,16 @@
-/** Agent task status chip — a small pill in the block's right gutter
+/** Agent task status chip — a compact line-end accessory
  *  driven purely by the `agent:*` properties the agent-dispatch daemon
  *  writes (running → replied ✓ / failed ⚠). The graph is the feedback
  *  channel: props sync reactively to every device, so this needs no
  *  daemon connection — it just makes the lifecycle visible.
  *
- *  Same gutter pattern as the inline backlink count badge: with no
- *  chip, content renders untouched (no wrapper). */
+ *  The default block layout owns the shared floated accessory rail, so
+ *  this chip no longer competes for its own top-right overlay. */
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { ClipboardCopy, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
-import {
-  cachedContentDecorator,
-  type BlockContentDecoratorContribution,
-} from '@/extensions/blockInteraction.js'
-import type { BlockRenderer } from '@/types.js'
+import type { BlockLineEndAccessoryContribution } from '@/extensions/blockInteraction.js'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,11 +41,11 @@ const RunningChip = ({ chip }: { chip: ChipState }) => {
     <>
       <span className="animate-pulse text-amber-600">●</span>
       {chip.cancelling ? (
-        <span>{chip.executorLabel} · cancelling…</span>
+        <span className="hidden md:inline">{chip.executorLabel} · cancelling…</span>
       ) : (
         <>
-          <span>{chip.executorLabel}{elapsed ? ` · ${elapsed}` : ''}</span>
-          {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
+          <span className="hidden md:inline">{chip.executorLabel}{elapsed ? ` · ${elapsed}` : ''}</span>
+          {chip.activity && <span className="hidden max-w-40 truncate md:inline"> · {chip.activity}</span>}
         </>
       )}
     </>
@@ -62,7 +58,7 @@ const chipBody = (chip: ChipState) => {
       return (
         <>
           <span className="text-muted-foreground">●</span>
-          <span>{chip.executorLabel}…</span>
+          <span className="hidden md:inline">{chip.executorLabel}…</span>
         </>
       )
     case 'running':
@@ -71,14 +67,14 @@ const chipBody = (chip: ChipState) => {
       return (
         <>
           <span className="text-emerald-600">✓</span>
-          <span>{chip.executorLabel}</span>
+          <span className="hidden md:inline">{chip.executorLabel}</span>
         </>
       )
     case 'error':
       return (
         <>
           <span className="text-red-600">⚠</span>
-          <span>{chip.executorLabel}</span>
+          <span className="hidden md:inline">{chip.executorLabel}</span>
         </>
       )
   }
@@ -101,7 +97,7 @@ const AgentStatusChipMenu = ({
       <span
         title={chipTitle(chip)}
         data-agent-dispatch-chip={chip.kind}
-        className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
+        className="block-line-end-accessory group h-5 gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
       >
         {chipBody(chip)}
       </span>
@@ -117,7 +113,7 @@ const AgentStatusChipMenu = ({
           aria-label={`${chip.executorLabel} task actions`}
           data-agent-dispatch-chip={chip.kind}
           onClick={event => event.stopPropagation()}
-          className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="block-line-end-accessory group h-5 gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {chipBody(chip)}
         </button>
@@ -144,12 +140,10 @@ const AgentStatusChipMenu = ({
  *  daemon's claim writing real props. */
 const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
 
-const AgentStatusChipRow = ({
+const AgentStatusAccessory = ({
   block,
-  Inner,
 }: {
   block: Block
-  Inner: BlockRenderer
 }) => {
   const propsChip = useHandle(block, {
     selector: doc => {
@@ -166,21 +160,12 @@ const AgentStatusChipRow = ({
   }, [propsChip, block.id])
 
   const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
-  if (!chip) return <Inner block={block} />
+  if (!chip) return null
 
-  return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <Inner block={block} />
-      </div>
-      <AgentStatusChipMenu chip={chip} block={block} />
-    </div>
-  )
+  return <AgentStatusChipMenu chip={chip} block={block} />
 }
 
-const decorate = cachedContentDecorator(AgentStatusChipRow, 'WithAgentStatusChip')
-
-/** The chip is a block-level pill in the right gutter, so it attaches on
+/** The chip is a block-level line-end accessory, so it attaches on
  *  every surface that renders the block as a full row — the outline,
  *  backlink entries, and embeds — where run status is genuinely useful
  *  (a page's backlink list is exactly where you review what the daemon
@@ -188,5 +173,7 @@ const decorate = cachedContentDecorator(AgentStatusChipRow, 'WithAgentStatusChip
  *  It's suppressed only where the block renders as inline text or a
  *  compact path preview — an inline `((reference))` or a breadcrumb
  *  segment — because a full-width gutter row can't lay out there. */
-export const agentStatusChipContribution: BlockContentDecoratorContribution = (ctx) =>
-  ctx.blockContext?.isReference || ctx.blockContext?.isBreadcrumb ? null : decorate
+export const agentStatusChipContribution: BlockLineEndAccessoryContribution = (ctx) =>
+  ctx.blockContext?.isReference || ctx.blockContext?.isBreadcrumb
+    ? null
+    : {id: 'agent-dispatch.status', render: AgentStatusAccessory}

@@ -27,6 +27,7 @@ describe('@/extensions/api — public surface', () => {
     'blockContentDecoratorsFacet',
     'blockContentRendererFacet',
     'blockContentSurfacePropsFacet',
+    'blockLineEndAccessoriesFacet',
     'shortcutSurfaceActivationsFacet',
     'enterBlockEditMode',
     'focusBlock',

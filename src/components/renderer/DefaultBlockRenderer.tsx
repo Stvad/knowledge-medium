@@ -48,8 +48,11 @@ import {
   blockContentRendererFacet,
   blockContentSurfacePropsFacet,
   blockHeaderFacet,
+  blockLineEndAccessoriesFacet,
   blockLayoutFacet,
   blockShellDecoratorsFacet,
+  type BlockLineEndAccessory,
+  type BlockLineEndAccessoryContribution,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
@@ -228,6 +231,48 @@ const ExpandButton = ({block}: { block: Block }) => {
         {isCollapsed ? '▸' : '▾'}
       </span>
     </Button>
+  )
+}
+
+const MobileExpandCollapseAccessory = ({block}: {block: Block}) => {
+  const isMobile = useIsMobile()
+  const hasChildren = useHasChildren(block)
+
+  if (!isMobile || !hasChildren) return null
+  return <ExpandButton block={block}/>
+}
+
+export const expandCollapseLineEndAccessoryContribution: BlockLineEndAccessoryContribution = (ctx) => {
+  if (ctx.isTopLevel || ctx.blockContext?.isReference || ctx.blockContext?.isBreadcrumb) return null
+  return {
+    id: 'core.expand-collapse',
+    render: MobileExpandCollapseAccessory,
+  }
+}
+
+const BlockLineEndAccessories = ({
+  block,
+  accessories,
+}: {
+  block: Block
+  accessories: readonly BlockLineEndAccessory[]
+}) => {
+  if (accessories.length === 0) return null
+
+  return (
+    <span
+      className="block-line-end-accessories"
+      data-block-line-end-accessories="true"
+    >
+      {accessories.map(accessory => {
+        const Accessory = accessory.render
+        return (
+          <ErrorBoundary key={accessory.id} FallbackComponent={FallbackComponent}>
+            <Accessory block={block}/>
+          </ErrorBoundary>
+        )
+      })}
+    </span>
   )
 }
 
@@ -571,14 +616,31 @@ export function DefaultBlockRenderer(
         [resolveBlockContentRenderer],
       )
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
-      const ContentRenderer = useMemo(
-        () => decorateContent(resolveContext, baseContentRenderer),
-        [decorateContent, baseContentRenderer],
-      )
       const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
       const contentSurfaceProps = useMemo(
         () => resolveContentSurfaceProps(resolveContext),
         [resolveContentSurfaceProps],
+      )
+      const resolveLineEndAccessories = runtime.read(blockLineEndAccessoriesFacet)
+      const lineEndAccessories = useMemo(
+        () => resolveLineEndAccessories(resolveContext),
+        [resolveLineEndAccessories],
+      )
+      const contentWithLineEndAccessories = useMemo<BlockRenderer>(() => {
+        if (lineEndAccessories.length === 0) return baseContentRenderer
+        const InnerContentRenderer = baseContentRenderer
+        const WithLineEndAccessories: BlockRenderer = ({block}) => (
+          <>
+            <BlockLineEndAccessories block={block} accessories={lineEndAccessories}/>
+            <InnerContentRenderer block={block}/>
+          </>
+        )
+        WithLineEndAccessories.displayName = 'WithBlockLineEndAccessories'
+        return WithLineEndAccessories
+      }, [baseContentRenderer, lineEndAccessories])
+      const ContentRenderer = useMemo(
+        () => decorateContent(resolveContext, contentWithLineEndAccessories),
+        [decorateContent, contentWithLineEndAccessories],
       )
       // Top-of-panel content renders as a title: larger font, less bullet-list
       // weight. The Controls slot already returns null for top-level so there's
@@ -639,22 +701,14 @@ export function DefaultBlockRenderer(
     return function BlockControlsSlot() {
       const isFocal = useIsFocalRender(block)
       const isMobile = useIsMobile()
-      const hasChildren = useHasChildren(block)
 
       if (isFocal) return null
 
       return (
-        <>
-          <div className="block-controls flex items-center">
-            {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block}/>
-          </div>
-          {isMobile && hasChildren && (
-            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
-              <ExpandButton block={block}/>
-            </div>
-          )}
-        </>
+        <div className="block-controls flex items-center">
+          {!isMobile && <ExpandButton block={block}/>}
+          <BlockBullet block={block}/>
+        </div>
       )
     }
   }, [block])

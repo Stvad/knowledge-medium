@@ -1,19 +1,17 @@
 import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
-  blockContentDecoratorsFacet,
+  blockLineEndAccessoriesFacet,
   diagnosticsFacet,
   ChangeScope, defineBlockType, seedProperty, extensionPropertySeedKey, definePropertyEditorOverride,
   getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, definitionSeedsFacet,
   showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
   type DiagnosticSnapshot,
   type DiagnosticSourceContribution,
-  type BlockContentDecorator,
-  type BlockContentDecoratorContribution,
+  type BlockLineEndAccessoryContribution,
   type PropertyEditorProps,
 } from '@/extensions/api.js'
 import { useHandle } from '@/hooks/block.js'
 import type { Block } from '@/data/block.js'
-import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties } from '@/data/properties.js'
@@ -1177,13 +1175,11 @@ const resetPositionAction = {
 }
 
 // ---------------------------------------------------------------------------
-// audio-url content decorator — a message carrying a `matrix:audio-url`
+// audio-url line-end accessory — a message carrying a `matrix:audio-url`
 // property (promoted from an `audio-url::` attribute in the message body) gets
-// a small audio glyph pinned to its top-right corner that opens the linked
-// audio in a new tab. A decorator (not a renderer override) so it composes with
-// whatever content renderer the block already uses — same idiom as the geo /
-// character-counter / readwise decorators. Gated on the stable `matrix-message`
-// type membership (resolver context doesn't track property changes); the icon
+// a small audio glyph in the shared block line-end rail that opens the linked
+// audio in a new tab. Gated on the stable `matrix-message` type membership
+// (resolver context doesn't track property changes); the icon
 // itself is shown/hidden inside the component from a reactive `useHandle` read,
 // so it appears the moment the property lands and vanishes if it's cleared.
 
@@ -1204,11 +1200,7 @@ const firstHttpUrl = (value: unknown): string | null => {
 }
 
 const matrixAudioStyles = {
-  wrapper: {position: 'relative', width: '100%'},
   link: {
-    position: 'absolute',
-    top: '1px',
-    right: '1px',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1245,51 +1237,33 @@ const AudioGlyph = () => (
   </svg>
 )
 
-const MatrixAudioDecorator = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+const MatrixAudioAccessory = ({block}: {block: Block}) => {
   const audioUrl = useHandle(block, {
     selector: data => firstHttpUrl(data?.properties?.[AUDIO_URL_KEY]),
   })
+  if (!audioUrl) return null
+
   return (
-    <div style={matrixAudioStyles.wrapper}>
-      <Inner block={block}/>
-      {audioUrl && (
-        <a
-          href={audioUrl}
-          target='_blank'
-          rel='noreferrer'
-          title='Open audio'
-          aria-label='Open audio'
-          style={matrixAudioStyles.link}
-          onClick={event => event.stopPropagation()}
-          onMouseDown={event => event.stopPropagation()}
-        >
-          <AudioGlyph/>
-        </a>
-      )}
-    </div>
+    <a
+      className='block-line-end-accessory'
+      href={audioUrl}
+      target='_blank'
+      rel='noreferrer'
+      title='Open audio'
+      aria-label='Open audio'
+      style={matrixAudioStyles.link}
+      onClick={event => event.stopPropagation()}
+      onMouseDown={event => event.stopPropagation()}
+    >
+      <AudioGlyph/>
+    </a>
   )
 }
 
-// Cached per inner renderer so React keeps a stable component identity and
-// never unmounts the inner subtree on a parent re-render (same invariant the
-// other decorators rely on).
-const matrixAudioDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorateMatrixAudio: BlockContentDecorator = inner => {
-  const existing = matrixAudioDecoratorCache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({block}) => (
-    <MatrixAudioDecorator block={block} Inner={inner}/>
-  )
-  Decorated.displayName = 'WithMatrixAudio'
-  matrixAudioDecoratorCache.set(inner, Decorated)
-  return Decorated
-}
-
-const matrixAudioContentDecorator: BlockContentDecoratorContribution = ctx => {
+const matrixAudioLineEndAccessory: BlockLineEndAccessoryContribution = ctx => {
   if (!ctx.types.includes(MATRIX_MESSAGE_TYPE)) return null
   if (ctx.blockContext?.isBreadcrumb) return null
-  return decorateMatrixAudio
+  return {id: 'matrix.audio-url', render: MatrixAudioAccessory}
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,7 +1293,7 @@ export default [
   appMountsFacet.of({id: 'matrix.setup-dialog', component: MatrixSetupDialog}, {source}),
   appEffectsFacet.of(matrixIngestEffect, {source}),
 
-  blockContentDecoratorsFacet.of(matrixAudioContentDecorator, {source}),
+  blockLineEndAccessoriesFacet.of(matrixAudioLineEndAccessory, {source}),
 
   actionsFacet.of(openSettingsAction, {source}),
   actionsFacet.of(connectAction, {source}),
