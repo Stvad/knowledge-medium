@@ -2420,7 +2420,20 @@ into is smaller).
         writer-interleaving suite (note below).</td>
       <td>Requires A (it stamps <code>scope</code>, which is A's column, and
         prunes by <code>id</code>). Independent <em>of #288</em> — slice C no
-        longer waits on it (§11 revised); the two are unordered.</td>
+        longer waits on it (§11 revised); the two are unordered.
+        <strong>B splits on <a href="#s16">O7</a></strong> (review finding):
+        <em>B1</em> — tagging <em>dedicated UI-state storage blocks</em> + the
+        sweeper — ships freely, because those blocks are non-undoable and pruning
+        them has no undo interaction at all; that is where the entire 35&nbsp;MB
+        motivation lives. <em>B2</em> — the <strong>user-assignable</strong>
+        affordance ([1000]: marking one's own, possibly undoable, block) — is
+        <strong>gated on O7</strong>. The reason is asymmetry, not caution:
+        retention is <em>one-way</em>, so shipping B2 first lets a prune
+        permanently erase the only boundary data (<code>group_id</code> and
+        friends) that O7(a) or (c) would later need, and no subsequent decision can
+        recover it — whereas shipping B1 first and adding B2 after O7 resolves
+        costs nothing. Until O7 is decided the shipping default is therefore
+        (b)-shaped, which is the safe direction.</td>
     </tr>
     <tr>
       <td><strong>C — stock migration</strong></td>
@@ -3008,7 +3021,15 @@ generator, which is how both were found.
     </ul>
     Bundled with the broader "are we over-hardening the unbuilt §10 reader"
     simplification question. Only the undoable corner is affected — non-undoable
-    UI-state pruning (the dominant case) is unaffected.</li>
+    UI-state pruning (the dominant case) is unaffected.
+    <strong>This does not block shipping</strong> (review finding, §13): slice B
+    splits, with B1 (tagging dedicated UI-state storage + the sweeper) free to ship
+    and only B2 (the user-assignable affordance) gated on this decision. The gate
+    exists because retention is <em>one-way</em> — shipping B2 before deciding lets
+    a prune permanently destroy the <code>group_id</code>/boundary data that (a) and
+    (c) both depend on, and no later choice can recover it, while deferring B2 costs
+    nothing. So the decision can be taken unhurried; what it must not be is taken
+    <em>implicitly</em>, by shipping B2 first.</li>
 </ol>
 
 <hr>
