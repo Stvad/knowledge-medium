@@ -986,6 +986,18 @@ describe('type definition materialization', () => {
       .toEqual([propertyDefinitionBlockId(WS, goodProp.seedKey)])
   })
 
+  it('canonicalTypeSeedProperties warns without throwing on a skipped record entry with a non-serializable value', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // A record-shaped entry lacking a /property/ seed key but carrying a bigint —
+    // the skip-path warn must not JSON.stringify it (that throws on bigint/circular
+    // and would re-abort the pass the guard exists to protect).
+    const withBadRecord = {
+      ...seedType({seedKey: 'system:test/type/badrec', revision: 1, id: 'badrec', label: 'BadRec'}),
+      properties: [{name: 'weird', big: 10n}],
+    } as unknown as TypeSeedDeclaration
+    expect(() => canonicalTypeSeedProperties(withBadRecord, WS)).not.toThrow()
+  })
+
   it('materializes the backing block under Types, bare (no PAGE_TYPE, no alias), and is idempotent', async () => {
     const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
     expect(await materializeTypeSeeds(repo, WS, [typeSeed]))

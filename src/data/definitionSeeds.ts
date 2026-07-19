@@ -187,9 +187,17 @@ export const canonicalTypeSeedProperties = (
     for (const prop of seed.properties) {
       const propSeedKey = propertySeedKeyOf(prop)
       if (propSeedKey === undefined) {
+        // Identify the entry by its `name` if it has a string one — NEVER
+        // JSON.stringify(prop): a record entry can carry a bigint / circular value
+        // that throws the serializer, which would re-abort the very pass this
+        // skip path exists to protect.
+        const propName = typeof prop === 'object' && prop !== null
+          && typeof (prop as {name?: unknown}).name === 'string'
+          ? (prop as {name: string}).name
+          : '<non-property entry>'
         console.warn(
           `[canonicalTypeSeedProperties] type seed ${JSON.stringify(seed.seedKey)} references a ` +
-          `property with no usable /property/ seed key (${JSON.stringify(prop)}); omitting it from ` +
+          `property with no usable /property/ seed key (${propName}); omitting it from ` +
           'block-type:properties (repo.types still carries it from the declaration)',
         )
         continue
