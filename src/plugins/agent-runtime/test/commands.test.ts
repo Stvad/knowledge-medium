@@ -392,6 +392,49 @@ describe('agent runtime commands', () => {
     expect(row?.content).toBe('original')
   })
 
+  // SQLite lets a WITH clause prefix DML, so `WITH … UPDATE blocks` is a real
+  // raw write whose first token is `WITH` — it used to sail past the guard
+  // (PR #386 review). Recursive-CTE READS are the bridge's bread and butter,
+  // so they must keep working.
+  it('sql refuses a CTE-prefixed write but still allows a CTE-prefixed read', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-cte',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard cte target'},
+    )
+
+    await expect(executeCommand({
+      commandId: 'sql-guard-cte-1',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'WITH ids AS (SELECT id FROM blocks WHERE id = ?) '
+        + 'UPDATE blocks SET content = ? WHERE id IN (SELECT id FROM ids)',
+      params: ['sql-guard-cte', 'raw-write'],
+    }, env.context)).rejects.toThrow(/refusing to write to synced table "blocks"/)
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-cte'],
+    )
+    expect(row?.content).toBe('original')
+
+    const read = await executeCommand({
+      commandId: 'sql-guard-cte-2',
+      type: 'sql',
+      mode: 'all',
+      sql: 'WITH RECURSIVE up(id) AS (SELECT id FROM blocks WHERE id = ?) SELECT id FROM up',
+      params: ['sql-guard-cte'],
+    }, env.context)
+    expect(read).toEqual([{id: 'sql-guard-cte'}])
+  })
+
   it('sql execute allows the same write once allowSyncedWrite opts in', async () => {
     await env.repo.tx(
       async tx => {

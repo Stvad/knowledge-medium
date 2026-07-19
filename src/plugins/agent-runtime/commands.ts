@@ -24,7 +24,11 @@ import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
-import { SYNCED_TABLES, writeTargetTable } from '@/data/syncedTableWriteGuard.js'
+import {
+  SYNCED_TABLES,
+  isUnresolvableStatement,
+  writeTargetTable,
+} from '@/data/syncedTableWriteGuard.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
@@ -174,6 +178,18 @@ const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
  *  explicit, one-call opt-out for a deliberate surgical fix. */
 const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): void => {
   if (allowSyncedWrite) return
+  // Fail closed on a WITH prefix whose verb we couldn't resolve: null there
+  // means "couldn't tell", not "not a write" (a well-formed `WITH … SELECT`
+  // resolves fine, so ordinary recursive-CTE reads are unaffected).
+  if (isUnresolvableStatement(sql)) {
+    throw new Error(
+      'sql: refusing a WITH-prefixed statement whose target could not be determined. ' +
+        'SQLite allows a WITH clause to prefix INSERT/UPDATE/DELETE, so this may be a ' +
+        'raw write to a synced table, which would never upload and would skip the kernel ' +
+        'derivations. Rewrite it without the CTE prefix, or pass --allow-synced-write ' +
+        '(or {allowSyncedWrite: true}) if you know it is safe.',
+    )
+  }
   const target = writeTargetTable(sql)
   if (target === null || !SYNCED_TABLES.has(target)) return
   throw new Error(

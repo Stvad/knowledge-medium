@@ -19,6 +19,9 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
     noRawSyncedTableWrites.rules['no-raw-synced-table-writes'],
     {
       valid: [
+        // A recursive-CTE READ (the shape treeQueries.ts is full of) must not
+        // be flagged just because it mentions blocks.
+        `db.getAll('WITH RECURSIVE up(id, depth) AS (SELECT id, 0 FROM blocks) SELECT * FROM up')`,
         // Reads are unaffected.
         { code: `db.execute('SELECT * FROM blocks WHERE id = ?')` },
         // The write TARGET is a local index table even though `blocks` is
@@ -47,6 +50,12 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
         { code: 'const label = `count: ${n}`' },
       ],
       invalid: [
+        {
+          // SQLite allows a WITH clause to prefix DML — the write is real
+          // even though the statement's first token is `WITH`.
+          code: 'db.execute(`WITH ids AS (SELECT id FROM blocks_synced) UPDATE blocks SET content = ?`)',
+          errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
+        },
         {
           code: `db.execute('INSERT INTO blocks (id) VALUES (?)')`,
           errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],

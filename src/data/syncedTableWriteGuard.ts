@@ -59,15 +59,78 @@ const unquote = (ident: string): string =>
   ident.replace(/^["'`[]/, '').replace(/["'`\]]$/, '')
 
 /**
+ * Skip a leading `WITH [RECURSIVE] cte AS (…), … ` prefix and return the
+ * statement it decorates, or the input unchanged when there is no such prefix.
+ *
+ * SQLite lets a WITH clause prefix INSERT / UPDATE / DELETE, not just SELECT
+ * (https://sqlite.org/lang_with.html), so `WITH ids AS (…) UPDATE blocks …` is
+ * a real synced-table write whose first token is `WITH` — it slipped past the
+ * verb match below and was waved through by every consumer of this function
+ * (PR #386 review). Every CTE body is parenthesized, so the statement's own
+ * verb is simply the first keyword at paren depth 0.
+ *
+ * The scan skips string/identifier literals and comments rather than counting
+ * parens blindly: a `'('` inside a CTE body would otherwise unbalance the
+ * depth and hide the write. Anything it can't resolve returns null from
+ * `writeTargetTable`, same as a SELECT — callers that must fail closed check
+ * {@link isUnresolvableStatement}.
+ */
+const skipCtePrefix = (s: string): string => {
+  if (!/^with\b/i.test(s)) return s
+  let depth = 0
+  for (let i = 4; i < s.length; i++) {
+    const c = s[i]
+    if (c === "'" || c === '"' || c === '`') {
+      // Quoted literal/identifier: skip to its close, honouring '' escaping.
+      let j = i + 1
+      while (j < s.length) {
+        if (s[j] === c) {
+          if (s[j + 1] === c) { j += 2; continue }
+          break
+        }
+        j++
+      }
+      i = j
+    } else if (c === '[') {
+      const end = s.indexOf(']', i)
+      i = end === -1 ? s.length : end
+    } else if (c === '-' && s[i + 1] === '-') {
+      const nl = s.indexOf('\n', i)
+      i = nl === -1 ? s.length : nl
+    } else if (c === '/' && s[i + 1] === '*') {
+      const end = s.indexOf('*/', i)
+      i = end === -1 ? s.length : end + 1
+    } else if (c === '(') {
+      depth++
+    } else if (c === ')') {
+      depth--
+    } else if (depth === 0 && /[a-z]/i.test(c)) {
+      const rest = s.slice(i)
+      // The main statement's verb — everything before it is CTE scaffolding
+      // (names, AS, MATERIALIZED, commas). A CTE *named* e.g. `updates` can't
+      // false-match: `\b` requires the keyword to end at a non-word char.
+      if (/^(?:insert\b|replace\b|update\b|delete\b|select\b|values\b)/i.test(rest)) {
+        return rest
+      }
+      // Skip the rest of this identifier so its interior can't match.
+      while (i + 1 < s.length && /[\w$]/.test(s[i + 1])) i++
+    }
+  }
+  return s
+}
+
+/**
  * The table an INSERT / UPDATE / DELETE writes to, lowercased, or `null` for
  * any other statement (SELECT, CREATE INDEX/TRIGGER, DROP, PRAGMA, …). Reads
  * the *write target* — the table after `INTO` / `UPDATE` / `DELETE FROM` — so a
  * statement that only mentions a synced table in a `FROM`/subquery (e.g. a
  * local-index backfill `INSERT INTO block_aliases … SELECT … FROM blocks`) is
- * correctly attributed to its real target.
+ * correctly attributed to its real target. A leading WITH clause is skipped
+ * first (see {@link skipCtePrefix}), so a CTE-prefixed DML statement resolves
+ * to the table it actually writes.
  */
 export const writeTargetTable = (sql: string): string | null => {
-  const s = stripLeading(sql)
+  const s = skipCtePrefix(stripLeading(sql))
   const insert = s.match(/^(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+([^\s(]+)/i)
   if (insert) return unquote(insert[1]).toLowerCase()
   const update = s.match(/^update\s+(?:or\s+\w+\s+)?([^\s(]+)/i)
@@ -75,6 +138,20 @@ export const writeTargetTable = (sql: string): string | null => {
   const del = s.match(/^delete\s+from\s+([^\s(]+)/i)
   if (del) return unquote(del[1]).toLowerCase()
   return null
+}
+
+/**
+ * True when the statement carries a WITH prefix whose main verb we could NOT
+ * find — malformed, or a shape the scan doesn't model. `writeTargetTable`
+ * reports null for it, which reads as "not a write" and is the WRONG default
+ * for a guard. Callers that must fail closed (the agent bridge's raw `sql`
+ * verb) refuse these unless explicitly overridden; a well-formed
+ * `WITH … SELECT` resolves normally and is unaffected, so ordinary recursive-
+ * CTE reads still work.
+ */
+export const isUnresolvableStatement = (sql: string): boolean => {
+  const s = stripLeading(sql)
+  return /^with\b/i.test(s) && /^with\b/i.test(skipCtePrefix(s))
 }
 
 type ExecuteFn<A extends unknown[], R> = (sql: string, ...rest: A) => Promise<R>
