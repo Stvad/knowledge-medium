@@ -113,6 +113,7 @@ import type { PropertyDefinitionChange } from './internals/propertyDefinitionMig
 import {
   encodedPropertyValueToChildContent,
   isInsidePropertySubtreeWalk,
+  isPropertyFieldInstance,
   propertiesEqual,
   propertyChildContentToEncodedValue,
   type IsPropertyFieldDefinition,
@@ -2841,8 +2842,23 @@ export class Repo {
             let sawFieldRow = false
             // Re-encode + re-key once per parent (a parent's projection reads
             // ALL its field rows for this schema in deterministic order).
+            // Two conditions, not one: the fieldId equality selects THIS
+            // definition's field rows specifically (isPropertyFieldInstance
+            // has no notion of "which" definition); isPropertyFieldInstance
+            // reuses the shared §9 recognizer (root rule + isFieldDefinition,
+            // same closure isInsidePropertySubtreeWalk uses above) instead of
+            // trusting the stored column outright — it's a no-op here for
+            // the root half (`siblings` are all actual children of `parent`,
+            // so `parentId` is never null), but guards the resolvability half
+            // if `change.fieldId` stops resolving under `resolverForChunk`'s
+            // per-chunk snapshot after `plans` was built off the outer
+            // `resolver` snapshot (e.g. a concurrent same-tx definition
+            // change lands mid-batch).
             for (const sibling of siblings) {
-              if ((sibling.referenceTargetId ?? null) !== change.fieldId) continue
+              if (
+                (sibling.referenceTargetId ?? null) !== change.fieldId
+                || !isPropertyFieldInstance(sibling, isFieldDefinition)
+              ) continue
               sawFieldRow = true
               const values = await tx.childrenOf(sibling.id, undefined)
               for (const value of values) {
