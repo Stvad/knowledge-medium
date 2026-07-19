@@ -1,4 +1,4 @@
-import { ChangeScope, defineBlockType, seedProperty, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
+import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 
 export const SRS_REVIEW_DECK_TYPE = 'srs-review-deck'
 
@@ -29,7 +29,9 @@ export const reviewDeckStartedProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const srsReviewDeckType = defineBlockType({
+export const srsReviewDeckType = seedType({
+  seedKey: 'system:srs-review/type/srs-review-deck',
+  revision: 1,
   id: SRS_REVIEW_DECK_TYPE,
   label: 'SRS review deck',
   properties: [reviewDeckTagProp, reviewDeckStartedProp],
@@ -66,7 +68,9 @@ export const reviewProgressProp = seedProperty<ReviewProgress | null>({
   changeScope: ChangeScope.UiState,
 })
 
-export const srsReviewProgressType = defineBlockType({
+export const srsReviewProgressType = seedType({
+  seedKey: 'system:srs-review/type/srs-review-progress',
+  revision: 1,
   id: SRS_REVIEW_PROGRESS_TYPE,
   label: 'SRS review progress',
   ...INFRASTRUCTURE_TYPE_DISPLAY,

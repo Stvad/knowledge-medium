@@ -1,4 +1,4 @@
-import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
 import {
   srsArchivedProp,
@@ -19,5 +19,5 @@ export const srsReschedulingDataExtension: AppExtension = [
   definitionSeedsFacet.of(srsGradeProp, {source: 'srs-rescheduling'}),
   definitionSeedsFacet.of(srsArchivedProp, {source: 'srs-rescheduling'}),
   definitionSeedsFacet.of(srsSnapshotHistoryProp, {source: 'srs-rescheduling'}),
-  typesFacet.of(srsSm25Type, {source: 'srs-rescheduling'}),
+  typeSeedsFacet.of(srsSm25Type, {source: 'srs-rescheduling'}),
 ]

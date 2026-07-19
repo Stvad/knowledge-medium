@@ -1,4 +1,4 @@
-import { ChangeScope, defineBlockType, seedProperty, type PropertySeedDeclaration, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
+import { ChangeScope, seedProperty, seedType, type PropertySeedDeclaration, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 // Sub-path import (not the barrel) — `schema.ts` is loaded from
 // `srsReschedulingDataExtension`, which is in the static-data graph.
 // Importing the barrel would force daily-notes/index.ts to evaluate
@@ -82,7 +82,9 @@ export const srsSnapshotHistoryProp = seedProperty({
 // list(unsafeIdentity<SrsReviewSnapshot>()) codec. Keep the typed handle local.
 }) as PropertySeedDeclaration<SrsReviewSnapshot[]>
 
-export const srsSm25Type = defineBlockType({
+export const srsSm25Type = seedType({
+  seedKey: 'system:srs-rescheduling/type/srs-sm2.5',
+  revision: 1,
   id: SRS_SM25_TYPE,
   label: 'SRS SM-2.5',
   ...INFRASTRUCTURE_TYPE_DISPLAY,

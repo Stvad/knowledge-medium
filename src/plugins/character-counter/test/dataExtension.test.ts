@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { definitionSeedsFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { CHAR_COUNTER_TYPE } from '../blockType'
 import { charLimitProp, charProfileProp, charScopeProp } from '../properties'
 import { characterCounterDataExtension } from '../dataExtension'
 
 describe('characterCounterDataExtension', () => {
   const runtime = resolveFacetRuntimeSync(characterCounterDataExtension)
-  const types = runtime.read(typesFacet)
+  const types = runtime.read(typeSeedsFacet)
   const seeds = runtime.read(definitionSeedsFacet)
 
   it('registers the char-counter type with char:* properties lifted', () => {
-    const type = types.get(CHAR_COUNTER_TYPE)
+    const type = types.find(t => t.id === CHAR_COUNTER_TYPE)
     expect(type).toBeDefined()
     expect(type?.label).toBe('Character counter')
     expect(type?.properties?.map(p => p.name)).toEqual([

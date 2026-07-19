@@ -12,8 +12,8 @@
  * cosmetic. (Capture — Phase 5 — populates them; this phase only defines + renders.)
  */
 
-import { ChangeScope, defineBlockType, seedProperty, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
-import type { TypeContribution } from '@/data/api'
+import { ChangeScope, seedProperty, seedType, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
+import type { TypeSeedDeclaration } from '@/data/api'
 
 export const MEDIA_TYPE = 'media'
 
@@ -67,7 +67,9 @@ export const MEDIA_PROPERTY_SCHEMAS = [
   mediaFilenameProp,
 ] as const
 
-export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
+export const MEDIA_TYPE_CONTRIBUTION: TypeSeedDeclaration = seedType({
+  seedKey: 'system:attachments/type/media',
+  revision: 1,
   id: MEDIA_TYPE,
   label: 'Media',
   ...INFRASTRUCTURE_TYPE_DISPLAY,
@@ -157,7 +159,9 @@ export const ASSETS_TYPE = 'assets'
 export const ASSETS_NS = 'b6e4d9a1-2f47-4c3e-9a0d-7c1e8f5b2a36'
 export const ASSETS_ALIAS = 'Assets'
 
-export const ASSETS_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
+export const ASSETS_TYPE_CONTRIBUTION: TypeSeedDeclaration = seedType({
+  seedKey: 'system:attachments/type/assets',
+  revision: 1,
   id: ASSETS_TYPE,
   label: 'Assets',
   ...INFRASTRUCTURE_TYPE_DISPLAY,
