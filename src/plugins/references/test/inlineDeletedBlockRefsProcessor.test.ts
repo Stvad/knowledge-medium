@@ -8,8 +8,9 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, normalizeReferences, type BlockData } from '@/data/api'
 import { Repo } from '@/data/repo'
+import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -270,5 +271,139 @@ describe('references.inlineDeletedBlockReferences', () => {
     expect(env.read(D)!.deleted).toBe(false)
     expect(env.read('s')!.content).toBe(`pre ((${D})) post`)
     expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
+  })
+})
+
+/**
+ * #404 item 4 / PR #288 §9: a ref-typed property VALUE is `((targetId))`.
+ * Inlining it would rewrite the value into prose, clear its derived column,
+ * and silently drop the property key at the next projection — irreversibly,
+ * since the id is gone. Cell-era semantics were the opposite: a deleted
+ * target left a dangling reference with the property RETAINED. Soft-delete
+ * makes dangling recoverable (restore the target and the property snaps
+ * back), so the value keeps identity and inlining skips it.
+ */
+describe('property value children keep a dangling ref instead of inlining (#404)', () => {
+  const DEF = '44444444-4444-4444-8444-444444444444'
+
+  const relatedSchema = defineProperty('related', {
+    codec: codecs.ref(),
+    defaultValue: null,
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  /** Recognition has two halves: the tx-layer registry (`resolveField`) and
+   *  the SQL `block_types` probe. Seed both — the definition block carries
+   *  the type, the runtime contribution makes the fieldId resolvable. */
+  const registerDefinition = (): void => {
+    env.repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-related-definition',
+      [{
+        metadata: {
+          fieldId: DEF,
+          workspaceId: WS,
+          createdAt: 1,
+          name: relatedSchema.name,
+          changeScope: relatedSchema.changeScope,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: relatedSchema,
+      }],
+      {workspaceId: WS},
+    )
+  }
+
+  const seedFlippedWorkspaceWithRefValue = async (): Promise<void> => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS],
+    )
+    registerDefinition()
+    await env.repo.tx(async tx => {
+      // Definition block — `block_types` (written by typeify) is what the
+      // recognition predicate binds definition-ness to.
+      await tx.create({
+        id: DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'related', properties: {types: ['property-schema']},
+      })
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target body'})
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
+      await tx.create({
+        id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1',
+        content: `((${DEF}))`,
+      })
+      await tx.create({
+        id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
+        content: `((${D}))`, references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+  }
+
+  it('leaves the value row pointing at the tombstone, column intact', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    expect(env.read('value')!.referenceTargetId).toBe(D)
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('value')!.content).toBe(`((${D}))`)
+    expect(env.read('value')!.referenceTargetId).toBe(D)
+    expect(env.read('value')!.references).toEqual([{id: D, alias: D}])
+  })
+
+  // The exemption is for VALUES, not for everything under a property: a
+  // comment beneath a value row is ordinary prose and still inlines, exactly
+  // as it would anywhere else in the outline.
+  it('still inlines ordinary content nested under a value row', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'comment', workspaceId: WS, parentId: 'value', orderKey: 'a1',
+        content: `see ((${D})) for why`, references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('comment')!.content).toBe('see target body for why')
+    expect(env.read('comment')!.references).toEqual([])
+  })
+
+  // Dormancy: the exemption is flip-gated like every other §9 recognition —
+  // an un-flipped workspace has no property machinery to recognize, so the
+  // same shape inlines as ordinary content.
+  it('is dormant in an un-flipped workspace', async () => {
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'cell')`,
+      [WS],
+    )
+    registerDefinition()
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'related', properties: {types: ['property-schema']},
+      })
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'target body'})
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
+      await tx.create({id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: `((${DEF}))`})
+      await tx.create({
+        id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
+        content: `((${D}))`, references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('value')!.content).toBe('target body')
+    expect(env.read('value')!.referenceTargetId).toBeNull()
   })
 })
