@@ -353,9 +353,11 @@ describe('findReplaceDataExtension', () => {
       expect(owner?.properties[countSchema.name]).toBe(42)
     })
 
-    // A field row is the property's identity, not a value: no replacement can
-    // be a legitimate edit to it, so it is skipped without a codec check.
-    it('never rewrites a field row\'s `((fieldId))` identity', async () => {
+    // A field row is a NORMAL block — find-replace edits its content like any
+    // other, NOT special-cased. Rewriting `((fieldId))` re-roles the property
+    // deterministically (same as a direct edit or a move), so nothing is
+    // skipped and nothing is held back for a forced re-run.
+    it('edits a field row like a normal block, re-roling the property', async () => {
       await seedFlippedWorkspaceWithCountProperty()
       const [field] = await env.h.db.getAll<{id: string; content: string}>(
         `SELECT id, content FROM blocks WHERE parent_id = 'owner' AND reference_target_id = ? AND deleted = 0`,
@@ -373,15 +375,20 @@ describe('findReplaceDataExtension', () => {
         },
       )
 
-      expect(result.updatedBlocks).toBe(0)
-      expect(result.skippedUnparseableProperty).toBe(1)
-      expect(result.unparseableProperties).toEqual([countSchema.name])
-      // A field row is never offered for a forced re-run.
+      // Written, not skipped — no special case, no retry offer.
+      expect(result.updatedBlocks).toBe(1)
+      expect(result.replacements).toBe(1)
+      expect(result.skippedUnparseableProperty).toBe(0)
       expect(result.retryableSkips).toEqual([])
-      // Identity intact: content, stamp, and the owner's cell all survive.
-      expect((await load(field!.id))?.content).toBe(`((${DEF}))`)
-      expect((await load(field!.id))?.referenceTargetId).toBe(DEF)
-      expect((await load('owner'))?.properties[countSchema.name]).toBe(42)
+      // The field row's content changed like any block's would...
+      expect((await load(field!.id))?.content).toBe('((clobbered))')
+      // ...and the stamp follows the text (a `((id))` ref derives purely
+      // textually, no existence check), so it now points at `clobbered` —
+      // which is not a definition. The row is therefore no longer a
+      // recognized field row, and the owner's cell re-roles: the count key
+      // is gone. Same outcome as editing the row directly.
+      expect((await load(field!.id))?.referenceTargetId).toBe('clobbered')
+      expect((await load('owner'))?.properties[countSchema.name]).toBeUndefined()
     })
 
     // Dormancy: recognition is flip-gated like every other §9 primitive —

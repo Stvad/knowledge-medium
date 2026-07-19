@@ -16,7 +16,6 @@ import {
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import {
-  isPropertyFieldRow,
   propertyChildContentToEncodedValue,
   resolvePropertyValueFieldSchema,
 } from '@/data/propertyChildren'
@@ -198,25 +197,18 @@ export const applyContentReplaceMutator = defineMutator<
       )
       if (replaced.replacementCount === 0) continue
 
-      // A FIELD row's content is the property's IDENTITY (`((fieldId))`), not
-      // its value: rewriting it retargets or orphans the whole property and
-      // strands the value subtree as ordinary content. No text replacement can
-      // be a legitimate edit to it, so it is skipped outright rather than
-      // codec-checked (PR #386 review — the same identity argument as the
-      // deleted-target exemption in `inlineDeletedBlockReferences`). Reachable
-      // via the unfiltered search above or a direct mutator call. NOT
-      // forceable: unlike a value that reads as unset until fixed, a rewritten
-      // field row detaches the property structurally, so it never enters
-      // `retryableSkips` — `force` does not reach here.
-      if (await isPropertyFieldRow(tx, current)) {
-        result.skippedUnparseableProperty += 1
-        const fieldId = current.referenceTargetId ?? null
-        const fieldSchema = fieldId === null ? null
-          : await tx.resolvePropertyFieldSchema(current.workspaceId, fieldId)
-        if (fieldSchema !== null) unparseableProperties.add(fieldSchema.name)
-        continue
-      }
-
+      // A FIELD row (content `((fieldId))`) is deliberately NOT special-cased.
+      // Find-replace is a content edit, and editing a field row's content is
+      // the same operation as editing it directly in the outline: the
+      // derive/project pass re-roles the property deterministically and
+      // visibly, exactly as a direct edit or a move does — the intended
+      // everything-is-a-block semantics (§9/§10). There is no invisible
+      // failure to guard (the row's own content visibly changed) and no codec
+      // to break (its content is a ref, not a typed value), so a field row
+      // falls through to the ordinary write below like any other block. (Only
+      // VALUE rows get the codec skip — see below — because a broken value
+      // fails SILENTLY: the key drops from the owner's cell with no error.)
+      //
       // #404 item 5: under properties-as-blocks (PR #288 §9), a property
       // VALUE child's `content` IS its typed value — writing straight
       // through here can leave it unparseable under its codec (a
