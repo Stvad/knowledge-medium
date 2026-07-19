@@ -8,8 +8,10 @@ import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
+  propertyMachinerySourceIds,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -114,14 +116,26 @@ const resolveBacklinkSourceIds = async (
   workspaceId: string,
   id: string,
   filter?: Required<BacklinksFilter>,
-): Promise<string[]> =>
-  (await ctx.run('core.typedBlockIds', {
+): Promise<string[]> => {
+  const ids = (await ctx.run('core.typedBlockIds', {
     workspaceId,
     referencedBy: {id},
     match: filter?.include,
     exclude: filter?.exclude,
     order: 'created-desc',
   })).filter(sourceId => sourceId !== id)
+  // Same flip-gated property-machinery exclusion `backlinks.forBlock` applies
+  // (PR #386 review): grouped backlinks resolve their own sources rather than
+  // routing through that query, so without this a hidden value row's
+  // `[[Target]]` disappears from Linked References and the inline count but
+  // still shows up here — duplicating the owner's projected property backlink
+  // on the one surface that didn't filter. Dormant while un-flipped: no
+  // machinery exists to exclude, and this pays only the cached flip read.
+  if (ids.length === 0) return ids
+  if (!(await readIsChildBackedWorkspace(ctx.db, workspaceId))) return ids
+  const machinery = await propertyMachinerySourceIds(ctx.db, ids)
+  return machinery.size === 0 ? ids : ids.filter(sourceId => !machinery.has(sourceId))
+}
 
 const resolveSourceParents = async (
   ctx: QueryCtx,
