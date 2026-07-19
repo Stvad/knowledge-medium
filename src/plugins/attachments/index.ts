@@ -2,7 +2,7 @@
  * The `attachments` plugin (design §11) — packages the media block model + its
  * renderer, mirroring the video-player plugin's facet wiring.
  *
- * Scope: the `media` block TYPE + its property schemas (typesFacet /
+ * Scope: the `media` block TYPE + its property schemas (typeSeedsFacet /
  * definitionSeedsFacet), the {@link MediaBlockRenderer} (blockRenderersFacet), the
  * boot upload reconciler (appMountsFacet), and the paste rule that turns a file paste
  * into a media capture (pasteDecisionVerb decorator). Everything the feature adds is
