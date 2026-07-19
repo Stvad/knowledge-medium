@@ -181,6 +181,85 @@ export const writeTargetTable = (sql: string): string | null => {
 }
 
 /**
+ * Split a script into its top-level statements, ignoring semicolons inside
+ * string/identifier literals, comments, and parentheses.
+ *
+ * `applyLocalSchemaContributions` runs `db.execute(statement)` with no params,
+ * and the adapter executes EVERY statement in the string when there are no
+ * bindings — so `CREATE INDEX …; UPDATE blocks SET …` runs both halves while a
+ * first-statement-only check sees a harmless CREATE (PR #386 review). Nothing
+ * ships a two-statement string today; the guard exists for the regression that
+ * hasn't been written yet, so a hole in it is the thing worth closing.
+ *
+ * A `CREATE TRIGGER … BEGIN UPDATE blocks …; END` body splits into fragments
+ * too, harmlessly: the verb match only fires at a fragment's START, and the
+ * trigger's own fragment starts with CREATE.
+ */
+export const splitTopLevelStatements = (sql: string): string[] => {
+  const statements: string[] = []
+  let current = ''
+  let depth = 0
+  let quote: string | null = null
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]
+    if (quote !== null) {
+      current += ch
+      if (quote === '[') {
+        if (ch === ']') quote = null
+      } else if (ch === quote) {
+        if (sql[i + 1] === quote) { current += sql[++i]; continue }
+        quote = null
+      }
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
+      quote = ch
+      current += ch
+      continue
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i)
+      const end = nl === -1 ? sql.length : nl
+      current += sql.slice(i, end)
+      i = end - 1
+      continue
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      const close = sql.indexOf('*/', i)
+      const end = close === -1 ? sql.length : close + 2
+      current += sql.slice(i, end)
+      i = end - 1
+      continue
+    }
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    else if (ch === ';' && depth === 0) {
+      statements.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  statements.push(current)
+  return statements.filter(s => s.trim() !== '')
+}
+
+/**
+ * The first SYNCED table any statement in `sql` writes to, or null. This — not
+ * `writeTargetTable` — is what a guard should ask: it covers every statement in
+ * a multi-statement script, and it owns the `SYNCED_TABLES` membership test so
+ * the three call sites (runtime guard, agent bridge, lint rule) can't drift on
+ * what counts as synced.
+ */
+export const syncedWriteTarget = (sql: string): string | null => {
+  for (const statement of splitTopLevelStatements(sql)) {
+    const target = writeTargetTable(statement)
+    if (target !== null && SYNCED_TABLES.has(target)) return target
+  }
+  return null
+}
+
+/**
  * True when the statement carries a WITH prefix whose main verb we could NOT
  * find — malformed, or a shape the scan doesn't model. `writeTargetTable`
  * reports null for it, which reads as "not a write" and is the WRONG default
@@ -189,10 +268,11 @@ export const writeTargetTable = (sql: string): string | null => {
  * `WITH … SELECT` resolves normally and is unaffected, so ordinary recursive-
  * CTE reads still work.
  */
-export const isUnresolvableStatement = (sql: string): boolean => {
-  const s = stripLeading(sql)
-  return /^with\b/i.test(s) && /^with\b/i.test(skipCtePrefix(s))
-}
+export const isUnresolvableStatement = (sql: string): boolean =>
+  splitTopLevelStatements(sql).some(statement => {
+    const s = stripLeading(statement)
+    return /^with\b/i.test(s) && /^with\b/i.test(skipCtePrefix(s))
+  })
 
 type ExecuteFn<A extends unknown[], R> = (sql: string, ...rest: A) => Promise<R>
 
@@ -201,8 +281,10 @@ export const guardSyncedTableWrites = <A extends unknown[], R>(
   execute: ExecuteFn<A, R>,
 ): ExecuteFn<A, R> =>
   (sql, ...rest) => {
-    const target = writeTargetTable(sql)
-    if (target !== null && SYNCED_TABLES.has(target)) {
+    // Every statement, not just the first: a local-schema contribution passes
+    // its string straight to `db.execute` and the adapter runs all of them.
+    const target = syncedWriteTarget(sql)
+    if (target !== null) {
       return Promise.reject(
         new Error(
           `[syncedTableWriteGuard] refusing a raw write to synced table "${target}". ` +

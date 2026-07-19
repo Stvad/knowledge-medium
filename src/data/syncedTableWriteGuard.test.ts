@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   guardSyncedTableWrites,
   isUnresolvableStatement,
+  syncedWriteTarget,
   writeTargetTable,
 } from './syncedTableWriteGuard.ts'
 
@@ -79,6 +80,27 @@ describe('writeTargetTable', () => {
   })
 })
 
+// `applyLocalSchemaContributions` hands its string straight to `db.execute`
+// with no params, and the adapter runs EVERY statement in it — so checking
+// only the first left a raw synced write behind a harmless-looking CREATE.
+describe('multi-statement scripts', () => {
+  it('finds a synced write in any statement, not just the first', () => {
+    expect(syncedWriteTarget('CREATE INDEX i ON blocks (x); UPDATE blocks SET content = ?')).toBe('blocks')
+    expect(syncedWriteTarget('SELECT 1; DELETE FROM blocks WHERE id = ?')).toBe('blocks')
+    expect(syncedWriteTarget('SELECT 1;\n  INSERT INTO workspaces (id) VALUES (?)')).toBe('workspaces')
+  })
+
+  it('leaves all-local scripts alone, including semicolons inside literals and trigger bodies', () => {
+    expect(syncedWriteTarget('CREATE INDEX a ON blocks (x); CREATE INDEX b ON blocks (y)')).toBeNull()
+    expect(syncedWriteTarget(`INSERT INTO block_aliases (x) VALUES (';'); SELECT 1`)).toBeNull()
+    // The write verb lives inside a trigger BODY — the fragment it starts is
+    // still the CREATE, so nothing matches at a fragment start.
+    expect(syncedWriteTarget(
+      'CREATE TRIGGER t AFTER UPDATE ON blocks BEGIN UPDATE blocks SET x=1; END',
+    )).toBeNull()
+  })
+})
+
 describe('isUnresolvableStatement', () => {
   it('is true only for a WITH prefix whose statement verb never appears', () => {
     expect(isUnresolvableStatement('WITH ids AS (SELECT 1')).toBe(true)
@@ -117,6 +139,14 @@ describe('guardSyncedTableWrites', () => {
       await expect(execute(sql)).resolves.toBe('ok')
     }
     expect(inner).toHaveBeenCalledTimes(allowed.length)
+  })
+
+  it('rejects a synced write hiding behind a leading local statement', async () => {
+    const inner = vi.fn(async () => 'ok')
+    const execute = guardSyncedTableWrites(inner)
+    await expect(execute('CREATE INDEX i ON blocks (x); UPDATE blocks SET content = ?'))
+      .rejects.toThrow(/synced table "blocks"/)
+    expect(inner).not.toHaveBeenCalled()
   })
 
   it('forwards sql + params unchanged to the wrapped execute', async () => {

@@ -25,9 +25,8 @@ import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
 import {
-  SYNCED_TABLES,
   isUnresolvableStatement,
-  writeTargetTable,
+  syncedWriteTarget,
 } from '@/data/syncedTableWriteGuard.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
@@ -190,8 +189,9 @@ const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): 
         '(or {allowSyncedWrite: true}) if you know it is safe.',
     )
   }
-  const target = writeTargetTable(sql)
-  if (target === null || !SYNCED_TABLES.has(target)) return
+  // Checks EVERY statement in the string, not just the first.
+  const target = syncedWriteTarget(sql)
+  if (target === null) return
   throw new Error(
     `sql: refusing to write to synced table "${target}" via raw SQL — this bypasses ` +
       'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +

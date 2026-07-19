@@ -164,6 +164,70 @@ const skipCtePrefix = (s) => {
 }
 
 /**
+ * Split a script into its top-level statements, ignoring semicolons inside
+ * string/identifier literals, comments, and parentheses.
+ *
+ * `applyLocalSchemaContributions` runs `db.execute(statement)` with no params,
+ * and the adapter executes EVERY statement in the string when there are no
+ * bindings — so `CREATE INDEX …; UPDATE blocks SET …` runs both halves while a
+ * first-statement-only check sees a harmless CREATE (PR #386 review). Nothing
+ * ships a two-statement string today; the guard exists for the regression that
+ * hasn't been written yet, so a hole in it is the thing worth closing.
+ *
+ * A `CREATE TRIGGER … BEGIN UPDATE blocks …; END` body splits into fragments
+ * too, harmlessly: the verb match only fires at a fragment's START, and the
+ * trigger's own fragment starts with CREATE.
+ */
+const splitTopLevelStatements = (sql) => {
+  const statements = []
+  let current = ''
+  let depth = 0
+  let quote = null
+  for (let i = 0; i < sql.length; i++) {
+    const ch = sql[i]
+    if (quote !== null) {
+      current += ch
+      if (quote === '[') {
+        if (ch === ']') quote = null
+      } else if (ch === quote) {
+        if (sql[i + 1] === quote) { current += sql[++i]; continue }
+        quote = null
+      }
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`' || ch === '[') {
+      quote = ch
+      current += ch
+      continue
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i)
+      const end = nl === -1 ? sql.length : nl
+      current += sql.slice(i, end)
+      i = end - 1
+      continue
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      const close = sql.indexOf('*/', i)
+      const end = close === -1 ? sql.length : close + 2
+      current += sql.slice(i, end)
+      i = end - 1
+      continue
+    }
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    else if (ch === ';' && depth === 0) {
+      statements.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  statements.push(current)
+  return statements.filter(s => s.trim() !== '')
+}
+
+/**
  * The table an INSERT / UPDATE / DELETE writes to, lowercased, or `null` for
  * any other statement (SELECT, CREATE INDEX/TRIGGER, DROP, PRAGMA, …) or an
  * unresolvable dynamic target. Mirrors `writeTargetTable` in
@@ -223,8 +287,10 @@ const noRawSyncedTableWrites = {
     const check = (node) => {
       const text = literalSqlText(node)
       if (text === null) return
-      const table = writeTargetTable(text)
-      if (table !== null && SYNCED_TABLES.has(table)) {
+      const table = splitTopLevelStatements(text)
+        .map(writeTargetTable)
+        .find(t => t !== null && SYNCED_TABLES.has(t))
+      if (table !== undefined) {
         const messageId = table === 'blocks' ? 'rawSyncedWrite' : 'rawWorkspaceWrite'
         context.report({node, messageId, data: {table}})
       }

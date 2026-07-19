@@ -457,4 +457,52 @@ describe('references.retargetMergedBlockReferences', () => {
       ]))
     })
   })
+
+  // PR #386 review raised this as a gap: the properties patch updates the
+  // owner's CELL, but the value child under the field row would keep
+  // `((fromId))` — and the child is PROJECT's truth, so the tombstoned id
+  // would come back. It doesn't happen, and the reason is worth pinning:
+  // removing the parse-level machinery suppression put value rows in
+  // `block_references` like any other row, so the retarget walk reaches the
+  // child directly and rewrites its content. Cell and child converge.
+  describe('property value children in a child-backed workspace', () => {
+    const REF_DEF = '55555555-5555-4555-8555-555555555555'
+    const FROM = '66666666-6666-4666-8666-666666666666'
+    const INTO = '77777777-7777-4777-8777-777777777777'
+
+    it('retargets the value child itself, not just the owner cell', async () => {
+      await env.h.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [WS],
+      )
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: REF_DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
+          content: 'related', properties: {types: ['property-schema']},
+        })
+        await tx.create({id: FROM, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'From'})
+        await tx.create({id: INTO, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Into'})
+        await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a3', content: 'Owner'})
+        await tx.create({
+          id: 'field', workspaceId: WS, parentId: 'owner', orderKey: 'a0',
+          content: `((${REF_DEF}))`,
+        })
+        await tx.create({
+          id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
+          content: `((${FROM}))`, references: [{id: FROM, alias: FROM}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+      expect(env.read('value')!.referenceTargetId).toBe(FROM)
+
+      await env.repo.mutate.merge({fromId: FROM, intoId: INTO})
+      await env.repo.awaitProcessors()
+
+      expect(env.read('value')!.content).toBe(`((${INTO}))`)
+      expect(env.read('value')!.referenceTargetId).toBe(INTO)
+      expect(env.read('value')!.references).toEqual([{id: INTO, alias: INTO}])
+    })
+  })
 })
