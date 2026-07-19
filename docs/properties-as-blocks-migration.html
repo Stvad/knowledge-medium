@@ -419,6 +419,29 @@
   follow-up (§11); residual flip-gated gaps are tracked in issue #389. Slices A–B are
   <em>implemented</em> (dormant at <code>'cell'</code>); code + tests on PR #386 are
   authoritative over §5/§7/§9/§11 mechanism text.<br>
+  <strong>Revised 2026-07-19 (UX round + divergence-note refresh, PR #386 at
+  <code>12609823</code>):</strong> the display model is settled — <em>two tiers,
+  in place</em>: non-hidden properties render at their true outline position as
+  name/value rows and behave as ordinary children; hidden-tier rows are revealed
+  per block on demand; a grouped "property section" was considered and rejected
+  (§10). Movement policy: every gesture anchors on the sibling list <em>the caller
+  sees</em> — visible view for outline gestures, structural view for programmatic
+  callers — so hidden rows can neither absorb nor deflect a gesture; reparenting a
+  field row <em>is</em> the property-transfer affordance (decided: embrace — §9,
+  aligned with #404's item-3 withdrawal); field-row placement has <em>no special
+  logic</em> (hand-typed rows live where typed); split follows the existing
+  children policy. Copy is WYSIWYG: default copy prunes hidden-tier subtrees only,
+  an explicit "copy with hidden properties" command carries everything (§9). Late
+  divergence-note items folded: ref-typed <em>values</em> are stored as editable
+  <code>((id))</code> refs read via the derived column (§9); merge is
+  <em>union-with-dedupe</em> — divergent values persist as peer siblings, the
+  relocate-stamp-clear is gone (§9, B3); field rows parse into
+  <code>block_references</code> — a definition's backlinks answer "which blocks
+  use this property," with only strictly-interior rows filtered from display
+  (§9). Pre-flip correctness gaps live in issue #404 (ref-target deletion keeps a
+  <em>dangling</em> <code>((id))</code>, decided there; raw-write guard class),
+  same-tx derivation liveness in #402; #389's still-live set is trimmed
+  accordingly (§11).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -434,10 +457,11 @@
   classifiability machinery is superseded by the workspace-level cutover, and the
   two-phase bootstrap's hard half dissolves into a pure computation. Types are <em>not</em> yet
   seeded (unification slice C pending) — nothing here depends on them.
-  <strong>Last verified against code:</strong> 2026-07-17 (initial rewrite 2026-07-01
+  <strong>Last verified against code:</strong> 2026-07-19 (initial rewrite 2026-07-01
   against <code>8a6f22cd</code>; spot-verifications through 07-09; unification
   re-ground 07-15 against post-#364 master; implementation re-ground 07-17 against
-  PR #386 at <code>7e878b6e</code>).
+  PR #386 at <code>7e878b6e</code>; UX round + divergence-note refresh 07-19 at
+  <code>12609823</code>).
 </aside>
 
 <aside class="reading-guide">
@@ -1048,8 +1072,12 @@ arrived row:
       empty, so the spike's row-targeted catch-up no-ops on them and never visits the
       shared parent — where the dedup lives. The reconcile pass walks arrived field
       rows (recognizable by <code>reference_target_id</code>) up to their parent and
-      dedups there. Until then, duplicate rows persist until some unrelated local edit
-      happens to touch the parent.</li>
+      dedups there — <em>union-with-dedupe</em> (§9): the duplicate field rows fold
+      into one, content-equal values fold with them, and <em>divergent</em> values
+      persist as peer siblings, so a genuine concurrent conflict is surfaced in the
+      tree rather than silently resolved. Until the reconcile visits the parent,
+      duplicate rows persist until some unrelated local edit
+      happens to touch it.</li>
   </ul>
 </div>
 
@@ -1388,7 +1416,10 @@ becomes a deferred <em>affordance</em> — the auto-claim step (§11).
   <li><strong>Markdown round-trip: same-workspace works today, readable/cross-workspace
     is a named follow-up.</strong> Within a workspace, <code>((fieldId))</code> pastes
     back and resolves — ids are workspace-valid, so the round-trip promise holds where
-    it's most used. What id-content defers is <em>readable</em> markdown and
+    it's most used (property rows enter the copied markdown at all via §9's WYSIWYG
+    copy rule — visible property subtrees serialize once slice D's tier-aware
+    predicate lands; today's shipped copy still prunes all machinery, correctly,
+    while every workspace reads <code>'cell'</code>). What id-content defers is <em>readable</em> markdown and
     cross-workspace transfer: the designed home is <strong>"copy resolves
     references"</strong> — a generic copy-boundary mechanism (not property-specific)
     that renders id refs as <code>[[name]]</code> on the way out, paired with
@@ -1526,8 +1557,9 @@ supabase skill if it's kept.
     PR-review P2: recognition off
     the raw column alone activates the moment slice A starts stamping — a whole-block
     exact ref that happens to target a definition (a hand-typed <code>((id))</code>,
-    a same-workspace pasted field-row line, a ref-typed value) would be hidden and
-    reinterpreted even while the workspace is still cell-only, breaking the
+    a same-workspace pasted field-row line, a ref-typed value) would be
+    reinterpreted as machinery — and hidden outright for hidden-tier
+    definitions — even while the workspace is still cell-only, breaking the
     "machinery lands dormant" claim; the workspace column is synced and
     server-visible, so the gate is fleet-consistent) — <em>and P
     is a content-role block</em>: not itself a field row and not a value row. Role is
@@ -1650,31 +1682,65 @@ supabase skill if it's kept.
     "unset". Acceptable; document that "field with only-invalid values" reads as unset
     while remaining visible/fixable in the tree — with one addition (PR-review P2, via
     the cross-workspace paste case): "visible/fixable" is weak comfort for
-    hidden-by-default rows, so the §5 sweep reports the class — a live field row none
+    hidden-tier rows, so the §5 sweep reports the class — a live field row none
     of whose children decode — alongside its divergence log, surfacing what would
-    otherwise read as unset forever.</dd>
+    otherwise read as unset forever. <strong>Ref-typed values are
+    reference-shaped</strong> (PR #386, divergence item 6): a ref-typed value child
+    holds <code>((id))</code> — the same editable block-reference affordance as
+    anywhere else, and the same grammar as the field row's own
+    <code>((fieldId))</code> — while the <em>cell</em> keeps a bare id
+    (<code>codecs.ref</code> unchanged). The read path returns the row's derived
+    <code>reference_target_id</code>, which stays NULL unless the content is a
+    resolvable exact ref — so prose typed into a ref property ("people type text
+    into a ref property, like a log") is unparseable, the projection skips it, and
+    the key reads unset while the row keeps its text, instead of a log silently
+    coercing into a fake block id as bare-id storage did. It also puts property
+    refs on the reference-maintenance rails: merge-retarget rewrites
+    <code>((A))</code>→<code>((B))</code> inside a value and the cell follows.
+    <code>refList</code> stays JSON for now — the direction is "a refList is N
+    <code>((id))</code> sibling values," deferred with the multi-value design pass
+    (it needs list-aggregate projection semantics).</dd>
 
-  <dt><strong>Duplicates.</strong></dt>
-  <dd>Divergence from rev 1 ("keep extras, pick lowest orderKey"): the materialize path
-    <em>deletes</em> duplicate field rows and duplicate value children (soft-delete, so
-    recoverable via history). Projection reads the first field row's first parseable
-    value. Deterministic dedup is the better call under sync races, but slice B3 must
-    tighten two things the spike leaves sharp: <strong>(a)</strong> the survivor is
-    picked by <code>(order_key, id)</code> — arbitrary relative to content — and
-    <code>deleteSubtree</code> recursively removes the loser <em>including any
-    user-authored sub-children</em> (a comment thread under the losing value silently
-    goes with it). Before deleting: for duplicate <em>value children</em>, relocate the
-    loser's non-value sub-children (comments, elaboration) under the survivor; for
-    duplicate <em>field rows</em> whose surviving values <em>differ</em>, preserve the
-    losing value visibly — e.g. relocate it under the surviving <em>value child</em>
-    (not directly under the field row, where the value-child dedup would just
-    re-collapse it) — silently hiding a divergent value behind first-wins is data loss
-    in effect if not in storage. <strong>(b)</strong> the two dedup call sites disagree on deletion
-    semantics: materialize subtree-deletes, while
-    <code>writePropertyValueChild</code> shallow-deletes duplicate value children —
-    orphaning their sub-children live under a tombstone. Unify on one (relocate, then
-    subtree-delete). Until multi-value lands, "N children under one field row" stays a
-    reserved shape, not a user affordance.</dd>
+  <dt><strong>Deleting a referenced block keeps the value dangling — never inline
+    it.</strong></dt>
+  <dd>Decided in #404 (item 4): <code>inlineDeletedBlockReferences</code> must
+    <em>skip</em> property value children. Inlining a deleted target rewrites
+    the value's <code>((deletedId))</code> into prose — which clears its derived
+    column, silently drops the key at the next projection, and is irreversible
+    (the id is gone). Left dangling, the value keeps identity: soft-delete means
+    the target is a tombstone, so restoring it snaps the property back — exactly
+    the cell era's semantics, where a dangling ref left the property retained.
+    The principle is the same one inlining serves for prose, applied to a
+    different content type: prose wants readable <em>text</em> preserved; a typed
+    value wants <em>identity</em> preserved, and inlining destroys exactly that.
+    (Derivation already cooperates: <code>deriveReferenceTargetId</code> resolves
+    purely textually with no existence check, so the stamp survives the target's
+    deletion and the property survives re-materialization.)</dd>
+
+  <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped).</strong></dt>
+  <dd>PR #386 (divergence item 7) replaced both rev 1's "keep extras, pick lowest
+    orderKey" and the spike's delete-all-duplicates: <strong>a field row holds a
+    <em>set</em> of value children, deduped by content.</strong> Content-equal
+    duplicates fold (soft-delete; the relocate rule survives for their
+    user-authored sub-children — a comment thread under a folding duplicate moves
+    to the survivor, and both dedup call sites must fold identically);
+    <em>divergent</em> values are <strong>never deleted</strong> — they persist as
+    peer siblings under the field row. Projection reads the first parseable value,
+    so the visibly-first value owns the cell while the others stay in the tree as
+    a surfaced conflict; concurrent dual-writes from two devices converge to
+    sibling values rather than one silently winning. This dissolves the earlier
+    tightening list this entry carried (relocating a losing value under the
+    survivor to keep it visible): divergent values were exactly the case that made
+    deletion delicate, and they are no longer deleted at all. It also composes
+    with movement being ordinary (§10): since projection reads the
+    <em>first</em> value and reorder is a normal gesture, <strong>dragging a value
+    to the top <em>is</em> the conflict-resolution affordance</strong> — no new
+    mechanism; slice D may badge a field row carrying more than one divergent
+    value ("+1 conflicting"). Duplicate <em>field rows</em> for one fieldId
+    collapse to a single row whose value set is the union, deduped by the same
+    content rule. Divergent siblings are thus a real, expected shape — a surfaced
+    conflict — but still not the user-facing multi-value affordance; that (and
+    refList-as-children) gets its own design pass.</dd>
 
   <dt><strong>Default-value vs. unset.</strong></dt>
   <dd>Unchanged from rev 1: zero value children <em>under a live field row</em> ⇒ key
@@ -1694,48 +1760,107 @@ supabase skill if it's kept.
     behavior. Same machinery as the rename reproject; build them together in slice
     B.</dd>
 
-  <dt><strong>Field-row ordering (decided).</strong></dt>
-  <dd>Machinery <em>inserts</em> field rows first among children: every creation path
-    uses <code>keyAtStart</code>, which is what the spike ships — so fields cluster
-    above content children as an emergent default, not an enforced invariant. Rev 1's
-    "carriers-then-content with ghosts between" is dropped. Materialization, backfill,
-    and the add-field affordance all follow the insertion rule; <code>orderKey</code>
-    remains authoritative and user-owned, so a field row manually reordered below
-    content children stays where the user put it.</dd>
+  <dt><strong>Field-row placement (decided: no special logic).</strong></dt>
+  <dd>Owner decision (2026-07-19): there is <em>no placement policy for property
+    rows at all</em>. A user who types a property into a block has chosen where it
+    lives — nothing repositions, redirects, or normalizes it, ever. Programmatic
+    creation paths (<code>setProperty</code>, materialization, backfill) still
+    need <em>some</em> deterministic key and use <code>keyAtStart</code> as
+    shipped — an implementation default, not a UX invariant (machinery-created
+    rows therefore cluster at the head, in reverse creation order among
+    themselves; accepted cosmetics, freely reordered since movement is ordinary —
+    §10). This supersedes both rev 1's "carriers-then-content with ghosts
+    between" and the interim "insert after the last property child" intent from
+    the divergence-note round. <code>orderKey</code> remains authoritative and
+    user-owned: a field row reordered below content children stays where the user
+    put it, and the display renders it there (§10 — position-honest, no
+    grouping).</dd>
 
-  <dt><strong>Reparenting a field row = assigning the property (decide in slice D).</strong></dt>
-  <dd>The project processor reprojects both sides of a move, so dragging a
-    <code>[[status]]</code> row under a different block <em>gives that block a status
-    property</em> — and removes it from the old parent. That's a coherent "it's just
-    blocks" semantic, but as a silent side effect of an ordinary indent/drag it's
-    surprising (and works on any host, including schema/system blocks). Slice D must
-    either embrace it as the explicit field-assignment affordance (with UI signal on
-    drop) or guard plain structural moves (e.g. reject, or clear
-    <code>reference_target_id</code> on cross-parent moves that aren't the assignment
-    gesture). Recommendation: embrace with signal — guards that silently strip identity
-    create their own confusion.</dd>
+  <dt><strong>Reparenting a field row = transferring the property (decided:
+    embrace).</strong></dt>
+  <dd>The project processor reprojects both sides of a move, so moving a status
+    field row under a different block <em>gives that block the status
+    property</em> — and removes it from the old parent. Owner decision
+    (2026-07-19): this is the intended everything-is-a-block semantic, not a
+    hazard — properties "behave like normal children," including transfer across
+    hierarchies. #404 reached the same conclusion independently and withdrew its
+    movement item: the transfer is what the spike pins as consistency case 7
+    ("reprojects both parents when a property child is moved"), and the
+    destructive variant it feared isn't reachable. No guard, no
+    <code>reference_target_id</code> clearing on cross-parent moves; what makes
+    the semantic safe is the anchor rule below — every transfer is a gesture the
+    user performed on a row they could see, and undo covers it. A drop-time UI
+    signal ("moving property <em>status</em>") is optional slice-D polish, not a
+    correctness requirement. The same embrace covers role <em>changes</em>:
+    indenting a content block under a visible field row makes it that property's
+    value — visible, undoable, and the natural "add another value" gesture.</dd>
 
-  <dt><strong>Ref-typed values → parent <code>references[]</code>.</strong></dt>
-  <dd>Two paths exist now: (a) the cell-side projection
-    (<code>projectPropertyReferences</code>, <code>sourceField = schema.name</code>)
-    still runs off the bag — unchanged, keeps backlinks-by-field working; (b) field rows
-    and value rows are themselves reference-bearing blocks, so the references plugin
-    indexes them as ordinary rows — meaning a user field's schema block accrues backlinks
-    from every block that uses the field ("where is this field used?" for free). Verify
-    the two paths don't double-count in backlink UIs (dedup key is
-    <code>(sourceField, id)</code>; path (b) rows carry <code>sourceField: ''</code> on
-    their own row — the <em>parent's</em> entry stays single).</dd>
+  <dt><strong>Movement anchors on the list the caller sees (decided).</strong></dt>
+  <dd>The one rule that makes hidden rows safe (owner decision, 2026-07-19):
+    <strong>every structural gesture resolves its anchors — the
+    <code>moveVertical</code> neighbour, the <code>indent</code> target, the drop
+    target, the insertion position — against the sibling list the caller
+    sees</strong>; the physical list is used only for order-key arithmetic around
+    the chosen anchor. For outline gestures that is the visible view: non-hidden
+    property rows and any hidden rows currently revealed are <em>in</em> the
+    list (so indent/outdent/reorder work on them like any child — resolving the
+    asymmetry #404 noted, where <code>outdent</code> reads the raw sibling list
+    while <code>indent</code>/<code>moveVertical</code> read the visible one);
+    hidden-tier rows are not. For programmatic callers (the agent bridge,
+    plugins) the anchor list is the structural view — a deliberate move of
+    machinery just works. Consequences, each pinned by a test in slice D:
+    <em>move-up skips a hidden physical neighbour</em> — physical
+    <code>[hidden, C1, C2]</code>, move C2 up → C2 lands visibly above C1, and
+    whether it physically lands before or after the hidden row is unobservable
+    (hidden rows' position carries no semantics); a visible gesture can never
+    appear to do nothing. <em>Indent targets the previous <strong>visible</strong>
+    sibling, never a hidden row</em> — a block can't be captured as a secret
+    property's value. <em>Value-row edges no-op cleanly</em> — the spike's
+    <code>-1</code>-fallback path that silently deleted a property on
+    <code>outdent</code>/<code>moveVertical</code> of a value row must not be
+    inherited; the current branch avoids it by accident, the rule makes it
+    deliberate. <strong>Split has no property special-casing</strong> (owner
+    decision, 2026-07-19): whatever the existing split logic does with children
+    applies to property rows unchanged — they are children. No property-specific
+    movement guard exists anywhere: with visible anchoring, every role change is
+    something the user watched themselves do.</dd>
+
+  <dt><strong>References: field rows carry a "used by" edge (as shipped).</strong></dt>
+  <dd>Parse-level property-machinery suppression has been <em>removed</em>
+    (PR #386 at <code>12609823</code>): field and value rows parse into
+    <code>block_references</code> like any other row. A property definition's
+    backlinks therefore answer <em>"which blocks use this property?"</em> — a
+    deliberate feature, and also what lets definition merge/rename retargeting
+    reach field rows at all (the maintenance passes walk the raw reference
+    table). Backlink <em>display</em> filters only <strong>strictly
+    interior</strong> rows — value rows and deeper — because only those duplicate
+    the owner's reprojected edge; the field row's own edge is unique and is kept,
+    and the inline backlink count applies the same exclusion. The cell-side
+    projection (<code>projectPropertyReferences</code>,
+    <code>sourceField = schema.name</code>) still runs off the bag unchanged, so
+    backlinks-by-field keep working through the transition.</dd>
 
   <dt><strong>Merge, orphan cleanup, panel layout, tree primitives.</strong></dt>
-  <dd>Implemented in the spike: <code>mergeBlocksInTx</code> reparents only non-field
-    children, subtree-deletes <code>from</code>'s field children (fixed at
-    <code>f4d0b447</code> — a bare delete had orphaned value rows), and re-materializes
-    the merged bag — but slice B3 must add the same preservation rule as the dedup
-    above (PR-review P2): before the subtree-delete, relocate user-authored
-    descendants of the source's value children (comments, elaboration) under the
-    merged result's corresponding value children — a bare subtree-delete silently
-    tombstones them; orphan-alias cleanup deletes generated field rows under alias
-    seats; panel-layout projection ignores field rows. <strong>Traversal polarity is
+  <dd><strong>Merge is union-with-dedupe as shipped</strong> (PR #386, divergence
+    item 7, superseding the spike's subtree-delete-and-rematerialize):
+    <code>mergeBlocksInTx</code> is property-aware — for a property both blocks
+    carry, a content-equal value folds; a <em>divergent</em> value is kept as a
+    peer sibling under the target's field row (projection reads the first value,
+    so the target's winner keeps the cell while the conflict stays visible and
+    resolvable — see the dedup entry above); a property only the source has is
+    <em>adopted</em>, its field row moved intact. Nothing is silently dropped and
+    nothing litters the outline, so the earlier preservation rule this entry
+    carried (relocate user-authored descendants before the subtree-delete) is
+    superseded — nothing but content-equal duplicates is deleted, and those fold
+    under the dedup entry's relocate rule. <strong>The merge relocate-stamp-clear
+    is gone</strong>: the old path relocated a losing value into ordinary content
+    and had to null its definition-shaped <code>reference_target_id</code> to
+    stop it classifying as a field row — unsound, because the column is
+    content-derived and device-local (the clear evaporates on the next edit and
+    never synced). Keeping the loser as an <em>interior</em> sibling means the §9
+    role grammar exempts it regardless of stamp; no clear is needed.
+    Orphan-alias cleanup deletes generated field rows under alias seats;
+    panel-layout projection ignores field rows. <strong>Traversal polarity is
     inverted from earlier revisions</strong> (PR #386, deliberate divergence): every
     traversal primitive (<code>tx.childrenOf</code>,
     <code>core.children</code>/<code>childIds</code>, <code>subtree</code>) returns
@@ -1748,15 +1873,24 @@ supabase skill if it's kept.
     <code>mutators.ts</code>). Everything-by-default makes the forgotten flag merely
     cosmetic — a display surface briefly showing hidden machinery rows — and is the
     more coherent primitive. Delete/purge/backup are therefore correct with no
-    flag; the audience split survives on the display side (PR-review P2): user-facing
-    copy and markdown export are <em>display surfaces</em> — they opt into the
-    visible view, or every copied subtree serializes hidden-by-default machine rows
-    (<code>seed:*</code> config, machine-scoped document props) into user-facing
-    markdown and re-imports them as real properties; hidden fields travel only when
-    the surface shows them (Show Hidden Fields). Under the §6 scoping these rules
-    apply <em>everywhere</em> — kernel props materialize too, so hidden field rows
-    exist on most blocks and the display opt-ins get more load-bearing, not less.
-    Field rows, user and kernel alike, must not be reparented as content.</dd>
+    flag. <strong>Copy is WYSIWYG</strong> (owner decision, 2026-07-19): default
+    copy serializes exactly the visible view — non-hidden property rows travel
+    <em>with their subtrees</em>, hidden-tier subtrees prune whole — and an
+    explicit "copy with hidden properties" command is the full-tree variant.
+    As shipped today <code>serializeBlock</code> prunes <em>all</em> machinery
+    (<code>hidePropertyChildren: true</code>) — correct while every workspace
+    reads <code>'cell'</code>; the tier-aware predicate lands with slice D, and
+    switching to it also closes #404's copy gap by construction (user content
+    nested under a <em>visible</em> property's value stops being silently
+    dropped, because visible subtrees are no longer pruned). Content nested under
+    a <em>hidden</em> property's value still doesn't travel on default copy — an
+    accepted WYSIWYG consequence (it was authored under a revealed row; the
+    full-copy command carries it). Under the §6 scoping these rules apply
+    <em>everywhere</em> — kernel props materialize too, so hidden-tier field rows
+    exist on most blocks and the copy/display predicates get more load-bearing,
+    not less. Reparenting a field row as "content" is not a case to guard: by the
+    role grammar it simply <em>is</em> a field row of its new parent — transfer,
+    embraced above.</dd>
 
   <dt><strong>Type-add field slots vs ghosts (decided: render-only ghosts).</strong></dt>
   <dd>The spike materializes <em>empty field rows</em>
@@ -1773,26 +1907,48 @@ supabase skill if it's kept.
     consistency of field order), add explicit cleanup on type removal.</dd>
 </dl>
 
-<h2 id="s10">10. UI: in-tree rendering exists; the panel is not sunset</h2>
+<h2 id="s10">10. UI: the display model — two tiers, in place; the panel is not sunset</h2>
 
 <p>
-The spike ships <code>FieldBlockRenderer</code> (field-row line: shape glyph + label
-linking to the schema block; value editing via the preset's editor; empty-value editor
-for slot rows) and <code>PropertyValueBlockRenderer</code>, registered in the default
-renderer chain, plus hidden-field filtering in <code>useChildIds</code> and a
-"Show Hidden Fields" context-menu toggle. Under §6's materialize-everything decision
-the hidden mechanism is load-bearing, not cosmetic. The spike's curated list
-(<code>hiddenKernelPropertyUis</code> in <code>typesPropertyUi.ts</code>) predates
-schema unification, which replaced hidden-ness with a synced
-<code>property-schema:hidden</code> definition field carried on
-<code>ResolvedPropertySchema</code> — extraction reads that field, not a code list.
-What the field does <em>not</em> yet answer: it is one bit gating the property panel,
-while the outline needs its own answer for panel-visible props —
-<code>types</code> above all is (rightly) not hidden in the panel, yet a materialized
-<code>[[types]]</code> row must not appear in the outline. Deciding whether outline
-filtering reuses <code>hidden</code>, adds a per-surface bit to the definition, or
-defaults by origin is a slice-C flip deliverable (§11, end-state step 2), with the
-toggle as the escape hatch. The property panel remains fully functional
+<strong>The display model is settled</strong> (owner decisions, divergence-note
+round 3 + 2026-07-19), and it is <em>two tiers, rendered in place</em>. Properties
+whose definition is not <code>hidden</code> render inline in the outline <em>at
+their true position among the children</em>, as a two-column name/value row (not a
+nested indent) — the spike's <code>FieldBlockRenderer</code> direction: the label
+links to the definition block, the value cell renders the property type's real
+editor, and each row is individually collapsible
+(<code>PropertyValueBlockRenderer</code> covers the expanded value/subtree view).
+For every gesture they are ordinary children — reorder, indent/outdent, transfer,
+copy — per §9's movement policy. Properties whose definition is
+<code>hidden: true</code> (<code>system:collapsed</code> and friends — the ones
+that would appear on nearly every block) stay out of the default view and are
+revealed <em>per block, on demand</em> (the spike's "Show/Hide Hidden Fields"
+context-menu entry); while revealed they join the visible list with full gesture
+standing. <strong>The display is position-honest</strong>: a grouped "property
+section" pinned above the content — considered in this design round — was
+rejected (2026-07-19), because grouping makes property rows lie about their
+position, recreating the display-vs-structure divergence for <em>every</em> row
+that the two-tier model confines to hidden ones. The invariant: what you see is
+the true order, minus hidden rows. One caution the audit quantified so the model
+isn't oversold: of ~30 machinery-exclusion call sites, only ~9 are
+render-motivated and collapse under this display; ~20 are structural tree math
+that is indifferent to whether a row is drawn (the spike's final commit flipped
+its <code>childrenOf</code> default for exactly this reason). <em>Visibility does
+not remove the machinery</em> — property children stay structurally special even
+once visible.
+</p>
+
+<p>
+Hidden-ness is the synced <code>property-schema:hidden</code> definition field
+carried on <code>ResolvedPropertySchema</code> (schema unification replaced the
+spike's curated code list); extraction reads that field. What the one bit does
+<em>not</em> yet answer: it gates the property panel, while the outline needs its
+own answer for panel-visible props — <code>types</code> above all is (rightly)
+not hidden in the panel, yet a materialized types row must not clutter the
+outline. Deciding whether outline filtering reuses <code>hidden</code>, adds a
+per-surface bit to the definition, or defaults by origin is a slice-C flip
+deliverable (§11, end-state step 2), with the per-block reveal as the escape
+hatch. The property panel remains fully functional
 alongside — both surfaces read the same cell and write through the same
 <code>setProperty</code>, so they coexist safely during the transition. Panel sunset is
 deliberately last (§11) and follows usage, not a schedule. Rev 1's inventory of what
@@ -1849,25 +2005,37 @@ gaps, and the fix commits churn the same files a reviewer just read. If shipping
 dominates, the dormant-column path is legitimate — but it must fold in the <em>full</em>
 review-fix set, not just the gate: the §5 deletion-convergence catch-up, the §6
 durability/collision rules, the §8 gate + RPC + migration re-timestamps, and the §9
-dedup tightening. A dormant landing that defers those ships the same gaps one
+dedup semantics (since shipped as union-with-dedupe). A dormant landing that defers those ships the same gaps one
 workspace-column write away from production. Either way, treat PR #285 as the <strong>reference
 implementation</strong> and keep it open until its content is fully accounted for.
 </p>
 
 <p>
-<strong>Status (2026-07-17): slices A and B are implemented — PR #386</strong>, extracted
+<strong>Status (2026-07-17, refreshed 07-19 at <code>12609823</code>): slices A and
+B are implemented — PR #386</strong>, extracted
 from the spike against post-unification master, hardened through three adversarial
 review rounds plus two Codex waves, and carrying the deliberate divergences this doc
 now reflects (§7 id-content, §9 form-agnostic recognition and traversal polarity, §6's
 as-shipped trigger). It lands dormant: every workspace reads
 <code>properties_migration = 'cell'</code>, and master's suite passes unmodified.
-<strong>Residual flip-gated gaps live in issue #389</strong> — reprojection on
-role-flip, machinery filtering in search/find-replace surfaces, merge
-relocate-stamps, divergent-value visibility, the prospective-duplicate guard, the §6
-scope-routing shim, children-handle refresh on flip arrival, and the B2 trigger for
-definition changes synced while a workspace was inactive — all dormant at
+<strong>Residual flip-gated gaps live in issue #389</strong> (post-flip
+<em>healing</em>; the issue is authoritative over this snapshot) — as of
+<code>12609823</code> the still-live set is recognition-input handle invalidation
+(flip arrival, <code>block_types</code> changes, ancestor field-flip),
+inactive-workspace definition changes missing B2, same-tx ancestor content-flip,
+background-workspace recognition failing closed, the CAS-repair→field-row ref
+reconcile, <code>core.restore</code> re-materialization, and materializing
+pre-existing cells when a definition arrives late or on flip — all dormant at
 <code>'cell'</code>, all landing with the flip enablement (slice C's checklist
-inherits that issue).
+inherits that issue). Two items left the bucket as <em>resolved on the branch</em>
+rather than deferred: the merge relocate-stamp-clear is gone (union-with-dedupe,
+§9) and value-row backlink de-dup is handled at the display layer (§9). Two
+companion issues carry what #389 doesn't: <strong>#404</strong> — <em>pre-flip</em>
+correctness (the raw-write guard class, NORMALIZE never running on arrival,
+find-replace codec validation, sync hard-delete reprojection, the SQL/JS
+seed-window recognition divergence; its ref-target-deletion item is decided as
+keep-dangling, §9, and its movement item was withdrawn in favor of the §9/§10
+movement design) — and <strong>#402</strong>, same-tx derivation liveness.
 </p>
 
 <div class="phases">
@@ -1995,7 +2163,10 @@ inherits that issue).
         recursive positional rule workspace-scoped) return everything by default;
         the outline hooks opt into <code>hidePropertyChildren</code>. Without the
         outline opt-in, C's backfill renders every property as an ordinary outline
-        row for production users until D's tree UI lands. A third surface joins the
+        row for production users until D's tree UI lands. (The blanket hide is the
+        pre-D baseline; slice D replaces it with §10's tier-aware predicate —
+        non-hidden properties render in place as name/value rows, hidden-tier
+        rows stay filtered.) A third surface joins the
         same half (PR-review P2): search and recency — <code>blocks_fts</code>
         matching plus <code>SELECT_BLOCKS_BY_CONTENT_SQL</code> /
         <code>SELECT_RECENT_BLOCKS_SQL</code> filter only
@@ -2019,11 +2190,14 @@ inherits that issue).
         the migrations run under the References maintenance bucket (never on
         cmd-Z); unconvertible values are reported via the user-error channel, never
         silently unset; <code>addSchema</code> rejects <code>]]</code>-lossy names.
-        <strong>B3 (integration):</strong> merge/orphan/panel-layout handling with the
-        §9 dedup tightening (relocate-then-subtree-delete at both call sites, one
-        canonical <code>deleteSubtreeInTx</code>; merge preserves tree-only value
-        text — unparseable/shadowed/merge-losing values relocate visibly and comment
-        threads survive). The roam importer needed <em>no code change</em>
+        <strong>B3 (integration):</strong> merge/orphan/panel-layout handling — as
+        shipped, merge is <em>union-with-dedupe</em> (§9): content-equal values
+        fold (one canonical <code>deleteSubtreeInTx</code>, with the relocate rule
+        preserving a folding duplicate's user-authored sub-children), divergent
+        values persist as peer siblings, and source-only properties are adopted
+        intact — nothing else is deleted, so the old
+        relocate-then-subtree-delete preservation choreography is superseded.
+        The roam importer needed <em>no code change</em>
         (implementation finding: it writes bags via <code>repo.tx</code>, and the
         flip-gated materializer converges imports). The §6 scope-routing shim
         (structural ops on a recognized property-subtree row resolve their
@@ -2137,10 +2311,24 @@ inherits that issue).
     <div class="body">
       <div class="name">In-tree UI</div>
       <p>
-        <code>FieldBlockRenderer</code> / <code>PropertyValueBlockRenderer</code>,
-        the per-schema hidden toggle, ghost rows for type-expected fields (replacing
-        the spike's materialized slots), add-field affordance on the block (slash
-        command → schema autocomplete → field row + value in one tx). The baseline
+        The positive surface, now specified by §10's settled display model and
+        §9's movement/copy policy rather than open-ended:
+        <code>FieldBlockRenderer</code> / <code>PropertyValueBlockRenderer</code>
+        rendering non-hidden properties in place as name/value rows, the per-block
+        "show hidden properties" reveal, ghost rows for type-expected fields
+        (replacing the spike's materialized slots), add-field affordance on the
+        block (slash command → schema autocomplete → field row + value in one tx).
+        With it come the policy's mechanical deliverables: the <em>visible-anchor
+        movement tests</em> (§9 — move-up skips a hidden physical neighbour;
+        indent never targets a hidden row; value-row edges no-op instead of
+        inheriting the spike's silent-delete fallback; <code>outdent</code> joins
+        <code>indent</code>/<code>moveVertical</code> on the visible sibling
+        list), the <em>tier-aware copy predicate</em> (§9 — default copy carries
+        visible property subtrees and prunes hidden-tier ones, closing #404's
+        copy gap; plus the explicit "copy with hidden properties" command), the
+        search/recents machinery-filtering call (filter property-subtree rows or
+        map value hits to owners — B1's note), and optionally the divergent-value
+        badge (§9 — reorder is the conflict-resolution gesture). The baseline
         field-row <em>invisibility</em> is not here — the outline's visible-view
         opt-in (<code>hidePropertyChildren</code>, §9) ships in B1 and gates the C
         flip (PR-review P2); D is the
