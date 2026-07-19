@@ -20,6 +20,7 @@ import {
   blockTypeHideFromBlockDisplayProp,
   blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
+  blockTypePropertiesProp,
   blockTypeTypeIdProp,
   getAliases,
   getBlockTypes,
@@ -924,7 +925,7 @@ describe('seed definition write guard (tx layer)', () => {
 describe('type definition materialization', () => {
   it('canonicalTypeSeedProperties encodes identity/display facts, is provenance-valid, and carries only block-type membership', () => {
     const id = typeDefinitionBlockId(WS, typeSeed.seedKey)
-    const bag = canonicalTypeSeedProperties(typeSeed)
+    const bag = canonicalTypeSeedProperties(typeSeed, WS)
 
     expect(isValidSeededDefinition({id, workspaceId: WS, properties: bag})).toBe(true)
     expect(blockTypeLabelProp.codec.decode(bag[blockTypeLabelProp.name])).toBe(typeSeed.label)
@@ -938,6 +939,35 @@ describe('type definition materialization', () => {
     expect(bag).not.toHaveProperty(aliasesProp.name)
     // Membership is BLOCK_TYPE_TYPE only — a code type is not a navigable page.
     expect(getBlockTypes({properties: bag})).toEqual([BLOCK_TYPE_TYPE])
+    // No `properties` on this seed → no on-block refs field at all.
+    expect(bag).not.toHaveProperty(blockTypePropertiesProp.name)
+  })
+
+  it('canonicalTypeSeedProperties encodes block-type:properties as per-property deterministic backing-block refs', () => {
+    const propA = seedProperty({seedKey: 'system:test/property/pa', revision: 1, name: 'test:pa', preset: 'optional-string', defaultValue: undefined, changeScope: ChangeScope.BlockDefault})
+    const propB = seedProperty({seedKey: 'system:test/property/pb', revision: 1, name: 'test:pb', preset: 'optional-string', defaultValue: undefined, changeScope: ChangeScope.BlockDefault})
+    const withProps = seedType({
+      seedKey: 'system:test/type/carrier', revision: 1, id: 'carrier', label: 'Carrier',
+      properties: [propA, propB],
+    })
+    // Refs are the properties' backing-block ids, in declaration order.
+    expect(blockTypePropertiesProp.codec.decode(canonicalTypeSeedProperties(withProps, WS)[blockTypePropertiesProp.name]))
+      .toEqual([propertyDefinitionBlockId(WS, propA.seedKey), propertyDefinitionBlockId(WS, propB.seedKey)])
+    // Workspace-scoped: a different workspace derives different backing ids (else
+    // every workspace's type block would point at one workspace's property blocks).
+    expect(blockTypePropertiesProp.codec.decode(canonicalTypeSeedProperties(withProps, OTHER_WS)[blockTypePropertiesProp.name]))
+      .toEqual([propertyDefinitionBlockId(OTHER_WS, propA.seedKey), propertyDefinitionBlockId(OTHER_WS, propB.seedKey)])
+  })
+
+  it('materializes block-type:properties refs onto the backing block (workspaceId threaded through the pass)', async () => {
+    const prop = seedProperty({seedKey: 'system:test/property/pc', revision: 1, name: 'test:pc', preset: 'optional-string', defaultValue: undefined, changeScope: ChangeScope.BlockDefault})
+    const withProps = seedType({
+      seedKey: 'system:test/type/holder', revision: 1, id: 'holder', label: 'Holder', properties: [prop],
+    })
+    await materializeTypeSeeds(repo, WS, [withProps])
+    const row = repo.block(typeDefinitionBlockId(WS, withProps.seedKey)).peek()
+    expect(blockTypePropertiesProp.codec.decode(row!.properties[blockTypePropertiesProp.name]))
+      .toEqual([propertyDefinitionBlockId(WS, prop.seedKey)])
   })
 
   it('materializes the backing block under Types, bare (no PAGE_TYPE, no alias), and is idempotent', async () => {
@@ -1226,7 +1256,7 @@ describe('type definition materialization', () => {
       parentId: repo.typesPageId!,
       orderKey: 'a0',
       content: typeSeed.label,
-      properties: canonicalTypeSeedProperties(typeSeed),
+      properties: canonicalTypeSeedProperties(typeSeed, WS),
     }), {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
   })
 })

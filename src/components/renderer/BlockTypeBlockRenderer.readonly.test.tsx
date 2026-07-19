@@ -59,7 +59,7 @@ describe('BlockTypeContentRenderer read-only for code-owned type seeds', () => {
         parentId: 'root',
         orderKey: 'a1',
         content: typeSeed.label,
-        properties: canonicalTypeSeedProperties(typeSeed),
+        properties: canonicalTypeSeedProperties(typeSeed, WS),
       })
     }, {scope: ChangeScope.Automation, description: 'type seed fixture'})
   })
