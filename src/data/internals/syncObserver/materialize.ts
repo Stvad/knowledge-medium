@@ -33,8 +33,9 @@ import {
   parseBlockRow,
   type BlockRow,
 } from '@/data/blockSchema.js'
-import type { BlockData } from '@/data/api'
+import { normalizeReferences, type BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
+import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import {
   deriveReferenceTargetId,
   type ReferenceTargetLookups,
@@ -392,9 +393,38 @@ export const materializeStagingRows = async (
       if (action.kind === 'apply') {
         await tx.execute(UPSERT_BLOCK_SQL, blockRowParams(plaintext))
         applied.push(plaintext.id)
+        const after = parseBlockRow(plaintext)
+        if (devAssertionsEnabled()) {
+          // L2 dev/test-only assertion (off in prod — issue #404 item 2):
+          // this UPSERT trusts arrived `references_json` as already
+          // canonical and never re-normalizes it. That's safe only because
+          // every writer in this codebase runs `core.normalizeReferences`
+          // (a same-tx processor, `normalizeReferencesProcessor.ts`) before
+          // the row is ever uploaded — a cross-device invariant with no
+          // local enforcement here, since sync-applied rows bypass
+          // `repo.tx` entirely and never pass through that processor.
+          // Deliberately NOT fixed by normalizing on every arrival: that
+          // would cost a JSON round-trip on every synced row (~320k in the
+          // existing dataset) to guard a risk that has never materialized.
+          // This assertion exists to catch the day that stops being true —
+          // a future writer that skips normalization, a hand-crafted sync
+          // fixture, or a non-app writer hitting the same tables directly
+          // (see issue #404 item 1) — in CI/dev, before a non-canonical row
+          // silently breaks the set-equality consumers that assume
+          // `references_json` is already sorted+deduped (the `json_each`
+          // backlinks index, `BACKLINKS_FOR_BLOCK_QUERY`, Map-keyed
+          // invalidation).
+          const canonical = normalizeReferences(after.references)
+          if (JSON.stringify(canonical) !== JSON.stringify(after.references)) {
+            throw new Error(
+              `[materialize] arrived references_json is not canonical for block ${plaintext.id} — ` +
+              'every writer is expected to normalize before upload (core.normalizeReferences)',
+            )
+          }
+        }
         snapshots.set(plaintext.id, {
           before: beforeRow ? parseBlockRow(beforeRow) : null,
-          after: parseBlockRow(plaintext),
+          after,
         })
       } else {
         // A local edit landed between Phase 1 and the lock — it wins.

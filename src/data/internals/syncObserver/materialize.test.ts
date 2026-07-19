@@ -494,3 +494,41 @@ describe('materializeStagingRows — soft-delete (tombstone) materialization', (
     })
   })
 })
+
+describe('materializeStagingRows — dev assertion: arrived references_json must be canonical (issue #404 item 2)', () => {
+  // `setDevAssertionsEnabled(true)` in src/test/setup.ts keeps L2 assertions on
+  // for the whole suite, so this exercises the real production gate rather
+  // than flipping it locally.
+
+  it('throws when the staged references array is not in canonical (sorted) order', async () => {
+    await stageRow(blockData({
+      references: [
+        { id: 'b-target', alias: 'B' },
+        { id: 'a-target', alias: 'A' },
+      ],
+    }))
+
+    await expect(materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )).rejects.toThrow(/not canonical/)
+  })
+
+  it('applies normally when the staged references array is already canonical', async () => {
+    await stageRow(blockData({
+      references: [
+        { id: 'a-target', alias: 'A' },
+        { id: 'b-target', alias: 'B' },
+      ],
+    }))
+
+    const out = await materializeStagingRows(
+      env.db,
+      { upserted: ['b1'], removed: [] },
+      { getMaterializability: constMat('copy'), getCek: noKey },
+    )
+
+    expect(out.applied).toEqual(['b1'])
+  })
+})
