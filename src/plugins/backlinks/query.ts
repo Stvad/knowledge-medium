@@ -42,7 +42,13 @@ const MACHINERY_SOURCE_CHUNK = 500
  *  embeds one), because `reference_target_id` derivation and `property-schema`
  *  types both exist independent of the flip. Calling it for an UN-flipped
  *  workspace would misclassify an ordinary `((definitionId))` reference as
- *  machinery and silently drop a real backlink. */
+ *  machinery and silently drop a real backlink.
+ *
+ *  The `up` walk carries the same per-seed `path` visited-guard as
+ *  `manyAncestorsSql` (treeQueries.ts) — issue #404 item 8b: without it a
+ *  cyclic `parent_id` chain (issue #183) still terminates on `depth < 100`,
+ *  but re-emits every cycle member on each loop iteration instead of
+ *  stopping the moment a walk revisits a row it's already seen. */
 export const propertyMachinerySourceIds = async (
   db: { getAll<T>(sql: string, params?: unknown[]): Promise<T[]> },
   sourceIds: readonly string[],
@@ -53,13 +59,18 @@ export const propertyMachinerySourceIds = async (
     const chunk = sourceIds.slice(i, i + chunkSize)
     const placeholders = chunk.map(() => '?').join(', ')
     const rows = await db.getAll<{ id: string }>(
-      `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, depth) AS (
-         SELECT id, id, reference_target_id, parent_id, workspace_id, 0
+      `WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, path, depth) AS (
+         SELECT id, id, reference_target_id, parent_id, workspace_id,
+                '!' || hex(id) || '/',
+                0
            FROM blocks WHERE id IN (${placeholders})
          UNION ALL
-         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+                up.path || '!' || hex(b.id) || '/',
+                up.depth + 1
            FROM blocks AS b JOIN up ON b.id = up.parent_id
           WHERE up.depth < 100
+            AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
        )
        SELECT DISTINCT up.start_id AS id
          FROM up

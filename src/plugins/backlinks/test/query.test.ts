@@ -315,6 +315,27 @@ describe('backlinksDataExtension query', () => {
       expect([...machinery].sort()).toEqual(['V1', 'V2'])
     })
 
+    it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {
+      await seedFlipped()
+      // A 2-cycle (issue #183 shape) with no field row anywhere on it —
+      // seeded via raw SQL, not tx.move, since tx.move's cycle-validation
+      // would refuse to create this structurally. Such a cycle is exactly
+      // what a pair of concurrent sync-applied moves can still produce; the
+      // `up` walk under test must stay correct (and bounded) when it does.
+      const cyclicPair = `
+        INSERT INTO blocks
+          (id, workspace_id, parent_id, order_key, content, properties_json,
+           references_json, created_at, updated_at, created_by, updated_by, deleted)
+        VALUES (?, ?, ?, 'a0', '', '{}', '[]', 0, 0, 'u', 'u', 0)
+      `
+      await sharedDb.db.execute(cyclicPair, ['cx', FLIP_WS, 'cy'])
+      await sharedDb.db.execute(cyclicPair, ['cy', FLIP_WS, 'cx'])
+      await createIn({id: 'under-cycle', parentId: 'cx'})
+
+      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'])
+      expect(machinery.size).toBe(0)
+    })
+
     it('does not filter in an un-flipped workspace (no machinery exists)', async () => {
       await create({id: 'Foo2', workspaceId: WS})
       await create({id: 'src', workspaceId: WS, references: [{id: 'Foo2', alias: 'Foo2'}]})

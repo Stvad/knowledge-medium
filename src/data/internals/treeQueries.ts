@@ -256,6 +256,13 @@ export const CHILDREN_IDS_SQL = `
  *
  * An un-flipped workspace short-circuits on the `workspaces` probe
  * (dormant: today's behavior, zero rows filtered).
+ *
+ * The inner `up` walk carries the same `path` visited-guard as the
+ * descendant CTEs above (issue #404 item 8b) — without it a cyclic
+ * `parent_id` chain (see issue #183; classification still converges
+ * because the walk terminates on the `depth < 100` cap either way, but
+ * a cyclic DB would otherwise spin every one of those 100 steps instead
+ * of stopping the moment it revisits a row).
  */
 const VISIBLE_CHILD_PREDICATE_SQL = `
    AND (
@@ -272,14 +279,19 @@ const VISIBLE_CHILD_PREDICATE_SQL = `
           AND bt.workspace_id = blocks.workspace_id
      )
      OR EXISTS (
-       WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
-         SELECT id, reference_target_id, parent_id, workspace_id, 0
+       WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, path, depth) AS (
+         SELECT id, reference_target_id, parent_id, workspace_id,
+                '!' || hex(id) || '/',
+                0
            FROM blocks WHERE id = ?
          UNION ALL
-         SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+         SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+                up.path || '!' || hex(b.id) || '/',
+                up.depth + 1
            FROM blocks AS b
            JOIN up ON b.id = up.parent_id
           WHERE up.depth < 100
+            AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
        )
        SELECT 1 FROM up
         WHERE up.reference_target_id IS NOT NULL
@@ -351,14 +363,19 @@ export const VISIBLE_SUBTREE_SQL = `
   WITH RECURSIVE
   root_exempt(v) AS (
     SELECT CASE WHEN EXISTS (
-      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
-        SELECT id, reference_target_id, parent_id, workspace_id, 0
+      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, path, depth) AS (
+        SELECT id, reference_target_id, parent_id, workspace_id,
+               '!' || hex(id) || '/',
+               0
           FROM blocks WHERE id = ?
         UNION ALL
-        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+               up.path || '!' || hex(b.id) || '/',
+               up.depth + 1
           FROM blocks AS b
           JOIN up ON b.id = up.parent_id
          WHERE up.depth < 100
+           AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
       )
       SELECT 1 FROM up
        WHERE up.reference_target_id IS NOT NULL
