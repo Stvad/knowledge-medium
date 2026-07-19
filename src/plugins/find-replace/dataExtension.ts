@@ -79,6 +79,7 @@ const applyContentReplaceArgsSchema = z.object({
     blockId: z.string(),
     originalContent: z.string(),
   })),
+  force: z.boolean().optional(),
 }) as unknown as Schema<ApplyContentReplaceArgs>
 
 interface ContentCandidateRow {
@@ -151,6 +152,7 @@ const emptyResult = (): ApplyContentReplaceResult => ({
   skippedUnavailableBlocks: 0,
   skippedUnparseableProperty: 0,
   unparseableProperties: [],
+  retryableSkips: [],
 })
 
 export const applyContentReplaceMutator = defineMutator<
@@ -168,6 +170,7 @@ export const applyContentReplaceMutator = defineMutator<
 
     const seen = new Set<string>()
     const options = normalizeOptions(args.options)
+    const force = args.force === true
     const result = emptyResult()
     // #404 item 5: which properties were skipped, so the caller's summary can
     // name them (the dialog renders this result directly).
@@ -201,7 +204,10 @@ export const applyContentReplaceMutator = defineMutator<
       // be a legitimate edit to it, so it is skipped outright rather than
       // codec-checked (PR #386 review — the same identity argument as the
       // deleted-target exemption in `inlineDeletedBlockReferences`). Reachable
-      // via the unfiltered search above or a direct mutator call.
+      // via the unfiltered search above or a direct mutator call. NOT
+      // forceable: unlike a value that reads as unset until fixed, a rewritten
+      // field row detaches the property structurally, so it never enters
+      // `retryableSkips` — `force` does not reach here.
       if (await isPropertyFieldRow(tx, current)) {
         result.skippedUnparseableProperty += 1
         const fieldId = current.referenceTargetId ?? null
@@ -219,20 +225,20 @@ export const applyContentReplaceMutator = defineMutator<
       // drop the property key from the owner's cell, with no error
       // surfaced to the user who ran the replace.
       //
-      // Design choice: SKIP the write rather than write-then-report,
-      // matching the §9 migration precedent
-      // (`runPropertyDefinitionMigrationBatch`) — it never writes a value
-      // it can't convert, preserving the original (still-valid) text and
-      // reporting a count instead. Writing the broken text here would be
-      // "replace succeeded, property silently detached"; skipping keeps
-      // the typed value intact at the cost of that one occurrence not
-      // being replaced — the user can revisit it once told about it.
+      // Default: SKIP the write rather than write-then-report, matching the
+      // §9 migration precedent (`runPropertyDefinitionMigrationBatch`) — it
+      // never writes a value it can't convert, preserving the original
+      // (still-valid) text. Writing the broken text would be "replace
+      // succeeded, property silently detached". The skip is returned in
+      // `retryableSkips` so the caller can offer "replace anyway"; on that
+      // forced re-run the write goes through and the property reads unset
+      // (visible in the value row, undo-recoverable) until the text is fixed.
       //
       // Dormant un-flipped: both recognizers return false/null whenever the
       // workspace isn't child-backed (no field rows are ever recognized), so
       // this whole section is a no-op there.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
-      if (schema !== null) {
+      if (schema !== null && !force) {
         // Ref-typed values are validated against the target the PROPOSED
         // content would derive (not the stale pre-replace column) — same-tx
         // `core.deriveReferenceTarget` hasn't run yet at this point in the
@@ -253,6 +259,11 @@ export const applyContentReplaceMutator = defineMutator<
         if (breaksCodec) {
           result.skippedUnparseableProperty += 1
           unparseableProperties.add(schema.name)
+          result.retryableSkips.push({
+            blockId: current.id,
+            originalContent: current.content,
+            property: schema.name,
+          })
           continue
         }
       }

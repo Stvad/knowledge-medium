@@ -151,6 +151,7 @@ describe('findReplaceDataExtension', () => {
       skippedUnavailableBlocks: 0,
       skippedUnparseableProperty: 0,
       unparseableProperties: [],
+      retryableSkips: [],
     })
     expect((await load('a'))?.content).toBe('omega omega')
     expect((await load('b'))?.content).toBe('omega')
@@ -184,6 +185,7 @@ describe('findReplaceDataExtension', () => {
       skippedUnavailableBlocks: 0,
       skippedUnparseableProperty: 0,
       unparseableProperties: [],
+      retryableSkips: [],
     })
     expect((await load('a'))?.content).toBe('alpha user edit')
   })
@@ -279,12 +281,41 @@ describe('findReplaceDataExtension', () => {
         skippedUnavailableBlocks: 0,
         skippedUnparseableProperty: 1,
         unparseableProperties: [countSchema.name],
+        retryableSkips: [{blockId: valueId, originalContent: '42', property: countSchema.name}],
       })
       // Original valid content preserved — never overwritten with 'abc'.
       expect((await load(valueId))?.content).toBe('42')
       // The owning cell keeps the original, still-decodable value.
       const owner = await load('owner')
       expect(owner?.properties[countSchema.name]).toBe(42)
+    })
+
+    // `force: true` is the "replace anyway" re-run: the user accepted that the
+    // property reads unset until the text is fixed. The write goes through, the
+    // broken text lands, and the cell drops the now-undecodable key.
+    it('writes the broken value on a forced re-run and drops the cell key', async () => {
+      const {valueId} = await seedFlippedWorkspaceWithCountProperty()
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '42',
+          replace: 'abc',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: '42'}],
+          force: true,
+        },
+      )
+
+      expect(result.updatedBlocks).toBe(1)
+      expect(result.replacements).toBe(1)
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.retryableSkips).toEqual([])
+      // The broken text is written and visible in the value row...
+      expect((await load(valueId))?.content).toBe('abc')
+      // ...and the owner's cell no longer carries the (now-undecodable) key.
+      expect((await load('owner'))?.properties[countSchema.name]).toBeUndefined()
     })
 
     // The valid replacement elsewhere in the same call must survive the skip.
@@ -314,6 +345,7 @@ describe('findReplaceDataExtension', () => {
         skippedUnavailableBlocks: 0,
         skippedUnparseableProperty: 1,
         unparseableProperties: [countSchema.name],
+        retryableSkips: [{blockId: valueId, originalContent: '42', property: countSchema.name}],
       })
       expect((await load('plain'))?.content).toBe('abc units')
       expect((await load(valueId))?.content).toBe('42')
@@ -344,6 +376,8 @@ describe('findReplaceDataExtension', () => {
       expect(result.updatedBlocks).toBe(0)
       expect(result.skippedUnparseableProperty).toBe(1)
       expect(result.unparseableProperties).toEqual([countSchema.name])
+      // A field row is never offered for a forced re-run.
+      expect(result.retryableSkips).toEqual([])
       // Identity intact: content, stamp, and the owner's cell all survive.
       expect((await load(field!.id))?.content).toBe(`((${DEF}))`)
       expect((await load(field!.id))?.referenceTargetId).toBe(DEF)
@@ -380,6 +414,7 @@ describe('findReplaceDataExtension', () => {
         skippedUnavailableBlocks: 0,
         skippedUnparseableProperty: 0,
         unparseableProperties: [],
+        retryableSkips: [],
       })
       expect((await load('value2'))?.content).toBe('abc')
     })
