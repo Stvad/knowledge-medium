@@ -117,10 +117,12 @@ export const canonicalPropertySeedProperties = (
 /** Extract a property's `/property/` seed key, or undefined when it has none — a
  * non-seed property (a bare `defineProperty` handle carries no seed key), or a
  * malformed dynamic contribution whose `properties` array holds a NON-OBJECT
- * entry. `isTypeSeedDeclaration` only checks `properties` is an array, not that
- * each element is a record, so guarding object-ness before the `in` check keeps
- * one bad entry (a primitive/null) from THROWING and aborting the whole
- * workspace's type materialization pass — skip+warn it instead. */
+ * entry. `isTypeSeedDeclaration` rejects non-record elements at the FACET
+ * boundary, but `materializeTypeSeeds` / `canonicalTypeSeedProperties` also take
+ * explicit unvalidated arrays from direct callers that never pass through it, so
+ * guarding object-ness before the `in` check is still load-bearing: it keeps one
+ * bad entry (a primitive/null) from THROWING and aborting the whole workspace's
+ * type materialization pass — skip+warn it instead. */
 const propertySeedKeyOf = (prop: unknown): string | undefined => {
   if (typeof prop !== 'object' || prop === null || !('seedKey' in prop)) return undefined
   const key: unknown = (prop as {readonly seedKey: unknown}).seedKey
