@@ -49,7 +49,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent runtime-summary` | Compact agent-oriented runtime context. |
 | `kmagent health` | Sync-health snapshot: block vs blocks_synced counts, upload queue, materialization backlog. |
 | `kmagent describe-runtime` | Full or targeted runtime diagnostics (`--guide <id>`, `--storage`, …). |
-| `kmagent sql <mode> <sql> [paramsJson]` | Run SQL (mode: `all\|get\|optional\|execute`). |
+| `kmagent sql <mode> <sql> [paramsJson] [--allow-synced-write]` | Run SQL (mode: `all\|get\|optional\|execute`). Refuses a raw write to a synced table (`blocks`, `workspaces`, `workspace_members`) unless `--allow-synced-write` is passed — see note below. |
 | `kmagent get-block <id>` | Fetch a block. |
 | `kmagent subtree <rootId> [--json]` | Fetch a subtree as a depth-indented outline (`--json` for the raw flat array). |
 | `kmagent create-block <json>` | Create a block from a JSON body. |
@@ -67,6 +67,8 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
+
+**`kmagent sql` and synced tables:** a raw `INSERT`/`UPDATE`/`DELETE` against `blocks`, `workspaces`, or `workspace_members` bypasses `repo.tx` — it leaves `tx_context.source = NULL` (the row never uploads to the server or other clients) and skips the kernel's post-commit derivations (block_types, reference normalization, property projection), so derived state goes stale. `kmagent sql` refuses such writes by default and names the offending table in the error. Prefer `create-block` / `update-block` / `run-action` (all go through `repo.tx`) for a normal write. If you genuinely need a raw statement against one of these tables, pass `--allow-synced-write` (or `{allowSyncedWrite: true}` on a `kmagent raw` body) to opt in for that one call.
 
 ## MCP Server
 
@@ -110,7 +112,7 @@ the built entrypoint directly:
 | `db` | `repo.db` — the underlying database handle. |
 | `runtime` | The `FacetRuntime`. Prefer `describe-runtime` over reading internal caches. |
 | `safeMode` | `true` when the runtime is paused for safe-mode boot. |
-| `sql(sql, params?, mode?)` | Thin SQL helper, matches `kmagent sql`. |
+| `sql(sql, params?, mode?, allowSyncedWrite?)` | Thin SQL helper, matches `kmagent sql` — including its refusal of raw writes to synced tables (see the note above `kmagent sql`) unless `allowSyncedWrite` is `true`. |
 | `block(id)` / `getBlock(id)` / `getSubtree(rootId)` | Block accessors. |
 | `createBlock(input)` / `updateBlock(input)` / `moveBlock(input)` / `deleteBlock(input)` / `restoreBlock(input)` | Block mutators (same shape as the wire commands; restore is one block only). |
 | `installExtension(input)` / `setExtensionEnabled(input)` / `uninstallExtension(input)` | Extension lifecycle. |

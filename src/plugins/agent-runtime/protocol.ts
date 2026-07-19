@@ -185,7 +185,10 @@ export interface AgentRuntimeContext {
   db: Repo['db']
   runtime: FacetRuntime
   safeMode: boolean
-  sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
+  /** `allowSyncedWrite` overrides the raw-write-to-synced-table refusal
+   *  (see `assertSyncedTableWriteAllowed` in commands.ts) — leave it unset
+   *  for the normal, guarded path. */
+  sql: (sql: string, params?: unknown[], mode?: SqlMode, allowSyncedWrite?: boolean) => Promise<unknown>
   block: (id: string) => Block
   getBlock: (id: string) => Promise<BlockData | null>
   getSubtree: (rootId: string) => Promise<SubtreeRow[]>

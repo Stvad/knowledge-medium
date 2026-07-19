@@ -24,6 +24,7 @@ import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
+import { SYNCED_TABLES, writeTargetTable } from '@/data/syncedTableWriteGuard.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
@@ -162,12 +163,38 @@ const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
   return data
 }
 
+/** Guard for the bridge's raw `sql` verb (any mode — `execute` is the common
+ *  shape, but `all`/`get`/`optional` reach the same `repo.db` connection and
+ *  could carry a write statement too). A raw write to a synced table
+ *  (`blocks`, `workspaces`, `workspace_members`) bypasses `repo.tx`: it
+ *  leaves `tx_context.source = NULL` so the upload trigger never fires (the
+ *  write is local-only — see `syncedTableWriteGuard.ts`), AND it skips the
+ *  kernel's post-commit derivations (block_types, reference normalization,
+ *  property projection), desyncing derived state. `allowSyncedWrite` is the
+ *  explicit, one-call opt-out for a deliberate surgical fix. */
+const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): void => {
+  if (allowSyncedWrite) return
+  const target = writeTargetTable(sql)
+  if (target === null || !SYNCED_TABLES.has(target)) return
+  throw new Error(
+    `sql: refusing to write to synced table "${target}" via raw SQL — this bypasses ` +
+      'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +
+      'server or other clients) and skips the kernel derivations (block_types, ' +
+      'reference normalization, property projection), desyncing derived state. Use ' +
+      'create-block / update-block / run-action (which go through repo.tx) for a normal ' +
+      'write. For a deliberate surgical fix, pass --allow-synced-write on the CLI ' +
+      '(or {allowSyncedWrite: true} on the command body) to override this check.',
+  )
+}
+
 const runSql = async (
   repo: Repo,
   sql: string,
   params: unknown[] = [],
   mode: SqlMode = 'all',
+  allowSyncedWrite = false,
 ) => {
+  assertSyncedTableWriteAllowed(sql, allowSyncedWrite)
   if (mode === 'get') return repo.db.get(sql, params)
   if (mode === 'optional') return repo.db.getOptional(sql, params)
   if (mode === 'execute') return repo.db.execute(sql, params)
@@ -1320,7 +1347,7 @@ export const createAgentRuntimeContext = ({
     db: repo.db,
     runtime,
     safeMode,
-    sql: (sql, params, mode) => runSql(repo, sql, params, mode),
+    sql: (sql, params, mode, allowSyncedWrite) => runSql(repo, sql, params, mode, allowSyncedWrite),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
     // The visible outline: `get-subtree` (and the MCP `subtree` tool, and
@@ -1388,7 +1415,7 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      return context.sql(sql, getParams(command.params), mode)
+      return context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
     }
 
     case 'get-block':

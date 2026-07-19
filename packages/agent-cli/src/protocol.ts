@@ -111,6 +111,12 @@ export const sqlCommandSchema = z.looseObject({
   sql: z.string(),
   mode: sqlModeSchema.optional(),
   params: z.array(z.unknown()).optional(),
+  /** Override the kernel's refusal to write to a synced table (`blocks`,
+   *  `workspaces`, `workspace_members`) via raw SQL — such a write bypasses
+   *  repo.tx, so it never uploads and skips the kernel derivations. Unset
+   *  (or false) keeps the guard on; true is a deliberate, one-call opt-out
+   *  (the CLI's `--allow-synced-write`). */
+  allowSyncedWrite: z.boolean().optional(),
   ...commandIdField,
 })
 
@@ -581,8 +587,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     readOnly: true,
   },
   'sql': {
-    usage: 'kmagent sql <all|get|optional|execute> <sql> [paramsJson]',
-    description: 'Run SQL (mode: all|get|optional|execute).',
+    usage: 'kmagent sql <all|get|optional|execute> <sql> [paramsJson] [--allow-synced-write]',
+    description: 'Run SQL (mode: all|get|optional|execute). Refuses a raw write to a synced table (blocks, workspaces, workspace_members) — it would bypass repo.tx, so it never uploads and skips the kernel derivations (block_types, reference normalization, property projection). Use create-block/update-block/run-action for a normal write; pass --allow-synced-write for a deliberate surgical fix.',
     // Mode-dependent: `execute` (or a mutating statement) writes. The
     // bridge refines this per-call before consulting the registry, so
     // the verb-level default here is the conservative `false`.

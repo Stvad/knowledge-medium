@@ -362,6 +362,108 @@ describe('agent runtime commands', () => {
     }
   })
 
+  it('sql execute refuses a raw write to a synced table (blocks) by default', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-target',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard target'},
+    )
+
+    await expect(executeCommand({
+      commandId: 'sql-guard-1',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'UPDATE blocks SET content = ? WHERE id = ?',
+      params: ['raw-write', 'sql-guard-target'],
+    }, env.context)).rejects.toThrow(/refusing to write to synced table "blocks"/)
+
+    // The raw write must never have landed.
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-target'],
+    )
+    expect(row?.content).toBe('original')
+  })
+
+  it('sql execute allows the same write once allowSyncedWrite opts in', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-override',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard override target'},
+    )
+
+    await executeCommand({
+      commandId: 'sql-guard-2',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'UPDATE blocks SET content = ? WHERE id = ?',
+      params: ['raw-write', 'sql-guard-override'],
+      allowSyncedWrite: true,
+    }, env.context)
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-override'],
+    )
+    expect(row?.content).toBe('raw-write')
+  })
+
+  it('sql select and writes to a LOCAL table (block_aliases) are unaffected by the guard', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-select',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'selectable',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard select target'},
+    )
+
+    // A read against the synced `blocks` table is never a "write" — the
+    // guard must not touch it.
+    const selectResult = await executeCommand({
+      commandId: 'sql-guard-select-1',
+      type: 'sql',
+      mode: 'all',
+      sql: 'SELECT content FROM blocks WHERE id = ?',
+      params: ['sql-guard-select'],
+    }, env.context) as Array<{content: string}>
+    expect(selectResult).toEqual([{content: 'selectable'}])
+
+    // A raw write to a LOCAL derived-index table (not in SYNCED_TABLES)
+    // must go through unguarded.
+    await executeCommand({
+      commandId: 'sql-guard-local-write',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower) VALUES (?, ?, ?, ?)',
+      params: ['sql-guard-select', WS, 'Manual Alias', 'manual alias'],
+    }, env.context)
+
+    const aliasRow = await env.h.db.get<{alias: string}>(
+      'SELECT alias FROM block_aliases WHERE block_id = ?',
+      ['sql-guard-select'],
+    )
+    expect(aliasRow?.alias).toBe('Manual Alias')
+  })
+
   it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {
     const renderer = () => null
     const Component = () => null

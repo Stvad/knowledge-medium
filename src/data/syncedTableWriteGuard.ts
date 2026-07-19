@@ -26,8 +26,12 @@
 
 /** App-visible / synced tables whose changes must propagate through the upload
  *  path. These are exact names: `blocks_fts`, `blocks_synced`, `block_aliases`,
- *  etc. are deliberately NOT here — they are local. */
-const SYNCED_TABLES: ReadonlySet<string> = new Set([
+ *  etc. are deliberately NOT here — they are local.
+ *
+ *  Exported so other callers that need the same "is this a synced table"
+ *  check (e.g. the agent bridge's raw `sql` verb) share this single list
+ *  instead of re-deriving it. */
+export const SYNCED_TABLES: ReadonlySet<string> = new Set([
   'blocks',
   'workspaces',
   'workspace_members',

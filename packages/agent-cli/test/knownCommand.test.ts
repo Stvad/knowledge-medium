@@ -19,6 +19,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['runtime-summary', {type: 'runtime-summary'}],
     ['describe-runtime', {type: 'describe-runtime', guides: ['external-sync-plugin'], brief: true}],
     ['sql', {type: 'sql', sql: 'SELECT 1', mode: 'all'}],
+    ['sql (allowSyncedWrite)', {type: 'sql', sql: 'UPDATE blocks SET x = 1', mode: 'execute', allowSyncedWrite: true}],
     ['get-block', {type: 'get-block', id: 'b-1'}],
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
@@ -69,6 +70,12 @@ describe('knownCommandSchema — rejection', () => {
 
   it('rejects sql with an unknown mode', () => {
     expect(knownCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1', mode: 'truncate'}).success).toBe(false)
+  })
+
+  it('rejects sql with a non-boolean allowSyncedWrite', () => {
+    expect(
+      knownCommandSchema.safeParse({type: 'sql', sql: 'SELECT 1', allowSyncedWrite: 'yes'}).success,
+    ).toBe(false)
   })
 
   it('rejects install-extension without a source', () => {
