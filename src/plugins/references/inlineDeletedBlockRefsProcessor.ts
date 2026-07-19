@@ -44,6 +44,7 @@ import {
   deriveReferenceTargetId,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
+import { isPropertyValueRow } from '@/data/propertyChildren'
 import { inlineBlockRefs } from './referenceParser.ts'
 
 export const INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR =
@@ -96,39 +97,16 @@ const resolveInlineContent = (
   return resolved
 }
 
-/**
- * Is `source` a property VALUE row — the direct child of a recognized field
- * row (PR #288 §9)? Such a row's `((targetId))` content IS the property's
- * value, so inlining would rewrite it to prose, clear the derived column the
- * projection reads, and drop the key from the owner's cell at the next
- * projection — with the id gone, irreversibly. The cell era did the opposite:
- * a deleted target left a dangling reference and the property RETAINED. Since
- * delete is soft, `((deletedId))` stays restorable, so keeping it dangling is
- * both the old semantics and the recoverable choice (#404 item 4). Inlining's
- * principle still holds, it just resolves differently here: prose wants
- * readable TEXT preserved, a typed value wants IDENTITY preserved.
- *
- * Recognition is the canonical one: a field row is exactly a child the visible
- * view filters out, so ask that view rather than re-deriving the rule (flip
- * gate, definition-ness, and the §9 ancestry rule all come with it — including
- * "nothing inside a property subtree is a field row", which is why a comment
- * BENEATH a value keeps inlining like the ordinary prose it is).
- */
-const isPropertyValueRow = async (
-  tx: SameTxCtx['tx'],
-  source: BlockData,
-): Promise<boolean> => {
-  if (source.parentId === null) return false
-  if (!(await tx.isPropertyChildBackedWorkspace(source.workspaceId))) return false
-  const parent = await tx.get(source.parentId)
-  // Cheap pre-filter: the recognition column is stamped on every field row, so
-  // an unstamped parent can't be one and needs no sibling query.
-  if (parent === null || parent.referenceTargetId === null) return false
-  const parentSiblings = await tx.childrenOf(
-    parent.parentId, parent.workspaceId, {hidePropertyChildren: true},
-  )
-  return !parentSiblings.some(row => row.id === parent.id)
-}
+// `isPropertyValueRow` (shared, `@/data/propertyChildren`): such a row's
+// `((targetId))` content IS the property's value, so inlining would rewrite
+// it to prose, clear the derived column the projection reads, and drop the
+// key from the owner's cell at the next projection — with the id gone,
+// irreversibly. The cell era did the opposite: a deleted target left a
+// dangling reference and the property RETAINED. Since delete is soft,
+// `((deletedId))` stays restorable, so keeping it dangling is both the old
+// semantics and the recoverable choice (#404 item 4). Inlining's principle
+// still holds, it just resolves differently here: prose wants readable TEXT
+// preserved, a typed value wants IDENTITY preserved.
 
 const inlineSource = async (
   ctx: SameTxCtx,

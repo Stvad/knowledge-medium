@@ -38,8 +38,16 @@ const defaultOptions: FindReplaceOptions = {
 const resultSummary = (result: ApplyContentReplaceResult): string => {
   const changed = `${result.replacements} replacement${result.replacements === 1 ? '' : 's'} in ${result.updatedBlocks} block${result.updatedBlocks === 1 ? '' : 's'}`
   const skipped = result.skippedChangedBlocks + result.skippedUnavailableBlocks
-  if (skipped === 0) return changed
-  return `${changed}; ${skipped} skipped`
+  const base = skipped === 0 ? changed : `${changed}; ${skipped} skipped`
+  // Codec skips get their own clause, named: "3 skipped" reads like a stale
+  // match, while these were refused because the new text wouldn't parse as
+  // the property's value — the user needs to know WHICH property to go fix
+  // (#404 item 5; the original values are untouched).
+  if (result.skippedUnparseableProperty === 0) return base
+  const names = result.unparseableProperties.map(name => `"${name}"`).join(', ')
+  const count = result.skippedUnparseableProperty
+  return `${base}; ${count} left unchanged — the new text is not a valid value for `
+    + `propert${result.unparseableProperties.length === 1 ? 'y' : 'ies'} ${names}`
 }
 
 const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>

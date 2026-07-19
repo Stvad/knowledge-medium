@@ -12,6 +12,14 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
+  deriveReferenceTargetId,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
+import {
+  propertyChildContentToEncodedValue,
+  resolvePropertyValueFieldSchema,
+} from '@/data/propertyChildren'
+import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,
   replaceLiteralMatches,
@@ -135,6 +143,15 @@ export const searchContentQuery = defineQuery<
   },
 })
 
+const emptyResult = (): ApplyContentReplaceResult => ({
+  updatedBlocks: 0,
+  replacements: 0,
+  skippedChangedBlocks: 0,
+  skippedUnavailableBlocks: 0,
+  skippedUnparseableProperty: 0,
+  unparseableProperties: [],
+})
+
 export const applyContentReplaceMutator = defineMutator<
   ApplyContentReplaceArgs,
   ApplyContentReplaceResult
@@ -146,23 +163,14 @@ export const applyContentReplaceMutator = defineMutator<
   describe: ({items}) => `replace content across ${items.length} blocks`,
   apply: async (tx, args) => {
     const find = args.find.trim()
-    if (!find) {
-      return {
-        updatedBlocks: 0,
-        replacements: 0,
-        skippedChangedBlocks: 0,
-        skippedUnavailableBlocks: 0,
-      }
-    }
+    if (!find) return emptyResult()
 
     const seen = new Set<string>()
     const options = normalizeOptions(args.options)
-    const result: ApplyContentReplaceResult = {
-      updatedBlocks: 0,
-      replacements: 0,
-      skippedChangedBlocks: 0,
-      skippedUnavailableBlocks: 0,
-    }
+    const result = emptyResult()
+    // #404 item 5: which properties were skipped, so the caller's summary can
+    // name them (the dialog renders this result directly).
+    const unparseableProperties = new Set<string>()
 
     for (const item of args.items) {
       if (seen.has(item.blockId)) continue
@@ -186,10 +194,58 @@ export const applyContentReplaceMutator = defineMutator<
       )
       if (replaced.replacementCount === 0) continue
 
+      // #404 item 5: under properties-as-blocks (PR #288 §9), a property
+      // VALUE child's `content` IS its typed value — writing straight
+      // through here can leave it unparseable under its codec (a
+      // `number`/`date`/`boolean` value in particular), and PROJECT's
+      // `firstProjectedFieldValue` would then silently skip the child and
+      // drop the property key from the owner's cell, with no error
+      // surfaced to the user who ran the replace.
+      //
+      // Design choice: SKIP the write rather than write-then-report,
+      // matching the §9 migration precedent
+      // (`runPropertyDefinitionMigrationBatch`) — it never writes a value
+      // it can't convert, preserving the original (still-valid) text and
+      // reporting a count instead. Writing the broken text here would be
+      // "replace succeeded, property silently detached"; skipping keeps
+      // the typed value intact at the cost of that one occurrence not
+      // being replaced — the user can revisit it once told about it.
+      //
+      // Dormant un-flipped: `resolvePropertyValueFieldSchema` returns null
+      // whenever the workspace isn't child-backed (no field rows are ever
+      // recognized), so this whole block is a no-op there.
+      const schema = await resolvePropertyValueFieldSchema(tx, current)
+      if (schema !== null) {
+        // Ref-typed values are validated against the target the PROPOSED
+        // content would derive (not the stale pre-replace column) — same-tx
+        // `core.deriveReferenceTarget` hasn't run yet at this point in the
+        // pipeline, so the column still reflects the OLD content.
+        const projectedTargetId = schema.codec.type === 'ref'
+          ? (await deriveReferenceTargetId(
+              replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx),
+            )) ?? null
+          : current.referenceTargetId ?? null
+        const breaksCodec = (() => {
+          try {
+            propertyChildContentToEncodedValue(schema, replaced.content, projectedTargetId)
+            return false
+          } catch {
+            return true
+          }
+        })()
+        if (breaksCodec) {
+          result.skippedUnparseableProperty += 1
+          unparseableProperties.add(schema.name)
+          continue
+        }
+      }
+
       await tx.update(current.id, {content: replaced.content})
       result.updatedBlocks += 1
       result.replacements += replaced.replacementCount
     }
+
+    result.unparseableProperties = [...unparseableProperties].sort()
 
     return result
   },

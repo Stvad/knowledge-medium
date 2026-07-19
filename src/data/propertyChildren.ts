@@ -24,6 +24,7 @@ import {
   type AnyPropertySchema,
   type BlockData,
   type PropertySchema,
+  type Tx,
 } from '@/data/api'
 import { referenceBlockContentForId } from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
@@ -302,4 +303,67 @@ export const isInsidePropertySubtreeWalk = async (
   const resolved = result ?? false
   for (const walkedId of walked) memo.set(walkedId, resolved)
   return resolved
+}
+
+/** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the
+ *  field row `source` is a value child of, or null when `source` isn't a
+ *  property value child at all. Recognition reuses the canonical
+ *  visible-children exclusion (`hidePropertyChildren`) rather than
+ *  re-deriving `isPropertyFieldInstance` + the ancestry walk by hand — a
+ *  parent qualifies as "the field row a value hangs off of" exactly when the
+ *  visible view (which already encodes the flip gate, definition-ness, and
+ *  the §9 ancestry rule) excludes it from its own parent's children. */
+const propertyValueFieldRow = async (
+  tx: Tx,
+  source: Pick<BlockData, 'parentId' | 'workspaceId'>,
+): Promise<BlockData | null> => {
+  if (source.parentId === null) return null
+  if (!(await tx.isPropertyChildBackedWorkspace(source.workspaceId))) return null
+  const parent = await tx.get(source.parentId)
+  // Cheap pre-filter: the recognition column is stamped on every field row, so
+  // an unstamped parent can't be one and needs no sibling query.
+  if (parent === null || parent.referenceTargetId === null) return null
+  const parentSiblings = await tx.childrenOf(
+    parent.parentId, parent.workspaceId, {hidePropertyChildren: true},
+  )
+  return parentSiblings.some(row => row.id === parent.id) ? null : parent
+}
+
+/**
+ * Is `source` a property VALUE row — the direct child of a recognized field
+ * row (PR #288 §9)? Shared write-side primitive: a value child's content IS
+ * the property's value (ref-typed as `((targetId))`, scalar-typed as its
+ * codec's canonical text), so any write path that rewrites `content` without
+ * knowing this can corrupt a typed value or silently detach it from its
+ * owner's projected cell (see `inlineDeletedBlockReferences` — #404 item 4 —
+ * and the find-replace codec guard — #404 item 5 — for two call sites that
+ * need exactly this question answered before they write).
+ *
+ * Recognition is the canonical one: a field row is exactly a child the
+ * visible view filters out, so this asks that view rather than re-deriving
+ * the rule (flip gate, definition-ness, and the §9 ancestry rule all come
+ * with it — including "nothing inside a property subtree is a field row",
+ * which is why a comment BENEATH a value keeps ordinary content semantics).
+ */
+export const isPropertyValueRow = async (
+  tx: Tx,
+  source: Pick<BlockData, 'parentId' | 'workspaceId'>,
+): Promise<boolean> => (await propertyValueFieldRow(tx, source)) !== null
+
+/** If `source` is a property VALUE row, resolve the schema its field row is
+ *  keyed to — null when `source` isn't a value row, OR when the field's
+ *  fieldId doesn't resolve to an active schema (shadowed/orphaned/foreign-
+ *  workspace definitions never project into a cell, per
+ *  `tx.resolvePropertyFieldSchema`, so there is no live codec to validate
+ *  against). Lets a write path check, BEFORE writing, whether a proposed new
+ *  `content` would still decode under the owning property's codec (#404
+ *  item 5 — `applyContentReplaceMutator` is the first caller). */
+export const resolvePropertyValueFieldSchema = async (
+  tx: Tx,
+  source: Pick<BlockData, 'parentId' | 'workspaceId'>,
+): Promise<AnyPropertySchema | null> => {
+  const fieldRow = await propertyValueFieldRow(tx, source)
+  const fieldId = fieldRow?.referenceTargetId ?? null
+  if (fieldId === null) return null
+  return tx.resolvePropertyFieldSchema(source.workspaceId, fieldId)
 }
