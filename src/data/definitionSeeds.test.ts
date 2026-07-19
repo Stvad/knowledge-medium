@@ -32,7 +32,7 @@ import {
 } from '@/data/properties'
 import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {typesPageBlockId} from '@/data/typesPage'
-import {seedType} from '@/data/typeSeeds'
+import {seedType, type TypeSeedDeclaration} from '@/data/typeSeeds'
 import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import {typeSeedsFacet} from '@/data/facets'
 import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
@@ -968,6 +968,22 @@ describe('type definition materialization', () => {
     const row = repo.block(typeDefinitionBlockId(WS, withProps.seedKey)).peek()
     expect(blockTypePropertiesProp.codec.decode(row!.properties[blockTypePropertiesProp.name]))
       .toEqual([propertyDefinitionBlockId(WS, prop.seedKey)])
+  })
+
+  it('canonicalTypeSeedProperties skips a malformed (non-object) property entry instead of throwing', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const goodProp = seedProperty({seedKey: 'system:test/property/pg', revision: 1, name: 'test:pg', preset: 'optional-string', defaultValue: undefined, changeScope: ChangeScope.BlockDefault})
+    // A dynamic contribution can smuggle a primitive past isTypeSeedDeclaration's
+    // array-only check; the bag builder must skip it (a `'seedKey' in <primitive>`
+    // would throw and abort the whole workspace's materialization pass).
+    const malformed = {
+      ...seedType({seedKey: 'system:test/type/malformed', revision: 1, id: 'malformed', label: 'Malformed'}),
+      properties: ['not-an-object', goodProp],
+    } as unknown as TypeSeedDeclaration
+    const bag = canonicalTypeSeedProperties(malformed, WS)
+    // No throw, and only the well-formed seeded property is referenced.
+    expect(blockTypePropertiesProp.codec.decode(bag[blockTypePropertiesProp.name]))
+      .toEqual([propertyDefinitionBlockId(WS, goodProp.seedKey)])
   })
 
   it('materializes the backing block under Types, bare (no PAGE_TYPE, no alias), and is idempotent', async () => {

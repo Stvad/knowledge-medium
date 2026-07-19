@@ -114,6 +114,19 @@ export const canonicalPropertySeedProperties = (
   return addBlockTypeToProperties(properties, PROPERTY_SCHEMA_TYPE)
 }
 
+/** Extract a property's `/property/` seed key, or undefined when it has none — a
+ * non-seed property (a bare `defineProperty` handle carries no seed key), or a
+ * malformed dynamic contribution whose `properties` array holds a NON-OBJECT
+ * entry. `isTypeSeedDeclaration` only checks `properties` is an array, not that
+ * each element is a record, so guarding object-ness before the `in` check keeps
+ * one bad entry (a primitive/null) from THROWING and aborting the whole
+ * workspace's type materialization pass — skip+warn it instead. */
+const propertySeedKeyOf = (prop: unknown): string | undefined => {
+  if (typeof prop !== 'object' || prop === null || !('seedKey' in prop)) return undefined
+  const key: unknown = (prop as {readonly seedKey: unknown}).seedKey
+  return isPropertySeedKey(key) ? key : undefined
+}
+
 /** The one canonical block-property bag for a TYPE seed's backing block — a
  * `block-type` definition block, the type analog of `canonicalPropertySeed-
  * Properties`. It carries the declaration's identity/display facts (`block-type:
@@ -172,15 +185,11 @@ export const canonicalTypeSeedProperties = (
   if (seed.properties !== undefined && seed.properties.length > 0) {
     const refs: string[] = []
     for (const prop of seed.properties) {
-      // A type seed's `properties` are typed as bare `AnyPropertySchema`; only a
-      // `seedProperty` handle (`PropertyHandle`) carries the `/property/` seed key
-      // a backing-block id can be derived from. A non-seed property has no backing
-      // block to reference, so skip+warn rather than emit a ref that can't resolve.
-      const propSeedKey: unknown = 'seedKey' in prop ? prop.seedKey : undefined
-      if (!isPropertySeedKey(propSeedKey)) {
+      const propSeedKey = propertySeedKeyOf(prop)
+      if (propSeedKey === undefined) {
         console.warn(
-          `[canonicalTypeSeedProperties] type seed ${JSON.stringify(seed.seedKey)} references ` +
-          `property ${JSON.stringify(prop.name)} with no /property/ seed key; omitting it from ` +
+          `[canonicalTypeSeedProperties] type seed ${JSON.stringify(seed.seedKey)} references a ` +
+          `property with no usable /property/ seed key (${JSON.stringify(prop)}); omitting it from ` +
           'block-type:properties (repo.types still carries it from the declaration)',
         )
         continue

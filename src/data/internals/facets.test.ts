@@ -53,6 +53,7 @@ import {
   BLOCK_TYPE_TYPE,
   EXTENSION_TYPE,
   KERNEL_TYPE_CONTRIBUTIONS,
+  PAGE_TYPE,
   PROPERTY_SCHEMA_TYPE,
   TYPES_PAGE_TYPE,
 } from '@/data/blockTypes'
@@ -280,6 +281,21 @@ describe('typesFacet + schema lift', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
     repo.setFacetRuntime(runtime)
     expect(repo.types.has(TYPES_PAGE_TYPE)).toBe(true)
+  })
+
+  it('surfaces kernel type seeds in repo.types BEFORE a workspace pin (buildUnboundTypes fallback)', () => {
+    // No setActiveWorkspaceId: the type-definition registry is null, so repo.types
+    // must fall back to the unbound seed synthesis. Direct regression guard for the
+    // C4a move of kernel types off `typesFacet` onto `typeSeedsFacet` — without the
+    // fallback, `repo.types` would be empty until a workspace pins the registry.
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    repo.setFacetRuntime(runtime)
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.types.get(PAGE_TYPE)?.label).toBe('Page')
+    // The synthesized contribution is provenance-stripped (seedContribution),
+    // matching a bare defineBlockType — the seed's seedKey/revision don't leak.
+    expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('seedKey')
+    expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('revision')
   })
 
   it('shared schema object lifted by multiple types dedups without warning', () => {
