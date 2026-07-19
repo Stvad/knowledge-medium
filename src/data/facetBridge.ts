@@ -37,7 +37,7 @@ import {
   buildUnboundPropertySchemas,
 } from '@/data/propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from '@/data/typeDefinitionRegistry'
-import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
+import {buildTypeDefinitionRegistry, buildUnboundTypes} from '@/data/typeDefinitionRegistry'
 import type {
   Facet,
   FacetRuntime,
@@ -65,28 +65,36 @@ import {
 import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjection'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
-/** Merge the code-owned `typesFacet` contributions with the block-built + seed
- *  contributions from the type-definition registry. Registry entries win a
+/** Merge the code-owned `typesFacet` contributions with an OVERLAY of block-built
+ *  + seed type contributions — either the workspace-scoped registry's `typesById`
+ *  OR (before a pin) the unbound seed synthesis (`buildUnboundTypes`). Taking the
+ *  overlay map directly (rather than the registry) mirrors the property side's
+ *  `propertyDefinitions?.schemas ?? buildUnboundPropertySchemas(...)` shape and
+ *  keeps this helper decoupled from the snapshot type. Overlay entries win a
  *  same-`id` collision and are appended after the code entries — reproducing the
  *  fold order + last-wins precedence of the pre-C3b single `typesFacet` (static
  *  code contributions first; the `userTypesProjector`'s `'user-data'` bucket
- *  appended, so a user row's id shadowed a code id). In C3b `typeSeedsFacet` is
- *  empty and user block ids never collide with code slug ids, so the union is
- *  disjoint; the collision rule matters only for a future seed↔code id overlap
- *  during the Slice C4 `typesFacet.of → seedType` conversion (where the seed is
- *  the authoritative successor). */
+ *  appended, so a user row's id shadowed a code id). Post-C4a the kernel type
+ *  seeds live in the overlay, not `codeTypes` (which now holds only PLUGIN code
+ *  types + not-yet-migrated types), so a completion/lift name-collision between a
+ *  plugin code type and a kernel/seed type resolves last-wins toward the overlay —
+ *  the same "user-data wins" direction as before. The union stays disjoint by id
+ *  today, so the collision warn is the tripwire for a HALF-done
+ *  `typesFacet.of → seedType` conversion where a plugin code type and its seed
+ *  successor both momentarily exist. */
 export const mergeCodeAndRegistryTypes = (
   codeTypes: ReadonlyMap<string, TypeContribution>,
-  registry: TypeDefinitionRegistrySnapshot | null,
+  overlay: ReadonlyMap<string, TypeContribution> | null,
 ): ReadonlyMap<string, TypeContribution> => {
-  if (!registry || registry.typesById.size === 0) return codeTypes
+  if (!overlay || overlay.size === 0) return codeTypes
   const merged = new Map(codeTypes)
-  for (const [id, contribution] of registry.typesById) {
-    // Restore the diagnostic the pre-C3b single `keyedMapFacet` fold emitted on
-    // a duplicate key: a raw `.set()` here would silently overwrite. Unreachable
-    // today (user block ids are uuids, code ids are slugs, `typeSeedsFacet` is
-    // empty) — this is the C4 tripwire for a half-done `typesFacet.of → seedType`
-    // conversion where a code type and its seed successor both momentarily exist.
+  for (const [id, contribution] of overlay) {
+    // Restore the diagnostic the pre-C3b single `keyedMapFacet` fold emitted on a
+    // duplicate key: a raw `.set()` here would silently overwrite. The overlay's
+    // ids (kernel seeds + user rows) and `codeTypes`' ids (plugin slugs) are
+    // disjoint today — this is the C4 tripwire for a half-done
+    // `typesFacet.of → seedType` conversion where a code type and its seed
+    // successor both momentarily exist.
     if (merged.has(id)) {
       console.warn(
         `[facetBridge] type id "${id}" is claimed by both a code contribution and ` +
@@ -371,20 +379,30 @@ export class FacetBridge {
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
           const codeTypes = rt.read(typesFacet)
+          const seedTypes = rt.read(typeSeedsFacet)
           // The type-definition registry needs a workspace to scope its rows;
-          // before a pin it's null and `repo.types` is code contributions only.
-          // No priming gate (unlike the property registry): an unprimed
-          // projection is simply an empty projected-rows map — the registry then
-          // holds only declared seeds, which are code-owned and must be present
-          // pre-materialization anyway.
+          // before a pin it stays null (identity resolution / `getTypeBlockId` is
+          // correctly unavailable). No priming gate (unlike the property
+          // registry): an unprimed projection is simply an empty projected-rows
+          // map — the registry then holds only declared seeds, which are
+          // code-owned and must be present pre-materialization anyway.
           const typeDefinitions = this.activeWorkspaceId
             ? buildTypeDefinitionRegistry({
               workspaceId: this.activeWorkspaceId,
               projectedDefinitions: rt.read(projectedTypeDefinitionsFacet),
-              seeds: rt.read(typeSeedsFacet),
+              seeds: seedTypes,
             })
             : null
-          const types = mergeCodeAndRegistryTypes(codeTypes, typeDefinitions)
+          // Post-C4a the kernel/plugin type seeds live in `typeSeedsFacet`, not
+          // the static `typesFacet`, so a pre-pin `repo.types` would otherwise be
+          // missing every seeded type. Mirror `buildUnboundPropertySchemas` (the
+          // `X?.field ?? buildUnbound(...)` shape used for schemas just below):
+          // fall back to the unbound seed synthesis so seeded types are readable
+          // before a workspace pins the registry (and in the runtime-install→
+          // first-pin window, where `repo._types` is already facet-driven, not the
+          // static `KERNEL_TYPES` fallback).
+          const overlayTypes = typeDefinitions?.typesById ?? buildUnboundTypes(seedTypes)
+          const types = mergeCodeAndRegistryTypes(codeTypes, overlayTypes)
           const legacySchemas = liftTypeSchemas(types)
           const seeds = rt.read(definitionSeedsFacet)
           const propertySeedNameCounts = new Map<string, number>()

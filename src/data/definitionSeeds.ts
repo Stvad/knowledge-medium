@@ -8,6 +8,7 @@ import {
   blockTypeHideFromBlockDisplayProp,
   blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
+  blockTypePropertiesProp,
   blockTypeTypeIdProp,
   presetConfigProp,
   presetIdProp,
@@ -113,6 +114,21 @@ export const canonicalPropertySeedProperties = (
   return addBlockTypeToProperties(properties, PROPERTY_SCHEMA_TYPE)
 }
 
+/** Extract a property's `/property/` seed key, or undefined when it has none — a
+ * non-seed property (a bare `defineProperty` handle carries no seed key), or a
+ * malformed dynamic contribution whose `properties` array holds a NON-OBJECT
+ * entry. `isTypeSeedDeclaration` rejects non-record elements at the FACET
+ * boundary, but `materializeTypeSeeds` / `canonicalTypeSeedProperties` also take
+ * explicit unvalidated arrays from direct callers that never pass through it, so
+ * guarding object-ness before the `in` check is still load-bearing: it keeps one
+ * bad entry (a primitive/null) from THROWING and aborting the whole workspace's
+ * type materialization pass — skip+warn it instead. */
+const propertySeedKeyOf = (prop: unknown): string | undefined => {
+  if (typeof prop !== 'object' || prop === null || !('seedKey' in prop)) return undefined
+  const key: unknown = (prop as {readonly seedKey: unknown}).seedKey
+  return isPropertySeedKey(key) ? key : undefined
+}
+
 /** The one canonical block-property bag for a TYPE seed's backing block — a
  * `block-type` definition block, the type analog of `canonicalPropertySeed-
  * Properties`. It carries the declaration's identity/display facts (`block-type:
@@ -124,18 +140,29 @@ export const canonicalPropertySeedProperties = (
  * page by the typeify same-tx processor), a code type was never a page. Forcing
  * PAGE_TYPE + an alias here would be a visible behavior change at the C4 cutover
  * and risk `alias.collision` on the real type labels; the typeify carve-out for
- * seed rows keeps this bare row bare. `block-type:properties` (the on-block
- * property refs) is also omitted. This is NOT a functional gap for type
- * resolution: a declared seed's `TypeContribution.properties` is synthesized
- * straight from the code declaration (`seedContribution` in
- * `typeDefinitionRegistry.ts`), never from the block's refList — so a C4 seed
- * carrying `properties` resolves correctly through `repo.types` even with the
- * refs absent from the row. Writing the on-block refs (which only feeds the
- * definition block's own property-panel display) needs each target's
- * deterministic id derived from a seeded property HANDLE and lands with C4; no
- * current type seed declares `properties`. */
+ * seed rows keeps this bare row bare.
+ *
+ * `block-type:properties` (the on-block property refs) IS written from
+ * `seed.properties` (C4a). A declared seed's `TypeContribution.properties` is
+ * synthesized straight from the code declaration (`seedContribution` in
+ * `typeDefinitionRegistry.ts`), never from the block's refList, so `repo.types`
+ * is already correct without it — but the durable row must still match the
+ * declaration: the materializer is create/restore-only and never repairs
+ * payloads, so an empty list here would strand every kernel type's definition
+ * block property-less forever (it feeds the definition block's own
+ * property-panel display, and eventually the block-as-source-of-truth endgame).
+ * Each ref is the target property's DETERMINISTIC backing-block id
+ * (`propertyDefinitionBlockId(workspaceId, prop.seedKey)`); the property pass
+ * runs before the type pass (`runWorkspaceSeedMaterialization`), so those blocks
+ * exist — but the ref is by id anyway, so it resolves whenever the target
+ * materializes (a withheld/contested property just dangles until it does, which
+ * the refList `decodeValid` tolerates). A property without a `/property/` seed
+ * key has no backing block to reference and is skipped with a warning; that
+ * never happens for the kernel types (every referenced prop is a `seedProperty`),
+ * and the synthesized `repo.types` contribution still carries it regardless. */
 export const canonicalTypeSeedProperties = (
   seed: TypeSeedDeclaration,
+  workspaceId: string,
 ): Record<string, unknown> => {
   const properties: Record<string, unknown> = {
     [blockTypeLabelProp.name]: blockTypeLabelProp.codec.encode(seed.label),
@@ -156,6 +183,32 @@ export const canonicalTypeSeedProperties = (
   if (seed.hideFromBlockDisplay !== undefined) {
     properties[blockTypeHideFromBlockDisplayProp.name] =
       blockTypeHideFromBlockDisplayProp.codec.encode(seed.hideFromBlockDisplay)
+  }
+  if (seed.properties !== undefined && seed.properties.length > 0) {
+    const refs: string[] = []
+    for (const prop of seed.properties) {
+      const propSeedKey = propertySeedKeyOf(prop)
+      if (propSeedKey === undefined) {
+        // Identify the entry by its `name` if it has a string one — NEVER
+        // JSON.stringify(prop): a record entry can carry a bigint / circular value
+        // that throws the serializer, which would re-abort the very pass this
+        // skip path exists to protect.
+        const propName = typeof prop === 'object' && prop !== null
+          && typeof (prop as {name?: unknown}).name === 'string'
+          ? (prop as {name: string}).name
+          : '<non-property entry>'
+        console.warn(
+          `[canonicalTypeSeedProperties] type seed ${JSON.stringify(seed.seedKey)} references a ` +
+          `property with no usable /property/ seed key (${propName}); omitting it from ` +
+          'block-type:properties (repo.types still carries it from the declaration)',
+        )
+        continue
+      }
+      refs.push(propertyDefinitionBlockId(workspaceId, propSeedKey))
+    }
+    if (refs.length > 0) {
+      properties[blockTypePropertiesProp.name] = blockTypePropertiesProp.codec.encode(refs)
+    }
   }
   return addBlockTypeToProperties(properties, BLOCK_TYPE_TYPE)
 }
@@ -323,7 +376,10 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
    *  `materializeSeeds`). */
   readonly ensureParent: (repo: Repo, workspaceId: string) => Promise<unknown>
   readonly contentFor: (seed: S) => string
-  readonly propertiesFor: (seed: S) => Record<string, unknown>
+  /** Build the seed's on-block property bag. Receives `workspaceId` so the type
+   *  pass can derive its `block-type:properties` refs' deterministic backing-block
+   *  ids; the property pass ignores it. */
+  readonly propertiesFor: (seed: S, workspaceId: string) => Record<string, unknown>
   readonly txDescription: string
   /** Optional pre-materialization filter, applied AFTER the read-only / empty
    *  guards and before the probe. Types drop contested-`id` seeds here; the
@@ -479,7 +535,7 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
         parentId,
         orderKey: 'a0',
         content: config.contentFor(seed),
-        properties: config.propertiesFor(seed),
+        properties: config.propertiesFor(seed, workspaceId),
       }, {systemMint: true})
       created += 1
     }

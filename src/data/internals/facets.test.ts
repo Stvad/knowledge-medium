@@ -36,6 +36,7 @@ import {
   mutatorsFacet,
   propertyEditorOverridesFacet,
   queriesFacet,
+  typeSeedsFacet,
   typesFacet,
   valuePresetCoresFacet,
 } from '../facets'
@@ -52,6 +53,7 @@ import {
   BLOCK_TYPE_TYPE,
   EXTENSION_TYPE,
   KERNEL_TYPE_CONTRIBUTIONS,
+  PAGE_TYPE,
   PROPERTY_SCHEMA_TYPE,
   TYPES_PAGE_TYPE,
 } from '@/data/blockTypes'
@@ -192,19 +194,22 @@ describe('typesFacet + schema lift', () => {
     }
   })
 
-  it('kernelDataExtension contributes kernel block types', () => {
+  it('kernelDataExtension contributes kernel block types as seeds', () => {
+    // C4a: kernel types are code seeds now — they register into `typeSeedsFacet`
+    // (a list facet the materializer reads), not the static `typesFacet`.
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(typesFacet)
-    expect(registered.size).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    expect(runtime.read(typesFacet).size).toBe(0)
+    const registered = runtime.read(typeSeedsFacet)
+    expect(registered.length).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    const byId = new Map(registered.map(t => [t.id, t]))
     for (const type of KERNEL_TYPE_CONTRIBUTIONS) {
-      expect(registered.get(type.id)).toBe(type)
+      expect(byId.get(type.id)).toBe(type)
     }
   })
 
   it('Extension blocks lift name and description metadata properties', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(typesFacet)
-    const extensionType = registered.get(EXTENSION_TYPE)
+    const extensionType = runtime.read(typeSeedsFacet).find(t => t.id === EXTENSION_TYPE)
 
     expect(extensionType?.properties).toEqual(
       expect.arrayContaining([extensionNameProp, extensionDescriptionProp]),
@@ -276,6 +281,21 @@ describe('typesFacet + schema lift', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
     repo.setFacetRuntime(runtime)
     expect(repo.types.has(TYPES_PAGE_TYPE)).toBe(true)
+  })
+
+  it('surfaces kernel type seeds in repo.types BEFORE a workspace pin (buildUnboundTypes fallback)', () => {
+    // No setActiveWorkspaceId: the type-definition registry is null, so repo.types
+    // must fall back to the unbound seed synthesis. Direct regression guard for the
+    // C4a move of kernel types off `typesFacet` onto `typeSeedsFacet` — without the
+    // fallback, `repo.types` would be empty until a workspace pins the registry.
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    repo.setFacetRuntime(runtime)
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.types.get(PAGE_TYPE)?.label).toBe('Page')
+    // The synthesized contribution is provenance-stripped (seedContribution),
+    // matching a bare defineBlockType — the seed's seedKey/revision don't leak.
+    expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('seedKey')
+    expect(repo.types.get(PAGE_TYPE)).not.toHaveProperty('revision')
   })
 
   it('shared schema object lifted by multiple types dedups without warning', () => {

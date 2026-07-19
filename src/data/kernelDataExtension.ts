@@ -1,7 +1,7 @@
 /**
  * Kernel data-layer AppExtension — the single source of the kernel
  * mutators, queries, post-commit / same-tx processors, invalidation
- * rule, property definition seeds, and type contributions, expressed as facet
+ * rule, property definition seeds, and type seeds, expressed as facet
  * contributions. This is the ONLY kernel registration path (audit
  * B1(1)): the Repo constructor installs it as a kernel-only
  * `FacetRuntime` (`installKernelRuntime`, default true) so
@@ -29,7 +29,7 @@ import {
   queriesFacet,
   sameTxProcessorsFacet,
   systemPagesFacet,
-  typesFacet,
+  typeSeedsFacet,
   valuePresetCoresFacet,
 } from './facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -59,7 +59,10 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_SAME_TX_PROCESSORS.map(p => sameTxProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_QUERIES.map(q => queriesFacet.of(q, {source: 'kernel'})),
   KERNEL_PROPERTY_SEEDS.map(seed => definitionSeedsFacet.of(seed, {source: 'kernel'})),
-  KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),
+  // C4a: kernel types are code seeds now — contributed to `typeSeedsFacet` (not
+  // the static `typesFacet`) so the materializer mints their backing blocks and
+  // the type-definition registry synthesizes them into `repo.types`.
+  KERNEL_TYPE_CONTRIBUTIONS.map(t => typeSeedsFacet.of(t, {source: 'kernel'})),
   kernelValuePresetCores.map(core => valuePresetCoresFacet.of(core, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
   // Kernel singleton pages, materialised eagerly at workspace bootstrap via
