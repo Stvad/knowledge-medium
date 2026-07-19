@@ -668,6 +668,98 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
   })
 })
 
+describe('movement gestures anchor on the visible sibling list (§9/§10)', () => {
+  /** `p` → hidden field row → value child, plus two ordinary content
+   *  children, so every gesture has both a visible and a hidden neighbour. */
+  const setupMovable = async (): Promise<{
+    repo: Repo; fieldRowId: string; valueRowId: string
+  }> => {
+    await seedWorkspace('children')
+    const repo = setup()
+    // Real fractional-index keys throughout: these tests exercise the
+    // order-key arithmetic, which validates its inputs.
+    await repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'p'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    // Content children created AFTER the property so the field row (keyAtStart)
+    // sits physically first — the hidden-neighbour case.
+    await repo.tx(async tx => {
+      await tx.create({id: 'c1', workspaceId: WS, parentId: 'p', orderKey: 'a1', content: 'c1'})
+      await tx.create({id: 'c2', workspaceId: WS, parentId: 'p', orderKey: 'a2', content: 'c2'})
+    }, {scope: ChangeScope.BlockDefault})
+    const [field] = await liveFieldRows('p')
+    const [value] = (await childrenRows(field!.id)).filter(v => v.deleted === 0)
+    return {repo, fieldRowId: field!.id, valueRowId: value!.id}
+  }
+
+  const parentOf = async (id: string): Promise<string | null> =>
+    (await sharedDb.db.get<{parent_id: string | null}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [id],
+    )).parent_id
+
+  // The anchor for outdenting a VALUE row is its parent field row, which the
+  // caller cannot see — so the gesture has no target and must do nothing.
+  // Acting on the raw sibling list instead hoists the value out of the
+  // property and the next projection drops the key: silent property loss from
+  // a Shift+Tab the user aimed at ordinary content.
+  it('outdenting a property value row is a clean no-op — the property survives', async () => {
+    const {repo, fieldRowId, valueRowId} = await setupMovable()
+
+    const moved = await repo.mutate.outdent({id: valueRowId})
+
+    expect(moved).toBe(false)
+    expect(await parentOf(valueRowId)).toBe(fieldRowId)
+    expect(await cellValue('p')).toBe('done')
+  })
+
+  // Same subject, the other gesture: with the field row hidden from `p`'s
+  // visible children, the "parent has no neighbouring sibling" edge used to
+  // index `parentSiblings[-1 + 1]` and adopt the FIRST visible child as the
+  // new parent — dropping the value under an unrelated block.
+  it('moving a property value row down at the edge does not relocate it under a content sibling', async () => {
+    const {repo, fieldRowId, valueRowId} = await setupMovable()
+
+    const moved = await repo.mutate.moveVertical({
+      id: valueRowId, direction: 1, scopeRootId: 'p',
+    })
+
+    expect(moved).toBe(false)
+    expect(await parentOf(valueRowId)).toBe(fieldRowId)
+    expect(await cellValue('p')).toBe('done')
+  })
+
+  // Resolves the asymmetry #404 flagged: `indent` and `moveVertical` already
+  // no-op on a row the caller can't see, while `outdent` acted on it. A
+  // deliberate machinery move goes through `core.move`, not an outline gesture.
+  it('outdenting a hidden field row is a no-op, like indent and moveVertical', async () => {
+    const {repo, fieldRowId} = await setupMovable()
+
+    expect(await repo.mutate.outdent({id: fieldRowId})).toBe(false)
+    expect(await repo.mutate.moveVertical({id: fieldRowId, direction: -1})).toBe(false)
+    await repo.mutate.indent({id: fieldRowId})
+
+    expect(await parentOf(fieldRowId)).toBe('p')
+    expect(await cellValue('p')).toBe('done')
+  })
+
+  // The positive half of the rule: a hidden row must not absorb a gesture
+  // either. `c2` moves up past the field row's physical slot in ONE step and
+  // lands above `c1` — where it physically sits relative to the hidden row is
+  // unobservable, but a visible gesture may never appear to do nothing.
+  it('moving up past a hidden physical neighbour lands above the visible one', async () => {
+    const {repo} = await setupMovable()
+
+    expect(await repo.mutate.moveVertical({id: 'c2', direction: -1})).toBe(true)
+
+    await repo.tx(async tx => {
+      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
+      expect(visible.map(c => c.id)).toEqual(['c2', 'c1'])
+    }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
 describe('delete cascade (machinery traversal, §9)', () => {
   it('softDeleteSubtree tombstones hidden field/value rows with the parent', async () => {
     await seedWorkspace('children')

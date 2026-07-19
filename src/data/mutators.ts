@@ -505,6 +505,28 @@ export const setOrderKey = defineMutator<{id: string; orderKey: string}, void>({
   },
 })
 
+// ──── outline gestures: indent / outdent / moveVertical ────
+
+/**
+ * The three relative gestures resolve their anchors against the sibling list
+ * **the caller sees** — the visible view, with recognized property machinery
+ * filtered (PR #288 §9, "movement anchors on the list the caller sees"). A
+ * hidden row can therefore neither be picked as a gesture's target nor absorb
+ * a step aimed past it; where a moved block lands *physically* relative to a
+ * hidden row carries no semantics.
+ *
+ * Corollary: when the subject or the anchor is absent from that list, the
+ * gesture is a clean **no-op** rather than a surprising relocation. Outdenting
+ * a property VALUE row anchors on its field row, which the caller cannot see —
+ * acting on the raw list instead hoists the value out of the property and the
+ * next projection silently drops the key. `indent` and `moveVertical` already
+ * no-op this way; `outdent` joining them resolves the asymmetry #404 flagged.
+ *
+ * Deliberate machinery movement is not blocked, it just doesn't go through an
+ * outline gesture: `core.move` places a block at an explicit position on the
+ * structural list, which is what materialization, merge, and the bridge use.
+ */
+
 // ──── indent ────
 
 export const indent = defineMutator<{id: string}, void>({
@@ -560,6 +582,11 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     // workspace root), exiting the visible scope.
     if (scopeRootId !== undefined && self.parentId === scopeRootId) return false
     const parent = await requireBlock(tx, self.parentId)
+    // Gesture anchoring (see the section note above): the subject must be a row
+    // the caller can see, so a hidden field row isn't outdentable here while it
+    // is un-indentable — `core.move` is the structural path.
+    const siblings = await visibleChildrenOf(tx, self.parentId, self.workspaceId)
+    if (!siblings.some(s => s.id === id)) return false
     // Move under grandparent, positioned right after current parent.
     // tx.childrenOf(null) enumerates root-level siblings of the pinned
     // workspace, so the same logic works for both nested and root
@@ -567,18 +594,18 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     const grandparent = parent.parentId
     // Pass self.workspaceId so the null-grandparent case scopes
     // correctly even before this tx pins a workspace.
-    const grandSiblings = await tx.childrenOf(grandparent, self.workspaceId)
+    const grandSiblings = await visibleChildrenOf(tx, grandparent, self.workspaceId)
     const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
-    let orderKey: string
-    if (parentIx < 0) {
-      // Stale read — fall back to last position under grandparent.
-      orderKey = keyAtEnd(grandSiblings.at(-1)?.orderKey ?? null)
-    } else {
-      // Place the outdented block immediately after its parent (between the
-      // parent and the parent's next sibling), breaking a tie by re-keying the
-      // run when the parent shares an order_key with its next grand-sibling (A1).
-      orderKey = await keyImmediatelyAfter(tx, grandparent, grandSiblings, parentIx)
-    }
+    // The anchor — the current parent — isn't on the caller's list: either a
+    // hidden parent (outdenting a property value out of its field row, which
+    // would drop the key at the next projection) or a stale read. Both are
+    // no-ops; the old "fall back to last position under the grandparent" is
+    // exactly the silent relocation this rule exists to prevent.
+    if (parentIx < 0) return false
+    // Place the outdented block immediately after its parent (between the
+    // parent and the parent's next sibling), breaking a tie by re-keying the
+    // run when the parent shares an order_key with its next grand-sibling (A1).
+    const orderKey = await keyImmediatelyAfter(tx, grandparent, grandSiblings, parentIx)
     await tx.move(id, {parentId: grandparent, orderKey})
     return true
   },
@@ -677,6 +704,11 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     const parent = await requireBlock(tx, self.parentId)
     const parentSiblings = await visibleChildrenOf(tx, parent.parentId, self.workspaceId)
     const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
+    // The parent isn't on the caller's list — the value-row edge (its field row
+    // is hidden), or a stale read. Without this guard the DOWN branch reads
+    // `parentSiblings[-1 + 1]`, adopting the first VISIBLE sibling as the new
+    // parent: a property value silently relocated under an unrelated block.
+    if (pIdx < 0) return false
     const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
     if (!neighbourParent) return false
     // Moving INTO a neighbouring subtree reveals it if collapsed, so the block
