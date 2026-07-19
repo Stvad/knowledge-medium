@@ -318,15 +318,39 @@ const propertyValueFieldRow = async (
   source: Pick<BlockData, 'parentId' | 'workspaceId'>,
 ): Promise<BlockData | null> => {
   if (source.parentId === null) return null
-  if (!(await tx.isPropertyChildBackedWorkspace(source.workspaceId))) return null
   const parent = await tx.get(source.parentId)
+  if (parent === null) return null
+  return (await isPropertyFieldRow(tx, parent)) ? parent : null
+}
+
+/**
+ * Is `row` ITSELF a recognized property field row — the `((fieldId))` child
+ * that carries a property's identity on its owner (PR #288 §9)?
+ *
+ * Same canonical recognition as `isPropertyValueRow` (which is defined in
+ * terms of this): a field row is exactly a child the visible view filters out
+ * of its own parent's children, so the flip gate, definition-ness, and the §9
+ * ancestry rule all come along.
+ *
+ * Write paths need this for the same reason they need the value-row check, one
+ * level up: a field row's content IS the property's identity, so rewriting it
+ * doesn't corrupt a value, it detaches the property from its owner entirely
+ * (see `inlineDeletedBlockReferences` — deleting a DEFINITION block would
+ * otherwise inline every field row keyed to it).
+ */
+export const isPropertyFieldRow = async (
+  tx: Tx,
+  row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId'>,
+): Promise<boolean> => {
+  if (row.parentId === null) return false
   // Cheap pre-filter: the recognition column is stamped on every field row, so
-  // an unstamped parent can't be one and needs no sibling query.
-  if (parent === null || parent.referenceTargetId === null) return null
-  const parentSiblings = await tx.childrenOf(
-    parent.parentId, parent.workspaceId, {hidePropertyChildren: true},
+  // an unstamped row can't be one and needs no sibling query.
+  if (row.referenceTargetId === null) return false
+  if (!(await tx.isPropertyChildBackedWorkspace(row.workspaceId))) return false
+  const siblings = await tx.childrenOf(
+    row.parentId, row.workspaceId, {hidePropertyChildren: true},
   )
-  return parentSiblings.some(row => row.id === parent.id) ? null : parent
+  return !siblings.some(sibling => sibling.id === row.id)
 }
 
 /**

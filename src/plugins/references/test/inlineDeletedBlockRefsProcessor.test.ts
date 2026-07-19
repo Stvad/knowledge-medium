@@ -356,6 +356,25 @@ describe('property value children keep a dangling ref instead of inlining (#404)
     expect(env.read('value')!.references).toEqual([{id: D, alias: D}])
   })
 
+
+  // Deleting the DEFINITION block, not the ref target: every field row keyed
+  // to it is an ordinary reference source, so without an exemption they get
+  // inlined — content replaced by the definition's text, stamp cleared — and
+  // each owner loses its property identity irreversibly. Same argument as the
+  // value case: a dangling `((fieldId))` is restorable (restore the definition
+  // and the property comes back), inlined prose is not. §9 already has a home
+  // for the interim state: a field row whose definition doesn't resolve
+  // degrades to a visible "unknown field" row.
+  it('leaves field rows dangling when their definition block is deleted', async () => {
+    await seedFlippedWorkspaceWithRefValue()
+
+    await env.repo.mutate.delete({id: DEF})
+
+    expect(env.read(DEF)!.deleted).toBe(true)
+    expect(env.read('field')!.content).toBe(`((${DEF}))`)
+    expect(env.read('field')!.referenceTargetId).toBe(DEF)
+  })
+
   // The exemption is for VALUES, not for everything under a property: a
   // comment beneath a value row is ordinary prose and still inlines, exactly
   // as it would anywhere else in the outline.

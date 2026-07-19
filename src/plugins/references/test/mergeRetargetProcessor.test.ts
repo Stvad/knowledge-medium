@@ -470,6 +470,7 @@ describe('references.retargetMergedBlockReferences', () => {
     const FROM = '66666666-6666-4666-8666-666666666666'
     const INTO = '77777777-7777-4777-8777-777777777777'
 
+
     it('retargets the value child itself, not just the owner cell', async () => {
       await env.h.db.execute(
         `INSERT OR REPLACE INTO workspaces
