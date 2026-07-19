@@ -1,10 +1,15 @@
-import{defineQuery as e}from"../../data/api/query.js";import{boolean as t,object as n,string as r}from"../../../node_modules/zod/v4/classic/schemas.js";import{backlinksFilterSchema as i}from"../../data/api/typedBlockQuery.js";import"../../data/api/index.js";import a from"../../../node_modules/lodash-es/isEqual.js";import{readIsChildBackedWorkspace as o}from"../../data/workspaceSchema.js";import{TYPED_BLOCKS_STRUCTURE_CHANNEL as s,typedBlocksStructureKey as c}from"../../data/invalidation.js";var l=`backlinks.forBlock`,u=500,d=async(e,t,n=u)=>{let r=new Set;for(let i=0;i<t.length;i+=n){let a=t.slice(i,i+n),o=a.map(()=>`?`).join(`, `),s=await e.getAll(`WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, depth) AS (
-         SELECT id, id, reference_target_id, parent_id, workspace_id, 0
+import{defineQuery as e}from"../../data/api/query.js";import{boolean as t,object as n,string as r}from"../../../node_modules/zod/v4/classic/schemas.js";import{backlinksFilterSchema as i}from"../../data/api/typedBlockQuery.js";import"../../data/api/index.js";import a from"../../../node_modules/lodash-es/isEqual.js";import{readIsChildBackedWorkspace as o}from"../../data/workspaceSchema.js";import{TYPED_BLOCKS_STRUCTURE_CHANNEL as s,typedBlocksStructureKey as c}from"../../data/invalidation.js";var l=`backlinks.forBlock`,u=500,d=async(e,t,n=u)=>{let r=new Set;for(let i=0;i<t.length;i+=n){let a=t.slice(i,i+n),o=a.map(()=>`?`).join(`, `),s=await e.getAll(`WITH RECURSIVE up(start_id, id, reference_target_id, parent_id, workspace_id, path, depth) AS (
+         SELECT id, id, reference_target_id, parent_id, workspace_id,
+                '!' || hex(id) || '/',
+                0
            FROM blocks WHERE id IN (${o})
          UNION ALL
-         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+         SELECT up.start_id, b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+                up.path || '!' || hex(b.id) || '/',
+                up.depth + 1
            FROM blocks AS b JOIN up ON b.id = up.parent_id
           WHERE up.depth < 100
+            AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
        )
        SELECT DISTINCT up.start_id AS id
          FROM up

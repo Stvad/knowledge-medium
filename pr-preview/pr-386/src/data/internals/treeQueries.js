@@ -114,14 +114,19 @@ var e=`
           AND bt.workspace_id = blocks.workspace_id
      )
      OR EXISTS (
-       WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
-         SELECT id, reference_target_id, parent_id, workspace_id, 0
+       WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, path, depth) AS (
+         SELECT id, reference_target_id, parent_id, workspace_id,
+                '!' || hex(id) || '/',
+                0
            FROM blocks WHERE id = ?
          UNION ALL
-         SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+         SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+                up.path || '!' || hex(b.id) || '/',
+                up.depth + 1
            FROM blocks AS b
            JOIN up ON b.id = up.parent_id
           WHERE up.depth < 100
+            AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
        )
        SELECT 1 FROM up
         WHERE up.reference_target_id IS NOT NULL
@@ -152,14 +157,19 @@ ${s}
   WITH RECURSIVE
   root_exempt(v) AS (
     SELECT CASE WHEN EXISTS (
-      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
-        SELECT id, reference_target_id, parent_id, workspace_id, 0
+      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, path, depth) AS (
+        SELECT id, reference_target_id, parent_id, workspace_id,
+               '!' || hex(id) || '/',
+               0
           FROM blocks WHERE id = ?
         UNION ALL
-        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id,
+               up.path || '!' || hex(b.id) || '/',
+               up.depth + 1
           FROM blocks AS b
           JOIN up ON b.id = up.parent_id
          WHERE up.depth < 100
+           AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
       )
       SELECT 1 FROM up
        WHERE up.reference_target_id IS NOT NULL
