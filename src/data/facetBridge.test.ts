@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
 import type { TypeContribution } from '@/data/api'
-import type { TypeDefinitionRegistrySnapshot } from '@/data/typeDefinitionRegistry'
 import { mergeCodeAndRegistryTypes } from '@/data/facetBridge'
 
 /** The C3b behavior-neutrality invariant lives here: `repo.types` is no longer a
@@ -18,15 +17,10 @@ import { mergeCodeAndRegistryTypes } from '@/data/facetBridge'
 
 const code = (id: string, label: string): TypeContribution => ({ id, label })
 
-const registryWith = (types: readonly TypeContribution[]): TypeDefinitionRegistrySnapshot => ({
-  workspaceId: 'ws',
-  typesById: new Map(types.map(t => [t.id, t])),
-  definitionsByBlockId: new Map(),
-  blockIdByTypeId: new Map(),
-  seedsByKey: new Map(),
-  contestedSeedKeys: new Set(),
-  contestedTypeIds: new Set(),
-})
+// The overlay `mergeCodeAndRegistryTypes` merges is just the `typesById`-shaped
+// map — the registry's slice when pinned, or `buildUnboundTypes` before a pin.
+const overlayOf = (types: readonly TypeContribution[]): ReadonlyMap<string, TypeContribution> =>
+  new Map(types.map(t => [t.id, t]))
 
 describe('mergeCodeAndRegistryTypes', () => {
   const codeTypes = new Map([
@@ -39,13 +33,13 @@ describe('mergeCodeAndRegistryTypes', () => {
   })
 
   it('returns the code map unchanged when the registry has no types', () => {
-    expect(mergeCodeAndRegistryTypes(codeTypes, registryWith([]))).toBe(codeTypes)
+    expect(mergeCodeAndRegistryTypes(codeTypes, overlayOf([]))).toBe(codeTypes)
   })
 
   it('appends registry (user/seed) entries after the code entries, disjoint union', () => {
     const merged = mergeCodeAndRegistryTypes(
       codeTypes,
-      registryWith([code('uuid-a', 'Task'), code('uuid-b', 'Note')]),
+      overlayOf([code('uuid-a', 'Task'), code('uuid-b', 'Note')]),
     )
     // Order matches the old fold: static code first, user-data bucket appended.
     expect([...merged.keys()]).toEqual(['page', 'todo', 'uuid-a', 'uuid-b'])
@@ -59,7 +53,7 @@ describe('mergeCodeAndRegistryTypes', () => {
     try {
       const merged = mergeCodeAndRegistryTypes(
         codeTypes,
-        registryWith([code('todo', 'Todo (block-built)')]),
+        overlayOf([code('todo', 'Todo (block-built)')]),
       )
       // Registry wins the value...
       expect(merged.get('todo')).toMatchObject({ label: 'Todo (block-built)' })

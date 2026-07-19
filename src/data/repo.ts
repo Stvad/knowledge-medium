@@ -127,6 +127,7 @@ import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
+import {buildUnboundTypes} from './typeDefinitionRegistry'
 import {
   materializePropertySeeds,
   materializeTypeSeeds,
@@ -194,7 +195,12 @@ type KnownQueryDispatch = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
 
-const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
+// Stage-0 `_types` fallback before any runtime installs (overwritten synchronously
+// by the constructor's kernel-runtime install). Built via `buildUnboundTypes` — the
+// same synthesis the facet rebuild uses — so its entries are provenance-stripped
+// (no `seedKey`/`revision`), byte-consistent with the post-install map rather than
+// the raw `TypeSeedDeclaration`s `KERNEL_TYPE_CONTRIBUTIONS` now holds.
+const KERNEL_TYPES = buildUnboundTypes(KERNEL_TYPE_CONTRIBUTIONS)
 const KERNEL_PROPERTY_SEED_MAP = new Map(KERNEL_PROPERTY_SEEDS.map(seed => [seed.name, seed]))
 
 /** The `repo.mutate` / `repo.query` proxy shape: string property access
