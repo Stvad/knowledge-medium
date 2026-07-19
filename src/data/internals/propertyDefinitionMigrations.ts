@@ -23,6 +23,7 @@
  * this one-shot pass can't reach it.
  */
 
+import type { ResolvedPropertySchema } from '@/data/api'
 import type { PropertyDefinitionRegistrySnapshot } from '@/data/propertyDefinitionRegistry'
 
 export interface PropertyDefinitionChange {
@@ -33,6 +34,25 @@ export interface PropertyDefinitionChange {
    *  tweaks that keep the codec type re-encode lazily through the ordinary
    *  idempotent materialize/project round-trip instead. */
   readonly codecChanged: boolean
+}
+
+/** One change, resolved to the schema the workspace selected for its
+ *  fieldId — captured at `Repo.schedulePropertyDefinitionMigrations` time,
+ *  NOT re-resolved when the deferred batch finally runs.
+ *
+ *  `Repo.propertySchemaResolverFor` only serves the ACTIVE workspace or the
+ *  immediately-previous one (one-deep retention) and fails closed for any
+ *  other workspace. The migration batch is deferred to a deep-idle job, so by
+ *  the time it runs the user may have switched workspaces twice more —
+ *  re-resolving THEN would silently return zero plans and drop the migration
+ *  with no retry. Resolution is guaranteed to succeed at SCHEDULE time
+ *  (`changes` comes from this workspace's own registry rebuild, which just
+ *  primed its snapshot), so the plan is captured there instead. A change
+ *  whose fieldId doesn't resolve then (shadowed / unavailable, §6) is
+ *  dropped — same skip the old run-time check performed, just moved earlier. */
+export interface PropertyDefinitionMigrationPlan {
+  readonly change: PropertyDefinitionChange
+  readonly schema: ResolvedPropertySchema<unknown>
 }
 
 /** Diff two registry snapshots of the SAME workspace by durable fieldId.

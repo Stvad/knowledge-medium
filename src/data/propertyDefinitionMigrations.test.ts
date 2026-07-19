@@ -178,6 +178,40 @@ describe('rename migration (flipped workspace)', () => {
     // Cell keeps the old key (today's rename semantics), no children exist.
     expect(await cell('p')).toEqual({status: 'done'})
   })
+
+  it('still applies after the active workspace moves on twice before the idle drain', async () => {
+    // Repro for a PR #386 review defect: `propertySchemaResolverFor` only
+    // serves the ACTIVE workspace or the immediately-previous one (one-deep
+    // retention) and fails closed otherwise. The migration pass is deferred
+    // to a deep-idle job — if the user switches workspaces twice before that
+    // job fires, WS falls out of BOTH slots and a run-time re-resolve would
+    // silently return zero plans, dropping the migration with no retry.
+    await seedWorkspace('children')
+    const repo = setup()
+    const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'done')
+    expect(await cell('p')).toEqual({status: 'done'})
+
+    vi.useFakeTimers()
+    // Schedules the migration while WS is still active — this is the moment
+    // the fix captures the resolved plan.
+    publishDefinition(repo, stateString)
+    // A→B→C: WS (A) is neither active nor the retained-previous workspace
+    // once this returns. Each switch must reach a REAL primed snapshot for
+    // the new workspace (not just flip `activeWorkspaceId`) — otherwise the
+    // registry rebuild keeps re-publishing `null`, which leaves WS parked as
+    // "previous" forever and never actually reproduces the defect.
+    repo.setActiveWorkspaceId('ws-other-1')
+    await repo.whenPropertyDefinitionsReady('ws-other-1')
+    repo.setActiveWorkspaceId('ws-other-2')
+    await repo.whenPropertyDefinitionsReady('ws-other-2')
+    await vi.runAllTimersAsync()
+    await repo.awaitPropertyDefinitionMigrations()
+    vi.useRealTimers()
+
+    expect(await rowContent(fieldRowId)).toBe(`((${FIELD_ID}))`)
+    expect(await cell('p')).toEqual({state: 'done'})
+    expect(await rowContent(valueRowId)).toBe('done')
+  })
 })
 
 describe('codec-change migration', () => {

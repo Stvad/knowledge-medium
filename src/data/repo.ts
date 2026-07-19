@@ -109,7 +109,10 @@ import {
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
-import type { PropertyDefinitionChange } from './internals/propertyDefinitionMigrations'
+import type {
+  PropertyDefinitionChange,
+  PropertyDefinitionMigrationPlan,
+} from './internals/propertyDefinitionMigrations'
 import {
   encodedPropertyValueToChildContent,
   isInsidePropertySubtreeWalk,
@@ -2712,8 +2715,29 @@ export class Repo {
     changes: readonly PropertyDefinitionChange[],
   ): void {
     if (this.isReadOnly || !workspaceId || changes.length === 0) return
+    // Resolve NOW, not when the deferred job runs. `changes` comes from this
+    // workspace's OWN registry rebuild (the facet bridge calls
+    // `applyTypesAndSchemas` then this method synchronously, in the same
+    // tick), so `propertySchemaResolverFor(workspaceId)` is guaranteed to
+    // serve it faithfully here. The batch itself is deferred to a deep-idle
+    // job, and `propertySchemaResolverFor` only retains the active workspace
+    // or the immediately-previous one (one-deep) — by the time the job runs
+    // the user may have switched workspaces twice more, which would evict
+    // `workspaceId` from both slots and make a run-time re-resolve fail
+    // closed (empty plans, migration silently dropped with no retry, #386
+    // review). Capturing the resolved plan here instead means it describes
+    // THIS change and can never go stale from a LATER, unrelated workspace
+    // switch. A fieldId that doesn't resolve (shadowed / unavailable, §6) is
+    // dropped from the plan — the same skip the run-time check used to do,
+    // just performed here instead.
+    const resolver = this.propertySchemaResolverFor(workspaceId)
+    const plans: PropertyDefinitionMigrationPlan[] = changes.flatMap(change => {
+      const resolution = resolver.resolveField(change.fieldId)
+      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
+    })
+    if (plans.length === 0) return
     this.propertyDefinitionMigrationJobs.schedule(() =>
-      this.runPropertyDefinitionMigrations(workspaceId, changes),
+      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver),
     )
   }
 
@@ -2724,14 +2748,15 @@ export class Repo {
 
   private async runPropertyDefinitionMigrations(
     workspaceId: string,
-    changes: readonly PropertyDefinitionChange[],
+    plans: readonly PropertyDefinitionMigrationPlan[],
+    resolver: PropertySchemaResolver,
   ): Promise<void> {
     if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
     try {
-      await this.runPropertyDefinitionMigrationBatch(workspaceId, changes)
+      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
-      const names = changes.map(change => `"${change.newName}" (${change.fieldId})`).join(', ')
+      const names = plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
       console.error(`[propertyDefinitionMigrations] ${names} failed: ${reason}`)
     }
   }
@@ -2753,16 +2778,16 @@ export class Repo {
    *  never sees a key go missing. */
   private async runPropertyDefinitionMigrationBatch(
     workspaceId: string,
-    changes: readonly PropertyDefinitionChange[],
+    plans: readonly PropertyDefinitionMigrationPlan[],
+    resolver: PropertySchemaResolver,
   ): Promise<void> {
-    const resolver = this.propertySchemaResolverFor(workspaceId)
-    // Shadowed/unavailable definitions are excluded from the name map and
-    // the cell projection (§6) — nothing to re-key for them.
-    const plans = changes.flatMap(change => {
-      const resolution = resolver.resolveField(change.fieldId)
-      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
-    })
-    if (plans.length === 0) return
+    // `plans` arrives pre-resolved (schedule-time capture, see
+    // `schedulePropertyDefinitionMigrations`) and `resolver` is the SAME
+    // instance that resolved it — both frozen against the registry snapshot
+    // as of that moment, immune to any workspace switch that happens while
+    // this deferred batch sits queued or runs. Shadowed/unavailable
+    // definitions were already excluded from `plans` there (§6) — nothing to
+    // re-key for them.
 
     // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
     // is user content (never a field row); retitling it would rewrite the
@@ -2799,17 +2824,48 @@ export class Repo {
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
       await this.tx(async tx => {
-        // §9 ancestry rule, memoized per tx: a row whose parent chain passes
-        // through a field row is a VALUE/comment (e.g. a ref-typed value
-        // pointing at this very definition), not a field row — never retitle
-        // or re-key those. Checker built ONCE per chunk (rather than
-        // re-resolving the registry snapshot on every walked row) — the
-        // registry is a tx-start-captured snapshot, so it can't change
-        // mid-chunk anyway.
+        // §9 ancestry rule, memoized per tx (fresh per chunk — a fresh `tx()`
+        // per chunk sees the previous chunk's own committed writes, and the
+        // memo shouldn't outlive the tx it was walked against): a row whose
+        // parent chain passes through a field row is a VALUE/comment (e.g. a
+        // ref-typed value pointing at this very definition), not a field row
+        // — never retitle or re-key those.
+        //
+        // `isFieldDefinition` closes over the batch's captured `resolver`
+        // (schedule-time snapshot, captured in
+        // `schedulePropertyDefinitionMigrations` and threaded through as a
+        // parameter — NOT re-derived here). It used to call
+        // `this.propertySchemaResolverFor(workspaceId)` fresh per
+        // chunk, but that has the exact same one-deep active/previous fail-
+        // closed behavior as the outer resolve this method used to do: once
+        // the deferred batch's own workspace fell out of retention (further
+        // switches while THIS batch's chunks are still running), every
+        // fieldId — including the ones `plans` already proved resolvable —
+        // would stop resolving, `isPropertyFieldInstance` below would reject
+        // every sibling, and the batch would silently re-key nothing despite
+        // having non-empty plans. Reusing the captured `resolver` fixes that:
+        // it's bound to a real snapshot for the life of the batch, not to
+        // whatever workspace happens to be live when a chunk executes. This
+        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
+        // definitions encountered walking up from `parentId`), which a
+        // plans-only lookup can't answer — the resolver is what actually knows
+        // "is this fieldId some (possibly shadowed) definition in this
+        // workspace's registry", not just "is it one of the migrating ones".
+        //
+        // Trade-off: this is a fixed snapshot for the whole batch, so a
+        // genuinely concurrent definition change landing between chunks (or
+        // between schedule time and the batch running) isn't picked up
+        // here — but that's an independent, separately-diffed registry
+        // rebuild, so it schedules its OWN follow-up migration; it doesn't
+        // need this pass to also notice it. For the `plans` fieldIds
+        // specifically, `isFieldDefinition(change.fieldId)` is now
+        // provably always true (same resolver instance that already proved
+        // `change.fieldId` resolves when `plans` was built) — the guard below
+        // stays for the root-half/shared-recognizer symmetry with the
+        // ancestor walk, not as a live re-check.
         const subtreeMemo = new Map<string, boolean>()
-        const resolverForChunk = this.propertySchemaResolverFor(workspaceId)
         const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
-          const rowResolution = resolverForChunk.resolveField(fieldId)
+          const rowResolution = resolver.resolveField(fieldId)
           return rowResolution.status === 'resolved'
             || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
         }
@@ -2849,11 +2905,10 @@ export class Repo {
             // same closure isInsidePropertySubtreeWalk uses above) instead of
             // trusting the stored column outright — it's a no-op here for
             // the root half (`siblings` are all actual children of `parent`,
-            // so `parentId` is never null), but guards the resolvability half
-            // if `change.fieldId` stops resolving under `resolverForChunk`'s
-            // per-chunk snapshot after `plans` was built off the outer
-            // `resolver` snapshot (e.g. a concurrent same-tx definition
-            // change lands mid-batch).
+            // so `parentId` is never null) AND for the resolvability half
+            // (`isFieldDefinition(change.fieldId)` is always true here — see
+            // `isFieldDefinition`'s own comment above), kept only for
+            // symmetry with the ancestor walk's use of the same recognizer.
             for (const sibling of siblings) {
               if (
                 (sibling.referenceTargetId ?? null) !== change.fieldId
