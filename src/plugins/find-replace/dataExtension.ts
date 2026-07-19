@@ -16,6 +16,7 @@ import {
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import {
+  isPropertyFieldRow,
   propertyChildContentToEncodedValue,
   resolvePropertyValueFieldSchema,
 } from '@/data/propertyChildren'
@@ -194,6 +195,22 @@ export const applyContentReplaceMutator = defineMutator<
       )
       if (replaced.replacementCount === 0) continue
 
+      // A FIELD row's content is the property's IDENTITY (`((fieldId))`), not
+      // its value: rewriting it retargets or orphans the whole property and
+      // strands the value subtree as ordinary content. No text replacement can
+      // be a legitimate edit to it, so it is skipped outright rather than
+      // codec-checked (PR #386 review — the same identity argument as the
+      // deleted-target exemption in `inlineDeletedBlockReferences`). Reachable
+      // via the unfiltered search above or a direct mutator call.
+      if (await isPropertyFieldRow(tx, current)) {
+        result.skippedUnparseableProperty += 1
+        const fieldId = current.referenceTargetId ?? null
+        const fieldSchema = fieldId === null ? null
+          : await tx.resolvePropertyFieldSchema(current.workspaceId, fieldId)
+        if (fieldSchema !== null) unparseableProperties.add(fieldSchema.name)
+        continue
+      }
+
       // #404 item 5: under properties-as-blocks (PR #288 §9), a property
       // VALUE child's `content` IS its typed value — writing straight
       // through here can leave it unparseable under its codec (a
@@ -211,9 +228,9 @@ export const applyContentReplaceMutator = defineMutator<
       // the typed value intact at the cost of that one occurrence not
       // being replaced — the user can revisit it once told about it.
       //
-      // Dormant un-flipped: `resolvePropertyValueFieldSchema` returns null
-      // whenever the workspace isn't child-backed (no field rows are ever
-      // recognized), so this whole block is a no-op there.
+      // Dormant un-flipped: both recognizers return false/null whenever the
+      // workspace isn't child-backed (no field rows are ever recognized), so
+      // this whole section is a no-op there.
       const schema = await resolvePropertyValueFieldSchema(tx, current)
       if (schema !== null) {
         // Ref-typed values are validated against the target the PROPOSED

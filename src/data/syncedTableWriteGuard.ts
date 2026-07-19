@@ -83,7 +83,7 @@ export const SYNCED_TABLES: ReadonlySet<string> = new Set([
  * Double-quoted / backtick / bracket identifiers are KEPT — `UPDATE "blocks"`
  * is a real write and the quoted name is the target.
  */
-const blankCommentsAndStrings = (sql: string): string => {
+const blankCommentsAndStrings = (sql: string, keepStrings = false): string => {
   let out = ''
   for (let i = 0; i < sql.length; i++) {
     const ch = sql[i]
@@ -101,7 +101,7 @@ const blankCommentsAndStrings = (sql: string): string => {
       i = end - 1
       continue
     }
-    if (ch === "'") {
+    if (ch === "'" && !keepStrings) {
       let j = i + 1
       while (j < sql.length) {
         if (sql[j] === "'") {
@@ -165,11 +165,20 @@ const unqualifiedTableName = (ref: string): string => {
  *  dots and spaces) or a bare run of non-delimiter characters. */
 const NAME_PART = String.raw`(?:"[^"]*"|` + '`[^`]*`' + String.raw`|\[[^\]]*\]|[^\s(;.,]+)`
 
+/** As {@link NAME_PART}, but also accepting a SINGLE-quoted name. SQLite
+ *  really does take `UPDATE 'blocks' SET …` as a write to the table (verified
+ *  against the engine, not inferred) — a misfeature, but a live one. This
+ *  spelling is scanned separately, over text whose string literals are still
+ *  intact, because the main scan blanks them: a name can hide in a literal,
+ *  and prose can fake a write from inside one. */
+const NAME_PART_Q = String.raw`(?:'[^']*'|` + NAME_PART.slice(3)
+
 /** A possibly schema-qualified table reference, allowing whitespace around the
  *  dots — SQLite accepts `UPDATE main . blocks`, and a capture that stopped at
  *  the first whitespace saw only `main` and read it as an unsynced table
  *  (PR #386 review). */
 const QUALIFIED_NAME = `(${NAME_PART}(?:\\s*\\.\\s*${NAME_PART})*)`
+const QUALIFIED_NAME_Q = `(${NAME_PART_Q}(?:\\s*\\.\\s*${NAME_PART_Q})*)`
 
 /** DML shapes, matched ANYWHERE in the sanitized text (see the module doc).
  *  `\b` on the leading verb keeps `reinsert into x` / a column named
@@ -180,20 +189,37 @@ const DML_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`\bdelete\s+from\s+` + QUALIFIED_NAME, 'gi'),
 ]
 
+/** The same shapes, but for a target spelled with SINGLE quotes. Run over
+ *  strings-intact text, so the match is only trusted when the NAME ITSELF is
+ *  quoted — that is what keeps prose out: in `VALUES ('update blocks now')`
+ *  the token after `update` is bare `blocks`, so nothing matches here, while
+ *  `UPDATE 'blocks'` does. */
+const QUOTED_NAME_DML_PATTERNS: readonly RegExp[] = [
+  new RegExp(String.raw`\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+` + QUALIFIED_NAME_Q, 'gi'),
+  new RegExp(String.raw`\bupdate\s+(?:or\s+\w+\s+)?` + QUALIFIED_NAME_Q, 'gi'),
+  new RegExp(String.raw`\bdelete\s+from\s+` + QUALIFIED_NAME_Q, 'gi'),
+]
+
 /**
  * Every table this SQL writes to, lowercased and unqualified, in the order
  * found. Scans the whole text — nested, prefixed, and multi-statement writes
  * all surface, because position is not part of the question (module doc).
  */
 export const writeTargets = (sql: string): string[] => {
-  const text = blankCommentsAndStrings(sql)
   const targets: string[] = []
-  for (const pattern of DML_PATTERNS) {
-    pattern.lastIndex = 0
-    for (const match of text.matchAll(pattern)) {
-      targets.push(unqualifiedTableName(match[1]))
+  const collect = (text: string, patterns: readonly RegExp[], quotedOnly: boolean): void => {
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0
+      for (const match of text.matchAll(pattern)) {
+        // The strings-intact pass only trusts a name that is itself quoted;
+        // an unquoted match there could be text inside a literal.
+        if (quotedOnly && !match[1].includes("'")) continue
+        targets.push(unqualifiedTableName(match[1]))
+      }
     }
   }
+  collect(blankCommentsAndStrings(sql), DML_PATTERNS, false)
+  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DML_PATTERNS, true)
   return targets
 }
 

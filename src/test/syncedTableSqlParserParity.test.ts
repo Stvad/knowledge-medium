@@ -93,6 +93,16 @@ const CORPUS = [
   'INSERT INTO block_aliases (block_id) VALUES (?); SELECT 1',
   `INSERT INTO block_aliases (x) VALUES (';'); SELECT 1`,
   'CREATE INDEX a ON blocks (x); CREATE INDEX b ON blocks (y)',
+  `UPDATE 'blocks' SET content = ?`,
+  `DELETE FROM 'blocks' WHERE id = ?`,
+  `INSERT INTO 'workspaces' (id) VALUES (?)`,
+  `UPDATE 'main'.'blocks' SET x = 1`,
+  `UPDATE main . 'blocks' SET x = 1`,
+  `INSERT INTO block_aliases (note) VALUES ('update blocks now')`,
+  `UPDATE 'block_aliases' SET x = 1`,
+  `UPDATE /* note */ blocks SET x = 1`,
+  'CREATE TRIGGER t AFTER INSERT ON local BEGIN UPDATE blocks SET x = 1; END',
+  'CREATE TRIGGER t AFTER UPDATE OF x ON blocks BEGIN SELECT 1; END',
 ]
 
 describe('synced-table SQL recognizer: TS and ESLint copies agree', () => {

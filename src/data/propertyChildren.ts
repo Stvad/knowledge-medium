@@ -140,6 +140,14 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     // sees it. The CELL keeps a bare id (`codecs.ref` encodes via `string`);
     // only the child content is reference-shaped.
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
+    // An EMPTY ref is not a reference — it is the absence of one. `codecs.ref`
+    // encodes a cleared/default ref as `''`, and rendering that as `(())`
+    // would be unparseable content that `referenceBlockContentForId` now
+    // (correctly) refuses, aborting the whole tx over a normal "clear this
+    // property" write. Empty content is exactly right here: the row survives,
+    // its derived column stays NULL, and the projection reads the key as
+    // unset — the same shape as prose typed into a ref value.
+    if (encoded.trim() === '') return ''
     return referenceBlockContentForId(encoded)
   }
   if (

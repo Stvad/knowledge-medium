@@ -90,6 +90,21 @@ describe('writeTargets / syncedWriteTarget', () => {
     )).toBe('workspaces')
   })
 
+  // SQLite accepts a single-quoted table name in DML position — verified
+  // against the engine. The main scan blanks string literals (so prose can't
+  // fake a write), which is exactly what hid this spelling.
+  it('catches a single-quoted table identifier without letting prose through', () => {
+    expect(syncedWriteTarget(`UPDATE 'blocks' SET content = ?`)).toBe('blocks')
+    expect(syncedWriteTarget(`DELETE FROM 'blocks' WHERE id = ?`)).toBe('blocks')
+    expect(syncedWriteTarget(`INSERT INTO 'workspaces' (id) VALUES (?)`)).toBe('workspaces')
+    expect(syncedWriteTarget(`UPDATE 'main'.'blocks' SET x = 1`)).toBe('blocks')
+    expect(syncedWriteTarget(`UPDATE main . 'blocks' SET x = 1`)).toBe('blocks')
+    // Prose that merely READS like DML stays clean — the name isn't quoted.
+    expect(syncedWriteTarget(`INSERT INTO block_aliases (note) VALUES ('update blocks now')`)).toBeNull()
+    expect(syncedWriteTarget(`INSERT INTO block_aliases (note) VALUES ('delete from blocks')`)).toBeNull()
+    expect(syncedWriteTarget(`UPDATE 'block_aliases' SET x = 1`)).toBeNull()
+  })
+
   it('keeps prose in string literals from faking a write', () => {
     expect(syncedWriteTarget(`INSERT INTO block_aliases (note) VALUES ('update blocks now')`)).toBeNull()
     expect(syncedWriteTarget(`INSERT INTO block_aliases (x) VALUES (';'); SELECT 1`)).toBeNull()

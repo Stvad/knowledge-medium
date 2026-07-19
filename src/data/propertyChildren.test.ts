@@ -1168,6 +1168,18 @@ describe('content <-> value codecs: ref values are `((id))`, read via reference_
     expect(encodedPropertyValueToChildContent(refSchema, 'block-abc')).toBe('((block-abc))')
   })
 
+  // Regression (PR #386 review): `referenceBlockContentForId` was hardened to
+  // refuse ids it cannot round-trip, which made the ordinary "clear a ref
+  // property" path — `codecs.ref` encodes a cleared value as `''` — throw and
+  // roll back the whole transaction. An empty ref is the ABSENCE of a
+  // reference, so it renders as empty content: the row survives, its derived
+  // column stays NULL, and the projection reads the key as unset.
+  it('renders a cleared ref value as empty content instead of throwing', () => {
+    expect(propertyValueToChildContent(refSchema, '')).toBe('')
+    expect(encodedPropertyValueToChildContent(refSchema, '')).toBe('')
+    expect(propertyValueToChildContent(refSchema, '   ')).toBe('')
+  })
+
   it('reads the ref back from the column (the bare id lands in the cell)', () => {
     const content = propertyValueToChildContent(refSchema, 'block-abc')
     // The derived column DERIVE would have stamped for `((block-abc))`.

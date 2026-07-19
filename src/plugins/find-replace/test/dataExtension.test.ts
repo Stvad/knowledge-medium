@@ -321,6 +321,35 @@ describe('findReplaceDataExtension', () => {
       expect(owner?.properties[countSchema.name]).toBe(42)
     })
 
+    // A field row is the property's identity, not a value: no replacement can
+    // be a legitimate edit to it, so it is skipped without a codec check.
+    it('never rewrites a field row\'s `((fieldId))` identity', async () => {
+      await seedFlippedWorkspaceWithCountProperty()
+      const [field] = await env.h.db.getAll<{id: string; content: string}>(
+        `SELECT id, content FROM blocks WHERE parent_id = 'owner' AND reference_target_id = ? AND deleted = 0`,
+        [DEF],
+      )
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: DEF,
+          replace: 'clobbered',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: field!.id, originalContent: field!.content}],
+        },
+      )
+
+      expect(result.updatedBlocks).toBe(0)
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([countSchema.name])
+      // Identity intact: content, stamp, and the owner's cell all survive.
+      expect((await load(field!.id))?.content).toBe(`((${DEF}))`)
+      expect((await load(field!.id))?.referenceTargetId).toBe(DEF)
+      expect((await load('owner'))?.properties[countSchema.name]).toBe(42)
+    })
+
     // Dormancy: recognition is flip-gated like every other §9 primitive —
     // an un-flipped workspace has no property machinery to recognize, so a
     // value-shaped row is ordinary content and the replacement proceeds.
