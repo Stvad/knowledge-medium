@@ -51,6 +51,11 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
       ],
       invalid: [
         {
+          // Schema-qualified target — still the synced table.
+          code: `db.execute('UPDATE main.blocks SET content = ?')`,
+          errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
+        },
+        {
           // SQLite allows a WITH clause to prefix DML — the write is real
           // even though the statement's first token is `WITH`.
           code: 'db.execute(`WITH ids AS (SELECT id FROM blocks_synced) UPDATE blocks SET content = ?`)',

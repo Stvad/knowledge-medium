@@ -35,6 +35,19 @@ describe('writeTargetTable', () => {
     ).toBe('block_aliases')
   })
 
+  // SQLite accepts a schema prefix on the DML target, and `main.blocks` IS
+  // the synced table — an exact-name check on the raw capture missed it.
+  it('strips a schema qualifier before matching the table name', () => {
+    expect(writeTargetTable('UPDATE main.blocks SET content = ?')).toBe('blocks')
+    expect(writeTargetTable('INSERT INTO "main"."blocks" (id) VALUES (?)')).toBe('blocks')
+    expect(writeTargetTable('DELETE FROM [main].[workspace_members] WHERE id = ?')).toBe('workspace_members')
+    expect(writeTargetTable('UPDATE `main`.`workspaces` SET name = ?')).toBe('workspaces')
+    // A dot inside a quoted identifier is part of the NAME, not a qualifier.
+    expect(writeTargetTable('UPDATE "a.b" SET x = 1')).toBe('a.b')
+    // Local tables stay local however they're qualified.
+    expect(writeTargetTable('INSERT INTO main.block_aliases (block_id) VALUES (?)')).toBe('block_aliases')
+  })
+
   // SQLite lets a WITH clause prefix DML, not just SELECT, so a statement whose
   // FIRST token is `WITH` can still be a synced-table write (PR #386 review).
   it('resolves through a leading WITH clause to the real DML target', () => {

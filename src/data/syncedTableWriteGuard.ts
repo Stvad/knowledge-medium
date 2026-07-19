@@ -59,6 +59,46 @@ const unquote = (ident: string): string =>
   ident.replace(/^["'`[]/, '').replace(/["'`\]]$/, '')
 
 /**
+ * The bare table name of a possibly schema-qualified, possibly quoted table
+ * reference: `main.blocks`, `"main"."blocks"`, `[main].[blocks]` → `blocks`.
+ * SQLite accepts a schema prefix on a DML target, and `UPDATE main.blocks`
+ * writes the very same synced table — an exact-name check against the raw
+ * capture let it through (PR #386 review). A dot INSIDE a quoted identifier
+ * doesn't split, so a (pathological) table literally named `"a.b"` still
+ * resolves to `a.b` rather than `b`.
+ *
+ * Deliberately over-approximates: a write to `temp.blocks` — a different
+ * table in the temp schema — would also read as `blocks`. No such table
+ * exists in this schema, and a guard that occasionally asks for an explicit
+ * override is the right side to err on.
+ */
+const unqualifiedTableName = (ref: string): string => {
+  const parts: string[] = []
+  let current = ''
+  let quote: string | null = null
+  for (const ch of ref) {
+    if (quote !== null) {
+      current += ch
+      if (ch === quote || (quote === '[' && ch === ']')) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`' || ch === '[') {
+      quote = ch
+      current += ch
+      continue
+    }
+    if (ch === '.') {
+      parts.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  parts.push(current)
+  return unquote(parts[parts.length - 1]).toLowerCase()
+}
+
+/**
  * Skip a leading `WITH [RECURSIVE] cte AS (…), … ` prefix and return the
  * statement it decorates, or the input unchanged when there is no such prefix.
  *
@@ -132,11 +172,11 @@ const skipCtePrefix = (s: string): string => {
 export const writeTargetTable = (sql: string): string | null => {
   const s = skipCtePrefix(stripLeading(sql))
   const insert = s.match(/^(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+([^\s(]+)/i)
-  if (insert) return unquote(insert[1]).toLowerCase()
+  if (insert) return unqualifiedTableName(insert[1])
   const update = s.match(/^update\s+(?:or\s+\w+\s+)?([^\s(]+)/i)
-  if (update) return unquote(update[1]).toLowerCase()
+  if (update) return unqualifiedTableName(update[1])
   const del = s.match(/^delete\s+from\s+([^\s(]+)/i)
-  if (del) return unquote(del[1]).toLowerCase()
+  if (del) return unqualifiedTableName(del[1])
   return null
 }
 
