@@ -10,6 +10,10 @@ const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const UUID_RE = new RegExp(`^${UUID_RE_SOURCE}$`, 'i')
 const EXACT_BLOCK_REF_RE = /^\(\(([^()\s]+)\)\)$/
 
+/** The ids `((id))` content can actually round-trip — the same character class
+ *  {@link EXACT_BLOCK_REF_RE} accepts inside the parens. */
+const RENDERABLE_BLOCK_REF_ID_RE = /^[^()\s]+$/
+
 export const parseExactReferenceBlockContent = (
   content: string,
 ): ExactReferenceBlockContent | null => {
@@ -36,7 +40,31 @@ export const referenceBlockContentForLabel = (label: string): string =>
  *  recovered by resolving the id → definition (which owns the name). Rendering
  *  is unaffected — a definition block's own `content` is its name, and a
  *  block-ref renders the target's label. */
-export const referenceBlockContentForId = (id: string): string => `((${id}))`
+export const referenceBlockContentForId = (id: string): string => {
+  // Never emit content the parser can't read back. Block ids are usually
+  // UUIDs, but `tx.create` and the agent bridge's `create-block` accept a
+  // caller-supplied id, and one containing whitespace or parentheses renders
+  // as a `((…))` that `parseExactReferenceBlockContent` rejects. In a
+  // child-backed workspace that lands as silent corruption rather than an
+  // error: the value/field child is written with a prefilled
+  // `referenceTargetId`, then `core.deriveReferenceTarget` runs afterwards,
+  // fails to parse the same text, and clears the column — leaving a property
+  // child that no longer projects and an owner cell that quietly loses the
+  // key (PR #386 review).
+  //
+  // Throwing at the point of rendering turns that into a loud, local failure
+  // on the write that caused it. Same instinct as `addSchema` rejecting a
+  // `]]`-lossy property name: refuse to store what can't be read back.
+  if (!RENDERABLE_BLOCK_REF_ID_RE.test(id)) {
+    throw new Error(
+      `[referenceBlockContentForId] cannot address block id ${JSON.stringify(id)} as `
+      + '((id)) — block-ref content may not contain whitespace or parentheses, and an '
+      + 'unparseable ref would silently drop the reference (and, for a property child, '
+      + 'the property) at the next derive.',
+    )
+  }
+  return `((${id}))`
+}
 
 /** Does `label` survive the wikilink round trip intact? A name containing
  *  `]]` renders lossy (`foo]]bar` → `foo] ]bar`) so it can't be written as a

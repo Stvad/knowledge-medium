@@ -26,8 +26,8 @@
  * ── What this recognizer is, and what it deliberately is not ──
  *
  * It answers ONE question: *does this SQL text write a synced table anywhere?*
- * Not "what does statement N write" — that framing is what leaked. Five review
- * rounds each found a different way for a real write to hide from a
+ * Not "what does statement N write" — that framing is what leaked. Successive
+ * review rounds each found a different way for a real write to hide from a
  * leading-verb check: a `WITH …` CTE prefix, a schema qualifier
  * (`main.blocks`), a second statement after a harmless first, a comment
  * between keywords (`UPDATE /*x*\/ blocks`), and DML nested inside a
@@ -38,6 +38,15 @@
  * all: comments and string literals are blanked (they can hide or fake a
  * match), and the whole remaining text is scanned for a DML verb followed by a
  * table name. Nesting, prefixes, and statement boundaries stop mattering.
+ *
+ * What remains is TOKENIZATION — how a name is spelled (quoting, schema
+ * qualifiers, whitespace around the dots). That axis is handled explicitly
+ * below and is where the later reports landed. Be honest about the standing
+ * limit: this is a conservative recognizer, not a SQL parser, so an
+ * exotic-enough spelling can still slip past it. It is one of three layers
+ * (this guard, the ESLint rule, code review), each cheap and none sound
+ * alone; if a spelling slips, widen the tokenizer or move enforcement, but
+ * don't mistake it for a complete parser.
  *
  * The tradeoff is deliberate: it OVER-approximates. `INSERT INTO block_aliases
  * … SELECT … FROM blocks` stays clean (the verb-adjacent name is the target),
@@ -148,16 +157,27 @@ const unqualifiedTableName = (ref: string): string => {
     current += ch
   }
   parts.push(current)
-  return unquote(parts[parts.length - 1]).toLowerCase()
+  // `main . blocks` — trim the whitespace SQLite allows around the dot.
+  return unquote(parts[parts.length - 1].trim()).toLowerCase()
 }
+
+/** One name part: a quoted identifier (which may contain anything, including
+ *  dots and spaces) or a bare run of non-delimiter characters. */
+const NAME_PART = String.raw`(?:"[^"]*"|` + '`[^`]*`' + String.raw`|\[[^\]]*\]|[^\s(;.,]+)`
+
+/** A possibly schema-qualified table reference, allowing whitespace around the
+ *  dots — SQLite accepts `UPDATE main . blocks`, and a capture that stopped at
+ *  the first whitespace saw only `main` and read it as an unsynced table
+ *  (PR #386 review). */
+const QUALIFIED_NAME = `(${NAME_PART}(?:\\s*\\.\\s*${NAME_PART})*)`
 
 /** DML shapes, matched ANYWHERE in the sanitized text (see the module doc).
  *  `\b` on the leading verb keeps `reinsert into x` / a column named
  *  `last_update` from matching. */
 const DML_PATTERNS: readonly RegExp[] = [
-  /\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+([^\s(;]+)/gi,
-  /\bupdate\s+(?:or\s+\w+\s+)?([^\s(;]+)/gi,
-  /\bdelete\s+from\s+([^\s(;]+)/gi,
+  new RegExp(String.raw`\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+` + QUALIFIED_NAME, 'gi'),
+  new RegExp(String.raw`\bupdate\s+(?:or\s+\w+\s+)?` + QUALIFIED_NAME, 'gi'),
+  new RegExp(String.raw`\bdelete\s+from\s+` + QUALIFIED_NAME, 'gi'),
 ]
 
 /**

@@ -76,6 +76,10 @@ const CORPUS = [
   `WITH x AS (SELECT '(' AS c FROM blocks) UPDATE blocks SET content = ?`,
   'WITH updates AS (SELECT 1) SELECT * FROM updates',
   'WITH a AS (SELECT 1), b AS (SELECT 2) INSERT INTO workspaces (id) SELECT 1',
+  // Whitespace around the qualifier dot
+  'UPDATE main . blocks SET x = 1',
+  'INSERT INTO "main" . "blocks" (id) VALUES (?)',
+  'UPDATE main . block_aliases SET x = 1',
   // Comments between keywords, and DML nested in a trigger body
   'UPDATE /* note */ blocks SET x = 1',
   'INSERT /* note */ INTO blocks (id) VALUES (?)',

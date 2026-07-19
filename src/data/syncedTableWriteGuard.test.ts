@@ -57,6 +57,15 @@ describe('writeTargets / syncedWriteTarget', () => {
     expect(syncedWriteTarget('INSERT OR IGNORE INTO block_aliases (block_id) SELECT id FROM blocks')).toBeNull()
   })
 
+  // SQLite tolerates whitespace around the qualifier dot; a capture that
+  // stopped at the first space saw only `main`.
+  it('handles whitespace around the qualifier dot', () => {
+    expect(syncedWriteTarget('UPDATE main . blocks SET x = 1')).toBe('blocks')
+    expect(syncedWriteTarget('INSERT INTO "main" . "blocks" (id) VALUES (?)')).toBe('blocks')
+    expect(syncedWriteTarget('DELETE FROM main\n  .\n  blocks WHERE id = ?')).toBe('blocks')
+    expect(syncedWriteTarget('UPDATE main . block_aliases SET x = 1')).toBeNull()
+  })
+
   it('strips a schema qualifier before matching the table name', () => {
     expect(syncedWriteTarget('UPDATE main.blocks SET content = ?')).toBe('blocks')
     expect(syncedWriteTarget('INSERT INTO "main"."blocks" (id) VALUES (?)')).toBe('blocks')

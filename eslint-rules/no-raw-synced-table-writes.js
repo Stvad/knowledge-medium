@@ -113,16 +113,27 @@ const unqualifiedTableName = (ref) => {
     current += ch
   }
   parts.push(current)
-  return unquote(parts[parts.length - 1]).toLowerCase()
+  // `main . blocks` — trim the whitespace SQLite allows around the dot.
+  return unquote(parts[parts.length - 1].trim()).toLowerCase()
 }
+
+/** One name part: a quoted identifier (which may contain anything, including
+ *  dots and spaces) or a bare run of non-delimiter characters. */
+const NAME_PART = String.raw`(?:"[^"]*"|` + '`[^`]*`' + String.raw`|\[[^\]]*\]|[^\s(;.,]+)`
+
+/** A possibly schema-qualified table reference, allowing whitespace around the
+ *  dots — SQLite accepts `UPDATE main . blocks`, and a capture that stopped at
+ *  the first whitespace saw only `main` and read it as an unsynced table
+ *  (PR #386 review). */
+const QUALIFIED_NAME = `(${NAME_PART}(?:\\s*\\.\\s*${NAME_PART})*)`
 
 /** DML shapes, matched ANYWHERE in the sanitized text (see the module doc).
  *  `\b` on the leading verb keeps `reinsert into x` / a column named
  *  `last_update` from matching. */
 const DML_PATTERNS = [
-  /\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+([^\s(;]+)/gi,
-  /\bupdate\s+(?:or\s+\w+\s+)?([^\s(;]+)/gi,
-  /\bdelete\s+from\s+([^\s(;]+)/gi,
+  new RegExp(String.raw`\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+` + QUALIFIED_NAME, 'gi'),
+  new RegExp(String.raw`\bupdate\s+(?:or\s+\w+\s+)?` + QUALIFIED_NAME, 'gi'),
+  new RegExp(String.raw`\bdelete\s+from\s+` + QUALIFIED_NAME, 'gi'),
 ]
 
 /**
