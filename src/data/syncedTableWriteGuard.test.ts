@@ -1,113 +1,106 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   guardSyncedTableWrites,
-  isUnresolvableStatement,
   syncedWriteTarget,
-  writeTargetTable,
+  writeTargets,
 } from './syncedTableWriteGuard.ts'
+import {
+  BACKFILL_BLOCK_REFERENCES_SQL,
+  CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
+  CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,
+  CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
+  CREATE_BLOCK_REFERENCES_TABLE_SQL,
+  CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
+} from '@/plugins/references/localSchema.ts'
 
-describe('writeTargetTable', () => {
+describe('writeTargets / syncedWriteTarget', () => {
+  const target = (sql: string) => writeTargets(sql)[0] ?? null
+
   it('extracts the target of INSERT / UPDATE / DELETE (incl. OR-conflict + REPLACE forms)', () => {
-    expect(writeTargetTable('UPDATE blocks SET properties_json = ?')).toBe('blocks')
-    expect(writeTargetTable('UPDATE OR IGNORE blocks SET x = 1')).toBe('blocks')
-    expect(writeTargetTable('INSERT INTO blocks (id) VALUES (?)')).toBe('blocks')
-    expect(writeTargetTable('INSERT OR REPLACE INTO workspaces (id) VALUES (?)')).toBe('workspaces')
-    expect(writeTargetTable('REPLACE INTO workspace_members (id) VALUES (?)')).toBe('workspace_members')
-    expect(writeTargetTable('DELETE FROM blocks WHERE deleted = 1')).toBe('blocks')
+    expect(target('UPDATE blocks SET properties_json = ?')).toBe('blocks')
+    expect(target('UPDATE OR IGNORE blocks SET x = 1')).toBe('blocks')
+    expect(target('INSERT INTO blocks (id) VALUES (?)')).toBe('blocks')
+    expect(target('INSERT OR REPLACE INTO workspaces (id) VALUES (?)')).toBe('workspaces')
+    expect(target('REPLACE INTO workspace_members (id) VALUES (?)')).toBe('workspace_members')
+    expect(target('DELETE FROM blocks WHERE deleted = 1')).toBe('blocks')
   })
 
-  it('tolerates leading whitespace/newlines, comments, and quoted identifiers', () => {
-    expect(writeTargetTable('\n  UPDATE "blocks" SET x = 1')).toBe('blocks')
-    expect(writeTargetTable('-- migrate\nUPDATE [blocks] SET x = 1')).toBe('blocks')
-    expect(writeTargetTable('/* c */ INSERT INTO `blocks` (id) VALUES (?)')).toBe('blocks')
+  it('tolerates whitespace, comments, and quoted identifiers', () => {
+    expect(target('\n  UPDATE "blocks" SET x = 1')).toBe('blocks')
+    expect(target('-- migrate\nUPDATE [blocks] SET x = 1')).toBe('blocks')
+    expect(target('/* c */ INSERT INTO `blocks` (id) VALUES (?)')).toBe('blocks')
   })
 
-  it('returns null for reads and DDL — including CREATE INDEX/TRIGGER on blocks', () => {
-    expect(writeTargetTable('SELECT * FROM blocks WHERE deleted = 0')).toBeNull()
-    expect(writeTargetTable('CREATE INDEX IF NOT EXISTS i ON blocks (x) WHERE deleted = 0')).toBeNull()
-    expect(writeTargetTable('CREATE TRIGGER t AFTER UPDATE ON blocks BEGIN UPDATE blocks SET x=1; END')).toBeNull()
-    expect(writeTargetTable('PRAGMA optimize')).toBeNull()
+  // Comments are whitespace to SQLite, so they can sit BETWEEN the keywords —
+  // a pattern joined by `\s+` missed these entirely.
+  it('sees through comments between the DML keywords', () => {
+    expect(syncedWriteTarget('UPDATE /* note */ blocks SET x = 1')).toBe('blocks')
+    expect(syncedWriteTarget('INSERT /* note */ INTO blocks (id) VALUES (?)')).toBe('blocks')
+    expect(syncedWriteTarget('DELETE /* note */ FROM blocks WHERE id = ?')).toBe('blocks')
+    expect(syncedWriteTarget('UPDATE -- note\n blocks SET x = 1')).toBe('blocks')
+  })
+
+  it('returns null for reads and DDL that only MENTION a synced table', () => {
+    expect(syncedWriteTarget('SELECT * FROM blocks WHERE deleted = 0')).toBeNull()
+    expect(syncedWriteTarget('CREATE INDEX IF NOT EXISTS i ON blocks (x) WHERE deleted = 0')).toBeNull()
+    expect(syncedWriteTarget('PRAGMA optimize')).toBeNull()
+    // Trigger HEADERS name the table after the event, not after a DML verb.
+    expect(syncedWriteTarget('CREATE TRIGGER t AFTER UPDATE ON blocks BEGIN DELETE FROM block_refs; END')).toBeNull()
+    expect(syncedWriteTarget('CREATE TRIGGER t AFTER UPDATE OF x ON blocks BEGIN SELECT 1; END')).toBeNull()
+    expect(syncedWriteTarget('CREATE TRIGGER t AFTER INSERT ON blocks BEGIN SELECT 1; END')).toBeNull()
+    expect(syncedWriteTarget('CREATE TRIGGER t AFTER DELETE ON blocks BEGIN SELECT 1; END')).toBeNull()
   })
 
   it('reads the write target, not tables merely mentioned in FROM/subqueries', () => {
     // The motivating false-positive: a local-index backfill that SELECTs FROM blocks.
-    expect(
-      writeTargetTable('INSERT OR IGNORE INTO block_aliases (block_id) SELECT id FROM blocks'),
-    ).toBe('block_aliases')
+    expect(syncedWriteTarget('INSERT OR IGNORE INTO block_aliases (block_id) SELECT id FROM blocks')).toBeNull()
   })
 
-  // SQLite accepts a schema prefix on the DML target, and `main.blocks` IS
-  // the synced table — an exact-name check on the raw capture missed it.
   it('strips a schema qualifier before matching the table name', () => {
-    expect(writeTargetTable('UPDATE main.blocks SET content = ?')).toBe('blocks')
-    expect(writeTargetTable('INSERT INTO "main"."blocks" (id) VALUES (?)')).toBe('blocks')
-    expect(writeTargetTable('DELETE FROM [main].[workspace_members] WHERE id = ?')).toBe('workspace_members')
-    expect(writeTargetTable('UPDATE `main`.`workspaces` SET name = ?')).toBe('workspaces')
-    // A dot inside a quoted identifier is part of the NAME, not a qualifier.
-    expect(writeTargetTable('UPDATE "a.b" SET x = 1')).toBe('a.b')
-    // Local tables stay local however they're qualified.
-    expect(writeTargetTable('INSERT INTO main.block_aliases (block_id) VALUES (?)')).toBe('block_aliases')
+    expect(syncedWriteTarget('UPDATE main.blocks SET content = ?')).toBe('blocks')
+    expect(syncedWriteTarget('INSERT INTO "main"."blocks" (id) VALUES (?)')).toBe('blocks')
+    expect(syncedWriteTarget('DELETE FROM [main].[workspace_members] WHERE id = ?')).toBe('workspace_members')
+    expect(syncedWriteTarget('UPDATE `main`.`workspaces` SET name = ?')).toBe('workspaces')
+    expect(target('UPDATE "a.b" SET x = 1')).toBe('a.b')
+    expect(syncedWriteTarget('INSERT INTO main.block_aliases (block_id) VALUES (?)')).toBeNull()
   })
 
-  // SQLite lets a WITH clause prefix DML, not just SELECT, so a statement whose
-  // FIRST token is `WITH` can still be a synced-table write (PR #386 review).
-  it('resolves through a leading WITH clause to the real DML target', () => {
-    expect(writeTargetTable(
-      'WITH ids AS (SELECT id FROM blocks_synced) UPDATE blocks SET content = ?',
+  // Position no longer matters: a CTE prefix, a later statement, or a trigger
+  // BODY all put the write somewhere a leading-verb check couldn't see.
+  it('finds a synced write wherever it sits — CTE prefix, later statement, trigger body', () => {
+    expect(syncedWriteTarget('WITH ids AS (SELECT id FROM blocks_synced) UPDATE blocks SET content = ?')).toBe('blocks')
+    expect(syncedWriteTarget('CREATE INDEX i ON blocks (x); UPDATE blocks SET content = ?')).toBe('blocks')
+    expect(syncedWriteTarget('SELECT 1; DELETE FROM blocks WHERE id = ?')).toBe('blocks')
+    // A trigger that writes a synced table WILL fire outside any repo.tx.
+    expect(syncedWriteTarget(
+      'CREATE TRIGGER t AFTER INSERT ON local_table BEGIN UPDATE blocks SET x = 1; END',
     )).toBe('blocks')
-    expect(writeTargetTable(
-      'WITH RECURSIVE up(id) AS (SELECT ? UNION ALL SELECT b.id FROM blocks b JOIN up ON 1) '
-      + 'DELETE FROM blocks WHERE id IN (SELECT id FROM up)',
-    )).toBe('blocks')
-    expect(writeTargetTable(
-      'WITH a AS (SELECT 1), b AS (SELECT 2) INSERT INTO workspaces (id) SELECT 1',
+    expect(syncedWriteTarget(
+      'CREATE TRIGGER t AFTER INSERT ON local_table BEGIN DELETE FROM workspaces WHERE id = 1; END',
     )).toBe('workspaces')
   })
 
-  it('keeps CTE reads unflagged, including a literal paren inside the CTE body', () => {
-    expect(writeTargetTable(
-      'WITH RECURSIVE up(id, depth) AS (SELECT id, 0 FROM blocks) SELECT * FROM up',
-    )).toBeNull()
-    // A `(` inside a string literal would unbalance a naive depth count and
-    // hide the write that follows.
-    expect(writeTargetTable(
-      `WITH x AS (SELECT '(' AS c FROM blocks) UPDATE blocks SET content = ?`,
-    )).toBe('blocks')
-    // A CTE *named* like a keyword prefix must not be mistaken for the verb.
-    expect(writeTargetTable(
-      'WITH updates AS (SELECT 1) SELECT * FROM updates',
-    )).toBeNull()
-  })
-})
-
-// `applyLocalSchemaContributions` hands its string straight to `db.execute`
-// with no params, and the adapter runs EVERY statement in it — so checking
-// only the first left a raw synced write behind a harmless-looking CREATE.
-describe('multi-statement scripts', () => {
-  it('finds a synced write in any statement, not just the first', () => {
-    expect(syncedWriteTarget('CREATE INDEX i ON blocks (x); UPDATE blocks SET content = ?')).toBe('blocks')
-    expect(syncedWriteTarget('SELECT 1; DELETE FROM blocks WHERE id = ?')).toBe('blocks')
-    expect(syncedWriteTarget('SELECT 1;\n  INSERT INTO workspaces (id) VALUES (?)')).toBe('workspaces')
-  })
-
-  it('leaves all-local scripts alone, including semicolons inside literals and trigger bodies', () => {
-    expect(syncedWriteTarget('CREATE INDEX a ON blocks (x); CREATE INDEX b ON blocks (y)')).toBeNull()
+  it('keeps prose in string literals from faking a write', () => {
+    expect(syncedWriteTarget(`INSERT INTO block_aliases (note) VALUES ('update blocks now')`)).toBeNull()
     expect(syncedWriteTarget(`INSERT INTO block_aliases (x) VALUES (';'); SELECT 1`)).toBeNull()
-    // The write verb lives inside a trigger BODY — the fragment it starts is
-    // still the CREATE, so nothing matches at a fragment start.
-    expect(syncedWriteTarget(
-      'CREATE TRIGGER t AFTER UPDATE ON blocks BEGIN UPDATE blocks SET x=1; END',
-    )).toBeNull()
   })
-})
 
-describe('isUnresolvableStatement', () => {
-  it('is true only for a WITH prefix whose statement verb never appears', () => {
-    expect(isUnresolvableStatement('WITH ids AS (SELECT 1')).toBe(true)
-    expect(isUnresolvableStatement('WITH ids AS (SELECT 1) UPDATE blocks SET x = 1')).toBe(false)
-    expect(isUnresolvableStatement('WITH ids AS (SELECT 1) SELECT * FROM ids')).toBe(false)
-    expect(isUnresolvableStatement('SELECT * FROM blocks')).toBe(false)
-    expect(isUnresolvableStatement('UPDATE blocks SET x = 1')).toBe(false)
+  // The guard wraps the handle these actually run through at boot, so a
+  // false positive here is a startup failure, not a lint nit.
+  it('passes every real local-schema statement the app ships', () => {
+    const shipped = [
+      CREATE_BLOCK_REFERENCES_TABLE_SQL,
+      CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
+      CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
+      CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,
+      CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,
+      CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
+      BACKFILL_BLOCK_REFERENCES_SQL,
+    ]
+    for (const sql of shipped) {
+      expect({sql, target: syncedWriteTarget(sql)}).toEqual({sql, target: null})
+    }
   })
 })
 

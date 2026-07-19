@@ -76,6 +76,13 @@ const CORPUS = [
   `WITH x AS (SELECT '(' AS c FROM blocks) UPDATE blocks SET content = ?`,
   'WITH updates AS (SELECT 1) SELECT * FROM updates',
   'WITH a AS (SELECT 1), b AS (SELECT 2) INSERT INTO workspaces (id) SELECT 1',
+  // Comments between keywords, and DML nested in a trigger body
+  'UPDATE /* note */ blocks SET x = 1',
+  'INSERT /* note */ INTO blocks (id) VALUES (?)',
+  'DELETE /* note */ FROM blocks WHERE id = ?',
+  'CREATE TRIGGER t AFTER INSERT ON local_table BEGIN UPDATE blocks SET x = 1; END',
+  'CREATE TRIGGER t AFTER UPDATE OF x ON blocks BEGIN SELECT 1; END',
+  `INSERT INTO block_aliases (note) VALUES ('update blocks now')`,
   // Multi-statement scripts
   'CREATE INDEX i ON blocks (x); UPDATE blocks SET content = ?',
   'SELECT 1; DELETE FROM blocks WHERE id = ?',
