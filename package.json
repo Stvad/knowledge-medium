@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "dev": "vite",
-    "compile": "tsc -b && yarn run compile:post",
+    "compile": "tsgo -b && yarn run compile:post",
+    "compile:tsc": "tsc -b && yarn run compile:post",
     "compile:packages": "tsc -b packages/agent-cli packages/agent-dispatch && yarn run compile:post",
     "compile:post": "node packages/agent-cli/scripts/build-kernel-types.mjs && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js packages/agent-cli/dist/mcp.js packages/agent-dispatch/dist/daemon.js packages/agent-dispatch/dist/mcp.js",
     "build": "yarn run compile && vite build && vite build --config vite.sw.config.ts && vite-node scripts/inject-sw-build-id.ts",
@@ -97,6 +98,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
     "babel-plugin-react-compiler": "^1.0.0",
