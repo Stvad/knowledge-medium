@@ -1,0 +1,2 @@
+import{BlockRefAncestorsContext as e}from"./cycleGuardContext.js";import{useContext as t}from"react";import{c as n}from"react/compiler-runtime";import{jsx as r}from"react/jsx-runtime";var i=i=>{let a=n(6),{ancestor:o,children:s}=i,c=t(e),l;a[0]!==o||a[1]!==c?(l=new Set(c),l.add(o),a[0]=o,a[1]=c,a[2]=l):l=a[2];let u=l,d;return a[3]!==s||a[4]!==u?(d=r(e,{value:u,children:s}),a[3]=s,a[4]=u,a[5]=d):d=a[5],d};export{i as BlockRefAncestorsProvider};
+//# sourceMappingURL=cycleGuard.js.map
