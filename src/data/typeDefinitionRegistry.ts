@@ -411,8 +411,8 @@ export const harvestNestedPropertySeeds = (
         // conflict. (An IDENTICAL object — the `todo` embed+seed pattern — is silent.)
         console.warn(
           `[harvestNestedPropertySeeds] type seed ${JSON.stringify(typeSeed.seedKey)} inlines property ` +
-          `${JSON.stringify(key)} that is already declared elsewhere; keeping the first declaration ` +
-          '(its durable definition is what the block materializes)',
+          `${JSON.stringify(key)} that is already declared elsewhere (an explicit seed or an earlier ` +
+          'type); keeping the existing declaration — its durable definition is what the block materializes',
         )
       }
     }

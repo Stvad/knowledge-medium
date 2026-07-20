@@ -682,6 +682,34 @@ describe('dynamicExtensionsExtension — type seed identity', () => {
       'Dynamic type seed declaration was reused across extension blocks',
     )
   })
+
+  it('rejects a NESTED property seed reused across two extension blocks', () => {
+    // A shared imported `seedProperty` singleton embedded in two blocks' type seeds.
+    // Block A's bind mutates the shared object's key to `block-a/property/...`; at
+    // block B the reserved prefix is gone, but it must NOT be silently skipped as a
+    // cross-owner ref — the WeakMap reuse guard must still reject it, else block B's
+    // type would persist a `block-type:properties` ref to block A's property.
+    const sharedProp = seedProperty({
+      seedKey: extensionPropertySeedKey('color'),
+      revision: 1,
+      name: 'color',
+      preset: 'optional-string',
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const typeA = seedType({
+      seedKey: extensionTypeSeedKey('widget'), revision: 1, id: 'widget', label: 'A', properties: [sharedProp],
+    })
+    bindExtensionTypeSeed(typeA, 'block-a')
+    expect(sharedProp.seedKey).toBe('block-a/property/color') // bound in place by block A
+
+    const typeB = seedType({
+      seedKey: extensionTypeSeedKey('widget'), revision: 1, id: 'widget', label: 'B', properties: [sharedProp],
+    })
+    expect(() => bindExtensionTypeSeed(typeB, 'block-b')).toThrow(
+      'Dynamic definition seed declaration was reused across extension blocks',
+    )
+  })
 })
 
 describe('dynamicExtensionsExtension — gate 1 (intent / overrides)', () => {

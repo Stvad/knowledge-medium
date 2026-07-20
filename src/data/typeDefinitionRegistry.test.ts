@@ -256,6 +256,20 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(build([impostor, real]).typesById.get('page')).toMatchObject({label: 'Real Page'})
   })
 
+  it('a non-kernel BUILT-IN plugin seed also outranks a lower-sorting third-party (built-in tier, not kernel-only)', () => {
+    // Pins the generalization from kernel-only to any `system:` owner: `system:todo`
+    // is NOT the kernel yet must still beat a third-party `aaa/type/todo` that sorts
+    // lexicographically BELOW it — so a dynamic extension (whose bound uuid owner
+    // likewise sorts below `system:`) can't take over a built-in PLUGIN id. Fails if
+    // the tier reverts to `=== 'system:kernel-data'`.
+    const builtin = seedType({seedKey: 'system:todo/type/todo', revision: 1, id: 'todo', label: 'Builtin'})
+    const third = seedType({seedKey: 'aaa/type/todo', revision: 1, id: 'todo', label: 'Third-party'})
+    const build = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+      buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+    expect(build([builtin, third]).typesById.get('todo')).toMatchObject({label: 'Builtin'})
+    expect(build([third, builtin]).typesById.get('todo')).toMatchObject({label: 'Builtin'})
+  })
+
   it('retains an inactive (dup-id-loser) seed mirror for provenance only, not as a user type', () => {
     // seed A wins the 'page' id; seed B (different key, same id) is dropped. A
     // materialized mirror of the LOSER must not resurface as a separate
@@ -424,11 +438,16 @@ describe('harvestNestedPropertySeeds', () => {
   })
 
   it('does NOT re-contribute a property already seeded separately (gap-fill; else the registry throws on a dup key)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const color = prop('plugin:demo', 'color')
     const snap = snapshotOf([
       seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [color]}),
     ])
+    // The SAME object embedded AND seeded separately (the `todo` pattern) is deduped
+    // silently — the identity guard must NOT emit a spurious conflict warn every rebuild.
     expect(harvestNestedPropertySeeds(snap, [color])).toEqual([])
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('leaves a CROSS-owner reference as a pure ref (a type never materializes another owner’s property)', () => {

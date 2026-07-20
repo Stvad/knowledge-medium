@@ -80,7 +80,11 @@ export const seedKeyOwner = (seedKey: string): string => {
  * `bindExtensionTypeSeed`, which REJECTS any seedKey lacking the reserved
  * `@extension/type/` prefix and rebinds the owner to the extension's block id (a
  * uuid). So a `system:` owner always denotes shipped app code — the sole backstop
- * `typeSeedKeyOutranks` leans on when it trusts the owner substring for priority. */
+ * `typeSeedKeyOutranks` leans on when it trusts the owner substring for priority.
+ * CONVENTION (relied on here): every first-party/static type seed must use a
+ * `system:<owner>` seed key — a first-party seed under a non-`system:` owner would
+ * silently fall into the third-party tier and could lose its membership id to a
+ * dynamic extension whose bound uuid owner sorts lower. */
 const BUILTIN_SEED_OWNER_PREFIX = 'system:'
 
 /** Winner comparator for two type seeds that claim ONE membership id (compares

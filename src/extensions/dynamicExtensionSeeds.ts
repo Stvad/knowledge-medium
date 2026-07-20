@@ -140,7 +140,17 @@ export const extensionTypeSeedKey = (key: string): string => {
  *  `bindExtensionPropertySeed` so it agrees with the same seed when it's ALSO
  *  contributed separately, in either contribution order. A reserved-keyed entry
  *  that isn't a well-formed property seed is rejected rather than silently
- *  persisting its reserved key. */
+ *  persisting its reserved key.
+ *
+ *  Bind a full declaration that is reserved-keyed OR one this loader has ALREADY
+ *  bound to some block. The second case is the reuse hazard: block A's bind mutates
+ *  a shared declaration object's `seedKey` to `<blockA>/property/…`, so at block B
+ *  the reserved prefix is gone — skipping it as a "cross-owner ref" would silently
+ *  persist block B's type ref to block A's property. Routing it back through
+ *  `bindExtensionPropertySeed` lets its WeakMap guard REJECT the cross-block reuse
+ *  (throw), exactly as the top-level type/property binds do. A full declaration that
+ *  is NEITHER reserved NOR previously bound is a genuine cross-owner reference (e.g.
+ *  a kernel property) and stays a pure ref. */
 const bindNestedDynamicPropertySeeds = (
   properties: ReadonlyArray<unknown>,
   blockId: string,
@@ -148,15 +158,20 @@ const bindNestedDynamicPropertySeeds = (
   for (const prop of properties) {
     if (typeof prop !== 'object' || prop === null) continue
     const seedKey: unknown = (prop as {seedKey?: unknown}).seedKey
-    if (typeof seedKey !== 'string' || !seedKey.startsWith(DYNAMIC_EXTENSION_PROPERTY_PREFIX)) {
+    const reserved = typeof seedKey === 'string' && seedKey.startsWith(DYNAMIC_EXTENSION_PROPERTY_PREFIX)
+    if (!isPropertySeedDeclaration(prop)) {
+      // A malformed entry still carrying a reserved key must be rejected (that key
+      // would otherwise reach storage); anything else is a plain reference to leave.
+      if (reserved) {
+        throw new Error(
+          'Dynamic type seed embeds a malformed reserved property seed in `properties`',
+        )
+      }
       continue
     }
-    if (!isPropertySeedDeclaration(prop)) {
-      throw new Error(
-        'Dynamic type seed embeds a malformed reserved property seed in `properties`',
-      )
+    if (reserved || boundOwners.has(prop)) {
+      bindExtensionPropertySeed(prop, blockId)
     }
-    bindExtensionPropertySeed(prop, blockId)
   }
 }
 
