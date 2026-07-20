@@ -157,6 +157,49 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.blockIdByTypeId.get('todo')).toBe(earlyId)
   })
 
+  it('does not let a retired row overwrite a genuine user row already published under that id', () => {
+    // Abnormal but reachable (a deterministic-id caller / import / bridge eval can
+    // mint a block-type block with a literal short id, not a fresh uuid): a genuine
+    // user row's blockId equals a retired plugin type's claimed id. Step 2 publishes
+    // the user row under 'todo'; step 3 must NOT clobber it with the retired row —
+    // the user row wins, the retired row stays provenance-only.
+    const retiredKey = 'system:todo/type/todo'
+    const retiredId = typeDefinitionBlockId(WS, retiredKey)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: 'todo', label: 'My User Todo'}),
+        projected({blockId: retiredId, typeId: 'todo', seedKey: retiredKey, label: 'Retired Plugin Todo'}),
+      ]),
+      seeds: [],
+    })
+    expect(reg.typesById.get('todo')).toMatchObject({id: 'todo', label: 'My User Todo'})
+    expect(reg.blockIdByTypeId.get('todo')).toBe('todo')
+    expect(reg.typesById.has(retiredId)).toBe(false)
+    expect(reg.definitionsByBlockId.get(retiredId)?.seedKey).toBe(retiredKey)
+  })
+
+  it('breaks an equal-createdAt tie between retired rows by lexicographically-lower blockId', () => {
+    // Two retired rows claim 'todo' with the SAME createdAt; the stable blockId
+    // tiebreak (lexicographically lower wins) keeps resolution deterministic across
+    // clients regardless of projected-row iteration order.
+    const keyA = 'system:todo/type/todo'
+    const keyB = 'evil/type/todo'
+    const idA = typeDefinitionBlockId(WS, keyA)
+    const idB = typeDefinitionBlockId(WS, keyB)
+    const lower = idA < idB ? idA : idB
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: idA, typeId: 'todo', seedKey: keyA, label: 'A', createdAt: 100}),
+        projected({blockId: idB, typeId: 'todo', seedKey: keyB, label: 'B', createdAt: 100}),
+      ]),
+      seeds: [],
+    })
+    expect(reg.typesById.get('todo')).toMatchObject({label: lower === idA ? 'A' : 'B'})
+    expect(reg.blockIdByTypeId.get('todo')).toBe(lower)
+  })
+
   it('excludes rows from a foreign workspace', () => {
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,

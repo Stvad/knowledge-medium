@@ -183,9 +183,10 @@ export const buildUnboundTypes = (
  * for the same id; among competing retired rows for one undeclared id the earliest
  * `createdAt` wins (§7 winner-resolution, stable `blockId` tiebreak) — this is what
  * bounds §9's small-fleet forgery residual (an early real seed beats a late
- * forgery), and it is scoped to the code-owned short-id namespace: a genuine user
- * row (no `/type/` seed key) still publishes under its own fresh-uuid block id,
- * where it can never contend for a declared/retired short id.
+ * forgery). Retired republication is scoped to the code-owned short-id namespace: a
+ * genuine user row (no `/type/` seed key) publishes under its own block id (normally
+ * a fresh uuid), and step 3 skips any id already published (`typesById.has`), so a
+ * retired row can never overwrite a user row that happens to share its short id.
  *
  * Two seed-authoring/corruption hazards fail closed:
  * two seeds claiming one membership `id` (keep the first, warn — `typeSeedsFacet`
@@ -265,15 +266,19 @@ export const buildTypeDefinitionRegistry = (
     blockIdByTypeId.set(def.metadata.blockId, def.metadata.blockId)
   }
 
-  // 3. Resolve retired-seed rows under their claimed id. A live declaration owns
-  //    its id outright (skip — its `typesById` entry from step 1 stays). Among
-  //    retired rows contending for one undeclared id, earliest `createdAt` wins
-  //    (stable `blockId` tiebreak): the §7 resolution bounding §9's forgery
+  // 3. Resolve retired-seed rows under their claimed id. Skip any id already
+  //    published — by a live declaration (step 1, authoritative) OR a genuine user
+  //    row (step 2): `typesById.has(typeId)` covers both, since a declared id is
+  //    always in `typesById`. Retired resolution must never overwrite an existing
+  //    entry (a user row whose block id is, abnormally, a short mnemonic string
+  //    could otherwise be clobbered by a retired row claiming that same id). Among
+  //    retired rows contending for one still-unclaimed id, earliest `createdAt`
+  //    wins (stable `blockId` tiebreak): the §7 resolution bounding §9's forgery
   //    residual — an early real seed beats a late forgery. The winner republishes
   //    read-only; every row's `seedKey` provenance is already in
   //    `definitionsByBlockId` for the read-only gate.
   for (const [typeId, group] of retiredByTypeId) {
-    if (seedKeyById.has(typeId)) continue
+    if (typesById.has(typeId)) continue
     group.sort((a, b) =>
       a.metadata.createdAt !== b.metadata.createdAt
         ? a.metadata.createdAt - b.metadata.createdAt
