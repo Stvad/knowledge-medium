@@ -1037,6 +1037,132 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
   })
 })
 
+describe('dynamicExtensionsExtension — function-shaped export bind-error attribution', () => {
+  // A function-shaped default export (`export default (ctx) => …`) defers its
+  // contribution binding PAST the loader's per-block try/catch: the wrapper is
+  // invoked later, during whole-app resolution. Before the loader threaded
+  // `errorReporter` into the deferred wrapper, a bind throw from that path fell
+  // through to walkAppExtension's generic catch — logged with no blockId and no
+  // errorReporter, so the block's contributions vanished from the settings UI
+  // with no attribution. These tests pin that the deferred path now attributes
+  // the throw exactly like the direct-export `rejects hard-coded owners` tests.
+  // The gap is loader-wide, so both a type seed and a property seed are covered
+  // to prove the fix is generic, not seed-kind-specific.
+
+  it('attributes a hard-coded type-seed owner thrown from an async function export', async () => {
+    const blocks = [blockData({id: 'ext-fn-type', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => typeSeedsFacet.of(seedType({
+          seedKey: 'example/type/widget',
+          revision: 1,
+          id: 'example-widget',
+          label: 'Example widget',
+        })),
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      // Attributed to the block, and reported exactly once (the deferred wrapper
+      // catches its own throw and recovers to null — walkAppExtension's generic
+      // catch never sees it, so there's no second, block-anonymous report).
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-type',
+        expect.objectContaining({
+          message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes a hard-coded property-seed owner thrown from an async function export', async () => {
+    const blocks = [blockData({id: 'ext-fn-prop', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => definitionSeedsFacet.of(seedProperty({
+          seedKey: 'example/property/status',
+          revision: 1,
+          name: 'example:status',
+          preset: 'boolean',
+          defaultValue: false,
+          changeScope: ChangeScope.BlockDefault,
+        })),
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(definitionSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-prop',
+        expect.objectContaining({
+          message: 'Dynamic property seeds must use extensionPropertySeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes the throw for a SYNC (non-async) function export too', async () => {
+    // The deferred wrapper awaits the function result either way, so the sync
+    // shape must attribute identically to the async one.
+    const blocks = [blockData({id: 'ext-fn-sync', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: () => typeSeedsFacet.of(seedType({
+          seedKey: 'example/type/widget',
+          revision: 1,
+          id: 'example-widget',
+          label: 'Example widget',
+        })),
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-sync',
+        expect.objectContaining({
+          message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+})
+
 describe('dynamicExtensionsExtension — workspace scoping', () => {
   it('passes the workspaceId through to repo.query.findExtensionBlocks', async () => {
     const findExtensionBlocks = vi.fn(() => ({load: async () => []}))

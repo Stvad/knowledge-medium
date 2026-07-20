@@ -233,7 +233,7 @@ export const dynamicExtensionsExtension = (
       }
       const exported = module.default as AppExtension
       const handle = userExtensionToggle(block)
-      const validated = validateAndPrefix(handle.of(exported), block.id)
+      const validated = validateAndPrefix(handle.of(exported), block.id, errorReporter)
       collected.push(validated ?? shell.of([]))
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error(String(error))
@@ -250,8 +250,14 @@ export const dynamicExtensionsExtension = (
  * Walks an AppExtension tree, validates shape, and force-prefixes every
  * FacetContribution's `source`.
  *
- * Returns a normalized AppExtension on success; throws on shape errors so
- * the caller can attribute them to the offending block.
+ * Returns a normalized AppExtension on success. For the SYNCHRONOUS shapes
+ * (contribution / array) it throws on shape or bind errors so the caller's
+ * per-block try/catch can attribute them to the offending block. The
+ * FUNCTION shape runs later (its wrapper is invoked during whole-app
+ * resolution, past that try/catch), so it must self-attribute: `errorReporter`
+ * is threaded in and the deferred wrapper catches + reports its own bind
+ * errors, mirroring the synchronous path. Callers that can supply attribution
+ * should pass `errorReporter`.
  *
  * **Boundary preservation:** when the input array carries a togglable
  * BOUNDARY symbol (attached by `userExtensionToggle(block).of(...)`),
@@ -262,30 +268,46 @@ export const dynamicExtensionsExtension = (
 const validateAndPrefix = (
   extension: AppExtension,
   blockId: string,
+  errorReporter?: ExtensionLoadErrorReporter,
 ): AppExtension => {
   if (extension === null || extension === undefined || extension === false) {
     return null
   }
 
   if (Array.isArray(extension)) {
-    const mapped = extension.map((child) => validateAndPrefix(child, blockId))
+    const mapped = extension.map((child) => validateAndPrefix(child, blockId, errorReporter))
     const boundary = getBoundary(extension)
     if (boundary) attachBoundary(mapped, boundary)
     return mapped
   }
 
   if (typeof extension === 'function') {
-    // Wrap so the function's return value also gets prefixed.
+    // A function-shaped export defers binding: the wrapper runs LATER, during
+    // whole-app resolution (`walkAppExtension`), AFTER `dynamicExtensionsExtension`'s
+    // per-block try/catch has already returned. So a bind throw here (malformed
+    // seed, hard-coded owner, cross-block reuse, or an invalid returned shape)
+    // can't reach that catch. Without this local try/catch it would fall through
+    // to `walkAppExtension`'s generic `catch` — logged with no blockId and no
+    // `errorReporter`, so the block's contributions vanish from the settings UI
+    // with no attribution. Catch + report here so the deferred path mirrors the
+    // synchronous one, recovering to `null` (pruned, per the nullish grammar).
     return async (context) => {
-      const inner = await (extension as (
-        ctx: typeof context,
-      ) => AppExtension | Promise<AppExtension>)(context)
-      return validateAndPrefix(inner, blockId)
+      try {
+        const inner = await (extension as (
+          ctx: typeof context,
+        ) => AppExtension | Promise<AppExtension>)(context)
+        return validateAndPrefix(inner, blockId, errorReporter)
+      } catch (error) {
+        const wrapped = error instanceof Error ? error : new Error(String(error))
+        errorReporter?.(blockId, wrapped)
+        console.error(`Failed to load extension block ${blockId}`, wrapped)
+        return null
+      }
     }
   }
 
   if (isFacetContribution(extension)) {
-    return prefixContributionSource(extension, blockId)
+    return prefixContributionSource(extension, blockId, errorReporter)
   }
 
   throw new Error(
@@ -306,6 +328,7 @@ const validateAndPrefix = (
 const prefixContributionSource = (
   contribution: FacetContribution<unknown>,
   blockId: string,
+  errorReporter?: ExtensionLoadErrorReporter,
 ): FacetContribution<unknown> => {
   const blockSource = `block:${blockId}`
   const composed = contribution.source
@@ -324,7 +347,7 @@ const prefixContributionSource = (
     source: composed,
   }
   if (contribution.enables !== undefined) {
-    result.enables = validateAndPrefix(contribution.enables, blockId)
+    result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter)
   }
   return result
 }
