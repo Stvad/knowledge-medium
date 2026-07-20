@@ -49,9 +49,6 @@ jobs:
           node-version: 26
           cache: pnpm
 
-      - name: Enable Corepack
-        run: corepack enable
-
       - name: Validate build variables
         run: |
           test -n "$VITE_SUPABASE_URL"
