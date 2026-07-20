@@ -5,7 +5,7 @@ describe('isPrecacheableAsset', () => {
   it('accepts the same-origin runtime asset types the SW serves cache-first', () => {
     for (const rel of [
       'src/main.js',
-      'src/extensions/api.js',
+      'src/extensions/blockInteraction.js',
       'assets/index.css',
       'node_modules/@journeyapps/wa-sqlite/wa-sqlite.wasm',
       'assets/inter.woff2',
@@ -39,7 +39,7 @@ describe('collectRestAssets', () => {
     const allFiles = [
       'src/main.js', // first-paint — excluded
       'assets/index.css', // first-paint — excluded
-      'src/extensions/api.js', // lazy — the module whose skew this precache fixes
+      'src/extensions/blockInteraction.js', // lazy — the module whose skew this precache fixes
       'src/data/api/blockType.js', // lazy
       'node_modules/@babel/standalone/babel.js', // lazy (was the babel-only list)
     ]
@@ -51,7 +51,7 @@ describe('collectRestAssets', () => {
     expect(restAssets).toEqual([
       '/node_modules/@babel/standalone/babel.js',
       '/src/data/api/blockType.js',
-      '/src/extensions/api.js',
+      '/src/extensions/blockInteraction.js',
     ])
   })
 
@@ -62,12 +62,12 @@ describe('collectRestAssets', () => {
         'sw.js',
         'version.json',
         'index.html',
-        'src/extensions/api.js',
+        'src/extensions/blockInteraction.js',
       ],
       firstPaint: [],
       toBaseUrl,
     })
-    expect(restAssets).toEqual(['/src/extensions/api.js'])
+    expect(restAssets).toEqual(['/src/extensions/blockInteraction.js'])
   })
 
   it('excludes ONLY the root sw.js — a nested dep sw.js stays precached (not grafted)', () => {

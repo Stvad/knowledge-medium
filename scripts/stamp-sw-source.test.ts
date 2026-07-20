@@ -21,7 +21,7 @@ const evalExpr = (src: string) =>
 describe('stampSwSource', () => {
   const buildId = 'abc123def456'
   const firstPaintAssets = ['/knowledge-medium/src/main.js', '/knowledge-medium/assets/index.css']
-  const restAssets = ['/knowledge-medium/src/extensions/api.js', '/knowledge-medium/assets/x.woff2']
+  const restAssets = ['/knowledge-medium/src/extensions/blockInteraction.js', '/knowledge-medium/assets/x.woff2']
   const vendorAssets = ['https://esm.sh/react@19.2.6', 'https://esm.sh/react-dom@19.2.6/client']
 
   // The load-bearing property: the stamp survives whatever quote style the

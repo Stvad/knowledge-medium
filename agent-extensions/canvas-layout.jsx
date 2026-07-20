@@ -1,12 +1,8 @@
-import {
-  blockRenderersFacet,
-  actionsFacet,
-  definitionSeedsFacet,
-  ActionContextTypes,
-  seedProperty,
-  extensionPropertySeedKey,
-  ChangeScope,
-} from '@/extensions/api.js'
+import { blockRenderersFacet, actionsFacet } from '@/extensions/core.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { seedProperty, ChangeScope } from '@/data/api/index.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.js'
 import {

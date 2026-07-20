@@ -441,7 +441,7 @@ const cap = (s: string) => (s.length === 0 ? s : s[0].toUpperCase() + s.slice(1)
  */
 export const extensionsPageOutline = (): TutorialNode[] => [
   { content: '**Anything** in this app is an extension — the default block renderer, the vim plugin, daily notes, find-and-replace. The host loads core ones at startup; the rest are blocks like the ones below.' },
-  { content: "An extension block is a block with `types = ['extension']`. Its content is a TS/JSX module whose `default` export is an `AppExtension` — a `FacetContribution`, an array of them, or a function returning one. Imports resolve through the page-global importmap, so `@/extensions/api.js` returns the same module instance the running app uses." },
+  { content: "An extension block is a block with `types = ['extension']`. Its content is a TS/JSX module whose `default` export is an `AppExtension` — a `FacetContribution`, an array of them, or a function returning one. Imports resolve through the page-global importmap, so importing a symbol from its real module (e.g. `@/extensions/core.js`) returns the same module instance the running app uses." },
   { content: "Author one: create a block, give it `types = ['extension']`, paste the source, then open **Extensions settings** from the command palette and tick the row to enable it." },
   { content: 'User extensions start **disabled**. The Extensions settings tree lets you toggle each row; the override is per-device and persists across reloads.' },
   { content: "After editing an extension's source, run **Reload extensions** from the command palette to pick up your changes." },

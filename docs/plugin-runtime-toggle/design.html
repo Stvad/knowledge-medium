@@ -399,10 +399,10 @@ export const staticAppExtensions = ({repo}) => [
       extension starts disabled and its source is not compiled.
       <br><br>
       Author usage:
-      <pre style="margin: 0.6rem 0;"><code>// Authors import from the curated public surface re-exported
-// through @/extensions/api.js (see src/extensions/api.ts for the
-// existing convention).
-import { actionsFacet } from '@/extensions/api.js'
+      <pre style="margin: 0.6rem 0;"><code>// Authors import each symbol directly from its real module; discover
+// what lives where via describe-runtime's apiSurface / the curated
+// catalog in src/extensions/apiCatalog.ts.
+import { actionsFacet } from '@/extensions/core.js'
 
 export default [
   actionsFacet.of(myAction, { source: 'my-ext' }),

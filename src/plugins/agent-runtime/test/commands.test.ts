@@ -187,8 +187,9 @@ describe('agent runtime commands', () => {
     // though production registers it. The fix swaps in
     // resolveAppRuntime, which mirrors the production walk.
     //
-    // The vitest jsdom env can't resolve `@/extensions/api.js` from
-    // inside a Babel-compiled blob URL, so we stub the compile to
+    // The vitest jsdom env can't resolve `@/…` app modules (e.g.
+    // `@/extensions/core.js`) from inside a Babel-compiled blob URL, so
+    // we stub the compile to
     // emit the AppExtension shape directly. The compile is just a
     // text→module step — the rest of the install + verify path is
     // exercised end-to-end.

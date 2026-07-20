@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import * as Babel from '@babel/standalone'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
-import * as extensionApi from '@/extensions/api'
-import {definitionSeedsFacet} from '@/data/facets'
-import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
+import { ChangeScope } from '@/data/api'
+import { definitionSeedsFacet } from '@/data/facets'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
+import { buildExampleRequire, unknownCatalogImports } from '@/test/exampleModuleResolver'
 
-const evaluateApiOnlySource = (source: string, filename: string): AppExtension => {
+const evaluateExampleSource = async (source: string, filename: string): Promise<AppExtension> => {
   const compiled = Babel.transform(source, {
     filename,
     presets: ['react', 'typescript'],
@@ -14,22 +15,18 @@ const evaluateApiOnlySource = (source: string, filename: string): AppExtension =
   if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
 
   const module = {exports: {} as {default?: AppExtension}}
-  const requireTemplateImport = (specifier: string): unknown => {
-    if (specifier === '@/extensions/api.js') return extensionApi
-    throw new Error(`${filename}: unexpected template import ${specifier}`)
-  }
-  // Babel's CommonJS transform lets this focused test evaluate the exact
-  // generated module string while supplying the real public extension API.
+  // The barrel is gone — a template imports from many real modules now, so the
+  // require shim preloads whatever each source declares.
+  const requireTemplateImport = await buildExampleRequire(source)
   const evaluate = new Function('require', 'module', 'exports', compiled)
   evaluate(requireTemplateImport, module, module.exports)
   if (!module.exports.default) throw new Error(`${filename}: no default export`)
   return module.exports.default
 }
 
-// Catches typos in the templated extension sources. Templated strings
-// bypass TypeScript's checker, so without this any malformed JSX or
-// import would only surface at workspace seed / command-palette
-// invocation time.
+// Catches typos in the templated extension sources. Templated strings bypass
+// TypeScript's checker, so without this any malformed JSX or import would only
+// surface at workspace seed / command-palette invocation time.
 describe('exampleExtensions — templated sources', () => {
   it('all templated sources transpile via Babel (react + typescript) without error', () => {
     for (const {id, source} of exampleExtensions) {
@@ -43,7 +40,23 @@ describe('exampleExtensions — templated sources', () => {
     }
   })
 
-  it('property-bearing examples evaluate and contribute durable definition seeds', () => {
+  it('every named import from a curated-API module exists in the catalog', () => {
+    // The barrel was retired; each source imports from real modules. Guard
+    // against a renamed/moved export leaving a seeded example dangling — it
+    // would break at workspace-seed time, not in CI.
+    const missing: Array<{id: string, specifier: string, name: string}> = []
+    for (const {id, source} of exampleExtensions) {
+      for (const {specifier, name} of unknownCatalogImports(source)) {
+        missing.push({id, specifier, name})
+      }
+    }
+    expect(
+      missing,
+      missing.map(({id, specifier, name}) => `${id} imports '${name}' from ${specifier}, but the catalog doesn't list it`).join('\n'),
+    ).toEqual([])
+  })
+
+  it('property-bearing examples evaluate and contribute durable definition seeds', async () => {
     const cases = [
       {
         id: 'hello-renderer',
@@ -73,7 +86,7 @@ describe('exampleExtensions — templated sources', () => {
     for (const expected of cases) {
       const definition = exampleExtensions.find(example => example.id === expected.id)
       expect(definition, `${expected.id} example should exist`).toBeDefined()
-      const runtime = resolveFacetRuntimeSync(evaluateApiOnlySource(
+      const runtime = resolveFacetRuntimeSync(await evaluateExampleSource(
         definition!.source,
         `${expected.id}.tsx`,
       ))
@@ -86,7 +99,7 @@ describe('exampleExtensions — templated sources', () => {
         name: expected.name,
         presetId: expected.presetId,
         defaultValue: expected.defaultValue,
-        changeScope: extensionApi.ChangeScope.BlockDefault,
+        changeScope: ChangeScope.BlockDefault,
       })
       if ('hasExplicitDefault' in expected) {
         expect(seeds[0]).toMatchObject({

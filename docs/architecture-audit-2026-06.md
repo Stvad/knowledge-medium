@@ -190,9 +190,11 @@ untyped event bus grew beside the typed mechanisms.
   `facet.ts`, `variantFacet.ts`, the walkers (natural home for the B2 unification),
   `runtimeEvents.ts`, and `togglable.ts` with its `aliasesProp` label-decode
   inverted (caller passes the label). `src/data` then imports only the kernel;
-  the rest of `src/extensions` is declared app-layer. The `@/extensions/api.js`
-  barrel must keep re-exporting from the new path (user extensions import it via
-  the importmap; module identity matters).
+  the rest of `src/extensions` is declared app-layer. (Update: the
+  `@/extensions/api.js` barrel has since been retired — extensions import each
+  symbol directly from its real module via the importmap, discovered through
+  `src/extensions/apiCatalog.ts`. Module identity still matters: those real
+  modules must stay importable at stable paths.)
 
 ### C3. `data` and `sync` are one subsystem wearing two directories
 *(layering lens · novel)*

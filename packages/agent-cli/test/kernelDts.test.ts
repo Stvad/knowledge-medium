@@ -34,9 +34,9 @@ describe('kernel type tree helpers', () => {
   })
 
   it('maps browser-style @/ module specifiers to declaration candidates', () => {
-    expect(kernelTypeDeclarationCandidates('@/extensions/api.js')).toEqual([
-      'src/extensions/api.d.ts',
-      'src/extensions/api/index.d.ts',
+    expect(kernelTypeDeclarationCandidates('@/extensions/core.js')).toEqual([
+      'src/extensions/core.d.ts',
+      'src/extensions/core/index.d.ts',
     ])
     expect(kernelTypeDeclarationCandidates('@/data/api')).toEqual([
       'src/data/api.d.ts',

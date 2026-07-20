@@ -8,7 +8,7 @@
  * on the SW pinning each deploy to its own generation cache and never grafting
  * foreign-generation bytes onto a page. That invariant only holds for assets
  * that are actually IN the generation cache. Anything lazy — e.g. the extension
- * surface `src/extensions/api.js`, imported only at runtime by user-extension
+ * surface `src/extensions/blockInteraction.js`, imported only at runtime by user-extension
  * blocks and therefore never first-painted — was NOT precached, so on a cache
  * miss the SW's network fallback served the NEWEST generation's copy, grafting
  * new bytes onto an old page. When the new copy's exports drifted from the old

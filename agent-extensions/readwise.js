@@ -1,11 +1,8 @@
-import {
-  ActionContextTypes,
-  ChangeScope,
-  actionsFacet,
-  definitionSeedsFacet,
-  seedProperty,
-  extensionPropertySeedKey,
-} from '@/extensions/api.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 
 const VERSION = 1
