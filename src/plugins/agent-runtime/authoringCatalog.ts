@@ -12,6 +12,10 @@ export interface AuthoringModuleSummary {
   category: string
   description: string
   exports?: string[]
+  /** Type-only exports, for curated-API modules. Surfaced for discovery and
+   *  searched by the `--modules <term>` filter so a type-name lookup (e.g.
+   *  `PropertyEditorProps`) finds the module that owns it. */
+  types?: string[]
   source: AuthoringCatalogSource
   safeForExtensions?: boolean
 }
@@ -568,6 +572,14 @@ const guides: AuthoringGuide[] = [
     preferredModules: [
       '@/extensions/core.js',
       '@/shortcuts/types.js',
+      // Data primitives the steps require (seedProperty, definitionSeedsFacet,
+      // getPluginPrefsBlock, pluginBlockId, extensionPropertySeedKey). In brief
+      // mode preferredModules is the ONLY module hint, so these must be here.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/data/stateBlocks.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/extensions/pluginIds.js',
       '@/context/repo.js',
       '@/utils/dialogs.js',
       '@/utils/toast.js',
@@ -627,6 +639,12 @@ const guides: AuthoringGuide[] = [
     preferredModules: [
       '@/extensions/core.js',
       '@/shortcuts/types.js',
+      // The property-editor-override path + saving non-secret settings need
+      // these (definePropertyEditorOverride, propertyEditorOverridesFacet,
+      // getPluginPrefsBlock); brief mode surfaces only preferredModules.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/data/stateBlocks.js',
       '@/context/repo.js',
       '@/utils/dialogs.js',
       '@/utils/toast.js',
@@ -771,6 +789,7 @@ const curatedApiModules = (): AuthoringModuleSummary[] =>
     category: group.category,
     description: group.description,
     ...(group.exports.length > 0 ? {exports: group.exports} : {}),
+    ...(group.types.length > 0 ? {types: group.types} : {}),
     source: 'curated-api',
     safeForExtensions: true,
   } satisfies AuthoringModuleSummary))
@@ -935,7 +954,7 @@ export const describeAuthoringCatalog = (
       ...generatedModules(),
       ...documentModules(document),
     ]).filter(module =>
-      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
+      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports, module.types),
     )
 
   const components = filters.omitDiscoverableModules

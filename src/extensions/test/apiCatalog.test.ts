@@ -29,6 +29,9 @@ describe('extensionApiCatalog — runtime export drift guard', () => {
   })
 
   for (const group of extensionApiCatalog) {
+    // Generous timeout: each case cold-imports an app module; under parallel
+    // suite load the first transform of a heavy module can exceed the 5s
+    // default (harmless flake, same hazard the describeRuntime test pre-warms).
     it(`${group.importPath} exports every listed runtime symbol`, async () => {
       const module = await import(/* @vite-ignore */ runtimeSpecifier(group.importPath)) as Record<string, unknown>
       const missing = group.exports.filter(name => !(name in module))
@@ -36,7 +39,7 @@ describe('extensionApiCatalog — runtime export drift guard', () => {
       for (const name of group.exports) {
         expect(module[name], `${group.importPath}#${name} re-exports as undefined`).toBeDefined()
       }
-    })
+    }, 15_000)
   }
 })
 
@@ -69,7 +72,10 @@ describe('extensionApiCatalog — importPath maps to an exact emitted file', () 
 // covered there, under the matching module, so the tsc guard can't miss one.
 describe('extensionApiCatalog — type surface is drift-guarded', () => {
   const parityByPath = new Map<string, Set<string>>()
-  const EXPORT_TYPE_RE = /export\s+type\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g
+  // Anchor to line start (`m` flag) so a formatted `export type { … } from '…'`
+  // inside a doc-comment (prefixed with `//`) can't pollute a covered-set and
+  // mask a genuinely-missing type. Real fixture statements start at column 0.
+  const EXPORT_TYPE_RE = /^export\s+type\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/gm
   const paritySource = readFileSync(
     resolve(process.cwd(), 'src/extensions/test/apiCatalogTypeParity.ts'),
     'utf8',
