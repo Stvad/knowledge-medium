@@ -26,7 +26,7 @@ export interface ExtensionLintWarning {
   /** One-line problem statement. */
   message: string
   /** Catalog pattern id that solves this — agent can fetch the full
-   *  example via `yarn agent describe-runtime --guide block-backed-config`
+   *  example via `pnpm agent describe-runtime --guide block-backed-config`
    *  or read the principles from `runtime-summary.capabilities.storage`. */
   catalogPattern: string
   /** First line of source that matched, for at-a-glance "where". */

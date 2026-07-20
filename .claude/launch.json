@@ -4,25 +4,25 @@
     {
       "name": "dev",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec yarn dev"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec pnpm dev"],
       "port": 5173
     },
     {
       "name": "dev-preview",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec yarn dev --port 5188 --strictPort"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec pnpm dev --port 5188 --strictPort"],
       "port": 5188
     },
     {
       "name": "agent-server",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec yarn agent:server"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec pnpm agent:server"],
       "port": 8787
     },
     {
       "name": "prod-preview",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && yarn build && exec yarn preview --port 4173"],
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && pnpm build && exec pnpm preview --port 4173"],
       "port": 4173
     }
   ]

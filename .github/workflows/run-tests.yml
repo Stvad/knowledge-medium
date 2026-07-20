@@ -15,17 +15,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '24.x'
-          cache: yarn
+          cache: pnpm
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Install Social Publisher extension dependencies
-        run: yarn --cwd agent-extensions/social-media-publisher install --frozen-lockfile
+        run: pnpm -C agent-extensions/social-media-publisher install --frozen-lockfile
 
       # Persist the incremental build caches across runs: tsgo -b (the check
       # gate's compiler; plain tsc for compile:tsc/compile:packages) writes
@@ -44,15 +47,15 @@ jobs:
           path: |
             node_modules/.tmp
             node_modules/.cache/eslint
-          key: build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'yarn.lock') }}-${{ github.sha }}
+          key: build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: |
-            build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'yarn.lock') }}-
+            build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'pnpm-lock.yaml') }}-
 
       - name: Run checks
-        run: yarn run check
+        run: pnpm run check
 
       - name: Generate agent extension type stubs
-        run: yarn agent types --force
+        run: pnpm agent types --force
 
       - name: Run Social Publisher extension checks
-        run: yarn --cwd agent-extensions/social-media-publisher run check
+        run: pnpm -C agent-extensions/social-media-publisher run check

@@ -2,9 +2,9 @@
 //
 // Run via the agent bridge (the target tab must be focused/connected):
 //   DRY-RUN (default — reports the plan, writes nothing):
-//     yarn agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js
+//     pnpm agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js
 //   APPLY (performs the writes — HELD until explicitly approved):
-//     yarn agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js \
+//     pnpm agent --profile <profile> eval --file scripts/dangling-refs/remediate.eval.js \
 //       --data-json '{"apply":true}'
 //   Scope to a specific workspace (defaults to the active one):
 //     ... --data-json '{"apply":true,"workspaceId":"<workspace-id>"}'

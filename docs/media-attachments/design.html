@@ -1508,7 +1508,7 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       ciphertext audit. The RLS contract (writer-gated flat insert, member read, no-update
       immutability, writer delete) is verified end-to-end against a real stack with real gotrue
       users by <code>scripts/attachments-rls-verify.ts</code> (a pre-deploy gate, not in
-      <code>yarn run check</code> — it needs a live stack; 13/13).</td></tr>
+      <code>pnpm run check</code> — it needs a live stack; 13/13).</td></tr>
 <tr><td>3 — cache + resolver (in-thread)</td>
     <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
       session) → decrypt / passthrough / fail-closed per the three-valued materializability (pin read is

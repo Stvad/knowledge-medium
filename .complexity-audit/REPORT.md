@@ -18,7 +18,7 @@ Net: a few clear deletes/dedups worth doing now; most std-API swaps are cosmetic
 ## Dead code
 
 **Remove the unused `react-hotkeys-hook` dependency** — `package.json:65`
-Declared as a runtime dep with zero imports anywhere in `src/`/`packages/`; the entire shortcut system runs on `tinykeys` (`src/shortcuts/HotkeyReconciler.tsx`). Delete the line and re-run `yarn install` to drop it from the lockfile.
+Declared as a runtime dep with zero imports anywhere in `src/`/`packages/`; the entire shortcut system runs on `tinykeys` (`src/shortcuts/HotkeyReconciler.tsx`). Delete the line and re-run `pnpm install` to drop it from the lockfile.
 `[adopt · trivial · ~1 LOC · low]`
 
 **Delete dead module `src/utils/async.ts`** — `src/utils/async.ts:6`
@@ -138,7 +138,7 @@ Three near-identical unwrap branches; the empty-cursor case (1) is a strict spec
 `[adopt · small · ~12-18 LOC · low]`
 
 **Swap `blockFingerprint`'s `JSON.stringify` for lodash `isEqual`** — `src/data/blockCache.ts:14-15, 132`
-The dedup gate is load-bearing (it suppresses no-op `notify()` fan-out — tested), but the `JSON.stringify` **implementation** is not. `isEqual` (already this kernel's idiom at `handleStore.ts:508`) short-circuits on the first differing field instead of fully serializing large content/properties, and is order-insensitive for the `properties` map (so any change is in the safe direction — more dedup hits, never a false-equal). Note the finding overstates the cost: `applyIfNewer` does **not** double-fingerprint (it gates on the integer `updatedAt` first), so the win is early-bail on large blocks + property-key-order correctness, not the claimed 2× serialization. Hot kernel path; one-line swap, run `yarn run check`.
+The dedup gate is load-bearing (it suppresses no-op `notify()` fan-out — tested), but the `JSON.stringify` **implementation** is not. `isEqual` (already this kernel's idiom at `handleStore.ts:508`) short-circuits on the first differing field instead of fully serializing large content/properties, and is order-insensitive for the `properties` map (so any change is in the safe direction — more dedup hits, never a false-equal). Note the finding overstates the cost: `applyIfNewer` does **not** double-fingerprint (it gates on the integer `updatedAt` first), so the win is early-bail on large blocks + property-key-order correctness, not the claimed 2× serialization. Hot kernel path; one-line swap, run `pnpm run check`.
 `[consider · small · ~0 LOC · low]`
 
 **Consider a shared `toHex` helper for the two SHA-256 hex hand-rolls** — `src/plugins/birthday/gate.ts:37-43` (+ `src/plugins/agent-runtime/tokens.ts:38`)

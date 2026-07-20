@@ -1,18 +1,25 @@
 verification:
-- use `yarn run check` for verification unless otherwise stated
-- bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `yarn run check` or those specific tests with elevated permissions
+- use `pnpm run check` for verification unless otherwise stated
+- bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `pnpm run check` or those specific tests with elevated permissions
 
 inner loop (this repo is built primarily by agents — keep the edit→verify cycle tight):
-- iterate against ONE test file: `yarn vitest run <path>` (~1s). `yarn run check` (~64s, the full gate) is for *before a commit*, not after every edit.
-- inspect the LIVE client with no rebuild via the agent bridge: `yarn agent <verb>` — `runtime-summary` / `describe-runtime` for runtime + data-model context, `sql all "<query>"`, `get-block`, `subtree` for data. Full surface + pairing: `packages/agent-cli/README.md`. Read verbs (above) are safe to run freely; mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the live user client — use deliberately, and prefer a scratch page over touching real data.
+- iterate against ONE test file: `pnpm vitest run <path>` (~1s). `pnpm run check` (~64s, the full gate) is for *before a commit*, not after every edit.
+- inspect the LIVE client with no rebuild via the agent bridge: `pnpm agent <verb>` — `runtime-summary` / `describe-runtime` for runtime + data-model context, `sql all "<query>"`, `get-block`, `subtree` for data. Full surface + pairing: `packages/agent-cli/README.md`. Read verbs (above) are safe to run freely; mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the live user client — use deliberately, and prefer a scratch page over touching real data.
 - the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
-- `yarn run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`yarn agent types`).
+- `pnpm run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`pnpm agent types`).
 
 delegate code to cheaper models:
 - top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a cheaper subagent when the work is bounded and easy to audit, and keep the deciding / auditing / data-synthesis in the main loop.
 - Claude Code: use the Agent tool with `model:` set, or `agent(prompt, {model})` in a Workflow. Rough default (your call per task): `sonnet` for substantive implementation, `haiku` for trivial / mechanical edits.
 - Codex: when `spawn_agent` exposes `gpt-5.3-codex-spark`, prefer it with `xhigh` reasoning effort for concrete, self-contained, parallelizable tasks with clear file ownership or file-path evidence. Otherwise use the cheapest available suitable subagent model or omit the model override. Additional reason: subagents have a separate token budget, so this can preserve main-agent context while advancing work in parallel.
 - don't delegate the parts where a subtle mistake is expensive to catch later — architecture calls, data-layer invariants, tricky state semantics, concurrency, migrations, security-sensitive paths, final integration, final verification, or commit decisions.
+
+waiting on background subagents / tasks (they die more often than you think):
+- a USER INTERRUPTION of the main session kills in-flight background subagents too — their transcript ends with `[Request interrupted by user]` and the completion notification NEVER arrives. After any interruption, before resuming a wait, re-verify liveness of everything you were waiting on.
+- Vlad interrupts to STEER, not to cancel: an interruption is normally new input for the main thread, not a verdict on background work. After handling the steer, resume the killed background agents by default (only drop them if the new input supersedes their task).
+- never wait open-ended on a notification alone. Pair every wait with a scheduled fallback wakeup, and when the fallback fires (or after an interruption), check liveness instead of re-waiting: stat the agent's transcript/output file — a small size or minutes-stale mtime with no notification means presume dead. Confirm by tailing the transcript's last entries (bounded `tail -c`, don't read the whole JSONL) for `[Request interrupted by user]` or an error.
+- a dead agent may have made partial edits — `git status` its target files before deciding. Prefer resuming the SAME agent via SendMessage (general-purpose subagents resume with full context; Explore/Plan are one-shot and can't) over re-spawning from scratch; re-spawn only if resume fails or the agent had barely started.
+- background Bash tasks piped through `| tail`/`| head` report the PIPE's exit code — the harness "completed (exit 0)" line can mask a failing command. Capture the real status explicitly (`; echo "EXIT:$?"` before any pipe, or write to a log file and tail that) and read the output before declaring success.
 
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
@@ -22,7 +29,7 @@ secret handling:
 
 testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
-- fuzz suites (`*.fuzz.test.ts`, fast-check) run as a small fixed-seed smoke tier inside the normal gate and as random-seed deep runs via `yarn fuzz` + the nightly `fuzz-nightly.yml` workflow. Reproduce failures with `FUZZ_SEED`/`FUZZ_PATH`; conventions + oracle discipline in `docs/fuzzing.md`. Never weaken a failing property to make it pass — diagnose (real bug vs wrong oracle) first.
+- fuzz suites (`*.fuzz.test.ts`, fast-check) run as a small fixed-seed smoke tier inside the normal gate and as random-seed deep runs via `pnpm fuzz` + the nightly `fuzz-nightly.yml` workflow. Reproduce failures with `FUZZ_SEED`/`FUZZ_PATH`; conventions + oracle discipline in `docs/fuzzing.md`. Never weaken a failing property to make it pass — diagnose (real bug vs wrong oracle) first.
 - share one DB per test file: open with `createTestDb()` once in module scope / `beforeAll`, reset with `resetTestDb()` in `beforeEach`. Don't call `createTestDb()` per test.
 - don't `await new Promise(r => setTimeout(r, N))` to wait on a DB/subscription/BroadcastChannel round-trip — it's slow and flaky. Poll the outcome with `vi.waitFor`.
 - proving a write does NOT fire/invalidate:

@@ -532,7 +532,7 @@ export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 export interface KnownCommandMeta {
   /** CLI usage example, including positional + flag hints. Phrased as
    *  the user would type it via the published bin (`kmagent X`); the
-   *  monorepo `yarn agent X` wrapper invokes the same binary. */
+   *  monorepo `pnpm agent X` wrapper invokes the same binary. */
   usage: string
   /** Short one-line description for help / summary surfaces. */
   description: string

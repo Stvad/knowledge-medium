@@ -560,24 +560,24 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['core.actions', 'core.app-mounts', 'core.app-effects', 'data.definition-seeds', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --guide external-sync-plugin --storage',
-      'yarn agent describe-runtime --components dialog,input,button,label',
+      'pnpm agent describe-runtime --guide external-sync-plugin --storage',
+      'pnpm agent describe-runtime --components dialog,input,button,label',
       // Writes compiled declarations for the app's vendored `@/...`
       // modules, so TS-aware editors resolve extension imports with
       // the same signatures the app build checks.
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/extensions/api.js"',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/extensions/api.js"',
       // Convention: extension source files live under `agent-extensions/`
       // at the repo root. The matrix-chat-client + canvas-layout
       // extensions are there as references.
-      'yarn agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
-      'yarn agent enable-extension <label>',
-      'yarn agent uninstall-extension <label>',
+      'pnpm agent install-extension --verify [--description "<text>"] agent-extensions/<plugin>.js <label>',
+      'pnpm agent enable-extension <label>',
+      'pnpm agent uninstall-extension <label>',
     ],
     afterInstall: [
-      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `yarn agent enable-extension <label>` (or `<id>`) before its actions show up in `yarn agent run-action`.',
+      'User-installed extensions are disabled by default (`userExtensionToggle` sets `defaultEnabled: false`). After install, run `pnpm agent enable-extension <label>` (or `<id>`) before its actions show up in `pnpm agent run-action`.',
       'enable-extension does two things (issue #67): it sets the synced "enabled" intent AND grants THIS device a trust approval pinned to the current source hash. A block runs only with both — so enabling on the bridge runs it on the bridge.',
-      'After you EDIT an extension (install-extension onto the same block, or hand-edit the source), re-run `yarn agent enable-extension <label>` to re-pin the new source on this device. Until you do, the device keeps running the PREVIOUSLY approved version and the settings UI shows "Update available" — the live source is never auto-executed.',
+      'After you EDIT an extension (install-extension onto the same block, or hand-edit the source), re-run `pnpm agent enable-extension <label>` to re-pin the new source on this device. Until you do, the device keeps running the PREVIOUSLY approved version and the settings UI shows "Update available" — the live source is never auto-executed.',
       'disable-extension / a source change do NOT stop a running extension by themselves: disable only clears intent (the trust grant persists for a frictionless re-enable), and a drifted source keeps running the pinned version. uninstall-extension deletes the block and revokes the device trust.',
       'Do not retry `install-extension` if the action is "not found" — the install succeeded; the toggle/approval is just off. Run enable-extension.',
       'Pass `--verify` to `install-extension` to see the facets/actions the extension contributed without enabling/approving it (verify compiles the live source in isolation for diagnostics only).',
@@ -615,10 +615,10 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['core.app-mounts', 'core.actions'],
     commands: [
-      'yarn agent describe-runtime --components dialog,input,button,label',
-      'yarn agent describe-runtime --modules components/ui',
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/components/ui/dialog.js"',
+      'pnpm agent describe-runtime --components dialog,input,button,label',
+      'pnpm agent describe-runtime --modules components/ui',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/components/ui/dialog.js"',
     ],
     examples: [
       settingsDialogExample,
@@ -640,10 +640,10 @@ const guides: AuthoringGuide[] = [
     preferredModules: ['@/extensions/api.js'],
     relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [
-      'yarn agent describe-runtime --storage',
-      'yarn agent describe-runtime --facets data.definition-seeds',
-      'yarn agent types agent-extensions/kernel-types',
-      'yarn agent types --module "@/extensions/api.js"',
+      'pnpm agent describe-runtime --storage',
+      'pnpm agent describe-runtime --facets data.definition-seeds',
+      'pnpm agent types agent-extensions/kernel-types',
+      'pnpm agent types --module "@/extensions/api.js"',
     ],
     examples: [
       storageGuide.patterns.find(p => p.id === 'user-prefs-config')!.example!,

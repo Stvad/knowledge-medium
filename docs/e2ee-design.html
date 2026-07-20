@@ -941,7 +941,7 @@ CREATE TRIGGER blocks_require_ciphertext_for_e2ee_trg
         backfills existing rows to <code>'none'</code> at migration time (matching the server),
         and later replays overwrite with the real value. <code>wk_canary</code> stays nullable
         &mdash; <code>NULL</code> is the correct value for a plaintext workspace.</li>
-      <li>Run <code>yarn gen:sync-config</code> to refresh the yaml; <code>yarn check:sync-config</code>
+      <li>Run <code>pnpm gen:sync-config</code> to refresh the yaml; <code>pnpm check:sync-config</code>
         in CI catches anyone who forgets.</li>
     </ul>
 

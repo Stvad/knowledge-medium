@@ -192,7 +192,7 @@ export const requestJson = async <T = unknown>(
 }
 
 // Errors the server returns when the client has temporarily lost its
-// token registration (typical after a `yarn agent reload` or after
+// token registration (typical after a `kmagent reload` or after
 // `install-extension` triggers refreshAppRuntime). Retrying on these
 // for ~10–15s smooths over the reconnect gap without papering over
 // real auth failures (scope mismatch, missing token, etc.).
@@ -210,7 +210,7 @@ const authedRetryMaxDelayMs = 1_000
  *  Pre-creates the bridge secret so the server and later pairing agree
  *  on it. Shared by the CLI's ensureBridgeRunning and the agent-dispatch
  *  daemon's unattended preflight (which must survive reboots without a
- *  human running `yarn agent`). */
+ *  human running `kmagent`). */
 export const startBridgeInBackground = async (): Promise<void> => {
   const serverScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'server.js')
   const logPath = bridgeLogPath()
@@ -279,7 +279,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     const token = await clientResolveToken()
     if (!token) {
       throw new Error(
-        `No agent token configured for profile "${profileName}". Run \`yarn agent --profile ${profileName} connect\` to pair the CLI with the app.`,
+        `No agent token configured for profile "${profileName}". Run \`kmagent --profile ${profileName} connect\` to pair the CLI with the app.`,
       )
     }
     return token

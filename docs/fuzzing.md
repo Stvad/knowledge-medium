@@ -17,8 +17,8 @@ The same property code runs at three intensities (mechanics in
 
 | Tier | Trigger | Seeds | Budget |
 |---|---|---|---|
-| smoke | part of the normal `yarn test` / `yarn run check` gate | fixed | small run counts, ~1s/file |
-| local deep | `yarn fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
+| smoke | part of the normal `pnpm test` / `pnpm run check` gate | fixed | small run counts, ~1s/file |
+| local deep | `pnpm fuzz [files…]` | random | `FUZZ_TIME_MS` per property (default 15s) |
 | nightly | `.github/workflows/fuzz-nightly.yml` (06:23 UTC cron + manual dispatch) | random | 15s/property across all suites, then a 20-minute dedicated pass on the stateful data-layer suite |
 
 The smoke tier is deliberately deterministic: the gate re-explores the
@@ -36,7 +36,7 @@ fast-check's failure report includes `seed`, `path`, and the shrunk
 counterexample. Replay it:
 
 ```sh
-FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file> -t '<failing test name>'
+FUZZ_SEED=<seed> FUZZ_PATH="<path>" pnpm vitest run --testTimeout=600000 <failing file> -t '<failing test name>'
 ```
 
 The `-t` filter matters: the env vars apply to every property in the

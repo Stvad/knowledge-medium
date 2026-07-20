@@ -69,4 +69,4 @@ DELETE FROM row_events
 4. **Migration coexistence test.** Pre-insert one row in old shape (full `before_json`/`after_json`, `changed_columns IS NULL`); confirm tail still produces correct invalidation by treating `changed_columns IS NULL` as "full snapshot, all-fields-changed".
 5. **Bench delta — manual.** Run `scripts/bench/bench-tail.ts` before/after on a seeded workspace; record write-tx tail latency + row_events bytes/event.
 
-Verification gate: `yarn run check` per [AGENTS.md](AGENTS.md).
+Verification gate: `pnpm run check` per [AGENTS.md](AGENTS.md).
