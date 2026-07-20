@@ -127,7 +127,7 @@ import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from './typeDefinitionRegistry'
-import {buildUnboundTypes} from './typeDefinitionRegistry'
+import {buildUnboundTypes, materializingTypeSeeds} from './typeDefinitionRegistry'
 import {
   materializePropertySeeds,
   materializeTypeSeeds,
@@ -277,11 +277,12 @@ const sameSeedKeySet = (
 ): boolean => sameKeyedMap(a, b)
 
 /** Like {@link sameSeedKeySet}, but also compares each type seed's membership
- *  `id`. `materializeTypeSeeds` skips EVERY seed in a duplicate-`id` group
- *  (`uncontestedTypeSeeds`), so a declaration that de-collides an id — without
- *  adding or removing a key — still changes what is materializable, and the
- *  reschedule trigger must see it. Property seeds carry no such id-collision
- *  filter, so their key-set diff alone suffices. */
+ *  `id`. `materializeTypeSeeds` winner-resolves a duplicate-`id` group to its
+ *  lowest-seed-key seed (`winnerTypeSeeds`), so an `id` change with no key added or
+ *  removed can still change which seed materializes for that id (a de-collision, or a
+ *  new lower-key claimant taking over), and the reschedule trigger must see it.
+ *  Property seeds carry no such id-collision resolution, so their key-set diff alone
+ *  suffices. */
 const sameTypeSeedIdentities = (
   a: ReadonlyMap<string, {id: string}> | undefined,
   b: ReadonlyMap<string, {id: string}> | undefined,
@@ -2308,20 +2309,16 @@ export class Repo {
       propertySeeds: propertyRegistry?.workspaceId === workspaceId
         ? [...propertyRegistry.seedsByKey.values()]
         : [],
-      // Withhold contested seeds from materialization: `seedsByKey` kept a
-      // contribution-order-dependent first-winner, but the backing pass is
-      // create/restore-only, so persisting one would strand a stale mirror on a
-      // later reorder. Drop BOTH a contested KEY and a contested membership ID
-      // using the registry's authoritative sets — filtering ids here (not leaving
-      // it to `materializeTypeSeeds`' `uncontestedTypeSeeds`) is what keeps a
-      // contested-key drop from making a surviving id-loser look uncontested. The
-      // type stays resolvable in-memory; only its backing block defers until the
-      // duplicate is resolved.
+      // Materialize exactly the registry's winners: one backing block per membership
+      // id (the lowest-seed-key winner from `seedKeyById`), and never a contested-KEY
+      // seed (its keep-first winner is contribution-order-dependent, so the
+      // create/restore-only pass would strand a stale mirror on a later reorder). A
+      // membership-id collision is winner-resolved rather than withheld — the id's one
+      // stable winner materializes, its losers don't. `materializingTypeSeeds` is the
+      // shared derivation, so this agrees with the block-id binding and the scheduled
+      // recheck.
       typeSeeds: typeRegistry?.workspaceId === workspaceId
-        ? [...typeRegistry.seedsByKey.values()].filter(
-            seed => !typeRegistry.contestedSeedKeys.has(seed.seedKey)
-              && !typeRegistry.contestedTypeIds.has(seed.id),
-          )
+        ? materializingTypeSeeds(typeRegistry)
         : [],
     }
   }

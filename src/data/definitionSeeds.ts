@@ -62,6 +62,37 @@ export const typeDefinitionBlockId = (workspaceId: string, seedKey: string): str
   return definitionBlockId(workspaceId, seedKey)
 }
 
+/** Owner segment of a code-owned seed key — everything before the FIRST `/`.
+ * Grammar-agnostic across BOTH kinds (`<owner>/property/<key>` and
+ * `<owner>/type/<key>`, where an owner never contains `/`), unlike
+ * `propertySchemaOriginForSeedKey`, which assumes the `/property/` segment and
+ * silently truncates a `/type/` owner (the split `typeDefinitionMetadata` flagged
+ * as needed). Used to gate nested-property auto-contribution to a type's OWN owner:
+ * a type materializes only the properties it owns, never another owner's. */
+export const seedKeyOwner = (seedKey: string): string => {
+  const slash = seedKey.indexOf('/')
+  return slash === -1 ? seedKey : seedKey.slice(0, slash)
+}
+
+const KERNEL_SEED_OWNER = 'system:kernel-data'
+
+/** Winner comparator for two type seeds that claim ONE membership id (compares
+ * their seed keys). A kernel-owned seed (`system:kernel-data`) always outranks a
+ * non-kernel one, so an installed plugin/extension can never take over a built-in
+ * id (the anti-hijack invariant the old fail-closed stance protected). Among
+ * same-privilege seeds the lexicographically-LOWER key wins — deterministic and
+ * contribution-order-INDEPENDENT, so two installs of one extension resolve to a
+ * single stable winner (and one stable backing block) instead of flipping with load
+ * order. Returns true when `challenger` should replace the current winner
+ * `incumbent`. Shared by the registry (`synthesizeSeedTypes`) and the direct-caller
+ * materialization filter (`winnerTypeSeeds`) so both pick the same winner. */
+export const typeSeedKeyOutranks = (challenger: string, incumbent: string): boolean => {
+  const challengerKernel = seedKeyOwner(challenger) === KERNEL_SEED_OWNER
+  const incumbentKernel = seedKeyOwner(incumbent) === KERNEL_SEED_OWNER
+  if (challengerKernel !== incumbentKernel) return challengerKernel
+  return challenger < incumbent
+}
+
 type SeedIdentityRow = Pick<BlockData, 'id' | 'workspaceId' | 'properties'>
 
 const validSeedKeyForRow = (row: SeedIdentityRow): string | undefined => {
@@ -123,7 +154,7 @@ export const canonicalPropertySeedProperties = (
  * guarding object-ness before the `in` check is still load-bearing: it keeps one
  * bad entry (a primitive/null) from THROWING and aborting the whole workspace's
  * type materialization pass — skip+warn it instead. */
-const propertySeedKeyOf = (prop: unknown): string | undefined => {
+export const propertySeedKeyOf = (prop: unknown): string | undefined => {
   if (typeof prop !== 'object' || prop === null || !('seedKey' in prop)) return undefined
   const key: unknown = (prop as {readonly seedKey: unknown}).seedKey
   return isPropertySeedKey(key) ? key : undefined
@@ -572,51 +603,36 @@ export const materializePropertySeeds = (
       : undefined,
   }, signal)
 
-/** Exclude EVERY seed whose membership `id` is claimed by more than one seed in
- * the batch (returning the uncontested rest). Two seeds sharing an `id` are an
- * authoring error that `assertUniqueSeedKeys` can't catch — they carry DIFFERENT
- * keys, so they hash to different deterministic block ids — yet both would
- * materialize a `block-type` block claiming the same `block-type:type-id`.
- *
- * Materializing even a keep-first "winner" is unsafe, because the winner is
- * contribution-order-dependent: a reorder across runs (plugin load order, a
- * dynamic-extension change) would materialize a DIFFERENT backing block, and
- * this create/restore-only pass never deletes the old one, stranding an orphaned
- * mirror at the now-stale deterministic id that `buildTypeDefinitionRegistry`
- * can't cleanly resolve (neither the active declared mirror nor a cleanly-retired
- * row). So we back NONE of a contested id: its `TypeContribution` is
- * still synthesized from the declaration (the type isn't lost — only
- * `getTypeBlockId` stays undefined until the collision is resolved), and no
- * backing row is ever written to orphan. Skip-and-warn, not throw, so one bad
- * dynamic contribution can't abort materialization of the other seeds. */
-const uncontestedTypeSeeds = (
+/** Keep only the id-WINNER of each membership id: when several seeds in the batch
+ * claim one `id` (an id collision `assertUniqueSeedKeys` can't catch — they carry
+ * DIFFERENT keys, hashing to different deterministic block ids, yet each would
+ * materialize a `block-type` block claiming the same `block-type:type-id`), the
+ * LOWEST seed key wins and the losers are dropped. This is the direct-caller twin of
+ * `synthesizeSeedTypes`' registry resolution, so a direct-array materialization set
+ * agrees with what the registry publishes and binds. The winner is deterministic
+ * (order-independent), so exactly ONE backing block per id is ever materialized — no
+ * reorder-dependent flip that this create/restore-only pass could never delete.
+ * Unlike the former fail-closed drop-both behavior, the id still materializes (its
+ * one stable winner) rather than stranding every contender until the clash is
+ * manually resolved — an id clash now degrades gracefully. */
+const winnerTypeSeeds = (
   seeds: readonly TypeSeedDeclaration[],
 ): readonly TypeSeedDeclaration[] => {
-  const countById = new Map<string, number>()
-  for (const seed of seeds) countById.set(seed.id, (countById.get(seed.id) ?? 0) + 1)
-  const warned = new Set<string>()
-  const kept: TypeSeedDeclaration[] = []
+  const winnerById = new Map<string, TypeSeedDeclaration>()
   for (const seed of seeds) {
-    if ((countById.get(seed.id) ?? 0) > 1) {
-      if (!warned.has(seed.id)) {
-        console.warn(
-          `[materializeTypeSeeds] duplicate type seed id ${JSON.stringify(seed.id)}; ` +
-          'not materializing any of its declarations until the collision is resolved',
-        )
-        warned.add(seed.id)
-      }
-      continue
-    }
-    kept.push(seed)
+    const prior = winnerById.get(seed.id)
+    if (!prior || typeSeedKeyOutranks(seed.seedKey, prior.seedKey)) winnerById.set(seed.id, seed)
   }
-  return kept
+  const winners = new Set(winnerById.values())
+  return seeds.filter(seed => winners.has(seed))
 }
 
 /** Create/restore-only TYPE seed pass — missing definitions minted beneath the
  * Types page, which the pass ensures exists first. Unlike the property pass it
- * drops contested-`id` seeds first (`uncontestedTypeSeeds`, via `preFilter`) so a
- * membership collision never materializes an order-dependent, orphan-prone
- * backing row; the property side folds its collision handling into the registry
+ * winner-resolves a membership-`id` collision first (`winnerTypeSeeds`, via
+ * `preFilter`): the lowest-seed-key winner materializes and the losers are dropped,
+ * so exactly one stable backing block exists per id and an id clash degrades
+ * gracefully; the property side folds its collision handling into the registry
  * upstream. Its `block-type` backing rows are kept bare (no PAGE_TYPE / alias) by
  * the typeify same-tx processor's `/type/`-seed carve-out. See `materializeSeeds`. */
 export const materializeTypeSeeds = (
@@ -634,28 +650,27 @@ export const materializeTypeSeeds = (
     contentFor: seed => seed.label,
     propertiesFor: canonicalTypeSeedProperties,
     txDescription: 'materialize type definitions',
-    preFilter: uncontestedTypeSeeds,
+    preFilter: winnerTypeSeeds,
     stillMaterializable: revalidateAgainstRegistry
       ? seed => {
           const reg = repo.typeDefinitions
           // Not the live registry for this workspace (direct caller with an explicit
           // array, or a switch-away the abort guard already handles) → trust the array.
           if (reg?.workspaceId !== workspaceId) return true
-          const current = reg.seedsByKey.get(seed.seedKey)
-          // Withhold a seed the live registry no longer declares OR now flags
-          // contested by key OR by membership id, matching `workspaceSeeds`' filter.
-          if (!current
-            || reg.contestedSeedKeys.has(seed.seedKey)
-            || reg.contestedTypeIds.has(seed.id)) return false
-          // The live declaration for this key must still carry the same membership
-          // ID we snapshotted. A same-key id REPLACEMENT (an id de-collision, a
-          // plugin update) would otherwise write the stale id to the deterministic
-          // block; create/restore-only never repairs it, so the registry would bind
-          // the NEW id to a row claiming the OLD one. Compare ID only — NOT revision:
-          // a revision bump is a payload-version change materialization deliberately
-          // doesn't chase (the reschedule diff ignores it too, §4.3/§6.1), so gating
-          // on it here would reject the snapshot with no dirty re-run to replace it.
-          return current.id === seed.id
+          // Materialize only if this seed is STILL the live id-winner for its key and
+          // that key isn't contested. `seedKeyById.get(id) === seedKey` IS the winner
+          // test; it subsumes both a demotion (an install change since the snapshot
+          // handed the membership id to a lower-seed-key declaration) AND a same-key
+          // id REPLACEMENT (a plugin update rebound this key to a new id) — in either
+          // case this (key, id) is no longer the registry's winning pair, so writing
+          // it would strand a stale/loser backing block this create/restore-only pass
+          // can never delete. Matches `workspaceSeeds` / `materializingTypeSeeds`.
+          // Identity only, not revision: a revision bump is a payload-version change
+          // materialization deliberately doesn't chase (the reschedule diff ignores it
+          // too, §4.3/§6.1), so gating on it would reject the snapshot with no dirty
+          // re-run to replace it.
+          return !reg.contestedSeedKeys.has(seed.seedKey)
+            && reg.seedKeyById.get(seed.id) === seed.seedKey
         }
       : undefined,
   }, signal)

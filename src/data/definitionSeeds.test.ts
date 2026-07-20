@@ -574,8 +574,8 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     await insertEditorMembership()
     await repo.whenPropertyDefinitionsReady(WS)
 
-    // Two type seeds sharing a membership id but with distinct keys: contested, so
-    // `uncontestedTypeSeeds` backs NEITHER.
+    // Two type seeds sharing a membership id but with distinct keys: winner-resolved
+    // to the lowest key (seedA), so seedA backs and the id-loser seedB does not.
     const seedA = seedType({seedKey: 'system:test/type/a', revision: 1, id: 'dup', label: 'A'})
     const seedBContested = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup', label: 'B'})
     repo.setRuntimeContributions(typeSeedsFacet, 'contested', [seedA, seedBContested])
@@ -586,15 +586,19 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/a')).toBe(seedA)
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/b')).toBe(seedBContested)
     })
-    await repo.awaitSeedMaterialization()
-    // Neither backed while contested (also the pre-materialization state, so this
-    // holds regardless of the auto-scheduled pass's timing).
+    // The winner (seedA) is backed via the auto-reschedule; the id-loser (seedB) is not.
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const rowA = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedA.seedKey)])
+      expect(rowA?.deleted).toBe(0)
+    })
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
-      [typeDefinitionBlockId(WS, seedA.seedKey)])).toBeNull()
+      [typeDefinitionBlockId(WS, seedBContested.seedKey)])).toBeNull()
 
     // De-collide B's id WITHOUT changing the key set. Materializability changed
-    // (both are now uncontested), so the reschedule trigger must fire on the id
-    // change alone — a key-set-only diff would miss it and leave them unbacked.
+    // (seedB becomes its own winner), so the reschedule trigger must fire on the id
+    // change alone — a key-set-only diff would miss it and leave seedB unbacked.
     // NOTE: no explicit schedule here — this relies on the applyTypesAndSchemas
     // auto-reschedule, which is the mechanism under test.
     const seedBFixed = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup-b', label: 'B'})
@@ -652,15 +656,15 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     })
   })
 
-  it('withholds an id-loser mirror when a contested-KEY winner shares its id', async () => {
+  it('withholds all backing when the id-winner’s own key is contested', async () => {
     await insertEditorMembership()
     await repo.whenPropertyDefinitionsReady(WS)
 
-    // A & B share KEY k1 (→ k1 key-contested, A kept first); A & C share membership
-    // id 'x'. If `workspaceSeeds` only dropped the contested KEY, it would remove A
-    // and leave C looking id-uncontested (uncontestedTypeSeeds counts x once) →
-    // materialize an order-dependent loser mirror, since A is the id-'x' winner
-    // in-memory. Filtering contested IDS against the registry withholds C too.
+    // A & B share KEY k1 (→ k1 key-contested, A kept first); A & C share membership id
+    // 'x'. id 'x' winner-resolves to A (lowest key, k1 < k2) — but A's key is
+    // contested, so `materializingTypeSeeds` withholds it. C (the id-'x' loser) never
+    // materializes either. Nothing gets a backing row until the mess is resolved —
+    // materializing the loser C would orphan a block the winner's id doesn't reference.
     const K1 = 'system:test/type/k1'
     const K2 = 'system:test/type/k2'
     const seedA = seedType({seedKey: K1, revision: 1, id: 'x', label: 'A'})
@@ -669,7 +673,8 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     repo.setRuntimeContributions(typeSeedsFacet, 'triple', [seedA, seedB, seedC])
     await vi.waitFor(() => {
       expect(repo.typeDefinitions?.contestedSeedKeys.has(K1)).toBe(true)
-      expect(repo.typeDefinitions?.contestedTypeIds.has('x')).toBe(true)
+      // id 'x' resolves to A's key (k1), the winner — but that key is contested.
+      expect(repo.typeDefinitions?.seedKeyById.get('x')).toBe(K1)
     })
 
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
@@ -679,6 +684,46 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       [typeDefinitionBlockId(WS, K1)])).toBeNull()
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [typeDefinitionBlockId(WS, K2)])).toBeNull()
+  })
+
+  it('auto-contributes and materializes a type’s inline own-owned property (never seeded separately)', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+
+    const inlineProp = seedProperty({
+      seedKey: 'system:demo/property/color',
+      revision: 1,
+      name: 'demo:color',
+      preset: 'optional-string',
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const demoType = seedType({
+      seedKey: 'system:demo/type/widget', revision: 1, id: 'demo-widget', label: 'Widget',
+      properties: [inlineProp],
+    })
+    // Only the TYPE is contributed — the property is embedded in `properties` but is
+    // NOT separately contributed to `definitionSeedsFacet`. The harvest closes that gap.
+    repo.setRuntimeContributions(typeSeedsFacet, 'demo', [demoType])
+
+    // The embedded property was harvested into the property registry (so its schema
+    // resolves for anything typed with it)...
+    await vi.waitFor(() => {
+      expect(repo.propertyDefinitions?.seedsByKey.has('system:demo/property/color')).toBe(true)
+    })
+    // ...and it materializes a backing block by the same path as any property seed, so
+    // the type's block-type:properties ref resolves instead of dangling.
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const propRow = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?',
+        [propertyDefinitionBlockId(WS, 'system:demo/property/color')])
+      const typeRow = await sharedDb.db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?',
+        [typeDefinitionBlockId(WS, 'system:demo/type/widget')])
+      expect(propRow?.deleted).toBe(0)
+      expect(typeRow?.deleted).toBe(0)
+    })
   })
 })
 
@@ -1168,25 +1213,48 @@ describe('type definition materialization', () => {
     expect((await materializeTypeSeeds(repo, WS, [typeSeed])).created).toBe(1)
   })
 
-  it('with revalidation on, skips a seed the live registry now flags id-contested (stale-snapshot guard)', async () => {
-    // A seed uncontested at snapshot time can become duplicate-ID contested during
-    // the pass's awaits (a twin declaration lands). The live recheck must withhold
-    // it by MEMBERSHIP ID too — not only removed or key-contested seeds — else an
-    // order-dependent loser mirror gets written. Simulate that post-await registry.
+  it('with revalidation on, skips an id-LOSER the live registry resolved against (stale-snapshot guard)', async () => {
+    // A seed that was its id's sole claimant at snapshot time can be demoted to an
+    // id-loser during the pass's awaits (a lower-key twin lands, taking the id). The
+    // live recheck must withhold the loser — else a redundant backing block gets
+    // written for an id whose winner already owns it, and this create/restore-only
+    // pass can never delete it. Simulate that post-await registry: `twin` sorts BELOW
+    // typeSeed's key, so it wins the shared id and typeSeed is the loser.
+    const winnerKey = 'system:test/type/aaa' // sorts before typeSeed.seedKey → the winner
     const contestedRegistry = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: new Map(),
       seeds: [
         typeSeed,
-        seedType({seedKey: 'system:test/type/twin', revision: 1, id: typeSeed.id, label: 'Twin'}),
+        seedType({seedKey: winnerKey, revision: 1, id: typeSeed.id, label: 'Twin'}),
       ],
     })
-    expect(contestedRegistry.contestedTypeIds.has(typeSeed.id)).toBe(true)
+    // typeSeed lost its membership id to the lower-key twin.
+    expect(contestedRegistry.seedKeyById.get(typeSeed.id)).toBe(winnerKey)
     vi.spyOn(repo, 'typeDefinitions', 'get').mockReturnValue(contestedRegistry)
 
     expect((await materializeTypeSeeds(repo, WS, [typeSeed], undefined, true)).created).toBe(0)
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [typeDefinitionBlockId(WS, typeSeed.seedKey)])).toBeNull()
+  })
+
+  it('with revalidation on, materializes the id-WINNER of a live collision', async () => {
+    // The mirror of the loser-skip guard: when this seed IS the id-winner (its key
+    // sorts below the twin's), the live recheck lets it through so the id still gets
+    // its one stable backing block.
+    const loserKey = 'system:test/type/zzz' // sorts after typeSeed.seedKey → the loser
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: new Map(),
+      seeds: [typeSeed, seedType({seedKey: loserKey, revision: 1, id: typeSeed.id, label: 'Twin'})],
+    })
+    expect(reg.seedKeyById.get(typeSeed.id)).toBe(typeSeed.seedKey)
+    vi.spyOn(repo, 'typeDefinitions', 'get').mockReturnValue(reg)
+
+    expect((await materializeTypeSeeds(repo, WS, [typeSeed], undefined, true)).created).toBe(1)
+    expect(await sharedDb.db.getOptional<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)]))
+      .toMatchObject({deleted: 0})
   })
 
   it('with revalidation on, skips when the live declaration for the key has a new membership id', async () => {
@@ -1240,36 +1308,27 @@ describe('type definition materialization', () => {
     expect(repo.typeDefinitions?.blockIdByTypeId.get(typeSeed.id)).toBe(blockId)
   })
 
-  it('materializes NO seed of a contested membership id, but still materializes the uncontested ones', async () => {
+  it('winner-resolves a contested membership id (backs the lowest-key winner) and still backs the uncontested ones', async () => {
     // typeSeed + twin share an `id` but carry different keys (→ different
-    // deterministic ids, so assertUniqueSeedKeys passes). Materializing an
-    // order-dependent keep-first winner would orphan a phantom `/type/` row on a
-    // reorder / authoring fix (this create/restore-only pass never deletes), so
-    // NEITHER contested declaration is backed. A third, uncontested seed in the
-    // same batch must still materialize — one bad contribution can't abort the pass.
+    // deterministic ids, so assertUniqueSeedKeys passes). `winnerTypeSeeds` backs the
+    // lowest-key winner (typeSeed; 'widget' sorts before 'widget-twin') and drops the
+    // loser (twin) — exactly one stable backing block per id, no order-dependent
+    // phantom row on a reorder. A third, uncontested seed materializes as usual.
     const twin = seedType({
       seedKey: 'system:test/type/widget-twin', revision: 1, id: typeSeed.id, label: 'Widget Twin',
     })
     const other = seedType({
       seedKey: 'system:test/type/gadget', revision: 1, id: 'test-gadget', label: 'Gadget',
     })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      expect(await materializeTypeSeeds(repo, WS, [typeSeed, twin, other]))
-        .toEqual({created: 1, restored: 0, skippedReadOnly: false})
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('duplicate type seed id'))
-    } finally {
-      warn.mockRestore()
-    }
-    // No backing row for either contested declaration...
-    expect(await sharedDb.db.getOptional(
-      'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
-    )).toBeNull()
+    expect(await materializeTypeSeeds(repo, WS, [typeSeed, twin, other]))
+      .toEqual({created: 2, restored: 0, skippedReadOnly: false})
+    // The winner (typeSeed) and the uncontested seed are backed...
+    expect(repo.block(typeDefinitionBlockId(WS, typeSeed.seedKey)).peek()).toBeTruthy()
+    expect(repo.block(typeDefinitionBlockId(WS, other.seedKey)).peek()).toBeTruthy()
+    // ...but the id-loser (twin) is not.
     expect(await sharedDb.db.getOptional(
       'SELECT id FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, twin.seedKey)],
     )).toBeNull()
-    // ...but the uncontested seed materialized.
-    expect(repo.block(typeDefinitionBlockId(WS, other.seedKey)).peek()).toBeTruthy()
   })
 
   it('rejects a user-scope create that forges a provenance-valid /type/ seed row (tx guard is grammar-agnostic)', async () => {

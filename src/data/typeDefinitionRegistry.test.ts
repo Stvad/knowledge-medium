@@ -1,10 +1,13 @@
-import {describe, expect, it} from 'vitest'
-import type {AnyPropertySchema} from '@/data/api'
+import {describe, expect, it, vi} from 'vitest'
+import {ChangeScope, type AnyPropertySchema} from '@/data/api'
 import {typeDefinitionBlockId} from '@/data/definitionSeeds'
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
+import {seedProperty} from '@/data/propertySeeds'
 import {seedType} from '@/data/typeSeeds'
 import {
   buildTypeDefinitionRegistry,
+  harvestNestedPropertySeeds,
+  materializingTypeSeeds,
   type ProjectedTypeDefinition,
 } from '@/data/typeDefinitionRegistry'
 
@@ -333,22 +336,138 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.blockIdByTypeId.has('first')).toBe(false)
   })
 
-  it('refuses getTypeBlockId for an already-mirrored seed whose membership ID is now contested', () => {
-    const KEY_B = 'system:kernel-data/type/todo'
-    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+  it('winner-resolves a membership-ID collision to the lowest seed key and binds only its mirror', () => {
+    const KEY_B = 'system:kernel-data/type/todo' // sorts after PAGE_KEY ('page' < 'todo')
+    const winnerBlockId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const loserBlockId = typeDefinitionBlockId(WS, KEY_B)
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
-      projectedDefinitions: asMap([projected({blockId: backingId, seedKey: PAGE_KEY, label: 'A'})]),
-      // Distinct keys, same membership id → id-contested.
+      // Both installs already materialized a mirror; both carry valid provenance.
+      projectedDefinitions: asMap([
+        projected({blockId: winnerBlockId, seedKey: PAGE_KEY, label: 'A'}),
+        projected({blockId: loserBlockId, seedKey: KEY_B, label: 'B'}),
+      ]),
+      // Distinct keys, same membership id → winner-resolved (not withheld).
       seeds: [
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
         seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
       ],
     })
-    expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
-    expect(reg.blockIdByTypeId.has('shared')).toBe(false)
-    // The contested id is exposed on the snapshot so the scheduled materialization
-    // path can withhold it authoritatively (not recompute from a filtered snapshot).
-    expect(reg.contestedTypeIds.has('shared')).toBe(true)
+    // The lowest-seed-key seed (PAGE_KEY) wins id 'shared': it publishes and its
+    // mirror binds getTypeBlockId, so the type resolves to one stable block instead
+    // of failing closed.
+    expect(reg.seedKeyById.get('shared')).toBe(PAGE_KEY)
+    expect(reg.typesById.get('shared')).toMatchObject({label: 'A'})
+    expect(reg.blockIdByTypeId.get('shared')).toBe(winnerBlockId)
+    // The loser's mirror stays provenance-only (the read-only gate still recognizes
+    // it) but never rebinds 'shared' to its own block.
+    expect(reg.definitionsByBlockId.has(loserBlockId)).toBe(true)
+    expect(reg.blockIdByTypeId.get('shared')).not.toBe(loserBlockId)
+  })
+
+  it('winner-resolution is order-independent (contribution order does not change the winner)', () => {
+    const KEY_B = 'system:kernel-data/type/todo'
+    const build = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+      buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+    const lowFirst = build([
+      seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+      seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+    ])
+    const highFirst = build([
+      seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+      seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+    ])
+    // Either order picks the lowest seed key — the whole point vs a keep-first pick,
+    // whose winner (and materialized backing block) would flip with load order.
+    expect(lowFirst.seedKeyById.get('shared')).toBe(PAGE_KEY)
+    expect(highFirst.seedKeyById.get('shared')).toBe(PAGE_KEY)
+    expect(highFirst.typesById.get('shared')).toMatchObject({label: 'A'})
+  })
+})
+
+// A minimal own-owned property seed for the given owner (`<owner>/property/<name>`).
+const prop = (owner: string, name: string) => seedProperty({
+  seedKey: `${owner}/property/${name}`,
+  revision: 1,
+  name: `${owner}:${name}`,
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const snapshotOf = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+  buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+
+describe('materializingTypeSeeds', () => {
+  it('returns the winners and excludes a contested-KEY seed', () => {
+    const DUP = 'system:test/type/dup'
+    const clean = seedType({seedKey: 'system:test/type/clean', revision: 1, id: 'clean', label: 'Clean'})
+    const snap = snapshotOf([
+      seedType({seedKey: DUP, revision: 1, id: 'a', label: 'A'}),
+      seedType({seedKey: DUP, revision: 1, id: 'b', label: 'B'}), // same key → contested
+      clean,
+    ])
+    const keys = materializingTypeSeeds(snap).map(s => s.seedKey)
+    expect(keys).toContain('system:test/type/clean')
+    // The contested key's keep-first winner is order-dependent, so it never materializes.
+    expect(keys).not.toContain(DUP)
+  })
+})
+
+describe('harvestNestedPropertySeeds', () => {
+  it('auto-contributes an own-owned inline property that was not seeded separately', () => {
+    const color = prop('plugin:demo', 'color')
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [color]}),
+    ])
+    const harvested = harvestNestedPropertySeeds(snap, [])
+    expect(harvested).toEqual([color])
+  })
+
+  it('does NOT re-contribute a property already seeded separately (gap-fill; else the registry throws on a dup key)', () => {
+    const color = prop('plugin:demo', 'color')
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [color]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [color])).toEqual([])
+  })
+
+  it('leaves a CROSS-owner reference as a pure ref (a type never materializes another owner’s property)', () => {
+    const foreign = prop('plugin:other', 'color') // owner differs from the type
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [foreign]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [])).toEqual([])
+  })
+
+  it('harvests only from the WINNING type seed, never a loser install’s nested property', () => {
+    // Two installs collide on id 'widget'; the lower seed key (owner-a) wins.
+    const propA = prop('owner-a', 'color')
+    const propB = prop('owner-b', 'color')
+    const snap = snapshotOf([
+      seedType({seedKey: 'owner-a/type/widget', revision: 1, id: 'widget', label: 'A', properties: [propA]}),
+      seedType({seedKey: 'owner-b/type/widget', revision: 1, id: 'widget', label: 'B', properties: [propB]}),
+    ])
+    const harvested = harvestNestedPropertySeeds(snap, [])
+    // Only the winner's property is auto-contributed; the loser's would orphan (its
+    // type never materializes to reference it).
+    expect(harvested).toEqual([propA])
+  })
+
+  it('warns on an own-owned STUB ref that is neither a full declaration nor seeded separately', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const stubType = seedType({
+      seedKey: 'plugin:demo/type/widget',
+      revision: 1,
+      id: 'widget',
+      label: 'W',
+      // A bare ref (valid /property/ key, own owner) that carries no preset/codec →
+      // nothing to materialize, so its block-type:properties ref will dangle.
+      properties: [{seedKey: 'plugin:demo/property/ghost'} as unknown as AnyPropertySchema],
+    })
+    const harvested = harvestNestedPropertySeeds(snapshotOf([stubType]), [])
+    expect(harvested).toEqual([])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('plugin:demo/property/ghost'))
+    warn.mockRestore()
   })
 })
