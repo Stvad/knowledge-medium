@@ -206,9 +206,9 @@ describe('describeRuntime', () => {
     })
 
     expect(summary.activeWorkspaceId).toBe('ws-1')
-    expect(summary.commands.baseline).toContain('yarn agent ping')
+    expect(summary.commands.baseline).toContain('pnpm agent ping')
     expect(summary.commands.diagnostics.some(command =>
-      command.startsWith('yarn agent describe-runtime'),
+      command.startsWith('pnpm agent describe-runtime'),
     )).toBe(true)
     expect(summary.capabilities.actions.count).toBe(2)
     expect(summary.capabilities.actions.byContext.global).toBe(2)
@@ -247,8 +247,8 @@ describe('describeRuntime', () => {
     expect(patternIds).toContain('plugin-root-singleton')
     expect(patternIds).toContain('imported-record-blocks')
 
-    expect(summary.more.map(hint => hint.command)).toContain('yarn agent status')
-    expect(summary.more.some(hint => hint.command.includes('yarn agent types agent-extensions/kernel-types'))).toBe(true)
+    expect(summary.more.map(hint => hint.command)).toContain('pnpm agent status')
+    expect(summary.more.some(hint => hint.command.includes('pnpm agent types agent-extensions/kernel-types'))).toBe(true)
     expect(JSON.stringify(summary)).not.toContain('valueSummary')
   })
 
@@ -270,8 +270,8 @@ describe('describeRuntime', () => {
       guide => guide.id === 'external-sync-plugin',
     )
     expect(syncGuide).toBeDefined()
-    expect(syncGuide?.commands).toContain('yarn agent types agent-extensions/kernel-types')
-    expect(syncGuide?.commands).toContain('yarn agent types --module "@/extensions/api.js"')
+    expect(syncGuide?.commands).toContain('pnpm agent types agent-extensions/kernel-types')
+    expect(syncGuide?.commands).toContain('pnpm agent types --module "@/extensions/api.js"')
 
     // Disabled-by-default rescue — the highest-friction paper cut from
     // the previous bridge surface. If this assertion fails, the agent

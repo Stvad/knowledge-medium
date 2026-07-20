@@ -11,9 +11,9 @@
 //
 // Run via the agent bridge (the target tab must be focused/connected):
 //   DRY-RUN (default — reports the candidate count, writes nothing):
-//     yarn agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js
+//     pnpm agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js
 //   APPLY (performs the writes — HELD until explicitly approved):
-//     yarn agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js \
+//     pnpm agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js \
 //       --data-json '{"apply":true}'
 //   Scope to a specific workspace (defaults to the active one):
 //     ... --data-json '{"apply":true,"workspaceId":"ef43b424-80ba-4967-b587-a4c32efd8071"}'

@@ -6,21 +6,21 @@ import fc from 'fast-check'
  * The same property code runs in two tiers:
  *
  * - **Smoke** (default — no env vars): small, fixed-seed run that executes as
- *   part of the regular `yarn test` / `yarn run check` gate. Deterministic on
+ *   part of the regular `pnpm test` / `pnpm run check` gate. Deterministic on
  *   purpose: the gate re-explores the same cases every run, so a pre-existing
  *   bug can only surface in the nightly deep run, never block an unrelated PR.
  * - **Deep** (`FUZZ_RUNS` and/or `FUZZ_TIME_MS` set): fresh random seed each
  *   run, run count / per-property time budget from the env. Used by
- *   `yarn fuzz` locally and the scheduled fuzz workflow in CI.
+ *   `pnpm fuzz` locally and the scheduled fuzz workflow in CI.
  *
  * Reproducing a failure: fast-check's assertion error reports the failing
  * `seed`, `path`, and the shrunk counterexample. Re-run with
  *
- *   FUZZ_SEED=<seed> FUZZ_PATH=<path> FUZZ_RUNS=<n> yarn vitest run <file>
+ *   FUZZ_SEED=<seed> FUZZ_PATH=<path> FUZZ_RUNS=<n> pnpm vitest run <file>
  *
  * (`FUZZ_PATH` jumps straight to the counterexample without re-generating.)
  *
- * Deep runs can exceed vitest's 5s default test timeout — the `yarn fuzz`
+ * Deep runs can exceed vitest's 5s default test timeout — the `pnpm fuzz`
  * wrapper passes an appropriate `--testTimeout`; do the same for manual runs.
  */
 

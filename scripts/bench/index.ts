@@ -1,11 +1,11 @@
 /**
  * Bench runner. Invoked via:
  *
- *   yarn bench                  # run all suites at default scale
- *   yarn bench writes reads     # run a subset
- *   yarn bench -- --scale full  # include the large fixture variants
+ *   pnpm bench                  # run all suites at default scale
+ *   pnpm bench writes reads     # run a subset
+ *   pnpm bench -- --scale full  # include the large fixture variants
  *                                 (50k+ blocks, deep chains)
- *   yarn bench -- --out path.json   # write JSON results to path
+ *   pnpm bench -- --out path.json   # write JSON results to path
  *
  * Suites:
  *   writes, reads, handles, search, tail, scale

@@ -1,0 +1,3 @@
+# Root marker: this extension installs standalone (it is outside the repo's
+# workspace on purpose — see AGENTS.md). Without this file pnpm climbs to the
+# repo root's pnpm-workspace.yaml and installs the wrong project.

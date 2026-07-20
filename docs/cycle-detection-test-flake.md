@@ -11,7 +11,7 @@
 
 **Diff stat:** `2 files changed, 53 insertions(+), 10 deletions(-)`.
 
-**Verification:** 50/50 isolated `yarn test --run src/data/internals/cycleDetection.test.ts`, 25/25 full-suite runs with zero `cycleDetection.test.ts` failures.
+**Verification:** 50/50 isolated `pnpm test --run src/data/internals/cycleDetection.test.ts`, 25/25 full-suite runs with zero `cycleDetection.test.ts` failures.
 
 ---
 
@@ -25,7 +25,7 @@ After landing the cycle-detection fix, a 20-run sweep showed the suite at 18/20 
 
 **3. `describeRuntime.test.ts > getApiSurface > returns the @/extensions/api module name and a non-empty exports list` —** 5004 ms timeouts under load. `getApiSurface()` does `await import('@/extensions/api.ts')`, a barrel of ~25 facets that pulls a wide transitive dep tree. Vitest's parent process holds the Vite transform server; with 65 other test files contending for transforms, a cold dynamic import can exceed the 5 s per-test timeout. Fix: pre-warm via a top-level `import '@/extensions/api.ts'` in the test file. The module is loaded during file-load (no per-test timeout), and the dynamic import inside `getApiSurface()` resolves from cache instantly. Tests-runtime in isolation dropped from 1–2 s to 5 ms.
 
-**Combined verification:** 15/15 consecutive full-suite passes (`yarn test --run`) with all three fixes applied. Brief's "done" criterion (10/10) cleared.
+**Combined verification:** 15/15 consecutive full-suite passes (`pnpm test --run`) with all three fixes applied. Brief's "done" criterion (10/10) cleared.
 
 **Things ruled out along the way:** test isolation / parallelism (each `createTestDb` makes a fresh tmpdir, fresh PowerSync, fresh worker pool — no shared resource); reader-snapshot lag from PowerSync's reader pool (initial hypothesis — added a `writeTransaction` wrap, the wrap's *own* lock-acquisition can sneak in *between* test moves so the scan still saw a stale view, dropped that fix); `cycleScanSql`'s missing visited-id guard (depth-100 cap is sufficient, the brief's adjacent comment about "visited-id guard inline" is slightly inaccurate but pre-existing and not in scope).
 
@@ -33,7 +33,7 @@ After landing the cycle-detection fix, a 20-run sweep showed the suite at 18/20 
 
 ## What you're investigating
 
-Two tests in [src/data/internals/cycleDetection.test.ts](../src/data/internals/cycleDetection.test.ts) intermittently fail when the full suite runs (`yarn test --run`) but pass cleanly when the file is run in isolation:
+Two tests in [src/data/internals/cycleDetection.test.ts](../src/data/internals/cycleDetection.test.ts) intermittently fail when the full suite runs (`pnpm test --run`) but pass cleanly when the file is run in isolation:
 
 ```
 × cycle detection (§4.7) > emits cycleDetected with startIds covering both members of a sync-induced 2-cycle
@@ -72,14 +72,14 @@ i.e. the test setup made a **non-cyclic** parent move (B under A), but the cycle
 # Full suite, repeated until it fails (usually 1–3 runs):
 for i in 1 2 3 4 5; do
   echo "=== run $i ==="
-  yarn test --run 2>&1 | tail -5
+  pnpm test --run 2>&1 | tail -5
 done
 
 # Single-file run — should always pass:
-yarn test --run src/data/internals/cycleDetection.test.ts
+pnpm test --run src/data/internals/cycleDetection.test.ts
 
 # The pair that was seen failing together — also passes when run alone:
-yarn test --run \
+pnpm test --run \
   src/data/internals/cycleDetection.test.ts \
   src/data/internals/invalidation.test.ts
 ```
@@ -112,7 +112,7 @@ The test (`src/data/internals/invalidation.test.ts`) seeds a `{kind:'table', tab
 
 ## What "done" looks like
 
-A 10-run loop of `yarn test --run` passes 10/10 with no test changes that suppress real signal. If the root cause turns out to be parallelism + a real SDK-level shared resource, the fix is either to serialize the affected files (vitest's `sequence.concurrent: false` per-file) or to give each test process a unique resource handle (separate tmp dirs, separate ports, fresh PowerSync connection).
+A 10-run loop of `pnpm test --run` passes 10/10 with no test changes that suppress real signal. If the root cause turns out to be parallelism + a real SDK-level shared resource, the fix is either to serialize the affected files (vitest's `sequence.concurrent: false` per-file) or to give each test process a unique resource handle (separate tmp dirs, separate ports, fresh PowerSync connection).
 
 If the root cause is in the cycle scanner / tail logic, the fix is in `treeQueries.ts` / `rowEventsTail.ts` and the test should remain deterministic against the new code path.
 

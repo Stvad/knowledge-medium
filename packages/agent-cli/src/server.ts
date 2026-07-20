@@ -32,7 +32,7 @@ const commandTtlMs = 10 * 60 * 1000
 const clientTtlMs = 60_000
 const unknownTokenMessage = [
   'Agent token is not registered with the local bridge.',
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `yarn agent connect` to pair a fresh token.',
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `pnpm agent connect` to pair a fresh token.',
   'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
 ].join(' ')
 const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? 10 * 1024 * 1024)
@@ -811,7 +811,7 @@ const handleRequest = async (
     if (request.method === 'POST' && requestUrl.pathname === '/runtime/commands') {
       const token = extractBearer(request)
       if (!token) {
-        sendJson(response, 401, {error: 'Missing bearer token. Run `yarn agent connect <token>` first.'})
+        sendJson(response, 401, {error: 'Missing bearer token. Run `pnpm agent connect <token>` first.'})
         return
       }
       const entry = tokens.get(token)

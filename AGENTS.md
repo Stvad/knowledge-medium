@@ -1,12 +1,12 @@
 verification:
-- use `yarn run check` for verification unless otherwise stated
-- bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `yarn run check` or those specific tests with elevated permissions
+- use `pnpm run check` for verification unless otherwise stated
+- bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `pnpm run check` or those specific tests with elevated permissions
 
 inner loop (this repo is built primarily by agents — keep the edit→verify cycle tight):
-- iterate against ONE test file: `yarn vitest run <path>` (~1s). `yarn run check` (~64s, the full gate) is for *before a commit*, not after every edit.
-- inspect the LIVE client with no rebuild via the agent bridge: `yarn agent <verb>` — `runtime-summary` / `describe-runtime` for runtime + data-model context, `sql all "<query>"`, `get-block`, `subtree` for data. Full surface + pairing: `packages/agent-cli/README.md`. Read verbs (above) are safe to run freely; mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the live user client — use deliberately, and prefer a scratch page over touching real data.
+- iterate against ONE test file: `pnpm vitest run <path>` (~1s). `pnpm run check` (~64s, the full gate) is for *before a commit*, not after every edit.
+- inspect the LIVE client with no rebuild via the agent bridge: `pnpm agent <verb>` — `runtime-summary` / `describe-runtime` for runtime + data-model context, `sql all "<query>"`, `get-block`, `subtree` for data. Full surface + pairing: `packages/agent-cli/README.md`. Read verbs (above) are safe to run freely; mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the live user client — use deliberately, and prefer a scratch page over touching real data.
 - the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
-- `yarn run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`yarn agent types`).
+- `pnpm run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`pnpm agent types`).
 
 delegate code to cheaper models:
 - top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a cheaper subagent when the work is bounded and easy to audit, and keep the deciding / auditing / data-synthesis in the main loop.
@@ -22,7 +22,7 @@ secret handling:
 
 testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
-- fuzz suites (`*.fuzz.test.ts`, fast-check) run as a small fixed-seed smoke tier inside the normal gate and as random-seed deep runs via `yarn fuzz` + the nightly `fuzz-nightly.yml` workflow. Reproduce failures with `FUZZ_SEED`/`FUZZ_PATH`; conventions + oracle discipline in `docs/fuzzing.md`. Never weaken a failing property to make it pass — diagnose (real bug vs wrong oracle) first.
+- fuzz suites (`*.fuzz.test.ts`, fast-check) run as a small fixed-seed smoke tier inside the normal gate and as random-seed deep runs via `pnpm fuzz` + the nightly `fuzz-nightly.yml` workflow. Reproduce failures with `FUZZ_SEED`/`FUZZ_PATH`; conventions + oracle discipline in `docs/fuzzing.md`. Never weaken a failing property to make it pass — diagnose (real bug vs wrong oracle) first.
 - share one DB per test file: open with `createTestDb()` once in module scope / `beforeAll`, reset with `resetTestDb()` in `beforeEach`. Don't call `createTestDb()` per test.
 - don't `await new Promise(r => setTimeout(r, N))` to wait on a DB/subscription/BroadcastChannel round-trip — it's slow and flaky. Poll the outcome with `vi.waitFor`.
 - proving a write does NOT fire/invalidate:

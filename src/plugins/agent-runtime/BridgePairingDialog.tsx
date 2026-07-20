@@ -43,7 +43,7 @@ export function BridgePairingDialog({
             runtime bridge. Once connected, a process on this machine can
             read and modify this workspace as you — including running
             code. Only continue if you just started this from your own
-            terminal (e.g. <code>yarn agent connect</code>).
+            terminal (e.g. <code>pnpm agent connect</code>).
           </DialogDescription>
         </DialogHeader>
 

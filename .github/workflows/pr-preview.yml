@@ -49,12 +49,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        if: github.event.action != 'closed'
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         if: github.event.action != 'closed'
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: yarn
+          cache: pnpm
 
       - name: Enable Corepack
         if: github.event.action != 'closed'
@@ -70,11 +74,11 @@ jobs:
 
       - name: Install dependencies
         if: github.event.action != 'closed'
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Build
         if: github.event.action != 'closed'
-        run: yarn run build
+        run: pnpm run build
 
       # deploy on opened/reopened/synchronize, remove on closed (action: auto).
       # source-dir must match the build output; umbrella-dir + the pr-<n>/ subdir

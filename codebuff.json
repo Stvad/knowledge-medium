@@ -3,14 +3,14 @@
   "startupProcesses": [
     {
       "name": "dev",
-      "command": "yarn dev",
+      "command": "pnpm dev",
       "stdoutFile": "logs/dev.log"
     }
   ],
   "fileChangeHooks": [
     {
       "name": "typecheck",
-      "command": "yarn run compile"
+      "command": "pnpm run compile"
     }
   ],
   "maxAgentSteps": 2

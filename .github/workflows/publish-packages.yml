@@ -52,14 +52,17 @@ jobs:
           # manual dispatch selected).
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '24.x'
-          cache: yarn
+          cache: pnpm
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       # Produce the publish-ready dist for both packages: tsc -b scoped to just
       # the two packages (not the whole app — agent-dispatch pulls agent-cli via
@@ -70,7 +73,7 @@ jobs:
       # kernel-types + chmod tail with `compile` (compile:post), so it can't
       # drift from the full build.
       - name: Build packages
-        run: yarn run compile:packages
+        run: pnpm run compile:packages
 
       # upload-artifact's if-no-files-found checks the *combined* count across
       # both paths, so it wouldn't catch one package's dist being empty while
@@ -130,7 +133,7 @@ jobs:
         run: npm install -g npm@11.18.0 --ignore-scripts
 
       # Bring in the dist built by the token-less build job. This job runs no
-      # yarn install and publishes with --ignore-scripts, so no third-party code
+      # pnpm install and publishes with --ignore-scripts, so no third-party code
       # executes alongside the id-token.
       - name: Download built package dists
         uses: actions/download-artifact@v4

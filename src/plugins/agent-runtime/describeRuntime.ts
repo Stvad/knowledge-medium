@@ -105,7 +105,7 @@ export interface ActionSummary {
   description: string
   context: string
   hasDefaultBinding: boolean
-  /** Whether `yarn agent run-action` can dispatch this action. False
+  /** Whether `pnpm agent run-action` can dispatch this action. False
    *  for contexts whose dependencies are live UI handles (CodeMirror
    *  view, focused input). */
   runnableFromCli: boolean
@@ -128,7 +128,7 @@ export interface RuntimeDescription {
   apiSurface: ApiSurfaceSummary
   authoring: AuthoringCatalog
   /** The data-model guide markdown, present only when the caller asked
-   *  for it via `--guide data-model`. (Its own home is `yarn agent
+   *  for it via `--guide data-model`. (Its own home is `pnpm agent
    *  data-model`; this is the discoverable describe-runtime touch-point.) */
   dataModel?: string
 }
@@ -226,17 +226,17 @@ export interface RuntimeSummary {
 //
 // Local-only CLI commands (`profiles`, `status`, `raw`) aren't part of
 // the wire protocol; they stay hard-coded next to the wire-derived
-// entries. The `yarn agent` prefix is the monorepo wrapper for
+// entries. The `pnpm agent` prefix is the monorepo wrapper for
 // kmagent — both invoke the same binary.
 const wireUsage = (type: KnownCommandType): string =>
-  `yarn agent ${getCommandMeta(type).usage.replace(/^kmagent /, '')}`
+  `pnpm agent ${getCommandMeta(type).usage.replace(/^kmagent /, '')}`
 
 const runtimeCommandHints = {
   baseline: [
     wireUsage('ping'),
     wireUsage('runtime-summary'),
     `${wireUsage('data-model')}  # orient on blocks/refs/pages/backlinks before querying`,
-    'yarn agent profiles',
+    'pnpm agent profiles',
   ],
   dataAccess: [
     wireUsage('sql'),
@@ -251,9 +251,9 @@ const runtimeCommandHints = {
     `${wireUsage('eval')}  # use \`return ...\` to print a value`,
   ],
   diagnostics: [
-    'yarn agent status',
+    'pnpm agent status',
     wireUsage('describe-runtime'),
-    'yarn agent raw <json>',
+    'pnpm agent raw <json>',
   ],
 }
 
@@ -508,35 +508,35 @@ export const describeRuntimeSummary = async (
     more: [
       {
         need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
-        command: 'yarn agent data-model',
+        command: 'pnpm agent data-model',
       },
       {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',
-        command: 'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
+        command: 'pnpm agent describe-runtime [--actions <text>] [--facets <text>]',
       },
       {
         need: 'Guided extension authoring paths for sync plugins, dialogs, and block-backed config',
-        command: 'yarn agent describe-runtime --guide external-sync-plugin --storage',
+        command: 'pnpm agent describe-runtime --guide external-sync-plugin --storage',
       },
       {
         need: 'Discover extension-safe modules and UI components',
-        command: 'yarn agent describe-runtime --modules dialog --components dialog,input,button',
+        command: 'pnpm agent describe-runtime --modules dialog --components dialog,input,button',
       },
       {
         need: 'Install compiled declarations for extension authoring, or inspect one module declaration',
-        command: 'yarn agent types agent-extensions/kernel-types  # or: yarn agent types --module "@/extensions/api.js"',
+        command: 'pnpm agent types agent-extensions/kernel-types  # or: pnpm agent types --module "@/extensions/api.js"',
       },
       {
         need: 'Bridge clients and pending command queue',
-        command: 'yarn agent status',
+        command: 'pnpm agent status',
       },
       {
         need: 'Targeted in-app inspection using the runtime context — but NOT for "what is registered". For actions/facets/renderers/contributions, prefer `describe-runtime`; reaching into `facetRuntime.staticContributionsByFacet` from eval is reading an internal cache with a different shape and will mislead you. Inside the code, `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `deleteBlock`, `restoreBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` are already bound — do not dig into `window.__omniliner`. For structured input, pass `--data <path>` (or `--data-json <inline>`) and read it as `data`.',
-        command: 'yarn agent eval <code>  # use `return ...` to print a value; --data <path> binds JSON as `data`',
+        command: 'pnpm agent eval <code>  # use `return ...` to print a value; --data <path> binds JSON as `data`',
       },
       {
         need: 'Raw protocol access for uncommon runtime commands',
-        command: 'yarn agent raw <json>',
+        command: 'pnpm agent raw <json>',
       },
     ],
   }

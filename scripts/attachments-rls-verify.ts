@@ -8,14 +8,14 @@
  * are already applied (hosted post-push; or local after applying the migration
  * once Storage is up):
  *
- *   SUPABASE_URL=... ANON_KEY=... SUPABASE_SECRET_KEY=... yarn rls:verify-attachments
+ *   SUPABASE_URL=... ANON_KEY=... SUPABASE_SECRET_KEY=... pnpm rls:verify-attachments
  *
  * SUPABASE_SECRET_KEY is the privileged key (a modern `sb_secret_…` secret key, or
  * a legacy service_role JWT — the local stack still issues the latter); it bypasses
  * RLS to set up the test users/workspaces. Exercises the post-§10.1-reversal
  * contract: direct writer-gated INSERT (flat, non-empty path), member SELECT, NO
  * UPDATE (immutability / first-write-wins), writer DELETE. NOT part of
- * `yarn run check` — it needs a live stack.
+ * `pnpm run check` — it needs a live stack.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { isAlreadyExists } from '@/plugins/attachments/blobStore'

@@ -1,0 +1,26 @@
+packages:
+  - packages/*
+
+# agent-dispatch depends on agent-cli via a plain semver range (NOT workspace:)
+# because the publish pipeline runs plain `npm publish`, which does not rewrite
+# workspace: protocol ranges. This keeps yarn-1-style local linking instead.
+linkWorkspacePackages: true
+
+# pnpm blocks dependency build scripts by default; these two genuinely need
+# theirs (native/wasm setup). Anything new that wants one will warn at install.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - '@journeyapps/wa-sqlite'
+
+# Was `resolutions` under yarn 1: pin the CodeMirror/Lezer family to single
+# versions so transitive copies can't fork editor state.
+overrides:
+  '@codemirror/state': ^6.6.0
+  '@codemirror/view': ^6.43.0
+  '@codemirror/commands': ^6.10.3
+  '@codemirror/language': ^6.11.0
+  '@codemirror/autocomplete': ^6.18.0
+  '@codemirror/search': ^6.5.0
+  '@lezer/common': ^1.5.2
+  '@lezer/highlight': ^1.2.1
+  '@lezer/lr': ^1.4.2
