@@ -236,9 +236,7 @@ export const dynamicExtensionsExtension = (
       const validated = validateAndPrefix(handle.of(exported), block.id, errorReporter)
       collected.push(validated ?? shell.of([]))
     } catch (error) {
-      const wrapped = error instanceof Error ? error : new Error(String(error))
-      errorReporter?.(block.id, wrapped)
-      console.error(`Failed to load extension block ${block.id}`, wrapped)
+      reportBlockLoadError(errorReporter, block.id, error)
       collected.push(shell.of([]))
     }
   }
@@ -298,9 +296,7 @@ const validateAndPrefix = (
         ) => AppExtension | Promise<AppExtension>)(context)
         return validateAndPrefix(inner, blockId, errorReporter)
       } catch (error) {
-        const wrapped = error instanceof Error ? error : new Error(String(error))
-        errorReporter?.(blockId, wrapped)
-        console.error(`Failed to load extension block ${blockId}`, wrapped)
+        reportBlockLoadError(errorReporter, blockId, error)
         return null
       }
     }
@@ -350,6 +346,21 @@ const prefixContributionSource = (
     result.enables = validateAndPrefix(contribution.enables, blockId, errorReporter)
   }
   return result
+}
+
+/** Wrap a thrown block-load failure to an Error, attribute it to the block via
+ *  `errorReporter`, and log it. Shared by the loader's synchronous per-block
+ *  catch and the deferred function-export wrapper so the error-coercion idiom
+ *  and the log-message wording live in one place (they'd otherwise silently
+ *  drift). The caller owns recovery (push a shell vs. return null). */
+const reportBlockLoadError = (
+  errorReporter: ExtensionLoadErrorReporter | undefined,
+  blockId: string,
+  error: unknown,
+): void => {
+  const wrapped = error instanceof Error ? error : new Error(String(error))
+  errorReporter?.(blockId, wrapped)
+  console.error(`Failed to load extension block ${blockId}`, wrapped)
 }
 
 const describeShape = (value: unknown): string => {

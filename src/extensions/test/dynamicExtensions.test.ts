@@ -1113,6 +1113,7 @@ describe('dynamicExtensionsExtension — function-shaped export bind-error attri
       }))
 
       expect(runtime.read(definitionSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
       expect(errorReporter).toHaveBeenCalledWith(
         'ext-fn-prop',
         expect.objectContaining({
@@ -1150,11 +1151,82 @@ describe('dynamicExtensionsExtension — function-shaped export bind-error attri
       }))
 
       expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
       expect(errorReporter).toHaveBeenCalledWith(
         'ext-fn-sync',
         expect.objectContaining({
           message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
         }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes an invalid return shape from a function export', async () => {
+    // The deferred wrapper's catch is GENERIC, not seed-specific: a function
+    // returning a non-extension value throws inside validateAndPrefix's
+    // invalid-shape branch (not a binder), and that throw must attribute to the
+    // block too. A catch narrowed to only binder errors would let this escape
+    // to walkAppExtension's generic catch, and the seed tests above wouldn't
+    // notice. This is the deferred twin of `reports invalid default-export
+    // shapes` (which only covers the synchronous export shape).
+    const blocks = [blockData({id: 'ext-fn-shape', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => 'not an extension' as unknown as AppExtension,
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      const [reportedBlockId, reportedError] = errorReporter.mock.calls[0]
+      expect(reportedBlockId).toBe('ext-fn-shape')
+      expect((reportedError as Error).message).toMatch(/invalid shape/)
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes an error thrown by the function export itself', async () => {
+    // The other half of the wrapper's try scope: a throw from `extension(context)`
+    // itself (an author-code crash), before validateAndPrefix ever runs on the
+    // result. No other test exercises this sub-path — the seed/shape cases all
+    // throw during validation of the returned value, not during the call.
+    const blocks = [blockData({id: 'ext-fn-throws', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => {
+          throw new TypeError('author boom')
+        },
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-throws',
+        expect.objectContaining({message: 'author boom'}),
       )
     } finally {
       restore()
