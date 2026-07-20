@@ -26,20 +26,40 @@
  *     helper rather than growing a parallel one here.
  *
  * CRITICAL INVARIANT: an arrival processor may write ONLY device-local
- * state and must NEVER cause `tx_context.source` to be set. The
+ * state, and must never cause `tx_context.source` to be set. The
  * upload-routing triggers in `clientSchema.ts` fire ONLY when
- * `tx_context.source IS NOT NULL`; `materializeStagingRows` explicitly nulls
- * that column before Phase 2 runs (`UPDATE tx_context SET source = NULL`).
- * That NULL is the ONLY thing standing between an arrival-derived write and
- * an unwanted upload-echo loop — a sync-applied row re-uploading itself back
- * to the server as though it were a fresh local edit. An arrival processor
- * must never touch `tx_context`, and must write through the same raw
- * `tx.execute` the surrounding write tx already uses — never open its own
- * `repo.tx` (which WOULD stamp a source and re-enter the very upload-routing
- * path this seam exists to bypass).
+ * `tx_context.source IS NOT NULL`, and `materializeStagingRows` nulls that
+ * column before Phase 2 (defence in depth — NULL is already the resting
+ * state, and `runTx` sets its own source unconditionally at the top of every
+ * local tx rather than inheriting whatever was left behind). `runArrival-
+ * Processors` re-checks the column after each processor under
+ * `devAssertionsEnabled()`, so a member that violates this fails loudly in
+ * CI/dev instead of silently echo-uploading a sync-applied row back to the
+ * server as a fresh local edit.
+ *
+ * "Device-local" means the COLUMN, not the table. `reference_target_id` is
+ * absent from `BLOCK_UPLOAD_COLUMNS` (`clientSchema.ts`), so deriving it
+ * here is genuinely local. `properties_json` and `references_json` ARE in
+ * that list — so a future member deriving one of those (the PROJECT /
+ * NORMALIZE candidates in issue #404 items 6 and 2) is a CATEGORICALLY
+ * different move, not an incremental one: the value would never reach the
+ * server, leaving its copy permanently stale with no path to correct it,
+ * and every peer computing its own. Note the `no-raw-synced-table-writes`
+ * lint rule is disabled for this whole directory (`eslint.config.js`) and is
+ * table-granular anyway, so it will NOT catch that — decide it deliberately.
+ *
+ * NEVER open a `repo.tx` (or any `db.writeTransaction`) from inside `apply`.
+ * Besides stamping a source, it DEADLOCKS: PowerSync serialises every write
+ * tx on one non-reentrant mutex, and no call site passes a timeout — the
+ * inner call would wait for a permit only the suspended outer call can
+ * release, freezing every subsequent write on the client. Writes go through
+ * the raw `tx.execute` the surrounding write tx already holds. Work that
+ * genuinely needs its own tx belongs in a deferred repair scheduled AFTER
+ * the drain (see `onAliasTargetsAdded` in `materialize.ts`), not here.
  */
 
 import type { BlockData } from '@/data/api'
+import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import type { TxDb } from '@/data/internals/txEngine.js'
 import { deriveReferenceTargetId } from '@/data/internals/referenceTargetProcessor.js'
 import type { MaterializeDeps, SyncSnapshot } from './materialize.js'
@@ -110,6 +130,26 @@ export const runArrivalProcessors = async (
     }
     if (rows.length === 0) continue
     await processor.apply(rows, snapshots, ctx)
+    if (devAssertionsEnabled()) {
+      // L2 dev/test-only enforcement of the module's CRITICAL INVARIANT (off
+      // in prod). A processor that stamps `tx_context.source` — directly, or
+      // by reaching for a write path that does — turns every remaining write
+      // in this window into an upload, echoing sync-applied rows back to the
+      // server as fresh local edits. That failure is silent at runtime and
+      // would surface only as mysterious upload traffic and clobbered peers,
+      // so catch it at the point of violation, naming the processor.
+      const ctxRow = await tx.getOptional<{source: string | null}>(
+        'SELECT source FROM tx_context WHERE id = 1',
+      )
+      if (ctxRow?.source != null) {
+        throw new Error(
+          `[arrivalProcessors] ${processor.name} left tx_context.source = `
+          + `${JSON.stringify(ctxRow.source)} — an arrival processor must write only `
+          + 'device-local state and must never stamp a tx source (see this module\'s '
+          + 'CRITICAL INVARIANT). Every later write in this window would upload.',
+        )
+      }
+    }
   }
 }
 

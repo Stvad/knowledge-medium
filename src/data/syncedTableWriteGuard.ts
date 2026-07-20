@@ -205,16 +205,25 @@ const QUOTED_NAME_DML_PATTERNS: readonly RegExp[] = [
  * local store more completely than any UPDATE could, and a DML-only scan
  * waved it through — so the same guard has to see it.
  *
- * The line is drawn at DESTRUCTIVE, not at DDL in general, and that
- * distinction is load-bearing rather than fussy: the bootstrap adds its local
- * columns to BOTH synced tables via `ALTER TABLE … ADD COLUMN`
- * (`blockSchema.ts`, `workspaceSchema.ts`) and hangs every row/upload trigger
- * off `blocks` — all through the guarded handle. A blanket "reject DDL naming
- * a synced table" would refuse those and brick startup. So: DROP TABLE, and
- * the ALTER forms that REMOVE or RENAME existing structure; never ADD COLUMN,
- * never CREATE/DROP TRIGGER or INDEX (a trigger's name may start with the
- * table's, but `unqualifiedTableName` compares the whole name, so
- * `blocks_upload_insert` is not `blocks`).
+ * The line is drawn at DESTRUCTIVE, not at DDL in general: additive schema
+ * evolution against a synced table is legitimate and must not be refused.
+ * The bootstrap adds local columns to both synced tables via `ALTER TABLE …
+ * ADD COLUMN` (`blockSchema.ts`, `workspaceSchema.ts`) and hangs every
+ * row/upload trigger off `blocks`. So: DROP TABLE, and the ALTER forms that
+ * REMOVE or RENAME existing structure; never ADD COLUMN, never CREATE/DROP
+ * TRIGGER or INDEX (a trigger's name may start with the table's, but
+ * `unqualifiedTableName` compares the whole name, so `blocks_upload_insert`
+ * is not `blocks`).
+ *
+ * Correcting the first version of this comment (PR #386 areview): it claimed
+ * those bootstrap statements run THROUGH this guard, so a blanket DDL rule
+ * would brick startup. They do not — `repoProvider.ts` calls
+ * `ensureBlockLocalColumns(powerSyncDb)` on the UNGUARDED handle, and only
+ * the one-shot side-index backfills use the guarded `backfillDb`. The
+ * narrowing above is still right, but on principle rather than on that
+ * (false) blast radius. The realistic destructive caller is the agent
+ * bridge's raw `sql` verb, which is exactly where a `DROP TABLE blocks`
+ * would come from.
  *
  * The verb sits AFTER the table name in the ALTER forms, which is why these
  * can't just be folded into {@link DML_PATTERNS}.
@@ -249,10 +258,15 @@ export const writeTargets = (sql: string): string[] => {
       }
     }
   }
-  collect(blankCommentsAndStrings(sql), DML_PATTERNS, false)
-  collect(blankCommentsAndStrings(sql), DDL_PATTERNS, false)
-  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DML_PATTERNS, true)
-  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DDL_PATTERNS, true)
+  // Two blanked variants, each scanned by both its DML and DDL pattern sets —
+  // `blankCommentsAndStrings` is a full character walk, so hoist rather than
+  // re-derive the identical text per pattern set.
+  const blanked = blankCommentsAndStrings(sql)
+  const stringsIntact = blankCommentsAndStrings(sql, true)
+  collect(blanked, DML_PATTERNS, false)
+  collect(blanked, DDL_PATTERNS, false)
+  collect(stringsIntact, QUOTED_NAME_DML_PATTERNS, true)
+  collect(stringsIntact, QUOTED_NAME_DDL_PATTERNS, true)
   return targets
 }
 

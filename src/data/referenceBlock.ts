@@ -64,26 +64,34 @@ export const referenceBlockContentForId = (id: string): string => {
     )
   }
   // Round-tripping is not just "does it parse" — it must parse back to the SAME
-  // id. `parseExactReferenceBlockContent` canonicalizes UUID-looking ids to
-  // lowercase, so a case-variant UUID clears the check above and still reads
-  // back as a DIFFERENT id: the derive then stamps `reference_target_id` to the
-  // lowercase spelling, pointing the child at a wrong or nonexistent block
-  // (PR #386 review). Strictly worse than the unparseable case, which at least
-  // resolves to nothing.
+  // id. Today the one way that fails is UUID case: the parser canonicalizes
+  // UUID-looking ids to lowercase, so a case-variant clears the check above and
+  // still reads back as a DIFFERENT id — the derive then stamps
+  // `reference_target_id` to the lowercase spelling, pointing the child at a
+  // wrong or nonexistent block (PR #386 review). Strictly worse than the
+  // unparseable case, which at least resolves to nothing.
   //
-  // Reject rather than normalize: emitting `((lowercased))` for an id the
-  // caller passed in another case would silently paper over a real id mismatch
-  // at the call site, and this function's whole contract is to refuse content
-  // it can't read back.
-  if (UUID_RE.test(id) && id !== id.toLowerCase()) {
+  // Asked by ACTUALLY round-tripping rather than by re-stating the parser's
+  // canonicalization rule here — the same idiom as
+  // `isRoundTrippableReferenceLabel` below. A second copy of that rule could
+  // drift from the parser's; this can't, and it covers any future
+  // canonicalization for free.
+  //
+  // Reject rather than normalize: emitting `((canonicalized))` for an id the
+  // caller passed differently would silently paper over a real id mismatch at
+  // the call site, and this function's whole contract is to refuse content it
+  // can't read back.
+  const content = `((${id}))`
+  const parsed = parseExactReferenceBlockContent(content)
+  if (parsed?.kind !== 'blockRef' || parsed.id !== id) {
+    const readsAs = parsed?.kind === 'blockRef' ? JSON.stringify(parsed.id) : 'not a block ref'
     throw new Error(
       `[referenceBlockContentForId] block id ${JSON.stringify(id)} does not round-trip: `
-      + 'UUID-shaped ids are canonicalized to lowercase when parsed back, so this ref '
-      + `would resolve to ${JSON.stringify(id.toLowerCase())} instead. Pass the id in `
-      + 'lowercase.',
+      + `${JSON.stringify(content)} parses back as ${readsAs}. Ids are canonicalized on `
+      + 'parse (UUID-shaped ids are lowercased), so pass the id in its canonical form.',
     )
   }
-  return `((${id}))`
+  return content
 }
 
 /** Does `label` survive the wikilink round trip intact? A name containing

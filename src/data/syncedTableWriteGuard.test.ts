@@ -13,6 +13,8 @@ import {
   CREATE_BLOCK_REFERENCES_TABLE_SQL,
   CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
 } from '@/plugins/references/localSchema.ts'
+import { CLIENT_SCHEMA_STATEMENTS } from '@/data/internals/clientSchema.ts'
+import { dailyNotesLocalSchema } from '@/plugins/daily-notes/localSchema.ts'
 
 describe('writeTargets / syncedWriteTarget', () => {
   const target = (sql: string) => writeTargets(sql)[0] ?? null
@@ -136,10 +138,18 @@ describe('writeTargets / syncedWriteTarget', () => {
     expect(syncedWriteTarget(`INSERT INTO block_aliases (x) VALUES (';'); SELECT 1`)).toBeNull()
   })
 
-  // The guard wraps the handle these actually run through at boot, so a
-  // false positive here is a startup failure, not a lint nit.
+  // Every schema statement the app ships must read as "no synced write" — a
+  // false positive here refuses real local-schema work rather than a lint nit.
+  // Iterates the actual collections rather than a hand-copied subset: the
+  // first version of this test listed 7 constants from ONE plugin while
+  // claiming to cover everything (PR #386 areview), so the 65 kernel trigger
+  // and index statements — the ones most likely to trip a DDL pattern, since
+  // they all name `blocks` — went unchecked by the test that existed to check
+  // them.
   it('passes every real local-schema statement the app ships', () => {
     const shipped = [
+      ...CLIENT_SCHEMA_STATEMENTS,
+      ...(dailyNotesLocalSchema.statements ?? []),
       CREATE_BLOCK_REFERENCES_TABLE_SQL,
       CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
       CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
@@ -148,6 +158,8 @@ describe('writeTargets / syncedWriteTarget', () => {
       CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
       BACKFILL_BLOCK_REFERENCES_SQL,
     ]
+    // Guard against the collections silently becoming empty imports.
+    expect(shipped.length).toBeGreaterThan(50)
     for (const sql of shipped) {
       expect({sql, target: syncedWriteTarget(sql)}).toEqual({sql, target: null})
     }

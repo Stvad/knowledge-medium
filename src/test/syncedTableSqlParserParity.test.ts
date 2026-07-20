@@ -61,6 +61,11 @@ const CORPUS = [
   'DROP TABLE IF EXISTS workspaces',
   "DROP TABLE 'blocks'",
   'DROP TABLE main . blocks',
+  // Single-quoted ALTER targets. Proven necessary, not speculative: deleting
+  // the quoted-ALTER regex from one parser left all other corpus entries in
+  // agreement, so the drift was undetectable without these two.
+  "ALTER TABLE 'workspaces' RENAME TO ws_old",
+  "ALTER TABLE 'blocks' DROP COLUMN content",
   'ALTER TABLE workspaces RENAME TO ws_old',
   'ALTER TABLE blocks RENAME COLUMN content TO body',
   'ALTER TABLE blocks DROP COLUMN content',

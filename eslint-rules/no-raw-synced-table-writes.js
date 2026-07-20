@@ -189,10 +189,14 @@ const writeTargets = (sql) => {
       }
     }
   }
-  collect(blankCommentsAndStrings(sql), DML_PATTERNS, false)
-  collect(blankCommentsAndStrings(sql), DDL_PATTERNS, false)
-  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DML_PATTERNS, true)
-  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DDL_PATTERNS, true)
+  // Hoisted per the runtime copy: one blanking walk per variant, not per
+  // pattern set.
+  const blanked = blankCommentsAndStrings(sql)
+  const stringsIntact = blankCommentsAndStrings(sql, true)
+  collect(blanked, DML_PATTERNS, false)
+  collect(blanked, DDL_PATTERNS, false)
+  collect(stringsIntact, QUOTED_NAME_DML_PATTERNS, true)
+  collect(stringsIntact, QUOTED_NAME_DDL_PATTERNS, true)
   return targets
 }
 
