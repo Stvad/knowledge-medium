@@ -18,6 +18,17 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['**/*.{test,spec}.{ts,tsx}'],
     maxWorkers: '100%',
+    // Node ≥25 ships its own Web Storage: `localStorage`/`sessionStorage`
+    // become own keys of globalThis (returning undefined unless node runs with
+    // `--localstorage-file`). The jsdom environment skips window keys that
+    // already exist on the global, so jsdom's storage never gets installed and
+    // every DOM test touching localStorage explodes on `undefined` — and the
+    // real jsdom window is unreachable from a setup file (vitest rewires both
+    // `window` and `document.defaultView` to the node global). Disabling
+    // node's webstorage in the worker processes makes every node version
+    // behave like node 24, where jsdom's storage wins. Node ≥22 accepts the
+    // flag, so this is a no-op on versions without the new globals.
+    execArgv: ['--no-experimental-webstorage'],
     // node_modules + dist are vitest defaults; .claude/worktrees and
     // .codex/worktrees hold full repo copies from agent runs (Claude Code and
     // Codex respectively) whose tests we don't want to re-execute here.
