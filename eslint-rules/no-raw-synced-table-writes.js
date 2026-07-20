@@ -161,6 +161,21 @@ const QUOTED_NAME_DML_PATTERNS = [
  * found. Scans the whole text — nested, prefixed, and multi-statement writes
  * all surface, because position is not part of the question (module doc).
  */
+/** Destructive DDL — mirror of `DDL_PATTERNS` in syncedTableWriteGuard.ts.
+ *  DROP TABLE and the structure-REMOVING ALTER forms only: the bootstrap runs
+ *  `ALTER TABLE blocks/workspaces ADD COLUMN` and hangs its triggers off
+ *  `blocks` through the guarded handle, so matching DDL wholesale would brick
+ *  startup. Pinned against the runtime copy by the parser-parity test. */
+const DDL_PATTERNS = [
+  new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?` + QUALIFIED_NAME, 'gi'),
+  new RegExp(String.raw`\balter\s+table\s+` + QUALIFIED_NAME + String.raw`\s+(?:rename|drop)\b`, 'gi'),
+]
+
+const QUOTED_NAME_DDL_PATTERNS = [
+  new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?` + QUALIFIED_NAME_Q, 'gi'),
+  new RegExp(String.raw`\balter\s+table\s+` + QUALIFIED_NAME_Q + String.raw`\s+(?:rename|drop)\b`, 'gi'),
+]
+
 const writeTargets = (sql) => {
   const targets = []
   const collect = (text, patterns, quotedOnly) => {
@@ -175,7 +190,9 @@ const writeTargets = (sql) => {
     }
   }
   collect(blankCommentsAndStrings(sql), DML_PATTERNS, false)
+  collect(blankCommentsAndStrings(sql), DDL_PATTERNS, false)
   collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DML_PATTERNS, true)
+  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DDL_PATTERNS, true)
   return targets
 }
 

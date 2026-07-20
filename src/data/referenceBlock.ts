@@ -63,6 +63,26 @@ export const referenceBlockContentForId = (id: string): string => {
       + 'the property) at the next derive.',
     )
   }
+  // Round-tripping is not just "does it parse" — it must parse back to the SAME
+  // id. `parseExactReferenceBlockContent` canonicalizes UUID-looking ids to
+  // lowercase, so a case-variant UUID clears the check above and still reads
+  // back as a DIFFERENT id: the derive then stamps `reference_target_id` to the
+  // lowercase spelling, pointing the child at a wrong or nonexistent block
+  // (PR #386 review). Strictly worse than the unparseable case, which at least
+  // resolves to nothing.
+  //
+  // Reject rather than normalize: emitting `((lowercased))` for an id the
+  // caller passed in another case would silently paper over a real id mismatch
+  // at the call site, and this function's whole contract is to refuse content
+  // it can't read back.
+  if (UUID_RE.test(id) && id !== id.toLowerCase()) {
+    throw new Error(
+      `[referenceBlockContentForId] block id ${JSON.stringify(id)} does not round-trip: `
+      + 'UUID-shaped ids are canonicalized to lowercase when parsed back, so this ref '
+      + `would resolve to ${JSON.stringify(id.toLowerCase())} instead. Pass the id in `
+      + 'lowercase.',
+    )
+  }
   return `((${id}))`
 }
 

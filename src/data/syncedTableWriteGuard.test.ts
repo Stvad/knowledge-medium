@@ -52,6 +52,32 @@ describe('writeTargets / syncedWriteTarget', () => {
     expect(syncedWriteTarget('CREATE TRIGGER t AFTER DELETE ON blocks BEGIN SELECT 1; END')).toBeNull()
   })
 
+  // DESTRUCTIVE DDL (PR #386 review). The guard exists so a raw path can't
+  // quietly desync the local store; `DROP TABLE blocks` does that far more
+  // thoroughly than any UPDATE, and the DML-only scan let it through. The line
+  // is drawn at destructive shapes — DROP TABLE, and the ALTER forms that
+  // remove or rename existing structure — NOT at DDL in general.
+  it('rejects destructive DDL against a synced table', () => {
+    expect(syncedWriteTarget('DROP TABLE blocks')).toBe('blocks')
+    expect(syncedWriteTarget('DROP TABLE IF EXISTS workspaces')).toBe('workspaces')
+    expect(syncedWriteTarget('ALTER TABLE workspaces RENAME TO ws_old')).toBe('workspaces')
+    expect(syncedWriteTarget('ALTER TABLE blocks RENAME COLUMN content TO body')).toBe('blocks')
+    expect(syncedWriteTarget('ALTER TABLE blocks DROP COLUMN content')).toBe('blocks')
+    expect(syncedWriteTarget("DROP TABLE 'blocks'")).toBe('blocks')
+    expect(syncedWriteTarget('DROP TABLE main . blocks')).toBe('blocks')
+  })
+
+  // The counterweight, and the reason a blanket DDL rejection would be wrong:
+  // the bootstrap adds local columns to BOTH synced tables by ALTER (see
+  // blockSchema.ts / workspaceSchema.ts) and hangs its triggers off `blocks`.
+  // Those run through the guarded handle, so over-matching here bricks boot.
+  it('allows additive DDL and trigger maintenance on a synced table', () => {
+    expect(syncedWriteTarget('ALTER TABLE blocks ADD COLUMN reference_target_id TEXT')).toBeNull()
+    expect(syncedWriteTarget("ALTER TABLE workspaces ADD COLUMN properties_migration TEXT")).toBeNull()
+    expect(syncedWriteTarget('DROP TRIGGER IF EXISTS blocks_upload_insert')).toBeNull()
+    expect(syncedWriteTarget('DROP INDEX IF EXISTS idx_blocks_parent')).toBeNull()
+  })
+
   it('reads the write target, not tables merely mentioned in FROM/subqueries', () => {
     // The motivating false-positive: a local-index backfill that SELECTs FROM blocks.
     expect(syncedWriteTarget('INSERT OR IGNORE INTO block_aliases (block_id) SELECT id FROM blocks')).toBeNull()

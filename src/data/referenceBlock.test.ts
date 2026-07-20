@@ -43,6 +43,22 @@ describe('referenceBlockContentForId', () => {
     const content = referenceBlockContentForId('field-status')
     expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: 'field-status'})
   })
+
+  // A case-variant UUID passes the no-parens/no-whitespace check but does NOT
+  // round-trip: the parser canonicalizes UUID-looking ids to lowercase, so the
+  // ref reads back as a DIFFERENT id (PR #386 review). Same silent-corruption
+  // shape as the unparseable case, except the derived stamp lands on a wrong or
+  // nonexistent block instead of clearing.
+  it('refuses a UUID id that is not already lowercase', () => {
+    // Must contain hex LETTERS — an all-digit UUID is unchanged by upper-casing
+    // and would vacuously pass.
+    const lower = 'abcdef01-1111-4111-8111-1111111111ab'
+    const upper = lower.toUpperCase()
+    expect(upper).not.toBe(lower)
+    expect(parseExactReferenceBlockContent(`((${upper}))`)).toEqual({kind: 'blockRef', id: lower})
+    expect(() => referenceBlockContentForId(upper)).toThrow(/does not round-trip/)
+    expect(referenceBlockContentForId(lower)).toBe(`((${lower}))`)
+  })
 })
 
 describe('referenceBlockContentForLabel', () => {

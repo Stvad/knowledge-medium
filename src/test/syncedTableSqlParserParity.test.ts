@@ -56,6 +56,22 @@ const CORPUS = [
   'PRAGMA optimize',
   'CREATE INDEX IF NOT EXISTS i ON blocks (x) WHERE deleted = 0',
   'CREATE TRIGGER t AFTER UPDATE ON blocks BEGIN UPDATE blocks SET x=1; END',
+  // Destructive DDL — a target, same as DML (PR #386 review)
+  'DROP TABLE blocks',
+  'DROP TABLE IF EXISTS workspaces',
+  "DROP TABLE 'blocks'",
+  'DROP TABLE main . blocks',
+  'ALTER TABLE workspaces RENAME TO ws_old',
+  'ALTER TABLE blocks RENAME COLUMN content TO body',
+  'ALTER TABLE blocks DROP COLUMN content',
+  // Additive DDL + trigger/index maintenance — NOT a target; the bootstrap
+  // runs these on synced tables through the guarded handle, so a parser that
+  // flags them bricks startup.
+  'ALTER TABLE blocks ADD COLUMN reference_target_id TEXT',
+  "ALTER TABLE workspaces ADD COLUMN properties_migration TEXT",
+  'DROP TRIGGER IF EXISTS blocks_upload_insert',
+  'DROP INDEX IF EXISTS idx_blocks_parent',
+  'DROP TABLE block_aliases',
   // Local tables that merely look similar
   'INSERT OR IGNORE INTO block_aliases (block_id) SELECT id FROM blocks',
   'INSERT INTO blocks_fts_rowids (block_id) VALUES (?)',

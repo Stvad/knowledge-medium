@@ -201,6 +201,37 @@ const QUOTED_NAME_DML_PATTERNS: readonly RegExp[] = [
 ]
 
 /**
+ * DESTRUCTIVE DDL shapes (PR #386 review). `DROP TABLE blocks` desyncs the
+ * local store more completely than any UPDATE could, and a DML-only scan
+ * waved it through — so the same guard has to see it.
+ *
+ * The line is drawn at DESTRUCTIVE, not at DDL in general, and that
+ * distinction is load-bearing rather than fussy: the bootstrap adds its local
+ * columns to BOTH synced tables via `ALTER TABLE … ADD COLUMN`
+ * (`blockSchema.ts`, `workspaceSchema.ts`) and hangs every row/upload trigger
+ * off `blocks` — all through the guarded handle. A blanket "reject DDL naming
+ * a synced table" would refuse those and brick startup. So: DROP TABLE, and
+ * the ALTER forms that REMOVE or RENAME existing structure; never ADD COLUMN,
+ * never CREATE/DROP TRIGGER or INDEX (a trigger's name may start with the
+ * table's, but `unqualifiedTableName` compares the whole name, so
+ * `blocks_upload_insert` is not `blocks`).
+ *
+ * The verb sits AFTER the table name in the ALTER forms, which is why these
+ * can't just be folded into {@link DML_PATTERNS}.
+ */
+const DDL_PATTERNS: readonly RegExp[] = [
+  new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?` + QUALIFIED_NAME, 'gi'),
+  new RegExp(String.raw`\balter\s+table\s+` + QUALIFIED_NAME + String.raw`\s+(?:rename|drop)\b`, 'gi'),
+]
+
+/** {@link DDL_PATTERNS} for a single-quoted target, same rationale as
+ *  {@link QUOTED_NAME_DML_PATTERNS}. */
+const QUOTED_NAME_DDL_PATTERNS: readonly RegExp[] = [
+  new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?` + QUALIFIED_NAME_Q, 'gi'),
+  new RegExp(String.raw`\balter\s+table\s+` + QUALIFIED_NAME_Q + String.raw`\s+(?:rename|drop)\b`, 'gi'),
+]
+
+/**
  * Every table this SQL writes to, lowercased and unqualified, in the order
  * found. Scans the whole text — nested, prefixed, and multi-statement writes
  * all surface, because position is not part of the question (module doc).
@@ -219,7 +250,9 @@ export const writeTargets = (sql: string): string[] => {
     }
   }
   collect(blankCommentsAndStrings(sql), DML_PATTERNS, false)
+  collect(blankCommentsAndStrings(sql), DDL_PATTERNS, false)
   collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DML_PATTERNS, true)
+  collect(blankCommentsAndStrings(sql, true), QUOTED_NAME_DDL_PATTERNS, true)
   return targets
 }
 
@@ -248,7 +281,11 @@ export const guardSyncedTableWrites = <A extends unknown[], R>(
             'tx_context.source = NULL, so the upload trigger never fires and the write is ' +
             'local-only — it will silently never sync (see the daily-note:date backfill, ' +
             'gone in 8c50f167). Route synced-table backfills through repo.tx — e.g. ' +
-            `workspaceBackfillsFacet — which uploads. Offending SQL: ${sql.trim().slice(0, 120)}`,
+            'workspaceBackfillsFacet — which uploads. If this is destructive DDL ' +
+            '(DROP TABLE / ALTER … RENAME / ALTER … DROP COLUMN), it is refused for a ' +
+            'different reason: it would discard synced state the server still holds, and ' +
+            'belongs in a migration rather than an ad-hoc execute. Additive DDL ' +
+            `(ALTER … ADD COLUMN) and trigger/index maintenance are allowed. Offending SQL: ${sql.trim().slice(0, 120)}`,
         ),
       )
     }
