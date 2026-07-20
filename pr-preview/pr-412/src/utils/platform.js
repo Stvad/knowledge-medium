@@ -1,2 +1,0 @@
-var e=()=>typeof navigator>`u`||(navigator.maxTouchPoints??0)===0?!1:/apple/i.test(navigator.vendor??``)||/\b(CriOS|FxiOS|EdgiOS)\//.test(navigator.userAgent??``);export{e as isIOS};
-//# sourceMappingURL=platform.js.map
