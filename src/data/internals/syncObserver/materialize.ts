@@ -36,13 +36,14 @@ import {
 import { normalizeReferences, type BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
-import {
-  deriveReferenceTargetId,
-  type ReferenceTargetLookups,
-} from '@/data/internals/referenceTargetProcessor.js'
+import type { ReferenceTargetLookups } from '@/data/internals/referenceTargetProcessor.js'
 import {
   decideStagingRow,
 } from './reconcile.js'
+import {
+  ARRIVAL_PROCESSORS,
+  runArrivalProcessors,
+} from './arrivalProcessors.js'
 import {
   decodeFromWire,
   type GetCek,
@@ -432,46 +433,14 @@ export const materializeStagingRows = async (
       }
     }
 
-    // ── Derive-at-arrival: stamp the LOCAL `reference_target_id` for
-    // content-changed arrivals (PR #288 slice A). Runs AFTER every upsert in
-    // the window so a definition/alias target arriving alongside its
-    // reference rows resolves (the alias index triggers fired on the upserts
-    // above), and INSIDE this write tx — strictly before `applyOutcome`'s
-    // invalidation fan-out, so readers never see a content change whose
-    // column lags. The UPSERT never touches the column (it's outside
-    // `UPDATE_ASSIGNMENTS`), so unchanged-content arrivals keep the local
-    // value; the snapshots must carry the final value either way — the
-    // staging row has no such column, so `parseBlockRow(plaintext)` above
-    // said `null` regardless of what the table holds.
-    if (deps.referenceTargetLookups) {
-      const lookups = deps.referenceTargetLookups(tx)
-      for (const id of applied) {
-        const snap = snapshots.get(id)
-        if (!snap?.after) continue
-        const before = snap.before
-        const currentColumn = before?.referenceTargetId ?? null
-        // Deleted arrivals derive too: a content edit that syncs while the
-        // row is tombstoned would otherwise leave a stale column that a
-        // later content-unchanged restore never repairs.
-        const contentChanged = before === null || before.content !== snap.after.content
-        const derived = contentChanged
-          ? (await deriveReferenceTargetId(
-              snap.after.content, snap.after.workspaceId, lookups,
-            )) ?? null
-          : currentColumn
-        if (derived !== currentColumn) {
-          await tx.execute(
-            'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
-            [derived, id],
-          )
-        }
-        snapshots.set(id, {
-          before,
-          after: {...snap.after, referenceTargetId: derived},
-        })
-      }
-
-    }
+    // ── Arrival-processor pass (`arrivalProcessors.ts`): runs AFTER every
+    // upsert in the window so a definition/alias target arriving alongside
+    // its referencing rows resolves (the alias index triggers fired on the
+    // upserts above), and INSIDE this write tx — strictly before
+    // `applyOutcome`'s invalidation fan-out, so readers never see a content
+    // change whose derived column lags. `deriveReferenceTargetArrivalProcessor`
+    // (PR #288 slice A) is currently the seam's only registered member.
+    await runArrivalProcessors(tx, snapshots, deps, ARRIVAL_PROCESSORS)
 
     const removedBeforeById = await readBlocksByIds(tx, change.removed, readChunkSize)
     // A 'delete' whose staging row still exists is an INSERT OR REPLACE
