@@ -1783,7 +1783,7 @@ fcd93d82a4f19a28c76bbff7aed6a819da9cc2b089e64da7d9ddeb03a02c71e3  ./src/App.js
 1fb947a799f6ec708cfb146c8ca45a6e2bdb94e4619d22848f6c090ee537f9f2  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-a4388c770761ddde6fcc65141127ce1312f387eef6126bac06094c9cc330fbe4  ./src/appVersion.js
+ac9dacc7856ee0f390c8eda8a2a9452c55d154a8e72e0d770fb30b9d4f73128a  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2076,8 +2076,8 @@ ca643565a018edfd72335c9c79ff476faadf5077a08d10c7bb854b78989ad6ef  ./src/data/ord
 83c57a0a6c9fb58e5f3eb51863ac29cb270484519bd1b71bc92e60e7134db22d  ./src/data/orderKey.js.map
 f94528ef367702b0045d8e5bf3b34e49b67ce65b4b715bfc706ce0c65825c6b1  ./src/data/orderKeyPlacement.js
 39512e71c4ef3512a492c8e9081f537a09f1d1796f0035332f233ac4e9c5bd77  ./src/data/orderKeyPlacement.js.map
-2fa745664c4ce10ecde307a42e674c687e8ad07168e4d1f1dbf636e3dadcbdfd  ./src/data/pluginStateExtensions.js
-c68f226a987d5a519f840b203adf7acf938631a2ce58086120b17bddec1e91c6  ./src/data/pluginStateExtensions.js.map
+be3ad9935615c280c18965793f7df42a84e8f2409cc260a7ba7869130109462a  ./src/data/pluginStateExtensions.js
+3fff8ff66310aec697f85a2bbfe85ae629bb15d55ecaffd861a41f658a2bb964  ./src/data/pluginStateExtensions.js.map
 6bba3acf6b9833da3d2e6d5e9f1a28d03810b2f1c98a3a10ca903a5426562ed5  ./src/data/projectorRuntime.js
 cdc642d9655ec8ddcdd0758f7c84859b429fd6ec57808a7346809206e071e730  ./src/data/projectorRuntime.js.map
 b0d2dc7d1c07e691366b6b8a175ef778107255a4a5d15ef9269b1a6e93afbef0  ./src/data/properties.js
@@ -2304,7 +2304,7 @@ c6bebc83a6c34b8ca11fac1475030d0d240c6fcc95b76a16d54053c4dcfee114  ./src/plugins/
 2c1b4fb7aabe802b5d3ed3170a362baca3f8cf3aeba7f9c56e5e775211961684  ./src/plugins/agent-runtime/AgentTokensDialog.js.map
 4e1fdc547877031f95c1e3cdc3d3de843356e843495aecc7d193d5eb03b437ae  ./src/plugins/agent-runtime/BridgePairingDialog.js
 998b6fc20ff5eb5ea8807e969be0a2388d5914320c6d9d4c8516989a94854e56  ./src/plugins/agent-runtime/BridgePairingDialog.js.map
-7f0e5f37dea13a5477b20ea3e11403d32c997bcf612b4c6c7bf63d3ae9eaadfe  ./src/plugins/agent-runtime/authoringCatalog.js
+ab2d53e5a1a38ae42cc2636f42303656e0aad7a37954936af0e045a10ca26654  ./src/plugins/agent-runtime/authoringCatalog.js
 85c95ecc8f93656217386ef40ce38220359d3cd6b3ae7b022f9e817df9e7bdd5  ./src/plugins/agent-runtime/authoringCatalog.js.map
 e9f3373e71b32c6ce8eb79fba07752bcf55226349d110e272d1bb4a67528bce8  ./src/plugins/agent-runtime/bridge.js
 fba6d6896e7a47ed25c8e42f073ccf421ca75c9cea05eaa1857fbbd050144141  ./src/plugins/agent-runtime/bridge.js.map
@@ -2428,8 +2428,8 @@ df0772049da9268e4444e295e8027dbb1ae295276169d8cda8639dd223bcbe10  ./src/plugins/
 cffd03e5eee187ae4b1dde409d20621be2aa923bbb94b90a08be9595c113655a  ./src/plugins/backlinks/LinkedReferences.js.map
 456558d3f4a5b04c12d3df63400f36a003d0e72eb189e4befce78f9db579bb72  ./src/plugins/backlinks/backlinkBreadcrumbShortcuts.js
 3f78534e7bd53498fb9ca288fae43049c5af70521a40675c7c73ac1fa0fb58dd  ./src/plugins/backlinks/backlinkBreadcrumbShortcuts.js.map
-0b44d60896a093331f87c6384590f9cf20285b42fb2bcd32579707dc78f37b6d  ./src/plugins/backlinks/dailyNoteDefaults.js
-5b99ff4e637a7fdc0061457852788cf885826861b2ade5afd5f43a8b03ee33fb  ./src/plugins/backlinks/dailyNoteDefaults.js.map
+5080601cbb25cb891a9542f14bc670fa4c6eeb913cd09056f4de02c90dbbd162  ./src/plugins/backlinks/dailyNoteDefaults.js
+30f2972ff6cd74b82a7fa8f18ff6f079c96887d743484a952da76380c7ccf117  ./src/plugins/backlinks/dailyNoteDefaults.js.map
 740a3b0df8567d47f87c7f9dda7ac4da7c1979bb3e0a44142815acaca91f2de9  ./src/plugins/backlinks/dataExtension.js
 a5a788de2dcf44bb46442cee028643262de44302c1be1488e410290dbd085088  ./src/plugins/backlinks/dataExtension.js.map
 19a23192d11eca23cfa1be0d016ee001df8a9758e72d9b0c52928c22e7d3cc91  ./src/plugins/backlinks/filterProperty.js
@@ -2478,8 +2478,8 @@ e4d7ce10f20885bbb717393b8647bdb2d2840c8631d9b4715713ecdb1df54b04  ./src/plugins/
 d8ecee41a245de05b8379a59563f5525ec4d7c6233601b6d05c4c5776f13356a  ./src/plugins/block-tagging/addTagAction.js.map
 6ddad45d40a5fd0417cee8dc9eeb0ee9af882b7d6532defa12b9887e1fa8904a  ./src/plugins/block-tagging/appendTag.js
 7bc90573e3e3302a4fe6f1954cec7d529bdbb96f7cb17fa23eff6d6633de9ceb  ./src/plugins/block-tagging/appendTag.js.map
-7aba29abf1dec7041927827ca1ab8df51663422f6ecb93aa5c9263244c3c24a1  ./src/plugins/block-tagging/config.js
-04f4ce89ad41b210068d0f50bd40e851839679ae4ba147afe56d15b69389e807  ./src/plugins/block-tagging/config.js.map
+e29babc20ed419be14c804de7121ffb846898349533bc680b7c90e7e96b6e196  ./src/plugins/block-tagging/config.js
+9786e5663006a206e83988ca0e8b4d8cfc8466e913bb3dd5311dd392c5d272bb  ./src/plugins/block-tagging/config.js.map
 76be2aac74b3bc09f4473f47514114b6c1729cf5c901ec73bbba1ec6ee46150a  ./src/plugins/block-tagging/dataExtension.js
 f8ba21ccb8990df5a4dce88b9dca6c165878da37132b15f9b7fa66203fa19800  ./src/plugins/block-tagging/dataExtension.js.map
 d9fe64fe3d9d8fe946062ee95a4b719b7f56b1acee176e2a1b7657a52f5510c6  ./src/plugins/block-tagging/index.js
@@ -2613,8 +2613,8 @@ fe63185ba7d158fde02b410f978474814fe5617ebe0c635829016af2bcba616a  ./src/plugins/
 0dce9562e9bc36702af6b7512447842f0d66a7fb9d0ae420f543a562e05fbe14  ./src/plugins/extensions-settings/ExtensionsSettings.js.map
 55fc0a2fe56fa3c09f14d21151ab7f23a362f13252ec40095e87a99decb6f1f3  ./src/plugins/extensions-settings/actions.js
 8873810d83d843b12b222a54bcf347627c7be115cdd5f9147fd30303ee3df24d  ./src/plugins/extensions-settings/actions.js.map
-e76545561cfec9ded9a9e86ed963eec24165889459fb098068c3a3959ec565a9  ./src/plugins/extensions-settings/config.js
-b99001f72d23ebd7c962396c96c0b10c83e69ff07578943bde4c74bd84f62df6  ./src/plugins/extensions-settings/config.js.map
+6cac3b3d140793ecbee920161ab5360294aaacba26a86f39e514943cef0af143  ./src/plugins/extensions-settings/config.js
+188861ca1fdd9272020867d98dd89f43ff22e8862e04f04085723fb7bd316ef0  ./src/plugins/extensions-settings/config.js.map
 9ae33f152c109e23e3fc0702315d1ffbcc67399f817c30ea7b0ab7e6049963ad  ./src/plugins/extensions-settings/dataExtension.js
 25796595707b6843b8e7291481905ebe8973521b2fa917376247a2f5ac9c252d  ./src/plugins/extensions-settings/dataExtension.js.map
 49d9223dc87e213607b713badf44fe05b987175c737616def6b06dd3d7822e99  ./src/plugins/extensions-settings/effect.js
@@ -2692,8 +2692,8 @@ d09fce64c63916f6cc86eb086589178f3eef5f1f7de51dca05ba67255b156526  ./src/plugins/
 803afd525f2470039fa30bf32ffffbfc813961cd19ee4f605bb1ac071d2f3067  ./src/plugins/grouped-backlinks/GroupedBacklinksConfigEditor.js.map
 89f2c70a3532fafdb814b3d2bf96a1e2ae67986098e103edb8dfc1ab4dcb6569  ./src/plugins/grouped-backlinks/GroupedLinkedReferences.js
 42f732a71fd9c97356ee0865c59cd4ae2df448dda87f2dc2439d794f70f1887e  ./src/plugins/grouped-backlinks/GroupedLinkedReferences.js.map
-f72c5b23bf4667ea639911362701025e74cc3660aa67ee09e9d8ca3dfc815965  ./src/plugins/grouped-backlinks/config.js
-4744f77d54fe8202c904e61fe226900ba6ce0ebedb458e370d6b95b0bdfd0942  ./src/plugins/grouped-backlinks/config.js.map
+cce7959b577e611345b2edd926cf19975948b95a71bbf9548fd6323b2983c1a8  ./src/plugins/grouped-backlinks/config.js
+2e63652eea60bb5d59bff95af4a86222e4460c3fc480c3cbf2b5906cd08689de  ./src/plugins/grouped-backlinks/config.js.map
 08f96d5486dc259dc1b035c3aec963928488987f0ff359439c7d42ea723364b0  ./src/plugins/grouped-backlinks/dataExtension.js
 8d73de91668d1bf2cbd419a5b6040b47efbbcf1ebfa10614860fe636920f3558  ./src/plugins/grouped-backlinks/dataExtension.js.map
 6e0f837429a089ec36414694427c79e262f0fa34bfcbcb73870ec1a3ebec0f1c  ./src/plugins/grouped-backlinks/facet.js
@@ -2718,8 +2718,8 @@ c22b6ed733428fbe3c5155d27578e0b0f71d79728207b68ed4c3982fb3b463b2  ./src/plugins/
 ee3f78766e7cab289bffffc7721e18ff3b268cb399736c5deced94eba6cc8357  ./src/plugins/keybindings-settings/KeybindingsEditor.js.map
 e0c9e07ba176ab0d3e880cea3b6054f3be89350922a82f38759691784323688a  ./src/plugins/keybindings-settings/actions.js
 4b92e1d0c4c5426a02dcb3995e8d83eb1355b1f75465ef7584bd480da79f2ebc  ./src/plugins/keybindings-settings/actions.js.map
-b2d02fea87aba17aae318cc1d1d8bdf42a4bd3cdbedd1ebc165eaff215672ce1  ./src/plugins/keybindings-settings/config.js
-54d91b5f963587a51fb295edca3e95d02c2b92343774c2bce7310a25df2d54a9  ./src/plugins/keybindings-settings/config.js.map
+85afc9624e6937fdf47e34076dcb924ee8c812485628f8262543d16da5876ed1  ./src/plugins/keybindings-settings/config.js
+00de70643e32ac7fb551a65a0ec4e7bd91527f9308281a5be85ca6f15f086653  ./src/plugins/keybindings-settings/config.js.map
 fe23a70a9e456f13f2eef8fd00839971f52cec72d1ed11beeed617c421f85ffa  ./src/plugins/keybindings-settings/dataExtension.js
 8f2264eb7511a0f88c6c3d7cf43e0c2b686deb5de0ebadad698f89006b1d0324  ./src/plugins/keybindings-settings/dataExtension.js.map
 198d67248a065b7791f8f126110c641cbd0db4747f117bb858996002ccee6556  ./src/plugins/keybindings-settings/effect.js
@@ -2796,8 +2796,8 @@ d53a422961ede491c8ab4c315b4b8de7b0bbeb11c8da2dbda33e3d714354b61b  ./src/plugins/
 cab7947a695bbe0018af706a2460c89c1c6fb5d19d435f26a271d463242459ca  ./src/plugins/quick-find/QuickFind.js.map
 5209e26b633c087ebbb1785ab5b29e986b36274201bc5423e26aa434b8d78b93  ./src/plugins/quick-find/index.js
 e205939523c3f57aa0550da8fbe7ef501e5eaeef6055bd63feab739e0a20b328  ./src/plugins/quick-find/index.js.map
-b273d3b616bc653846e900c6185926c39302203385990a9dac4d656dc6b3137f  ./src/plugins/quick-find/recents.js
-bdd90b1a2b360a6a0accaef6a87c4470523ca7fb5c89010a263d116cc0ad76ef  ./src/plugins/quick-find/recents.js.map
+79d710ae00a56983a92fffc1680b8343cd13a105421ebcf94e28eb8eb337b71b  ./src/plugins/quick-find/recents.js
+c59d90a28d43f8c3d0d374ef207626c69b15cdf061cff1602bba1d16ee303d7f  ./src/plugins/quick-find/recents.js.map
 052d7cd65778fe876f95f0df4cbb08e4c4119751640cfc9a0c26123941d038ab  ./src/plugins/quick-find/selection.js
 4eae668122f6c195b8f6149ec2bb4751ee9254a719f38484e3ea23f8dafe4839  ./src/plugins/quick-find/selection.js.map
 78602413c1fd2bbce392676339467864bd5b4e646994aa54377abfedfb5d1660  ./src/plugins/quick-find/toggleStore.js
@@ -3015,8 +3015,8 @@ bccac4b08172d5a9d11fdd473c49a47bf7ed87dd76403384c854f1f4b752a99c  ./src/plugins/
 0092562ee0c509b654278899fe3b2daaa7955688f5e7486cb85830db4d34ce6e  ./src/plugins/update-indicator/UpdateIndicator.js.map
 5e9d24634a34a2df40d90e964f7ccf6741909f342b6be8683b76ac7288e20cf5  ./src/plugins/update-indicator/index.js
 17c1f541f4640f6c0a0c6bf3cce3a99d1557428a3c317cc5a83b346e6f435d68  ./src/plugins/update-indicator/index.js.map
-51ecd8a1a8e91520f2007785b48e12904f42016084af2a069dcfe06dd2a691a1  ./src/plugins/update-indicator/loadTimes.js
-229e984a5848ee895310df1bc02f7da9db853f4518591a077d4cab1e914d891b  ./src/plugins/update-indicator/loadTimes.js.map
+6c53475f87656675eadf514ebce23a9c0315f20ea22b268d9b3818cad1161ee5  ./src/plugins/update-indicator/loadTimes.js
+b3d9561c594c3a609b8fb733bbf545cf5c53d4d18c28c5d663820002e02ff977  ./src/plugins/update-indicator/loadTimes.js.map
 087f7a3d260ce26aeeaf4782555147dd7567a47c7d28d9fbe634a947c07188dd  ./src/plugins/video-player/VideoNotesRenderer.js
 8ba3cb2a6c59f6179c2288a7a9a4bc15b64286dff1796a43d33e6080aa878b96  ./src/plugins/video-player/VideoNotesRenderer.js.map
 d4b9cd5f937f964f3015a531f0fe91b3c97864443bc049e83f53747db0c1d75f  ./src/plugins/video-player/VideoPlayerRenderer.js
@@ -3249,8 +3249,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-241d27c4f5c5e347e98876a2d4d296df95f264847794693fc7bf002d5ddc271f  ./sw.js
-1cd60b9a81ba8d6da0857b4696f9e605aa5a1c68e8708f3e2f576b8aa00e26c8  ./version.json
+e3159f784333fa93728a7d5d30b48f0ba0139981a7aa9212d9b66d926005c4ca  ./sw.js
+1d8fd40fff9a6fe7c85b5cfedfc0a313d36524db5e942809c65ed3f3155ab05b  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
