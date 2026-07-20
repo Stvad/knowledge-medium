@@ -10,7 +10,7 @@
 import {
   ChangeScope,
   CodecError,
-  defineBlockType,
+  seedType,
   definePresetCore,
   seedProperty,
   type Codec,
@@ -67,7 +67,9 @@ export const extensionsOverridesProp = seedProperty({
 /** Per-user prefs sub-block type for the Extensions meta-plugin.
  *  Holds the central overrides map for every togglable. Lives under the
  *  Preferences tree via `getPluginPrefsBlock`. */
-export const extensionsPrefsType = defineBlockType({
+export const extensionsPrefsType = seedType({
+  seedKey: 'system:extensions-settings/type/extensions-prefs',
+  revision: 1,
   id: 'extensions-prefs',
   label: 'Extensions',
   properties: [extensionsOverridesProp],
