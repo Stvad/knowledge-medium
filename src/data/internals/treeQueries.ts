@@ -229,15 +229,27 @@ export const CHILDREN_IDS_SQL = `
 `
 
 /**
- * VISIBLE-children predicate (PR #288 §9, slice B1): in a child-backed
- * workspace the outline's default child listing excludes recognized
- * property field rows — a child whose local `reference_target_id` names a
- * definition block, when the workspace's `properties_migration` is at or
- * past 'children' (never an equality test) and the PARENT itself is
- * ordinary content (role is positional: everything beneath a field row is
- * property-subtree interior — values, comments — so listings there never
- * filter; a ref-typed VALUE pointing at a definition block would otherwise
- * be misread as a nested field).
+ * VISIBLE-children predicate (PR #288 §9, slice B1). Traversal polarity is
+ * everything-by-default: the plain listings above return every child and
+ * THIS view is the opt-in (`hidePropertyChildren`), not the reverse.
+ *
+ * As shipped it excludes every recognized property field row — a child
+ * whose local `reference_target_id` names a definition block, when the
+ * workspace's `properties_migration` is at or past 'children' (never an
+ * equality test) and the PARENT itself is ordinary content (role is
+ * positional: everything beneath a field row is property-subtree interior
+ * — values, comments — so listings there never filter; a ref-typed VALUE
+ * pointing at a definition block would otherwise be misread as a nested
+ * field).
+ *
+ * INTERIM, and deliberately so. The settled display model (§10, doc rev
+ * 2026-07-19) is two tiers rendered IN PLACE: a NON-hidden property is an
+ * ordinary outline child at its true position and must NOT be filtered
+ * here; only HIDDEN-tier rows are. Filtering all of them is correct only
+ * while every workspace reads 'cell' (nothing is child-backed, so this
+ * predicate filters zero rows in practice). The tier-aware predicate lands
+ * with slice D and asks a different question — "is this a HIDDEN-tier
+ * definition?" rather than "is this a definition?".
  *
  * The row template binds nothing; the recursion template consumes ONE `?`
  * (the parent id) for the §9 ancestry rule. Callers therefore bind
@@ -247,12 +259,26 @@ export const CHILDREN_IDS_SQL = `
  * 'property-schema'`, SAME workspace — a foreign workspace's definition id
  * must degrade to a visible "unknown field" row per §9, exactly as the
  * tx-layer registry checker resolves it): every definition block —
- * user-authored and materialized seed alike — carries that type. DIVERGENCE from the
- * tx-layer checker (which asks the registry and so recognizes a seeded
- * definition with zero rows): a not-yet-materialized seed's field rows are
- * invisible to this SQL — acceptable because the slice-C flip runbook
- * materializes seeds before any workspace flips, and un-flipped workspaces
- * never reach the predicate at all.
+ * user-authored and materialized seed alike — carries that type.
+ *
+ * DIVERGENCE from the tx-layer checker (issue #404 item 7). That checker
+ * asks the REGISTRY, so it recognizes a code-declared seed definition with
+ * zero rows; this SQL sees only what `materializePropertySeeds` has
+ * written and the `block_types` triggers have indexed. In the gap the same
+ * row is hidden by an in-tx read and shown by the reactive query. Two
+ * windows, not one: boot before seeds materialize (the slice-C runbook
+ * materializes before any flip, and un-flipped workspaces never reach this
+ * predicate), AND a field row arriving over sync ahead of its definition
+ * block, which no boot-time ordering rule covers.
+ *
+ * Do NOT fix this by teaching the CURRENT predicate about seeds — slice D
+ * retargets it at the hidden-tier set, which is registry-derived, so both
+ * sides end up reading one source and the divergence dissolves rather than
+ * needing its own mechanism. Note the tx-layer checker is ALSO the
+ * write-side positional gate (`txEngine.isInsidePropertySubtree` /
+ * `isProspectiveFieldRow`), where under-recognizing would nest machinery
+ * that recognition can never reclaim — so converging the two by making the
+ * tx layer forget seeds is not an option.
  *
  * An un-flipped workspace short-circuits on the `workspaces` probe
  * (dormant: today's behavior, zero rows filtered).
@@ -329,9 +355,15 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
 
 /**
  * VISIBLE-subtree form of {@link SUBTREE_SQL} (PR #288 §9, slice C gap fix):
- * a flipped workspace's hidden property field/value machinery must not leak
- * into subtree consumers (panels, copy, navigation, shortcuts) any more than
- * it leaks into the outline. The recursive descent refuses to step INTO a
+ * subtree consumers (panels, copy, navigation, shortcuts) get the same view
+ * as the outline rather than a second, more permissive one. Carries the
+ * same INTERIM scope as {@link VISIBLE_CHILD_PREDICATE_SQL} — it prunes at
+ * EVERY recognized field row today, where §10 wants only hidden-tier rows
+ * pruned; slice D's tier-aware predicate is what makes copy WYSIWYG (a
+ * non-hidden property row travels with its subtree, a hidden-tier one
+ * prunes whole) and closes #404's copy gap by construction, since user
+ * content nested under a visible property's value stops being pruned along
+ * with it. The recursive descent refuses to step INTO a
  * recognized field-row child — same recognition predicate as
  * {@link VISIBLE_CHILD_PREDICATE_SQL} (flip probe on the child's workspace +
  * a workspace-scoped `block_types = 'property-schema'` probe on the child's
