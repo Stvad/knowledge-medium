@@ -1,6 +1,6 @@
 import {
   ChangeScope,
-  defineBlockType,
+  seedType,
   definePresetCore,
   seedProperty,
   type Codec,
@@ -54,7 +54,9 @@ export const blockTagsConfigProp = seedProperty({
 
 /** Per-plugin prefs sub-block for the block-tagging plugin. Holds
  *  `blockTagsConfigProp` (the user's curated tag list). */
-export const blockTaggingPrefsType = defineBlockType({
+export const blockTaggingPrefsType = seedType({
+  seedKey: 'system:block-tagging/type/block-tagging-prefs',
+  revision: 1,
   id: 'block-tagging-prefs',
   label: 'Tags',
   properties: [blockTagsConfigProp],

@@ -1,7 +1,7 @@
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   ChangeScope,
-  defineBlockType,
+  seedType,
   seedProperty,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
@@ -29,7 +29,9 @@ export const currentLoadTimeProp = seedProperty({
 /** Per-plugin prefs sub-block for the update-indicator plugin. Records
  *  the previous/current bundle-load timestamps so the indicator can tell
  *  the user "a new build is live since you last loaded." */
-export const updateIndicatorPrefsType = defineBlockType({
+export const updateIndicatorPrefsType = seedType({
+  seedKey: 'system:update-indicator/type/update-indicator-prefs',
+  revision: 1,
   id: 'update-indicator-prefs',
   label: 'Update indicator',
   properties: [previousLoadTimeProp, currentLoadTimeProp],

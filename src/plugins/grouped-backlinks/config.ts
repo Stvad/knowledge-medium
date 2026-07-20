@@ -1,6 +1,6 @@
 import {
   ChangeScope,
-  defineBlockType,
+  seedType,
   definePresetCore,
   seedProperty,
   type BlockData,
@@ -173,7 +173,9 @@ export const groupedBacklinksOverridesProp = seedProperty({
 /** Per-plugin prefs sub-block for grouped-backlinks defaults. The
  *  defaults live here (UserPrefs scope); per-block overrides keep using
  *  `groupedBacklinksOverridesProp` on the target block itself. */
-export const groupedBacklinksPrefsType = defineBlockType({
+export const groupedBacklinksPrefsType = seedType({
+  seedKey: 'system:grouped-backlinks/type/grouped-backlinks-prefs',
+  revision: 1,
   id: 'grouped-backlinks-prefs',
   label: 'Grouped backlinks',
   properties: [groupedBacklinksDefaultsProp],
