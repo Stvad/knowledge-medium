@@ -64,13 +64,19 @@ const seedContribution = (seed: TypeSeedDeclaration): TypeContribution => ({
   ...(seed.properties !== undefined ? {properties: seed.properties} : {}),
 })
 
-/** Reconstruct a user row's `TypeContribution` from its projected metadata +
+/** Reconstruct a block row's `TypeContribution` from its projected metadata +
  * resolved property schemas. Absent display fields are omitted (not stored as
- * `undefined`) so the result matches a hand-written `defineBlockType({…})`. */
-const contributionFromProjection = (def: ProjectedTypeDefinition): TypeContribution => {
+ * `undefined`) so the result matches a hand-written `defineBlockType({…})`. `id`
+ * defaults to the block id (user rows, whose membership id IS their block id) but
+ * is overridden to the claimed membership id for a retired-seed row republished
+ * under it (§7 resolution below). */
+const contributionFromProjection = (
+  def: ProjectedTypeDefinition,
+  id: string = def.metadata.blockId,
+): TypeContribution => {
   const m = def.metadata
   return {
-    id: m.blockId,
+    id,
     label: m.label,
     ...(m.description ? {description: m.description} : {}),
     ...(m.hideFromBlockDisplay ? {hideFromBlockDisplay: m.hideFromBlockDisplay} : {}),
@@ -163,14 +169,25 @@ export const buildUnboundTypes = (
  * and safe across a `typesFacet.of → seedType` conversion), and a projected row
  * that mirrors a declared seed contributes only its `blockId`/provenance, never
  * its (possibly stale/tampered) contribution or stored `block-type:type-id`
- * claim. A projected row whose `/type/` seed key is NOT a current declaration
- * (foreign / forged / retired) is refused and published under its own block id.
+ * claim.
  *
- * Because seed backing blocks have deterministic ids (one per key) and user
- * rows carry fresh uuid ids (`typeId === blockId`), no two published entries
- * ever contend for one `typeId` — the §7 earliest-`createdAt` winner-resolution
- * the property registry needs for name collisions has no analog here once claims
- * are bound to declarations. Two seed-authoring/corruption hazards fail closed:
+ * A projected row whose `/type/` seed key is valid provenance (§4.2's id-equation
+ * holds, checked upstream by `parseTypeDefinitionMetadata`) but is NOT a current
+ * declaration is a RETIRED seed — most commonly a plugin's materialized type block
+ * after the plugin's toggle was turned off, or a self-consistent forgery. Rather
+ * than demote it to its backing-block uuid (which would SPLIT the type's identity:
+ * blocks already tagged `todo` keep the string while the picker offers a rival uuid
+ * id — see schema-unification §5.3 "definitions persist on disable"), it is
+ * republished read-only under its CLAIMED membership id, so a disabled plugin's
+ * type keeps resolving as `todo`. A LIVE declaration always outranks a retired row
+ * for the same id; among competing retired rows for one undeclared id the earliest
+ * `createdAt` wins (§7 winner-resolution, stable `blockId` tiebreak) — this is what
+ * bounds §9's small-fleet forgery residual (an early real seed beats a late
+ * forgery), and it is scoped to the code-owned short-id namespace: a genuine user
+ * row (no `/type/` seed key) still publishes under its own fresh-uuid block id,
+ * where it can never contend for a declared/retired short id.
+ *
+ * Two seed-authoring/corruption hazards fail closed:
  * two seeds claiming one membership `id` (keep the first, warn — `typeSeedsFacet`
  * is a list so the collision stays observable rather than a silent last-wins
  * hijack), and binding a seed to a non-seed block — `blockIdByTypeId` is
@@ -191,6 +208,9 @@ export const buildTypeDefinitionRegistry = (
     synthesizeSeedTypes(args.seeds)
   const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
   const blockIdByTypeId = new Map<string, string>()
+  // Retired-seed rows (valid `/type/` provenance, no live declaration), grouped by
+  // claimed membership id and resolved after the loop by earliest-`createdAt`.
+  const retiredByTypeId = new Map<string, ProjectedTypeDefinition[]>()
 
   // 2. Projected block rows.
   for (const def of args.projectedDefinitions.values()) {
@@ -225,14 +245,43 @@ export const buildTypeDefinitionRegistry = (
       continue
     }
 
-    // A user row (seed key absent, or a `/type/` key that isn't a current
-    // declaration — foreign/forged/retired): publish under its own block id,
-    // never a stored claim. A declared seed already owning this id always wins
-    // (a user block id is a fresh uuid, so this guard only fires for a
-    // pathological forged/duplicate id).
+    if (def.metadata.seedKey !== undefined) {
+      // Valid `/type/` seed provenance (the §4.2 id-equation held upstream) but
+      // no live declaration: a RETIRED seed (disabled plugin) or a self-consistent
+      // forgery. Defer to the post-loop earliest-`createdAt` resolution keyed by
+      // the CLAIMED membership id — republishing under the real id keeps a disabled
+      // plugin's type coherent instead of splitting it to a uuid.
+      const group = retiredByTypeId.get(def.metadata.typeId)
+      if (group) group.push(def)
+      else retiredByTypeId.set(def.metadata.typeId, [def])
+      continue
+    }
+
+    // A genuine user row (no `/type/` seed key): publish under its own block id — a
+    // fresh uuid (`typeId === blockId`) that can never contend for a declared or
+    // retired short id. The guard only fires for a pathological duplicate blockId.
     if (typesById.has(def.metadata.blockId)) continue
     typesById.set(def.metadata.blockId, contributionFromProjection(def))
     blockIdByTypeId.set(def.metadata.blockId, def.metadata.blockId)
+  }
+
+  // 3. Resolve retired-seed rows under their claimed id. A live declaration owns
+  //    its id outright (skip — its `typesById` entry from step 1 stays). Among
+  //    retired rows contending for one undeclared id, earliest `createdAt` wins
+  //    (stable `blockId` tiebreak): the §7 resolution bounding §9's forgery
+  //    residual — an early real seed beats a late forgery. The winner republishes
+  //    read-only; every row's `seedKey` provenance is already in
+  //    `definitionsByBlockId` for the read-only gate.
+  for (const [typeId, group] of retiredByTypeId) {
+    if (seedKeyById.has(typeId)) continue
+    group.sort((a, b) =>
+      a.metadata.createdAt !== b.metadata.createdAt
+        ? a.metadata.createdAt - b.metadata.createdAt
+        : a.metadata.blockId < b.metadata.blockId ? -1
+          : a.metadata.blockId > b.metadata.blockId ? 1 : 0)
+    const winner = group[0]!
+    typesById.set(typeId, contributionFromProjection(winner, typeId))
+    blockIdByTypeId.set(typeId, winner.metadata.blockId)
   }
 
   return {

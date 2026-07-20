@@ -97,10 +97,11 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.get('page')).toMatchObject({label: 'Page', hideFromCompletion: true})
   })
 
-  it('refuses a claim whose seed key is not a current declaration (forged/foreign)', () => {
+  it('a forged/retired claim never shadows a LIVE declaration for that id', () => {
     // A forged row sits at the deterministic id for an invented /type/ key and
-    // claims 'page'. Its key isn't declared, so it is demoted to its block id —
-    // it must not hijack 'page'.
+    // claims 'page' while 'page' is a live declaration. The declaration outranks it
+    // (§7): 'page' stays the declared Page, and the impostor is retained for
+    // provenance only — never published under 'page' nor under its own block id.
     const forgedKey = 'evil/type/x'
     const blockId = typeDefinitionBlockId(WS, forgedKey)
     const reg = buildTypeDefinitionRegistry({
@@ -108,11 +109,52 @@ describe('buildTypeDefinitionRegistry', () => {
       projectedDefinitions: asMap([
         projected({blockId, typeId: 'page', seedKey: forgedKey, label: 'Impostor'}),
       ]),
+      seeds: [seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'})],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({id: 'page', label: 'Page'})
+    expect(reg.typesById.has(blockId)).toBe(false)
+    expect(reg.definitionsByBlockId.get(blockId)?.seedKey).toBe(forgedKey)
+  })
+
+  it('republishes a retired seed (disabled plugin) under its real id, not its uuid', () => {
+    // A plugin type materialized while enabled, then the plugin toggle went off: the
+    // seed declaration is gone but the backing block persists at its deterministic id,
+    // still claiming 'todo'. It must keep resolving as 'todo' (coherent persistence,
+    // schema-unification §5.3) rather than splitting to the backing-block uuid — the
+    // regression the demote-to-uuid behavior caused for toggleable seeded types.
+    const TODO_KEY = 'system:todo/type/todo'
+    const blockId = typeDefinitionBlockId(WS, TODO_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId, typeId: 'todo', seedKey: TODO_KEY, label: 'Todo'}),
+      ]),
+      seeds: [], // plugin disabled → declaration absent
+    })
+    expect(reg.typesById.get('todo')).toMatchObject({id: 'todo', label: 'Todo'})
+    expect(reg.typesById.has(blockId)).toBe(false)
+    expect(reg.blockIdByTypeId.get('todo')).toBe(blockId)
+  })
+
+  it('resolves competing retired rows for one undeclared id by earliest createdAt', () => {
+    // Two rows claim 'todo' via different valid /type/ keys with no live declaration
+    // (a real retired seed + a later forgery/second client). Earliest createdAt wins
+    // — the §7 resolution that bounds §9's forgery residual so an early real seed
+    // beats a late forgery.
+    const keyEarly = 'system:todo/type/todo'
+    const keyLate = 'evil/type/todo'
+    const earlyId = typeDefinitionBlockId(WS, keyEarly)
+    const lateId = typeDefinitionBlockId(WS, keyLate)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: lateId, typeId: 'todo', seedKey: keyLate, label: 'Forgery', createdAt: 200}),
+        projected({blockId: earlyId, typeId: 'todo', seedKey: keyEarly, label: 'Real', createdAt: 100}),
+      ]),
       seeds: [],
     })
-    expect(reg.typesById.has('page')).toBe(false)
-    expect(reg.typesById.get(blockId)).toMatchObject({id: blockId, label: 'Impostor'})
-    expect(reg.blockIdByTypeId.get(blockId)).toBe(blockId)
+    expect(reg.typesById.get('todo')).toMatchObject({label: 'Real'})
+    expect(reg.blockIdByTypeId.get('todo')).toBe(earlyId)
   })
 
   it('excludes rows from a foreign workspace', () => {
