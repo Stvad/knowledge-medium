@@ -172,7 +172,7 @@ importers:
         version: 10.0.1(eslint@10.2.1(jiti@2.6.1))
       '@powersync/node':
         specifier: ^0.19.0
-        version: 0.19.0(@powersync/common@1.55.0)(better-sqlite3@12.9.0)
+        version: 0.19.0(@powersync/common@1.55.0)(better-sqlite3@12.11.1)
       '@rolldown/plugin-babel':
         specifier: ^0.2.3
         version: 0.2.3(@babel/core@7.27.1)(@babel/runtime@7.27.1)(rolldown@1.0.0-rc.17)(vite@8.0.10(@types/node@25.9.1)(jiti@2.6.1)(yaml@2.8.3))
@@ -228,8 +228,8 @@ importers:
         specifier: ^1.0.0
         version: 1.0.0
       better-sqlite3:
-        specifier: ^12.9.0
-        version: 12.9.0
+        specifier: ^12.11.1
+        version: 12.11.1
       eslint:
         specifier: ^10.2.1
         version: 10.2.1(jiti@2.6.1)
@@ -1932,9 +1932,9 @@ packages:
   bcp-47@2.1.0:
     resolution: {integrity: sha512-9IIS3UPrvIa1Ej+lVDdDwO7zLehjqsaByECw0bu2RRGP73jALm6FYbzI5gWbgHLvNdkvfXB5YrSbocZdOS0c0w==}
 
-  better-sqlite3@12.9.0:
-    resolution: {integrity: sha512-wqUv4Gm3toFpHDQmaKD4QhZm3g1DjUBI0yzS4UBl6lElUmXFYdTQmmEDpAFa5o8FiFiymURypEnfVHzILKaxqQ==}
-    engines: {node: 20.x || 22.x || 23.x || 24.x || 25.x}
+  better-sqlite3@12.11.1:
+    resolution: {integrity: sha512-dq9AtApgg5PGFtBzPFSBl3HZQjHok5gaQCM6zh2Yk0aSmDCs1CbnVI8/HgASQkNKsWFpseIO9beg5xxpYhbIfA==}
+    engines: {node: 20.x || 22.x || 23.x || 24.x || 25.x || 26.x}
 
   bidi-js@1.0.3:
     resolution: {integrity: sha512-RKshQI1R3YQ+n9YJz2QQ147P66ELpa1FQEg20Dk8oW9t2KgLbpDLLp9aGZ7y8WHSshDknG0bknqGw5/tyCs5tw==}
@@ -4595,13 +4595,13 @@ snapshots:
     dependencies:
       js-logger: 1.6.1
 
-  '@powersync/node@0.19.0(@powersync/common@1.55.0)(better-sqlite3@12.9.0)':
+  '@powersync/node@0.19.0(@powersync/common@1.55.0)(better-sqlite3@12.11.1)':
     dependencies:
       '@powersync/common': 1.55.0
       comlink: 4.4.2
       undici: 7.25.0
     optionalDependencies:
-      better-sqlite3: 12.9.0
+      better-sqlite3: 12.11.1
 
   '@powersync/react@1.10.0(@powersync/common@1.55.0)(react@19.2.6)':
     dependencies:
@@ -5746,7 +5746,7 @@ snapshots:
       is-alphanumerical: 2.0.1
       is-decimal: 2.0.1
 
-  better-sqlite3@12.9.0:
+  better-sqlite3@12.11.1:
     dependencies:
       bindings: 1.5.0
       prebuild-install: 7.1.3
