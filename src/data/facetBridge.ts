@@ -416,11 +416,13 @@ export class FacetBridge {
           // the winner set (`typeDefinitions`), and nothing materializes pre-pin. The
           // harvested seeds flow through the SAME property-registry build below, so
           // they reach schema resolution AND `workspaceSeeds` materialization for free.
-          const seeds = typeDefinitions
-            ? [
-              ...explicitPropertySeeds,
-              ...harvestNestedPropertySeeds(typeDefinitions, explicitPropertySeeds),
-            ]
+          const harvested = typeDefinitions
+            ? harvestNestedPropertySeeds(typeDefinitions, explicitPropertySeeds)
+            : []
+          // Avoid copying the (potentially large) explicit set on every rebuild when
+          // no type carries an own-owned inline property — the common case.
+          const seeds = harvested.length > 0
+            ? [...explicitPropertySeeds, ...harvested]
             : explicitPropertySeeds
           const propertySeedNameCounts = new Map<string, number>()
           for (const seed of seeds) {

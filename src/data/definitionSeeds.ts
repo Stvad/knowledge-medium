@@ -74,22 +74,32 @@ export const seedKeyOwner = (seedKey: string): string => {
   return slash === -1 ? seedKey : seedKey.slice(0, slash)
 }
 
-const KERNEL_SEED_OWNER = 'system:kernel-data'
+/** Owner prefix marking a BUILT-IN seed — kernel (`system:kernel-data`) or a
+ * first-party plugin (`system:todo`, `system:geo`, …). Untrusted dynamic-extension
+ * code cannot forge it: every dynamic type-seed contribution is routed through
+ * `bindExtensionTypeSeed`, which REJECTS any seedKey lacking the reserved
+ * `@extension/type/` prefix and rebinds the owner to the extension's block id (a
+ * uuid). So a `system:` owner always denotes shipped app code — the sole backstop
+ * `typeSeedKeyOutranks` leans on when it trusts the owner substring for priority. */
+const BUILTIN_SEED_OWNER_PREFIX = 'system:'
 
 /** Winner comparator for two type seeds that claim ONE membership id (compares
- * their seed keys). A kernel-owned seed (`system:kernel-data`) always outranks a
- * non-kernel one, so an installed plugin/extension can never take over a built-in
- * id (the anti-hijack invariant the old fail-closed stance protected). Among
- * same-privilege seeds the lexicographically-LOWER key wins — deterministic and
- * contribution-order-INDEPENDENT, so two installs of one extension resolve to a
- * single stable winner (and one stable backing block) instead of flipping with load
- * order. Returns true when `challenger` should replace the current winner
- * `incumbent`. Shared by the registry (`synthesizeSeedTypes`) and the direct-caller
- * materialization filter (`winnerTypeSeeds`) so both pick the same winner. */
+ * their seed keys). A BUILT-IN seed (`system:*` owner — kernel OR a first-party
+ * plugin) always outranks a third-party one, so an installed dynamic extension can
+ * never take over a built-in id — the anti-hijack invariant the old fail-closed
+ * stance protected, now covering plugin ids too, not just the kernel. (Sound only
+ * because binding stops untrusted code from bearing a `system:` owner — see
+ * `BUILTIN_SEED_OWNER_PREFIX`.) Among same-tier seeds the lexicographically-LOWER
+ * key wins — deterministic and contribution-order-INDEPENDENT, so two installs of
+ * one extension (both non-`system:`, block-id owners) resolve to a single stable
+ * winner (and one stable backing block) instead of flipping with load order. Returns
+ * true when `challenger` should replace the current winner `incumbent`. Shared by the
+ * registry (`synthesizeSeedTypes`) and the direct-caller materialization filter
+ * (`winnerTypeSeeds`) so both pick the same winner. */
 export const typeSeedKeyOutranks = (challenger: string, incumbent: string): boolean => {
-  const challengerKernel = seedKeyOwner(challenger) === KERNEL_SEED_OWNER
-  const incumbentKernel = seedKeyOwner(incumbent) === KERNEL_SEED_OWNER
-  if (challengerKernel !== incumbentKernel) return challengerKernel
+  const challengerBuiltin = seedKeyOwner(challenger).startsWith(BUILTIN_SEED_OWNER_PREFIX)
+  const incumbentBuiltin = seedKeyOwner(incumbent).startsWith(BUILTIN_SEED_OWNER_PREFIX)
+  if (challengerBuiltin !== incumbentBuiltin) return challengerBuiltin
   return challenger < incumbent
 }
 
@@ -623,8 +633,9 @@ const winnerTypeSeeds = (
     const prior = winnerById.get(seed.id)
     if (!prior || typeSeedKeyOutranks(seed.seedKey, prior.seedKey)) winnerById.set(seed.id, seed)
   }
-  const winners = new Set(winnerById.values())
-  return seeds.filter(seed => winners.has(seed))
+  // One winner per id → `values()` is already the deduped winner set (matches the
+  // snapshot-twin `materializingTypeSeeds`, which likewise returns map-values order).
+  return [...winnerById.values()]
 }
 
 /** Create/restore-only TYPE seed pass — missing definitions minted beneath the

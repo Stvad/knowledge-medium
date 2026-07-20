@@ -243,18 +243,17 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(bare).not.toHaveProperty('description')
   })
 
-  it('fails closed on two seeds claiming one membership id (keeps the first)', () => {
-    // A plugin/dynamic seed reusing a built-in id must be observable, not a
-    // silent last-wins hijack of the published type shape.
-    const reg = buildTypeDefinitionRegistry({
-      workspaceId: WS,
-      projectedDefinitions: new Map(),
-      seeds: [
-        seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Real Page'}),
-        seedType({seedKey: 'evil/type/page', revision: 1, id: 'page', label: 'Impostor Page'}),
-      ],
-    })
-    expect(reg.typesById.get('page')).toMatchObject({label: 'Real Page'})
+  it('built-in (system:) seed outranks a third-party impostor for a shared membership id, either order', () => {
+    // A third-party seed reusing a built-in id must NOT take it over. The built-in
+    // (`system:kernel-data`) seed wins regardless of contribution order, even though
+    // 'evil/type/page' sorts lexicographically BELOW it — the built-in tier dominates
+    // the lowest-key tiebreak. (Old behavior fail-closed; now it resolves to the built-in.)
+    const real = seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Real Page'})
+    const impostor = seedType({seedKey: 'evil/type/page', revision: 1, id: 'page', label: 'Impostor Page'})
+    const build = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+      buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+    expect(build([real, impostor]).typesById.get('page')).toMatchObject({label: 'Real Page'})
+    expect(build([impostor, real]).typesById.get('page')).toMatchObject({label: 'Real Page'})
   })
 
   it('retains an inactive (dup-id-loser) seed mirror for provenance only, not as a user type', () => {
@@ -468,6 +467,43 @@ describe('harvestNestedPropertySeeds', () => {
     const harvested = harvestNestedPropertySeeds(snapshotOf([stubType]), [])
     expect(harvested).toEqual([])
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('plugin:demo/property/ghost'))
+    warn.mockRestore()
+  })
+
+  it('keeps the first and WARNS when two types inline the same own key with different declarations', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const declA = prop('plugin:demo', 'shared')
+    const declB = seedProperty({
+      seedKey: 'plugin:demo/property/shared', revision: 1, name: 'plugin:demo:CONFLICT',
+      preset: 'optional-string', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
+    })
+    // Two winning types (different ids, same owner) inline the SAME property key with
+    // DIFFERENT declarations. Only the first materializes the shared deterministic
+    // block, so the conflicting second must be dropped-and-warned, not silently kept.
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/a', revision: 1, id: 'a', label: 'A', properties: [declA]}),
+      seedType({seedKey: 'plugin:demo/type/b', revision: 1, id: 'b', label: 'B', properties: [declB]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [])).toEqual([declA])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('already declared elsewhere'))
+    warn.mockRestore()
+  })
+
+  it('does NOT warn a stub ref when a full declaration provides the same key (any order)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const full = prop('plugin:demo', 'color')
+    // A stub ref in one type + the full declaration of the same key in another: the
+    // full declaration provides the key, so the stub's dangling-ref warning is
+    // suppressed (it only fires when nothing ever materializes the key).
+    const snap = snapshotOf([
+      seedType({
+        seedKey: 'plugin:demo/type/a', revision: 1, id: 'a', label: 'A',
+        properties: [{seedKey: 'plugin:demo/property/color'} as unknown as AnyPropertySchema],
+      }),
+      seedType({seedKey: 'plugin:demo/type/b', revision: 1, id: 'b', label: 'B', properties: [full]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [])).toEqual([full])
+    expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 })
