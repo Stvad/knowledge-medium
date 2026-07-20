@@ -210,7 +210,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 
    The `claude` page must exist (type `[[claude]]` once and click it).
 
-   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `pnpm agent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
+   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `kmagent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
 
    Set `"disabled": true` on any watcher to keep it parked in the config without registering it, blocking its target wikilinks, affecting billing posture, or processing tasks. Disabled watchers still have to be valid watcher objects, so broken parked config is caught at startup instead of drifting silently. They also still reserve their `name`, because cursors and baselines are keyed by watcher name. If every configured watcher is disabled, the daemon clears its existing push registration and stops.
 
@@ -335,7 +335,7 @@ Caveats, honestly: research preview (flag syntax/protocol may change — nothing
 
 ## Troubleshooting
 
-- Waiting on `bridge/pairing` in the log → the daemon auto-starts the bridge and retries forever (reboot-safe); if it never pairs, run `pnpm agent --profile agent-dispatch connect` with the app tab open.
+- Waiting on `bridge/pairing` in the log → the daemon auto-starts the bridge and retries forever (reboot-safe); if it never pairs, run `kmagent --profile agent-dispatch connect` with the app tab open.
 - Config errors exit **0** (clean) so launchd doesn't hot-loop a restart that can't help — fix the config, then `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.agent-dispatch`.
 - `Another km-agent-dispatch is already running` → the pidfile guard; stop the launchd instance before running one by hand (`launchctl bootout gui/$(id -u)/org.knowledge-medium.agent-dispatch`).
 - `Page "claude" does not exist` → create the page (type `[[claude]]`, click it).

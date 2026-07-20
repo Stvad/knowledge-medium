@@ -42,7 +42,7 @@ const bridgeSecret = 'BRIDGE-SECRET'
 const bridgeHeaders = {'x-agent-runtime-secret': bridgeSecret}
 const unknownTokenMessage =
   'Agent token is not registered with the local bridge. ' +
-  'Open or focus the app tab for the same workspace, then retry; if needed, run `pnpm agent connect` to pair a fresh token. ' +
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `kmagent connect` to pair a fresh token. ' +
   'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.'
 
 // One server for the whole file. Each test wipes state via the

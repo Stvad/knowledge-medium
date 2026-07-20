@@ -161,14 +161,14 @@ const main = async () => {
         log(`bridge not reachable (${errorMessage(error)}) — starting it`)
         // The daemon runs unattended (launchd, post-reboot), so it must
         // be able to start the bridge itself — otherwise a reboot leaves
-        // it waiting until the user happens to run `pnpm agent`. Only for
+        // it waiting until the user happens to run `kmagent`. Only for
         // a LOCAL bridge — a configured AGENT_RUNTIME_URL is someone
         // else's process to manage.
         await startBridgeInBackground().catch(startError => log(`bridge start failed: ${errorMessage(startError)}`))
         await nap(1_000) // brief recheck right after starting it
         continue
       }
-      log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: pnpm agent --profile ${config.profile} connect`)
+      log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: kmagent --profile ${config.profile} connect`)
       await nap(30_000)
     }
   }
