@@ -13,7 +13,9 @@
 // keyed on the specifier exactly as written in the source, its value the
 // module loaded from the `.js`-stripped form.
 
+import * as Babel from '@babel/standalone'
 import {extensionApiCatalog} from '@/extensions/apiCatalog'
+import type {AppExtension} from '@/facets/facet'
 
 const IMPORT_SPECIFIER_RE = /\bfrom\s*['"]([^'"]+)['"]/g
 
@@ -44,6 +46,30 @@ export const buildExampleRequire = async (
     }
     return modules.get(specifier)
   }
+}
+
+/**
+ * Babel-transpile an example source to CommonJS and evaluate it against the
+ * real app modules it imports, returning its default-exported AppExtension.
+ * Shared by the authoring-catalog and example-extension eval tests.
+ */
+export const evaluateExampleModule = async (
+  source: string,
+  filename: string,
+): Promise<AppExtension> => {
+  const compiled = Babel.transform(source, {
+    filename,
+    presets: ['react', 'typescript'],
+    plugins: ['transform-modules-commonjs'],
+  }).code
+  if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
+
+  const module = {exports: {} as {default?: AppExtension}}
+  const requireExampleImport = await buildExampleRequire(source)
+  const evaluate = new Function('require', 'module', 'exports', compiled)
+  evaluate(requireExampleImport, module, module.exports)
+  if (!module.exports.default) throw new Error(`${filename}: no default export`)
+  return module.exports.default
 }
 
 const catalogByPath = new Map(

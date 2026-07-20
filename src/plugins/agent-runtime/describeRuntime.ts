@@ -483,7 +483,9 @@ export const describeRuntimeSummary = async (
       apiSurface: {
         moduleCount: apiSurface.modules.length,
         exportCount: extensionApiRuntimeExports().length,
-        modules: apiSurface.modules.map(module => module.importPath).slice(0, 10),
+        // All importPaths (they're short and few) — a sliced preview would
+        // omit the whole @/data/* tail, which is what plugins use most.
+        modules: apiSurface.modules.map(module => module.importPath),
       },
       authoring: {
         guideCount: authoring.guides.length,

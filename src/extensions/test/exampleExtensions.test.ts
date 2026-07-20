@@ -3,26 +3,8 @@ import * as Babel from '@babel/standalone'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import { ChangeScope } from '@/data/api'
 import { definitionSeedsFacet } from '@/data/facets'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
-import { buildExampleRequire, unknownCatalogImports } from '@/test/exampleModuleResolver'
-
-const evaluateExampleSource = async (source: string, filename: string): Promise<AppExtension> => {
-  const compiled = Babel.transform(source, {
-    filename,
-    presets: ['react', 'typescript'],
-    plugins: ['transform-modules-commonjs'],
-  }).code
-  if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
-
-  const module = {exports: {} as {default?: AppExtension}}
-  // The barrel is gone — a template imports from many real modules now, so the
-  // require shim preloads whatever each source declares.
-  const requireTemplateImport = await buildExampleRequire(source)
-  const evaluate = new Function('require', 'module', 'exports', compiled)
-  evaluate(requireTemplateImport, module, module.exports)
-  if (!module.exports.default) throw new Error(`${filename}: no default export`)
-  return module.exports.default
-}
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { evaluateExampleModule, unknownCatalogImports } from '@/test/exampleModuleResolver'
 
 // Catches typos in the templated extension sources. Templated strings bypass
 // TypeScript's checker, so without this any malformed JSX or import would only
@@ -86,7 +68,7 @@ describe('exampleExtensions — templated sources', () => {
     for (const expected of cases) {
       const definition = exampleExtensions.find(example => example.id === expected.id)
       expect(definition, `${expected.id} example should exist`).toBeDefined()
-      const runtime = resolveFacetRuntimeSync(await evaluateExampleSource(
+      const runtime = resolveFacetRuntimeSync(await evaluateExampleModule(
         definition!.source,
         `${expected.id}.tsx`,
       ))

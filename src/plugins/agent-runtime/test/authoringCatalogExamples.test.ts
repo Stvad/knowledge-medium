@@ -2,9 +2,9 @@ import * as Babel from '@babel/standalone'
 import {describe, expect, it} from 'vitest'
 import {ChangeScope} from '@/data/api'
 import {definitionSeedsFacet} from '@/data/facets'
-import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
+import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {
-  buildExampleRequire,
+  evaluateExampleModule,
   parseNamedImports,
   unknownCatalogImports,
 } from '@/test/exampleModuleResolver'
@@ -62,22 +62,6 @@ const collectExamples = (): Array<{path: string, example: AuthoringExample}> => 
     throw new Error('No catalog examples found — the catalog restructured and this test is silently passing')
   }
   return examples
-}
-
-const evaluateCompleteExample = async (source: string, filename: string): Promise<AppExtension> => {
-  const compiled = Babel.transform(source, {
-    filename,
-    presets: ['react', 'typescript'],
-    plugins: ['transform-modules-commonjs'],
-  }).code
-  if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
-
-  const module = {exports: {} as {default?: AppExtension}}
-  const requireExampleImport = await buildExampleRequire(source)
-  const evaluate = new Function('require', 'module', 'exports', compiled)
-  evaluate(requireExampleImport, module, module.exports)
-  if (!module.exports.default) throw new Error(`${filename}: no default export`)
-  return module.exports.default
 }
 
 describe('authoring catalog example drift guard', () => {
@@ -157,7 +141,7 @@ describe('authoring catalog example drift guard', () => {
     )
     expect(match).toBeDefined()
 
-    const runtime = resolveFacetRuntimeSync(await evaluateCompleteExample(
+    const runtime = resolveFacetRuntimeSync(await evaluateExampleModule(
       match!.example.code,
       'settings-via-property-editor-override.tsx',
     ))
