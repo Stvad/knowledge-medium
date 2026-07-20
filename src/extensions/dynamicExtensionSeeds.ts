@@ -35,6 +35,9 @@ export const extensionPropertySeedKey = (key: string): string => {
  *  `segment` selects the namespace — `property` or the disjoint `type` (see
  *  `isPropertySeedKey` / `isTypeSeedKey`). Callers guarantee the matching
  *  reserved prefix is present before calling. */
+const reservedPrefixFor = (segment: 'property' | 'type'): string =>
+  segment === 'property' ? DYNAMIC_EXTENSION_PROPERTY_PREFIX : DYNAMIC_EXTENSION_TYPE_PREFIX
+
 const bindReservedSeedKey = (
   seedKey: string,
   blockId: string,
@@ -44,8 +47,16 @@ const bindReservedSeedKey = (
   if (owner.length === 0) {
     throw new Error('Dynamic extension block id must be non-empty')
   }
-  const key = seedKey.slice(`${DYNAMIC_EXTENSION_SEED_OWNER}/${segment}/`.length)
-  return `${owner}/${segment}/${key}`
+  const prefix = reservedPrefixFor(segment)
+  // Callers already guard `startsWith(prefix)` before calling, so a mismatch
+  // here is a segment/prefix wiring bug — fail loudly instead of silently
+  // mis-slicing (the two reserved prefixes differ in length).
+  if (!seedKey.startsWith(prefix)) {
+    throw new Error(
+      `[bindReservedSeedKey] ${JSON.stringify(seedKey)} does not carry the reserved ${segment} prefix`,
+    )
+  }
+  return `${owner}/${segment}/${seedKey.slice(prefix.length)}`
 }
 
 const boundOwners = new WeakMap<AnyPropertySeedDeclaration, string>()
@@ -119,6 +130,36 @@ export const extensionTypeSeedKey = (key: string): string => {
   return `${DYNAMIC_EXTENSION_TYPE_PREFIX}${key}`
 }
 
+/** A dynamic `seedType` may embed property seeds in its `properties`; their
+ *  keys are persisted into the backing block's `block-type:properties` refs
+ *  (see `canonicalTypeSeedProperties`). Those nested seeds carry the same
+ *  reserved `@extension/property/<key>` owner and must be block-bound too —
+ *  otherwise a ref to a definition block derived from the reserved key gets
+ *  persisted, and that block never materializes (a dangling ref; a reserved
+ *  key must never reach storage). Rebind each through the idempotent
+ *  `bindExtensionPropertySeed` so it agrees with the same seed when it's ALSO
+ *  contributed separately, in either contribution order. A reserved-keyed entry
+ *  that isn't a well-formed property seed is rejected rather than silently
+ *  persisting its reserved key. */
+const bindNestedDynamicPropertySeeds = (
+  properties: ReadonlyArray<unknown>,
+  blockId: string,
+): void => {
+  for (const prop of properties) {
+    if (typeof prop !== 'object' || prop === null) continue
+    const seedKey: unknown = (prop as {seedKey?: unknown}).seedKey
+    if (typeof seedKey !== 'string' || !seedKey.startsWith(DYNAMIC_EXTENSION_PROPERTY_PREFIX)) {
+      continue
+    }
+    if (!isPropertySeedDeclaration(prop)) {
+      throw new Error(
+        'Dynamic type seed embeds a malformed reserved property seed in `properties`',
+      )
+    }
+    bindExtensionPropertySeed(prop, blockId)
+  }
+}
+
 const boundTypeOwners = new WeakMap<TypeSeedDeclaration, string>()
 
 /** Loader-only: bind a type-seed declaration's reserved dynamic owner to its
@@ -150,6 +191,9 @@ export const bindExtensionTypeSeed = (
   }
 
   ;(value as {seedKey: string}).seedKey = bindReservedSeedKey(value.seedKey, blockId, 'type')
+  if (value.properties !== undefined) {
+    bindNestedDynamicPropertySeeds(value.properties, blockId)
+  }
   boundTypeOwners.set(value, blockId)
   return value
 }

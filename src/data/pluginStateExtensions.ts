@@ -65,9 +65,11 @@ const hiddenPluginTypeContribution = (
     : typesFacet.of({...type, hideFromCompletion: true}, {source})
 
 /** Bundle a plugin-prefs container-type registration with an idle-time
- *  eager-bootstrap effect. Pass a code `seedType` (preferred); a plain
- *  `TypeContribution` is accepted for a dynamic extension that can't seed its
- *  type yet. Spread the returned array into the plugin's `AppExtension`:
+ *  eager-bootstrap effect. Pass a `seedType` (preferred — materializes a
+ *  backing block; both static plugins and, via `extensionTypeSeedKey`, dynamic
+ *  extensions); a plain `TypeContribution` (a bare `defineBlockType`) is also
+ *  accepted and routed to the static `typesFacet`. Spread the returned array
+ *  into the plugin's `AppExtension`:
  *
  *      export const myPlugin: AppExtension = [
  *        ...pluginPrefsExtension(myPrefsSeedType, 'my-plugin'),

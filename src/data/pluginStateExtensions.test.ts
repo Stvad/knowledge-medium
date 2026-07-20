@@ -5,12 +5,13 @@ import { appEffectsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { pluginPrefsExtension, pluginUIStateExtension } from './pluginStateExtensions.js'
 
-// Guards `hiddenPluginTypeContribution`'s provenance routing: a code `seedType`
-// materializes (→ typeSeedsFacet), while a plain `TypeContribution` (a dynamic
-// extension with no type-seed binding) falls back to the static `typesFacet`.
-// The transitional typesFacet branch is only reachable in production via a
-// standalone dynamic extension (outside the app gate), so without this test a
-// flipped ternary or a changed `isTypeSeedDeclaration` would go uncaught.
+// Guards `hiddenPluginTypeContribution`'s provenance routing: a `seedType`
+// materializes (→ typeSeedsFacet), while a plain `TypeContribution` (a bare
+// `defineBlockType` — e.g. a dynamic extension that hasn't adopted
+// `extensionTypeSeedKey`) falls back to the static `typesFacet`. That fallback
+// branch is unused by the in-app static plugins (all now seedType), so without
+// this test a flipped ternary or a changed `isTypeSeedDeclaration` would go
+// uncaught.
 describe('pluginStateExtensions routing', () => {
   it('routes a seedType container through typeSeedsFacet, forced hidden from completion', () => {
     const type = seedType({seedKey: 'system:test/type/test-prefs', revision: 1, id: 'test-prefs', label: 'Test prefs'})

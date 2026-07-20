@@ -525,6 +525,92 @@ describe('dynamicExtensionsExtension — type seed identity', () => {
     }
   })
 
+  it('binds reserved property seedKeys nested inside a dynamic type seed', async () => {
+    // A dynamic seedType can embed property seeds in `properties`; their keys
+    // are persisted into block-type:properties refs. If the nested key stayed
+    // `@extension/property/...` it would ref a definition block that never
+    // materializes (a dangling reserved-key ref). The type bind must block-bind
+    // nested reserved property seeds too.
+    const blocks = [blockData({id: 'ext-nested', content: 'nested'})]
+    const restore = __setCompileImplForTest(async () => {
+      const nestedProp = seedProperty({
+        seedKey: extensionPropertySeedKey('foo'),
+        revision: 1,
+        name: 'example:foo',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const type = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+        properties: [nestedProp],
+      })
+      return {default: typeSeedsFacet.of(type)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(typeSeedsFacet)
+      expect(seeds[0]?.seedKey).toBe('ext-nested/type/widget')
+      expect((seeds[0]?.properties?.[0] as unknown as {seedKey: string}).seedKey).toBe(
+        'ext-nested/property/foo',
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('keeps a nested property seed consistent with the same seed contributed separately', async () => {
+    // Same declaration object referenced by the type AND contributed standalone,
+    // with the type contributed FIRST — the order that would double-bind (and
+    // throw) if the nested rebind didn't route through the idempotent
+    // bindExtensionPropertySeed. Both must land on one block-scoped key.
+    const blocks = [blockData({id: 'ext-shared', content: 'shared'})]
+    const restore = __setCompileImplForTest(async () => {
+      const sharedProp = seedProperty({
+        seedKey: extensionPropertySeedKey('foo'),
+        revision: 1,
+        name: 'example:foo',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const type = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+        properties: [sharedProp],
+      })
+      return {default: [typeSeedsFacet.of(type), definitionSeedsFacet.of(sharedProp)]}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(typeSeedsFacet)
+      const propSeeds = runtime.read(definitionSeedsFacet)
+      expect(propSeeds[0]?.seedKey).toBe('ext-shared/property/foo')
+      expect((seeds[0]?.properties?.[0] as unknown as {seedKey: string}).seedKey).toBe(
+        'ext-shared/property/foo',
+      )
+      // Same object, bound exactly once (idempotent) — no throw, no divergence.
+      expect(seeds[0]?.properties?.[0]).toBe(propSeeds[0])
+    } finally {
+      restore()
+    }
+  })
+
   it('binds idempotently to the same block but rejects reuse across blocks', () => {
     // Directly exercises the WeakMap reuse guard the loader relies on: one
     // declaration object may only ever bind to one block. Re-binding to that
