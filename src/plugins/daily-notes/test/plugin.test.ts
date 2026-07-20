@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { typesFacet } from '@/data/facets.js'
+import { typeSeedsFacet } from '@/data/facets.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
@@ -28,9 +28,9 @@ describe('dailyNotesPlugin', () => {
     // ensureDailyNoteTarget throws on addTypeInTx.
     const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
     const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))
-    const types = runtime.read(typesFacet)
+    const types = runtime.read(typeSeedsFacet)
 
-    expect(types.has(DAILY_NOTE_TYPE)).toBe(true)
+    expect(types.some(t => t.id === DAILY_NOTE_TYPE)).toBe(true)
   })
 
   it('contributes the daily note picker action and header item', () => {

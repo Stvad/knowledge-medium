@@ -120,19 +120,20 @@ describe('UserTypesService subscription', () => {
     expect(env.service.getTypeBlockId(id)).toBe(id)
   })
 
-  it('does not let a seed-valid /type/ row hijack a type id via a colliding claim', async () => {
+  it('does not let a seed-valid /type/ row shadow a LIVE declaration via a colliding claim', async () => {
     env = await setup()
     // Simulate a synced/imported block-type row that is a VALID seeded
     // definition: it sits at the deterministic id for a /type/ seed key and
     // claims an existing id ('page'). parseTypeDefinitionMetadata honors that
-    // claim (it passes the id equation) and the projector publishes the full
-    // metadata, but its `/type/` key is a FORGED foreign owner — NOT a current
-    // code declaration (the real kernel `page` seed is
-    // `system:kernel-data/type/page`, a different key) — so
-    // `buildTypeDefinitionRegistry` demotes the row to its own block id rather
-    // than binding the 'page' membership, closing the hijack the last-wins
-    // typesFacet would otherwise allow. Created at Automation scope so the
-    // seed-write backstop (BlockDefault-only) doesn't reject the mint.
+    // claim (it passes the id equation), but its `/type/` key is a FORGED foreign
+    // owner — NOT a current code declaration (the real kernel `page` seed is
+    // `system:kernel-data/type/page`, a different key). Because the kernel `page`
+    // seed IS a live declaration, it OUTRANKS the forged claim (§7 winner
+    // resolution): 'page' stays the kernel Page, and the forged row is retained
+    // for provenance only — published NOWHERE. (A retired row whose claimed id is
+    // UNDECLARED would instead persist under that id; here 'page' is declared, so
+    // the declaration wins.) Created at Automation scope so the seed-write
+    // backstop (BlockDefault-only) doesn't reject the mint.
     const seedKey = 'plugin:imposter/type/page'
     const blockId = typeDefinitionBlockId(WS, seedKey)
     // Mint the whole bag through tx.create (like the property materializer):
@@ -163,14 +164,18 @@ describe('UserTypesService subscription', () => {
       }, {systemMint: true})
     }, {scope: ChangeScope.Automation, description: 'simulate synced seed-valid type row'})
 
-    // The contribution publishes under its own block id (an honored 'page'
-    // claim would key it under 'page' instead and time this out).
-    await waitForTypeRegistration(env.repo, blockId, 'Imported Page')
-    expect(env.repo.types.get(blockId)!.id).toBe(blockId)
-    // 'page' is not hijacked: the built-in kernel type is untouched, and the
-    // registry never binds the 'page' membership id to this block.
+    // Control fence: a plain user type minted AFTER the forged row (its helper
+    // waits for its own registration). In-order projection then guarantees the
+    // forged row was already processed, so the ABSENCE assertions below are real,
+    // not a not-yet-projected race.
+    await createBlockTypeBlock(env.repo, {label: 'Control Type'})
+
+    // 'page' is not hijacked: the kernel Page wins and the registry never binds
+    // the 'page' membership id to the forged block.
     expect(env.repo.types.get('page')?.label).toBe('Page')
     expect(env.service.getTypeBlockId('page')).not.toBe(blockId)
+    // The forged row surfaces nowhere — not under 'page', not under its block id.
+    expect(env.repo.types.has(blockId)).toBe(false)
   })
 
   it('lifts hide-from-completion onto the contribution and republishes on change', async () => {

@@ -2,7 +2,7 @@
  * The `attachments` plugin (design §11) — packages the media block model + its
  * renderer, mirroring the video-player plugin's facet wiring.
  *
- * Scope: the `media` block TYPE + its property schemas (typesFacet /
+ * Scope: the `media` block TYPE + its property schemas (typeSeedsFacet /
  * definitionSeedsFacet), the {@link MediaBlockRenderer} (blockRenderersFacet), the
  * boot upload reconciler (appMountsFacet), and the paste rule that turns a file paste
  * into a media capture (pasteDecisionVerb decorator). Everything the feature adds is
@@ -10,7 +10,7 @@
  * paste, no media blocks are minted, and the renderer/reconciler aren't mounted.
  */
 
-import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
@@ -40,8 +40,8 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   name: 'Attachments',
   description: 'Image & file attachments — content-addressed media blocks embedded via !((id)).',
 }).of([
-  typesFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'attachments' }),
-  typesFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'attachments' }),
+  typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'attachments' }),
+  typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'attachments' }),
   MEDIA_PROPERTY_SCHEMAS.map((schema) => definitionSeedsFacet.of(schema, { source: 'attachments' })),
   blockRenderersFacet.of({ id: 'media', renderer: MediaBlockRenderer }, { source: 'attachments' }),
   // The image + audio + PDF mime-family viewers. A video plugin registers its own viewer

@@ -581,10 +581,10 @@ export const materializePropertySeeds = (
  * Materializing even a keep-first "winner" is unsafe, because the winner is
  * contribution-order-dependent: a reorder across runs (plugin load order, a
  * dynamic-extension change) would materialize a DIFFERENT backing block, and
- * this create/restore-only pass never deletes the old one. The orphaned row's
- * `/type/` key is no longer the active winner, so `buildTypeDefinitionRegistry`
- * republishes it as a phantom, user-selectable block-id type (the retired-key
- * demotion branch). So we back NONE of a contested id: its `TypeContribution` is
+ * this create/restore-only pass never deletes the old one, stranding an orphaned
+ * mirror at the now-stale deterministic id that `buildTypeDefinitionRegistry`
+ * can't cleanly resolve (neither the active declared mirror nor a cleanly-retired
+ * row). So we back NONE of a contested id: its `TypeContribution` is
  * still synthesized from the declaration (the type isn't lost — only
  * `getTypeBlockId` stays undefined until the collision is resolved), and no
  * backing row is ever written to orphan. Skip-and-warn, not throw, so one bad

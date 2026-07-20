@@ -1,7 +1,7 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { appEffectsFacet } from '@/extensions/core.js'
-import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
 import {
   collectStartupMetricsEffect,
   startupMetricsUIStateType,
@@ -18,5 +18,5 @@ export const startupMetricsPlugin: AppExtension = systemToggle({
 }).of([
   appEffectsFacet.of(collectStartupMetricsEffect, { source: 'startup-metrics' }),
   definitionSeedsFacet.of(startupRecordProp, { source: 'startup-metrics' }),
-  typesFacet.of(startupMetricsUIStateType, { source: 'startup-metrics' }),
+  typeSeedsFacet.of(startupMetricsUIStateType, { source: 'startup-metrics' }),
 ])
