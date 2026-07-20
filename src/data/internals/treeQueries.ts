@@ -261,7 +261,7 @@ export const CHILDREN_IDS_SQL = `
  * tx-layer registry checker resolves it): every definition block —
  * user-authored and materialized seed alike — carries that type.
  *
- * DIVERGENCE from the tx-layer checker (issue #404 item 7). That checker
+ * DIVERGENCE from the tx-layer checker (issue #389 item 7). That checker
  * asks the REGISTRY, so it recognizes a code-declared seed definition with
  * zero rows; this SQL sees only what `materializePropertySeeds` has
  * written and the `block_types` triggers have indexed. In the gap the same
@@ -271,14 +271,22 @@ export const CHILDREN_IDS_SQL = `
  * predicate), AND a field row arriving over sync ahead of its definition
  * block, which no boot-time ordering rule covers.
  *
- * Do NOT fix this by teaching the CURRENT predicate about seeds — slice D
- * retargets it at the hidden-tier set, which is registry-derived, so both
- * sides end up reading one source and the divergence dissolves rather than
- * needing its own mechanism. Note the tx-layer checker is ALSO the
- * write-side positional gate (`txEngine.isInsidePropertySubtree` /
+ * Only the SEED half is a divergence: for a USER-authored definition
+ * neither side knows it until the block arrives, so both answer "not a
+ * definition" — consistent and self-healing, not a split.
+ *
+ * The fix belongs with slice C's invisibility half, not slice D: this is a
+ * hole in exactly the blanket hide that gates the C flip. Seed definition
+ * ids are deterministic (`propertyDefinitionBlockId`), so the set is
+ * computable from the registry and can be bound into this predicate. Slice
+ * D retargets the predicate at the hidden-tier set — also registry-derived
+ * — so D REUSES that mechanism rather than replacing it; don't defer to D
+ * on the assumption it dissolves on its own.
+ *
+ * Converging the other direction is not an option: the tx-layer checker is
+ * ALSO the write-side positional gate (`txEngine.isInsidePropertySubtree` /
  * `isProspectiveFieldRow`), where under-recognizing would nest machinery
- * that recognition can never reclaim — so converging the two by making the
- * tx layer forget seeds is not an option.
+ * that recognition can never reclaim.
  *
  * An un-flipped workspace short-circuits on the `workspaces` probe
  * (dormant: today's behavior, zero rows filtered).
