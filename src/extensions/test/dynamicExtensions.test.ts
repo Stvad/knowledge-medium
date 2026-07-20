@@ -568,10 +568,14 @@ describe('dynamicExtensionsExtension — type seed identity', () => {
   })
 
   it('keeps a nested property seed consistent with the same seed contributed separately', async () => {
-    // Same declaration object referenced by the type AND contributed standalone,
-    // with the type contributed FIRST — the order that would double-bind (and
-    // throw) if the nested rebind didn't route through the idempotent
-    // bindExtensionPropertySeed. Both must land on one block-scoped key.
+    // Shared declaration object referenced by the type AND contributed standalone
+    // (type FIRST). Because the object is aliased, the standalone
+    // definitionSeedsFacet arm would block-bind it either way — so this is the
+    // regression guard for the idempotent ROUTING, not for the nested rebind's
+    // existence (the test above covers that): a naive in-place nested rebind that
+    // bypassed bindExtensionPropertySeed's WeakMap would leave the later
+    // standalone arm re-seeing a rewritten key and throwing. Both must land on
+    // one block-scoped key with no throw.
     const blocks = [blockData({id: 'ext-shared', content: 'shared'})]
     const restore = __setCompileImplForTest(async () => {
       const sharedProp = seedProperty({
@@ -606,6 +610,51 @@ describe('dynamicExtensionsExtension — type seed identity', () => {
       )
       // Same object, bound exactly once (idempotent) — no throw, no divergence.
       expect(seeds[0]?.properties?.[0]).toBe(propSeeds[0])
+    } finally {
+      restore()
+    }
+  })
+
+  it('leaves a non-reserved nested property key untouched (cross-owner reference)', async () => {
+    // A dynamic type may legitimately reference a property it does NOT own — a
+    // kernel/other-owner seedKey that is already final (not `@extension/...`).
+    // bindNestedDynamicPropertySeeds must SKIP it: without the reserved-prefix
+    // guard it would route into bindExtensionPropertySeed, which rejects a
+    // non-reserved key ('must use extensionPropertySeedKey') and drop the block.
+    // So this discriminates the skip path — it fails if the guard is removed.
+    const blocks = [blockData({id: 'ext-xowner', content: 'xowner'})]
+    const restore = __setCompileImplForTest(async () => {
+      const foreignProp = seedProperty({
+        seedKey: 'other-owner/property/foo',
+        revision: 1,
+        name: 'other:foo',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const type = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+        properties: [foreignProp],
+      })
+      return {default: typeSeedsFacet.of(type)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(typeSeedsFacet)
+      expect(seeds).toHaveLength(1)
+      expect(seeds[0]?.seedKey).toBe('ext-xowner/type/widget')
+      // The foreign property key is left exactly as authored — not block-scoped.
+      expect((seeds[0]?.properties?.[0] as unknown as {seedKey: string}).seedKey).toBe(
+        'other-owner/property/foo',
+      )
     } finally {
       restore()
     }
