@@ -111,10 +111,35 @@ export const mergeBlocksInTx = async (
   const fromPropertyChildren = (await tx.childrenOf(
     from.id, undefined,
   )).filter(child => !fromChildren.some(visible => visible.id === child.id))
+  // Destination map, built the SAME way as `fromPropertyChildren` above:
+  // raw children minus the visible ones, so a row counts as `into`'s field row
+  // only when the canonical exclusion actually hid it — which carries the flip
+  // gate, definition-ness, AND the §9 positional rule with it.
+  //
+  // Reading `referenceTargetId` off every raw child instead (the first version
+  // of this, PR #386 review) skipped all three. The column is a bare
+  // content-derived stamp: ANY child that is a whole-block ref carries one. So
+  // when `into` is itself property-subtree INTERIOR — a value row, which
+  // `hidePropertyChildren` deliberately exempts from filtering, making its
+  // children ordinary content — an ordinary `((definitionId))` child was
+  // recorded as the destination field row, and `collapseDuplicateFieldRow`
+  // then relocated `from`'s real values/comments under that unrelated block and
+  // tombstoned the genuine field row. Reachable from the "Merge into…" picker,
+  // not just raw tooling: its `searchByContent` has no property-child
+  // exclusion, so a property VALUE row matches on its own text and can be
+  // picked as the target.
+  //
+  // With the map empty for an interior `into`, the branch below adopts the
+  // `from` field row intact instead — the documented "`into` LACKS this field"
+  // case, which is the correct outcome.
+  //
+  // `intoAnchor` still walks EVERY raw child: it is the placement anchor for an
+  // adopted field row, so it wants the last physical sibling, hidden or not.
   const intoFieldByFieldId = new Map<string, BlockData>()
   let intoAnchor: string | null = null
   for (const child of await tx.childrenOf(into.id, undefined)) {
     intoAnchor = child.orderKey
+    if (intoChildren.some(visible => visible.id === child.id)) continue
     const fieldId = getPropertyFieldTargetId(child)
     if (fieldId !== undefined && !intoFieldByFieldId.has(fieldId)) {
       intoFieldByFieldId.set(fieldId, child)

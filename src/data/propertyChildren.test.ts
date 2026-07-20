@@ -609,6 +609,70 @@ describe('merge integration (§9, slice B3)', () => {
     const siblings = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
     expect(siblings.map(v => v.content).sort()).toEqual(['from-status', 'into-status'])
   })
+
+  it('an ordinary `((definitionId))` child of a property-subtree-interior `into` is not mistaken for its field row (PR #386 review)', async () => {
+    // `into` here is itself a property VALUE row (interior) — `owner`'s
+    // Status value — which has its OWN ordinary child that happens to be a
+    // block-ref to the Status definition. Per the §9 positional rule that
+    // child is ordinary content (children of a value row are never field
+    // rows), but its `reference_target_id` column is indistinguishable from
+    // a real field row's without going through the visible-children
+    // exclusion (`hidePropertyChildren`) — which is exactly what
+    // `intoFieldByFieldId` must do.
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'owner')
+    await repo.tx(tx => tx.setProperty('owner', statusSchema, 'owner-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [ownerField] = await liveFieldRows('owner')
+    const [ownerValue] = (await childrenRows(ownerField!.id)).filter(v => v.deleted === 0)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'ordinary-ref-child', workspaceId: WS, parentId: ownerValue!.id, orderKey: keyAtStart(),
+        content: `((${STATUS_FIELD_ID}))`, referenceTargetId: STATUS_FIELD_ID,
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
+
+    await repo.tx(async tx => {
+      const into = await tx.get(ownerValue!.id)
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The ordinary child was NOT treated as `into`'s field row: no value or
+    // comment got collapsed under it, and it is otherwise untouched.
+    const ordinaryChild = await sharedDb.db.get<{deleted: number; parent_id: string; content: string}>(
+      'SELECT deleted, parent_id, content FROM blocks WHERE id = ?', ['ordinary-ref-child'],
+    )
+    expect(ordinaryChild.deleted).toBe(0)
+    expect(ordinaryChild.parent_id).toBe(ownerValue!.id)
+    expect(ordinaryChild.content).toBe(`((${STATUS_FIELD_ID}))`)
+    expect((await childrenRows('ordinary-ref-child')).filter(c => c.deleted === 0)).toEqual([])
+
+    // `from`'s GENUINE field row was adopted intact under the value row
+    // (the "`into` lacks this field" branch) — NOT tombstoned-and-collapsed
+    // into the ordinary child.
+    const fromFieldRow = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', [fromField!.id],
+    )
+    expect(fromFieldRow.deleted).toBe(0)
+    expect(fromFieldRow.parent_id).toBe(ownerValue!.id)
+
+    // Its value child stayed put under the (adopted) field row — not
+    // relocated under the ordinary child.
+    const fromValueRow = await sharedDb.db.get<{deleted: number; parent_id: string}>(
+      'SELECT deleted, parent_id FROM blocks WHERE id = ?', [fromValue!.id],
+    )
+    expect(fromValueRow.deleted).toBe(0)
+    expect(fromValueRow.parent_id).toBe(fromField!.id)
+  })
 })
 
 describe('duplicate collapse preservation (§9, slice B3)', () => {
