@@ -27,7 +27,8 @@ jobs:
       - name: Install Social Publisher extension dependencies
         run: yarn --cwd agent-extensions/social-media-publisher install --frozen-lockfile
 
-      # Persist the incremental build caches across runs: tsc -b writes
+      # Persist the incremental build caches across runs: tsgo -b (the check
+      # gate's compiler; plain tsc for compile:tsc/compile:packages) writes
       # node_modules/.tmp/*.tsbuildinfo, eslint --cache writes
       # node_modules/.cache/eslint. Both live under node_modules and are wiped
       # on a cold runner. The key hashes the tsconfig/eslint config + rules +
