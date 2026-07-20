@@ -3,8 +3,9 @@
  *
  *   - `definitionSeedsFacet` registers the overrides declaration so the
  *     property reads/writes go through the strict decoder.
- *   - `pluginPrefsExtension` bundles the `typesFacet` registration
- *     for the prefs sub-block with an idle-time eager bootstrap.
+ *   - `pluginPrefsExtension` bundles the container-type registration
+ *     (a `seedType` here → `typeSeedsFacet`) for the prefs sub-block
+ *     with an idle-time eager bootstrap.
  *     The bootstrap creates the block before the user navigates to
  *     Preferences, so its existence isn't gated on opening the
  *     settings UI.
