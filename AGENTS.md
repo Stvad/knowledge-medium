@@ -14,6 +14,13 @@ delegate code to cheaper models:
 - Codex: when `spawn_agent` exposes `gpt-5.3-codex-spark`, prefer it with `xhigh` reasoning effort for concrete, self-contained, parallelizable tasks with clear file ownership or file-path evidence. Otherwise use the cheapest available suitable subagent model or omit the model override. Additional reason: subagents have a separate token budget, so this can preserve main-agent context while advancing work in parallel.
 - don't delegate the parts where a subtle mistake is expensive to catch later — architecture calls, data-layer invariants, tricky state semantics, concurrency, migrations, security-sensitive paths, final integration, final verification, or commit decisions.
 
+waiting on background subagents / tasks (they die more often than you think):
+- a USER INTERRUPTION of the main session kills in-flight background subagents too — their transcript ends with `[Request interrupted by user]` and the completion notification NEVER arrives. After any interruption, before resuming a wait, re-verify liveness of everything you were waiting on.
+- Vlad interrupts to STEER, not to cancel: an interruption is normally new input for the main thread, not a verdict on background work. After handling the steer, resume the killed background agents by default (only drop them if the new input supersedes their task).
+- never wait open-ended on a notification alone. Pair every wait with a scheduled fallback wakeup, and when the fallback fires (or after an interruption), check liveness instead of re-waiting: stat the agent's transcript/output file — a small size or minutes-stale mtime with no notification means presume dead. Confirm by tailing the transcript's last entries (bounded `tail -c`, don't read the whole JSONL) for `[Request interrupted by user]` or an error.
+- a dead agent may have made partial edits — `git status` its target files before deciding. Prefer resuming the SAME agent via SendMessage (general-purpose subagents resume with full context; Explore/Plan are one-shot and can't) over re-spawning from scratch; re-spawn only if resume fails or the agent had barely started.
+- background Bash tasks piped through `| tail`/`| head` report the PIPE's exit code — the harness "completed (exit 0)" line can mask a failing command. Capture the real status explicitly (`; echo "EXIT:$?"` before any pipe, or write to a log file and tail that) and read the output before declaring success.
+
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
 - do not print, echo, cat, grep, or otherwise reveal secrets or secret-bearing files in chat or command output
