@@ -25,9 +25,14 @@ import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 import {ChangeScope, definePropertyEditorOverride} from '@/data/api'
-import {definitionSeedsFacet, propertyEditorOverridesFacet} from '@/data/facets'
+import {definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet} from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
-import {extensionPropertySeedKey} from '@/extensions/dynamicExtensionSeeds'
+import {seedType} from '@/data/typeSeeds'
+import {
+  extensionPropertySeedKey,
+  extensionTypeSeedKey,
+  bindExtensionTypeSeed,
+} from '@/extensions/dynamicExtensionSeeds'
 
 // Test-local facet so contributions don't pollute / collide with the
 // real app facets.
@@ -435,6 +440,112 @@ describe('dynamicExtensionsExtension — property seed identity', () => {
       restore()
       errorSpy.mockRestore()
     }
+  })
+})
+
+describe('dynamicExtensionsExtension — type seed identity', () => {
+  it('binds reserved type-seed owners per block and does not share identical-source modules', async () => {
+    // The type-side analog of the property-seed identity test above: two blocks
+    // carrying identical source each get their OWN block-scoped type seedKey, so
+    // each installed extension materializes its own per-workspace backing block
+    // instead of the two installs colliding on one shared `@extension` key.
+    const blocks = [
+      blockData({id: 'ext/one', content: 'same-source'}),
+      blockData({id: 'ext-two', content: 'same-source'}),
+    ]
+    const declarations: ReturnType<typeof seedType>[] = []
+    const restore = __setCompileImplForTest(async () => {
+      const declaration = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+      })
+      declarations.push(declaration)
+      return {default: typeSeedsFacet.of(declaration)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      expect(declarations).toHaveLength(2)
+      expect(declarations[0]).not.toBe(declarations[1])
+      const runtimeSeeds = runtime.read(typeSeedsFacet)
+      expect(runtimeSeeds[0]).toBe(declarations[0])
+      expect(runtimeSeeds[1]).toBe(declarations[1])
+      expect(declarations.map(seed => seed.seedKey)).toEqual([
+        'ext%2Fone/type/widget',
+        'ext-two/type/widget',
+      ])
+      // The membership id is workspace-/block-agnostic and stays verbatim — only
+      // the seedKey (which addresses the backing block) is block-scoped.
+      expect(declarations.map(seed => seed.id)).toEqual([
+        'example-widget',
+        'example-widget',
+      ])
+    } finally {
+      restore()
+    }
+  })
+
+  it('rejects hard-coded owners so dynamic type seeds cannot collide across installs', async () => {
+    const blocks = [blockData({id: 'ext-hardcoded-type', content: 'hardcoded'})]
+    const declaration = seedType({
+      seedKey: 'example/type/widget',
+      revision: 1,
+      id: 'example-widget',
+      label: 'Example widget',
+    })
+    const restore = stubCompileByBlockId({
+      hardcoded: {default: typeSeedsFacet.of(declaration)},
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-hardcoded-type',
+        expect.objectContaining({
+          message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('binds idempotently to the same block but rejects reuse across blocks', () => {
+    // Directly exercises the WeakMap reuse guard the loader relies on: one
+    // declaration object may only ever bind to one block. Re-binding to that
+    // same block is a no-op; binding to a second block would collapse two
+    // installs onto one backing block, so it throws.
+    const declaration = seedType({
+      seedKey: extensionTypeSeedKey('widget'),
+      revision: 1,
+      id: 'example-widget',
+      label: 'Example widget',
+    })
+
+    const bound = bindExtensionTypeSeed(declaration, 'block-a')
+    expect(bound).toBe(declaration)
+    expect(bound.seedKey).toBe('block-a/type/widget')
+    // Idempotent: re-binding to the SAME block returns the object unchanged.
+    expect(bindExtensionTypeSeed(declaration, 'block-a').seedKey).toBe('block-a/type/widget')
+    // Reuse across blocks is rejected.
+    expect(() => bindExtensionTypeSeed(declaration, 'block-b')).toThrow(
+      'Dynamic type seed declaration was reused across extension blocks',
+    )
   })
 })
 

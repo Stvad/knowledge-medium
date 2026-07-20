@@ -2,10 +2,11 @@
  *
  *  Each plugin that owns a per-user pref sub-block or a per-device
  *  ui-state sub-block declares its container type and registers via one
- *  of the helpers below. The helpers pair the type registration — a code
- *  `seedType` (which materializes a per-workspace backing block), or, for a
- *  dynamic extension that has no type-seed binding yet, a plain
- *  `TypeContribution` on the static `typesFacet` (see
+ *  of the helpers below. The helpers pair the type registration — a
+ *  `seedType` (which materializes a per-workspace backing block; used by
+ *  static plugins and, via `extensionTypeSeedKey`, by dynamic extensions),
+ *  or a plain `TypeContribution` on the static `typesFacet` for a caller
+ *  that still passes a bare `defineBlockType` (see
  *  `hiddenPluginTypeContribution`) — with an idle-time eager-bootstrap
  *  `AppEffect` so the
  *  sub-block exists before the user navigates to the Preferences /
@@ -47,12 +48,14 @@ const pluginUIStateBootstrapEffect = (type: TypeContribution): AppEffect => ({
  *  containers are plumbing for the # dropdown (never offer to tag a block
  *  "Backlinks prefs") — but their chip is informative when the container block
  *  itself is on screen, so ONLY completion is hidden, forced here regardless of
- *  what the caller declared. A code `seedType` (the static plugins) is routed to
- *  `typeSeedsFacet` so it materializes a per-workspace backing block; a plain
- *  `TypeContribution` (a dynamic extension — no type-seed binding exists yet, so
- *  its container type can't be seeded) falls back to the static `typesFacet`.
- *  Forcing `hideFromCompletion` preserves a `TypeSeedDeclaration`'s
- *  `seedKey`/`revision`, so the spread result is still a valid seed. */
+ *  what the caller declared. A `seedType` is routed to `typeSeedsFacet` so it
+ *  materializes a per-workspace backing block — for static plugins, and for
+ *  dynamic extensions too (they build a block-scoped `seedKey` via
+ *  `extensionTypeSeedKey`, which the loader binds to the extension block). A
+ *  plain `TypeContribution` (a caller still passing a bare `defineBlockType`)
+ *  falls back to the static `typesFacet`. Forcing `hideFromCompletion`
+ *  preserves a `TypeSeedDeclaration`'s `seedKey`/`revision`, so the spread
+ *  result is still a valid seed. */
 const hiddenPluginTypeContribution = (
   type: TypeContribution | TypeSeedDeclaration,
   source: string,
