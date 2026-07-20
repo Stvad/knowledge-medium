@@ -33,10 +33,10 @@ export interface TypeDefinitionMetadata {
    *  provenance (deterministic-id check + `/type/` grammar). */
   readonly seedKey?: string
   // No `origin` field (unlike PropertyDefinitionMetadata) — no consumer needs it
-  // yet. When C2b adds one, do NOT reuse propertySchemaOriginForSeedKey: its
-  // `seedKey.indexOf('/property/')` returns -1 for a /type/ key, so slice(0, -1)
-  // silently truncates the owner (even 'system:kernel-data' → 'system:kernel-dat')
-  // instead of failing. Factor a grammar-aware owner split shared by both kinds.
+  // yet. If one is added, derive the owner via `seedKeyOwner` (definitionSeeds.ts):
+  // it's the grammar-agnostic split (before the first `/`) shared by both kinds, so
+  // it doesn't truncate a `/type/` owner the way `propertySchemaOriginForSeedKey`'s
+  // `/property/` slice would. `propertySchemaOriginForSeedKey` now uses it too.
 }
 
 /** The row's own code-seed key IFF it proves TYPE provenance: a valid seeded

@@ -216,7 +216,7 @@ export {
 } from '@/data/stateBlocks.js'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.
-export { defineBlockType, defineProperty, definePropertyEditorOverride, seedProperty, codecs, ChangeScope, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
+export { defineBlockType, defineProperty, definePropertyEditorOverride, seedProperty, seedType, codecs, ChangeScope, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 export type {
   BlockData,
   Codec,
@@ -228,9 +228,10 @@ export type {
   PropertySchemaEntry,
   ResolvedPropertySchema,
   TypeContribution,
+  TypeSeedDeclaration,
 } from '@/data/api'
-export { definitionSeedsFacet, propertyEditorOverridesFacet, typesFacet } from '@/data/facets.js'
-export { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+export { definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet, typesFacet } from '@/data/facets.js'
+export { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 export {
   // System UI-state props extensions might want to read/write
   isCollapsedProp,

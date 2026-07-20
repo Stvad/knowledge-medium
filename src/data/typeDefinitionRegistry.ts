@@ -1,6 +1,8 @@
 import type {AnyPropertySchema, TypeContribution} from '@/data/api'
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
 import type {TypeSeedDeclaration} from '@/data/typeSeeds'
+import {isPropertySeedDeclaration, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
+import {propertySeedKeyOf, seedKeyOwner, typeSeedKeyOutranks} from '@/data/definitionSeeds'
 
 /** A block-built type entry kept beside its durable block identity. The public
  * types map is `typeId`-keyed (the membership token written into `typesProp`);
@@ -33,13 +35,20 @@ export interface TypeDefinitionRegistrySnapshot {
    *  stale mirror on a later reorder. `getTypeBlockId` stays undefined until the
    *  duplicate is resolved — the same fail-closed stance as a contested id. */
   readonly contestedSeedKeys: ReadonlySet<string>
-  /** Membership `id`s claimed by more than one key-deduped seed this rebuild. The
-   *  authoritative id-collision set (`materializeTypeSeeds`' `uncontestedTypeSeeds`
-   *  recomputes the same thing for direct callers, but the SCHEDULED path filters
-   *  against THIS so it can't miscount after `workspaceSeeds` drops a contested-key
-   *  winner). Every seed carrying a contested id is withheld from materialization,
-   *  same fail-closed stance as `contestedSeedKeys`. */
-  readonly contestedTypeIds: ReadonlySet<string>
+  /** Each membership `id` → the seed key that WON it. A membership id claimed by
+   *  more than one key-deduped seed (two installs of the same dynamic extension, or
+   *  two plugins colliding) resolves via `typeSeedKeyOutranks`: a built-in (`system:`)
+   *  seed beats a third-party extension trying to take over a built-in id, otherwise
+   *  the LOWEST seed key wins — a deterministic, contribution-order-INDEPENDENT winner, so the
+   *  choice is stable across reloads and only ONE backing block is materialized per
+   *  id. This replaces the
+   *  earlier fail-closed stance (which withheld every contender): an id clash now
+   *  degrades gracefully to one working type. The loser never materializes; a former
+   *  winner demoted by an install change becomes a retired row (§7). This is the
+   *  authoritative winner map — `materializingTypeSeeds` / `workspaceSeeds`
+   *  materialize exactly its winners, `materializeTypeSeeds`' scheduled recheck
+   *  gates on it, and step 2's block-id binding uses it. */
+  readonly seedKeyById: ReadonlyMap<string, string>
 }
 
 export interface BuildTypeDefinitionRegistryArgs {
@@ -115,10 +124,15 @@ const indexSeedsByKey = (
 
 /** Step 1 of the registry build, shared with the pre-pin unbound view: index the
  * declared seeds by key (keep-first), then synthesize each into its publishable
- * `typesById` contribution, deduping by membership id (keep-first, fail closed).
- * Also returns the contested key/id sets and the id→key map the projected-row
- * binding step needs. Pure over the declarations — no workspace or projected
- * rows required, which is exactly why the unbound view can reuse it. */
+ * `typesById` contribution, resolving a membership-id collision via
+ * `typeSeedKeyOutranks` (a built-in `system:` seed beats a third-party hijack, else
+ * the lowest seed key). That winner is deterministic and contribution-order-
+ * independent, so a two-install / two-plugin id clash degrades gracefully to one
+ * stable working type (rather than failing closed and stranding both) and the
+ * single materialized backing block never flips on a reorder. Returns the
+ * contested-key set and the id→winning-key map (`seedKeyById`) the projected-row
+ * binding + materialization paths need. Pure over the declarations — no workspace
+ * or projected rows required, which is exactly why the unbound view can reuse it. */
 const synthesizeSeedTypes = (
   seeds: readonly TypeSeedDeclaration[],
 ): {
@@ -126,26 +140,38 @@ const synthesizeSeedTypes = (
   contestedSeedKeys: Set<string>
   typesById: Map<string, TypeContribution>
   seedKeyById: Map<string, string>
-  contestedTypeIds: Set<string>
 } => {
   const {seedsByKey, contestedSeedKeys} = indexSeedsByKey(seeds)
   const typesById = new Map<string, TypeContribution>()
   const seedKeyById = new Map<string, string>()
-  const contestedTypeIds = new Set<string>()
+  const warnedIds = new Set<string>()
   for (const seed of seedsByKey.values()) {
     const priorKey = seedKeyById.get(seed.id)
-    if (priorKey !== undefined) {
-      console.warn(
-        `[buildTypeDefinitionRegistry] duplicate type seed id ${seed.id} ` +
-        `(keys ${priorKey} + ${seed.seedKey}); keeping first`,
-      )
-      contestedTypeIds.add(seed.id)
+    if (priorKey === undefined) {
+      seedKeyById.set(seed.id, seed.seedKey)
+      typesById.set(seed.id, seedContribution(seed))
       continue
     }
-    seedKeyById.set(seed.id, seed.seedKey)
-    typesById.set(seed.id, seedContribution(seed))
+    // Same membership id claimed by another key. Winner-resolve (`typeSeedKeyOutranks`
+    // — a built-in `system:` seed beats a third-party hijack, else the lowest seed key
+    // wins) rather than fail closed. The winner is order-independent, so it (and the one
+    // materialized backing block) is stable across reloads, unlike a keep-first pick.
+    // Warn once per id: a genuine two-plugin collision is worth surfacing, and for the
+    // expected two-install case it's one benign line — mirroring the property side,
+    // which already logs per rebuild when two installs collide on a property name.
+    if (!warnedIds.has(seed.id)) {
+      console.warn(
+        `[buildTypeDefinitionRegistry] membership id ${JSON.stringify(seed.id)} is claimed by ` +
+        'multiple type seeds; resolving to the highest-priority (built-in first, else lowest seed key)',
+      )
+      warnedIds.add(seed.id)
+    }
+    if (typeSeedKeyOutranks(seed.seedKey, priorKey)) {
+      seedKeyById.set(seed.id, seed.seedKey)
+      typesById.set(seed.id, seedContribution(seed))
+    }
   }
-  return {seedsByKey, contestedSeedKeys, typesById, seedKeyById, contestedTypeIds}
+  return {seedsByKey, contestedSeedKeys, typesById, seedKeyById}
 }
 
 /** Stage-0 type view used before a workspace is pinned: the declared seeds'
@@ -188,10 +214,13 @@ export const buildUnboundTypes = (
  * a fresh uuid), and step 3 skips any id already published (`typesById.has`), so a
  * retired row can never overwrite a user row that happens to share its short id.
  *
- * Two seed-authoring/corruption hazards fail closed:
- * two seeds claiming one membership `id` (keep the first, warn — `typeSeedsFacet`
- * is a list so the collision stays observable rather than a silent last-wins
- * hijack), and binding a seed to a non-seed block — `blockIdByTypeId` is
+ * A membership-`id` collision (two key-deduped seeds claiming one `id`) is
+ * WINNER-RESOLVED, not fail-closed: a built-in (`system:`) seed outranks a third-party
+ * hijack, otherwise the lowest seed key wins (deterministic, order-independent — see
+ * `typeSeedKeyOutranks`), so a two-install / two-plugin clash degrades to one working
+ * type and one stable backing block; a warn keeps the collision observable. Only the
+ * true authoring/corruption hazard still fails closed — binding a seed to a non-seed
+ * block — where `blockIdByTypeId` is
  * populated ONLY from an actual valid mirror row (step 2), never predictively
  * from the deterministic id, since the pure registry can't prove that id is
  * unoccupied (a non-`block-type` or projector-dropped block there never appears
@@ -205,7 +234,7 @@ export const buildTypeDefinitionRegistry = (
   //    materialized row. Dedup by key then by membership id (fail closed).
   //    blockIdByTypeId is deferred to step 2, bound only from an actual valid
   //    mirror. Shared with `buildUnboundTypes` (the pre-pin view is step 1 alone).
-  const {seedsByKey, contestedSeedKeys, typesById, seedKeyById, contestedTypeIds} =
+  const {seedsByKey, contestedSeedKeys, typesById, seedKeyById} =
     synthesizeSeedTypes(args.seeds)
   const definitionsByBlockId = new Map<string, TypeDefinitionMetadata>()
   const blockIdByTypeId = new Map<string, string>()
@@ -229,17 +258,17 @@ export const buildTypeDefinitionRegistry = (
       // code-owned: retain it only in `definitionsByBlockId` (above) for
       // provenance — never republish it as a user-selectable type.
       //
-      // Refuse the binding when the seed's key OR id is CONTESTED (duplicated
-      // this rebuild). The materializer withholds contested seeds from NEW writes,
-      // but it can't delete a row created while the seed was uncontested — so an
-      // already-materialized mirror survives a later collision. Its stored content
-      // is frozen contribution-order-dependent (which duplicate first materialized),
-      // so keep `getTypeBlockId` UNDEFINED until the collision is resolved rather
-      // than pointing a link/repair consumer at that stale, order-dependent block.
+      // Bind only the id-WINNER's mirror. `seedKeyById.get(id) === seedKey` is
+      // exactly the winner test (an id-loser's key is never the winning key), so a
+      // membership-id collision binds the lowest-seed-key winner's block and leaves
+      // the losers' mirrors provenance-only — `getTypeBlockId` resolves the one
+      // stable winner instead of failing closed. A contested KEY still refuses:
+      // its keep-first winner is order-dependent and the materializer can't delete a
+      // row created while it was uncontested, so pointing a link/repair consumer at
+      // that stale block is unsafe until the duplicate key is removed.
       if (
         seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey &&
-        !contestedSeedKeys.has(declaredSeed.seedKey) &&
-        !contestedTypeIds.has(declaredSeed.id)
+        !contestedSeedKeys.has(declaredSeed.seedKey)
       ) {
         blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
       }
@@ -296,6 +325,105 @@ export const buildTypeDefinitionRegistry = (
     blockIdByTypeId,
     seedsByKey,
     contestedSeedKeys,
-    contestedTypeIds,
+    seedKeyById,
   }
+}
+
+/** The winning, materializable type seeds — one per membership id (the
+ * lowest-seed-key winner from `seedKeyById`) whose key is not itself contested.
+ * This is the set that earns a backing block: `workspaceSeeds` materializes exactly
+ * these, and nested-property auto-contribution harvests only from these (a loser
+ * install's nested property would orphan — its type never materializes to reference
+ * it). Derived purely from the snapshot, so callers agree with what the registry
+ * published and bound. */
+export const materializingTypeSeeds = (
+  snapshot: TypeDefinitionRegistrySnapshot,
+): readonly TypeSeedDeclaration[] => {
+  const winners: TypeSeedDeclaration[] = []
+  for (const winningKey of snapshot.seedKeyById.values()) {
+    if (snapshot.contestedSeedKeys.has(winningKey)) continue
+    const seed = snapshot.seedsByKey.get(winningKey)
+    if (seed) winners.push(seed)
+  }
+  return winners
+}
+
+/** Property seeds embedded in materializing type seeds' `properties` that the
+ * author did NOT contribute separately — auto-contributed so an inline-only
+ * property still materializes a backing block (otherwise its
+ * `block-type:properties` ref, written by `canonicalTypeSeedProperties`, dangles).
+ * A type's `properties` thus becomes a materialization source for the properties it
+ * OWNS, closing the "embed a property but forget to seed it" footgun without any
+ * extra author boilerplate. Deliberately scoped:
+ *   - only FULL property-seed declarations (a bare `{seedKey}` ref/stub carries no
+ *     preset/codec, so nothing to materialize) — an own-owned stub that nothing
+ *     else provides is warned, since its ref will dangle;
+ *   - only OWN-owned (the property's owner matches the type's): a type must not
+ *     materialize another owner's property, so a cross-owner reference stays a pure
+ *     ref, resolved if/when its real owner contributes it;
+ *   - deduped by seed key, and only KEYS not already explicitly contributed
+ *     (explicit wins — else `buildPropertyDefinitionRegistry`'s duplicate-key guard
+ *     throws, e.g. the `todo` pattern that both embeds AND separately seeds
+ *     `statusProp`). A CONFLICTING duplicate (same key, a DIFFERENT declaration) is
+ *     kept-first and warned — only the provider's payload materializes, so the loser
+ *     would otherwise silently advertise a name/codec its durable block lacks.
+ * Only winning type seeds are scanned (`materializingTypeSeeds`), so a loser
+ * install's nested property is never harvested. The returned seeds are appended to
+ * the `definitionSeedsFacet` set before the property registry is built, so they
+ * flow into schema resolution AND materialization by the same path as any seed. */
+export const harvestNestedPropertySeeds = (
+  snapshot: TypeDefinitionRegistrySnapshot,
+  explicitPropertySeeds: readonly AnyPropertySeedDeclaration[],
+): readonly AnyPropertySeedDeclaration[] => {
+  // `providedByKey` tracks the ONE declaration each key resolves to (explicit wins,
+  // else the first harvested winner) — the object whose payload the deterministic
+  // property block actually materializes from.
+  const providedByKey = new Map<string, AnyPropertySeedDeclaration>()
+  for (const seed of explicitPropertySeeds) providedByKey.set(seed.seedKey, seed)
+  const harvested: AnyPropertySeedDeclaration[] = []
+  // Own-owned STUB refs (valid `/property/` key, not a full declaration). Warned
+  // AFTER the full sweep and only if nothing ever provides the key — so a stub that a
+  // full declaration for the same key (any type, any order) does provide never
+  // false-warns. Keyed by property key to dedupe the warning.
+  const stubRefTypeByKey = new Map<string, string>()
+  for (const typeSeed of materializingTypeSeeds(snapshot)) {
+    if (typeSeed.properties === undefined) continue
+    const typeOwner = seedKeyOwner(typeSeed.seedKey)
+    for (const prop of typeSeed.properties) {
+      const key = propertySeedKeyOf(prop)
+      if (key === undefined) continue // not a `/property/` ref at all
+      if (seedKeyOwner(key) !== typeOwner) continue // cross-owner → pure ref, leave it
+      if (!isPropertySeedDeclaration(prop)) {
+        stubRefTypeByKey.set(key, typeSeed.seedKey)
+        continue
+      }
+      const provider = providedByKey.get(key)
+      if (provider === undefined) {
+        providedByKey.set(key, prop)
+        harvested.push(prop)
+      } else if (provider !== prop) {
+        // The key is already provided by a DIFFERENT declaration (an explicit seed or
+        // an earlier winner). Only the provider's payload materializes into the shared
+        // deterministic block, so this later declaration would advertise a name/codec
+        // its durable definition doesn't carry. The property registry rejects a
+        // duplicate key outright; harvest can't throw (one bad contribution mustn't
+        // abort the whole property registry), so keep the provider and surface the
+        // conflict. (An IDENTICAL object — the `todo` embed+seed pattern — is silent.)
+        console.warn(
+          `[harvestNestedPropertySeeds] type seed ${JSON.stringify(typeSeed.seedKey)} inlines property ` +
+          `${JSON.stringify(key)} that is already declared elsewhere (an explicit seed or an earlier ` +
+          'type); keeping the existing declaration — its durable definition is what the block materializes',
+        )
+      }
+    }
+  }
+  for (const [key, typeSeedKey] of stubRefTypeByKey) {
+    if (providedByKey.has(key)) continue // a full declaration provides it after all
+    console.warn(
+      `[harvestNestedPropertySeeds] type seed ${JSON.stringify(typeSeedKey)} references ` +
+      `its own property ${JSON.stringify(key)} that is neither a full property-seed declaration ` +
+      'nor contributed separately; its block-type:properties ref will dangle until it is seeded',
+    )
+  }
+  return harvested
 }

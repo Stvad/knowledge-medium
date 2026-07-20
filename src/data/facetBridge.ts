@@ -37,7 +37,11 @@ import {
   buildUnboundPropertySchemas,
 } from '@/data/propertyDefinitionRegistry'
 import type {TypeDefinitionRegistrySnapshot} from '@/data/typeDefinitionRegistry'
-import {buildTypeDefinitionRegistry, buildUnboundTypes} from '@/data/typeDefinitionRegistry'
+import {
+  buildTypeDefinitionRegistry,
+  buildUnboundTypes,
+  harvestNestedPropertySeeds,
+} from '@/data/typeDefinitionRegistry'
 import type {
   Facet,
   FacetRuntime,
@@ -404,7 +408,22 @@ export class FacetBridge {
           const overlayTypes = typeDefinitions?.typesById ?? buildUnboundTypes(seedTypes)
           const types = mergeCodeAndRegistryTypes(codeTypes, overlayTypes)
           const legacySchemas = liftTypeSchemas(types)
-          const seeds = rt.read(definitionSeedsFacet)
+          const explicitPropertySeeds = rt.read(definitionSeedsFacet)
+          // Auto-contribute the property seeds a type embedded in its `properties` but
+          // the author didn't seed separately (own-owned only) so an inline-only
+          // property still materializes a backing block instead of dangling — see
+          // `harvestNestedPropertySeeds`. Scoped to the pinned branch: harvest needs
+          // the winner set (`typeDefinitions`), and nothing materializes pre-pin. The
+          // harvested seeds flow through the SAME property-registry build below, so
+          // they reach schema resolution AND `workspaceSeeds` materialization for free.
+          const harvested = typeDefinitions
+            ? harvestNestedPropertySeeds(typeDefinitions, explicitPropertySeeds)
+            : []
+          // Avoid copying the (potentially large) explicit set on every rebuild when
+          // no type carries an own-owned inline property — the common case.
+          const seeds = harvested.length > 0
+            ? [...explicitPropertySeeds, ...harvested]
+            : explicitPropertySeeds
           const propertySeedNameCounts = new Map<string, number>()
           for (const seed of seeds) {
             propertySeedNameCounts.set(
