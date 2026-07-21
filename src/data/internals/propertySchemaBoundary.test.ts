@@ -5,12 +5,12 @@ import {
   ChangeScope,
   PropertySchemaIdentityError,
   codecs,
-  defineBlockType,
   defineProperty,
+  seedType,
 } from '@/data/api'
 import {
   definitionSeedsFacet,
-  typesFacet,
+  typeSeedsFacet,
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
@@ -128,8 +128,8 @@ describe('typed property identity boundary', () => {
       installKernelRuntime: false,
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
-    repo.setRuntimeContributions(typesFacet, 'test-pre-pin-legacy', [
-      defineBlockType({id: 'test:pre-pin-legacy', properties: [legacyLookalike]}),
+    repo.setRuntimeContributions(typeSeedsFacet, 'test-pre-pin-legacy', [
+      seedType({seedKey: 'test/type/pre-pin-legacy', revision: 1, id: 'test:pre-pin-legacy', label: 'Pre pin legacy', properties: [legacyLookalike]}),
     ])
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-pre-pin-seed', [shadowed])
     await repo.tx(
@@ -225,7 +225,13 @@ describe('typed property identity boundary', () => {
     expect(repo.block('target').get(unregistered)).toBe('unregistered-value')
   })
 
-  it('rejects an exact ambient PropertyHandle without a seed declaration', async () => {
+  it('rejects a PropertyHandle embedded in a type but never declared as a seed', async () => {
+    // The handle is embedded in a type's `properties` but its seedKey is owned by
+    // `system:test-plugin` while the TYPE's seedKey is owned by `test` — cross-owner,
+    // so nested-property harvest deliberately does NOT contribute it, and (with the
+    // type-lift gone) it never enters the property registry. Its seedKey is therefore
+    // absent from the workspace snapshot, so the identity boundary rejects writes
+    // as `definition-unavailable` rather than interpreting a cell it can't identify.
     const handle = seedProperty({
       seedKey: 'system:test-plugin/property/ambient-handle-only',
       revision: 1,
@@ -241,8 +247,8 @@ describe('typed property identity boundary', () => {
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([]))
     repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(typesFacet, 'test-ambient-handle-only', [
-      defineBlockType({id: 'test:ambient-handle-only', properties: [handle]}),
+    repo.setRuntimeContributions(typeSeedsFacet, 'test-ambient-handle-only', [
+      seedType({seedKey: 'test/type/ambient-handle-only', revision: 1, id: 'test:ambient-handle-only', label: 'Ambient handle only', properties: [handle]}),
     ])
     await repo.tx(
       tx => tx.create({
@@ -255,7 +261,8 @@ describe('typed property identity boundary', () => {
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(repo.propertySchemas.get(handle.name)).toBe(handle)
+    // The undeclared handle never enters the ambient schema map (no lift, no harvest).
+    expect(repo.propertySchemas.has(handle.name)).toBe(false)
     expect(repo.propertySchemaResolverFor(WS).resolveBoundary(handle)).toEqual({
       status: 'identity-unavailable',
       reason: 'definition-unavailable',
@@ -295,8 +302,8 @@ describe('typed property identity boundary', () => {
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([]))
     repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(typesFacet, 'test-renamed-seed-legacy', [
-      defineBlockType({id: 'test:renamed-seed-legacy', properties: [legacy]}),
+    repo.setRuntimeContributions(typeSeedsFacet, 'test-renamed-seed-legacy', [
+      seedType({seedKey: 'test/type/renamed-seed-legacy', revision: 1, id: 'test:renamed-seed-legacy', label: 'Renamed seed legacy', properties: [legacy]}),
     ])
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-renamed-seed', [declared])
     repo.setRuntimeContributions(
@@ -798,9 +805,9 @@ describe('typed property identity boundary', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     repo.setRuntimeContributions(
-      typesFacet,
+      typeSeedsFacet,
       'test-cross-workspace-registered-legacy',
-      [defineBlockType({id: 'test:cross-workspace-registered-legacy', properties: [registeredLegacy]})],
+      [seedType({seedKey: 'test/type/cross-workspace-registered-legacy', revision: 1, id: 'test:cross-workspace-registered-legacy', label: 'Cross workspace registered legacy', properties: [registeredLegacy]})],
     )
     // A row in `ws-other`, a workspace that is neither active nor the retained
     // previous one — its projected definitions are not loaded. A code-owned seed

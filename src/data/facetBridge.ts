@@ -60,60 +60,17 @@ import {
   queriesFacet,
   sameTxProcessorsFacet,
   typeSeedsFacet,
-  typesFacet,
   valuePresetCoresFacet,
   valuePresetPresentationsFacet,
   workspaceBackfillsFacet,
   type WorkspaceBackfill,
 } from './facets'
-import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjection'
+import { changedRefSchemaNames } from './internals/refProjection'
 import {
   changedPropertyDefinitions,
   type PropertyDefinitionChange,
 } from './internals/propertyDefinitionMigrations'
 import {readValuePresetRegistry} from './valuePresetRegistry'
-
-/** Merge the code-owned `typesFacet` contributions with an OVERLAY of block-built
- *  + seed type contributions — either the workspace-scoped registry's `typesById`
- *  OR (before a pin) the unbound seed synthesis (`buildUnboundTypes`). Taking the
- *  overlay map directly (rather than the registry) mirrors the property side's
- *  `propertyDefinitions?.schemas ?? buildUnboundPropertySchemas(...)` shape and
- *  keeps this helper decoupled from the snapshot type. Overlay entries win a
- *  same-`id` collision and are appended after the code entries — reproducing the
- *  fold order + last-wins precedence of the pre-C3b single `typesFacet` (static
- *  code contributions first; the `userTypesProjector`'s `'user-data'` bucket
- *  appended, so a user row's id shadowed a code id). Post-C4a the kernel type
- *  seeds live in the overlay, not `codeTypes` (which now holds only PLUGIN code
- *  types + not-yet-migrated types), so a completion/lift name-collision between a
- *  plugin code type and a kernel/seed type resolves last-wins toward the overlay —
- *  the same "user-data wins" direction as before. The union stays disjoint by id
- *  today, so the collision warn is the tripwire for a HALF-done
- *  `typesFacet.of → seedType` conversion where a plugin code type and its seed
- *  successor both momentarily exist. */
-export const mergeCodeAndRegistryTypes = (
-  codeTypes: ReadonlyMap<string, TypeContribution>,
-  overlay: ReadonlyMap<string, TypeContribution> | null,
-): ReadonlyMap<string, TypeContribution> => {
-  if (!overlay || overlay.size === 0) return codeTypes
-  const merged = new Map(codeTypes)
-  for (const [id, contribution] of overlay) {
-    // Restore the diagnostic the pre-C3b single `keyedMapFacet` fold emitted on a
-    // duplicate key: a raw `.set()` here would silently overwrite. The overlay's
-    // ids (kernel seeds + user rows) and `codeTypes`' ids (plugin slugs) are
-    // disjoint today — this is the C4 tripwire for a half-done
-    // `typesFacet.of → seedType` conversion where a code type and its seed
-    // successor both momentarily exist.
-    if (merged.has(id)) {
-      console.warn(
-        `[facetBridge] type id "${id}" is claimed by both a code contribution and ` +
-        'a block-built/seed definition; the registry entry wins (last-wins, matching ' +
-        'the pre-C3b typesFacet fold)',
-      )
-    }
-    merged.set(id, contribution)
-  }
-  return merged
-}
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
  *  the runtime-contribution path can run only the steps whose inputs
@@ -377,16 +334,16 @@ export class FacetBridge {
         },
       },
       {
-        // Owns the merged `repo.types` + `propertySchemas`. Types: fold the
-        // block-built rows (`projectedTypeDefinitionsFacet`) + declared type
-        // seeds (`typeSeedsFacet`) into the declaration-authoritative registry,
-        // then merge with the code-owned `typesFacet` contributions. Schemas:
-        // build the property registry, seeded by the transitional type-lift
-        // (Slice C removes the lift). The former direct `propertySchemasFacet`
-        // input was removed in B′.
+        // Owns `repo.types` + `propertySchemas`. Types: fold the block-built
+        // rows (`projectedTypeDefinitionsFacet`) + declared type seeds
+        // (`typeSeedsFacet`) into the declaration-authoritative registry — the
+        // sole type source now that the static `typesFacet` registration path
+        // is gone (Slice D). Schemas: build the property registry from the
+        // property seeds + block-built rows; type-embedded properties reach it
+        // as seeds (explicit or harvested — `harvestNestedPropertySeeds`), not
+        // via the retired type-lift.
         id: 'propertySchemas',
         inputs: [
-          typesFacet as Facet<unknown, unknown>,
           projectedTypeDefinitionsFacet as Facet<unknown, unknown>,
           typeSeedsFacet as Facet<unknown, unknown>,
           projectedPropertyDefinitionsFacet as Facet<unknown, unknown>,
@@ -396,7 +353,6 @@ export class FacetBridge {
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
           const previousPropertyDefinitions = target.getPropertyDefinitions()
-          const codeTypes = rt.read(typesFacet)
           const seedTypes = rt.read(typeSeedsFacet)
           // The type-definition registry needs a workspace to scope its rows;
           // before a pin it stays null (identity resolution / `getTypeBlockId` is
@@ -411,17 +367,14 @@ export class FacetBridge {
               seeds: seedTypes,
             })
             : null
-          // Post-C4a the kernel/plugin type seeds live in `typeSeedsFacet`, not
-          // the static `typesFacet`, so a pre-pin `repo.types` would otherwise be
-          // missing every seeded type. Mirror `buildUnboundPropertySchemas` (the
-          // `X?.field ?? buildUnbound(...)` shape used for schemas just below):
-          // fall back to the unbound seed synthesis so seeded types are readable
-          // before a workspace pins the registry (and in the runtime-install→
-          // first-pin window, where `repo._types` is already facet-driven, not the
-          // static `KERNEL_TYPES` fallback).
-          const overlayTypes = typeDefinitions?.typesById ?? buildUnboundTypes(seedTypes)
-          const types = mergeCodeAndRegistryTypes(codeTypes, overlayTypes)
-          const legacySchemas = liftTypeSchemas(types)
+          // The kernel/plugin type seeds live in `typeSeedsFacet`. Mirror
+          // `buildUnboundPropertySchemas` (the `X?.field ?? buildUnbound(...)`
+          // shape used for schemas just below): before a workspace pins the
+          // registry (and in the runtime-install→first-pin window, where
+          // `repo._types` is already facet-driven, not the static `KERNEL_TYPES`
+          // fallback) fall back to the unbound seed synthesis so seeded types
+          // are still readable.
+          const types = typeDefinitions?.typesById ?? buildUnboundTypes(seedTypes)
           const explicitPropertySeeds = rt.read(definitionSeedsFacet)
           // Auto-contribute the property seeds a type embedded in its `properties` but
           // the author didn't seed separately (own-owned only) so an inline-only
@@ -449,13 +402,12 @@ export class FacetBridge {
             && this.canBuildPropertyDefinitionsForWorkspace(this.activeWorkspaceId)
             ? buildPropertyDefinitionRegistry({
               workspaceId: this.activeWorkspaceId,
-              legacySchemas,
               projectedDefinitions: rt.read(projectedPropertyDefinitionsFacet),
               seeds,
             })
             : null
           const propertySchemas = propertyDefinitions?.schemas
-            ?? buildUnboundPropertySchemas(legacySchemas, seeds)
+            ?? buildUnboundPropertySchemas(seeds)
           target.applyTypesAndSchemas(
             types,
             propertySchemas,

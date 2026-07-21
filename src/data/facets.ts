@@ -20,7 +20,6 @@ import type {
   AnyValuePresetPresentation,
   ChangeScope,
   Tx,
-  TypeContribution,
 } from '@/data/api'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
 import type {ProjectedTypeDefinition} from '@/data/typeDefinitionRegistry'
@@ -158,8 +157,6 @@ export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedProperty
   'data.projected-property-definitions',
   definition => definition.metadata.fieldId,
 )
-
-export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
 
 /** Block-built type definitions keyed by durable block id — the type-side
  * twin of `projectedPropertyDefinitionsFacet`. The `userTypesProjector`

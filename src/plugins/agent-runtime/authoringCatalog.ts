@@ -1,5 +1,7 @@
+import { extensionApiCatalog } from '@/extensions/apiCatalog.js'
+
 export type AuthoringCatalogSource =
-  | 'generated-api'
+  | 'curated-api'
   | 'generated-module-glob'
   | 'html-importmap'
   | 'html-preload'
@@ -10,6 +12,10 @@ export interface AuthoringModuleSummary {
   category: string
   description: string
   exports?: string[]
+  /** Type-only exports, for curated-API modules. Surfaced for discovery and
+   *  searched by the `--modules <term>` filter so a type-name lookup (e.g.
+   *  `PropertyEditorProps`) finds the module that owns it. */
+  types?: string[]
   source: AuthoringCatalogSource
   safeForExtensions?: boolean
 }
@@ -83,11 +89,6 @@ export interface AuthoringCatalogFilters {
   omitDiscoverableModules?: boolean
 }
 
-interface ApiSurfaceLike {
-  module: string
-  exports: string[]
-}
-
 type RuntimeModule = Record<string, unknown>
 
 const internalModuleIndex = import.meta.glob([
@@ -120,15 +121,14 @@ const storageGuide: AuthoringStorageGuide = {
       id: 'user-prefs-config',
       when: 'Per-user plugin settings, defaults, and lightweight sync checkpoints.',
       use: 'Define a seeded block type for the plugin via `seedType({seedKey: extensionTypeSeedKey(\'prefs\'), revision: 1, id, label, properties})` and register it through `typeSeedsFacet`. Then read/write the per-plugin sub-block via `getPluginPrefsBlock(repo, workspaceId, user, type)`. Each plugin gets its own row under user-prefs, so unrelated plugins\' settings can\'t clobber each other.',
-      modules: ['@/extensions/api.js'],
+      modules: ['@/data/api/index.js', '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js', '@/data/stateBlocks.js'],
       example: {
         label: 'Define a prefs type and read/write a setting',
         code: [
-          "import {",
-          "  ChangeScope, seedType, definitionSeedsFacet,",
-          "  extensionPropertySeedKey, extensionTypeSeedKey,",
-          "  getPluginPrefsBlock, seedProperty, typeSeedsFacet,",
-          "} from '@/extensions/api.js'",
+          "import { ChangeScope, seedProperty, seedType } from '@/data/api/index.js'",
+          "import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'",
+          "import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'",
+          "import { getPluginPrefsBlock } from '@/data/stateBlocks.js'",
           "",
           "const lastSyncProp = seedProperty({",
           "  seedKey: extensionPropertySeedKey('last-synced-at'),",
@@ -173,11 +173,12 @@ const storageGuide: AuthoringStorageGuide = {
       id: 'plugin-root-singleton',
       when: 'The plugin needs a stable workspace-scoped root block — e.g. a "Readwise Library" page that all imported books/highlights live under.',
       use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)`. Same inputs always produce the same id, so re-running the install (or running on a fresh device) lands on the same block and your upserts stay idempotent. Use the same helper for per-record ids by passing a key like `book:${externalId}`.',
-      modules: ['@/extensions/api.js'],
+      modules: ['@/data/api/index.js', '@/extensions/pluginIds.js'],
       example: {
         label: 'Deterministic id for a plugin root block',
         code: [
-          "import { ChangeScope, pluginBlockId } from '@/extensions/api.js'",
+          "import { ChangeScope } from '@/data/api/index.js'",
+          "import { pluginBlockId } from '@/extensions/pluginIds.js'",
           "",
           "// Generate ONE namespace UUID for your plugin and never change it.",
           "// (Run `crypto.randomUUID()` in any browser console.)",
@@ -207,24 +208,32 @@ const storageGuide: AuthoringStorageGuide = {
       id: 'workspace-config-block',
       when: 'Workspace-visible plugin configuration or shared sync state.',
       use: 'Use a deterministic id (see `plugin-root-singleton`) for a config block, then store config as properties and child blocks. Prefer this over user-prefs when the config should sync across all of the user\'s devices and be visible to other workspace members.',
-      modules: ['@/extensions/api.js'],
+      modules: ['@/data/api/index.js', '@/extensions/pluginIds.js'],
     },
     {
       id: 'settings-via-property-editor-override',
       when: 'Settings / configuration UI for a plugin — what a user sees when they want to change how the plugin behaves. Preferred over a modal dialog: configuration belongs *with* the block whose properties it edits, syncs naturally, and is browsable / scriptable like any other block.',
       use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
-      modules: ['@/extensions/api.js', '@/utils/navigation.js'],
+      modules: [
+        '@/extensions/core.js', '@/shortcuts/types.js', '@/data/api/index.js',
+        '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js',
+        '@/data/stateBlocks.js', '@/data/properties.js', '@/utils/navigation.js',
+      ],
       example: {
         label: 'Custom settings UI as a property-editor override on the prefs block',
         code: [
+          "import { actionsFacet } from '@/extensions/core.js'",
+          "import { ActionContextTypes } from '@/shortcuts/types.js'",
           "import {",
-          "  actionsFacet, ActionContextTypes, ChangeScope,",
-          "  seedType, definitionSeedsFacet, definePropertyEditorOverride,",
-          "  extensionPropertySeedKey, extensionTypeSeedKey,",
-          "  getPluginPrefsBlock, propertyEditorOverridesFacet,",
-          "  seedProperty, showPropertiesProp, typeSeedsFacet,",
+          "  ChangeScope, definePropertyEditorOverride, seedProperty, seedType,",
           "  type PropertyEditorProps,",
-          "} from '@/extensions/api.js'",
+          "} from '@/data/api/index.js'",
+          "import {",
+          "  definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet,",
+          "} from '@/data/facets.js'",
+          "import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'",
+          "import { getPluginPrefsBlock } from '@/data/stateBlocks.js'",
+          "import { showPropertiesProp } from '@/data/properties.js'",
           "import { navigate } from '@/utils/navigation.js'",
           "",
           "// 1. Each setting is its own typed property of the prefs block.",
@@ -312,13 +321,13 @@ const storageGuide: AuthoringStorageGuide = {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
       use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …) and either upsert by id-lookup or derive the block id from the external id with `pluginBlockId(workspaceId, NAMESPACE, `book:${id}`)`. Either way, the second sync of the same record must update the existing block, not create a duplicate.',
-      modules: ['@/extensions/api.js'],
+      modules: ['@/data/api/index.js', '@/data/orderKey.js', '@/extensions/pluginIds.js'],
       example: {
         label: 'Tx mutation primitives — create/read/update inside a transaction',
         code: [
-          "import {",
-          "  ChangeScope, keyAtEnd, keysBetween, pluginBlockId,",
-          "} from '@/extensions/api.js'",
+          "import { ChangeScope } from '@/data/api/index.js'",
+          "import { keyAtEnd, keysBetween } from '@/data/orderKey.js'",
+          "import { pluginBlockId } from '@/extensions/pluginIds.js'",
           "",
           "// Inside `await repo.tx(async tx => { ... }, {scope, description})`:",
           "//",
@@ -392,10 +401,10 @@ const storageGuide: AuthoringStorageGuide = {
 const settingsDialogExample: AuthoringExample = {
   label: 'Setup dialog mounted via appMountsFacet; visibility is a typed module store flipped by an action',
   code: [
-    "import {",
-    "  actionsFacet, appMountsFacet, ActionContextTypes,",
-    "  useRepo, showError, showSuccess,",
-    "} from '@/extensions/api.js'",
+    "import { actionsFacet, appMountsFacet } from '@/extensions/core.js'",
+    "import { ActionContextTypes } from '@/shortcuts/types.js'",
+    "import { useRepo } from '@/context/repo.js'",
+    "import { showError, showSuccess } from '@/utils/toast.js'",
     "import {",
     "  Dialog, DialogContent, DialogDescription, DialogFooter,",
     "  DialogHeader, DialogTitle,",
@@ -497,10 +506,10 @@ const openDialogExample: AuthoringExample = {
     "// reactive subscription), `openDialog(Component, props)` returns",
     "// a promise that resolves with the user's choice. The dialog",
     "// component receives `resolve(value)` and `cancel()` as props.",
-    "import {",
-    "  actionsFacet, ActionContextTypes, openDialog,",
-    "  showError, showSuccess,",
-    "} from '@/extensions/api.js'",
+    "import { actionsFacet } from '@/extensions/core.js'",
+    "import { ActionContextTypes } from '@/shortcuts/types.js'",
+    "import { openDialog } from '@/utils/dialogs.js'",
+    "import { showError, showSuccess } from '@/utils/toast.js'",
     "import {",
     "  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,",
     "} from '@/components/ui/dialog.js'",
@@ -561,7 +570,19 @@ const guides: AuthoringGuide[] = [
       'For *background* sync (poll a webhook / poll on an interval) use `appEffectsFacet.of({id, start: ({repo}) => { ... return cleanup })`. Manual sync via an action is enough for most plugins — only reach for an effect when the data source itself pushes. The effect object must be a STABLE reference: define it once at module scope (not inline in a function-valued extension), and export your extension as an array, not a function — a fresh `{id, start}` every resolve reads as "code changed" and silently restarts the effect (dropping its connection / interval) on every unrelated extension toggle.',
     ],
     preferredModules: [
-      '@/extensions/api.js',
+      '@/extensions/core.js',
+      '@/shortcuts/types.js',
+      // Data primitives the steps require (seedProperty, definitionSeedsFacet,
+      // getPluginPrefsBlock, pluginBlockId, extensionPropertySeedKey). In brief
+      // mode preferredModules is the ONLY module hint, so these must be here.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/data/stateBlocks.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/extensions/pluginIds.js',
+      '@/context/repo.js',
+      '@/utils/dialogs.js',
+      '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
       '@/components/ui/button.js',
@@ -575,7 +596,7 @@ const guides: AuthoringGuide[] = [
       // modules, so TS-aware editors resolve extension imports with
       // the same signatures the app build checks.
       'pnpm agent types agent-extensions/kernel-types',
-      'pnpm agent types --module "@/extensions/api.js"',
+      'pnpm agent types --module "@/data/api/index.js"',
       // Convention: extension source files live under `agent-extensions/`
       // at the repo root. The matrix-chat-client + canvas-layout
       // extensions are there as references.
@@ -616,7 +637,17 @@ const guides: AuthoringGuide[] = [
       'Save non-secret values via `getPluginPrefsBlock`; save credentials to `localStorage`.',
     ],
     preferredModules: [
-      '@/extensions/api.js',
+      '@/extensions/core.js',
+      '@/shortcuts/types.js',
+      // The property-editor-override path + saving non-secret settings need
+      // these (definePropertyEditorOverride, propertyEditorOverridesFacet,
+      // getPluginPrefsBlock); brief mode surfaces only preferredModules.
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/data/stateBlocks.js',
+      '@/context/repo.js',
+      '@/utils/dialogs.js',
+      '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
       '@/components/ui/button.js',
@@ -646,13 +677,19 @@ const guides: AuthoringGuide[] = [
       'For plugin-owned singleton blocks (e.g. import roots), derive the id deterministically via `pluginBlockId(workspaceId, NS, key)` so re-installs land on the same block.',
       'Store large or user-visible imported data as child/content blocks.',
     ],
-    preferredModules: ['@/extensions/api.js'],
+    preferredModules: [
+      '@/data/api/index.js',
+      '@/data/facets.js',
+      '@/extensions/dynamicExtensionSeeds.js',
+      '@/data/stateBlocks.js',
+      '@/extensions/pluginIds.js',
+    ],
     relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [
       'pnpm agent describe-runtime --storage',
       'pnpm agent describe-runtime --facets data.definition-seeds',
       'pnpm agent types agent-extensions/kernel-types',
-      'pnpm agent types --module "@/extensions/api.js"',
+      'pnpm agent types --module "@/data/api/index.js"',
     ],
     examples: [
       storageGuide.patterns.find(p => p.id === 'user-prefs-config')!.example!,
@@ -684,7 +721,7 @@ const matchesTerms = (
 }
 
 const sourcePriority = (source: AuthoringCatalogSource): number => {
-  if (source === 'generated-api') return 4
+  if (source === 'curated-api') return 4
   if (source === 'generated-module-glob') return 3
   if (source === 'html-entry') return 2
   if (source === 'html-preload') return 1
@@ -704,7 +741,6 @@ const basename = (path: string): string =>
   stripExtension(path).split('/').at(-1) ?? path
 
 const categoryForPath = (importPath: string): string => {
-  if (importPath === '@/extensions/api.js') return 'public-api'
   if (importPath.includes('/components/ui/')) return 'ui-component'
   if (importPath.includes('/components/')) return 'component'
   if (importPath.includes('/extensions/')) return 'extension-system'
@@ -714,10 +750,7 @@ const categoryForPath = (importPath: string): string => {
   return 'module'
 }
 
-const generatedDescription = (importPath: string, exports: string[] | undefined): string => {
-  if (importPath === '@/extensions/api.js') {
-    return 'Generated from the live public extension API barrel.'
-  }
+const generatedDescription = (exports: string[] | undefined): string => {
   if (exports && exports.length > 0) {
     return `Generated from the module graph; runtime exports: ${exports.slice(0, 8).join(', ')}.`
   }
@@ -736,45 +769,46 @@ const exportNames = (module: RuntimeModule | undefined): string[] | undefined =>
   return Object.keys(module).sort()
 }
 
-const generatedExportMap = (apiSurface: ApiSurfaceLike): Map<string, string[]> => {
-  const map = new Map<string, string[]>([
-    ['@/extensions/api.js', apiSurface.exports],
-  ])
-
+const eagerUiExportMap = (): Map<string, string[]> => {
+  const map = new Map<string, string[]>()
   for (const [path, module] of Object.entries(eagerUiModules)) {
     map.set(toImportPath(path), exportNames(module) ?? [])
   }
-
   return map
 }
 
-const generatedModules = (apiSurface: ApiSurfaceLike): AuthoringModuleSummary[] => {
-  const exportsByImportPath = generatedExportMap(apiSurface)
-  const modules = Object.keys(internalModuleIndex).map(path => {
+// The curated public extension API (`apiCatalog.ts`) surfaced as authoring
+// modules: real importPath, curated category + description, and the blessed
+// runtime export names. These outrank the raw module-glob entries (see
+// `sourcePriority`), so where both describe the same path the curated
+// description/category wins on merge; curated-only paths (`@/facets/*`,
+// `@/context/*`, `@/paste/*`, `@/types.js`) are added outright.
+const curatedApiModules = (): AuthoringModuleSummary[] =>
+  extensionApiCatalog.map(group => ({
+    importPath: group.importPath,
+    category: group.category,
+    description: group.description,
+    ...(group.exports.length > 0 ? {exports: group.exports} : {}),
+    ...(group.types.length > 0 ? {types: group.types} : {}),
+    source: 'curated-api',
+    safeForExtensions: true,
+  } satisfies AuthoringModuleSummary))
+
+const generatedModules = (): AuthoringModuleSummary[] => {
+  const eagerExports = eagerUiExportMap()
+  const globModules = Object.keys(internalModuleIndex).map(path => {
     const importPath = toImportPath(path)
-    const exports = exportsByImportPath.get(importPath)
+    const exports = eagerExports.get(importPath)
     return {
       importPath,
       category: categoryForPath(importPath),
-      description: generatedDescription(importPath, exports),
+      description: generatedDescription(exports),
       ...(exports ? {exports} : {}),
-      source: importPath === '@/extensions/api.js' ? 'generated-api' : 'generated-module-glob',
+      source: 'generated-module-glob',
       safeForExtensions: true,
     } satisfies AuthoringModuleSummary
   })
-
-  if (!modules.some(module => module.importPath === '@/extensions/api.js')) {
-    modules.push({
-      importPath: '@/extensions/api.js',
-      category: 'public-api',
-      description: generatedDescription('@/extensions/api.js', apiSurface.exports),
-      exports: apiSurface.exports,
-      source: 'generated-api',
-      safeForExtensions: true,
-    })
-  }
-
-  return modules
+  return [...globModules, ...curatedApiModules()]
 }
 
 const isComponentExport = (name: string): boolean =>
@@ -911,17 +945,16 @@ const mergeModules = (modules: AuthoringModuleSummary[]): AuthoringModuleSummary
 }
 
 export const describeAuthoringCatalog = (
-  apiSurface: ApiSurfaceLike,
   filters: AuthoringCatalogFilters = {},
   document?: Document,
 ): AuthoringCatalog => {
   const modules = filters.omitDiscoverableModules
     ? []
     : mergeModules([
-      ...generatedModules(apiSurface),
+      ...generatedModules(),
       ...documentModules(document),
     ]).filter(module =>
-      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
+      matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports, module.types),
     )
 
   const components = filters.omitDiscoverableModules

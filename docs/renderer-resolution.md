@@ -508,7 +508,7 @@ If/when imported videos are stamped with `'video'` in `typesProp` ([docs/type-sy
 ### 5. Update example extensions and exported API surface
 
 - [src/extensions/exampleExtensions.ts](src/extensions/exampleExtensions.ts) keeps using `blockRenderersFacet` for the `rendererProp`-addressable case. Comments updated to clarify that contributing only to `blockRenderersFacet` registers the renderer for `rendererProp` lookup but not for predicate dispatch — to participate in dispatch, also contribute to `rendererSlotsFacet`.
-- Whatever `@/extensions/api.js` re-exports for example/extension authors (used in the inline source strings) gains `rendererSlotsFacet`.
+- Whatever the curated extension-API catalog (`src/extensions/apiCatalog.ts`) surfaces for example/extension authors gains `rendererSlotsFacet`; the inline source strings import it directly from its owning module (the `@/extensions/api.js` re-export barrel has been retired in favour of direct real-path imports).
 
 ### 6. Tighten `BlockRenderer`, drop the transitional fall-through
 

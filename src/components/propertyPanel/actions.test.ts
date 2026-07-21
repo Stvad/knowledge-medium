@@ -77,7 +77,6 @@ describe('property panel action visibility guards', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map([[schema.name, schema]]),
       projectedDefinitions: new Map([[hidden.fieldId, {metadata: hidden}]]),
       seeds: [],
     })
@@ -112,7 +111,6 @@ describe('property panel action visibility guards', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map([[hidden.fieldId, {metadata: hidden}]]),
       seeds: [],
     })
@@ -155,7 +153,6 @@ describe('property panel action visibility guards', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map([[
         metadataOnly.fieldId,
         {metadata: metadataOnly},

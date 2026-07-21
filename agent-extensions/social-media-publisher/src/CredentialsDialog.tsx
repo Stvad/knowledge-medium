@@ -1,7 +1,7 @@
 import {
   definePropertyEditorOverride,
   type PropertyEditorProps,
-} from '@/extensions/api.js'
+} from '@/data/api/index.js'
 import type {Block} from '@/data/block.js'
 import {openDialog, type DialogContextProps} from '@/utils/dialogs.js'
 import {showInfo, showSuccess} from '@/utils/toast.js'

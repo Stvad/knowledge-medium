@@ -154,7 +154,7 @@ export AGENT_RUNTIME_PROFILE=chrome-dev
 
 ## Type-vending for extension authors
 
-When you're authoring an extension that imports from Knowledge Medium modules (`@/extensions/api.js`, `@/data/api`, `@/components/ui/button.js`, etc.), `kmagent types` writes the app's compiled TypeScript declaration tree so type-aware editors resolve those imports with real signatures:
+When you're authoring an extension that imports from Knowledge Medium modules (`@/extensions/core.js`, `@/data/api/index.js`, `@/components/ui/button.js`, etc.), `kmagent types` writes the app's compiled TypeScript declaration tree so type-aware editors resolve those imports with real signatures:
 
 ```bash
 kmagent types agent-extensions/kernel-types
@@ -179,7 +179,7 @@ Re-run with `--force` after updating the app or CLI.
 For quick inspection, print one compiled module declaration to stdout:
 
 ```bash
-kmagent types --module '@/extensions/api.js'
+kmagent types --module '@/data/api/index.js'
 kmagent types --module '@/data/api'
 ```
 

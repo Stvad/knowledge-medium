@@ -25,8 +25,8 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { ChangeScope, defineBlockType, defineQuery } from '@/data/api'
-import { queriesFacet, typesFacet } from '@/data/facets'
+import { ChangeScope, defineQuery, seedType } from '@/data/api'
+import { queriesFacet, typeSeedsFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -323,7 +323,7 @@ describe('facade hygiene — no group-token leak into shared state (review findi
     const {repo} = env
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await seedRoot(repo, 't1', 'v0')
 

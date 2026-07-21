@@ -4,9 +4,8 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
-  defineBlockType,
   definePresetCore,
-  defineProperty,
+  seedType,
   type AnyValuePresetCore,
 } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -18,7 +17,7 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import {
   definitionSeedsFacet,
   projectedPropertyDefinitionsFacet,
-  typesFacet,
+  typeSeedsFacet,
   valuePresetCoresFacet,
 } from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
@@ -772,24 +771,23 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
     expect(env.repo.propertySchemas.has('plugin:runtime-only')).toBe(false)
   })
 
-  it('a type-lifted setRuntimeContributions bucket survives a runtime swap', async () => {
+  it('a durable type-seed setRuntimeContributions bucket survives a runtime swap', async () => {
     env = await setup()
-    const pluginSchema = defineProperty<string | undefined>('plugin:custom', {
-      codec: codecs.optionalString,
-      defaultValue: undefined,
-      changeScope: ChangeScope.BlockDefault,
-    })
-    env.repo.setRuntimeContributions(typesFacet, 'plugin', [
-      defineBlockType({id: 'test:plugin-custom', properties: [pluginSchema]}),
+    // A durable `typeSeedsFacet` bucket (a plugin's user-data type contribution)
+    // must be carried onto the next runtime by `adoptDurableContributionsFrom`, so
+    // the type stays in `repo.types` across the swap. (The published contribution is
+    // the provenance-stripped seed synthesis, hence `toMatchObject`, not `toBe`.)
+    env.repo.setRuntimeContributions(typeSeedsFacet, 'plugin', [
+      seedType({seedKey: 'test/type/plugin-custom', revision: 1, id: 'test:plugin-custom', label: 'Plugin custom'}),
     ])
-    expect(env.repo.propertySchemas.get('plugin:custom')).toBe(pluginSchema)
+    expect(env.repo.types.get('test:plugin-custom')).toMatchObject({id: 'test:plugin-custom', label: 'Plugin custom'})
 
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
     ]))
-    expect(env.repo.propertySchemas.get('plugin:custom')).toBe(pluginSchema)
+    expect(env.repo.types.get('test:plugin-custom')).toMatchObject({id: 'test:plugin-custom', label: 'Plugin custom'})
   })
 
   it('addSchema concurrent with a runtime swap lands on the new runtime', async () => {

@@ -1,10 +1,10 @@
 // @vitest-environment node
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, defineBlockType } from '@/data/api'
+import { ChangeScope, seedType } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
-import { typesFacet } from '@/data/facets'
+import { typeSeedsFacet } from '@/data/facets'
 import {
   getOrCreateKernelPage,
   kernelPageBlockId,
@@ -31,7 +31,7 @@ const setup = async (): Promise<Harness> => {
     db: h.db,
     user: {id: 'user-1'},
     extensions: [
-      typesFacet.of(defineBlockType({id: FOO_PAGE_TYPE, label: 'Foo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/panel-foo', revision: 1, id: FOO_PAGE_TYPE, label: 'Foo'}), {source: 'test'}),
     ],
   })
   repo.setActiveWorkspaceId(WS)

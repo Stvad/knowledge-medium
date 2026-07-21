@@ -92,7 +92,6 @@ describe('PropertyPicker', () => {
     })
     const snapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map(),
       seeds: [hidden],
     })

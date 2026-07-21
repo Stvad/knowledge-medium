@@ -529,7 +529,6 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
   }
   const snapshot = buildPropertyDefinitionRegistry({
     workspaceId: WS,
-    legacySchemas: new Map(),
     projectedDefinitions: projected,
     seeds: POOL,
   })

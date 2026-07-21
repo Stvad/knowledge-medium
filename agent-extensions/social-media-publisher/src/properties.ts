@@ -1,10 +1,5 @@
-import {
-  ChangeScope,
-  seedType,
-  seedProperty,
-  extensionPropertySeedKey,
-  extensionTypeSeedKey,
-} from '@/extensions/api.js'
+import {ChangeScope, seedType, seedProperty} from '@/data/api/index.js'
+import {extensionPropertySeedKey, extensionTypeSeedKey} from '@/extensions/dynamicExtensionSeeds.js'
 
 import type {TargetPlatform} from './types'
 

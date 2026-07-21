@@ -1980,8 +1980,8 @@ export class Repo {
 
   /** Subscribe to changes on `_types`. Fires whenever the rebuild step
    *  that owns `_types` re-runs — i.e. after `setFacetRuntime` AND
-   *  after `setRuntimeContributions(typesFacet, ...)` publishes into
-   *  the user-data bucket. Symmetric to `onPropertySchemasChange`.
+   *  after `setRuntimeContributions(typeSeedsFacet | projectedTypeDefinitionsFacet, ...)`
+   *  publishes into the user-data bucket. Symmetric to `onPropertySchemasChange`.
    *  Consumers (e.g. `createTypeBlock` waiting for `UserTypesService`
    *  to publish a freshly-committed type-definition block) recheck
    *  `repo.types` inside the listener; spurious firings are tolerated. */

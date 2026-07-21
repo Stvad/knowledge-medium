@@ -61,7 +61,6 @@ describe('isPropertyPanelHiddenProperty', () => {
     const hiddenLoser = metadata('second', schema.name, 2, true)
     const snapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map([[schema.name, schema]]),
       projectedDefinitions: new Map([
         [hiddenLoser.fieldId, {metadata: hiddenLoser}],
         [visibleWinner.fieldId, {metadata: visibleWinner}],
@@ -78,7 +77,6 @@ describe('isPropertyPanelHiddenProperty', () => {
     // decides — here the hidden one.
     const hiddenWinnerSnapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map([[schema.name, schema]]),
       projectedDefinitions: new Map([
         [visibleWinner.fieldId, {metadata: {...visibleWinner, createdAt: 2}}],
         [hiddenLoser.fieldId, {metadata: {...hiddenLoser, createdAt: 1}}],
@@ -97,7 +95,6 @@ describe('isPropertyPanelHiddenProperty', () => {
     const unique = hiddenSeed('plugin:one/property/secret')
     const uniqueSnapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map(),
       seeds: [unique],
     })
@@ -110,7 +107,6 @@ describe('isPropertyPanelHiddenProperty', () => {
     try {
       const collidedSnapshot = buildPropertyDefinitionRegistry({
         workspaceId: 'ws',
-        legacySchemas: new Map(),
         projectedDefinitions: new Map(),
         seeds: [unique, hiddenSeed('plugin:two/property/secret')],
       })

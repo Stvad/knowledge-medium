@@ -98,9 +98,10 @@ export interface DynamicExtensionsOptions {
  *   - `module.default` must be a valid AppExtension:
  *     a FacetContribution, an array of AppExtension, an async/sync
    *     function returning AppExtension, or nullish/false.
-   *   - Imports work through the page-global importmap. `import { x }
-   *     from '@/extensions/api.js'` returns the *same* module instance
-   *     the running app uses, so contribution facets match by identity.
+   *   - Imports work through the page-global importmap. Importing a
+   *     symbol from its real module (e.g. `import { actionsFacet } from
+   *     '@/extensions/core.js'`) returns the *same* module instance the
+   *     running app uses, so contribution facets match by identity.
    *   - Display metadata comes from extension block properties, not
    *     executable module code. That keeps settings rows descriptive
    *     even when a block is disabled and intentionally not compiled.

@@ -37,7 +37,7 @@
  *     bullet on first-run workspaces).
  *
  * `dailyNotesDataExtension` (in `dataExtension.ts`) contributes the
- * `daily-note` block type via `typesFacet`. It's a separate export so
+ * `daily-note` block type as a `seedType` on `typeSeedsFacet`. It's a separate export so
  * `staticDataExtensions.ts` can install it before the React app
  * mounts, alongside the kernel + other data-only plugins.
  */

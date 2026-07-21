@@ -9,8 +9,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { CompletionContext } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { ChangeScope, defineBlockType } from '@/data/api'
-import { typesFacet } from '@/data/facets'
+import { ChangeScope, seedType } from '@/data/api'
+import { typeSeedsFacet } from '@/data/facets'
 import { getBlockTypes } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
@@ -37,7 +37,7 @@ const setup = async (): Promise<Harness> => {
     db: sharedDb.db,
     user: {id: 'user-1'},
     extensions: [
-      typesFacet.of(defineBlockType({id: 'task', label: 'Task'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/task', revision: 1, id: 'task', label: 'Task'}), {source: 'test'}),
     ],
   })
   repo.setActiveWorkspaceId(WS)
