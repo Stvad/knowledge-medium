@@ -478,7 +478,8 @@
   checker</em> — resolved OR shadowed classifies — not bare
   <code>resolveField</code>, whose winner-enforcing semantics would unclassify
   every shadowed loser's rows (§9; the as-built
-  <code>isFieldDefinitionCheckerFor</code> already implements this, now pinned
+  <code>isFieldDefinitionCheckerFor</code>, on the PR #386 branch, already
+  implements this, now pinned
   as the contract); the types auto-claim precedent is narrowed to
   user-authored type blocks — seeded backing blocks deliberately claim no
   alias, so AC's bulk claim covers seeded and user definitions explicitly
@@ -1507,8 +1508,11 @@ alias and <code>[[Person]]</code> resolves through the generic index with no
 deliberately bare, no PAGE_TYPE and <strong>no alias</strong>
 (<code>definitionSeeds.ts</code>, pinned by test: the C4 cutover kept them
 invisible to avoid a behavior change and <code>alias.collision</code> on real
-type labels; a seeded type's label claims an alias only when its editable
-label is written). So auto-claim cannot assume seeded definitions "already
+type labels — and there is <em>no</em> transition out of bare for them:
+seed-backed rows are read-only and typeify skips seed rows, so the
+label-claim path exists only for user-authored type blocks; PR #417 review
+caught an earlier draft implying seeds could later claim via a label
+write). So auto-claim cannot assume seeded definitions "already
 work like types" — its bulk claim must cover seeded <em>and</em> user property
 definitions explicitly (§11 AC). <code>[[name]]</code> therefore stops being the identity carrier and
 becomes a deferred <em>affordance</em> — the auto-claim step (§11).
@@ -1680,7 +1684,9 @@ supabase skill if it's kept.
     as-built checker, <code>isFieldDefinitionCheckerFor</code>, wraps it and
     classifies on <em>resolved OR shadowed</em>, every other reason
     unclassifies — that disjunction is the contract, pin it so a resolver
-    refactor can't silently narrow it) — <em>the workspace is flipped</em>
+    refactor can't silently narrow it; the checker lives on PR #386
+    (<code>txEngine.ts</code>), this doc's authoritative implementation branch —
+    it is not on master until A/B merges) — <em>the workspace is flipped</em>
     (<code>properties_migration</code> at or past <code>'children'</code>, §6;
     PR-review P2: recognition off
     the raw column alone activates the moment slice A starts stamping — a whole-block
