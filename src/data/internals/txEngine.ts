@@ -1346,11 +1346,18 @@ export class TxImpl implements Tx {
       const [primary, ...duplicates] = values
       if (primary) {
         if (primary.content !== content) await this.update(primary.id, {content}, opts)
-        // §9 dedup — unified relocate-then-subtree-delete semantics (shared
-        // with the materialize processor): the loser's user-authored
-        // sub-children survive under the primary.
+        // §9 dedup — fold ONLY exact duplicates of the value we just wrote
+        // (concurrent dual-writes of the same value), matching the deferred
+        // materialize processor (propertyChildrenProcessor.ts). A DIVERGENT
+        // peer value — e.g. a merge's surfaced conflict — is kept, not silently
+        // collapsed onto the winner: a raw `tx.update({properties})` preserves
+        // it via materialize, so this eager path must too. The shared
+        // relocate-then-subtree-delete helper keeps the loser's user-authored
+        // sub-children under the primary when a fold does happen.
         for (const duplicate of duplicates) {
-          await collapseDuplicateValueChild(this, primary.id, duplicate)
+          if (duplicate.content === content) {
+            await collapseDuplicateValueChild(this, primary.id, duplicate)
+          }
         }
       } else {
         await this.create({

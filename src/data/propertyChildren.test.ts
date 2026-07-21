@@ -706,7 +706,11 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     await repo.tx(async tx => {
-      const visible = await tx.childrenOf('p')
+      // Ask for the visible view explicitly — recognition is flip-gated, so an
+      // un-flipped workspace must return the field-row-shaped child UNFILTERED
+      // even under hidePropertyChildren. (Without the option this asserts
+      // nothing about the flip gate — childrenOf short-circuits before it.)
+      const visible = await tx.childrenOf('p', undefined, {hidePropertyChildren: true})
       expect(visible.map(c => c.id)).toEqual(['ref-child'])
     }, {scope: ChangeScope.BlockDefault})
   })
@@ -960,6 +964,49 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
     )
     expect(commentB.deleted).toBe(0)
     expect(commentB.parent_id).toBe('value-b')
+  })
+
+  it('a non-equal setProperty after a merge keeps the divergent peer (eager dual-write parity with materialize, #386 ultra-review)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'into')
+    await createBlock(repo, 'from')
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'into-status'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('from', statusSchema, 'from-status'),
+      {scope: ChangeScope.BlockDefault})
+    const [fromField] = await liveFieldRows('from')
+    const [fromValue] = (await childrenRows(fromField!.id)).filter(v => v.deleted === 0)
+    const [intoField] = await liveFieldRows('into')
+
+    // Merge leaves ONE field row under `into` holding two divergent peer value
+    // children ('into-status' primary, 'from-status' peer) — the surfaced-conflict
+    // steady state (#23, above).
+    await repo.tx(async tx => {
+      const into = await tx.get('into')
+      const from = await tx.get('from')
+      await mergeBlocksInTx(tx, {into: into!, from: from!})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // A later, NON-equal setProperty routes through the eager dual-write
+    // (writePropertyValueChild). It must fold only EXACT duplicates of the new
+    // value — like the deferred materialize processor — and PRESERVE the
+    // divergent peer, not silently destroy it. A raw tx.update({properties})
+    // on the same state keeps the peer (it reconciles via materialize), so the
+    // two "set a property" entry points must agree.
+    await repo.tx(tx => tx.setProperty('into', statusSchema, 'archived'),
+      {scope: ChangeScope.BlockDefault})
+
+    // The divergent peer ('from-status' ≠ the new value 'archived') survives.
+    const survivor = await sharedDb.db.get<{deleted: number; parent_id: string; content: string}>(
+      'SELECT deleted, parent_id, content FROM blocks WHERE id = ?', [fromValue!.id],
+    )
+    expect(survivor.deleted).toBe(0)
+    expect(survivor.content).toBe('from-status')
+    expect(survivor.parent_id).toBe(intoField!.id)
+    // The primary now holds the new value; both live as siblings under the row.
+    const siblings = (await childrenRows(intoField!.id)).filter(v => v.deleted === 0)
+    expect(siblings.map(v => v.content).sort()).toEqual(['archived', 'from-status'])
   })
 })
 
@@ -1234,7 +1281,10 @@ describe('query-layer twin (core.childIds / core.children)', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    const ids = await repo.runQuery('core.childIds', {id: 'p'})
+    // Exercise the visible view: the reactive query's flip gate
+    // (VISIBLE_CHILD_PREDICATE_SQL's `properties_migration IN (...)` branch)
+    // must leave the field-row-shaped child visible in an un-flipped workspace.
+    const ids = await repo.runQuery('core.childIds', {id: 'p', hidePropertyChildren: true})
     expect(ids).toEqual(['ref-child'])
   })
 })

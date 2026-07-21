@@ -7,11 +7,15 @@ import type { BlockData, Tx } from '@/data/api'
  *  is arbitrarily deep user content, so recursion depth is not bounded.
  *
  *  `onDelete`, when supplied, is invoked with each visited block's PRE-delete
- *  `BlockData`, but the callback itself fires AFTER `tx.delete` commits, never
- *  before: a caller's `onDelete` may itself write (e.g. `tx.emitEvent`, which
- *  requires the tx's workspace already pinned by a prior write), and for the
- *  very first node in an otherwise-empty tx nothing pins the workspace until
- *  that node's own `tx.delete` runs.
+ *  `BlockData`, but the callback itself fires AFTER `tx.delete`, never before:
+ *  a caller's `onDelete` may itself write (e.g. `tx.emitEvent`, which requires
+ *  the tx's workspace already pinned by a prior write). The pin, though, is
+ *  only guaranteed when the visited node was LIVE — `tx.delete` on an
+ *  already-tombstoned node is a no-op that returns BEFORE pinning the
+ *  workspace, so a caller whose `onDelete` writes must itself skip tombstones
+ *  (guard on the pre-delete `deleted` flag, as `softDeleteSubtree` does) rather
+ *  than rely on this delete to pin. For the first LIVE node in an
+ *  otherwise-empty tx, that node's own `tx.delete` is what pins the workspace.
  *
  *  No node is read twice: every descendant arrives already hydrated from its
  *  parent's `childrenOf`, so only the ROOT is fetched — and only when a caller
