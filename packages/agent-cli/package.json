@@ -54,7 +54,7 @@
   "scripts": {
     "build": "tsc -b && node scripts/build-kernel-types.mjs && chmod +x ./dist/cli.js ./dist/server.js ./dist/mcp.js",
     "build:clean": "tsc -b --clean",
-    "prepublishOnly": "yarn run build:clean && yarn run build"
+    "prepublishOnly": "npm run build:clean && npm run build"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",

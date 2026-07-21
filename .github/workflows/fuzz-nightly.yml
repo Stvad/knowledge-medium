@@ -44,14 +44,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '24.x'
-          cache: yarn
+          node-version: '26.x'
+          cache: pnpm
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       # An explicit `shell: bash` already runs `bash -eo pipefail` (GitHub
       # Actions docs, "Exit codes and error action preference"), so a fuzz
@@ -66,7 +69,7 @@ jobs:
           FUZZ_TIME_MS: ${{ inputs.time_ms || '15000' }}
         run: |
           set -o pipefail
-          yarn fuzz 2>&1 | tee fuzz-sweep.log
+          pnpm fuzz 2>&1 | tee fuzz-sweep.log
 
       - name: Deep fuzz — stateful data-layer suite (long pass)
         id: stateful
@@ -79,7 +82,7 @@ jobs:
           FUZZ_TIME_MS: ${{ inputs.stateful_time_ms || '1200000' }}
         run: |
           set -o pipefail
-          yarn fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee fuzz-stateful.log
+          pnpm fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee fuzz-stateful.log
 
       - name: Upload fuzz logs
         if: always()

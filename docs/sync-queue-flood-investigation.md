@@ -45,9 +45,9 @@ involved a reload, which is when it was noticed.
 All evidence below came from the live client via the agent CLI:
 
 ```
-yarn agent --profile ff-vlad-dev ping                 # confirm connected
-yarn agent --profile ff-vlad-dev sql all "<SQL>"      # run SQL in the tab
-yarn agent --profile ff-vlad-dev eval "return <js>"   # run JS (repo/db in scope)
+pnpm agent --profile ff-vlad-dev ping                 # confirm connected
+pnpm agent --profile ff-vlad-dev sql all "<SQL>"      # run SQL in the tab
+pnpm agent --profile ff-vlad-dev eval "return <js>"   # run JS (repo/db in scope)
 ```
 
 (SQLite JSON paths use `'$.x'`; in zsh escape the `$` as `\$` inside double
@@ -147,7 +147,7 @@ dynamic-extension property schemas are still loading.
    # markers present:
    SELECT key FROM client_schema_state WHERE key LIKE 'reproject_ref:%' ORDER BY key;
    # then compare to the ref-typed names the runtime reports:
-   yarn agent --profile ff-vlad-dev eval \
+   pnpm agent --profile ff-vlad-dev eval \
      "return [...repo.propertySchemas?.entries?.() ?? []].filter(([,s]) => /* ref-typed */ true).map(([n]) => n)"
    ```
    (Use `describe-runtime` / the real `refCodecKind` to classify — see
@@ -231,7 +231,7 @@ keep tripping the ciphertext trigger unless they're sealed like any other block.
 
 1. **Identify the block + its write path:**
    ```
-   yarn agent --profile ff-vlad-dev sql all \
+   pnpm agent --profile ff-vlad-dev sql all \
      "SELECT id, workspace_id, substr(content,1,60) content, substr(properties_json,1,120) props FROM blocks WHERE id='469ecc66-34de-5a0e-a85a-a69c69477fb2'"
    ```
    Confirm it's the layout-session/panel-state block (`getLayoutSessionBlock` /
@@ -278,14 +278,14 @@ keep tripping the ciphertext trigger unless they're sealed like any other block.
 ## Quick command appendix
 
 ```
-yarn agent --profile ff-vlad-dev eval "return repo.metrics().reprojection"
-yarn agent --profile ff-vlad-dev sql all "SELECT COUNT(*) rows, COUNT(DISTINCT json_extract(data,'\$.id')) blocks FROM ps_crud"
-yarn agent --profile ff-vlad-dev sql all "SELECT je.key col, COUNT(*) n FROM ps_crud, json_each(json_extract(ps_crud.data,'\$.data')) je GROUP BY je.key ORDER BY n DESC"
-yarn agent --profile ff-vlad-dev sql all "SELECT data, error_code FROM ps_crud_rejected"
-yarn agent --profile ff-vlad-dev sql all "SELECT COUNT(*) FROM client_schema_state WHERE key LIKE 'reproject_ref:%'"
+pnpm agent --profile ff-vlad-dev eval "return repo.metrics().reprojection"
+pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) rows, COUNT(DISTINCT json_extract(data,'\$.id')) blocks FROM ps_crud"
+pnpm agent --profile ff-vlad-dev sql all "SELECT je.key col, COUNT(*) n FROM ps_crud, json_each(json_extract(ps_crud.data,'\$.data')) je GROUP BY je.key ORDER BY n DESC"
+pnpm agent --profile ff-vlad-dev sql all "SELECT data, error_code FROM ps_crud_rejected"
+pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) FROM client_schema_state WHERE key LIKE 'reproject_ref:%'"
 # session-2 additions:
-yarn agent --profile ff-vlad-dev eval "const s=(repo.db||db).currentStatus; return {uploading:s.dataFlowStatus.uploading, uploadError:String(s.dataFlowStatus.uploadError?.message), downloadError:String(s.dataFlowStatus.downloadError?.message)}"
-yarn agent --profile ff-vlad-dev sql all "SELECT MIN(id) lo, MAX(id) hi, COUNT(*) n FROM ps_crud"   # lo pinned at oldest ⇒ not draining
+pnpm agent --profile ff-vlad-dev eval "const s=(repo.db||db).currentStatus; return {uploading:s.dataFlowStatus.uploading, uploadError:String(s.dataFlowStatus.uploadError?.message), downloadError:String(s.dataFlowStatus.downloadError?.message)}"
+pnpm agent --profile ff-vlad-dev sql all "SELECT MIN(id) lo, MAX(id) hi, COUNT(*) n FROM ps_crud"   # lo pinned at oldest ⇒ not draining
 ```
 
 ---
@@ -442,4 +442,4 @@ lack `daily-note:date` and drop out of date-range queries until re-derived
 (derived/recoverable, not content loss); re-add a *workspace-scoped* pass if that
 ever surfaces.
 
-Verification gate per [AGENTS.md](AGENTS.md): `yarn run check`.
+Verification gate per [AGENTS.md](AGENTS.md): `pnpm run check`.

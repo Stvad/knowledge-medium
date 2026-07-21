@@ -5,9 +5,9 @@ This extension owns its platform SDK dependencies locally so they can be bundled
 From a fresh checkout:
 
 ```sh
-yarn
-yarn --cwd agent-extensions/social-media-publisher install
-yarn --cwd agent-extensions/social-media-publisher run check
+pnpm install
+pnpm -C agent-extensions/social-media-publisher install
+pnpm -C agent-extensions/social-media-publisher run check
 ```
 
 The installable artifact is built at `agent-extensions/social-media-publisher/dist/Social Media Publisher.js`. The `dist/` directory is generated and intentionally not committed. The agent CLI uses the file basename as the extension's install identity, so keep this filename when updating an existing installation.
@@ -15,6 +15,6 @@ The installable artifact is built at `agent-extensions/social-media-publisher/di
 To install the bundled version into a live agent profile:
 
 ```sh
-yarn agent --profile chrome-t2 install-extension --verify "agent-extensions/social-media-publisher/dist/Social Media Publisher.js"
-yarn agent --profile chrome-t2 enable-extension "Social Media Publisher"
+pnpm agent --profile chrome-t2 install-extension --verify "agent-extensions/social-media-publisher/dist/Social Media Publisher.js"
+pnpm agent --profile chrome-t2 enable-extension "Social Media Publisher"
 ```

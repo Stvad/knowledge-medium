@@ -18,6 +18,7 @@ import {
   getAliases,
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
@@ -80,15 +81,20 @@ export const writeBlockTypeLabel = async (
   }, {scope: ChangeScope.BlockDefault, description: 'edit block-type label'})
 }
 
-const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
+export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
+      workspaceId: d.workspaceId,
       content: d.content,
       properties: d.properties,
     } : undefined,
   })
-  const readOnly = block.repo.isReadOnly
+  // A materialized type seed is code-owned and unshadowable — lock its backing
+  // row read-only, same rationale as PropertySchemaContentRenderer. A viewer
+  // (repo read-only) is the same lock for a different reason.
+  const isSeedBacked = data ? isValidSeededDefinition(data) : false
+  const readOnly = block.repo.isReadOnly || isSeedBacked
   const runtime = useAppRuntime()
   const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)

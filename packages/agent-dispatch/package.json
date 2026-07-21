@@ -40,7 +40,7 @@
   ],
   "scripts": {
     "build": "tsc -b && chmod +x ./dist/daemon.js ./dist/mcp.js",
-    "prepublishOnly": "yarn run build"
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@knowledge-medium/agent-cli": "^0.3.0",

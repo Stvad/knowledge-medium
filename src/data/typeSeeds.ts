@@ -1,10 +1,13 @@
 import type {AnyPropertySchema} from './api/propertySchema'
 import type {TypeContribution} from './api/blockType'
 
-/** A code-owned block-type definition. The declaration is ALSO the
- * `TypeContribution` registered into `typesFacet` during the Slice-C
- * transitional window; extensions additionally contribute it to
- * `typeSeedsFacet` for materialization + workspace-bound identity.
+/** A code-owned block-type definition. The declaration IS a `TypeContribution`
+ * (its `id` is the membership token) plus `seedKey`/`revision` provenance, and is
+ * contributed to `typeSeedsFacet` — NOT the static `typesFacet` (C4a moved the
+ * kernel types across; see `kernelDataExtension`). The type-definition registry
+ * synthesizes it into `repo.types` (present even before its backing block
+ * materializes, and before a workspace pin via `buildUnboundTypes`), and the
+ * materializer mints its deterministic per-workspace backing block.
  *
  * Mirrors `PropertySeedDeclaration`. The property analogy is exact but for one
  * axis: a property's membership token is its `name` and its per-workspace
@@ -61,7 +64,12 @@ export const isTypeSeedDeclaration = (value: unknown): value is TypeSeedDeclarat
   (value.hideFromCompletion === undefined || typeof value.hideFromCompletion === 'boolean') &&
   (value.hideFromBlockDisplay === undefined || typeof value.hideFromBlockDisplay === 'boolean') &&
   (value.color === undefined || typeof value.color === 'string') &&
-  (value.properties === undefined || Array.isArray(value.properties))
+  // Elements must be records, not just an array: a primitive/null entry would
+  // survive an `Array.isArray`-only check and then throw in a downstream
+  // `'seedKey' in prop` (canonicalTypeSeedProperties), aborting the shared
+  // materialization pass this guard exists to protect.
+  (value.properties === undefined ||
+    (Array.isArray(value.properties) && value.properties.every(isRecord)))
 
 /** Define a seeded block type. Unlike `seedProperty` there is no codec/preset to
  * round-trip, so validation is purely structural. The returned declaration is a

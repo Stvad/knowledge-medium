@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Deep-tier fuzz runner — `yarn fuzz [vitest args…]`.
+ * Deep-tier fuzz runner — `pnpm fuzz [vitest args…]`.
  *
  * Runs every `*.fuzz.test.ts` suite (or just the files you name) with a
  * per-property time budget and a fresh random seed per property, instead
@@ -157,12 +157,12 @@ export function buildFailureReport({ runUrl, sections }) {
   // count, which is why the path form can't be made to regenerate.)
   const pathReplay =
     "Reproduce — first try the fast path replay (find the `seed`/`path` in the report above if not filled in):\n" +
-    `\`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 ${onlyFile} -t "<failing test>"\``
+    `\`FUZZ_SEED=<seed> FUZZ_PATH="<path>" pnpm vitest run --testTimeout=600000 ${onlyFile} -t "<failing test>"\``
 
   const regen =
     seedInfo?.runIndex !== undefined
       ? '\n\nIf that replay **passes**, the shrink is unsound — regenerate the full sequence from the seed instead:\n' +
-        `\`FUZZ_SEED=${seedInfo.seed} FUZZ_RUNS=${seedInfo.runIndex + 1} yarn vitest run --testTimeout=600000 ${onlyFile} -t "<failing test>"\``
+        `\`FUZZ_SEED=${seedInfo.seed} FUZZ_RUNS=${seedInfo.runIndex + 1} pnpm vitest run --testTimeout=600000 ${onlyFile} -t "<failing test>"\``
       : ''
 
   const repro = `${pathReplay}${regen}\n\n(see docs/fuzzing.md).`
@@ -190,7 +190,7 @@ function runReportCli(args) {
 // ---------------------------------------------------------------------
 
 function runFuzz(argv) {
-  const yarn = process.platform === 'win32' ? 'yarn.cmd' : 'yarn'
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   // FUZZ_RUNS without FUZZ_TIME_MS means a fixed-COUNT run — don't inject
   // the default time budget or fuzzParams would silently interrupt the
   // requested count at 15s. Keep both when the caller set both.
@@ -211,7 +211,7 @@ function runFuzz(argv) {
   const files = argv.length > 0 ? argv : ['fuzz.test.']
 
   const result = spawnSync(
-    yarn,
+    pnpm,
     ['vitest', 'run', '--testTimeout', String(testTimeout), ...files],
     {
       stdio: 'inherit',

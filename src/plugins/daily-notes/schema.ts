@@ -1,8 +1,7 @@
 import {
   ChangeScope,
-  defineBlockType,
   seedProperty,
-  type TypeContribution,
+  seedType,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 
@@ -23,7 +22,9 @@ export const dailyNoteDateProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const dailyNoteType: TypeContribution = defineBlockType({
+export const dailyNoteType = seedType({
+  seedKey: 'system:daily-notes/type/daily-note',
+  revision: 1,
   id: DAILY_NOTE_TYPE,
   label: 'Daily note',
   properties: [aliasesProp, dailyNoteDateProp],

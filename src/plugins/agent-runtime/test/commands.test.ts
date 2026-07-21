@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'

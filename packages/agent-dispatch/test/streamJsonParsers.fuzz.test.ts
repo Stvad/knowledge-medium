@@ -24,7 +24,7 @@
  * and this package has no `test` script or vitest config of its own (see
  * `packages/agent-dispatch/package.json`) — so it only ever runs through
  * the root project, which is also what makes `@/test/fuzz` resolve here
- * (the root config's `resolve.alias['@']`). `yarn fuzz` (scripts/fuzz.mjs)
+ * (the root config's `resolve.alias['@']`). `pnpm fuzz` (scripts/fuzz.mjs)
  * passes a bare `fuzz.test.` substring filter to that same root `vitest
  * run` with no path restriction, so it DOES pick this file up too —
  * verified live below, not assumed.

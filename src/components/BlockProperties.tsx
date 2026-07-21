@@ -91,6 +91,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
   const propertyDefinitions = block.repo.propertyDefinitions
+  // The type registry too, so a materialized type-seed backing block's panel
+  // locks (its provenance lives in `typeDefinitions.definitionsByBlockId`, not
+  // the property registry).
+  const typeDefinitions = block.repo.typeDefinitions
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   // Merged registry (kernel + plugin + block-built user types) via repo.types,
@@ -126,13 +130,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       properties,
       schemas,
       propertyDefinitions,
+      typeDefinitions,
       uis,
       presets,
       typesRegistry,
       syntheticRows,
     })
     : null,
-  [blockData, presets, properties, propertyDefinitions, schemas, syntheticRows, typesRegistry, uis, updatedByUser])
+  [blockData, presets, properties, propertyDefinitions, typeDefinitions, schemas, syntheticRows, typesRegistry, uis, updatedByUser])
 
   if (!blockData || !model) return null
 

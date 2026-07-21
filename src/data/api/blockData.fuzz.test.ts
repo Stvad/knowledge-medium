@@ -204,19 +204,21 @@ describe('parseBlockRow / blockToRowParams (blockSchema.ts)', () => {
   }
 
   it('blockToRowParams -> parseBlockRow round-trips an arbitrary BlockData', () => {
-    // QUARANTINED from the deep tier (issue #391; upstream nodejs/node#64546) —
-    // `quarantinedFuzzParams`, not `fuzzParams`. A V8 `JSON.parse` engine bug
-    // miscodes this pure `JSON.stringify`/`JSON.parse` round-trip: one specific
-    // fast-check-generated input (seed -915705129, run 20420) decodes a `"`
-    // property key to `\`. Not a blockSchema defect — the functions are correct
-    // by construction; the same bytes parse fine in a cold process and the
-    // reported counterexample passes in isolation. It reproduces on Node 24
-    // (V8 13.6) AND 26 (V8 14.6), deterministically under `node --predictable`,
-    // and is not fixed upstream. Deep-fuzzing a JSON round-trip adds ~nothing
-    // (its logic is exercised by the bounded sample), so we pin it rather than
-    // let the engine bug flip the nightly red. Restore `fuzzParams` once the
-    // upstream fix lands (and ships in a Node we run). See docs/fuzzing.md →
-    // "counterexample passes on replay".
+    // QUARANTINED from the deep tier (issue #391; upstream nodejs/node#63785,
+    // our dup #64546) — `quarantinedFuzzParams`, not `fuzzParams`. A V8 bug
+    // caches decoded property keys that contain escape sequences: a prior parse
+    // whose key decodes to `\` (an escaped-backslash key `"\\"`) poisons the
+    // cache, so a later escaped key reads back the cached `\`. In this suite the
+    // deep tier parses such a `\\`-key object before an input with a `"` key,
+    // and the `"` decodes to `\`. Not a blockSchema defect — the functions are
+    // correct by construction. Minimal repro (no fast-check, no flags):
+    //   JSON.parse('{"h":[],"\\\\":0}')
+    //   Object.keys(JSON.parse('{"h":1,"\\"":2}'))[1]  // '\' not '"'
+    // Reproduces on Node 24 (V8 13.6) and 26 (V8 14.6); open upstream. Deep-
+    // fuzzing a JSON round-trip adds ~nothing (its logic is exercised by the
+    // bounded sample), so we pin it rather than let the engine bug flip the
+    // nightly red. Restore `fuzzParams` once the upstream fix lands (and ships
+    // in a Node we run). See docs/fuzzing.md → "counterexample passes on replay".
     fc.assert(
       fc.property(blockDataArb, blockData => {
         const decoded = parseBlockRow(rowFromParams(blockToRowParams(blockData)))

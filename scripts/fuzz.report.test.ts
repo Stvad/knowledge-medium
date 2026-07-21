@@ -54,9 +54,9 @@ describe('fuzz --report', () => {
     // Path replay is still offered.
     expect(body).toContain('FUZZ_PATH="<path>"')
     // Regenerate command: seed carried through, FUZZ_RUNS = 20419 + 1.
-    expect(body).toContain('FUZZ_SEED=-915705129 FUZZ_RUNS=20420 yarn vitest run')
+    expect(body).toContain('FUZZ_SEED=-915705129 FUZZ_RUNS=20420 pnpm vitest run')
     // And it names the concrete failing file, not the placeholder.
-    expect(body).toMatch(/FUZZ_RUNS=20420 yarn vitest run --testTimeout=600000 src\/data\/api\/blockData\.fuzz\.test\.ts/)
+    expect(body).toMatch(/FUZZ_RUNS=20420 pnpm vitest run --testTimeout=600000 src\/data\/api\/blockData\.fuzz\.test\.ts/)
     // The unsound-shrink rationale is present so the reader knows WHY.
     expect(body).toContain('If that replay **passes**')
   })
@@ -76,7 +76,7 @@ describe('fuzz --report', () => {
     const body = runReport('Deep fuzz — all suites', multiFailLog)
 
     // seed 222 + path index 42 → FUZZ_RUNS 43, never seed 111.
-    expect(body).toContain('FUZZ_SEED=222 FUZZ_RUNS=43 yarn vitest run')
+    expect(body).toContain('FUZZ_SEED=222 FUZZ_RUNS=43 pnpm vitest run')
     expect(body).not.toContain('FUZZ_SEED=111')
   })
 
@@ -100,7 +100,7 @@ describe('fuzz --report', () => {
       {name: 'Deep fuzz — stateful data-layer suite (long pass)', log: statefulWithPath},
     ])
 
-    expect(body).toContain('FUZZ_SEED=222 FUZZ_RUNS=43 yarn vitest run')
+    expect(body).toContain('FUZZ_SEED=222 FUZZ_RUNS=43 pnpm vitest run')
     expect(body).not.toContain('FUZZ_SEED=111')
   })
 

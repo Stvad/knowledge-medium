@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import {beforeEach, describe, expect, it} from 'vitest'
 import {ClientLocalSettings} from '@/utils/ClientLocalSettings.js'
 import {ExtensionPromptDismissalStore} from '@/extensions/extensionPromptDismissals.js'

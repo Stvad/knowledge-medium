@@ -3,7 +3,7 @@ import {
   localSchemaFacet,
   refTargetFilterDefaultsFacet,
   systemPagesFacet,
-  typesFacet,
+  typeSeedsFacet,
   workspaceBackfillsFacet,
 } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet.js'
@@ -14,7 +14,7 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 
 export const dailyNotesDataExtension: AppExtension = [
   definitionSeedsFacet.of(dailyNoteDateProp, {source: 'daily-notes'}),
-  typesFacet.of(dailyNoteType, {source: 'daily-notes'}),
+  typeSeedsFacet.of(dailyNoteType, {source: 'daily-notes'}),
   localSchemaFacet.of(dailyNotesLocalSchema, {source: 'daily-notes'}),
   workspaceBackfillsFacet.of(dailyNoteDateBackfill, {source: 'daily-notes'}),
   // Eagerly materialise the Journal page at bootstrap so `[[Journal]]` resolves

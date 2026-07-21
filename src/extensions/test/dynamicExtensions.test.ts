@@ -25,9 +25,14 @@ import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 import {ChangeScope, definePropertyEditorOverride} from '@/data/api'
-import {definitionSeedsFacet, propertyEditorOverridesFacet} from '@/data/facets'
+import {definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet} from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
-import {extensionPropertySeedKey} from '@/extensions/dynamicExtensionSeeds'
+import {seedType} from '@/data/typeSeeds'
+import {
+  extensionPropertySeedKey,
+  extensionTypeSeedKey,
+  bindExtensionTypeSeed,
+} from '@/extensions/dynamicExtensionSeeds'
 
 // Test-local facet so contributions don't pollute / collide with the
 // real app facets.
@@ -438,6 +443,275 @@ describe('dynamicExtensionsExtension — property seed identity', () => {
   })
 })
 
+describe('dynamicExtensionsExtension — type seed identity', () => {
+  it('binds reserved type-seed owners per block and does not share identical-source modules', async () => {
+    // The type-side analog of the property-seed identity test above: two blocks
+    // carrying identical source each get their OWN block-scoped type seedKey, so
+    // each installed extension materializes its own per-workspace backing block
+    // instead of the two installs colliding on one shared `@extension` key.
+    const blocks = [
+      blockData({id: 'ext/one', content: 'same-source'}),
+      blockData({id: 'ext-two', content: 'same-source'}),
+    ]
+    const declarations: ReturnType<typeof seedType>[] = []
+    const restore = __setCompileImplForTest(async () => {
+      const declaration = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+      })
+      declarations.push(declaration)
+      return {default: typeSeedsFacet.of(declaration)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      expect(declarations).toHaveLength(2)
+      expect(declarations[0]).not.toBe(declarations[1])
+      const runtimeSeeds = runtime.read(typeSeedsFacet)
+      expect(runtimeSeeds[0]).toBe(declarations[0])
+      expect(runtimeSeeds[1]).toBe(declarations[1])
+      expect(declarations.map(seed => seed.seedKey)).toEqual([
+        'ext%2Fone/type/widget',
+        'ext-two/type/widget',
+      ])
+      // The membership id is workspace-/block-agnostic and stays verbatim — only
+      // the seedKey (which addresses the backing block) is block-scoped.
+      expect(declarations.map(seed => seed.id)).toEqual([
+        'example-widget',
+        'example-widget',
+      ])
+    } finally {
+      restore()
+    }
+  })
+
+  it('rejects hard-coded owners so dynamic type seeds cannot collide across installs', async () => {
+    const blocks = [blockData({id: 'ext-hardcoded-type', content: 'hardcoded'})]
+    const declaration = seedType({
+      seedKey: 'example/type/widget',
+      revision: 1,
+      id: 'example-widget',
+      label: 'Example widget',
+    })
+    const restore = stubCompileByBlockId({
+      hardcoded: {default: typeSeedsFacet.of(declaration)},
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-hardcoded-type',
+        expect.objectContaining({
+          message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('binds reserved property seedKeys nested inside a dynamic type seed', async () => {
+    // A dynamic seedType can embed property seeds in `properties`; their keys
+    // are persisted into block-type:properties refs. If the nested key stayed
+    // `@extension/property/...` it would ref a definition block that never
+    // materializes (a dangling reserved-key ref). The type bind must block-bind
+    // nested reserved property seeds too.
+    const blocks = [blockData({id: 'ext-nested', content: 'nested'})]
+    const restore = __setCompileImplForTest(async () => {
+      const nestedProp = seedProperty({
+        seedKey: extensionPropertySeedKey('foo'),
+        revision: 1,
+        name: 'example:foo',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const type = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+        properties: [nestedProp],
+      })
+      return {default: typeSeedsFacet.of(type)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(typeSeedsFacet)
+      expect(seeds[0]?.seedKey).toBe('ext-nested/type/widget')
+      expect((seeds[0]?.properties?.[0] as unknown as {seedKey: string}).seedKey).toBe(
+        'ext-nested/property/foo',
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('keeps a nested property seed consistent with the same seed contributed separately', async () => {
+    // Shared declaration object referenced by the type AND contributed standalone
+    // (type FIRST). Because the object is aliased, the standalone
+    // definitionSeedsFacet arm would block-bind it either way — so this is the
+    // regression guard for the idempotent ROUTING, not for the nested rebind's
+    // existence (the test above covers that): a naive in-place nested rebind that
+    // bypassed bindExtensionPropertySeed's WeakMap would leave the later
+    // standalone arm re-seeing a rewritten key and throwing. Both must land on
+    // one block-scoped key with no throw.
+    const blocks = [blockData({id: 'ext-shared', content: 'shared'})]
+    const restore = __setCompileImplForTest(async () => {
+      const sharedProp = seedProperty({
+        seedKey: extensionPropertySeedKey('foo'),
+        revision: 1,
+        name: 'example:foo',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const type = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+        properties: [sharedProp],
+      })
+      return {default: [typeSeedsFacet.of(type), definitionSeedsFacet.of(sharedProp)]}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(typeSeedsFacet)
+      const propSeeds = runtime.read(definitionSeedsFacet)
+      expect(propSeeds[0]?.seedKey).toBe('ext-shared/property/foo')
+      expect((seeds[0]?.properties?.[0] as unknown as {seedKey: string}).seedKey).toBe(
+        'ext-shared/property/foo',
+      )
+      // Same object, bound exactly once (idempotent) — no throw, no divergence.
+      expect(seeds[0]?.properties?.[0]).toBe(propSeeds[0])
+    } finally {
+      restore()
+    }
+  })
+
+  it('leaves a non-reserved nested property key untouched (cross-owner reference)', async () => {
+    // A dynamic type may legitimately reference a property it does NOT own — a
+    // kernel/other-owner seedKey that is already final (not `@extension/...`).
+    // bindNestedDynamicPropertySeeds must SKIP it: without the reserved-prefix
+    // guard it would route into bindExtensionPropertySeed, which rejects a
+    // non-reserved key ('must use extensionPropertySeedKey') and drop the block.
+    // So this discriminates the skip path — it fails if the guard is removed.
+    const blocks = [blockData({id: 'ext-xowner', content: 'xowner'})]
+    const restore = __setCompileImplForTest(async () => {
+      const foreignProp = seedProperty({
+        seedKey: 'other-owner/property/foo',
+        revision: 1,
+        name: 'other:foo',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const type = seedType({
+        seedKey: extensionTypeSeedKey('widget'),
+        revision: 1,
+        id: 'example-widget',
+        label: 'Example widget',
+        properties: [foreignProp],
+      })
+      return {default: typeSeedsFacet.of(type)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(typeSeedsFacet)
+      expect(seeds).toHaveLength(1)
+      expect(seeds[0]?.seedKey).toBe('ext-xowner/type/widget')
+      // The foreign property key is left exactly as authored — not block-scoped.
+      expect((seeds[0]?.properties?.[0] as unknown as {seedKey: string}).seedKey).toBe(
+        'other-owner/property/foo',
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it('binds idempotently to the same block but rejects reuse across blocks', () => {
+    // Directly exercises the WeakMap reuse guard the loader relies on: one
+    // declaration object may only ever bind to one block. Re-binding to that
+    // same block is a no-op; binding to a second block would collapse two
+    // installs onto one backing block, so it throws.
+    const declaration = seedType({
+      seedKey: extensionTypeSeedKey('widget'),
+      revision: 1,
+      id: 'example-widget',
+      label: 'Example widget',
+    })
+
+    const bound = bindExtensionTypeSeed(declaration, 'block-a')
+    expect(bound).toBe(declaration)
+    expect(bound.seedKey).toBe('block-a/type/widget')
+    // Idempotent: re-binding to the SAME block returns the object unchanged.
+    expect(bindExtensionTypeSeed(declaration, 'block-a').seedKey).toBe('block-a/type/widget')
+    // Reuse across blocks is rejected.
+    expect(() => bindExtensionTypeSeed(declaration, 'block-b')).toThrow(
+      'Dynamic type seed declaration was reused across extension blocks',
+    )
+  })
+
+  it('rejects a NESTED property seed reused across two extension blocks', () => {
+    // A shared imported `seedProperty` singleton embedded in two blocks' type seeds.
+    // Block A's bind mutates the shared object's key to `block-a/property/...`; at
+    // block B the reserved prefix is gone, but it must NOT be silently skipped as a
+    // cross-owner ref — the WeakMap reuse guard must still reject it, else block B's
+    // type would persist a `block-type:properties` ref to block A's property.
+    const sharedProp = seedProperty({
+      seedKey: extensionPropertySeedKey('color'),
+      revision: 1,
+      name: 'color',
+      preset: 'optional-string',
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const typeA = seedType({
+      seedKey: extensionTypeSeedKey('widget'), revision: 1, id: 'widget', label: 'A', properties: [sharedProp],
+    })
+    bindExtensionTypeSeed(typeA, 'block-a')
+    expect(sharedProp.seedKey).toBe('block-a/property/color') // bound in place by block A
+
+    const typeB = seedType({
+      seedKey: extensionTypeSeedKey('widget'), revision: 1, id: 'widget', label: 'B', properties: [sharedProp],
+    })
+    expect(() => bindExtensionTypeSeed(typeB, 'block-b')).toThrow(
+      'Dynamic definition seed declaration was reused across extension blocks',
+    )
+  })
+})
+
 describe('dynamicExtensionsExtension — gate 1 (intent / overrides)', () => {
   it('leaves new user extension blocks disabled until an explicit true override exists', async () => {
     const compileImpl = vi.fn().mockImplementation(async () => ({
@@ -784,6 +1058,204 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
       const [reportedBlockId, reportedError] = errorReporter.mock.calls[0]
       expect(reportedBlockId).toBe('bad-shape')
       expect((reportedError as Error).message).toMatch(/invalid shape/)
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+})
+
+describe('dynamicExtensionsExtension — function-shaped export bind-error attribution', () => {
+  // A function-shaped default export (`export default (ctx) => …`) defers its
+  // contribution binding PAST the loader's per-block try/catch: the wrapper is
+  // invoked later, during whole-app resolution. Before the loader threaded
+  // `errorReporter` into the deferred wrapper, a bind throw from that path fell
+  // through to walkAppExtension's generic catch — logged with no blockId and no
+  // errorReporter, so the block's contributions vanished from the settings UI
+  // with no attribution. These tests pin that the deferred path now attributes
+  // the throw exactly like the direct-export `rejects hard-coded owners` tests.
+  // The gap is loader-wide, so both a type seed and a property seed are covered
+  // to prove the fix is generic, not seed-kind-specific.
+
+  it('attributes a hard-coded type-seed owner thrown from an async function export', async () => {
+    const blocks = [blockData({id: 'ext-fn-type', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => typeSeedsFacet.of(seedType({
+          seedKey: 'example/type/widget',
+          revision: 1,
+          id: 'example-widget',
+          label: 'Example widget',
+        })),
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      // Attributed to the block, and reported exactly once (the deferred wrapper
+      // catches its own throw and recovers to null — walkAppExtension's generic
+      // catch never sees it, so there's no second, block-anonymous report).
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-type',
+        expect.objectContaining({
+          message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes a hard-coded property-seed owner thrown from an async function export', async () => {
+    const blocks = [blockData({id: 'ext-fn-prop', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => definitionSeedsFacet.of(seedProperty({
+          seedKey: 'example/property/status',
+          revision: 1,
+          name: 'example:status',
+          preset: 'boolean',
+          defaultValue: false,
+          changeScope: ChangeScope.BlockDefault,
+        })),
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(definitionSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-prop',
+        expect.objectContaining({
+          message: 'Dynamic property seeds must use extensionPropertySeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes the throw for a SYNC (non-async) function export too', async () => {
+    // The deferred wrapper awaits the function result either way, so the sync
+    // shape must attribute identically to the async one.
+    const blocks = [blockData({id: 'ext-fn-sync', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: () => typeSeedsFacet.of(seedType({
+          seedKey: 'example/type/widget',
+          revision: 1,
+          id: 'example-widget',
+          label: 'Example widget',
+        })),
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-sync',
+        expect.objectContaining({
+          message: 'Dynamic type seeds must use extensionTypeSeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes an invalid return shape from a function export', async () => {
+    // The deferred wrapper's catch is GENERIC, not seed-specific: a function
+    // returning a non-extension value throws inside validateAndPrefix's
+    // invalid-shape branch (not a binder), and that throw must attribute to the
+    // block too. A catch narrowed to only binder errors would let this escape
+    // to walkAppExtension's generic catch, and the seed tests above wouldn't
+    // notice. This is the deferred twin of `reports invalid default-export
+    // shapes` (which only covers the synchronous export shape).
+    const blocks = [blockData({id: 'ext-fn-shape', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => 'not an extension' as unknown as AppExtension,
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      const [reportedBlockId, reportedError] = errorReporter.mock.calls[0]
+      expect(reportedBlockId).toBe('ext-fn-shape')
+      expect((reportedError as Error).message).toMatch(/invalid shape/)
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('attributes an error thrown by the function export itself', async () => {
+    // The other half of the wrapper's try scope: a throw from `extension(context)`
+    // itself (an author-code crash), before validateAndPrefix ever runs on the
+    // result. No other test exercises this sub-path — the seed/shape cases all
+    // throw during validation of the returned value, not during the call.
+    const blocks = [blockData({id: 'ext-fn-throws', content: 'hardcoded'})]
+    const restore = stubCompileByBlockId({
+      hardcoded: {
+        default: async () => {
+          throw new TypeError('author boom')
+        },
+      },
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(typeSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledTimes(1)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-fn-throws',
+        expect.objectContaining({message: 'author boom'}),
+      )
     } finally {
       restore()
       errorSpy.mockRestore()

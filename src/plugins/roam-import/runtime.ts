@@ -1,7 +1,7 @@
 // Idempotent window-hook so the agent runtime / devtools console can
 // kick off an import without going through the file-picker UI.
 //
-// Usage from the agent runtime (yarn agent eval):
+// Usage from the agent runtime (pnpm agent eval):
 //   const json = JSON.parse(await (await fetch('/tmp/roam.json')).text())
 //   return await window.__omniliner.roamImport.run(json)
 

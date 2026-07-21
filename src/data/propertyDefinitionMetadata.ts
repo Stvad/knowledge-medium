@@ -1,6 +1,6 @@
 import {ChangeScope, isChangeScope, type BlockData, type PropertySchemaOrigin} from '@/data/api'
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
-import {seededDefinitionKey} from '@/data/definitionSeeds'
+import {seededDefinitionKey, seedKeyOwner} from '@/data/definitionSeeds'
 import {isPropertySeedKey} from '@/data/propertySeeds'
 import {decodeRowProperty} from '@/data/rowProperty'
 import {
@@ -25,7 +25,7 @@ export interface PropertyDefinitionMetadata {
 }
 
 export const propertySchemaOriginForSeedKey = (seedKey: string): PropertySchemaOrigin => {
-  const owner = seedKey.slice(0, seedKey.indexOf('/property/'))
+  const owner = seedKeyOwner(seedKey)
   return owner === 'system:kernel-data' ? 'kernel' : `plugin:${owner}`
 }
 

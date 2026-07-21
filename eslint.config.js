@@ -39,7 +39,7 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       // Off by design: `only-export-components` guards Vite Fast Refresh, a
       // dev-HMR-only ergonomic. This repo is driven primarily by agents that
-      // verify via `yarn vitest` + the live bridge (not by hand-saving in a
+      // verify via `pnpm vitest` + the live bridge (not by hand-saving in a
       // running dev server), so the rule only emitted ~47 standing warnings
       // that added noise to every lint/check run with no signal. Turn it back
       // on if interactive HMR becomes part of the loop again.

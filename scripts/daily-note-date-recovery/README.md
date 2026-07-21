@@ -85,10 +85,10 @@ No manual server write — the heal is ordinary app operation.
 
 ```bash
 # Dry-run — reports the candidate count, writes nothing:
-yarn agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js
+pnpm agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js
 
 # Apply — performs the writes (HELD until approved):
-yarn agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js \
+pnpm agent --profile ff-vlad-dev eval --file scripts/daily-note-date-recovery/recover.eval.js \
   --data-json '{"apply":true}'
 ```
 
@@ -101,13 +101,13 @@ mid-flight reprojection.
 
 ```bash
 # Local: missing count should drop to 0 (or only future SRS targets remain).
-yarn agent --profile ff-vlad-dev sql all "SELECT COUNT(*) AS missing FROM blocks b JOIN block_types bt ON bt.block_id=b.id AND bt.type='daily-note' WHERE b.workspace_id='ef43b424-80ba-4967-b587-a4c32efd8071' AND b.deleted=0 AND json_extract(b.properties_json,'\$.\"daily-note:date\"') IS NULL"
+pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) AS missing FROM blocks b JOIN block_types bt ON bt.block_id=b.id AND bt.type='daily-note' WHERE b.workspace_id='ef43b424-80ba-4967-b587-a4c32efd8071' AND b.deleted=0 AND json_extract(b.properties_json,'\$.\"daily-note:date\"') IS NULL"
 
 # Upload queue drains as the writes flush:
-yarn agent --profile ff-vlad-dev sql all "SELECT COUNT(*) AS queued FROM ps_crud"
+pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) AS queued FROM ps_crud"
 
 # Server copy: blocks_synced should match local once the queue drains.
-yarn agent --profile ff-vlad-dev sql all "SELECT COUNT(*) AS synced_with_date FROM blocks_synced b JOIN block_types bt ON bt.block_id=b.id AND bt.type='daily-note' WHERE b.workspace_id='ef43b424-80ba-4967-b587-a4c32efd8071' AND json_extract(b.data,'\$.properties.\"daily-note:date\"') IS NOT NULL"
+pnpm agent --profile ff-vlad-dev sql all "SELECT COUNT(*) AS synced_with_date FROM blocks_synced b JOIN block_types bt ON bt.block_id=b.id AND bt.type='daily-note' WHERE b.workspace_id='ef43b424-80ba-4967-b587-a4c32efd8071' AND json_extract(b.data,'\$.properties.\"daily-note:date\"') IS NOT NULL"
 ```
 
 (Adjust the `blocks_synced` JSON path to match the synced-row shape if it

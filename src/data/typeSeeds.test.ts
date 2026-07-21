@@ -126,6 +126,16 @@ describe('isTypeSeedDeclaration', () => {
     expect(isTypeSeedDeclaration({...valid, revision: 0})).toBe(false)
     expect(isTypeSeedDeclaration({...valid, color: 5})).toBe(false)
   })
+
+  it('rejects a properties array with a non-object entry (would throw the materializer)', () => {
+    // Elements must be records: a primitive/null would survive an array-only check
+    // and then throw in canonicalTypeSeedProperties' `'seedKey' in prop`.
+    expect(isTypeSeedDeclaration({...valid, properties: ['not-an-object']})).toBe(false)
+    expect(isTypeSeedDeclaration({...valid, properties: [null]})).toBe(false)
+    // A record element passes this structural gate (per-element schema validity is
+    // the materializer's concern, not this boundary guard).
+    expect(isTypeSeedDeclaration({...valid, properties: [{name: 'x'}]})).toBe(true)
+  })
 })
 
 describe('typeSeedsFacet', () => {

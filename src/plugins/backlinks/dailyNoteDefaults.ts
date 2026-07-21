@@ -1,6 +1,6 @@
 import {
   ChangeScope,
-  defineBlockType,
+  seedType,
   seedProperty,
   type BlockData,
 } from '@/data/api'
@@ -31,7 +31,9 @@ export const dailyNoteBacklinksDefaultsProp = seedProperty({
 /** Per-plugin prefs sub-block for the backlinks plugin. Currently holds
  *  only the daily-note backlinks default filter; per-block filters live
  *  on the target block itself (`backlinksFilterProp`, BlockDefault scope). */
-export const backlinksPrefsType = defineBlockType({
+export const backlinksPrefsType = seedType({
+  seedKey: 'system:backlinks/type/backlinks-prefs',
+  revision: 1,
   id: 'backlinks-prefs',
   label: 'Backlinks',
   properties: [dailyNoteBacklinksDefaultsProp],

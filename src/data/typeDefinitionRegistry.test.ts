@@ -1,10 +1,13 @@
-import {describe, expect, it} from 'vitest'
-import type {AnyPropertySchema} from '@/data/api'
+import {describe, expect, it, vi} from 'vitest'
+import {ChangeScope, type AnyPropertySchema} from '@/data/api'
 import {typeDefinitionBlockId} from '@/data/definitionSeeds'
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
+import {seedProperty} from '@/data/propertySeeds'
 import {seedType} from '@/data/typeSeeds'
 import {
   buildTypeDefinitionRegistry,
+  harvestNestedPropertySeeds,
+  materializingTypeSeeds,
   type ProjectedTypeDefinition,
 } from '@/data/typeDefinitionRegistry'
 
@@ -97,10 +100,11 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.get('page')).toMatchObject({label: 'Page', hideFromCompletion: true})
   })
 
-  it('refuses a claim whose seed key is not a current declaration (forged/foreign)', () => {
+  it('a forged/retired claim never shadows a LIVE declaration for that id', () => {
     // A forged row sits at the deterministic id for an invented /type/ key and
-    // claims 'page'. Its key isn't declared, so it is demoted to its block id —
-    // it must not hijack 'page'.
+    // claims 'page' while 'page' is a live declaration. The declaration outranks it
+    // (§7): 'page' stays the declared Page, and the impostor is retained for
+    // provenance only — never published under 'page' nor under its own block id.
     const forgedKey = 'evil/type/x'
     const blockId = typeDefinitionBlockId(WS, forgedKey)
     const reg = buildTypeDefinitionRegistry({
@@ -108,11 +112,95 @@ describe('buildTypeDefinitionRegistry', () => {
       projectedDefinitions: asMap([
         projected({blockId, typeId: 'page', seedKey: forgedKey, label: 'Impostor'}),
       ]),
+      seeds: [seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'})],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({id: 'page', label: 'Page'})
+    expect(reg.typesById.has(blockId)).toBe(false)
+    expect(reg.definitionsByBlockId.get(blockId)?.seedKey).toBe(forgedKey)
+  })
+
+  it('republishes a retired seed (disabled plugin) under its real id, not its uuid', () => {
+    // A plugin type materialized while enabled, then the plugin toggle went off: the
+    // seed declaration is gone but the backing block persists at its deterministic id,
+    // still claiming 'todo'. It must keep resolving as 'todo' (coherent persistence,
+    // schema-unification §5.3) rather than splitting to the backing-block uuid — the
+    // regression the demote-to-uuid behavior caused for toggleable seeded types.
+    const TODO_KEY = 'system:todo/type/todo'
+    const blockId = typeDefinitionBlockId(WS, TODO_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId, typeId: 'todo', seedKey: TODO_KEY, label: 'Todo'}),
+      ]),
+      seeds: [], // plugin disabled → declaration absent
+    })
+    expect(reg.typesById.get('todo')).toMatchObject({id: 'todo', label: 'Todo'})
+    expect(reg.typesById.has(blockId)).toBe(false)
+    expect(reg.blockIdByTypeId.get('todo')).toBe(blockId)
+  })
+
+  it('resolves competing retired rows for one undeclared id by earliest createdAt', () => {
+    // Two rows claim 'todo' via different valid /type/ keys with no live declaration
+    // (a real retired seed + a later forgery/second client). Earliest createdAt wins
+    // — the §7 resolution that bounds §9's forgery residual so an early real seed
+    // beats a late forgery.
+    const keyEarly = 'system:todo/type/todo'
+    const keyLate = 'evil/type/todo'
+    const earlyId = typeDefinitionBlockId(WS, keyEarly)
+    const lateId = typeDefinitionBlockId(WS, keyLate)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: lateId, typeId: 'todo', seedKey: keyLate, label: 'Forgery', createdAt: 200}),
+        projected({blockId: earlyId, typeId: 'todo', seedKey: keyEarly, label: 'Real', createdAt: 100}),
+      ]),
       seeds: [],
     })
-    expect(reg.typesById.has('page')).toBe(false)
-    expect(reg.typesById.get(blockId)).toMatchObject({id: blockId, label: 'Impostor'})
-    expect(reg.blockIdByTypeId.get(blockId)).toBe(blockId)
+    expect(reg.typesById.get('todo')).toMatchObject({label: 'Real'})
+    expect(reg.blockIdByTypeId.get('todo')).toBe(earlyId)
+  })
+
+  it('does not let a retired row overwrite a genuine user row already published under that id', () => {
+    // Abnormal but reachable (a deterministic-id caller / import / bridge eval can
+    // mint a block-type block with a literal short id, not a fresh uuid): a genuine
+    // user row's blockId equals a retired plugin type's claimed id. Step 2 publishes
+    // the user row under 'todo'; step 3 must NOT clobber it with the retired row —
+    // the user row wins, the retired row stays provenance-only.
+    const retiredKey = 'system:todo/type/todo'
+    const retiredId = typeDefinitionBlockId(WS, retiredKey)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: 'todo', label: 'My User Todo'}),
+        projected({blockId: retiredId, typeId: 'todo', seedKey: retiredKey, label: 'Retired Plugin Todo'}),
+      ]),
+      seeds: [],
+    })
+    expect(reg.typesById.get('todo')).toMatchObject({id: 'todo', label: 'My User Todo'})
+    expect(reg.blockIdByTypeId.get('todo')).toBe('todo')
+    expect(reg.typesById.has(retiredId)).toBe(false)
+    expect(reg.definitionsByBlockId.get(retiredId)?.seedKey).toBe(retiredKey)
+  })
+
+  it('breaks an equal-createdAt tie between retired rows by lexicographically-lower blockId', () => {
+    // Two retired rows claim 'todo' with the SAME createdAt; the stable blockId
+    // tiebreak (lexicographically lower wins) keeps resolution deterministic across
+    // clients regardless of projected-row iteration order.
+    const keyA = 'system:todo/type/todo'
+    const keyB = 'evil/type/todo'
+    const idA = typeDefinitionBlockId(WS, keyA)
+    const idB = typeDefinitionBlockId(WS, keyB)
+    const lower = idA < idB ? idA : idB
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: idA, typeId: 'todo', seedKey: keyA, label: 'A', createdAt: 100}),
+        projected({blockId: idB, typeId: 'todo', seedKey: keyB, label: 'B', createdAt: 100}),
+      ]),
+      seeds: [],
+    })
+    expect(reg.typesById.get('todo')).toMatchObject({label: lower === idA ? 'A' : 'B'})
+    expect(reg.blockIdByTypeId.get('todo')).toBe(lower)
   })
 
   it('excludes rows from a foreign workspace', () => {
@@ -155,18 +243,31 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(bare).not.toHaveProperty('description')
   })
 
-  it('fails closed on two seeds claiming one membership id (keeps the first)', () => {
-    // A plugin/dynamic seed reusing a built-in id must be observable, not a
-    // silent last-wins hijack of the published type shape.
-    const reg = buildTypeDefinitionRegistry({
-      workspaceId: WS,
-      projectedDefinitions: new Map(),
-      seeds: [
-        seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Real Page'}),
-        seedType({seedKey: 'evil/type/page', revision: 1, id: 'page', label: 'Impostor Page'}),
-      ],
-    })
-    expect(reg.typesById.get('page')).toMatchObject({label: 'Real Page'})
+  it('built-in (system:) seed outranks a third-party impostor for a shared membership id, either order', () => {
+    // A third-party seed reusing a built-in id must NOT take it over. The built-in
+    // (`system:kernel-data`) seed wins regardless of contribution order, even though
+    // 'evil/type/page' sorts lexicographically BELOW it — the built-in tier dominates
+    // the lowest-key tiebreak. (Old behavior fail-closed; now it resolves to the built-in.)
+    const real = seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Real Page'})
+    const impostor = seedType({seedKey: 'evil/type/page', revision: 1, id: 'page', label: 'Impostor Page'})
+    const build = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+      buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+    expect(build([real, impostor]).typesById.get('page')).toMatchObject({label: 'Real Page'})
+    expect(build([impostor, real]).typesById.get('page')).toMatchObject({label: 'Real Page'})
+  })
+
+  it('a non-kernel BUILT-IN plugin seed also outranks a lower-sorting third-party (built-in tier, not kernel-only)', () => {
+    // Pins the generalization from kernel-only to any `system:` owner: `system:todo`
+    // is NOT the kernel yet must still beat a third-party `aaa/type/todo` that sorts
+    // lexicographically BELOW it — so a dynamic extension (whose bound uuid owner
+    // likewise sorts below `system:`) can't take over a built-in PLUGIN id. Fails if
+    // the tier reverts to `=== 'system:kernel-data'`.
+    const builtin = seedType({seedKey: 'system:todo/type/todo', revision: 1, id: 'todo', label: 'Builtin'})
+    const third = seedType({seedKey: 'aaa/type/todo', revision: 1, id: 'todo', label: 'Third-party'})
+    const build = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+      buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+    expect(build([builtin, third]).typesById.get('todo')).toMatchObject({label: 'Builtin'})
+    expect(build([third, builtin]).typesById.get('todo')).toMatchObject({label: 'Builtin'})
   })
 
   it('retains an inactive (dup-id-loser) seed mirror for provenance only, not as a user type', () => {
@@ -206,18 +307,222 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.get(backingId)).toMatchObject({id: backingId, label: 'Poison'})
   })
 
-  it('indexes declared seeds by key, keeping the first on a duplicate key', () => {
+  it('indexes declared seeds by key, keeping the first on a duplicate key and recording it as contested', () => {
+    const TODO_KEY = 'system:kernel-data/type/todo'
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: new Map(),
       seeds: [
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'}),
-        seedType({seedKey: 'system:kernel-data/type/todo', revision: 1, id: 'todo', label: 'Todo'}),
+        seedType({seedKey: TODO_KEY, revision: 1, id: 'todo', label: 'Todo'}),
         seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Duplicate'}),
       ],
     })
     expect(reg.seedsByKey.size).toBe(2)
     expect(reg.seedsByKey.get(PAGE_KEY)?.label).toBe('Page')
+    // In-memory resolution keeps the first (transient, rebuilt each load)...
     expect(reg.typesById.get('page')).toMatchObject({label: 'Page'})
+    // ...but the contested key is flagged so the create/restore-only materializer
+    // withholds its order-dependent backing row; the uncontested key is not.
+    expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
+    expect(reg.contestedSeedKeys.has(TODO_KEY)).toBe(false)
+  })
+
+  it('refuses getTypeBlockId for an already-mirrored seed whose KEY is now contested', () => {
+    // A backing row exists (materialized when the key was uncontested); a later
+    // load adds a second contribution with the same key. The materializer can't
+    // delete the row, so `getTypeBlockId` must fail closed rather than point at the
+    // stale, order-dependent mirror.
+    const backingId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([projected({blockId: backingId, seedKey: PAGE_KEY, label: 'First'})]),
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'first', label: 'First'}),
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'second', label: 'Second'}),
+      ],
+    })
+    expect(reg.contestedSeedKeys.has(PAGE_KEY)).toBe(true)
+    // Provenance is retained (the read-only gate still recognizes the row)...
+    expect(reg.definitionsByBlockId.has(backingId)).toBe(true)
+    // ...but the block-id binding is refused until the duplicate key is removed.
+    expect(reg.blockIdByTypeId.has('first')).toBe(false)
+  })
+
+  it('winner-resolves a membership-ID collision to the lowest seed key and binds only its mirror', () => {
+    const KEY_B = 'system:kernel-data/type/todo' // sorts after PAGE_KEY ('page' < 'todo')
+    const winnerBlockId = typeDefinitionBlockId(WS, PAGE_KEY)
+    const loserBlockId = typeDefinitionBlockId(WS, KEY_B)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      // Both installs already materialized a mirror; both carry valid provenance.
+      projectedDefinitions: asMap([
+        projected({blockId: winnerBlockId, seedKey: PAGE_KEY, label: 'A'}),
+        projected({blockId: loserBlockId, seedKey: KEY_B, label: 'B'}),
+      ]),
+      // Distinct keys, same membership id → winner-resolved (not withheld).
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+        seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+      ],
+    })
+    // The lowest-seed-key seed (PAGE_KEY) wins id 'shared': it publishes and its
+    // mirror binds getTypeBlockId, so the type resolves to one stable block instead
+    // of failing closed.
+    expect(reg.seedKeyById.get('shared')).toBe(PAGE_KEY)
+    expect(reg.typesById.get('shared')).toMatchObject({label: 'A'})
+    expect(reg.blockIdByTypeId.get('shared')).toBe(winnerBlockId)
+    // The loser's mirror stays provenance-only (the read-only gate still recognizes
+    // it) but never rebinds 'shared' to its own block.
+    expect(reg.definitionsByBlockId.has(loserBlockId)).toBe(true)
+    expect(reg.blockIdByTypeId.get('shared')).not.toBe(loserBlockId)
+  })
+
+  it('winner-resolution is order-independent (contribution order does not change the winner)', () => {
+    const KEY_B = 'system:kernel-data/type/todo'
+    const build = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+      buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+    const lowFirst = build([
+      seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+      seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+    ])
+    const highFirst = build([
+      seedType({seedKey: KEY_B, revision: 1, id: 'shared', label: 'B'}),
+      seedType({seedKey: PAGE_KEY, revision: 1, id: 'shared', label: 'A'}),
+    ])
+    // Either order picks the lowest seed key — the whole point vs a keep-first pick,
+    // whose winner (and materialized backing block) would flip with load order.
+    expect(lowFirst.seedKeyById.get('shared')).toBe(PAGE_KEY)
+    expect(highFirst.seedKeyById.get('shared')).toBe(PAGE_KEY)
+    expect(highFirst.typesById.get('shared')).toMatchObject({label: 'A'})
+  })
+})
+
+// A minimal own-owned property seed for the given owner (`<owner>/property/<name>`).
+const prop = (owner: string, name: string) => seedProperty({
+  seedKey: `${owner}/property/${name}`,
+  revision: 1,
+  name: `${owner}:${name}`,
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const snapshotOf = (seeds: Parameters<typeof buildTypeDefinitionRegistry>[0]['seeds']) =>
+  buildTypeDefinitionRegistry({workspaceId: WS, projectedDefinitions: new Map(), seeds})
+
+describe('materializingTypeSeeds', () => {
+  it('returns the winners and excludes a contested-KEY seed', () => {
+    const DUP = 'system:test/type/dup'
+    const clean = seedType({seedKey: 'system:test/type/clean', revision: 1, id: 'clean', label: 'Clean'})
+    const snap = snapshotOf([
+      seedType({seedKey: DUP, revision: 1, id: 'a', label: 'A'}),
+      seedType({seedKey: DUP, revision: 1, id: 'b', label: 'B'}), // same key → contested
+      clean,
+    ])
+    const keys = materializingTypeSeeds(snap).map(s => s.seedKey)
+    expect(keys).toContain('system:test/type/clean')
+    // The contested key's keep-first winner is order-dependent, so it never materializes.
+    expect(keys).not.toContain(DUP)
+  })
+})
+
+describe('harvestNestedPropertySeeds', () => {
+  it('auto-contributes an own-owned inline property that was not seeded separately', () => {
+    const color = prop('plugin:demo', 'color')
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [color]}),
+    ])
+    const harvested = harvestNestedPropertySeeds(snap, [])
+    expect(harvested).toEqual([color])
+  })
+
+  it('does NOT re-contribute a property already seeded separately (gap-fill; else the registry throws on a dup key)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const color = prop('plugin:demo', 'color')
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [color]}),
+    ])
+    // The SAME object embedded AND seeded separately (the `todo` pattern) is deduped
+    // silently — the identity guard must NOT emit a spurious conflict warn every rebuild.
+    expect(harvestNestedPropertySeeds(snap, [color])).toEqual([])
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('leaves a CROSS-owner reference as a pure ref (a type never materializes another owner’s property)', () => {
+    const foreign = prop('plugin:other', 'color') // owner differs from the type
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/widget', revision: 1, id: 'widget', label: 'W', properties: [foreign]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [])).toEqual([])
+  })
+
+  it('harvests only from the WINNING type seed, never a loser install’s nested property', () => {
+    // Two installs collide on id 'widget'; the lower seed key (owner-a) wins.
+    const propA = prop('owner-a', 'color')
+    const propB = prop('owner-b', 'color')
+    const snap = snapshotOf([
+      seedType({seedKey: 'owner-a/type/widget', revision: 1, id: 'widget', label: 'A', properties: [propA]}),
+      seedType({seedKey: 'owner-b/type/widget', revision: 1, id: 'widget', label: 'B', properties: [propB]}),
+    ])
+    const harvested = harvestNestedPropertySeeds(snap, [])
+    // Only the winner's property is auto-contributed; the loser's would orphan (its
+    // type never materializes to reference it).
+    expect(harvested).toEqual([propA])
+  })
+
+  it('warns on an own-owned STUB ref that is neither a full declaration nor seeded separately', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const stubType = seedType({
+      seedKey: 'plugin:demo/type/widget',
+      revision: 1,
+      id: 'widget',
+      label: 'W',
+      // A bare ref (valid /property/ key, own owner) that carries no preset/codec →
+      // nothing to materialize, so its block-type:properties ref will dangle.
+      properties: [{seedKey: 'plugin:demo/property/ghost'} as unknown as AnyPropertySchema],
+    })
+    const harvested = harvestNestedPropertySeeds(snapshotOf([stubType]), [])
+    expect(harvested).toEqual([])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('plugin:demo/property/ghost'))
+    warn.mockRestore()
+  })
+
+  it('keeps the first and WARNS when two types inline the same own key with different declarations', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const declA = prop('plugin:demo', 'shared')
+    const declB = seedProperty({
+      seedKey: 'plugin:demo/property/shared', revision: 1, name: 'plugin:demo:CONFLICT',
+      preset: 'optional-string', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
+    })
+    // Two winning types (different ids, same owner) inline the SAME property key with
+    // DIFFERENT declarations. Only the first materializes the shared deterministic
+    // block, so the conflicting second must be dropped-and-warned, not silently kept.
+    const snap = snapshotOf([
+      seedType({seedKey: 'plugin:demo/type/a', revision: 1, id: 'a', label: 'A', properties: [declA]}),
+      seedType({seedKey: 'plugin:demo/type/b', revision: 1, id: 'b', label: 'B', properties: [declB]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [])).toEqual([declA])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('already declared elsewhere'))
+    warn.mockRestore()
+  })
+
+  it('does NOT warn a stub ref when a full declaration provides the same key (any order)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const full = prop('plugin:demo', 'color')
+    // A stub ref in one type + the full declaration of the same key in another: the
+    // full declaration provides the key, so the stub's dangling-ref warning is
+    // suppressed (it only fires when nothing ever materializes the key).
+    const snap = snapshotOf([
+      seedType({
+        seedKey: 'plugin:demo/type/a', revision: 1, id: 'a', label: 'A',
+        properties: [{seedKey: 'plugin:demo/property/color'} as unknown as AnyPropertySchema],
+      }),
+      seedType({seedKey: 'plugin:demo/type/b', revision: 1, id: 'b', label: 'B', properties: [full]}),
+    ])
+    expect(harvestNestedPropertySeeds(snap, [])).toEqual([full])
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

@@ -1,7 +1,7 @@
 import {
   ChangeScope,
-  defineBlockType,
   seedProperty,
+  seedType,
 } from '@/data/api'
 
 export const TODO_TYPE = 'todo'
@@ -35,7 +35,9 @@ export const roamTodoStateProp = seedProperty<RoamTodoState>({
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const todoType = defineBlockType({
+export const todoType = seedType({
+  seedKey: 'system:todo/type/todo',
+  revision: 1,
   id: TODO_TYPE,
   label: 'Todo',
   // The checkbox renderer already conveys todo-ness on every todo

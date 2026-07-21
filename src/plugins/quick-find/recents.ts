@@ -1,6 +1,6 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { ChangeScope, defineBlockType, seedProperty, type PropertySeedDeclaration } from '@/data/api'
+import { ChangeScope, seedType, seedProperty, type PropertySeedDeclaration } from '@/data/api'
 import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
 
 export const RECENT_BLOCKS_LIMIT = 10
@@ -23,7 +23,9 @@ export const recentBlockIdsProp = seedProperty({
 // readonly. Preserve this handle's historical string[] contract locally.
 }) as PropertySeedDeclaration<string[]>
 
-export const quickFindUIStateType = defineBlockType({
+export const quickFindUIStateType = seedType({
+  seedKey: 'system:quick-find/type/quick-find-ui-state',
+  revision: 1,
   id: 'quick-find-ui-state',
   label: 'Quick find',
   properties: [recentBlockIdsProp],

@@ -1,9 +1,14 @@
 /** Bundling helpers for plugin-owned prefs / ui-state sub-blocks.
  *
  *  Each plugin that owns a per-user pref sub-block or a per-device
- *  ui-state sub-block declares it as a `TypeContribution` and registers
- *  via one of the helpers below. The helpers pair the `typesFacet`
- *  registration with an idle-time eager-bootstrap `AppEffect` so the
+ *  ui-state sub-block declares its container type and registers via one
+ *  of the helpers below. The helpers pair the type registration — a
+ *  `seedType` (which materializes a per-workspace backing block; used by
+ *  static plugins and, via `extensionTypeSeedKey`, by dynamic extensions),
+ *  or a plain `TypeContribution` on the static `typesFacet` for a caller
+ *  that still passes a bare `defineBlockType` (see
+ *  `hiddenPluginTypeContribution`) — with an idle-time eager-bootstrap
+ *  `AppEffect` so the
  *  sub-block exists before the user navigates to the Preferences /
  *  ui-state tree — without this, plugin sub-blocks would only appear
  *  after their hooks run for the first time, making configurable
@@ -11,7 +16,8 @@
  */
 
 import type { TypeContribution } from '@/data/api'
-import { typesFacet } from '@/data/facets.js'
+import { typeSeedsFacet, typesFacet } from '@/data/facets.js'
+import { isTypeSeedDeclaration, type TypeSeedDeclaration } from '@/data/typeSeeds.js'
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { getPluginPrefsBlock, getPluginUIStateBlock } from '@/data/stateBlocks.js'
@@ -38,24 +44,43 @@ const pluginUIStateBootstrapEffect = (type: TypeContribution): AppEffect => ({
   },
 })
 
-/** Bundle a plugin-prefs `TypeContribution` registration with an
- *  idle-time eager-bootstrap effect. Spread the returned array into the
- *  plugin's `AppExtension`:
+/** Register the container type, hidden from `#` completion. Prefs/ui-state
+ *  containers are plumbing for the # dropdown (never offer to tag a block
+ *  "Backlinks prefs") — but their chip is informative when the container block
+ *  itself is on screen, so ONLY completion is hidden, forced here regardless of
+ *  what the caller declared. A `seedType` is routed to `typeSeedsFacet` so it
+ *  materializes a per-workspace backing block — for static plugins, and for
+ *  dynamic extensions too (they build a block-scoped `seedKey` via
+ *  `extensionTypeSeedKey`, which the loader binds to the extension block). A
+ *  plain `TypeContribution` (a caller still passing a bare `defineBlockType`)
+ *  falls back to the static `typesFacet`. Forcing `hideFromCompletion`
+ *  preserves a `TypeSeedDeclaration`'s `seedKey`/`revision`, so the spread
+ *  result is still a valid seed. */
+const hiddenPluginTypeContribution = (
+  type: TypeContribution | TypeSeedDeclaration,
+  source: string,
+): AppExtension =>
+  isTypeSeedDeclaration(type)
+    ? typeSeedsFacet.of({...type, hideFromCompletion: true}, {source})
+    : typesFacet.of({...type, hideFromCompletion: true}, {source})
+
+/** Bundle a plugin-prefs container-type registration with an idle-time
+ *  eager-bootstrap effect. Pass a `seedType` (preferred — materializes a
+ *  backing block; both static plugins and, via `extensionTypeSeedKey`, dynamic
+ *  extensions); a plain `TypeContribution` (a bare `defineBlockType`) is also
+ *  accepted and routed to the static `typesFacet`. Spread the returned array
+ *  into the plugin's `AppExtension`:
  *
  *      export const myPlugin: AppExtension = [
- *        ...pluginPrefsExtension(myPrefsType, 'my-plugin'),
+ *        ...pluginPrefsExtension(myPrefsSeedType, 'my-plugin'),
  *        // …other facet contributions…
  *      ]
  */
 export const pluginPrefsExtension = (
-  type: TypeContribution,
+  type: TypeContribution | TypeSeedDeclaration,
   source: string,
 ): readonly AppExtension[] => [
-  // Prefs containers are plumbing for the # dropdown (never offer to
-  // tag a block "Backlinks prefs"), but their chip is informative when
-  // the container block itself is on screen — so only completion is
-  // hidden.
-  typesFacet.of({...type, hideFromCompletion: true}, {source}),
+  hiddenPluginTypeContribution(type, source),
   appEffectsFacet.of(pluginPrefsBootstrapEffect(type), {source}),
 ]
 
@@ -63,10 +88,9 @@ export const pluginPrefsExtension = (
  *  ui-state subtree (scoped via ChangeScope.UiState — non-undoable but
  *  still synced). */
 export const pluginUIStateExtension = (
-  type: TypeContribution,
+  type: TypeContribution | TypeSeedDeclaration,
   source: string,
 ): readonly AppExtension[] => [
-  // UI-state containers are plumbing, not tags — see pluginPrefsExtension.
-  typesFacet.of({...type, hideFromCompletion: true}, {source}),
+  hiddenPluginTypeContribution(type, source),
   appEffectsFacet.of(pluginUIStateBootstrapEffect(type), {source}),
 ]

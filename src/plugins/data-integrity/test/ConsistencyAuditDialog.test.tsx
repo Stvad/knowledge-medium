@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * The on-demand audit results dialog. Covers the contracts it owns:
  *   1. offending block ids are shown IN FULL and are copy-to-clipboard,

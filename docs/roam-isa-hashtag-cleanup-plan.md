@@ -73,7 +73,7 @@ appendix; summary:
 
 ## Migration algorithm (idempotent, workspace-scoped)
 
-Run via a one-shot `yarn agent --profile ff-vlad-dev eval` script using
+Run via a one-shot `pnpm agent --profile ff-vlad-dev eval` script using
 **repo/tx APIs** (not raw SQL), so `references_json`, backlinks, history,
 and sync all stay consistent. Scope every write to workspace
 `ef43b424…` (per the "don't touch unopened workspaces" rule).

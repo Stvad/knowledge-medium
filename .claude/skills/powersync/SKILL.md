@@ -42,7 +42,7 @@ npx powersync@latest fetch config   # prints the LIVE deployed config — grep f
 ```
 
 If the deployed sync rules already reflect your change, you're done. If not, retry with a longer wait: `npx powersync@latest deploy sync-config --deploy-timeout=600`.
-- **`powersync/sync-config.yaml` is GENERATED** by `yarn gen:sync-config` from the TS column lists (`src/data/blockSchema.ts` / `workspaceSchema.ts`). **Never hand-edit it** — `yarn check` runs `check:sync-config` and fails on hand-edits.
+- **`powersync/sync-config.yaml` is GENERATED** by `pnpm gen:sync-config` from the TS column lists (`src/data/blockSchema.ts` / `workspaceSchema.ts`). **Never hand-edit it** — `pnpm run check` runs `check:sync-config` and fails on hand-edits.
 - A synced-column change is a three-layer change (Postgres migration + local SQLite raw-table mapping + `src/types.ts`) — see the `supabase` skill.
 
 ## Using in a fresh git worktree

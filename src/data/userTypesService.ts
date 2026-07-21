@@ -55,9 +55,10 @@ const USER_DATA_SOURCE_ID = 'user-data'
  *  parsed metadata (including the §9 `block-type:type-id` claim + any `/type/`
  *  seed key) keyed by the BLOCK id, and `buildTypeDefinitionRegistry` (the
  *  declaration-authoritative id-keyed registry) resolves the claim downstream —
- *  binding a claim only to a real declared seed and demoting a
- *  forged/foreign/retired seed-key row to its own block id, so no synced/
- *  imported row can hijack a kernel/plugin id. Property resolution: each ref is
+ *  binding a claim only to a real declared seed and refusing any
+ *  forged/foreign/retired seed-key row that claims an id a live declaration owns
+ *  (the declaration always wins), so no synced/imported row can hijack a
+ *  kernel/plugin id. Property resolution: each ref is
  *  resolved through the schema projector's handle + the workspace-bound central
  *  resolver; refList entries that don't resolve to the selected workspace
  *  definition and locally available behavior are silently dropped (they fill in

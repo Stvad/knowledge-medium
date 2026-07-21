@@ -42,7 +42,7 @@ Then in the Tailscale **admin console** (login.tailscale.com/admin/dns) enable *
 tailscale serve --bg http://localhost:5173
 ```
 - Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `[::1]:5173` (IPv6-only); serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` resolves to `::1` and works.
-- Run the dev server with **`VITE_TUNNEL=1 yarn dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `yarn dev` is unaffected.
+- Run the dev server with **`VITE_TUNNEL=1 pnpm dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `pnpm dev` is unaffected.
 - Sanity-check from the Mac (Homebrew `tailscaled` doesn't wire MagicDNS into the macOS resolver, so force-resolve):
   ```bash
   curl -s --resolve <your-machine>.<tailnet>.ts.net:443:$(tailscale ip -4 | head -1) \
@@ -88,7 +88,7 @@ Override the tab match (default `ts.net`) with `MATCH=<substr>`.
 - **Capture the event sequence.** Install capture-phase listeners for `keydown`/`beforeinput`/`input` into a `window.__ev` buffer, have the user do the gesture once, then read the buffer. Reveals double-fires and which `inputType` actually drives the change.
 - **A/B guard experiment on-device.** To isolate which path inserts/mutates, install a listener that `preventDefault()`s a *candidate* cause, have the user reproduce, and measure the delta. (We proved a native `insertLineBreak` was the *sole* inserter by suppressing it and seeing zero change.)
 - **Measure structurally, not visually.** e.g. count `.cm-line` elements in the focused `.cm-editor` to count newlines; read `.cm-content` text; inspect app state via the data layer.
-- **Validate the fix live.** Edit code → `node ios.mjs eval '(() => { setTimeout(() => location.reload(), 50); return "reloading" })()'` (vite serves fresh modules) → user does the physical gesture once → re-measure. Then `yarn run check` and commit. Keep the unit test as the regression guard (native-only bugs won't be caught by jsdom/Playwright, but the *handler* behavior is testable — dispatch a synthetic `beforeinput` at the CM `contentDOM`; mark the file `// @vitest-environment jsdom`).
+- **Validate the fix live.** Edit code → `node ios.mjs eval '(() => { setTimeout(() => location.reload(), 50); return "reloading" })()'` (vite serves fresh modules) → user does the physical gesture once → re-measure. Then `pnpm run check` and commit. Keep the unit test as the regression guard (native-only bugs won't be caught by jsdom/Playwright, but the *handler* behavior is testable — dispatch a synthetic `beforeinput` at the CM `contentDOM`; mark the file `// @vitest-environment jsdom`).
 
 ## Teardown
 ```bash

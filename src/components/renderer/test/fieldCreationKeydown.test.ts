@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * The `>` field-creation keydown guard from CodeMirrorContentRenderer. The
  * effect (convertEmptyChildBlockToProperty) is tested in propertyCreation.test;

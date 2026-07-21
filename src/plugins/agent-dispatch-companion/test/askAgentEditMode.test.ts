@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * The edit-mode Ask Agent action must work from the LIVE editor doc,
  * not the persisted block: the DB trails the editor by the

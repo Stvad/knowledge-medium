@@ -353,7 +353,7 @@ const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
   if (!token) {
-    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` first.`)
+    throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`kmagent --profile ${selectedProfileName} connect\` first.`)
   }
 
   const before = await whoamiWithToken(token).catch(() => null)
@@ -438,7 +438,7 @@ const connectWithToken = async (
     if (!saveBeforeVerify) throw error
     process.stdout.write(
       `Token saved at ${tokenStorePath} (profile: ${selectedProfileName}), but bridge contact failed: ${errorMessage(error)}\n` +
-      `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
+      `Make sure the app tab is open. Run \`kmagent whoami\` to verify.\n`,
     )
   }
 }
@@ -471,7 +471,7 @@ const connectInteractively = async ({force = false} = {}) => {
     if (existing) {
       process.stdout.write(
         `Profile "${selectedProfileName}" has a saved token but no app tab is currently connected.\n` +
-        `Open or focus the app tab, or run \`yarn agent whoami\` to recheck. Re-pairing anyway…\n\n`,
+        `Open or focus the app tab, or run \`kmagent whoami\` to recheck. Re-pairing anyway…\n\n`,
       )
     }
   }
@@ -583,7 +583,7 @@ cli
     if (!token) {
       throw new Error(
         `No agent token configured for profile "${selectedProfileName}". `
-        + `Run \`yarn agent --profile ${selectedProfileName} connect\` first.`,
+        + `Run \`kmagent --profile ${selectedProfileName} connect\` first.`,
       )
     }
     const info = await whoamiWithToken(token)
@@ -778,7 +778,7 @@ cli
   .option('--limit <n>', 'Max substring candidates (default 20)')
   .action(async (name: unknown, options: {workspace?: string, limit?: string}) => {
     const text = toStringArray(name).join(' ').trim()
-    if (!text) throw new Error('page requires a <name> (e.g. `yarn agent page "Project Alpha"`)')
+    if (!text) throw new Error('page requires a <name> (e.g. `kmagent page "Project Alpha"`)')
     await runAndPrint({
       type: 'page',
       name: text,
@@ -792,7 +792,7 @@ cli
   .option('--workspace <id>', 'Workspace id (defaults to the active one)')
   .action(async (date: unknown, options: {workspace?: string}) => {
     const text = toStringArray(date).join(' ').trim()
-    if (!text) throw new Error('daily-note requires a <date> (e.g. `yarn agent daily-note yesterday`)')
+    if (!text) throw new Error('daily-note requires a <date> (e.g. `kmagent daily-note yesterday`)')
     await runAndPrint({
       type: 'daily-note',
       date: text,

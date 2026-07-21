@@ -1,6 +1,6 @@
 /**
  * Off-path ciphertext audit entrypoint (design §10.1 / §17).
- * Run: `yarn audit:attachments-ciphertext` (vite-node).
+ * Run: `pnpm audit:attachments-ciphertext` (vite-node).
  *
  * Verifies every object under an E2EE-workspace prefix in the `attachments`
  * bucket is an `encb:v1:` ciphertext envelope — the tripwire for an honest-client

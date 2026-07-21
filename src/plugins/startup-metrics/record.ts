@@ -10,7 +10,7 @@
  * "store it so we can see TTI trend, not just feel it" half.
  */
 
-import { ChangeScope, defineBlockType, seedProperty } from '@/data/api'
+import { ChangeScope, seedProperty, seedType } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
@@ -79,7 +79,9 @@ export const startupRecordProp = seedProperty<StartupRecordData | undefined>({
 })
 
 /** Parent ui-state container; each boot adds one child under it. */
-export const startupMetricsUIStateType = defineBlockType({
+export const startupMetricsUIStateType = seedType({
+  seedKey: 'system:startup-metrics/type/startup-metrics',
+  revision: 1,
   id: 'startup-metrics',
   label: 'Startup metrics',
   // Plumbing for the # dropdown, but the chip is informative on the

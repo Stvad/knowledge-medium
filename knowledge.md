@@ -9,8 +9,8 @@
 A Workflowy-like editor with dynamic block rendering capabilities. Blocks can contain custom renderers that are compiled and executed at runtime.
 
 ## Dependency management
-- `yarn` is used for package management
-- Run `yarn tsc -b` to type check the project (uses TypeScript's build mode with project references)
+- `pnpm` is used for package management
+- Run `pnpm tsc -b` to type check the project (uses TypeScript's build mode with project references)
 
 ## Architecture
 

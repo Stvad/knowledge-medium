@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+// Stays on jsdom: the receiver-binding test below wraps the accessor on
+// KeyboardEvent.prototype.code, which only exists as a prototype getter in
+// jsdom (matching real browsers). happy-dom defines `code` as an own instance
+// property, so the brand-check semantic under test isn't expressible there.
 import { describe, expect, it } from 'vitest'
 import { withRecoveredLetterKey } from '../utils.ts'
 

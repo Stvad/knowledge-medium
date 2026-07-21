@@ -102,7 +102,7 @@ So the safe window is automatic — but the rule above must hold until Phase D.
    existing plaintext workflows keep working.
 2. **Deploy the PowerSync sync rules** so clients receive the new `workspaces`
    columns (`encryption_mode`, `wk_canary`). `powersync/sync-config.yaml` is a
-   generated file — regenerate with `yarn gen:sync-config` (sourced from the TS
+   generated file — regenerate with `pnpm gen:sync-config` (sourced from the TS
    column lists in `src/data/blockSchema.ts` + `src/data/workspaceSchema.ts`)
    and deploy the result to the PowerSync instance. Must come **after** step 1,
    since the rules reference columns that have to exist first. (Schema change

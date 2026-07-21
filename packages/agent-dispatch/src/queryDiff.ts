@@ -7,9 +7,9 @@
  * re-exports it for the daemon's call sites). `watchers.ts` imports
  * `./config.js`, which pulls in `@knowledge-medium/agent-cli/config`; that
  * package export resolves to the untracked `packages/agent-cli/dist/`, so a
- * clean CI runner with no prior `yarn run compile` fails module resolution
+ * clean CI runner with no prior `pnpm run compile` fails module resolution
  * before any code runs. The nightly fuzz sweep hits exactly that path
- * (`fuzz-nightly.yml` runs `yarn fuzz` right after `yarn install`), so this
+ * (`fuzz-nightly.yml` runs `pnpm fuzz` right after `pnpm install`), so this
  * file keeping ZERO heavy imports is what lets `queryDiff.fuzz.test.ts`
  * import the diff logic and run pre-build.
  */

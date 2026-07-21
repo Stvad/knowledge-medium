@@ -7,7 +7,7 @@ import {
   definitionSeedsFacet,
   queriesFacet,
   systemPagesFacet,
-  typesFacet,
+  typeSeedsFacet,
 } from '@/data/facets'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions'
 import type { AppExtension } from '@/facets/facet'
@@ -18,7 +18,7 @@ import { getOrCreateLocationsPage } from './locationsPage'
 import { placesUnderBlockQuery } from './query'
 
 export const geoDataExtension: AppExtension = [
-  GEO_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'geo'})),
+  GEO_TYPE_CONTRIBUTIONS.map(t => typeSeedsFacet.of(t, {source: 'geo'})),
   GEO_PROPERTY_SCHEMAS.map(s => definitionSeedsFacet.of(s, {source: 'geo'})),
   queriesFacet.of(placesUnderBlockQuery, {source: 'geo'}),
   codeMirrorExtensionsFacet.of(geoCodeMirrorExtensions, {source: 'geo'}),

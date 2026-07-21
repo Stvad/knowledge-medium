@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keyStore.js'
 import { getModePin } from '../modePin.js'
@@ -104,7 +104,10 @@ describe('createEncryptedWorkspace (§8.1)', () => {
     // a server-side encrypted workspace this device can never open.
     const keyStore = new InMemoryWorkspaceKeyStore()
     let rpcCalled = false
-    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    // Spy on the instance, not Storage.prototype: happy-dom's localStorage
+    // doesn't dispatch setItem through the prototype, so a prototype spy is
+    // never hit there. An own-property spy intercepts in both environments.
+    const spy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
       throw new Error('localStorage is blocked')
     })
     try {
