@@ -52,44 +52,79 @@ describe('runArrivalProcessors', () => {
     // The CRITICAL INVARIANT, enforced rather than documented: a stamped
     // source turns every later write in the window into an upload, echoing
     // sync-applied rows back to the server as fresh local edits. Silent at
-    // runtime, so it has to fail loudly here.
+    // runtime, so it has to fail loudly here — and OUTSIDE the per-row
+    // quarantine, so it's fatal even though the stamp itself didn't throw.
     const source = {value: null as string | null}
     const offender: ArrivalProcessor = {
       name: 'test.stampsSource',
-      apply: async () => { source.value = 'user' },
+      prepare: async () => async () => { source.value = 'user' },
     }
     await expect(
       runArrivalProcessors(fakeTx(source), snapshotsWith('b1'), deps, [offender]),
     ).rejects.toThrow(/test\.stampsSource left tx_context\.source/)
   })
 
-  it('accepts a processor that leaves the source alone', async () => {
+  it('accepts a processor that leaves the source alone, running its handler per row', async () => {
     const source = {value: null as string | null}
     let seen = 0
     const wellBehaved: ArrivalProcessor = {
       name: 'test.wellBehaved',
-      apply: async (rows) => { seen = rows.length },
+      prepare: async () => async () => { seen += 1 },
     }
-    await runArrivalProcessors(fakeTx(source), snapshotsWith('b1', 'b2'), deps, [wellBehaved])
+    const quarantined = await runArrivalProcessors(
+      fakeTx(source), snapshotsWith('b1', 'b2'), deps, [wellBehaved],
+    )
     expect(seen).toBe(2)
+    expect(quarantined).toEqual([])
   })
 
-  it('skips rows whose arrival was a hard-delete, and runs nothing when none remain', async () => {
-    // `after: null` entries are the `removed` loop's; they must never reach a
-    // processor. With only those present there are no rows at all, so `apply`
-    // must not be called — which is also what keeps a processor from having to
-    // defend against an empty window itself.
+  it('quarantines a throwing row and still processes the rest', async () => {
+    // A deterministic poison row must not abort the pass — else the whole
+    // window rolls back, retries, and throws again, wedging the drain and
+    // starving every row after it. The bad row is skipped and named; the
+    // others run.
     const source = {value: null as string | null}
-    const snapshots = new Map<string, SyncSnapshot>([
+    const processed: string[] = []
+    const processor: ArrivalProcessor = {
+      name: 'test.throwsOnBad',
+      prepare: async () => async (row) => {
+        if (row.id === 'bad') throw new Error('boom')
+        processed.push(row.id)
+      },
+    }
+    const quarantined = await runArrivalProcessors(
+      fakeTx(source), snapshotsWith('good1', 'bad', 'good2'), deps, [processor],
+    )
+    expect(processed).toEqual(['good1', 'good2'])
+    expect(quarantined).toEqual(['bad'])
+  })
+
+  it('skips a processor whose prepare opts out, and does not even prepare when no rows remain', async () => {
+    // prepare → null opts a processor out of the window (a dep is absent): the
+    // opt-out decision happens in prepare, and NO per-row handler runs.
+    const source = {value: null as string | null}
+    let prepareCalls = 0
+    let handlerCalls = 0
+    const optOut: ArrivalProcessor = {
+      name: 'test.optOut',
+      prepare: async () => { prepareCalls += 1; return null },
+    }
+    await runArrivalProcessors(fakeTx(source), snapshotsWith('b1'), deps, [optOut])
+    expect(prepareCalls).toBe(1)
+    expect(handlerCalls).toBe(0)
+
+    // `after: null` entries (the `removed` loop's) never reach a processor;
+    // with only those present there are no rows, so prepare isn't even called.
+    const removedOnly = new Map<string, SyncSnapshot>([
       ['gone', {before: block('gone', 'x'), after: null} as unknown as SyncSnapshot],
     ])
-    let called = false
-    const processor: ArrivalProcessor = {
-      name: 'test.neverCalled',
-      apply: async () => { called = true },
+    let preparedForEmpty = false
+    const neverPrepared: ArrivalProcessor = {
+      name: 'test.neverPrepared',
+      prepare: async () => { preparedForEmpty = true; return async () => { handlerCalls += 1 } },
     }
-    await runArrivalProcessors(fakeTx(source), snapshots, deps, [processor])
-    expect(called).toBe(false)
+    await runArrivalProcessors(fakeTx(source), removedOnly, deps, [neverPrepared])
+    expect(preparedForEmpty).toBe(false)
   })
 
   it('hands each processor the rows present when it runs, including earlier mutations', async () => {
@@ -101,14 +136,14 @@ describe('runArrivalProcessors', () => {
     const snapshots = snapshotsWith('b1')
     const first: ArrivalProcessor = {
       name: 'test.first',
-      apply: async (_rows, snaps) => {
+      prepare: async () => async (_row, snaps) => {
         snaps.set('b1', {before: null, after: block('b1', 'rewritten')} as unknown as SyncSnapshot)
       },
     }
     let secondSaw = ''
     const second: ArrivalProcessor = {
       name: 'test.second',
-      apply: async (rows) => { secondSaw = rows[0]!.after.content },
+      prepare: async () => async (row) => { secondSaw = row.after.content },
     }
     await runArrivalProcessors(fakeTx(source), snapshots, deps, [first, second])
     expect(secondSaw).toBe('rewritten')

@@ -48,7 +48,7 @@
  * lint rule is disabled for this whole directory (`eslint.config.js`) and is
  * table-granular anyway, so it will NOT catch that — decide it deliberately.
  *
- * NEVER open a `repo.tx` (or any `db.writeTransaction`) from inside `apply`.
+ * NEVER open a `repo.tx` (or any `db.writeTransaction`) from inside a handler.
  * Besides stamping a source, it DEADLOCKS: PowerSync serialises every write
  * tx on one non-reentrant mutex, and no call site passes a timeout — the
  * inner call would wait for a permit only the suspended outer call can
@@ -86,25 +86,44 @@ export interface ArrivalProcessorCtx {
   readonly deps: MaterializeDeps
 }
 
+/** Per-row work an arrival processor does. The runner calls it once per
+ *  applied id, wrapped in a try/catch so a single throwing row is quarantined
+ *  rather than aborting the pass — see {@link runArrivalProcessors}. It
+ *  mutates `snapshots` in place for the id it settles. */
+export type ArrivalRowHandler = (
+  row: ArrivalChangedRow,
+  snapshots: Map<string, SyncSnapshot>,
+) => Promise<void>
+
 /**
- * A single arrival-path processor. `apply` receives EVERY id the window
- * applied — the runner does no field-change filtering, because a processor
- * may need to fix up the `snapshots` entry for a row even when nothing it
- * cares about changed (see `deriveReferenceTargetArrivalProcessor`). A
- * processor that wants a field diff computes the one it actually means.
+ * A single arrival-path processor, split into once-per-window setup
+ * (`prepare`) and per-row work (the {@link ArrivalRowHandler} it returns).
  *
- * `apply` mutates `snapshots` in place for any id whose final value it
- * settles — the runner does not collect or merge return values, it just
- * hands over the same live map the surrounding write tx already threads
- * through, matching what the hand-inlined block used to do directly.
+ * The split exists for per-row quarantine. If `prepare` handed back one
+ * `apply(allRows)` and that threw on a malformed row, the throw would abort
+ * the whole Phase-2 write tx; the observer would retry the window; the same
+ * row would throw again — a deterministic poison row wedging the drain (and
+ * everything queued behind it) forever, AND starving every row ordered after
+ * it in the window, since a window-level catch can't get past it either. So
+ * the runner drives the per-row loop itself and catches around each row,
+ * exactly as the decrypt path a few frames up quarantines an undecryptable
+ * row. Expensive once-per-window setup (building alias lookups) lives in
+ * `prepare` so it isn't paid per row.
+ *
+ * `prepare` returns `null` to opt the processor out of this window entirely
+ * (e.g. a required dep is absent) — cheaper and clearer than a handler that
+ * no-ops every row.
+ *
+ * A quarantined row is a graceful degradation, not corruption: its synced
+ * content already committed in the Phase-2 upsert; only this processor's
+ * device-local derivation is skipped, and the handler is written so the row's
+ * `snapshots` entry still reflects the untouched DB column (see the derive
+ * handler). The row re-derives on its next content edit or a `drainWorkspace`
+ * re-pass.
  */
 export interface ArrivalProcessor {
   readonly name: string
-  readonly apply: (
-    rows: readonly ArrivalChangedRow[],
-    snapshots: Map<string, SyncSnapshot>,
-    ctx: ArrivalProcessorCtx,
-  ) => Promise<void>
+  readonly prepare: (ctx: ArrivalProcessorCtx) => Promise<ArrivalRowHandler | null>
 }
 
 /**
@@ -113,23 +132,42 @@ export interface ArrivalProcessor {
  * the window (so alias/index triggers from this window's own upserts have
  * already fired) and BEFORE the `removed` hard-delete loop populates any
  * further entries — `snapshots` at this point holds exactly the ids the
- * window applied, each with a non-null `after`.
+ * window applied, each with a non-null `after`. Returns the ids quarantined
+ * (a handler threw); the pass never rejects for a per-row failure.
  */
 export const runArrivalProcessors = async (
   tx: TxDb,
   snapshots: Map<string, SyncSnapshot>,
   deps: MaterializeDeps,
   processors: readonly ArrivalProcessor[],
-): Promise<void> => {
+): Promise<string[]> => {
   const ctx: ArrivalProcessorCtx = { tx, deps }
+  const quarantined: string[] = []
   for (const processor of processors) {
+    // Rebuild per processor from the LIVE map, so a later member sees an
+    // earlier one's snapshot amendments.
     const rows: ArrivalChangedRow[] = []
     for (const [id, snap] of snapshots) {
       if (!snap.after) continue
       rows.push({id, before: snap.before, after: snap.after})
     }
     if (rows.length === 0) continue
-    await processor.apply(rows, snapshots, ctx)
+    const handle = await processor.prepare(ctx)
+    if (handle === null) continue
+    for (const row of rows) {
+      try {
+        await handle(row, snapshots)
+      } catch (err) {
+        // Quarantine THIS row so a deterministic poison row can't wedge the
+        // drain or starve the rows after it. The handler leaves the row's
+        // snapshot reflecting the untouched DB column, so skipping it is a
+        // consistent no-derivation, not a lie to the invalidation fan-out.
+        console.warn(
+          `[arrivalProcessors] ${processor.name} quarantined ${row.id}:`, err,
+        )
+        quarantined.push(row.id)
+      }
+    }
     if (devAssertionsEnabled()) {
       // L2 dev/test-only enforcement of the module's CRITICAL INVARIANT (off
       // in prod). A processor that stamps `tx_context.source` — directly, or
@@ -137,7 +175,9 @@ export const runArrivalProcessors = async (
       // in this window into an upload, echoing sync-applied rows back to the
       // server as fresh local edits. That failure is silent at runtime and
       // would surface only as mysterious upload traffic and clobbered peers,
-      // so catch it at the point of violation, naming the processor.
+      // so catch it at the point of violation, naming the processor. This
+      // runs OUTSIDE the per-row try/catch, so an invariant violation is
+      // fatal (rolls back the tx) even if it surfaced via a quarantined row.
       const ctxRow = await tx.getOptional<{source: string | null}>(
         'SELECT source FROM tx_context WHERE id = 1',
       )
@@ -151,6 +191,7 @@ export const runArrivalProcessors = async (
       }
     }
   }
+  return quarantined
 }
 
 /**
@@ -176,28 +217,36 @@ export const runArrivalProcessors = async (
  * table holds, and the invalidation fan-out reads `snapshots`, not the
  * table.
  *
- * Gated on `deps.referenceTargetLookups` being provided: storage-only
- * harness tests that don't wire it up skip derivation entirely.
+ * Gated on `deps.referenceTargetLookups` being provided: `prepare` returns
+ * `null` for a storage-only harness that doesn't wire it up, opting the
+ * processor out of the window.
  */
 export const deriveReferenceTargetArrivalProcessor: ArrivalProcessor = {
   name: 'sync.deriveReferenceTargetAtArrival',
-  apply: async (rows, snapshots, ctx) => {
-    if (!ctx.deps.referenceTargetLookups) return
+  prepare: async (ctx) => {
+    if (!ctx.deps.referenceTargetLookups) return null
     const lookups = ctx.deps.referenceTargetLookups(ctx.tx)
-    for (const row of rows) {
+    return async (row, snapshots) => {
       const { id, before, after } = row
       const currentColumn = before?.referenceTargetId ?? null
+      // Set the snapshot to the DB column FIRST — the upsert left it untouched
+      // (it's outside `UPDATE_ASSIGNMENTS`), so `currentColumn` is what the row
+      // actually holds, while the Phase-2 `parseBlockRow` put `null` there (the
+      // staging row has no such column). Doing this before the throwable derive
+      // means a quarantined row's snapshot still matches the DB rather than
+      // lying `null` to the invalidation fan-out.
+      snapshots.set(id, { before, after: { ...after, referenceTargetId: currentColumn } })
       const contentChanged = before === null || before.content !== after.content
-      const derived = contentChanged
-        ? (await deriveReferenceTargetId(after.content, after.workspaceId, lookups)) ?? null
-        : currentColumn
+      if (!contentChanged) return
+      const derived =
+        (await deriveReferenceTargetId(after.content, after.workspaceId, lookups)) ?? null
       if (derived !== currentColumn) {
         await ctx.tx.execute(
           'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
           [derived, id],
         )
+        snapshots.set(id, { before, after: { ...after, referenceTargetId: derived } })
       }
-      snapshots.set(id, { before, after: { ...after, referenceTargetId: derived } })
     }
   },
 }
