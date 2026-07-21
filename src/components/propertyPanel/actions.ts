@@ -132,8 +132,9 @@ export const deleteProperty = async (args: {
       // Typed path: unsetProperty resolves identity, runs the same
       // scope-consistency guard (resolved scope vs the scope this tx was
       // admitted under, = schema.changeScope), removes just this key — no
-      // whole-bag replace — and, in a child-backed workspace, soft-deletes the
-      // field-row children via MATERIALIZE.
+      // whole-bag replace — and, in a child-backed workspace, eagerly
+      // soft-deletes the field-row children (symmetric with setProperty's
+      // inline dual-write).
       await tx.unsetProperty(args.block.id, schema)
     } else {
       // Schema-less transitional key (no registered definition): unsetProperty

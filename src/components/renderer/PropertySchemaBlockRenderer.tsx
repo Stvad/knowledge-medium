@@ -18,7 +18,7 @@ import {
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
-import { ChangeScope, type AnyJoinedValuePreset } from '@/data/api'
+import { ChangeScope, propertyValue, type AnyJoinedValuePreset } from '@/data/api'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -120,23 +120,23 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     if (next === presetId) return
     const target = presets.get(next)
     if (!target) return
+    // setProperties applies a two-key DELTA read against the fresh in-tx row —
+    // NOT a whole-bag replace off the (possibly stale) `data` render snapshot,
+    // which would clobber any sibling key written between render and commit.
     await block.repo.tx(async tx => {
-      await tx.update(block.id, {
-        properties: {
-          ...data!.properties,
-          [presetIdProp.name]: presetIdProp.codec.encode(next),
-          // Reset config to the new preset's defaultConfig (re-encoded
-          // through its configCodec, if any), since the previous
-          // preset's config shape doesn't apply.
-          [presetConfigProp.name]: presetConfigProp.codec.encode(
-            target.configCodec
-              ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
-              : {},
-          ),
-        },
+      await tx.setProperties(block.id, {
+        set: [
+          propertyValue(presetIdProp, next),
+          // Reset config to the new preset's defaultConfig (re-encoded through
+          // its configCodec, if any), since the previous preset's config shape
+          // doesn't apply.
+          propertyValue(presetConfigProp, target.configCodec
+            ? target.configCodec.encode(target.defaultConfig as never) as Record<string, unknown>
+            : {}),
+        ],
       })
     }, {scope: ChangeScope.BlockDefault, description: `change preset to ${next}`})
-  }, [block, data, presetId, presets])
+  }, [block, presetId, presets])
 
   const writeConfig = useCallback(async (next: unknown) => {
     if (!preset?.configCodec) return
