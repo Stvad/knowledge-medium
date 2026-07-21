@@ -5,7 +5,7 @@ import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {
   definitionSeedsFacet,
   propertyEditorOverridesFacet,
-  typesFacet,
+  typeSeedsFacet,
 } from '@/data/facets.js'
 import {characterCountProfilesFacet} from '@/plugins/character-counter/index.js'
 
@@ -37,7 +37,7 @@ export default [
   dialogAppMountExtension,
 
   ...pluginPrefsExtension(publisherPrefsType, source),
-  ...commandTypes.map(command => typesFacet.of(command.type, {source})),
+  ...commandTypes.map(command => typeSeedsFacet.of(command.type, {source})),
 
   definitionSeedsFacet.of(blueskyHandleProp, {source}),
   definitionSeedsFacet.of(corsProxyUrlProp, {source}),

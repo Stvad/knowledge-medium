@@ -1,8 +1,9 @@
 import {
   ChangeScope,
-  defineBlockType,
+  seedType,
   seedProperty,
   extensionPropertySeedKey,
+  extensionTypeSeedKey,
 } from '@/extensions/api.js'
 
 import type {TargetPlatform} from './types'
@@ -54,7 +55,9 @@ export const lesswrongConnectedHintProp = seedProperty({
   changeScope: ChangeScope.UserPrefs,
 })
 
-export const publisherPrefsType = defineBlockType({
+export const publisherPrefsType = seedType({
+  seedKey: extensionTypeSeedKey('prefs'),
+  revision: 1,
   id: 'social-publisher-prefs',
   label: 'Social Publisher',
   hideFromCompletion: true,
@@ -67,25 +70,33 @@ export const publisherPrefsType = defineBlockType({
   ],
 })
 
-const publishAllType = defineBlockType({
+const publishAllType = seedType({
+  seedKey: extensionTypeSeedKey('publish'),
+  revision: 1,
   id: 'social-publisher-publish',
   label: 'Publish',
   description: 'Command block: publish child blocks to configured social platforms.',
 })
 
-const publishTwitterType = defineBlockType({
+const publishTwitterType = seedType({
+  seedKey: extensionTypeSeedKey('twitter'),
+  revision: 1,
   id: 'social-publisher-twitter',
   label: 'Tweet',
   description: 'Command block: publish child blocks to X / Twitter via Buffer.',
 })
 
-const publishBlueskyType = defineBlockType({
+const publishBlueskyType = seedType({
+  seedKey: extensionTypeSeedKey('bluesky'),
+  revision: 1,
   id: 'social-publisher-bluesky',
   label: 'Bsky',
   description: 'Command block: publish child blocks to Bluesky.',
 })
 
-const publishLessWrongType = defineBlockType({
+const publishLessWrongType = seedType({
+  seedKey: extensionTypeSeedKey('lesswrong'),
+  revision: 1,
   id: 'social-publisher-lesswrong',
   label: 'LW',
   description: 'Command block: publish child blocks to LessWrong shortform.',

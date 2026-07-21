@@ -1,11 +1,11 @@
 import {
   actionTransformsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
-  blockContentDecoratorsFacet, ChangeScope, defineBlockType,
+  blockContentDecoratorsFacet, ChangeScope, seedType,
   definePropertyEditorOverride, definitionSeedsFacet, getPluginPrefsBlock,
   keyBetween, keysBetween, pluginBlockId,
-  propertyEditorOverridesFacet, seedProperty, extensionPropertySeedKey,
+  propertyEditorOverridesFacet, seedProperty, extensionPropertySeedKey, extensionTypeSeedKey,
   showError, showInfo, showProgress, showPropertiesProp,
-  showSuccess, typesFacet, useRepo,
+  showSuccess, typeSeedsFacet, useRepo,
   type ActionConfig,
   type ActionContextType,
   type ActionTransform,
@@ -371,7 +371,9 @@ const reviewedProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-const readwisePrefsType = defineBlockType({
+const readwisePrefsType = seedType({
+  seedKey: extensionTypeSeedKey('prefs'),
+  revision: 1,
   id: 'readwise-prefs',
   label: 'Readwise',
   // Prefs container is plumbing for the # dropdown (typing #Readwise
@@ -385,13 +387,17 @@ const readwisePrefsType = defineBlockType({
     highlightTypesProp, connectedHintProp,
   ],
 })
-const readwiseLibraryType = defineBlockType({
+const readwiseLibraryType = seedType({
+  seedKey: extensionTypeSeedKey('library'),
+  revision: 1,
   id: READWISE_LIBRARY_TYPE,
   label: 'Readwise library',
   // Singleton root marker, same rationale as the prefs container.
   hideFromCompletion: true,
 })
-const readwiseDocumentType = defineBlockType({
+const readwiseDocumentType = seedType({
+  seedKey: extensionTypeSeedKey('document'),
+  revision: 1,
   id: READWISE_DOCUMENT_TYPE,
   label: 'Readwise document',
   description: 'A document imported from Readwise Reader or the Readwise export API.',
@@ -401,7 +407,9 @@ const readwiseDocumentType = defineBlockType({
     numHighlightsProp, lastHighlightAtProp, asinProp, tagsProp,
   ],
 })
-const readwiseHighlightType = defineBlockType({
+const readwiseHighlightType = seedType({
+  seedKey: extensionTypeSeedKey('highlight'),
+  revision: 1,
   id: READWISE_HIGHLIGHT_TYPE,
   label: 'Readwise highlight',
   description: 'A highlight imported from Readwise.',
@@ -411,7 +419,9 @@ const readwiseHighlightType = defineBlockType({
     reviewDateProp, reviewedProp,
   ],
 })
-const readwiseNoteType = defineBlockType({
+const readwiseNoteType = seedType({
+  seedKey: extensionTypeSeedKey('note'),
+  revision: 1,
   id: READWISE_NOTE_TYPE,
   label: 'Readwise note',
   properties: [noteForHighlightIdProp],
@@ -1739,11 +1749,11 @@ const highlightTypesEditor = definePropertyEditorOverride(highlightTypesProp, {
 const source = 'readwise'
 
 export default [
-  typesFacet.of(readwisePrefsType, { source }),
-  typesFacet.of(readwiseLibraryType, { source }),
-  typesFacet.of(readwiseDocumentType, { source }),
-  typesFacet.of(readwiseHighlightType, { source }),
-  typesFacet.of(readwiseNoteType, { source }),
+  typeSeedsFacet.of(readwisePrefsType, { source }),
+  typeSeedsFacet.of(readwiseLibraryType, { source }),
+  typeSeedsFacet.of(readwiseDocumentType, { source }),
+  typeSeedsFacet.of(readwiseHighlightType, { source }),
+  typeSeedsFacet.of(readwiseNoteType, { source }),
 
   definitionSeedsFacet.of(lastSyncedAtProp, { source }),
   definitionSeedsFacet.of(syncSinceProp, { source }),
