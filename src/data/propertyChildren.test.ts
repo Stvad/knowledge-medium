@@ -246,7 +246,7 @@ describe('tx.unsetProperty', () => {
 
     await repo.tx(tx => tx.unsetProperty('p', statusSchema),
       {scope: ChangeScope.BlockDefault})
-    // Cell key gone; the MATERIALIZE removal branch soft-deleted the field row.
+    // Cell key gone; unsetProperty eagerly soft-deleted the field-row subtree.
     expect(await cellValue('p')).toBeUndefined()
     expect(await liveFieldRows('p')).toEqual([])
 
@@ -411,10 +411,29 @@ describe('tx.setProperties (batch set + unset)', () => {
     }), {scope: ChangeScope.BlockDefault})
 
     expect(await cellValue('p')).toBe('archived')
-    expect(await priorityFieldRows('p')).toEqual([])       // MATERIALIZE deleted it
+    expect(await priorityFieldRows('p')).toEqual([])       // eagerly deleted by the unset half
     const statusValues = (await childrenRows((await liveFieldRows('p'))[0]!.id))
       .filter(v => v.deleted === 0)
     expect(statusValues.map(v => v.content)).toEqual(['archived'])
+  })
+
+  it('flipped workspace: unset wins over set on the SAME pre-existing key — child deleted, not recreated', async () => {
+    // The delete-then-skip-create seam: a key with LIVE children, named in both
+    // set and unset of one batch. The unset half must delete the field row and
+    // the set half must NOT recreate it (unsetNames guard).
+    const repo = await setupWithTwo('children')
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)
+
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(statusSchema, 'ignored')],
+      unset: [statusSchema],
+    }), {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBeUndefined()      // unset wins in the cell
+    expect(await liveFieldRows('p')).toEqual([])       // field row deleted, no recreate
   })
 
   it('is a net no-op when the batch leaves the bag unchanged', async () => {

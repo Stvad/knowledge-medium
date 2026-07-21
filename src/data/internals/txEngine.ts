@@ -789,7 +789,7 @@ export class TxImpl implements Tx {
       [parent.workspaceId, parent.id, schema.fieldId],
     )
     for (const row of fieldRows) {
-      await deleteSubtreeInTx(this, parseBlockRow(row).id)
+      await deleteSubtreeInTx(this, row.id)
     }
   }
 
