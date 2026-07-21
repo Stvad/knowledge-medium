@@ -442,6 +442,26 @@
   <em>dangling</em> <code>((id))</code>, decided there; raw-write guard class),
   same-tx derivation liveness in #402; #389's still-live set is trimmed
   accordingly (§11).<br>
+  <strong>Revised 2026-07-19 (PR-review rounds 25–27):</strong> sync-arrival
+  materialization exists for <em>no one</em> — the old-client branch leftover is
+  deleted and the invariant row is scoped to the sync path, keeping §5's local
+  materializer exempt (§5, invariants); the arrival repair recomputes
+  property-sourced <code>references_json</code> along with the cell — that column
+  is column-LWW too (§5, §6); rollback drains <em>before</em> flipping back —
+  recognition is flip-gated and the drain needs it (B); the C flip gains a
+  stream-ordering fence (synthesize → flip → fleet observes → backfill) and a slim
+  preflight for whole-block exact refs already pointing at definitions (C);
+  definition <em>deletion</em> joins B2 — tombstoned definitions stay resolvable
+  for classification, drain is the explicit destructive variant (B2); e2ee orphan
+  synthesis derives ids from secret key material — plain
+  <code>uuidv5(workspaceId, key)</code> is dictionary-testable (§9) — the
+  cell-off placeholder bind is plaintext-only (§11 end state), and the trigger's
+  e2ee refusal gets a successor migration when option 2 ships (§6); auto-claim
+  runs a claimant preflight — a page owning the alias refuses the claim, which
+  must be visible (AC); backlink surfaces present field-row sources as their
+  owners (§9); search/recents filtering is pinned to the C flip, not slice D
+  (§11); materializer-minted rows are born classified — both creation paths stamp
+  the column at <code>create</code> (§5).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -881,7 +901,13 @@ there are authoritative.
   <dd>
     Watches <code>properties</code>. For changed keys with a registered schema:
     find-or-create the field row + primary value child, update stale content, delete
-    children for removed keys, collapse duplicates. This keeps raw <em>local</em> cell
+    children for removed keys, collapse duplicates. Rows it creates are <em>born
+    classified</em>: both creation paths (<code>setProperty</code>'s
+    <code>writePropertyValueChild</code> and this processor) stamp
+    <code>reference_target_id</code> directly in the <code>create</code> — no
+    reliance on the derive processor running afterwards, so materializer-minted
+    rows classify and project within the same single pass (PR-review P2 asked;
+    verified in the PR #386 code). This keeps raw <em>local</em> cell
     writes (importers, plugins — any bag-shaped write through <code>repo.tx</code>)
     convergent with the children; sync arrivals never enter this direction (the
     one-direction rule below — an earlier revision also fed it old clients' synced
@@ -962,13 +988,20 @@ row</em>, which syncs per-row and re-projects on arrival like any other child ch
 </p>
 
 <div class="callout warn">
-  <strong>The flip must be total.</strong> Materialize-on-arrival (cell → children) must
-  run <em>only</em> where the cell is genuinely the newer truth: rows written by
-  old, pre-migration clients (cell-only writers) and backfill convergence. Any path
-  that lets an arriving cell overwrite existing children for a dual-writing fleet
-  re-opens the clobber through the back door — this is precisely what the spike's
-  current row-targeted catch-up does and the single most important thing to change
-  when extracting it.
+  <strong>The flip must be total: no materialize-on-arrival, for anyone.</strong>
+  Sync-arrival cell→children materialization exists <em>nowhere</em> after the
+  one-time backfill — not even for rows written by old, pre-migration cell-only
+  clients. Those are a policy-closed writer class (the one-direction callout
+  below): their property updates <em>and deletes</em> are reverted by the next
+  projection, logged by the sweep, recoverable from <code>row_events</code>. An
+  earlier revision of this callout sanctioned an old-client materialize branch
+  (behind a checksum discriminator); that survives only in review-thread history —
+  any path that lets an arriving cell overwrite existing children re-opens the
+  clobber through the back door, which is precisely what the spike's
+  row-targeted catch-up does and the single most important thing to change
+  when extracting it. The only cell→children machinery that survives is
+  <em>local</em>: the same-tx materializer for <code>repo.tx</code> bag writes,
+  which is not a sync path.
 </div>
 
 <h3>Sync arrival — mechanics</h3>
@@ -993,8 +1026,11 @@ arrived row:
 
 <ul>
   <li>Arrived <em>field/value rows</em> → walk up to the parent, re-<strong>project</strong>
-    its child-backed keys from local children, and dedup duplicate field rows at the
-    parent while there.</li>
+    its child-backed keys from local children — the cell <em>and</em> the
+    property-sourced <code>references_json</code> entries (§6's wire callout: that
+    column is column-LWW too, and a repair that fixes only the cell leaves the
+    by-field backlinks carrying the losing writer's list) — and dedup duplicate
+    field rows at the parent while there.</li>
   <li>Arrived <em>parent cells</em> → <strong>never a merge input, without
     classification</strong> (owner decision — see the one-direction callout below;
     the earlier revisions of this doc classified arriving bags with a projection
@@ -1139,13 +1175,25 @@ arrived row:
   <code>updated_at</code>/<code>updated_by</code> on the parent, and those columns
   sync), still well under re-shipping the whole bag, i.e. <em>cheaper on the wire than
   today</em> — but that step is deliberately staged and gated on the hydration
-  measurements (§11). One column is deliberately untouched by all of this:
+  measurements (§11). One column deliberately keeps its channel through all of this:
   <code>references_json</code> (PR-review P2). Ref-typed property edits re-project the
   <em>parent's</em> by-field backlinks (<code>sourceField</code> = the schema name)
   from the locally-derived cell, and that column keeps uploading through and beyond
   the cell sync-off — existing parent/sourceField backlink queries ride it unchanged,
   and the value child's own reference row (<code>sourceField: ''</code>) is not a
-  substitute for it. Only <code>properties_json</code> ever leaves the channel.
+  substitute for it. "Keeps its channel" does <em>not</em> mean the reconcile may
+  skip it (PR-review P2, round 25): the column is column-LWW like the cell was, so
+  when two clients concurrently set different ref-typed fields, the value children
+  union under §5 but one writer's whole <code>references_json</code> wins — the
+  losing by-field backlink goes missing until an unrelated local edit recomputes
+  the parent. The arrival repair therefore recomputes the parent's
+  <em>property-sourced</em> <code>references_json</code> entries from the repaired
+  bag along with the cell — through the projection pipeline, never
+  <code>applyRaw</code> (the same rule B2's rename re-key already pins) — and the
+  sweep verifies both columns. The value row's own raw
+  <code>block_references</code> edge is the maintenance-level backstop in the
+  window, not the query surface. Only <code>properties_json</code> ever leaves the
+  channel.
 </div>
 
 <h2 id="s6">6. The scope decision: every schema gets children</h2>
@@ -1285,7 +1333,13 @@ lookup recognition uses) — the routing shim ships in slice B3.
   itself immutable). Slice B's rollback is still executable, as a <em>migration
   rather than a column write</em>: the runbook drops the trigger for the duration of
   the drain-and-delete pass — a deliberate, visible act where a bare backward UPDATE
-  would silently strand recognized field rows. Advancing is a service-role SQL write
+  would silently strand recognized field rows. The e2ee refusal is revisable the
+  same way (PR-review P2, round 26: as written it would block e2ee workspaces from
+  <em>ever</em> leaving <code>'cell'</code>, contradicting §8's option-2 path to
+  the end state): when the client-side option-2 flip ships, its rollout includes a
+  successor trigger migration that permits e2ee transitions under option-2's
+  conditions — until that migration exists, the refusal is the correct encoding of
+  "option 2 is not built yet." Advancing is a service-role SQL write
   per the supabase skill — the runbook is the gate (no attestation RPC; encoding the
   checklist in an RPC is armor for an operator this fleet doesn't have). The predicate every consumer shares — recognition (§9), dual-write,
   projection, reconcile — is <strong>child-backed = workspace flipped</strong>.
@@ -1646,7 +1700,16 @@ supabase skill if it's kept.
     deterministic</em> — <code>uuidv5(workspaceId, key)</code>, the seeded-definition
     pattern — so a re-run converges on the same blocks, and two devices independently
     running an e2ee option-2 flip mint the <em>same</em> definition instead of
-    same-named duplicates whose loser strands its backfilled field rows. From that point they are ordinary
+    same-named duplicates whose loser strands its backfilled field rows. For
+    <em>e2ee</em> workspaces the derivation must not be dictionary-testable
+    (PR-review P2, round 26: ids sync in plaintext, so
+    <code>uuidv5(workspaceId, key)</code> would let the server confirm a guessed
+    private property name — <code>health</code>, <code>client:ssn</code> — against
+    §8's edge-metadata sensitivity line): e2ee synthesis derives the namespace
+    from workspace <em>secret</em> key material (an HMAC the key-holders can all
+    compute) — still deterministic across the workspace's devices, opaque to
+    anyone without the secret. Plaintext workspaces keep plain
+    <code>uuidv5</code>; their keys are server-readable anyway. From that point they are ordinary
     schemas riding the normal machinery. Until the flip runs (and for keys a
     still-unconverted dynamic extension owns), definition-less keys retain today's
     cell semantics — a transitional state, not an end state. Synthesized definitions
@@ -1835,7 +1898,13 @@ supabase skill if it's kept.
     table). Backlink <em>display</em> filters only <strong>strictly
     interior</strong> rows — value rows and deeper — because only those duplicate
     the owner's reprojected edge; the field row's own edge is unique and is kept,
-    and the inline backlink count applies the same exclusion. The cell-side
+    and the inline backlink count applies the same exclusion. Kept, but
+    <em>presented as the owner</em> (PR-review P2, round 27): the raw source is
+    the <code>((fieldId))</code> field row itself, and a backlink surface or
+    watcher that returned it verbatim would be listing machinery — display maps a
+    field-row source to its parent block, which is the thing that "uses" the
+    property; the raw table keeps the true source row for the maintenance
+    passes. The cell-side
     projection (<code>projectPropertyReferences</code>,
     <code>sourceField = schema.name</code>) still runs off the bag unchanged, so
     backlinks-by-field keep working through the transition.</dd>
@@ -2174,9 +2243,11 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         post-flip QuickFind and recent-block pickers would surface machinery field
         rows and bare value children as ordinary hits.
         Filter property-subtree rows out there too, or map value hits to their
-        owning parent (which of the two is slice D's call; dormant while every
+        owning parent (which of the two is decided under §10's display model;
+        dormant while every
         workspace reads <code>'cell'</code>, so it landed in the #389 flip-gated
-        containment bucket rather than B1). This is the
+        containment bucket rather than B1 — but it ships <em>with the C flip</em>,
+        not with slice D). This is the
         <em>negative</em> (invisibility) half of the in-tree work and it gates the C
         flip; only the positive surface stays in D. Then the ref double-count check and
         the §5 invariant code comments.
@@ -2190,6 +2261,18 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         the migrations run under the References maintenance bucket (never on
         cmd-Z); unconvertible values are reported via the user-error channel, never
         silently unset; <code>addSchema</code> rejects <code>]]</code>-lossy names.
+        B2 also owns the third definition lifecycle event, <em>deletion</em>
+        (PR-review P2, round 26): a soft-deleted definition dropping out of the
+        registry would silently un-classify every <code>((fieldId))</code> row —
+        machinery surfacing as ordinary orphan subtrees, cell keys stranded. The
+        rule is the same identity-preserving one as §9's dangling-value decision:
+        <em>recognition keeps resolving tombstoned definitions</em> (classification
+        is about shape, not liveness — rows stay field rows, display marks them
+        as belonging to a deleted property), the delete flow surfaces the
+        used-by count (§9 backlinks answer it directly) and offers the drain
+        (unset everywhere) as the explicit destructive variant, and restoring the
+        definition snaps everything back. Reversible by default; mass-unset only
+        by deliberate choice.
         <strong>B3 (integration):</strong> merge/orphan/panel-layout handling — as
         shipped, merge is <em>union-with-dedupe</em> (§9): content-equal values
         fold (one canonical <code>deleteSubtreeInTx</code>, with the relocate rule
@@ -2216,15 +2299,19 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
       </p>
       <p class="deliv">The write path is complete: in a flipped workspace, every
         property write is child-backed. The production flip waits for
-        slice C. Rollback:
-        set the workspace back to <code>'cell'</code> (a migration, not a bare column
-        write — the runbook drops the §6 guard trigger for the duration)
-        <em>and run the drain</em> — one
-        final children→cell projection pass over affected blocks, then <em>delete</em>
-        the children ("hide" is not an option: recognition is flip-gated (§9), so a
-        rolled-back workspace un-recognizes surviving field rows and they would
-        surface as ordinary outline rows — the drain must remove them, not rely on
-        filtering that no longer sees them). "Children stay inert but convergent" is
+        slice C. Rollback — <em>drain first, flip second</em> (PR-review P2, round
+        25: the drain needs §9 recognition to find field/value rows, and
+        recognition is flip-gated — a workspace already set back to
+        <code>'cell'</code> un-recognizes the very rows the drain must project and
+        delete): with the workspace still at-or-past <code>'children'</code> and
+        writers quiesced (the same drain-every-device closure as the forward
+        flip), run one final children→cell projection pass over affected blocks
+        and <em>delete</em> the children; only then set the workspace back to
+        <code>'cell'</code> (a migration, not a bare column write — the runbook
+        drops the §6 guard trigger for the duration). "Hide instead of delete" is
+        not an option for the same reason: surviving field rows in a rolled-back
+        workspace would surface as ordinary outline rows, invisible to any
+        recognition-based filter. "Children stay inert but convergent" is
         not a coherent state: if the
         processors are gated off, nothing keeps inert children convergent, and the
         tree UI would render stale values. Rollback = drain + freeze, not flip and
@@ -2262,23 +2349,44 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         (simplification: the children it creates sync to every device, so per-device
         markers, the hold-until-initial-sync-drained rule, and concurrent-backfill
         handling all disappear — the operator runs it on one fully-synced device as a
-        runbook step, right after flipping the column; e2ee workspaces run it
+        runbook step, as fence step (4) below: after the column write <em>and</em>
+        after the fleet has observed it; e2ee workspaces run it
         client-side the same way at their own flip, §8).
       </p>
       <p>
         The flip itself is one write: set the workspace's
         <code>properties_migration</code> column to <code>'children'</code> (§6) —
         all schemas at once, kernel, plugin, and user (owner decision: one flip, no
-        per-group staging; there is no separate later "kernel flip"). Two tooling
-        steps run with it: the §9 <em>orphan-definition synthesis</em> (every
-        definition-less cell key gets a synthesized, hidden-by-default definition
-        first, so the backfill's scope is total), and then the backfill. An earlier
+        per-group staging; there is no separate later "kernel flip"). The runbook
+        order around that write is a <em>fence</em> (PR-review P2, round 27: the
+        column and the backfilled rows travel on separate sync streams with no
+        ordering guarantee — a peer that receives child rows before its workspace
+        row advances reads them as ordinary content): <em>(1)</em> the §9
+        <em>orphan-definition synthesis</em> runs <strong>before</strong> the flip
+        (§6 already requires this; synthesized definitions are ordinary dormant
+        blocks, safe at <code>'cell'</code>), <em>(2)</em> the column write,
+        <em>(3)</em> the drain-every-device closure extends to <em>observed the
+        flip</em> — every online device confirms the new column value before
+        anything uploads — and only then <em>(4)</em> the backfill's upload burst.
+        A device that syncs up later can still receive rows before its workspace
+        row: that residual window is render-only under the traversal polarity
+        (rows briefly show as ordinary content; #389's flip-arrival invalidation
+        snaps them in), and an edit made to machinery in that window is exactly
+        the sweep-reported divergence class. An earlier
         revision put a pre-flip triage step here for pre-existing whole-block
         <code>[[name]]</code> rows the flip would retroactively reinterpret
-        (PR-review P2); under §7's id-content shape that hazard <em>no longer exists
-        at the flip</em> — <code>[[name]]</code> doesn't resolve to definitions, so
-        the flip reinterprets nothing that wasn't machinery-minted. The triage
-        obligation moves wholesale to the auto-claim step (below), which is when
+        (PR-review P2); under §7's id-content shape that hazard is <em>almost</em>
+        gone at the flip — <code>[[name]]</code> doesn't resolve to definitions —
+        but "nothing that wasn't machinery-minted" overclaims (PR-review P2, round
+        25): a whole-block <em>exact ref</em> a user pointed at a definition
+        (a hand-typed <code>((id))</code>, a field-row line pasted while the
+        workspace was still cell-only) does light up. What remains here is a slim
+        preflight over exactly that set — whole-block exact refs whose
+        derived <code>reference_target_id</code> is a definition id, enumerable by
+        SQL against the column slice A already stamps — triaged like the
+        auto-claim set: reword genuine prose, keep hand-authored fields. The
+        <code>[[name]]</code> triage obligation
+        moves wholesale to the auto-claim step (below), which is when
         prose <code>[[status]]</code> rows first become classifiable.
         Sequence the first production run deliberately: it's an upload burst of 2 rows
         per (block, property) — run workspace-by-workspace, watch <code>ps_crud</code>
@@ -2325,10 +2433,15 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <code>indent</code>/<code>moveVertical</code> on the visible sibling
         list), the <em>tier-aware copy predicate</em> (§9 — default copy carries
         visible property subtrees and prunes hidden-tier ones, closing #404's
-        copy gap; plus the explicit "copy with hidden properties" command), the
-        search/recents machinery-filtering call (filter property-subtree rows or
-        map value hits to owners — B1's note), and optionally the divergent-value
-        badge (§9 — reorder is the conflict-resolution gesture). The baseline
+        copy gap; plus the explicit "copy with hidden properties" command), and
+        optionally the divergent-value
+        badge (§9 — reorder is the conflict-resolution gesture). The
+        search/recents machinery filtering is deliberately <em>not</em> in this
+        list (PR-review P2, round 27 caught it drifting here): it is the
+        invisibility half and gates the C flip with the rest of the #389 bucket —
+        only the <em>choice</em> of approach (filter property-subtree rows vs map
+        value hits to their owners) is made under §10's display model, before C
+        flips. The baseline
         field-row <em>invisibility</em> is not here — the outline's visible-view
         opt-in (<code>hidePropertyChildren</code>, §9) ships in B1 and gates the C
         flip (PR-review P2); D is the
@@ -2365,7 +2478,16 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         genuine prose, keep hand-authored fields; <em>name-collision pastes</em>
         (same-named schema, incompatible codec) become reachable then and lean on the
         §9 sweep report; alias collision semantics ride the alias machinery's
-        existing seat/winner rules. Pairs with <strong>"copy resolves
+        existing seat/winner rules — which cuts both ways (PR-review P2, round 26):
+        the claim itself can be <em>refused</em> when a normal page already owns
+        the alias (<code>alias.collision</code>), so the bulk claim runs a
+        <strong>claimant preflight</strong> — enumerate existing owners of every
+        definition name <em>before</em> claiming, surface page-vs-definition
+        conflicts for resolution (rename the page's alias, rename the property, or
+        accept page-wins), and record refused claims in the report. A definition
+        whose claim was refused stays id-addressable but never becomes
+        name-resolvable; that state must be visible, not a silent bulk-claim
+        casualty. Pairs with <strong>"copy resolves
         references"</strong> (owner call, follow-up not blocker): a generic
         copy-boundary mechanism rendering id refs as <code>[[name]]</code> on the way
         out — which is what makes markdown export readable and cross-workspace
@@ -2520,7 +2642,14 @@ step gated on the one before:
     <code>properties_json</code> / re-project instead of writing the NULL through.
     The placeholder bind avoids the cascade entirely, at the cost of making '{}'
     ambiguous between "empty bag" and "column stopped" — harmless under §5's
-    one-direction rule, since no merge decision ever reads cell shape). The split's
+    one-direction rule, since no merge decision ever reads cell shape. The
+    placeholder is <em>plaintext-workspaces-only</em>, though (PR-review P2, round
+    25): e2ee materialization decrypts all three content columns, and a locally
+    bound plaintext <code>'{}'</code> is not a valid envelope for the row's AAD —
+    it fails or quarantines before any preserve/re-project logic runs. An e2ee
+    workspace reaching <code>cell-off</code> (option-2 era, §8) takes the
+    nullable/preserve-before-decrypt path — treat the staged NULL as "column
+    stopped" and skip that column in the decrypt transform). The split's
     predicate must
     be <em>server-visible</em> (PR-review P2): sync rules select over
     <code>public.blocks</code> and can see neither a client's registry nor, for e2ee
@@ -2688,10 +2817,13 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
         test)</td>
     </tr>
     <tr>
-      <td><strong>The flip is total and one-way.</strong> Materialize (cell →
-        children) runs exactly once — the backfill; after it, no code path converts
-        cell state into children, ever. Arriving bags are read fallbacks for pending
-        keys, never merge inputs.</td>
+      <td><strong>The flip is total and one-way — on the sync path.</strong>
+        Sync-direction materialize (cell → children) runs exactly once — the
+        backfill; after it, no <em>sync-arrival</em> path converts cell state into
+        children, ever. Arriving bags are read fallbacks for pending keys, never
+        merge inputs. The same-tx materializer for <em>local</em>
+        <code>repo.tx</code> bag writes (importers, plugins) is permanent local
+        convergence machinery (§5), not an exception to this row.</td>
       <td><a href="#s5">§5</a> callout</td>
       <td>Arrival catch-up, sweep, projection rebuilds</td>
       <td>A bag arrival never overwrites children — any writer, any version (C)</td>
