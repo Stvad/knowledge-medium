@@ -90,13 +90,19 @@ export const renameProperty = async (args: {
   if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis, definitions)) return
   if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis, definitions)) return
 
-  const value = args.properties[args.oldName]
-  if (value === undefined || !Object.hasOwn(args.properties, args.oldName)) return
+  // Cheap pre-gate on the panel snapshot; the authoritative check is in-tx.
+  if (!Object.hasOwn(args.properties, args.oldName)) return
 
   await args.block.repo.tx(async tx => {
-    const next = {...args.properties}
+    // Re-read the CURRENT bag inside the tx rather than trusting the panel's
+    // (possibly stale) `args.properties` snapshot — a whole-bag write off the
+    // snapshot would clobber any OTHER property a concurrent write changed
+    // between the panel opening and this commit. The tx serialises read+write.
+    const current = await tx.get(args.block.id)
+    if (!current || !Object.hasOwn(current.properties, args.oldName)) return
+    const next = {...current.properties}
+    next[nextName] = next[args.oldName]
     delete next[args.oldName]
-    next[nextName] = value
     await tx.update(args.block.id, {properties: next})
   }, {
     scope: ChangeScope.BlockDefault,
@@ -141,7 +147,11 @@ export const deleteProperty = async (args: {
       // would throw on the unresolvable schema, so drop the bare cell key
       // directly. Such a key has no children to reconcile (no schema → never
       // materialized); the migration backfill is what gives it a definition.
-      const next = {...args.properties}
+      // Re-read fresh inside the tx (not the panel's stale snapshot) so the
+      // whole-bag write can't clobber a concurrently-changed sibling key.
+      const current = await tx.get(args.block.id)
+      if (!current || !Object.hasOwn(current.properties, args.name)) return
+      const next = {...current.properties}
       delete next[args.name]
       await tx.update(args.block.id, {properties: next})
     }
