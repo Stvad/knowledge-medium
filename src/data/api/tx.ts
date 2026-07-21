@@ -190,10 +190,12 @@ export interface Tx {
    *  (there is no "set to undefined"). Resolves schema identity and checks
    *  scope exactly like `setProperty`, then drops just that key from the bag:
    *  a TARGETED delete, never a whole-bag replace, so it cannot clobber a
-   *  sibling key a peer synced in. In a child-backed workspace the same-tx
-   *  MATERIALIZE processor reconciles the field-row subtree delete from the
-   *  removed key (soft-delete, recoverable via history); un-flipped it is a
-   *  cell-only removal. No-op when the key is already absent. Throws
+   *  sibling key a peer synced in. In a child-backed workspace it EAGERLY
+   *  soft-deletes the field-row subtree for the key in the same tx (symmetric
+   *  with setProperty's inline dual-write, recoverable via history — eager
+   *  rather than left to the deferred MATERIALIZE pass, whose net-diff would
+   *  miss a key set-then-unset in one tx); un-flipped it is a cell-only
+   *  removal. No-op when the key is already absent. Throws
    *  `PropertySchemaIdentityError` if the schema has no resolvable definition,
    *  same as `setProperty`. */
   unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
@@ -205,12 +207,12 @@ export interface Tx {
    *  in, and it's codec-aware throughout. Build `set` entries with
    *  `propertyValue(schema, value)` for per-entry type-checking. Every schema
    *  is resolved + scope-checked up front (the whole batch fails before any
-   *  write on an unresolvable/mis-scoped entry). In a child-backed workspace
-   *  the same-tx MATERIALIZE processor reconciles children for every changed
-   *  key — creating/updating for sets, soft-deleting for unsets — so, like
-   *  `setProperty`/`unsetProperty`, no inline child write happens here. A net
-   *  no-op (bag unchanged) is skipped. `set` values are literals, not updater
-   *  functions — read via `getProperty` first if you need the current value. */
+   *  write on an unresolvable/mis-scoped entry). In a child-backed workspace it
+   *  EAGERLY reconciles children in the same tx — creating/updating for sets,
+   *  soft-deleting for unsets (unset wins on a key in both) — symmetric with
+   *  `setProperty`/`unsetProperty`. A net no-op (bag unchanged) is skipped.
+   *  `set` values are literals, not updater functions — read via `getProperty`
+   *  first if you need the current value. */
   setProperties(
     id: string,
     changes: {

@@ -77,7 +77,13 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
     // Content and props are now two writes in the one tx (setProperties can't
     // carry content). tx.update short-circuits an unchanged-content patch, and
     // the always-a-real-write guarantee rides the setProperties asked-at bump
-    // below rather than the content patch.
+    // below rather than the content patch. Tradeoff: when content DOES change
+    // (first ask / re-ask that adds the mention) this emits two row_events /
+    // two upload PATCHes instead of one — but both PATCHes share the tx's
+    // tx_seq so they upload as a single CrudTransaction, and undo/MATERIALIZE
+    // see the merged tx-net snapshot, so it's a minor cost, not a correctness
+    // change. Combining them would require a whole-bag replace for the clear,
+    // reintroducing the clobber setProperties exists to avoid.
     await tx.update(block.id, {content: contentWithAgentMention(liveContent ?? fresh.content ?? '')})
     // Clear lifecycle props only from TERMINAL states. An in-flight claim
     // (queued/running) is the daemon already doing what this gesture asks for

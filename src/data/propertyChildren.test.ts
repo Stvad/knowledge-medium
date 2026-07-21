@@ -284,6 +284,34 @@ describe('tx.unsetProperty', () => {
     )
     expect(updates).toEqual([])
   })
+
+  it('flipped: setProperty then unsetProperty on the SAME key in one tx removes value AND children (no resurrection)', async () => {
+    // Regression: setProperty writes children EAGERLY, so the removal must also
+    // be eager. A removal that only trusts the deferred single-pass MATERIALIZE
+    // net-diff sees `absent -> absent` for a key set-then-unset in one tx, never
+    // deletes the eager children, and PROJECT reprojects the value back.
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(async tx => {
+      await tx.setProperty('p', statusSchema, 'done')
+      await tx.unsetProperty('p', statusSchema)
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
+
+  it('flipped: setProperty then setProperties({unset}) on the SAME key in one tx removes value AND children', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(async tx => {
+      await tx.setProperty('p', statusSchema, 'done')
+      await tx.setProperties('p', {unset: [statusSchema]})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+  })
 })
 
 describe('tx.setProperties (batch set + unset)', () => {

@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { AGENT_PROPS } from '../chipState.ts'
-import { agentProtocolSeeds } from '../schema.ts'
+import { agentCancelProp, agentProtocolSeeds } from '../schema.ts'
 
 describe('agent protocol property seeds', () => {
   it('declares exactly one seed per AGENT_PROPS entry, keyed by the protocol name', () => {
@@ -22,5 +22,15 @@ describe('agent protocol property seeds', () => {
     const seedKeys = agentProtocolSeeds.map(seed => seed.seedKey)
     expect(new Set(seedKeys).size).toBe(seedKeys.length)   // no collisions
     expect(agentProtocolSeeds.every(seed => seed.hidden)).toBe(true)  // machinery
+  })
+
+  it('agent:cancel round-trips BOTH its value shapes (Date.now() number and daemon-cleared "")', () => {
+    // agent:cancel is mixed-type — a Date.now() number when the app requests a
+    // stop, '' when the daemon clears it — which is why it takes the identity
+    // (raw-json) codec. A typed number/string codec would break one shape on
+    // flip/re-encode; this pins the codec choice against that regression.
+    const {codec} = agentCancelProp
+    expect(codec.decode(codec.encode(1_723_000_000_000))).toBe(1_723_000_000_000)
+    expect(codec.decode(codec.encode(''))).toBe('')
   })
 })

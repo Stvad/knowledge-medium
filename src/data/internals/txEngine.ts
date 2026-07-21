@@ -92,6 +92,7 @@ import {
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 import { collapseDuplicateValueChild } from './propertyChildrenProcessor'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -746,29 +747,63 @@ export class TxImpl implements Tx {
     // child-backed — the field/value children land in the SAME tx as the cell
     // so readers stay synchronous against the cell while the children are the
     // truth that crosses sync. Requires resolved identity (the fieldId names
-    // the field row); a boot-window plain schema stays cell-only and the
-    // slice-C machinery converges it (a cell key with no children is pending
-    // materialization, never wrong).
-    if (
-      isResolvedPropertySchema(resolvedSchema)
-      && await this.isPropertyChildBackedWorkspace(before.workspaceId)
-      // §9 positional rule (write side): field rows and property-subtree
-      // interiors never grow nested field rows — their bag writes stay
-      // cell-only (recognition could never reclaim the nested rows).
-      && !(await this.isInsidePropertySubtree(
-        id, this.isFieldDefinitionCheckerFor(before.workspaceId),
-      ))
-      // The walk above reads the STORED column, which lags a content write
-      // made earlier in this same tx (the derive processor runs after the
-      // user fn). Recognize the target's prospective field-row-ness from
-      // its CURRENT content so "set content to `[[schema]]`, then set a
-      // property on it" stays cell-only instead of nesting machinery under
-      // a row that is about to become a field row (PR #386 review).
-      && !this.isProspectiveFieldRow(before)
-    ) {
+    // the field row); a boot-window plain schema stays cell-only.
+    if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
       await this.writePropertyValueChild(before, resolvedSchema, value, opts)
     }
     const properties = {...before.properties, [resolvedSchema.name]: encoded}
+    await this.writePropertiesBag(id, before, properties, opts)
+  }
+
+  /** The child-backing gate for a property write on `row` (schema-independent
+   *  half). True only in a flipped workspace where `row` may hold field rows:
+   *  a field row / property-subtree interior stays cell-only (§9 positional
+   *  rule — recognition could never reclaim nested rows), as does a row whose
+   *  CURRENT content is about to make it a field row (the stored column lags a
+   *  same-tx content edit; PR #386 review). The per-schema half
+   *  (`isResolvedPropertySchema`) is checked by the caller. */
+  private async isChildBackedRow(row: BlockData): Promise<boolean> {
+    return (
+      await this.isPropertyChildBackedWorkspace(row.workspaceId)
+      && !(await this.isInsidePropertySubtree(
+        row.id, this.isFieldDefinitionCheckerFor(row.workspaceId),
+      ))
+      && !this.isProspectiveFieldRow(row)
+    )
+  }
+
+  /** Eagerly soft-delete the field-row subtree(s) backing `schema` under
+   *  `parent` — the removal counterpart to `writePropertyValueChild`. Eager
+   *  (not left to the deferred MATERIALIZE pass) because MATERIALIZE diffs the
+   *  tx's NET bag change: a key `setProperty`-created then removed in the SAME
+   *  tx nets to "no change", so its eagerly-written children would never be
+   *  reconciled and PROJECT would reproject the value back. The machinery-aware
+   *  `deleteSubtreeInTx` carries any user-authored sub-children down with it
+   *  (recoverable via history), matching MATERIALIZE's own removal branch. */
+  private async deletePropertyValueChildren(
+    parent: BlockData,
+    schema: { readonly fieldId: string },
+  ): Promise<void> {
+    const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_PROPERTY_FIELD_CHILD_SQL,
+      [parent.workspaceId, parent.id, schema.fieldId],
+    )
+    for (const row of fieldRows) {
+      await deleteSubtreeInTx(this, parseBlockRow(row).id)
+    }
+  }
+
+  /** The identical tail of every property-bag write (`setProperty` /
+   *  `unsetProperty` / `setProperties`): stamp metadata, write ONLY
+   *  `properties_json` (+ metadata columns), pin, record. The three differ
+   *  only in how they build `properties` and reconcile children; the cell
+   *  write itself is one shape. */
+  private async writePropertiesBag(
+    id: string,
+    before: BlockData,
+    properties: Record<string, unknown>,
+    opts: TxWriteOpts | undefined,
+  ): Promise<void> {
     const after: BlockData = {
       ...before,
       properties,
@@ -792,25 +827,15 @@ export class TxImpl implements Tx {
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
     this.assertPropertyWriteScope(resolvedSchema)
     if (before.properties[resolvedSchema.name] === undefined) return // absent → no-op
+    // Eager child delete, symmetric with setProperty's inline dual-write (see
+    // deletePropertyValueChildren for why "rely on the deferred MATERIALIZE
+    // pass" is unsound for a key set-then-unset in one tx).
+    if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
+      await this.deletePropertyValueChildren(before, resolvedSchema)
+    }
     const properties = {...before.properties}
     delete properties[resolvedSchema.name]
-    const after: BlockData = {
-      ...before,
-      properties,
-      ...this.metadataPatch(id, before, opts?.skipMetadata),
-    }
-    await this.ctx.txDb.execute(
-      `UPDATE blocks SET properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
-      [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
-    )
-    this.pinWorkspace(before.workspaceId)
-    this.record(id, before, after)
-    // No inline child delete: in a child-backed workspace the same-tx
-    // MATERIALIZE processor's key-removal branch soft-deletes the field-row
-    // subtree for the now-removed key (which resolves to a schema), the mirror
-    // of setProperty's inline dual-write being idempotent with MATERIALIZE's
-    // create branch. Reusing that one canonical removal path (subtree relocate
-    // of user sub-children included) beats duplicating it here.
+    await this.writePropertiesBag(id, before, properties, opts)
   }
 
   async setProperties(
@@ -830,35 +855,35 @@ export class TxImpl implements Tx {
     const sets = (changes.set ?? []).map(assignment => {
       const resolvedSchema = this.resolvePropertySchemaForRow(before, assignment.schema)
       this.assertPropertyWriteScope(resolvedSchema)
-      return {name: resolvedSchema.name, encoded: resolvedSchema.codec.encode(assignment.value)}
+      return {schema: resolvedSchema, value: assignment.value}
     })
-    const unsetNames = (changes.unset ?? []).map(schema => {
+    const unsets = (changes.unset ?? []).map(schema => {
       const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
       this.assertPropertyWriteScope(resolvedSchema)
-      return resolvedSchema.name
+      return resolvedSchema
     })
     // Apply the delta on a copy of the current bag: sets first, then unsets, so
     // a key named in BOTH lists ends up removed (unset wins — an explicit
     // caller intent to clear takes precedence over a stale set in the batch).
     const properties = {...before.properties}
-    for (const {name, encoded} of sets) properties[name] = encoded
+    for (const {schema, value} of sets) properties[schema.name] = schema.codec.encode(value)
+    const unsetNames = new Set(unsets.map(schema => schema.name))
     for (const name of unsetNames) delete properties[name]
     if (jsonValuesEqual(before.properties, properties)) return // net no-op
-    const after: BlockData = {
-      ...before,
-      properties,
-      ...this.metadataPatch(id, before, opts?.skipMetadata),
+    // Eager child dual-write, symmetric with setProperty/unsetProperty: delete
+    // the field rows for unset keys first, then create/update for the sets that
+    // survive (a key in both lists was removed above, so skip its child write).
+    if (await this.isChildBackedRow(before)) {
+      for (const schema of unsets) {
+        if (isResolvedPropertySchema(schema)) await this.deletePropertyValueChildren(before, schema)
+      }
+      for (const {schema, value} of sets) {
+        if (!unsetNames.has(schema.name) && isResolvedPropertySchema(schema)) {
+          await this.writePropertyValueChild(before, schema, value, opts)
+        }
+      }
     }
-    await this.ctx.txDb.execute(
-      `UPDATE blocks SET properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
-      [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
-    )
-    this.pinWorkspace(before.workspaceId)
-    this.record(id, before, after)
-    // As with setProperty/unsetProperty, the same-tx MATERIALIZE processor
-    // reconciles children for every changed key in the net bag diff — create/
-    // update for the sets, soft-delete for the unsets — so no inline child
-    // write is needed here.
+    await this.writePropertiesBag(id, before, properties, opts)
   }
 
   async getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T> {
