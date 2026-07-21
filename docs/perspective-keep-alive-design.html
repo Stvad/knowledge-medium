@@ -31,7 +31,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. <strong>Last verified against code:</strong> 2026-07-15 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review. <strong>Last verified against code:</strong> 2026-07-21 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -164,6 +164,55 @@ consumed by boot; <code>repoProvider</code>'s <code>getActiveUserId()</code> + m
 renderer-registry itself is <em>not</em> a bypass — every mount goes through <code>useRenderer</code>
 → <code>blockRenderersFacet</code>, so the renderer is always overridable; direct
 <code>&lt;BlockComponent&gt;</code> mounts only pick <em>which block</em>, not how it renders.</p>
+
+<h3>Retiring the globals — the plan (part of this design, not a follow-up)</h3>
+
+<p>The audit is only useful if the design eliminates what it found. Disposition for each entry,
+sequenced into the rollout (steps 1–2 are exactly this work):</p>
+
+<div class="tblwrap"><table>
+<tr><th>Global</th><th>How it goes away</th></tr>
+<tr><td><code>getLayoutSessionId()</code></td>
+<td>Split its ~9 callers by kind, because they want two different things:
+<ul class="tight">
+  <li><strong>Render-tree consumers</strong> (the <code>data/globalState.ts</code> hook defaults and
+  anything else called during render) → read <code>layoutSessionBlockId</code> from block context
+  (<code>types.ts:100</code> — the field already exists and is populated by the layout chain). The
+  host then scopes each mounted session subtree automatically.</li>
+  <li><strong>Imperative/action consumers</strong> — <code>defaultShortcuts.ts:171</code>,
+  <code>utils/navigation.ts:144</code>, <code>daily-notes/actions.ts:215</code>,
+  <code>quick-find/QuickFind.tsx:371</code>, <code>alias/AliasCollisionToast.tsx:79</code>,
+  <code>app-intents/index.ts:38</code> — these don't sit in a session subtree; they want "the
+  session to act on <em>right now</em>". They switch to a new
+  <code>getActiveLayoutSessionId()</code> backed by the active-session store (which defaults to the
+  base id when nothing drives it — behavior identical today, correct under perspectives).</li>
+</ul>
+After the sweep, the raw global has exactly <strong>one</strong> caller: the seed inside
+bootstrap/the default layout-root renderer that mints the per-device base id. It stops being an
+API and becomes a persistence detail.</td></tr>
+<tr><td><code>isInstalledAppDisplayMode()</code></td>
+<td>Demoted, not injected: once the base-id seed is the global's only caller, this fork (which
+storage backs the base id) is an internal detail of that one call path — its only consumer is
+<code>getLayoutSessionStorageTarget</code> (<code>layoutSessionId.ts:45</code>) already. Nothing new
+may consume it; no DI machinery needed for a function with one internal caller.</td></tr>
+<tr><td><code>new PanelLayoutProjection(…)</code> at App</td>
+<td>Construction moves into whoever renders the layout root (<code>usePanelLayoutProjection</code>,
+rollout step 1). The class's URL hooks are already injectable
+(<code>panelLayoutProjection.ts:941</code>); the only thing being retired is App as the hardcoded
+construction site.</td></tr>
+<tr><td><code>panelHistory</code> singleton</td>
+<td>No injection needed (the review correction above: row-block-id keying partitions per
+perspective automatically). The one change: the host wires <code>panelHistory.clear(rowId)</code>
+into session eviction so evicted sessions' entries don't accumulate for the page lifetime.</td></tr>
+<tr><td>ui-state identity (<code>stateBlocks.ts</code>)</td>
+<td>Deliberately <em>not</em> retired here: per-perspective sessions live under the same
+<code>layout-sessions</code> container, so perspectives never need to re-root the tree. Making the
+uuidv5 namespaces injectable (shared/team layout roots) is real scope creep — out of scope, and
+saying so is the disposition.</td></tr>
+<tr><td><code>lastWorkspace</code> / <code>getActiveUserId()</code> / <code>getClientId()</code></td>
+<td>Out of this design's scope (non-layout). Listed so the pattern is on record; each wants the
+same treatment (one seed call site + context/store for consumers) in its own change.</td></tr>
+</table></div>
 
 <h3>What the provider looks like</h3>
 
@@ -515,9 +564,11 @@ two perspectives, once mounted in the visible one, immediately hydrates its hidd
   <code>usePanelLayoutProjection</code> hook; App shrinks to resolving + mounting the root. Behavior
   identical (single session); this is the "App.tsx got too big" cleanup and needs no perspectives to
   justify it.</li>
-  <li>Core: session id read from <code>layoutSessionBlockId</code> context instead of the
-  <code>getLayoutSessionId()</code> global at the ~9 call sites (global becomes the default seed);
-  projection construction fully owned by the renderer. This is what makes the root overridable.</li>
+  <li>Core: retire the globals per §"Retiring the globals" — render-tree callers read
+  <code>layoutSessionBlockId</code> from context, imperative callers switch to the store-backed
+  <code>getActiveLayoutSessionId()</code>, the raw global shrinks to the base-id seed; projection
+  construction fully owned by the renderer; <code>panelHistory.clear</code> wired to eviction.
+  This is what makes the root overridable.</li>
   <li>Video plugin: wire <code>onPlay</code>/<code>onPause</code> so <code>isPlaying</code> tracks
   native play state (makes Activity reveal a no-op for the enforcement effect; a latent correctness
   fix on its own).</li>
