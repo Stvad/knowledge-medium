@@ -3,63 +3,60 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
+  seedProperty,
+  seedType,
   type BlockReference,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
-import { typesFacet } from '../facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
 
-const statusProp = defineProperty<string>('status', {
-  codec: codecs.string,
-  defaultValue: 'open',
-  changeScope: ChangeScope.BlockDefault,
+// Test property fixtures — code-owned seeds so they resolve by name in the
+// property registry (the type-lift that used to surface a type's embedded
+// schemas is gone; a property must be a seed to be queryable/resolvable).
+const statusProp = seedProperty({
+  seedKey: 'test/property/status', revision: 1, name: 'status',
+  preset: 'string', defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
 })
 
-const doneProp = defineProperty<boolean>('done', {
-  codec: codecs.boolean,
-  defaultValue: false,
-  changeScope: ChangeScope.BlockDefault,
+const doneProp = seedProperty({
+  seedKey: 'test/property/done', revision: 1, name: 'done',
+  preset: 'boolean', defaultValue: false, changeScope: ChangeScope.BlockDefault,
 })
 
-const priorityProp = defineProperty<number>('priority', {
-  codec: codecs.number,
-  defaultValue: 0,
-  changeScope: ChangeScope.BlockDefault,
+const priorityProp = seedProperty({
+  seedKey: 'test/property/priority', revision: 1, name: 'priority',
+  preset: 'number', defaultValue: 0, changeScope: ChangeScope.BlockDefault,
 })
 
-const dueProp = defineProperty<Date | undefined>('due', {
-  codec: codecs.date,
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
+const dueProp = seedProperty({
+  seedKey: 'test/property/due', revision: 1, name: 'due',
+  preset: 'date', defaultValue: undefined, changeScope: ChangeScope.BlockDefault,
 })
 
-const weirdNameProp = defineProperty<string>('weird:name.with-dot-hyphen', {
-  codec: codecs.string,
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const weirdNameProp = seedProperty({
+  seedKey: 'test/property/weird-name', revision: 1, name: 'weird:name.with-dot-hyphen',
+  preset: 'string', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const labelsProp = defineProperty<readonly string[]>('labels', {
-  codec: codecs.list(codecs.string),
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
+const labelsProp = seedProperty({
+  seedKey: 'test/property/labels', revision: 1, name: 'labels',
+  preset: 'string-list', defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
 
-const reviewerProp = defineProperty<string>('reviewer', {
-  codec: codecs.ref(),
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const reviewerProp = seedProperty({
+  seedKey: 'test/property/reviewer', revision: 1, name: 'reviewer',
+  preset: 'ref', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
+
+const queryProps = [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp]
 
 interface Harness {
   h: TestDb
@@ -82,9 +79,13 @@ const setup = async (): Promise<Harness> => {
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
-    typesFacet.of(defineBlockType({
+    ...queryProps.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+    typeSeedsFacet.of(seedType({
+      seedKey: 'test/type/typed-block-query-props',
+      revision: 1,
       id: 'test:typed-block-query-props',
-      properties: [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp],
+      label: 'Typed block query props',
+      properties: queryProps,
     }), {source: 'test'}),
   ]))
   repo.setActiveWorkspaceId(WS)

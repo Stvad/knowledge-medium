@@ -302,7 +302,7 @@ export class EffectReconciler {
 
     const effects = runtime.read(appEffectsFacet)
     // Dedup by id, last-wins with a warn — matching the repo-wide facet
-    // convention (mutatorsFacet / typesFacet / … all warn + last-wins).
+    // convention (mutatorsFacet / queriesFacet / … all warn + last-wins).
     // The override idiom plugin authors are taught is "register after the
     // kernel to replace it"; a silent first-wins here would drop their
     // override with no signal. Duplicate effect ids are a misconfiguration

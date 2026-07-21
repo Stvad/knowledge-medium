@@ -45,7 +45,7 @@ const requireTypeContribution = (
   if (contribution !== undefined) return contribution
   throw new Error(
     `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
-    'Register a TypeContribution through typesFacet before calling addType.',
+    'Register a type seed (seedType) through typeSeedsFacet before calling addType.',
   )
 }
 

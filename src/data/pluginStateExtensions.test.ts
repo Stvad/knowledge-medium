@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { defineBlockType, seedType } from '@/data/api'
-import { typeSeedsFacet, typesFacet } from '@/data/facets.js'
+import { seedType } from '@/data/api'
+import { typeSeedsFacet } from '@/data/facets.js'
 import { appEffectsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { pluginPrefsExtension, pluginUIStateExtension } from './pluginStateExtensions.js'
 
 // Guards `hiddenPluginTypeContribution`'s provenance routing: a `seedType`
-// materializes (→ typeSeedsFacet), while a plain `TypeContribution` (a bare
-// `defineBlockType` — e.g. a dynamic extension that hasn't adopted
-// `extensionTypeSeedKey`) falls back to the static `typesFacet`. That fallback
-// branch is unused by the in-app static plugins (all now seedType), so without
-// this test a flipped ternary or a changed `isTypeSeedDeclaration` would go
-// uncaught.
+// materializes into `typeSeedsFacet`, carrying its provenance
+// (seedKey/revision) through with `hideFromCompletion` forced true. The
+// schema-unification migration removed the transitional `typesFacet`
+// fallback for a plain (non-seed) `TypeContribution` — every caller,
+// static or dynamic, now supplies a `seedType` (dynamic extensions via
+// `extensionTypeSeedKey`) — so `pluginPrefsExtension`/`pluginUIStateExtension`
+// only accept `TypeSeedDeclaration` and there is no plain-container branch
+// left to test.
 describe('pluginStateExtensions routing', () => {
   it('routes a seedType container through typeSeedsFacet, forced hidden from completion', () => {
     const type = seedType({seedKey: 'system:test/type/test-prefs', revision: 1, id: 'test-prefs', label: 'Test prefs'})
@@ -25,19 +27,8 @@ describe('pluginStateExtensions routing', () => {
       revision: 1,
       hideFromCompletion: true,
     })
-    // ...and NOT into the static typesFacet (a leak would double-contribute).
-    expect(runtime.read(typesFacet).has('test-prefs')).toBe(false)
     // The idle eager-bootstrap effect is bundled alongside.
     expect(runtime.read(appEffectsFacet).some(e => e.id === 'plugin-prefs.test-prefs.bootstrap')).toBe(true)
-  })
-
-  it('routes a plain (dynamic-extension) container through typesFacet, forced hidden from completion', () => {
-    const type = defineBlockType({id: 'dyn-prefs', label: 'Dyn prefs'})
-    const runtime = resolveFacetRuntimeSync(pluginPrefsExtension(type, 'test'))
-
-    expect(runtime.read(typesFacet).get('dyn-prefs')).toMatchObject({id: 'dyn-prefs', hideFromCompletion: true})
-    // A plain type carries no seedKey → nothing seeded.
-    expect(runtime.read(typeSeedsFacet)).toHaveLength(0)
   })
 
   it('pluginUIStateExtension shares the routing and bundles its own bootstrap effect', () => {

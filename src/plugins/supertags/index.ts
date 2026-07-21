@@ -1,7 +1,7 @@
 /** Supertags plugin — Tana-style `#` type tagging.
  *
  *  Two surfaces over the first-class type system (`typesProp` +
- *  `repo.addType`/`removeType`, registry = `typesFacet`):
+ *  `repo.addType`/`removeType`, registry = `repo.types`):
  *   - typing `#` in a block's editor opens an autocomplete over the
  *     registered types (plus a "Create type" option that materializes
  *     a user-defined type-definition block on the fly); picking one

@@ -4,15 +4,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   ChangeScope,
-  codecs,
-  defineBlockType,
-  defineProperty,
+  seedProperty,
+  seedType,
 } from '@/data/api'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -73,41 +72,46 @@ vi.mock('@/utils/navigation.ts', () => ({
   },
 }))
 
-const reviewStatusProp = defineProperty<string>('phase2:review-status', {
-  codec: codecs.string,
-  defaultValue: 'open',
-  changeScope: ChangeScope.BlockDefault,
+// Type-embedded properties are code-owned seeds (the type-lift that used to
+// surface a type's embedded schemas is gone) so the panel resolves + renders
+// each row. Contributed through `definitionSeedsFacet` in the runtime below.
+const reviewStatusProp = seedProperty({
+  seedKey: 'test/property/phase2-review-status', revision: 1, name: 'phase2:review-status',
+  preset: 'string', defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
 })
 
-const reviewerRefProp = defineProperty<string>('phase2:reviewer-ref', {
-  codec: codecs.ref({targetTypes: ['reviewer']}),
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const reviewerRefProp = seedProperty({
+  seedKey: 'test/property/phase2-reviewer-ref', revision: 1, name: 'phase2:reviewer-ref',
+  preset: 'ref', config: {targetTypes: ['reviewer']}, defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const relatedRefsProp = defineProperty<readonly string[]>('phase2:related-refs', {
-  codec: codecs.refList({targetTypes: ['related']}),
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
+const relatedRefsProp = seedProperty({
+  seedKey: 'test/property/phase2-related-refs', revision: 1, name: 'phase2:related-refs',
+  preset: 'refList', config: {targetTypes: ['related']}, defaultValue: [], changeScope: ChangeScope.BlockDefault,
 })
 
-const reviewType = defineBlockType({
+const reviewType = seedType({
+  seedKey: 'test/type/phase2-review',
+  revision: 1,
   id: 'phase2-review',
   label: 'Phase 2 Review',
   properties: [reviewStatusProp, reviewerRefProp, relatedRefsProp],
 })
 
-const reviewerProp = defineProperty<string>('phase2:reviewer', {
-  codec: codecs.string,
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
+const reviewerProp = seedProperty({
+  seedKey: 'test/property/phase2-reviewer', revision: 1, name: 'phase2:reviewer',
+  preset: 'string', defaultValue: '', changeScope: ChangeScope.BlockDefault,
 })
 
-const assignmentType = defineBlockType({
+const assignmentType = seedType({
+  seedKey: 'test/type/phase2-assignment',
+  revision: 1,
   id: 'phase2-assignment',
   label: 'Phase 2 Assignment',
   properties: [reviewerProp],
 })
+
+const reviewTypeProps = [reviewStatusProp, reviewerRefProp, relatedRefsProp, reviewerProp]
 
 // A user-schema-backed property hidden via the `system:` name convention.
 // B′ removed the name-key editor-override join, so a code override can no
@@ -141,8 +145,9 @@ describe('BlockProperties component', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
-      typesFacet.of(reviewType, {source: 'test'}),
-      typesFacet.of(assignmentType, {source: 'test'}),
+      reviewTypeProps.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+      typeSeedsFacet.of(reviewType, {source: 'test'}),
+      typeSeedsFacet.of(assignmentType, {source: 'test'}),
       defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
     ])
     repo.setFacetRuntime(runtime)

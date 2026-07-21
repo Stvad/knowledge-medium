@@ -158,16 +158,21 @@ describe('lintExtensionSource — clean source', () => {
   it('returns an empty array for source using the canonical patterns', () => {
     const source = `
       import {
-        ChangeScope, codecs, defineBlockType, defineProperty,
-        getPluginPrefsBlock, pluginBlockId, typesFacet,
+        ChangeScope, seedProperty, seedType, extensionPropertySeedKey,
+        extensionTypeSeedKey, getPluginPrefsBlock, pluginBlockId,
       } from '@/extensions/api.js'
 
       const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
-      const lastSyncProp = defineProperty('readwise:lastSyncedAt', {
-        codec: codecs.optionalString,
+      const lastSyncProp = seedProperty({
+        seedKey: extensionPropertySeedKey('lastSyncedAt'),
+        revision: 1,
+        name: 'readwise:lastSyncedAt',
+        preset: 'optional-string',
         changeScope: ChangeScope.UserPrefs,
       })
-      const readwisePrefsType = defineBlockType({
+      const readwisePrefsType = seedType({
+        seedKey: extensionTypeSeedKey('prefs'),
+        revision: 1,
         id: 'readwise-prefs',
         label: 'Readwise',
         properties: [lastSyncProp],

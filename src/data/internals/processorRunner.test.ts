@@ -26,16 +26,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
-  codecs,
   type AnyPostCommitProcessor,
-  defineBlockType,
-  defineProperty,
+  seedProperty,
 } from '@/data/api'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
-import { postCommitProcessorsFacet, typesFacet } from '../facets'
+import { definitionSeedsFacet, postCommitProcessorsFacet } from '../facets'
 
 const WS = 'ws-1'
 
@@ -287,15 +285,16 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
   })
 
   it('passes the propertySchemas snapshot from tx start to processors', async () => {
-    const originalSchema = defineProperty<string>('status', {
-      codec: codecs.string,
-      defaultValue: 'open',
-      changeScope: ChangeScope.BlockDefault,
+    // Same seedKey, swapped payload — an "upgrade" of the `status` property. Each
+    // runtime holds exactly one, so the registry resolves `status` to whichever
+    // object is currently contributed (identity-preserving for the assertions).
+    const originalSchema = seedProperty({
+      seedKey: 'test/property/status', revision: 1, name: 'status',
+      preset: 'string', defaultValue: 'open', changeScope: ChangeScope.BlockDefault,
     })
-    const replacementSchema = defineProperty<string>('status', {
-      codec: codecs.string,
-      defaultValue: 'done',
-      changeScope: ChangeScope.BlockDefault,
+    const replacementSchema = seedProperty({
+      seedKey: 'test/property/status', revision: 1, name: 'status',
+      preset: 'string', defaultValue: 'done', changeScope: ChangeScope.BlockDefault,
     })
     const observed: unknown[] = []
     const processor: AnyPostCommitProcessor = {
@@ -308,14 +307,14 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
 
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([
       postCommitProcessorsFacet.of(processor, {source: 'test'}),
-      typesFacet.of(defineBlockType({id: 'test:schema-snapshot', properties: [originalSchema]}), {source: 'test'}),
+      definitionSeedsFacet.of(originalSchema, {source: 'test'}),
     ]))
 
     await env.repo.tx(async tx => {
       await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
       env.repo.setFacetRuntime(resolveFacetRuntimeSync([
         postCommitProcessorsFacet.of(processor, {source: 'test'}),
-        typesFacet.of(defineBlockType({id: 'test:schema-snapshot', properties: [replacementSchema]}), {source: 'test'}),
+        definitionSeedsFacet.of(replacementSchema, {source: 'test'}),
       ]))
     }, {scope: ChangeScope.BlockDefault})
     await env.repo.awaitProcessors()

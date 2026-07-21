@@ -5,14 +5,14 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
   codecs,
-  defineBlockType,
   defineProperty,
+  seedType,
 } from '@/data/api'
 import { useEffect } from 'react'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typesFacet } from '@/data/facets'
+import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
@@ -130,7 +130,10 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
-      typesFacet.of(defineBlockType({id: 'test:status-prop', properties: [statusProp]}), {source: 'test'}),
+      typeSeedsFacet.of(
+        seedType({seedKey: 'test/type/test-status-prop', revision: 1, id: 'test:status-prop', label: 'Test Status Prop', properties: [statusProp]}),
+        {source: 'test'},
+      ),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},

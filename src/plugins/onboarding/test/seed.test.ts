@@ -19,7 +19,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { typeSeedsFacet, typesFacet } from '@/data/facets'
+import { typeSeedsFacet } from '@/data/facets'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
@@ -227,17 +227,14 @@ describe('seedTutorial', () => {
   // every block type the tutorial tags a demo with MUST be registered there,
   // or `addType` throws and no tutorial seeds (the original char-counter / geo
   // regression). Guard the production list directly — no DB, no processors.
-  // A type reaches the merged `repo.types` through EITHER channel: a static
-  // `typesFacet` code contribution OR a `typeSeedsFacet` seed (synthesised into
-  // repo.types by the facet bridge). Post-C4 these plugin types are all seeds,
-  // so check the union of both facets — the same set the construction-time
-  // registry merges.
+  // A type reaches the merged `repo.types` via a `typeSeedsFacet` seed
+  // (synthesised into repo.types by the facet bridge) — the sole
+  // registration channel now that the static `typesFacet` is gone (Slice D).
   it('staticDataExtensions registers every block type the tutorial seeds', () => {
     const runtime = resolveFacetRuntimeSync(staticDataExtensions)
-    const typeIds = new Set<string>([
-      ...runtime.read(typesFacet).keys(),
-      ...runtime.read(typeSeedsFacet).map(t => t.id),
-    ])
+    const typeIds = new Set<string>(
+      runtime.read(typeSeedsFacet).map(t => t.id),
+    )
     for (const typeId of [TODO_TYPE, CHAR_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE]) {
       expect(typeIds.has(typeId)).toBe(true)
     }

@@ -8,12 +8,13 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { typesProp } from '@/data/properties.js'
-import { typesFacet } from '@/data/facets.js'
+import { seedType } from '@/data/api'
 import {
   definitionSeedsFacet,
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
   queriesFacet,
+  typeSeedsFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
 import {readValuePresets} from '@/data/valuePresetRegistry'
@@ -1078,9 +1079,9 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(out.groups.map(group => group.label)).not.toContain('person')
     })
 
-    it('resolves user-defined type ids via typesFacet to a label', async () => {
+    it('resolves user-defined type ids via typeSeedsFacet to a label', async () => {
       // User-defined types store the block-type block's id in `types`,
-      // not its label. In production the label comes from `typesFacet`
+      // not its label. In production the label comes from `typeSeedsFacet`
       // — kernel-contributed types ride in at extension build, and
       // user-defined types are materialized into the facet by
       // `UserTypesService`. The resolver reads the facet at resolve
@@ -1090,8 +1091,8 @@ describe('groupedBacklinksDataExtension query', () => {
         kernelDataExtension,
         backlinksQueryInvalidationExtension,
         groupedBacklinksDataExtension,
-        typesFacet.of(
-          {id: 'person-type-block', label: 'Person'},
+        typeSeedsFacet.of(
+          seedType({seedKey: 'test/type/person-type-block', revision: 1, id: 'person-type-block', label: 'Person'}),
           {source: 'test'},
         ),
       ]))

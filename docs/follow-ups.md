@@ -91,7 +91,7 @@ The "don't enqueue" path also helps the `row_events` problem above — an `'impo
 
 ### Strict-mode-with-checked-overrides for name-keyed facets
 
-Every name-keyed facet in the codebase (`propertySchemasFacet`, `propertyUiFacet`, `postCommitProcessorsFacet`, `queriesFacet`, `mutatorsFacet`, `typesFacet`, `blockLayoutFacet`, etc.) follows the same convention: warn on duplicate name, last-wins. That's the existing override mechanism — plugins replace kernel registrations by registering after them. It works, but the warn is easy to miss in practice and accidental name collisions silently overwrite intended behavior.
+Every name-keyed facet in the codebase (`postCommitProcessorsFacet`, `queriesFacet`, `mutatorsFacet`, `valuePresetCoresFacet`, `blockLayoutFacet`, etc.) follows the same convention: warn on duplicate name, last-wins. That's the existing override mechanism — plugins replace kernel registrations by registering after them. It works, but the warn is easy to miss in practice and accidental name collisions silently overwrite intended behavior.
 
 A stricter scheme: registrations may opt into a checked override target — `propertySchemasFacet.of(statusPropV2, {source: 'my-plugin', overrides: 'status'})`. Combine asserts that an entry under `overrides` exists; if absent, throw (catches typos). If present, replace silently (intent declared, no warn). Without `overrides`, any duplicate-name collision throws (catches accidents). That gives strict mode + intentional override + typo catch in one shape.
 
@@ -143,6 +143,10 @@ Two viable fixes:
 The user is currently leaning toward **block-id keying as the destination** (per the user-defined-types design review session) because it composes with the same "id-stable handle" decision already made for types and resolves the rename problem cleanly for every consumer at once. Cascade-rename remains a viable interim step that doesn't paint into a corner.
 
 ## P3 — Deferred until trigger fires
+
+### Trim schema-unification.html's forward-looking #288 traceability (trigger: #288 work begins)
+
+The schema-unification project shipped in full (slices A–D). `docs/schema-unification.html` still carries the forward-looking requirements-traceability it wrote for the properties-as-blocks migration (#288): the reserved-but-unread `property-schema:child-backed` field (§3 table), and the `childBacked`/fleet-classifiability discussion threaded through §5.1, §6.1–§6.2, §11.1, §12 (all explicitly "#288's field end to end, not scope of this project", §11.1). Now that this project is done, that material is a hand-off note, not live design. **Trigger to trim:** the first #288 slice that actually consumes `childBacked` lands — at that point move the traceability into #288's own doc (or delete it here and let #288 own the field's home + flip mechanism), and drop the "reserved" pill. Until then it stays as the record of why the field exists. (Filed at schema-unification slice D per §11.1.)
 
 ### Consider DB/query revisioning if dirty-load handle semantics become hard to reason about
 
@@ -288,7 +292,7 @@ The current plugin-extensibility plan has plugins write into namespaced subtrees
 
 ## Data-defined `type-definition` blocks (deferred from type-system v1)
 
-Type-system v1 ([docs/type-system.md](docs/type-system.md)) ships types as facet contributions only — end users who want a new type write a small `extension` block that calls `typesFacet.of({...})`. The dedicated declarative `type-definition` block + property-panel UI for non-coding authors is deferred until there's user demand to remove the "write a tiny extension" friction. Design sketch survives in §9 of the type-system doc: a kernel query `findTypeDefinitionBlocksQuery` mirroring `findExtensionBlocksQuery`, a resolver `userDefinedTypesExtension` symmetric to `dynamicExtensionsExtension`, and a small `appEffect` watching `block_types WHERE type='type-definition'` that calls `refreshAppRuntime()` on change. Explicitly **not** a mutable `FacetRuntime` contribution sink — the immutable-then-rebuild shape is load-bearing (atomic switchover for mutators+processors+schemas, upfront validation, deterministic `combine`, order-independent visibility). **Trigger to build:** real users hit the "to add a new type I have to author code" wall and ask for a UI. Until then, code-extension types are sufficient.
+Type-system v1 ([docs/type-system.md](docs/type-system.md)) ships types as facet contributions only — end users who want a new type write a small `extension` block that contributes a `seedType({...})` to `typeSeedsFacet` (with a block-scoped `seedKey` from `extensionTypeSeedKey`; the static `typesFacet.of` registration path was removed in the schema-unification slice D). The dedicated declarative `type-definition` block + property-panel UI for non-coding authors is deferred until there's user demand to remove the "write a tiny extension" friction. Design sketch survives in §9 of the type-system doc: a kernel query `findTypeDefinitionBlocksQuery` mirroring `findExtensionBlocksQuery`, a resolver `userDefinedTypesExtension` symmetric to `dynamicExtensionsExtension`, and a small `appEffect` watching `block_types WHERE type='type-definition'` that calls `refreshAppRuntime()` on change. Explicitly **not** a mutable `FacetRuntime` contribution sink — the immutable-then-rebuild shape is load-bearing (atomic switchover for mutators+processors+schemas, upfront validation, deterministic `combine`, order-independent visibility). **Trigger to build:** real users hit the "to add a new type I have to author code" wall and ask for a UI. Until then, code-extension types are sufficient.
 
 ## Data-defined contributions over facets — projector-shim pattern
 
