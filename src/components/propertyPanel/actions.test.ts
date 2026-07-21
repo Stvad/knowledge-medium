@@ -5,7 +5,6 @@ import {
   ChangeScope,
   codecs,
   defineProperty,
-  PropertySchemaScopeMismatchError,
   type AnyPropertySchema,
 } from '@/data/api'
 import type {Block} from '@/data/block'
@@ -205,49 +204,52 @@ describe('property panel action visibility guards', () => {
     expect(addSchema).not.toHaveBeenCalled()
   })
 
-  // A UserPrefs (allow, non-hidden) captured scope is the reachable case: a
-  // UiState capture would be filtered as hidden before reaching the tx.
-  const scopeDriftBlock = (resolvedScope: ChangeScope) => {
-    const captured = defineProperty<string>('pref:foo', {
-      codec: codecs.string,
-      defaultValue: '',
-      changeScope: ChangeScope.UserPrefs,
-    })
+  // deleteProperty now routes a SCHEMA'd key through tx.unsetProperty, which
+  // owns the scope-consistency guard (resolved scope vs the tx's admitted
+  // scope) — the drift protection that used to be inlined here lives in the
+  // engine now (see the unsetProperty scope-mismatch test). A SCHEMA-LESS key
+  // has no resolvable definition, so it stays a raw tx.update.
+  const deleteBlock = () => {
     const update = vi.fn()
-    const resolvePropertySchema = vi.fn(async () => ({...captured, changeScope: resolvedScope}))
+    const unsetProperty = vi.fn()
     const tx = vi.fn(async (cb: (t: unknown) => Promise<void>) => {
-      await cb({resolvePropertySchema, update})
+      await cb({update, unsetProperty})
     })
     const block = {
       id: 'block-1',
       repo: {propertyDefinitions: null, propertySchemas: new Map(), tx},
     } as unknown as Block
-    return {captured, update, block}
+    return {update, unsetProperty, block}
   }
 
-  it('rejects a delete whose captured scope policy differs from the live resolved scope', async () => {
-    // Captured UserPrefs (allow) but the definition now resolves BlockDefault
-    // (reject): raw tx.update would bypass the read-only gate without this check.
-    const {captured, update, block} = scopeDriftBlock(ChangeScope.BlockDefault)
-    await expect(deleteProperty({
+  it('routes a schema-backed delete through the scope-checked unsetProperty, not a raw tx.update', async () => {
+    const schema = defineProperty<string>('pref:foo', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.UserPrefs,
+    })
+    const {update, unsetProperty, block} = deleteBlock()
+    await deleteProperty({
       block,
-      properties: {[captured.name]: 'v'},
-      schemas: new Map([[captured.name, captured]]),
+      properties: {[schema.name]: 'v'},
+      schemas: new Map([[schema.name, schema]]),
       uis: new Map(),
-      name: captured.name,
-    })).rejects.toThrow(PropertySchemaScopeMismatchError)
+      name: schema.name,
+    })
+    expect(unsetProperty).toHaveBeenCalledWith('block-1', schema)
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('deletes when the captured and resolved scope policies match', async () => {
-    const {captured, update, block} = scopeDriftBlock(ChangeScope.UserPrefs)
+  it('removes a schema-less key with a raw tx.update (no resolvable definition to unset through)', async () => {
+    const {update, unsetProperty, block} = deleteBlock()
     await deleteProperty({
       block,
-      properties: {[captured.name]: 'v'},
-      schemas: new Map([[captured.name, captured]]),
+      properties: {'unregistered:key': 'v', keep: 'me'},
+      schemas: new Map(), // no schema for the deleted name
       uis: new Map(),
-      name: captured.name,
+      name: 'unregistered:key',
     })
-    expect(update).toHaveBeenCalledWith('block-1', {properties: {}})
+    expect(update).toHaveBeenCalledWith('block-1', {properties: {keep: 'me'}})
+    expect(unsetProperty).not.toHaveBeenCalled()
   })
 })

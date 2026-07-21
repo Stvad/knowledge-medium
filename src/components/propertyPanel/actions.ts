@@ -1,7 +1,5 @@
 import {
   ChangeScope,
-  PropertySchemaScopeMismatchError,
-  scopePoliciesEquivalent,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
@@ -127,28 +125,25 @@ export const deleteProperty = async (args: {
   )) return
   if (!Object.hasOwn(args.properties, args.name)) return
 
-  const next = {...args.properties}
-  delete next[args.name]
   const schema = args.schemas.get(args.name)
 
   await args.block.repo.tx(async tx => {
     if (schema) {
-      // `args.schemas` is a render-time snapshot; the property's change-scope may
-      // have changed (e.g. synced from another client) since. This delete opens
-      // the tx under that captured scope and writes via raw `tx.update`, which —
-      // unlike `tx.setProperty` — skips the scope-consistency check. Mirror it:
-      // re-resolve against the live row and reject if the current scope's policy
-      // differs from the one this tx was admitted under, so a stale allow-scope
-      // can't delete a now-reject-scope property in a read-only session (nor
-      // misroute the undo entry).
-      const resolved = await tx.resolvePropertySchema(args.block.id, schema)
-      if (!scopePoliciesEquivalent(resolved.changeScope, schema.changeScope)) {
-        throw new PropertySchemaScopeMismatchError(
-          args.name, schema.changeScope, resolved.changeScope,
-        )
-      }
+      // Typed path: unsetProperty resolves identity, runs the same
+      // scope-consistency guard (resolved scope vs the scope this tx was
+      // admitted under, = schema.changeScope), removes just this key — no
+      // whole-bag replace — and, in a child-backed workspace, soft-deletes the
+      // field-row children via MATERIALIZE.
+      await tx.unsetProperty(args.block.id, schema)
+    } else {
+      // Schema-less transitional key (no registered definition): unsetProperty
+      // would throw on the unresolvable schema, so drop the bare cell key
+      // directly. Such a key has no children to reconcile (no schema → never
+      // materialized); the migration backfill is what gives it a definition.
+      const next = {...args.properties}
+      delete next[args.name]
+      await tx.update(args.block.id, {properties: next})
     }
-    await tx.update(args.block.id, {properties: next})
   }, {
     scope: schema?.changeScope ?? ChangeScope.BlockDefault,
     description: `delete property ${args.name}`,
