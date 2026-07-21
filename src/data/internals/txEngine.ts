@@ -749,7 +749,7 @@ export class TxImpl implements Tx {
     // truth that crosses sync. Requires resolved identity (the fieldId names
     // the field row); a boot-window plain schema stays cell-only.
     if (isResolvedPropertySchema(resolvedSchema) && await this.isChildBackedRow(before)) {
-      await this.writePropertyValueChild(before, resolvedSchema, value, opts)
+      await this.writePropertyValueChild(before, resolvedSchema, value)
     }
     const properties = {...before.properties, [resolvedSchema.name]: encoded}
     await this.writePropertiesBag(id, before, properties, opts)
@@ -879,7 +879,7 @@ export class TxImpl implements Tx {
       }
       for (const {schema, value} of sets) {
         if (!unsetNames.has(schema.name) && isResolvedPropertySchema(schema)) {
-          await this.writePropertyValueChild(before, schema, value, opts)
+          await this.writePropertyValueChild(before, schema, value)
         }
       }
     }
@@ -1329,7 +1329,6 @@ export class TxImpl implements Tx {
     parent: BlockData,
     schema: PropertySchema<T> & {readonly fieldId: string},
     value: T,
-    opts: TxWriteOpts | undefined,
   ): Promise<void> {
     const content = propertyValueToChildContent(schema, value)
     const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
@@ -1339,13 +1338,20 @@ export class TxImpl implements Tx {
     const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
 
     if (existing) {
+      // Child-backed field/value rows are synced data: update their content
+      // with REAL metadata (no `opts`) — same as the create path below and the
+      // deferred materialize processor (propertyChildrenProcessor.ts, which
+      // passes none). Forwarding the parent write's {skipMetadata} here would
+      // stamp these synced rows' user_updated_at/updated_by inconsistently
+      // depending on whether the change went through the eager dual-write or
+      // the deferred processor for the same logical value.
       if (existing.content !== propertyFieldContent(schema.fieldId)) {
-        await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)}, opts)
+        await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)})
       }
       const values = await this.childrenOf(existing.id, undefined)
       const [primary, ...duplicates] = values
       if (primary) {
-        if (primary.content !== content) await this.update(primary.id, {content}, opts)
+        if (primary.content !== content) await this.update(primary.id, {content})
         // §9 dedup — fold ONLY exact duplicates of the value we just wrote
         // (concurrent dual-writes of the same value), matching the deferred
         // materialize processor (propertyChildrenProcessor.ts). A DIVERGENT
