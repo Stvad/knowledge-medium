@@ -473,6 +473,18 @@
   workspace-before-block delivery guarantee (one stream, staged blocks
   materialize after the checkpoint the workspace row hydrates at), recorded as
   a sync-config invariant (C).<br>
+  <strong>Revised 2026-07-21, follow-up PR (PR-review round 29, arrived at
+  merge):</strong> classification runs through the <em>shadow-tolerant
+  checker</em> — resolved OR shadowed classifies — not bare
+  <code>resolveField</code>, whose winner-enforcing semantics would unclassify
+  every shadowed loser's rows (§9; the as-built
+  <code>isFieldDefinitionCheckerFor</code> already implements this, now pinned
+  as the contract); the types auto-claim precedent is narrowed to
+  user-authored type blocks — seeded backing blocks deliberately claim no
+  alias, so AC's bulk claim covers seeded and user definitions explicitly
+  (§7, AC); and the empty-string orphan key is a <em>hard flip blocker</em> —
+  no definition can ever back it, so the runbook deletes or remaps it before
+  the flip (§9).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -494,7 +506,8 @@
   every block type, kernel included, is now a seeded definition block with a
   materialized, read-only backing block. Nothing in this plan changes; three
   things strengthen: the auto-claim "types precedent" (§7, AC) is now the
-  <em>universal live mechanism</em>, not an analogy; the §9 parent-guard's
+  <em>live mechanism</em> for user-authored type blocks (see the round-29
+  correction: seeded backing blocks deliberately claim no alias); the §9 parent-guard's
   standing example (<code>block-type:properties</code> ref values targeting
   property-schema blocks) is materialized reality on every type block, so the
   guard is ubiquitous, not edge-case; and a type's inline <code>properties</code>
@@ -1488,9 +1501,16 @@ name-resolution tier only existed because properties weren't blocks. Post-unific
 definitions <em>are</em> blocks, and blocks already have exactly one name mechanism —
 the alias index. Types are the standing precedent: a type block claims its label as an
 alias and <code>[[Person]]</code> resolves through the generic index with no
-"type-name tier" — and since the master types cutover (2026-07-21 note), that
-precedent is universal: every type, kernel included, is a seeded definition
-block whose materialized backing block claims its label. <code>[[name]]</code> therefore stops being the identity carrier and
+"type-name tier". The precedent is narrower than "universal", though
+(PR-review round 29, correcting this doc's first rebase note): it holds for
+<em>user-authored</em> type blocks — <em>seeded</em> backing blocks are
+deliberately bare, no PAGE_TYPE and <strong>no alias</strong>
+(<code>definitionSeeds.ts</code>, pinned by test: the C4 cutover kept them
+invisible to avoid a behavior change and <code>alias.collision</code> on real
+type labels; a seeded type's label claims an alias only when its editable
+label is written). So auto-claim cannot assume seeded definitions "already
+work like types" — its bulk claim must cover seeded <em>and</em> user property
+definitions explicitly (§11 AC). <code>[[name]]</code> therefore stops being the identity carrier and
 becomes a deferred <em>affordance</em> — the auto-claim step (§11).
 </p>
 
@@ -1652,8 +1672,15 @@ supabase skill if it's kept.
 <dl>
   <dt><strong>Field-row recognition.</strong></dt>
   <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
-    definition block's id — a fieldId-keyed lookup the unified registry ships
-    (<code>resolveField</code>) — <em>the workspace is flipped</em>
+    definition block's id — via the <em>shadow-tolerant classification
+    checker</em>, not bare <code>resolveField</code> (PR-review round 29:
+    <code>resolveField</code> alone is winner-enforcing — a shadowed fieldId
+    returns <code>identity-unavailable/shadowed</code> — so classifying through
+    it would unclassify every shadowed loser's rows, contradicting §6; the
+    as-built checker, <code>isFieldDefinitionCheckerFor</code>, wraps it and
+    classifies on <em>resolved OR shadowed</em>, every other reason
+    unclassifies — that disjunction is the contract, pin it so a resolver
+    refactor can't silently narrow it) — <em>the workspace is flipped</em>
     (<code>properties_migration</code> at or past <code>'children'</code>, §6;
     PR-review P2: recognition off
     the raw column alone activates the moment slice A starts stamping — a whole-block
@@ -1745,7 +1772,14 @@ supabase skill if it's kept.
     affordance, so synthesis keeps <code>name = key</code> and <em>flags</em> such
     keys in the flip report for optional cleanup (the earlier
     deterministic-rename requirement is deleted; only a genuinely unusable key — the
-    empty string — is reported instead of synthesized); and <em>ids are
+    empty string — cannot be synthesized at all, and its report is a <em>hard
+    flip blocker</em>, not an FYI (PR-review round 29): the definition parser
+    and <code>addSchema</code> both reject empty names, so an empty-string cell
+    key can never be definition-backed — left in place it makes the
+    "no definition-less keys" gate unsatisfiable forever, and at
+    <code>cell-off</code> the column drop would orphan the value's only
+    carrier; the runbook resolves it before the flip proceeds — delete the key
+    or remap its value under a named key); and <em>ids are
     deterministic</em> — <code>uuidv5(workspaceId, key)</code>, the seeded-definition
     pattern — so a re-run converges on the same blocks, and two devices independently
     running an e2ee option-2 flip mint the <em>same</em> definition instead of
@@ -2539,8 +2573,12 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
       <p>
         The step that turns <code>[[name]]</code> from "resolves to a page or
         nothing" into a live property affordance: <strong>property definitions claim
-        their name as an alias</strong>, exactly like type blocks do today — the
-        generic alias index, no property-special tier (§7). Recognition needs
+        their name as an alias</strong>, riding the generic alias index with no
+        property-special tier (§7) — noting the types precedent is
+        user-authored-only (§7, round 29): seeded type backing blocks
+        deliberately claim <em>no</em> alias today, so the bulk claim here must
+        cover <em>seeded and user</em> property definitions explicitly rather
+        than assuming seeds "already work like types". Recognition needs
         <em>no change</em> (it is already form-agnostic, §9); the pre-marked spots
         that activate: the sync same-tx prospective probe gains its async
         <code>[[alias]]</code> branch, and the reference-target <em>reclaim</em>
