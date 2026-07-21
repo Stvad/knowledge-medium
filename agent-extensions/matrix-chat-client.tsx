@@ -2,9 +2,9 @@ import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   blockContentDecoratorsFacet,
   diagnosticsFacet,
-  ChangeScope, defineBlockType, seedProperty, extensionPropertySeedKey, definePropertyEditorOverride,
+  ChangeScope, seedType, seedProperty, extensionPropertySeedKey, extensionTypeSeedKey, definePropertyEditorOverride,
   getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, definitionSeedsFacet,
-  showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
+  showError, showInfo, showSuccess, showPropertiesProp, typeSeedsFacet, useRepo,
   type DiagnosticSnapshot,
   type DiagnosticSourceContribution,
   type BlockContentDecorator,
@@ -160,7 +160,9 @@ const eventTimestampProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-const matrixChatPrefsType = defineBlockType({
+const matrixChatPrefsType = seedType({
+  seedKey: extensionTypeSeedKey('prefs'),
+  revision: 1,
   id: 'matrix-chat-prefs',
   label: 'Matrix',
   // Prefs container is plumbing for the # dropdown (typing #Matrix
@@ -169,7 +171,9 @@ const matrixChatPrefsType = defineBlockType({
   hideFromCompletion: true,
   properties: [homeserverProp, roomIdProp, autoStartProp, connectedHintProp],
 })
-const matrixMessageType = defineBlockType({
+const matrixMessageType = seedType({
+  seedKey: extensionTypeSeedKey('message'),
+  revision: 1,
   id: MATRIX_MESSAGE_TYPE,
   label: 'Matrix message',
   description: 'A message ingested from a Matrix room.',
@@ -1296,8 +1300,8 @@ const matrixAudioContentDecorator: BlockContentDecoratorContribution = ctx => {
 // wiring
 
 export default [
-  typesFacet.of(matrixChatPrefsType, {source}),
-  typesFacet.of(matrixMessageType, {source}),
+  typeSeedsFacet.of(matrixChatPrefsType, {source}),
+  typeSeedsFacet.of(matrixMessageType, {source}),
 
   definitionSeedsFacet.of(homeserverProp, {source}),
   definitionSeedsFacet.of(roomIdProp, {source}),

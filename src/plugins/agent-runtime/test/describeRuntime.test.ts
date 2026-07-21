@@ -313,7 +313,7 @@ describe('describeRuntime', () => {
       pattern => pattern.id === 'user-prefs-config',
     )
     expect(userPrefs?.example?.code).toContain('getPluginPrefsBlock')
-    expect(userPrefs?.example?.code).toContain('defineBlockType')
+    expect(userPrefs?.example?.code).toContain('seedType')
   })
 
   it('exposes pluginBlockId on the public extension API surface', async () => {
