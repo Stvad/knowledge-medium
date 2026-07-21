@@ -6,10 +6,10 @@ import {
   BlockNotFoundForTypeError,
   ChangeScope,
   codecs,
-  defineBlockType,
   defineProperty,
   defineSameTxProcessor,
   seedProperty,
+  seedType,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -17,7 +17,7 @@ import {
   definitionSeedsFacet,
   projectedPropertyDefinitionsFacet,
   sameTxProcessorsFacet,
-  typesFacet,
+  typeSeedsFacet,
 } from '@/data/facets'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { addedTypes, getBlockTypes, typesProp } from '@/data/properties'
@@ -79,8 +79,11 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     let setupCalls = 0
-    const taskType = defineBlockType({
+    const taskType = seedType({
+      seedKey: 'test/type/task-1',
+      revision: 1,
       id: 'task',
+      label: 'Task',
       properties: [dueProp, setupCountProp],
     })
     const taskAddProcessor = defineSameTxProcessor({
@@ -102,7 +105,7 @@ describe('Repo type membership orchestration', () => {
       },
     })
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(taskType, {source: 'test'}),
+      typeSeedsFacet.of(taskType, {source: 'test'}),
       sameTxProcessorsFacet.of(taskAddProcessor, {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -134,7 +137,7 @@ describe('Repo type membership orchestration', () => {
       },
     })
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'task'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/task-2', revision: 1, id: 'task', label: 'Task'}), {source: 'test'}),
       sameTxProcessorsFacet.of(recorder, {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -163,7 +166,7 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-1', revision: 1, id: 'todo', label: 'Todo', properties: [statusProp]}), {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -188,7 +191,7 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo', properties: [shadowed]}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-2', revision: 1, id: 'todo', label: 'Todo', properties: [shadowed]}), {source: 'test'}),
     ]))
     repo.setActiveWorkspaceId('ws-1')
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [shadowed])
@@ -221,7 +224,7 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-3', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     repo.setActiveWorkspaceId('ws-1')
     repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-types-winner', [{
@@ -267,7 +270,7 @@ describe('Repo type membership orchestration', () => {
     })
     const fieldId = propertyDefinitionBlockId('ws-1', declared.seedKey)
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo', properties: [declared]}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-4', revision: 1, id: 'todo', label: 'Todo', properties: [declared]}), {source: 'test'}),
     ]))
     repo.setActiveWorkspaceId('ws-1')
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [declared])
@@ -302,7 +305,7 @@ describe('Repo type membership orchestration', () => {
 
   it('throws for unknown type ids and unknown initial value schemas', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-5', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -314,8 +317,8 @@ describe('Repo type membership orchestration', () => {
 
   it('removes, toggles, and sets type membership in one tx per operation', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'a'}), {source: 'test'}),
-      typesFacet.of(defineBlockType({id: 'b'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/a-1', revision: 1, id: 'a', label: 'A'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/b-1', revision: 1, id: 'b', label: 'B'}), {source: 'test'}),
     ]))
     await createBlock('b1')
 
@@ -338,7 +341,7 @@ describe('Repo type membership orchestration', () => {
 
   it('addType throws BlockNotFoundForTypeError when the target block is missing', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-6', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
 
     await expect(repo.addType('does-not-exist', 'todo')).rejects.toBeInstanceOf(BlockNotFoundForTypeError)
@@ -354,7 +357,7 @@ describe('Repo type membership orchestration', () => {
 
   it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a missing block', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-7', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
 
@@ -377,7 +380,7 @@ describe('Repo type membership orchestration', () => {
 
   it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a tombstoned block', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-8', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
     // Soft-delete the row so tx.get returns it with deleted=true.
@@ -405,7 +408,7 @@ describe('Repo type membership orchestration', () => {
 
   it('addTypeInTxLenient silently no-ops on a missing block (preserves legacy semantics)', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-9', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
 
@@ -417,7 +420,7 @@ describe('Repo type membership orchestration', () => {
 
   it('addTypeInTxLenient silently no-ops on a tombstoned block', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-10', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
     await repo.tx(async tx => {
@@ -432,7 +435,7 @@ describe('Repo type membership orchestration', () => {
 
   it('addTypeInTx (strict default) tags a valid block normally', async () => {
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-11', revision: 1, id: 'todo', label: 'Todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
     const snapshot = repo.snapshotTypeRegistries()
@@ -451,7 +454,7 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     repo.setFacetRuntime(resolveTypeRuntime([
-      typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
+      typeSeedsFacet.of(seedType({seedKey: 'test/type/todo-12', revision: 1, id: 'todo', label: 'Todo', properties: [statusProp]}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
 

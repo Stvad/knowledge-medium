@@ -35,10 +35,11 @@
  *   pre-image so a write can never silently clobber an undecodable stored
  *   value (propertySchemaResolution.ts:389-407).
  *
- * legacySchemas stays EMPTY throughout: the transitional dual-path (direct
- * facet registrations / legacy map) is deleted in the B′ slice
- * (docs/schema-unification.html §5.2 rev 5), and this suite must survive
- * that deletion unchanged.
+ * The transitional dual-path (direct facet registrations / legacy map, née
+ * `legacySchemas`) was deleted in the B′ slice (docs/schema-unification.html
+ * §5.2 rev 5) and then the `legacySchemas` parameter itself was removed from
+ * `buildPropertyDefinitionRegistry` once nothing fed it (Slice D) — this
+ * suite survived both deletions unchanged.
  */
 import fc from 'fast-check'
 import {afterAll, beforeAll, describe, expect, it, vi} from 'vitest'
@@ -239,7 +240,6 @@ const buildSnapshot = (universe: Universe, rowOrder?: readonly number[]): Proper
   const entries = rowOrder ? rowOrder.map(index => universe.rows[index]!) : universe.rows
   return buildPropertyDefinitionRegistry({
     workspaceId: WS,
-    legacySchemas: new Map(),
     projectedDefinitions: new Map(entries),
     seeds: universe.seeds,
   })

@@ -49,7 +49,6 @@ const metadata = (
 const build = (overrides: Partial<Parameters<typeof buildPropertyDefinitionRegistry>[0]> = {}) =>
   buildPropertyDefinitionRegistry({
     workspaceId: WS,
-    legacySchemas: new Map(),
     projectedDefinitions: new Map(),
     seeds: [titleSeed],
     ...overrides,
@@ -89,7 +88,6 @@ describe('property definition registry snapshot', () => {
       changeScope: ChangeScope.Automation,
     })
     const snapshot = build({
-      legacySchemas: new Map([[titleSeed.name, titleSeed]]),
       projectedDefinitions: new Map([[fieldId, {metadata: definition}]]),
     })
 
@@ -165,11 +163,6 @@ describe('property definition registry snapshot', () => {
     })
     const snapshot = build({
       seeds: [],
-      legacySchemas: new Map([['status', defineProperty('status', {
-        codec: codecs.string,
-        defaultValue: 'legacy-default',
-        changeScope: ChangeScope.BlockDefault,
-      })]]),
       projectedDefinitions: new Map([
         [winner.fieldId, {metadata: winner}],
         [loser.fieldId, {metadata: loser, schema: loserSchema}],

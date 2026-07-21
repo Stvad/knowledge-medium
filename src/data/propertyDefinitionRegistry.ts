@@ -26,10 +26,6 @@ export interface PropertyDefinitionRegistrySnapshot {
 
 export interface BuildPropertyDefinitionRegistryArgs {
   readonly workspaceId: string
-  /** Transitional type-lifted schemas (`TypeContribution.properties`). The
-   *  direct-registration source was removed in B′; the type-lift dies at the
-   *  types cutover (Slice C). */
-  readonly legacySchemas: ReadonlyMap<string, AnyPropertySchema>
   readonly projectedDefinitions: ReadonlyMap<string, ProjectedPropertyDefinition>
   readonly seeds: readonly AnyPropertySeedDeclaration[]
 }
@@ -73,10 +69,9 @@ const indexSeeds = (seeds: readonly AnyPropertySeedDeclaration[]) => {
 /** Stage-0 behavioral registry used before a workspace is pinned. It exposes
  * declarations as plain entries but cannot produce identity-bearing values. */
 export const buildUnboundPropertySchemas = (
-  legacySchemas: ReadonlyMap<string, AnyPropertySchema>,
   seeds: readonly AnyPropertySeedDeclaration[],
 ): ReadonlyMap<string, AnyPropertySchema> => {
-  const schemas = new Map(legacySchemas)
+  const schemas = new Map<string, AnyPropertySchema>()
   const {byName} = indexSeeds(seeds)
   for (const namedSeeds of byName.values()) {
     if (namedSeeds.length === 1) schemas.set(namedSeeds[0]!.name, namedSeeds[0]!)
@@ -147,11 +142,10 @@ export const buildPropertyDefinitionRegistry = (
     pushGrouped(seedsByNameMutable, definition?.name ?? seed.name, seed)
   }
 
-  const schemas = new Map(args.legacySchemas)
-  // Declarations own their original names even after synced metadata renames
-  // them. Clear transitional behavior under both declaration and effective
-  // names before selected winners repopulate the ambient map.
-  for (const name of seedsByDeclarationName.keys()) schemas.delete(name)
+  // Built fresh from the selected winners: block-built definitions first, then
+  // unique seed declarations. (There is no transitional base map to clear from
+  // now that the type-lift is gone.)
+  const schemas = new Map<string, AnyPropertySchema>()
   for (const [name, definitions] of definitionsByNameMutable) {
     const winnerSchema = schemasByFieldId.get(definitions[0]!.fieldId)
     if (!winnerSchema) {

@@ -200,7 +200,6 @@ describe('buildPropertyPanelModel', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map([[schema.name, schema]]),
       projectedDefinitions: new Map([[hidden.fieldId, {metadata: hidden}]]),
       seeds: [],
     })
@@ -234,7 +233,6 @@ describe('buildPropertyPanelModel', () => {
     })
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map(),
       seeds: [hidden],
     })
@@ -269,7 +267,6 @@ describe('buildPropertyPanelModel', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map([[
         metadataOnly.fieldId,
         {metadata: metadataOnly},
@@ -320,7 +317,6 @@ describe('buildPropertyPanelModel', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map([[
         metadataOnly.fieldId,
         {metadata: metadataOnly},
@@ -363,7 +359,6 @@ describe('buildPropertyPanelModel', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map([[seeded.fieldId, {metadata: seeded}]]),
       seeds: [],
     })
@@ -413,7 +408,6 @@ describe('buildPropertyPanelModel', () => {
     }
     const propertyDefinitions = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
-      legacySchemas: new Map(),
       projectedDefinitions: new Map([[userDef.fieldId, {metadata: userDef}]]),
       seeds: [],
     })

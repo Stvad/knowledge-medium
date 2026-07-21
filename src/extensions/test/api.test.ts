@@ -51,7 +51,6 @@ describe('@/extensions/api — public surface', () => {
     'getPluginUIStateBlock',
     // PropertySchema authoring surface (replaces legacy boolProp /
     // numberProperty / stringProperty / uiChangeScope)
-    'defineBlockType',
     'defineProperty',
     'seedProperty',
     'seedType',
@@ -61,7 +60,6 @@ describe('@/extensions/api — public surface', () => {
     'definitionSeedsFacet',
     'propertyEditorOverridesFacet',
     'typeSeedsFacet',
-    'typesFacet',
     'codecs',
     'ChangeScope',
   ]

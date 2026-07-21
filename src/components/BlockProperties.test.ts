@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   codecs,
-  defineBlockType,
   defineProperty,
   type AnyPropertySchema,
   type TypeContribution,
@@ -48,11 +47,11 @@ const typesMap = (types: readonly TypeContribution[]) =>
 
 describe('buildPropertyPanelSections', () => {
   it('surfaces unset type-contributed slots in type-declared order', () => {
-    const taskType = defineBlockType({
+    const taskType = {
       id: 'task',
       label: 'Task',
       properties: [dueProp, statusProp],
-    })
+    }
 
     const sections = buildPropertyPanelSections({
       properties: {status: 'done'},
@@ -97,16 +96,16 @@ describe('buildPropertyPanelSections', () => {
   })
 
   it('dedupes shared fields under the first contributing type in block type order', () => {
-    const taskType = defineBlockType({
+    const taskType = {
       id: 'task',
       label: 'Task',
       properties: [statusProp, dueProp],
-    })
-    const projectType = defineBlockType({
+    }
+    const projectType = {
       id: 'project',
       label: 'Project',
       properties: [statusProp, ownerProp],
-    })
+    }
 
     const sections = buildPropertyPanelSections({
       properties: {
@@ -125,11 +124,11 @@ describe('buildPropertyPanelSections', () => {
   })
 
   it('keeps known non-type fields in Other and unknown set fields in Unregistered', () => {
-    const taskType = defineBlockType({
+    const taskType = {
       id: 'task',
       label: 'Task',
       properties: [statusProp],
-    })
+    }
 
     const sections = buildPropertyPanelSections({
       properties: {

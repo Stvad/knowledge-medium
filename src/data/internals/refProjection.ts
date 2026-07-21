@@ -1,11 +1,10 @@
 /**
- * Shared property-schema projection helpers — the ref-codec classification,
- * the type→schema lift, and the ref-change diff. Used by two engines
- * that were both carved out of `Repo`:
+ * Shared property-schema projection helpers — the ref-codec classification
+ * and the ref-change diff. Used by two engines that were both carved out of
+ * `Repo`:
  *
- *   - `facetBridge.ts` rebuild steps: `liftTypeSchemas` (lift the type-
- *     contributed schemas) + `changedRefSchemaNames` (decide whether a swap
- *     needs a reprojection pass).
+ *   - `facetBridge.ts` rebuild steps: `changedRefSchemaNames` (decide whether
+ *     a swap needs a reprojection pass).
  *   - `repo.ts` reprojection: `projectedRefsForField` / `latestRefProjection-
  *     Schema` (recompute a block's derived references from its ref-typed
  *     property values).
@@ -18,36 +17,8 @@ import type {
   AnyPropertySchema,
   BlockData,
   BlockReference,
-  TypeContribution,
 } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api'
-
-/** Lift `TypeContribution.properties` schemas into a name-keyed registry,
- *  last-wins per facet convention with a warning on a genuine conflict
- *  (different schema object for the same name).
- *
- *  This is the surviving half of the former direct-registration merge: B′
- *  removed the `propertySchemasFacet` direct-registration source (schemas now
- *  enter the registry as seeds or user rows). The type-lift itself is
- *  transitional too and dies at the types cutover (Slice C). */
-export const liftTypeSchemas = (
-  types: ReadonlyMap<string, TypeContribution>,
-): ReadonlyMap<string, AnyPropertySchema> => {
-  const merged = new Map<string, AnyPropertySchema>()
-  for (const type of types.values()) {
-    for (const schema of type.properties ?? []) {
-      const existing = merged.get(schema.name)
-      if (existing !== undefined && existing !== schema) {
-        console.warn(
-          `[schema-lift] type "${type.id}" registers schema "${schema.name}" ` +
-          'that conflicts with an earlier type-lifted registration; last-wins per facet convention',
-        )
-      }
-      merged.set(schema.name, schema)
-    }
-  }
-  return merged
-}
 
 export type RefCodecKind = 'ref' | 'refList' | undefined
 

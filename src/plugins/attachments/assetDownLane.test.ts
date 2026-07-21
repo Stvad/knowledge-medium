@@ -18,7 +18,7 @@ vi.mock('./assetResolver.js', () => ({
 
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { definitionSeedsFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
@@ -43,8 +43,8 @@ const buildRepo = (): Repo => {
   r.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,
-      typesFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'test' }),
-      typesFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'test' }),
+      typeSeedsFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'test' }),
+      typeSeedsFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'test' }),
       ...MEDIA_PROPERTY_SCHEMAS.map((s) => definitionSeedsFacet.of(s, { source: 'test' })),
     ]),
   )
