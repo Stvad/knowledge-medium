@@ -1,22 +1,31 @@
+import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
-  actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   blockContentDecoratorsFacet,
-  diagnosticsFacet,
-  ChangeScope, seedType, seedProperty, extensionPropertySeedKey, extensionTypeSeedKey, definePropertyEditorOverride,
-  getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, definitionSeedsFacet,
-  showError, showInfo, showSuccess, showPropertiesProp, typeSeedsFacet, useRepo,
-  type DiagnosticSnapshot,
-  type DiagnosticSourceContribution,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
+} from '@/extensions/blockInteraction.js'
+import {
+  diagnosticsFacet,
+  type DiagnosticSnapshot,
+  type DiagnosticSourceContribution,
+} from '@/plugins/diagnostics/facet.js'
+import {
+  ChangeScope, seedType, seedProperty, definePropertyEditorOverride,
   type PropertyEditorProps,
-} from '@/extensions/api.js'
+} from '@/data/api/index.js'
+import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { pluginBlockId } from '@/extensions/pluginIds.js'
+import { propertyEditorOverridesFacet, definitionSeedsFacet, typeSeedsFacet } from '@/data/facets.js'
+import { showError, showInfo, showSuccess } from '@/utils/toast.js'
+import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import type { Block } from '@/data/block.js'
 import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
-import { addBlockTypeToProperties } from '@/data/properties.js'
+import { addBlockTypeToProperties, showPropertiesProp } from '@/data/properties.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/index.js'
 import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
 import { navigate } from '@/utils/navigation.js'

@@ -158,9 +158,11 @@ describe('lintExtensionSource — clean source', () => {
   it('returns an empty array for source using the canonical patterns', () => {
     const source = `
       import {
-        ChangeScope, seedProperty, seedType, extensionPropertySeedKey,
-        extensionTypeSeedKey, getPluginPrefsBlock, pluginBlockId,
-      } from '@/extensions/api.js'
+        ChangeScope, seedProperty, seedType,
+      } from '@/data/api/index.js'
+      import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+      import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+      import { pluginBlockId } from '@/extensions/pluginIds.js'
 
       const READWISE_NS = '0d4f1c2e-7e9a-4f4d-a4f1-2c0a3a6e7f01'
       const lastSyncProp = seedProperty({

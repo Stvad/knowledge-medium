@@ -1,32 +1,22 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
-  __resetApiSurfaceCacheForTest,
   describeFacets,
   describeRuntime,
   describeRuntimeSummary,
   getApiSurface,
   pingRuntime,
+  type ApiSurfaceSummary,
 } from '../describeRuntime.ts'
 import { defineFacet, resolveFacetRuntime } from '@/facets/facet.js'
-// Pre-warm `@/extensions/api` so the dynamic import inside
-// `getApiSurface()` resolves from cache. Under full-suite parallel
-// loads, the cold transform of this barrel + its transitive deps can
-// blow past the 5 s per-test timeout (file passes alone, fails ~10%
-// of the time when 65+ other test files are competing for the parent
-// Vite server's transform queue). Same `.ts` suffix as the dynamic
-// import so both share a module-cache key.
-import '@/extensions/api.js'
 import type { Repo } from '@/data/repo'
 import type { ActionConfig } from '@/shortcuts/types.js'
 
-beforeEach(() => {
-  __resetApiSurfaceCacheForTest()
-})
-
-afterEach(() => {
-  __resetApiSurfaceCacheForTest()
-})
+// The curated API surface is now structured (one entry per real module).
+// Flatten the runtime export names when a test just asks "is symbol X
+// discoverable at all?".
+const surfaceExports = (surface: ApiSurfaceSummary): string[] =>
+  surface.modules.flatMap(module => module.exports)
 
 describe('describeFacets', () => {
   it('lists every facet that has at least one contribution', async () => {
@@ -133,20 +123,21 @@ describe('describeFacets', () => {
 })
 
 describe('getApiSurface', () => {
-  it('returns the @/extensions/api module name and a non-empty exports list', async () => {
-    const surface = await getApiSurface()
-    expect(surface.module).toBe('@/extensions/api')
-    expect(surface.exports.length).toBeGreaterThan(0)
-    expect(surface.exports).toContain('defineFacet')
-    expect(surface.exports).toContain('actionsFacet')
-    expect(surface.exports).toContain('blockRenderersFacet')
-    expect(surface.exports).toContain('getUserPrefsBlock')
-  })
-
-  it('memoizes — subsequent calls return the same array reference', async () => {
-    const first = await getApiSurface()
-    const second = await getApiSurface()
-    expect(second).toBe(first)
+  it('returns curated modules with real importPaths and the key facets discoverable', () => {
+    const surface = getApiSurface()
+    expect(surface.modules.length).toBeGreaterThan(0)
+    // Each module carries a real, import-resolvable path (no barrel).
+    for (const module of surface.modules) {
+      expect(module.importPath).toMatch(/^@\//)
+    }
+    const exports = surfaceExports(surface)
+    expect(exports).toContain('defineFacet')
+    expect(exports).toContain('actionsFacet')
+    expect(exports).toContain('blockRenderersFacet')
+    expect(exports).toContain('getUserPrefsBlock')
+    // Discoverability now names the owning module directly.
+    const facetModule = surface.modules.find(module => module.importPath === '@/facets/facet.js')
+    expect(facetModule?.exports).toContain('defineFacet')
   })
 })
 
@@ -228,8 +219,9 @@ describe('describeRuntime', () => {
         {id: 'summary.b', contributionCount: 1},
       ],
     })
-    expect(summary.capabilities.apiSurface.module).toBe('@/extensions/api')
+    expect(summary.capabilities.apiSurface.moduleCount).toBeGreaterThan(0)
     expect(summary.capabilities.apiSurface.exportCount).toBeGreaterThan(0)
+    expect(summary.capabilities.apiSurface.modules).toContain('@/facets/facet.js')
     expect(summary.capabilities.authoring.guides).toContain('external-sync-plugin')
     expect(summary.capabilities.authoring.moduleCount).toBeGreaterThan(0)
     expect(summary.capabilities.authoring.componentCount).toBeGreaterThan(0)
@@ -271,7 +263,7 @@ describe('describeRuntime', () => {
     )
     expect(syncGuide).toBeDefined()
     expect(syncGuide?.commands).toContain('pnpm agent types agent-extensions/kernel-types')
-    expect(syncGuide?.commands).toContain('pnpm agent types --module "@/extensions/api.js"')
+    expect(syncGuide?.commands).toContain('pnpm agent types --module "@/data/api/index.js"')
 
     // Disabled-by-default rescue — the highest-friction paper cut from
     // the previous bridge surface. If this assertion fails, the agent
@@ -316,14 +308,14 @@ describe('describeRuntime', () => {
     expect(userPrefs?.example?.code).toContain('seedType')
   })
 
-  it('exposes pluginBlockId on the public extension API surface', async () => {
-    const surface = await getApiSurface()
-    // The api.ts barrel re-exports *concepts*, not libraries. The
-    // agent gets a deterministic-id helper that encodes the
-    // per-plugin namespace convention — uuid lives behind that helper
-    // and isn't re-exported, so plugins don't grow ad-hoc lib deps.
-    expect(surface.exports).toContain('pluginBlockId')
-    expect(surface.exports).not.toContain('uuidv5')
+  it('exposes pluginBlockId on the public extension API surface', () => {
+    const exports = surfaceExports(getApiSurface())
+    // The catalog surfaces *concepts*, not libraries. The agent gets a
+    // deterministic-id helper that encodes the per-plugin namespace
+    // convention — uuid lives behind that helper and isn't surfaced, so
+    // plugins don't grow ad-hoc lib deps.
+    expect(exports).toContain('pluginBlockId')
+    expect(exports).not.toContain('uuidv5')
   })
 
   it('brief mode drops actions/facets/renderers/modules/components from the response', async () => {
@@ -353,19 +345,18 @@ describe('describeRuntime', () => {
     // ...but the authoring content the agent actually wants is still there.
     expect(description.authoring.guides.map(g => g.id)).toContain('external-sync-plugin')
     expect(description.authoring.storage.patterns.length).toBeGreaterThan(0)
-    expect(description.apiSurface.exports.length).toBeGreaterThan(0)
+    expect(description.apiSurface.modules.length).toBeGreaterThan(0)
 
     // Whole brief-mode response should be small — the whole point.
     expect(JSON.stringify(description).length).toBeLessThan(40_000)
   })
 
-  it('exposes the authoring primitives plugins reach for first', async () => {
-    const surface = await getApiSurface()
-    // Without these, agents either pull from internal modules
-    // (@/utils/toast, @/utils/dialogs, @/data/orderKey, @/context/repo)
-    // or fall back to window.alert / window globals / ad-hoc ordering.
-    // The api.ts barrel is the discovery surface, so these have to
-    // appear there for the agent to find them without grepping.
+  it('exposes the authoring primitives plugins reach for first', () => {
+    const exports = surfaceExports(getApiSurface())
+    // Without these, agents either fall back to window.alert / window
+    // globals / ad-hoc ordering. The curated catalog is the discovery
+    // surface, so these have to appear there (each under its real module)
+    // for the agent to find them without grepping.
     for (const name of [
       'useRepo',
       'openDialog',
@@ -376,7 +367,7 @@ describe('describeRuntime', () => {
       'keyAtEnd',
       'keysBetween',
     ]) {
-      expect(surface.exports).toContain(name)
+      expect(exports).toContain(name)
     }
   })
 
@@ -427,12 +418,15 @@ describe('describeRuntime', () => {
     const facetIds = description.facets.map((f) => f.id)
     expect(facetIds).toContain('desc.full')
 
-    expect(description.apiSurface.module).toBe('@/extensions/api')
-    expect(description.apiSurface.exports).toContain('defineFacet')
+    expect(surfaceExports(description.apiSurface)).toContain('defineFacet')
+    expect(description.apiSurface.modules).toContainEqual(expect.objectContaining({
+      importPath: '@/facets/facet.js',
+      exports: expect.arrayContaining(['defineFacet']),
+    }))
     expect(description.authoring.guides.map(guide => guide.id)).toContain('external-sync-plugin')
     expect(description.authoring.modules).toContainEqual(expect.objectContaining({
-      importPath: '@/extensions/api.js',
-      source: 'generated-api',
+      importPath: '@/data/stateBlocks.js',
+      source: 'curated-api',
       exports: expect.arrayContaining(['getUserPrefsBlock']),
     }))
     expect(description.authoring.components).toContainEqual(expect.objectContaining({

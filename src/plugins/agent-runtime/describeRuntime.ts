@@ -6,6 +6,11 @@ import {
   describeAuthoringCatalog,
   type AuthoringCatalog,
 } from './authoringCatalog.ts'
+import {
+  extensionApiCatalog,
+  extensionApiRuntimeExports,
+  type ApiModuleGroup,
+} from '@/extensions/apiCatalog.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 
 /** Guide id that surfaces the data-model orientation through
@@ -96,8 +101,9 @@ export interface FacetSummary {
 }
 
 export interface ApiSurfaceSummary {
-  module: string
-  exports: string[]
+  /** Curated public extension API, one entry per real module. There is no
+   *  barrel — extensions import directly from each `importPath`. */
+  modules: ApiModuleGroup[]
 }
 
 export interface ActionSummary {
@@ -188,9 +194,9 @@ export interface RuntimeSummary {
       }>
     }
     apiSurface: {
-      module: string
+      moduleCount: number
       exportCount: number
-      examples: string[]
+      modules: string[]
     }
     authoring: {
       guideCount: number
@@ -375,30 +381,18 @@ const summarizeFacetCounts = (runtime: FacetRuntime) => {
   }
 }
 
-// Curated public surface for extension authors. Memoize once per
-// session — `Object.keys` of an ESM module is constant.
-let cachedApiSurface: ApiSurfaceSummary | null = null
-export const getApiSurface = async (): Promise<ApiSurfaceSummary> => {
-  if (!cachedApiSurface) {
-    const api = await import('@/extensions/api.js')
-    cachedApiSurface = {
-      module: '@/extensions/api',
-      exports: Object.keys(api).sort(),
-    }
-  }
-  return cachedApiSurface
-}
-
-// Test-only: clears the apiSurface memo so repeat tests start clean.
-export const __resetApiSurfaceCacheForTest = () => {
-  cachedApiSurface = null
-}
+// Curated public surface for extension authors — the structured catalog
+// that replaced the `@/extensions/api.js` barrel. Static data, so no async /
+// memo is needed (the barrel had to be imported to compute `Object.keys`).
+export const getApiSurface = (): ApiSurfaceSummary => ({
+  modules: extensionApiCatalog,
+})
 
 export const describeRuntime = async (
   context: DescribeRuntimeContext,
   filters: RuntimeDescriptionFilters = {},
 ): Promise<RuntimeDescription> => {
-  const apiSurface = await getApiSurface()
+  const apiSurface = getApiSurface()
 
   const includeDataModel = (filters.guides ?? []).some(
     guide => guide.trim().toLowerCase() === DATA_MODEL_GUIDE_ID,
@@ -438,7 +432,7 @@ export const describeRuntime = async (
       : describeFacets(context.runtime)
         .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
     apiSurface,
-    authoring: describeAuthoringCatalog(apiSurface, {
+    authoring: describeAuthoringCatalog({
       guides: filters.guides,
       modules: filters.modules,
       components: filters.components,
@@ -462,9 +456,9 @@ export const pingRuntime = (context: DescribeRuntimeContext): RuntimePing => ({
 export const describeRuntimeSummary = async (
   context: DescribeRuntimeContext,
 ): Promise<RuntimeSummary> => {
-  const apiSurface = await getApiSurface()
+  const apiSurface = getApiSurface()
   const renderers = Object.keys(context.renderers)
-  const authoring = describeAuthoringCatalog(apiSurface, {}, context.document)
+  const authoring = describeAuthoringCatalog({}, context.document)
 
   return {
     activeWorkspaceId: context.repo.activeWorkspaceId,
@@ -487,9 +481,11 @@ export const describeRuntimeSummary = async (
       },
       facets: summarizeFacetCounts(context.runtime),
       apiSurface: {
-        module: apiSurface.module,
-        exportCount: apiSurface.exports.length,
-        examples: apiSurface.exports.slice(0, 10),
+        moduleCount: apiSurface.modules.length,
+        exportCount: extensionApiRuntimeExports().length,
+        // All importPaths (they're short and few) — a sliced preview would
+        // omit the whole @/data/* tail, which is what plugins use most.
+        modules: apiSurface.modules.map(module => module.importPath),
       },
       authoring: {
         guideCount: authoring.guides.length,
@@ -524,7 +520,7 @@ export const describeRuntimeSummary = async (
       },
       {
         need: 'Install compiled declarations for extension authoring, or inspect one module declaration',
-        command: 'pnpm agent types agent-extensions/kernel-types  # or: pnpm agent types --module "@/extensions/api.js"',
+        command: 'pnpm agent types agent-extensions/kernel-types  # or: pnpm agent types --module "@/data/api/index.js"',
       },
       {
         need: 'Bridge clients and pending command queue',

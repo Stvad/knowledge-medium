@@ -3,9 +3,10 @@
 // `insert_example_extensions` NORMAL_MODE action.
 //
 // Each entry is an ESM module text whose `default` export is an
-// AppExtension — see dynamicExtensions.ts for the contract. Imports
-// resolve through the page-global importmap, so `@/extensions/api.js`
-// returns the same module instance the running app uses.
+// AppExtension — see dynamicExtensions.ts for the contract. Imports use
+// real module paths (e.g. `@/extensions/core.js`, `@/data/api/index.js`),
+// which resolve through the page-global importmap to the same module
+// instances the running app uses.
 //
 // Renderer-bearing examples register a renderer via blockRenderersFacet
 // and compose with the default block chrome by delegating to
@@ -34,14 +35,11 @@ export interface ExampleExtensionDefinition {
   source: string
 }
 
-const HELLO_RENDERER_SOURCE = `import {
-  blockContentRendererFacet,
-  ChangeScope,
-  definitionSeedsFacet,
-  defineVariant,
-  extensionPropertySeedKey,
-  seedProperty,
-} from '@/extensions/api.js'
+const HELLO_RENDERER_SOURCE = `import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { blockContentRendererFacet } from '@/extensions/blockInteraction.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { defineVariant } from '@/facets/variantFacet.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
 // content renderer for blocks tagged 'user:hello = true'. Returning
@@ -80,13 +78,10 @@ export default [
 ]
 `
 
-const FOLD_ALL_ACTION_SOURCE = `import {
-  actionsFacet,
-  ActionContextTypes,
-  ChangeScope,
-  isCollapsedProp,
-  topLevelBlockIdProp,
-} from '@/extensions/api.js'
+const FOLD_ALL_ACTION_SOURCE = `import { ChangeScope } from '@/data/api/index.js'
+import { isCollapsedProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 // Toggle collapse on every visible descendant of the top-level block.
 // Demonstrates a single action contribution with a default keybinding.
@@ -129,17 +124,16 @@ export default actionsFacet.of({
 })
 `
 
-const EMOJI_REACT_SOURCE = `import {
-  actionsFacet,
-  ActionContextTypes,
+const EMOJI_REACT_SOURCE = `import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
-  ChangeScope,
-  definitionSeedsFacet,
-  extensionPropertySeedKey,
   isSelectionClick,
-  seedProperty,
-} from '@/extensions/api.js'
+} from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
 // decorator that layers a reactions row (stored under property
@@ -215,8 +209,9 @@ export default [
 ]
 `
 
-const KUDOS_FACET_SOURCE = `import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+const KUDOS_FACET_SOURCE = `import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
+import { defineFacet } from '@/facets/facet.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
 // contributing to it from the same block, and registering a
@@ -255,14 +250,11 @@ export default [
 ]
 `
 
-const SPLIT_LAYOUT_SOURCE = `import {
-  blockLayoutFacet,
-  ChangeScope,
-  definitionSeedsFacet,
-  defineVariant,
-  extensionPropertySeedKey,
-  seedProperty,
-} from '@/extensions/api.js'
+const SPLIT_LAYOUT_SOURCE = `import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { defineVariant } from '@/facets/variantFacet.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
 // Properties, Children, Footer) inside a block's body. Each slot is
@@ -319,8 +311,8 @@ export default [
 ]
 `
 
-const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
-import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
 // inserting this example wraps every panel with the custom frame
@@ -355,9 +347,9 @@ export default blockRenderersFacet.of({
 })
 `
 
-const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
 
 // Replaces the fallback renderer registered under id 'default'.
 // Inserting this example immediately changes every ordinary block

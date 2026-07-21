@@ -1,23 +1,27 @@
 import {
-  actionTransformsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
-  blockContentDecoratorsFacet, ChangeScope, seedType,
-  definePropertyEditorOverride, definitionSeedsFacet, getPluginPrefsBlock,
-  keyBetween, keysBetween, pluginBlockId,
-  propertyEditorOverridesFacet, seedProperty, extensionPropertySeedKey, extensionTypeSeedKey,
-  showError, showInfo, showProgress, showPropertiesProp,
-  showSuccess, typeSeedsFacet, useRepo,
-  type ActionConfig,
-  type ActionContextType,
-  type ActionTransform,
+  actionTransformsFacet, actionsFacet, appEffectsFacet, appMountsFacet,
+} from '@/extensions/core.js'
+import {
+  blockContentDecoratorsFacet,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
+} from '@/extensions/blockInteraction.js'
+import {
+  ChangeScope, seedType, definePropertyEditorOverride, seedProperty,
   type PropertyEditorProps,
   type PropertySchema,
   type PropertySeedDeclaration,
-} from '@/extensions/api.js'
+} from '@/data/api/index.js'
+import { definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet } from '@/data/facets.js'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { keyBetween, keysBetween } from '@/data/orderKey.js'
+import { pluginBlockId } from '@/extensions/pluginIds.js'
+import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { showError, showInfo, showProgress, showSuccess } from '@/utils/toast.js'
+import { useRepo } from '@/context/repo.js'
 import type { Block } from '@/data/block.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
-import { aliasesProp, getBlockTypes } from '@/data/properties.js'
+import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
@@ -26,7 +30,13 @@ import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
   TODO_CYCLE_ACTION_ID,
 } from '@/plugins/todo/actions.js'
-import type { BlockShortcutDependencies } from '@/shortcuts/types.js'
+import {
+  ActionContextTypes,
+  type ActionConfig,
+  type ActionContextType,
+  type ActionTransform,
+  type BlockShortcutDependencies,
+} from '@/shortcuts/types.js'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
