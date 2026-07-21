@@ -187,7 +187,7 @@ describe('agent runtime commands', () => {
     // though production registers it. The fix swaps in
     // resolveAppRuntime, which mirrors the production walk.
     //
-    // The vitest jsdom env can't resolve `@/extensions/api.js` from
+    // The vitest happy-dom env can't resolve `@/extensions/api.js` from
     // inside a Babel-compiled blob URL, so we stub the compile to
     // emit the AppExtension shape directly. The compile is just a
     // text→module step — the rest of the install + verify path is
@@ -231,7 +231,7 @@ describe('agent runtime commands', () => {
 
   it('enable-extension / disable-extension flip the overrides map', async () => {
     // enable now also grants the device-local approval (#67), which would
-    // otherwise load real Babel + a blob-URL import (unsupported in jsdom),
+    // otherwise load real Babel + a blob-URL import (unsupported in happy-dom),
     // so stub the compile pipeline to a synthetic module.
     const restore = __setCompileImplForTest(async () => ({default: []}))
     try {
