@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, type BlockData } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, propertyValue, type BlockData } from '@/data/api'
 import { keyAtStart } from './orderKey'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -279,6 +279,127 @@ describe('tx.unsetProperty', () => {
     await repo.tx(tx => tx.unsetProperty('p', statusSchema),
       {scope: ChangeScope.BlockDefault})
     // No write → the no-WHEN update row_event trigger never fires for `p`.
+    const updates = await sharedDb.db.getAll<{id: number}>(
+      `SELECT id FROM row_events WHERE block_id = 'p' AND kind = 'update'`,
+    )
+    expect(updates).toEqual([])
+  })
+})
+
+describe('tx.setProperties (batch set + unset)', () => {
+  const PRIORITY_FIELD_ID = 'field-priority-children'
+  const prioritySchema = defineProperty<string>('priority', {
+    codec: codecs.string,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  const setupWithTwo = async (migration: string): Promise<Repo> => {
+    await seedWorkspace(migration)
+    const repo = setup()
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-priority-definition',
+      [{
+        metadata: {
+          fieldId: PRIORITY_FIELD_ID, workspaceId: WS, createdAt: 1,
+          name: prioritySchema.name, changeScope: prioritySchema.changeScope,
+          hidden: false, origin: 'user' as const,
+        },
+        schema: prioritySchema,
+      }],
+      {workspaceId: WS},
+    )
+    return repo
+  }
+
+  const priorityFieldRows = async (parentId: string): Promise<ChildRow[]> =>
+    (await childrenRows(parentId)).filter(
+      r => r.deleted === 0 && r.reference_target_id === PRIORITY_FIELD_ID,
+    )
+
+  it('cell workspace: applies set + unset in ONE bag rewrite', async () => {
+    const repo = await setupWithTwo('cell')
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'old'),
+      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.execute('DELETE FROM row_events')
+
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(prioritySchema, 'high')],
+      unset: [statusSchema],
+    }), {scope: ChangeScope.BlockDefault})
+
+    const bag = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', ['p'],
+    )
+    expect(JSON.parse(bag.properties_json)).toEqual({priority: 'high'})
+    // ONE bag write for the whole batch (not one per key).
+    const updates = await sharedDb.db.getAll<{id: number}>(
+      `SELECT id FROM row_events WHERE block_id = 'p' AND kind = 'update'`,
+    )
+    expect(updates).toHaveLength(1)
+  })
+
+  it('does not clobber a sibling key absent from the batch', async () => {
+    const repo = await setupWithTwo('cell')
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.update('p', {properties: {[statusSchema.name]: 'done', keep: 'me'}}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(prioritySchema, 'high')],
+      unset: [statusSchema],
+    }), {scope: ChangeScope.BlockDefault})
+    const bag = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', ['p'],
+    )
+    expect(JSON.parse(bag.properties_json)).toEqual({keep: 'me', priority: 'high'})
+  })
+
+  it('unset wins when a key is in BOTH set and unset', async () => {
+    const repo = await setupWithTwo('cell')
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(statusSchema, 'done')],
+      unset: [statusSchema],
+    }), {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('p')).toBeUndefined()
+  })
+
+  it('flipped workspace: sets create children, unsets soft-delete them, in one tx', async () => {
+    const repo = await setupWithTwo('children')
+    await createBlock(repo, 'p')
+    // Seed both keys as children.
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(statusSchema, 'done'), propertyValue(prioritySchema, 'high')],
+    }), {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)      // status field row
+    expect(await priorityFieldRows('p')).toHaveLength(1)  // priority field row
+
+    // One batch that updates status and clears priority.
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(statusSchema, 'archived')],
+      unset: [prioritySchema],
+    }), {scope: ChangeScope.BlockDefault})
+
+    expect(await cellValue('p')).toBe('archived')
+    expect(await priorityFieldRows('p')).toEqual([])       // MATERIALIZE deleted it
+    const statusValues = (await childrenRows((await liveFieldRows('p'))[0]!.id))
+      .filter(v => v.deleted === 0)
+    expect(statusValues.map(v => v.content)).toEqual(['archived'])
+  })
+
+  it('is a net no-op when the batch leaves the bag unchanged', async () => {
+    const repo = await setupWithTwo('cell')
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await sharedDb.db.execute('DELETE FROM row_events')
+    // Set status to its current value and unset an absent key → no net change.
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(statusSchema, 'done')],
+      unset: [prioritySchema],
+    }), {scope: ChangeScope.BlockDefault})
     const updates = await sharedDb.db.getAll<{id: number}>(
       `SELECT id FROM row_events WHERE block_id = 'p' AND kind = 'update'`,
     )

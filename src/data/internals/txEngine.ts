@@ -26,6 +26,7 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertyAssignment,
   AnyPropertySchema,
   BlockData,
   BlockDataPatch,
@@ -350,6 +351,25 @@ export class TxImpl implements Tx {
       schema,
       this.propertySchemaResolverFor(row.workspaceId),
     )
+  }
+
+  /** Scope-consistency guard shared by every property write primitive
+   *  (`setProperty` / `unsetProperty` / `setProperties`). The tx was admitted
+   *  under `this.meta.scope`, chosen from the CALLER's `schema.changeScope`. If
+   *  the definition's change-scope was edited after the caller captured its
+   *  schema, the resolved scope can differ — admitting the write under the
+   *  stale scope would bypass the read-only gate and misroute its undo entry.
+   *  Compare by POLICY (read-only behavior + undoability), not identity: a
+   *  same-policy difference (e.g. the references processor writing a
+   *  BlockDefault property under its own `References` bucket) is intentional
+   *  and harmless, while a policy difference (a stale UiState schema writing a
+   *  now-BlockDefault property) is exactly the bypass/misroute this guards. */
+  private assertPropertyWriteScope(resolvedSchema: PropertySchema<unknown>): void {
+    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
+      throw new PropertySchemaScopeMismatchError(
+        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
+      )
+    }
   }
 
   resolvePropertyFieldSchema(
@@ -713,22 +733,7 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
-    // Scope-consistency: the tx was admitted under `this.meta.scope`, chosen from
-    // the CALLER's schema.changeScope. If the definition's change-scope was edited
-    // after the caller captured its schema, the resolved scope can differ — and
-    // admitting the write under the stale scope would bypass the read-only gate
-    // and misroute its undo entry. Compare the resolved and admitted scopes by
-    // POLICY (read-only behavior + undoability), not identity: a same-policy
-    // difference (e.g. the references processor writing a BlockDefault property
-    // under its own `References` bucket) is intentional and harmless, while a
-    // policy difference (a stale UiState schema writing a now-BlockDefault
-    // property) is exactly the bypass/misroute this guards. The raw
-    // property-delete path shares this check via `scopePoliciesEquivalent`.
-    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
-      throw new PropertySchemaScopeMismatchError(
-        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
-      )
-    }
+    this.assertPropertyWriteScope(resolvedSchema)
     const stored = before.properties[resolvedSchema.name]
     const value = typeof valueOrUpdater === 'function'
       ? (valueOrUpdater as (current: T | undefined) => T)(
@@ -785,14 +790,7 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
-    // Same scope-consistency guard as setProperty (see there): a stale schema
-    // must not admit a delete under a scope whose read-only/undo policy differs
-    // from the definition's current one.
-    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
-      throw new PropertySchemaScopeMismatchError(
-        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
-      )
-    }
+    this.assertPropertyWriteScope(resolvedSchema)
     if (before.properties[resolvedSchema.name] === undefined) return // absent → no-op
     const properties = {...before.properties}
     delete properties[resolvedSchema.name]
@@ -813,6 +811,54 @@ export class TxImpl implements Tx {
     // of setProperty's inline dual-write being idempotent with MATERIALIZE's
     // create branch. Reusing that one canonical removal path (subtree relocate
     // of user sub-children included) beats duplicating it here.
+  }
+
+  async setProperties(
+    id: string,
+    changes: {
+      readonly set?: readonly AnyPropertyAssignment[]
+      readonly unset?: readonly AnyPropertySchema[]
+    },
+    opts?: TxWriteOpts,
+  ): Promise<void> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    // Resolve + scope-check EVERY schema before any mutation, so the whole
+    // batch fails atomically on an unresolvable/mis-scoped entry rather than
+    // half-applying. Resolution also collapses each schema to its canonical
+    // stored name (the bag key), so aliased/plain handles land on one key.
+    const sets = (changes.set ?? []).map(assignment => {
+      const resolvedSchema = this.resolvePropertySchemaForRow(before, assignment.schema)
+      this.assertPropertyWriteScope(resolvedSchema)
+      return {name: resolvedSchema.name, encoded: resolvedSchema.codec.encode(assignment.value)}
+    })
+    const unsetNames = (changes.unset ?? []).map(schema => {
+      const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+      this.assertPropertyWriteScope(resolvedSchema)
+      return resolvedSchema.name
+    })
+    // Apply the delta on a copy of the current bag: sets first, then unsets, so
+    // a key named in BOTH lists ends up removed (unset wins — an explicit
+    // caller intent to clear takes precedence over a stale set in the batch).
+    const properties = {...before.properties}
+    for (const {name, encoded} of sets) properties[name] = encoded
+    for (const name of unsetNames) delete properties[name]
+    if (jsonValuesEqual(before.properties, properties)) return // net no-op
+    const after: BlockData = {
+      ...before,
+      properties,
+      ...this.metadataPatch(id, before, opts?.skipMetadata),
+    }
+    await this.ctx.txDb.execute(
+      `UPDATE blocks SET properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
+    )
+    this.pinWorkspace(before.workspaceId)
+    this.record(id, before, after)
+    // As with setProperty/unsetProperty, the same-tx MATERIALIZE processor
+    // reconciles children for every changed key in the net bag diff — create/
+    // update for the sets, soft-delete for the unsets — so no inline child
+    // write is needed here.
   }
 
   async getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T> {

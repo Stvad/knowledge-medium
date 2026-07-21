@@ -4,7 +4,7 @@ import type {
   NewBlockData,
 } from './blockData'
 import type { ChangeScope, TxSource } from './changeScope'
-import type { AnyPropertySchema, PropertySchema } from './propertySchema'
+import type { AnyPropertyAssignment, AnyPropertySchema, PropertySchema } from './propertySchema'
 import type { User } from './user'
 
 /** Per-write opt: skip the engine's automatic `updatedAt`/`updatedBy` bump
@@ -197,6 +197,28 @@ export interface Tx {
    *  `PropertySchemaIdentityError` if the schema has no resolvable definition,
    *  same as `setProperty`. */
   unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
+
+  /** Atomically set and/or unset several properties in ONE bag rewrite. This
+   *  is the batch form callers should reach for instead of a whole-bag
+   *  `tx.update({properties})`: it applies a DELTA (set these, unset these,
+   *  leave the rest alone), so it can't clobber a sibling key a peer synced
+   *  in, and it's codec-aware throughout. Build `set` entries with
+   *  `propertyValue(schema, value)` for per-entry type-checking. Every schema
+   *  is resolved + scope-checked up front (the whole batch fails before any
+   *  write on an unresolvable/mis-scoped entry). In a child-backed workspace
+   *  the same-tx MATERIALIZE processor reconciles children for every changed
+   *  key — creating/updating for sets, soft-deleting for unsets — so, like
+   *  `setProperty`/`unsetProperty`, no inline child write happens here. A net
+   *  no-op (bag unchanged) is skipped. `set` values are literals, not updater
+   *  functions — read via `getProperty` first if you need the current value. */
+  setProperties(
+    id: string,
+    changes: {
+      readonly set?: readonly AnyPropertyAssignment[]
+      readonly unset?: readonly AnyPropertySchema[]
+    },
+    opts?: TxWriteOpts,
+  ): Promise<void>
 
   /** `getProperty`: reads SQL/cache and applies `codec.decode`. Returns
    *  the schema's `defaultValue` if the property is absent. */
