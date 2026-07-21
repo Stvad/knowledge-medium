@@ -146,24 +146,42 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
     expect(await readColumn('a')).toBeNull()
   })
 
-  it('derive write is bookkeeping: bumps updated_at, freezes user_updated_at', async () => {
+  it('derive stamp is local-only: the content edit enqueues ONE upload PATCH, none for reference_target_id', async () => {
+    // `reference_target_id` is a per-device derived column — never in
+    // `BLOCK_UPLOAD_COLUMNS`, never uploaded. Re-deriving it therefore must
+    // NOT mint an upload envelope. The user's content edit ships exactly one
+    // PATCH (the content); the same-tx derive amendment writes only the local
+    // column and must add no second PATCH (Decision A / PR #288 §5).
     const repo = setup()
-    await createBlock(repo, 'target', 'Inbox page', {properties: {alias: ['Inbox']}})
     await createBlock(repo, 'a', 'plain')
-    const before = await sharedDb.db.get<{updated_at: number; user_updated_at: number}>(
-      'SELECT updated_at, user_updated_at FROM blocks WHERE id = ?', ['a'],
-    )
-    await repo.tx(tx => tx.update('a', {content: '[[Inbox]]'}),
+    await repo.tx(tx => tx.update('a', {content: `((${STATUS_FIELD_ID}))`}),
       {scope: ChangeScope.BlockDefault})
-    const after = await sharedDb.db.get<{updated_at: number; user_updated_at: number}>(
-      'SELECT updated_at, user_updated_at FROM blocks WHERE id = ?', ['a'],
+    expect(await readColumn('a')).toBe(STATUS_FIELD_ID)   // the column WAS stamped
+    const envelopes = (await sharedDb.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string; data: Record<string, unknown>})
+      .filter(e => e.id === 'a')
+    // create PUT + exactly one content PATCH — not a second refTarget PATCH.
+    expect(envelopes.map(e => e.op)).toEqual(['PUT', 'PATCH'])
+    const patch = envelopes.find(e => e.op === 'PATCH')!
+    expect(patch.data).toHaveProperty('content')
+    expect(patch.data).not.toHaveProperty('reference_target_id')
+  })
+
+  it('derive stamp does not add a second user_updated_at bump beyond the content edit', async () => {
+    const repo = setup()
+    await createBlock(repo, 'a', 'plain')
+    const before = await sharedDb.db.get<{user_updated_at: number}>(
+      'SELECT user_updated_at FROM blocks WHERE id = ?', ['a'],
     )
-    expect(await readColumn('a')).toBe('target')
-    // The user's content edit bumps both; the derive amendment must not add
-    // a SECOND user_updated_at bump beyond the content edit's own. Both
-    // stamps move together here — the load-bearing check is that the column
-    // write rode the same tx (asserted above) without failing the tx.
-    expect(after.updated_at).toBeGreaterThan(before.updated_at)
+    await repo.tx(tx => tx.update('a', {content: `((${STATUS_FIELD_ID}))`}),
+      {scope: ChangeScope.BlockDefault})
+    const after = await sharedDb.db.get<{user_updated_at: number}>(
+      'SELECT user_updated_at FROM blocks WHERE id = ?', ['a'],
+    )
+    expect(await readColumn('a')).toBe(STATUS_FIELD_ID)
+    // The content edit is the one real user edit — it advances user_updated_at
+    // once. The derive amendment freezes it (local bookkeeping, not an edit).
+    expect(after.user_updated_at).toBeGreaterThan(before.user_updated_at)
   })
 
   it('undo restores the column alongside content (replay skips the processor)', async () => {

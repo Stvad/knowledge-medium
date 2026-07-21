@@ -412,6 +412,46 @@ describe('tx.update (data-fields-only)', () => {
   })
 })
 
+// ──── tx.stampReferenceTarget (local derived column) ────
+
+describe('tx.stampReferenceTarget (local, no-upload)', () => {
+  it('writes the column without advancing updated_at or enqueuing an upload', async () => {
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '((t))'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const createdAt = env.cache.getSnapshot(id)!.updatedAt
+    env.tick() // advance the clock: a stray updated_at bump would use this later value
+    const crudBefore = (await env.psCrud()).length
+
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x'), {scope: ChangeScope.BlockDefault})
+
+    const snap = env.cache.getSnapshot(id)!
+    expect(snap.referenceTargetId).toBe('target-x')  // column written
+    expect(snap.updatedAt).toBe(createdAt)           // NOT advanced — not a synced edit
+    expect((await env.psCrud()).length).toBe(crudBefore)  // no upload envelope minted
+  })
+
+  it('is a no-op (no UPDATE, no row_event) when the column already holds the target', async () => {
+    const id = await env.repo.tx(
+      tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '((t))'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x'), {scope: ChangeScope.BlockDefault})
+    const rowEventsAfterFirst = (
+      await env.h.db.getAll('SELECT id FROM row_events WHERE block_id = ?', [id])
+    ).length
+
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x'), {scope: ChangeScope.BlockDefault})
+
+    // The guard short-circuits before any UPDATE, so the no-WHEN row_event
+    // trigger never fires — the count is unchanged.
+    expect((await env.h.db.getAll('SELECT id FROM row_events WHERE block_id = ?', [id])).length)
+      .toBe(rowEventsAfterFirst)
+    expect(env.cache.getSnapshot(id)!.referenceTargetId).toBe('target-x')
+  })
+})
+
 // ──── tx.delete + tx.restore ────
 
 describe('tx.delete + tx.restore', () => {

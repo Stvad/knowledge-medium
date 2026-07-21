@@ -7,8 +7,10 @@
  * reference token (`((uuid))` or `[[alias]]`), resolves it — a `((uuid))`
  * block-ref textually (no lookup), an `[[alias]]` through the tx-aware generic
  * alias lookup — and writes the target id into `reference_target_id` in the
- * same transaction (`skipMetadata`: bumps the sync clock, not "last edited").
- * Detection everywhere downstream is a column read, never a content parse.
+ * same transaction via `tx.stampReferenceTarget` (a LOCAL-column write: no
+ * `updated_at` bump, no upload PATCH — the column is a per-device reflection
+ * of content, never synced). Detection everywhere downstream is a column read,
+ * never a content parse.
  *
  * Property field rows currently address their definition BY ID (`((fieldId))`,
  * §7), resolving on the textual `blockRef` branch — no property-name tier, no
@@ -98,8 +100,12 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
       const targetId = derivedTargetId === undefined && changed.before === null
         ? row.referenceTargetId ?? null
         : derivedTargetId ?? null
-      if ((row.referenceTargetId ?? null) === targetId) continue
-      await ctx.tx.update(row.id, {referenceTargetId: targetId}, {skipMetadata: true})
+      // `reference_target_id` is a LOCAL derived column — writing it is not a
+      // synced edit, so use the dedicated stamp primitive (no `updated_at`
+      // bump, no upload PATCH) rather than a `{skipMetadata}` update, which
+      // would still bump `updated_at` and ship a redundant envelope. The
+      // primitive no-ops when the column is already `targetId`.
+      await ctx.tx.stampReferenceTarget(row.id, targetId)
     }
   },
 })
