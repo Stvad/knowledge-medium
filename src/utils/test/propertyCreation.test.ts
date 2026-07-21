@@ -67,4 +67,22 @@ describe('convertEmptyChildBlockToProperty', () => {
     expect(repo.block('parent').peekProperty(showPropertiesProp)).toBeUndefined()
     expect(repo.block('child').peek()?.deleted).toBe(false)
   })
+
+  it('does not convert a block that owns property content (would delete its data)', async () => {
+    // A block with properties but empty content and no VISIBLE children. In a
+    // child-backed workspace its property field/value rows are hidden from the
+    // visible childIds facade the guard reads, so converting would `delete()`
+    // the block and strand/soft-delete that property data (incl. value-row
+    // comments). Guarding on the properties cell is flip-independent — the same
+    // block in a non-flipped workspace holds the data in its cell and must be
+    // protected too.
+    await repo.tx(tx => tx.update('child', {properties: {note: 'kept'}}),
+      {scope: ChangeScope.BlockDefault})
+
+    const converted = await convertEmptyChildBlockToProperty(repo.block('child'), repo)
+
+    expect(converted).toBe(false)
+    expect(repo.block('parent').peekProperty(showPropertiesProp)).toBeUndefined()
+    expect(repo.block('child').peek()?.deleted).toBe(false)
+  })
 })
