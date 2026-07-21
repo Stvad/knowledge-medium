@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * Tests the editor wrapper that bridges the toggle tree's
  * `onToggle(handle, nextState)` semantics to a property write.

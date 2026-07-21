@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /** Repo-backed integration of the `#` pick flow. The unit tests cover
  *  the source in isolation; these pin the wiring contract that keeps
  *  the pick safe across the types-triggered editor remount: the tag

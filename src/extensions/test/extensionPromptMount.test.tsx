@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * Integration test for the global prompt surface — the reconciliation the
  * reported bug lived in: enabling/dismissing one extension's prompt must act

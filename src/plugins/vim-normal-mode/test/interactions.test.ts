@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'

@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 import { Suspense } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
