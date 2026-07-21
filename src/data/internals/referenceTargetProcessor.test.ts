@@ -184,6 +184,23 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
     expect(after.user_updated_at).toBeGreaterThan(before.user_updated_at)
   })
 
+  it('derives a content edit made while the row is soft-deleted, preserving the tombstone', async () => {
+    // The module invariant: "Tombstoned rows derive too" — a content edit
+    // while deleted must still stamp the column (else a later content-unchanged
+    // restore never repairs it). The narrow stamp SQL must not resurrect the
+    // row. (Symmetric to the arrival path's tombstone-derive coverage.)
+    const repo = setup()
+    await createBlock(repo, 'a', 'plain')
+    await repo.tx(tx => tx.delete('a'), {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.update('a', {content: `((${STATUS_FIELD_ID}))`}),
+      {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('a')).toBe(STATUS_FIELD_ID)   // derived while deleted
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['a'],
+    )
+    expect(row.deleted).toBe(1)   // tombstone preserved — the stamp never resurrects
+  })
+
   it('undo restores the column alongside content (replay skips the processor)', async () => {
     const repo = setup()
     await createBlock(repo, 'a', 'plain text')

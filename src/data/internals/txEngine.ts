@@ -615,15 +615,12 @@ export class TxImpl implements Tx {
     this.record(id, before, after)
   }
 
-  /** Stamp the LOCAL derived `reference_target_id` column without advancing
-   *  `updated_at` (see the `Tx.stampReferenceTarget` contract). The narrow
-   *  `SET reference_target_id = ?` is load-bearing: it touches no upload
-   *  column and leaves `updated_at` alone, so `blocks_upload_update`'s diff
-   *  predicate is provably false and no envelope is enqueued — the whole
-   *  point (a `{skipMetadata}` `update` bumps `updated_at`, an upload column,
-   *  and would ship a redundant PATCH). `record` still fires the
-   *  `referenceTargetId`-changed snapshot for same-tab reactivity and clears
-   *  the §9 ancestry memo. No-op (no write, no snapshot) when unchanged. */
+  /** See the `Tx.stampReferenceTarget` contract for the why. Impl notes: the
+   *  narrow `SET reference_target_id = ?` is load-bearing — it names no upload
+   *  column and no `updated_at`, so `blocks_upload_update`'s diff predicate
+   *  can't fire; `record` still clears the §9 ancestry memo and records the
+   *  `referenceTargetId`-changed snapshot. No write / no snapshot when
+   *  unchanged. */
   async stampReferenceTarget(id: string, targetId: string | null): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
