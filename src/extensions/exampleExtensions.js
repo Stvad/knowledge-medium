@@ -1,11 +1,8 @@
-import{ChangeScope as e}from"../data/api/changeScope.js";import"../data/api/index.js";import{extensionDescriptionProp as t,extensionNameProp as n}from"../data/properties.js";import{EXTENSION_TYPE as r}from"../data/blockTypes.js";import{createChild as i}from"../data/mutators.js";var a=[{id:`hello-renderer`,name:`Hello renderer`,description:`Content-renderer variant gated by 'user:hello = true'.`,source:`import {
-  blockContentRendererFacet,
-  ChangeScope,
-  definitionSeedsFacet,
-  defineVariant,
-  extensionPropertySeedKey,
-  seedProperty,
-} from '@/extensions/api.js'
+import{ChangeScope as e}from"../data/api/changeScope.js";import"../data/api/index.js";import{extensionDescriptionProp as t,extensionNameProp as n}from"../data/properties.js";import{EXTENSION_TYPE as r}from"../data/blockTypes.js";import{createChild as i}from"../data/mutators.js";var a=[{id:`hello-renderer`,name:`Hello renderer`,description:`Content-renderer variant gated by 'user:hello = true'.`,source:`import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { blockContentRendererFacet } from '@/extensions/blockInteraction.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { defineVariant } from '@/facets/variantFacet.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
 // content renderer for blocks tagged 'user:hello = true'. Returning
@@ -42,13 +39,10 @@ export default [
     return defineVariant('user.hello', 'Hello', HelloContent)
   }),
 ]
-`},{id:`fold-all-action`,name:`Fold all`,description:`Action that folds/unfolds every block in the current view (Cmd+Shift+F).`,source:`import {
-  actionsFacet,
-  ActionContextTypes,
-  ChangeScope,
-  isCollapsedProp,
-  topLevelBlockIdProp,
-} from '@/extensions/api.js'
+`},{id:`fold-all-action`,name:`Fold all`,description:`Action that folds/unfolds every block in the current view (Cmd+Shift+F).`,source:`import { ChangeScope } from '@/data/api/index.js'
+import { isCollapsedProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 // Toggle collapse on every visible descendant of the top-level block.
 // Demonstrates a single action contribution with a default keybinding.
@@ -89,17 +83,16 @@ export default actionsFacet.of({
     }, { scope: ChangeScope.BlockDefault, description: 'fold all' })
   },
 })
-`},{id:`emoji-react`,name:`Emoji reactions`,description:`Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.`,source:`import {
-  actionsFacet,
-  ActionContextTypes,
+`},{id:`emoji-react`,name:`Emoji reactions`,description:`Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.`,source:`import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
-  ChangeScope,
-  definitionSeedsFacet,
-  extensionPropertySeedKey,
   isSelectionClick,
-  seedProperty,
-} from '@/extensions/api.js'
+} from '@/extensions/blockInteraction.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
 // decorator that layers a reactions row (stored under property
@@ -173,8 +166,9 @@ export default [
     }
   }),
 ]
-`},{id:`kudos-facet`,name:`Kudos facet`,description:`Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.`,source:`import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+`},{id:`kudos-facet`,name:`Kudos facet`,description:`Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.`,source:`import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
+import { defineFacet } from '@/facets/facet.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
 // contributing to it from the same block, and registering a
@@ -211,14 +205,11 @@ export default [
     renderer: KudosBannerRenderer,
   }),
 ]
-`},{id:`split-layout`,name:`Split layout`,description:`Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.`,source:`import {
-  blockLayoutFacet,
-  ChangeScope,
-  definitionSeedsFacet,
-  defineVariant,
-  extensionPropertySeedKey,
-  seedProperty,
-} from '@/extensions/api.js'
+`},{id:`split-layout`,name:`Split layout`,description:`Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.`,source:`import { ChangeScope, seedProperty } from '@/data/api/index.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
+import { blockLayoutFacet } from '@/extensions/blockInteraction.js'
+import { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
+import { defineVariant } from '@/facets/variantFacet.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
 // Properties, Children, Footer) inside a block's body. Each slot is
@@ -273,8 +264,8 @@ export default [
     return defineVariant('split', 'Split (content / children)', SplitLayout)
   }),
 ]
-`},{id:`layout-renderer-override`,name:`Layout renderer override`,description:`Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.`,source:`import { blockRenderersFacet } from '@/extensions/api.js'
-import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+`},{id:`layout-renderer-override`,name:`Layout renderer override`,description:`Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.`,source:`import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
 // inserting this example wraps every panel with the custom frame
@@ -307,9 +298,9 @@ export default blockRenderersFacet.of({
   id: 'layout',
   renderer: DemoLayoutRenderer,
 })
-`},{id:`default-renderer-placeholder`,name:`Default renderer placeholder`,description:`Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.`,source:`import { blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+`},{id:`default-renderer-placeholder`,name:`Default renderer placeholder`,description:`Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.`,source:`import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
+import { blockRenderersFacet } from '@/extensions/core.js'
 
 // Replaces the fallback renderer registered under id 'default'.
 // Inserting this example immediately changes every ordinary block
