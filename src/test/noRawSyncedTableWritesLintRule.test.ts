@@ -45,6 +45,13 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
         // this correctly isn't flagged (known limitation of a literal-text
         // rule, not a gap this rule tries to close).
         { code: 'db.execute(`INSERT OR REPLACE INTO ${tableName} (id) VALUES (?)`)' },
+        // A `+` concat with a dynamic table operand can't be folded — same
+        // documented limitation as `${interp}`; the literal parts alone carry
+        // no complete write, so nothing is flagged.
+        { code: `db.execute('UPDATE ' + tableName + ' SET x = ?')` },
+        // A fully-static concat that resolves to a LOCAL table is folded and
+        // correctly not flagged (the fold feeds the same exact-name matcher).
+        { code: `db.execute('UPDATE ' + 'tx_context' + ' SET source = ?')` },
         // Unrelated string/template literals.
         { code: `const greeting = 'hello world'` },
         { code: 'const label = `count: ${n}`' },
@@ -89,6 +96,19 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
         // Multi-line template literal, matching the real call-site shape.
         {
           code: 'tx.execute(`\n  UPDATE blocks SET content = ? WHERE id = ?\n`, [content, id])',
+          errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
+        },
+        // Fully-static `+` concatenation that SPLITS the keyword from the table
+        // — the bypass the fold closes (previously each literal alone matched
+        // nothing, so the write slipped past).
+        {
+          code: `db.execute('UPDATE ' + 'blocks' + ' SET content = ?')`,
+          errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
+        },
+        // A dynamic operand doesn't fold, but the keyword+table surviving in one
+        // literal is still caught by the per-literal pass (coverage preserved).
+        {
+          code: `db.execute('DELETE FROM blocks WHERE id = ' + id)`,
           errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
         },
       ],

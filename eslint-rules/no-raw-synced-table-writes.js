@@ -19,7 +19,11 @@
  *
  * A dynamic write target (e.g. `` `INSERT INTO ${tableName} (…)` ``) can't be
  * resolved statically — the interpolation is dropped rather than guessed at,
- * so the site isn't flagged. Known limitation of a literal-text rule.
+ * so the site isn't flagged. Known limitation of a literal-text rule. The same
+ * goes for a `+` concatenation with a NON-static operand (`'UPDATE ' + name`):
+ * the fold gives up (returns null), and the literal parts are re-examined on
+ * their own, so a statement whose keyword+table survive in one literal is still
+ * caught. Only a fully-static split (`'UPDATE ' + 'blocks'`) is reconstructed.
  *
  * A small handful of files are legitimately exempt — see the `files`-scoped
  * overrides in eslint.config.js, each with a comment explaining why.
@@ -27,12 +31,22 @@
 
 import { syncedWriteTarget } from '../src/data/syncedTableSqlRecognizer.js'
 
-/** The static text a literal AST node contributes, for target matching only.
- *  A template literal's interpolated expressions are dropped (not
- *  substituted) — see the module doc on why that's the right call. */
+/** The static text an expression contributes, for target matching only. A
+ *  template literal's interpolated expressions are dropped (not substituted);
+ *  a `+` concatenation is folded only when BOTH sides are fully static, so a
+ *  synced write split across string literals — `'UPDATE ' + 'blocks' + …` — is
+ *  still seen as one statement. Any dynamic operand collapses the whole fold to
+ *  `null` (see the module doc on why dropping beats guessing). */
 const literalSqlText = (node) => {
   if (node.type === 'Literal') return typeof node.value === 'string' ? node.value : null
   if (node.type === 'TemplateLiteral') return node.quasis.map(q => q.value.raw).join('')
+  if (node.type === 'BinaryExpression' && node.operator === '+') {
+    const left = literalSqlText(node.left)
+    if (left === null) return null
+    const right = literalSqlText(node.right)
+    if (right === null) return null
+    return left + right
+  }
   return null
 }
 
@@ -78,6 +92,14 @@ const noRawSyncedTableWrites = {
     return {
       Literal: check,
       TemplateLiteral: check,
+      // Fold `+` concatenations at the OUTERMOST `+` only — a nested sub-chain
+      // would re-fold a prefix and report twice. Operand literals are still
+      // visited individually, so a dynamic-operand concat whose keyword+table
+      // survive in one literal keeps its existing coverage.
+      "BinaryExpression[operator='+']"(node) {
+        if (node.parent?.type === 'BinaryExpression' && node.parent.operator === '+') return
+        check(node)
+      },
     }
   },
 }

@@ -2572,7 +2572,16 @@ export class Repo {
   scheduleReferenceTargetDerivePass(workspaceId: string): void {
     if (!workspaceId) return
     this.referenceTargetDeriveJobs.schedule(() =>
-      this.runReferenceTargetDerivePass(workspaceId),
+      // Swallow + log a transient sweep failure rather than leak an unhandled
+      // rejection (the idle-job runner only does `.finally`, like the sibling
+      // `drainNameRederives` guards its own body). The sweep marker is left
+      // UNSET on throw, so the next workspace open retries — the pass is
+      // strictly additive (`reference_target_id IS NULL`), never a re-stamp,
+      // so a partial run can't double-stamp or clobber.
+      this.runReferenceTargetDerivePass(workspaceId).catch((err) => {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(`[referenceTargetDerive] workspace ${workspaceId} sweep failed: ${reason}`)
+      }),
     )
   }
 
