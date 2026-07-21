@@ -38,6 +38,10 @@ const makeFakeBlock = (persistedContent: string) => {
         fn({
           get: async () => row,
           update: async (_id: string, patch: {content?: string}) => { updates.push(patch) },
+          // askAgent now writes asked-at via the typed setProperties path; the
+          // edit-mode tests only assert on the content write, so this just
+          // needs to exist (no-op) so the action doesn't throw.
+          setProperties: async () => {},
         }),
     },
   } as unknown as Block
