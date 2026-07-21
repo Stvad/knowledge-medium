@@ -67,7 +67,7 @@ const typeSeedKeyForRow = (row: BlockData): string | undefined => {
  * resolution (the early real seed beats a late forgery), and is remediable via
  * §12's enumeration query. Until that registry lands NO consumer honors a
  * differing `typeId` claim: the transitional `UserTypesService` projector keys
- * published contributions by BLOCK id, because the last-wins `typesFacet` has no
+ * published contributions by BLOCK id, because a bare last-wins facet fold has no
  * winner resolution — processed in `created_at ASC` order, a late import would
  * otherwise WIN and hijack a kernel/plugin id (see `userTypesService.ts`). */
 export const parseTypeDefinitionMetadata = (

@@ -148,10 +148,7 @@ export const buildPropertyDefinitionRegistry = (
   const schemas = new Map<string, AnyPropertySchema>()
   for (const [name, definitions] of definitionsByNameMutable) {
     const winnerSchema = schemasByFieldId.get(definitions[0]!.fieldId)
-    if (!winnerSchema) {
-      schemas.delete(name)
-      continue
-    }
+    if (!winnerSchema) continue
     schemas.set(name, name === winnerSchema.name
       ? winnerSchema
       : {...winnerSchema, name})

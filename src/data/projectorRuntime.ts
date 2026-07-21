@@ -7,7 +7,7 @@
  *  exist today and were hand-copied then DIVERGED:
  *    - `UserSchemasService` — `'property-schema'` blocks →
  *      `projectedPropertyDefinitionsFacet` (the bridge derives `propertySchemas`)
- *    - `UserTypesService`   — `'block-type'`    blocks → `typesFacet`
+ *    - `UserTypesService`   — `'block-type'`    blocks → `projectedTypeDefinitionsFacet` (the bridge derives `repo.types`)
  *
  *  This module owns the ONE copy of the safety-critical lifecycle the
  *  two surfaces must not drift on again:

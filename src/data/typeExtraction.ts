@@ -6,7 +6,7 @@
  *     `block-type` block on the workspace's Types page with the
  *     caller's label + property-schema refList, then wait for
  *     `UserTypesService` to publish the contribution into the
- *     `typesFacet` user-data bucket. Returns the new block id, which
+ *     `projectedTypeDefinitionsFacet` user-data bucket. Returns the new block id, which
  *     IS the type id (the user-defined-types block-id = type-id rule).
  *
  *  2. `retagBlocks(repo, args)` — apply a type to an explicit list of
@@ -52,7 +52,7 @@ import { typesPageBlockId } from '@/data/typesPage'
 
 /** Thrown by `createTypeBlock`'s Phase A→bridge handoff when the
  *  `UserTypesService` subscription doesn't publish the new id into
- *  `typesFacet`'s user-data bucket within `registrationTimeoutMs`.
+ *  `projectedTypeDefinitionsFacet`'s user-data bucket within `registrationTimeoutMs`.
  *  Realistic cause: `tryBuildType` returned null (the block-type
  *  block failed to parse — e.g. a property-schema ref doesn't
  *  resolve in the live registry). */

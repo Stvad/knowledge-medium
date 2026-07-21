@@ -19,7 +19,7 @@
  *
  *  The source is pure w.r.t. data access: it takes already-resolved
  *  candidates and a `pickType` callback. Wiring to the repo (the live
- *  `typesFacet` registry, `addType`, `createTypeBlock`) happens in the
+ *  `repo.types` registry, `addType`, `createTypeBlock`) happens in the
  *  plugin's CodeMirror extension. */
 
 import { EditorSelection } from '@codemirror/state'

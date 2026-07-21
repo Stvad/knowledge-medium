@@ -98,8 +98,8 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   // Merged registry (kernel + plugin + block-built user types) via repo.types,
-  // reactive on type-registry changes. Reading `typesFacet` directly would miss
-  // user-defined types after the C3b projector re-route.
+  // reactive on type-registry changes. Reading the raw type facets directly would
+  // miss user-defined types after the C3b projector re-route.
   const typesRegistry = useTypes()
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
