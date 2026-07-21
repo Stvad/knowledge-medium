@@ -53,10 +53,14 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
       const canonical = normalizeReferences(row.after.references)
       // Already canonical? Skip — saves a no-op write + UPDATE.
       if (referencesEqual(canonical, row.after.references)) continue
-      // `skipMetadata: true` so the normalization doesn't bump
-      // `updatedAt` / `updatedBy` — it's a bookkeeping write, not
-      // a user intent. Same convention used by parseReferences when
-      // it updates the projected references column.
+      // `skipMetadata: true` keeps `userUpdatedAt` / `updatedBy` untouched —
+      // canonicalizing is derived bookkeeping, not a user edit, so it must not
+      // float the row to the top of "recent" or change its "edited by". But
+      // `updatedAt` STILL advances (skipMetadata does not suppress it —
+      // metadataPatch always returns it): `references_json` is a SYNCED
+      // column, so a change to it must carry a new row version like any other
+      // synced edit, or a peer's LWW gate would drop the canonical value. Same
+      // convention as parseReferences' projection write next door.
       await ctx.tx.update(row.id, {references: canonical}, {skipMetadata: true})
     }
   },

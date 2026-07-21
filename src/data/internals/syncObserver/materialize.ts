@@ -466,6 +466,27 @@ export const materializeStagingRows = async (
       const beforeRow = removedBeforeById.get(id)
       if (beforeRow) snapshots.set(id, { before: parseBlockRow(beforeRow), after: null })
     }
+    // #404 item 6 — DOCUMENTED ASSUMPTION, deliberately not fixed here (Vlad,
+    // 2026-07-20). If a hard-deleted `id` was a property field/value child in a
+    // flipped workspace, its owner's projected cell keeps the now-orphaned key:
+    // the sync path doesn't run PROJECT, and there is no authoring device to
+    // upload a corrected cell (see below). We do NOT reproject the parent on
+    // arrival, because that would mean writing `properties_json` — a SYNCED
+    // column — from the arrival path, a categorically different move than the
+    // local-only derivations this path is allowed to make (see
+    // `arrivalProcessors.ts`).
+    //
+    // Why it's safe to leave: this is unreachable in normal operation. A user
+    // delete is a SOFT delete (`deleted = 1`, an UPDATE), which arrives as an
+    // upsert, not a `removed` — and the deleting device already ran PROJECT and
+    // uploaded the corrected cell, so peers converge. A `removed` here is a
+    // physical row disappearance: a stream-exit (scope-granular — it takes the
+    // parent too, so there's nothing local to reproject) or an OUT-OF-BAND hard
+    // delete of an individual block (manual server SQL / admin op / a future
+    // block-level GC — none exist as a normal path). Only that last case strands
+    // a cell. Recovery when it does: the parent's next content edit re-triggers
+    // PROJECT locally, or a manual reproject. If a routine individual-block
+    // hard-delete is ever introduced server-side, revisit this.
   })
 
   // §9 arrival-order repair, alias half (adversarial-review rounds 1+2): a
