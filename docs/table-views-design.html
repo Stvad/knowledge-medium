@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Table Views — Tana-style query tables over the type system</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --fg-dim: #555;
+    --fg-faint: #8a8a8a;
+    --bg: #fafaf7;
+    --panel: #fff;
+    --rule: #e3e0d8;
+    --accent: #5b3fd6;
+    --accent-bg: #ece8fb;
+    --good: #1f7a3a;
+    --good-bg: #e3f3e8;
+    --warn: #8a5a00;
+    --warn-bg: #fbf1d8;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #ececec;
+      --fg-dim: #b6b6b6;
+      --fg-faint: #7d7d7d;
+      --bg: #1a1a1a;
+      --panel: #232323;
+      --rule: #383838;
+      --accent: #b8a8ff;
+      --accent-bg: #2a2540;
+      --good: #7ed29a;
+      --good-bg: #1d3225;
+      --warn: #e6c068;
+      --warn-bg: #322a16;
+    }
+  }
+  html { font-size: 16px; }
+  body { font-family: var(--sans); color: var(--fg); background: var(--bg); margin: 0; padding: 0; line-height: 1.55; }
+  main { max-width: 880px; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header.doc-header { border-bottom: 1px solid var(--rule); padding-bottom: 1.25rem; margin-bottom: 1.5rem; }
+  header.doc-header h1 { font-size: 1.85rem; margin: 0 0 0.35rem; letter-spacing: -0.01em; }
+  header.doc-header .subtitle { color: var(--fg-dim); font-size: 1.02rem; margin: 0; }
+  aside.doc-status { margin: 0 0 1.5rem; padding: 0.6rem 0.9rem; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-bg); font-size: 0.85rem; line-height: 1.45; }
+  h2 { font-size: 1.32rem; margin: 3rem 0 0.75rem; letter-spacing: -0.005em; }
+  h3 { font-size: 1.06rem; margin: 1.8rem 0 0.5rem; }
+  p { margin: 0.6rem 0 1rem; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  code, .mono { font-family: var(--mono); font-size: 0.92em; background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 0.05em 0.3em; }
+  pre { background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 0.85rem 1rem; overflow-x: auto; font-family: var(--mono); font-size: 0.86rem; line-height: 1.5; }
+  pre code { background: none; border: none; padding: 0; font-size: inherit; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.3rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0 1.5rem; font-size: 0.9rem; }
+  th, td { border: 1px solid var(--rule); padding: 0.45rem 0.65rem; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; }
+  .tablewrap { overflow-x: auto; }
+  aside.callout { margin: 1.25rem 0; padding: 0.7rem 1rem; border-left: 3px solid var(--accent); background: var(--accent-bg); border-radius: 0 6px 6px 0; font-size: 0.92rem; }
+  aside.callout.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  aside.callout.good { border-left-color: var(--good); background: var(--good-bg); }
+  aside.callout > :first-child { margin-top: 0; }
+  aside.callout > :last-child { margin-bottom: 0; }
+  figure { margin: 1.5rem 0 1.75rem; padding: 0; }
+  figure .frame { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 1rem 1.25rem; overflow-x: auto; }
+  figcaption { color: var(--fg-dim); font-size: 0.82rem; margin-top: 0.5rem; }
+  .cols { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+  .cols > div { flex: 1 1 300px; }
+  .cols h4 { margin: 0 0 0.5rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-dim); }
+  .outline { font-family: var(--mono); font-size: 0.82rem; line-height: 1.7; white-space: pre; }
+  .dim { color: var(--fg-faint); }
+  .tag { color: var(--accent); }
+  .sql { color: var(--good); font-weight: 600; }
+  .js { color: var(--warn); font-weight: 600; }
+  .decision-list li { margin: 0.55rem 0; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc-header">
+  <h1>Table Views</h1>
+  <p class="subtitle">Tana-style query tables over the type system — a proposed <code>tables</code> plugin: editable table views fed by a text query language compiling onto <code>TypedBlockQuery</code>.</p>
+</header>
+
+<aside class="doc-status">
+  <strong>Status: proposed design — no implementation.</strong><br>
+  Last verified against code: 2026-07-12 (master @ <code>44d8631d</code>; every engine/UI claim below was checked against source at that revision, with <code>file:symbol</code> pointers inline). Written for the properties-as-blocks world (PR <a href="https://github.com/Stvad/knowledge-medium/pull/288">#288</a>, which lands first); the seams chosen here (cell-projection reads, <code>setProperty</code> writes) are correct on both sides of that migration regardless.
+</aside>
+
+<p><strong>Decisions proposed in this doc</strong> (each argued in its section):</p>
+<ul class="decision-list">
+  <li><strong>Ship as a core plugin</strong> (<code>src/plugins/tables/</code>): a <code>table</code> block type plus <code>table:view</code> child blocks, real npm dep on TanStack Table (headless), reusing the property panel's ValuePreset editors for cells (§4.2, §4.6). <strong>No bespoke embed type</strong> — a table is a block; embedding a table (or one specific view) is the generic <code>((id))</code> block-embed affordance, the media model (§4.4).</li>
+  <li><strong>One table substrate, two row sources</strong>: a query, or a block's own children ("view any node as a table"). Children-as-rows is a query term (<code>childof=self</code>), not a second mechanism — the compiler routes it to <code>childrenOf</code> (§4.1).</li>
+  <li><strong>The query is text, and text is the <em>only</em> stored artifact</strong> — no shadow copy of resolved ids. Names resolve against the schema registry at parse time; a <code>name^fieldId</code> exact form exists for stability-critical terms; schema renames rewrite query texts as part of the rename action; unresolvable names render as visible term errors, never silent empties (§4.3).</li>
+  <li><strong>Compile to <code>TypedBlockQuery</code> where the engine can express a term; evaluate the residue in JS</strong> over the pre-filtered set, with client-side terms marked in the UI (§4.3, §4.7).</li>
+  <li><strong>Columns are property schemas keyed by stable definition-block id, never display name.</strong> Schema unification (<code>docs/schema-unification.html</code>, accepted; Slice A landed) makes every schema — kernel and plugin included — a definition block, so one header affordance covers all columns (§4.2).</li>
+  <li><strong>Cells read the cell projection and write through <code>tx.setProperty</code></strong> — correct pre- and post-#288. Commit on Enter/blur (never per keystroke); sort/group re-evaluation is held while a cell editor is open; a new row stays pinned until commit, with query-condition back-fill (§4.5).</li>
+  <li><strong>Render cap + "show more" first; row virtualization deferred</strong> until it is designed together with the focus model it constrains (§4.6).</li>
+  <li><strong>View config is layered</strong>: durable view definitions live as props on <code>table:view</code> child blocks, plus a <code>UiState</code>-scoped tweak layer; casual interactions write the tweak layer, an explicit "save view" promotes. Both layers sync — a true per-user layer is future work, stated honestly (§4.4).</li>
+</ul>
+
+<h2 id="why">1. Why: the type system has no collection surface</h2>
+
+<p>KM already has the Tana-shaped half of a database feature: additive multi-typing (<code>types</code> on any block), user-defined types as blocks (<code>block-type</code>), property schemas as blocks (<code>property-schema</code>) with codecs and ValuePreset editors, and a SQL-compiled typed query engine. What it lacks is the surface that makes a type system <em>legible</em>: nowhere to see all <code>#book</code> rows with their fields as columns, sort by a property, edit a value without opening each block's property panel.</p>
+
+<p>The design deliberately follows Tana's model rather than Notion's, because KM's data model already made that choice. Notion bundles schema and views on a database container; a page has properties only by living inside one. Tana (and KM) attach schema to the <em>type</em> — instances live anywhere in the outline and are gathered by search. The consequence worth stating up front: <strong>collection views are node-anchored, not type-anchored</strong> — a table hangs off whichever block displays it, exactly like Tana's view config and unlike Notion's database views.</p>
+
+<h3 id="tana-mapping">1.1 The Tana correspondence</h3>
+
+<div class="tablewrap">
+<table>
+  <tr><th>Tana</th><th>KM</th></tr>
+  <tr><td>supertag on a node</td><td>entry in the block's <code>types</code> array</td></tr>
+  <tr><td>supertag config node (Schema area)</td><td><code>block-type</code> block / <code>TypeContribution</code></td></tr>
+  <tr><td>field definition node (<code>SYS_T02</code>)</td><td><code>property-schema</code> block / <code>PropertySchema</code> + codec</td></tr>
+  <tr><td>field tuple on an instance (first child = definition ref, rest = values)</td><td>today: key in <code>properties_json</code>; post-#288: field row (<code>[[Schema Name]]</code> + <code>reference_target_id</code>) with value children</td></tr>
+  <tr><td>field types (plain / options / options-from-tag / date / number / user / url / email / checkbox)</td><td>codec types (<code>string / enum / ref / date / number / url / boolean / refList / list…</code>) + ValuePresets</td></tr>
+  <tr><td>options-from-supertag field</td><td><code>ref</code> codec with <code>targetTypes</code>; value picking via <code>RefPropertyEditor</code>, schema-side config via <code>RefTargetTypePicker</code></td></tr>
+  <tr><td>search node (query = clause children, prefix notation)</td><td><code>TypedBlockQuery</code> — minus a text/UI surface (§3.2)</td></tr>
+  <tr><td>table view over children or a search</td><td><strong>the gap this plugin fills</strong></td></tr>
+</table>
+</div>
+
+<p>Tana behaviors adopted (argued at their design sites in §4): rows are live references and cells write through; adding a column adds field values to rows immediately while promoting the field into the type's schema is a separate opt-in suggestion; creating a row from a query back-fills the query's conditions; view config layers a personal tweak over a shared default; field identity is the definition's id, not its display name.</p>
+
+<p>Tana gaps deliberately <em>not</em> copied: no row expansion (a Tana row's sub-outline is only reachable by zooming in — we can mount the nested block renderer in an expanded row), no grouping in table view (a years-open Tana request; TanStack gives it as headless state), no per-type default view (also unshipped in Tana; deferred here too until there's evidence it's wanted).</p>
+
+<h2 id="ground">2. Ground truth #1: the properties-as-blocks world (PR #288)</h2>
+
+<p>The migration plan makes properties field-row children (<code>[[Schema Name]]</code> content, denormalized <code>reference_target_id</code>, values as children). Four of its guarantees are the seams this design builds on:</p>
+
+<ul>
+  <li><strong><code>properties_json</code> survives as a derived projection</strong> — <code>block.get(schema)</code> and <code>json_extract</code> queries stay correct and synchronous. A table reads the cell; it never walks field-row children on the read path.</li>
+  <li><strong><code>tx.setProperty</code> dual-writes</strong> children + cell in one tx. A cell editor that writes through <code>setProperty</code> is correct in both worlds, unchanged.</li>
+  <li><strong><code>tx.childrenOf</code> excludes field rows by default</strong> — children-as-rows tables see only content children, for free.</li>
+  <li><strong>Field identity is <code>fieldId</code></strong> — the schema's definition block id (uniformly, post-unification; #288's original <code>property:&lt;name&gt;</code> class for kernel/plugin schemas is superseded by the seeded definition blocks — §2 below); renames touch <code>name</code> only.</li>
+</ul>
+
+<p>Two caveats the plan itself carries, inherited here rather than dropped:</p>
+
+<ul>
+  <li><strong>Stale bootstrap-hint window</strong>: on a freshly-synced device the cell can be per-key stale until the projection pass sweeps — a table there can transiently show wrong cell values and wrong row membership. Bounded and self-healing, but an editing surface should not treat cold-device query results as authoritative (#288 §5, §12).</li>
+  <li><strong>Plugin schemas default to cell-backed</strong> until their durable opt-in — so field-row-derived affordances apply to user schemas first, not to e.g. a todo-status column.</li>
+</ul>
+
+<p>(E2EE is <em>not</em> a caveat here: encryption seals content columns at the upload boundary — <code>services/powersync.ts: encryptUploadOps</code> — so cell reads, <code>setProperty</code> writes, and compiled SQL all operate on local plaintext in any workspace mode. The #288 e2ee gate keeps such workspaces cell-only, whose only consequence for this plugin is that the §4.2 schema-block-backlinks nicety doesn't accrue there.)</p>
+
+<p><strong>Column identity is the definition block id, uniformly.</strong> Schema unification (<code>docs/schema-unification.html</code> — accepted; Slice A landed) dissolves the kernel/plugin-vs-user split this doc originally special-cased: every schema resolves to a definition block, seeded ones at deterministic per-workspace ids (<code>uuidv5(workspaceId:seedKey)</code>; handles carry <code>seedKey</code> and resolve ids through the registry primitive, never cache them). #288's <code>fieldId</code> is that same id, and #288 lands before this plugin — columns simply consume the resolution primitive; there is no synthetic <code>property:&lt;name&gt;</code> class to special-case. Unification also keeps <em>all</em> schema renames blocked until #288's slice B2 — the same machinery §4.3's query-text rewrite pass rides.</p>
+
+<h2 id="engine">3. Ground truth #2: the query engine, exactly as it is</h2>
+
+<h3 id="engine-has">3.1 What <code>TypedBlockQuery</code> gives today</h3>
+
+<p>Verified against <code>src/data/api/typedBlockQuery.ts</code> and <code>src/data/internals/typedBlockQuery.ts</code>:</p>
+
+<ul>
+  <li><code>types</code> (contains-any), <code>where</code> over codec-encoded properties — <code>eq / lt / lte / gt / gte / between / exists</code>, NULL-safe excludes (<code>IS NOT TRUE</code>), JSON paths inlined so expression indexes match.</li>
+  <li><code>where.&lt;field&gt;.target</code> traverses a ref (equality join) or refList (<code>json_each</code> fan-out) into inner predicates on the referenced block (<code>compileTargetTraversal</code>).</li>
+  <li><code>referencedBy: {id, sourceField?}</code> on a predicate compiles to <code>EXISTS(… block_references br WHERE br.source_id = &lt;candidate&gt;.id AND br.target_id = ?)</code> (<code>compileReferencedByExists</code>) — i.e. "the candidate references X (optionally via field F)". <strong>This is both ref-equality and refList-contains</strong>, already production-used (<code>typeExtraction.ts: findCandidatesByPropertyShape</code>). Ref codecs are deliberately not <code>where</code>-comparable; the compiler's own error message routes to <code>referencedBy</code>. Caveat: <code>block_references</code> is a projection maintained for schemas registered as ref/refList at write time — values written while a defining plugin was disabled aren't in it.</li>
+  <li><code>match</code> (AND) / <code>exclude</code> (NOR) predicate lists with <code>self</code> / <code>ancestor</code> scope; the ancestor walk is a recursive CTE that is <em>both</em> depth-bounded and gated: <code>assertAncestorWalkBounded</code> <strong>rejects the query unless a candidate-bounding filter exists</strong> (types / referencedBy / selective self-where). A bare "everything under X" is not compilable — the grammar must account for this (§4.3).</li>
+  <li>Reactivity: per-dimension deps (type channel, per-property channel, reference channels) for membership, plus per-row deps from hydration — one subscribed handle re-fires on any change to any matched row, <em>including</em> properties and content not mentioned in the query. Honesty note: it also <strong>over-fires</strong> — property channels are keyed by (workspace, property <em>name</em>), so any block writing that property re-resolves the view, and any member-row edit re-runs the query + full rehydrate. Direction is right (no under-fire; a table's cells stay live through one subscription); cost is budgeted in §4.7.</li>
+  <li>Surfaced as <code>repo.queryBlocks / subscribeBlocks</code> (+ active-workspace shorthands); hydrated rows include <code>content</code>.</li>
+  <li><strong>Free-text is SQL-able too</strong>: <code>blocks_fts</code> is a trigger-maintained <em>trigram</em> FTS5 index over live <code>blocks.content</code> (<code>clientSchema.ts</code>) — true case-insensitive substring semantics on an index. A content term compiles as an FTS join intersected with the typed candidates (exhaustive — <code>core.searchByContent</code>'s top-N limit is that query's choice, not the index's), and the narrow <code>KERNEL_CONTENT_CHANNEL</code> dep (<code>searchByContent</code>'s own pattern) provides exactly the invalidation an SQL-pushed content term needs: it fires when a non-member starts matching via a content edit, which per-row deps alone would miss. Residue: sub-trigram-length terms (&lt; 3 chars, <code>isTrigramSearchable</code>) fall back to the JS tail.</li>
+</ul>
+
+<h3 id="engine-lacks">3.2 What it lacks — and what this plugin does about each</h3>
+
+<div class="tablewrap">
+<table>
+  <tr><th>Gap</th><th>v1 approach</th><th>Candidate engine extension (optional, later)</th></tr>
+  <tr><td>ORDER BY property</td><td>JS sort over the filtered set</td><td><code>order: {property, dir}</code> pushdown</td></tr>
+  <tr><td>LIMIT</td><td>JS slice after sort</td><td><code>limit</code> arg</td></tr>
+  <tr><td>OR across predicates</td><td>JS tail (compile the AND-able intersection, evaluate the disjunction client-side)</td><td>match groups (<code>anyOf</code>)</td></tr>
+  <tr><td>contains on plain string lists (<code>list</code> codecs carry no <code>where</code>)</td><td>JS tail</td><td><code>json_each</code> membership clause for list codecs</td></tr>
+  <tr><td>created / updated terms</td><td>JS tail (they're columns, not properties)</td><td>column pseudo-fields in <code>where</code></td></tr>
+</table>
+</div>
+
+<p>The JS tail is not a regression: it is exactly how a query view would evaluate <em>everything</em> without the engine; here it runs over a pre-filtered set. Each candidate extension is independent and none blocks the plugin.</p>
+
+<h2 id="design">4. Design</h2>
+
+<h3 id="substrate">4.1 One substrate, two row sources</h3>
+
+<p>A <code>table</code> block renders a query's results as rows. "View any node's children as a table" — the pure outliner↔table flip — is the same substrate with a one-term query: <code>childof=self</code>. The compiler routes children-terms to <code>childrenOf</code> (the engine has no direct-children predicate) and everything else to <code>subscribeBlocks</code>; the view definition, the embed mechanism, and the table component see one shape either way. Rows are always live references to real blocks — an editing view, not a report.</p>
+
+<figure>
+<div class="frame">
+<div class="cols">
+<div>
+<h4>Outline</h4>
+<div class="outline">● Plan Q1 launch  <span class="tag">#project</span>
+  <span class="dim">[[status]] → in progress</span>
+  <span class="dim">[[owner]]  → ((mary))</span>
+  ● investigate vendor X <span class="tag">#task</span>
+    <span class="dim">[[deadline]] → 2026-07-20</span>
+  ● draft proposal <span class="tag">#task</span></div>
+</div>
+<div>
+<h4>Same data, table on "Plan Q1 launch" (childof=self #task)</h4>
+<div class="outline">┌────────────────────────┬────────────┐
+│ <b>block</b>                  │ <b>deadline</b>   │
+├────────────────────────┼────────────┤
+│ investigate vendor X   │ 2026-07-20 │
+│ draft proposal         │ <span class="dim">— ghost —</span>  │
+│ <span class="dim">+ new row…</span>             │            │
+└────────────────────────┴────────────┘</div>
+</div>
+</div>
+</div>
+<figcaption>Fig. 1 — the outliner↔table flip. Field rows (post-#288) are data, not rows: <code>childrenOf</code> excludes them, and each row's fields are read from its cell projection, not by walking its children. Mixed children are legal: an untyped plain-text child is a row with empty property cells.</figcaption>
+</figure>
+
+<p>Embedding follows the media model: a table is a block, so pinning it elsewhere is the generic <code>((id))</code> block embed — of the <code>table</code> block (its default/active view) or of one <code>table:view</code> child block (that view, pinned). No bespoke embed type (§4.4).</p>
+
+<h3 id="columns">4.2 Column model</h3>
+
+<ul>
+  <li>A column = a property schema, identified by its definition block id (§2; resolved through the unified registry — handles carry <code>seedKey</code>, ids are per-workspace) — never by display name. The leftmost column is the block itself (title/content; navigates on click).</li>
+  <li>Default column set: for a type-backed query (<code>#book</code>), the type's declared properties — the same set the outline will render as ghost slots post-#288; union-of-present-fields for untyped queries and mixed children.</li>
+  <li>Every column header links to the schema's definition block — post-unification, kernel/plugin schemas have seeded definition blocks too (read-only metadata mirrors in v1), so there is no popover carve-out. "Where is this field used" backlinks accrue on the definition block post-#288, for child-backed schemas.</li>
+  <li><strong>Add column</strong> = pick an existing schema (typeahead over the registry + schema blocks) or create one (reuse <code>AddPropertyForm</code> / the ValuePreset picker). Adding a column does <em>not</em> touch the type; when the query is type-backed, offer — never auto-apply — "add to <code>#type</code>'s template", Tana's exact split.</li>
+  <li>Cell display/editing resolves by codec shape through the existing property-panel machinery (<code>resolvePropertyDisplay</code>, ValuePreset editors) — a table cell editing property P on row B is semantically the property panel's row for (B, P). Ref cells render as chips that navigate.</li>
+</ul>
+
+<h3 id="query">4.3 The query language — text-first, agent-authorable</h3>
+
+<p>Requirements: a readable one-liner; writable by coding agents and by the UI (the UI writes text — text is canonical); compiles onto <code>TypedBlockQuery</code>; degrades to the JS tail for the residue, honestly marked.</p>
+
+<p>The grammar has <strong>three term shapes plus grouping</strong> — small enough that an outline-style query builder can round-trip it later:</p>
+
+<div class="tablewrap">
+<table>
+  <tr><th>Term</th><th>Meaning</th><th>Evaluates</th></tr>
+  <tr><td><code>#task</code> &nbsp; <code>#book|#article</code></td><td>type; <code>|</code> = contains-any (the engine's native type-OR)</td><td class="sql">SQL</td></tr>
+  <tr><td><code>status=open</code> &nbsp; <code>priority&gt;=3</code> &nbsp; <code>deadline&lt;=today+30d</code></td><td>property predicate: <code>= != &lt; &lt;= &gt; &gt;=</code>, date arithmetic on date codecs. <code>=</code> is <strong>codec-aware</strong>: equality on scalar codecs; on <code>refList</code>/<code>list</code> it means contains — evaluation site differs, next two rows.</td><td class="sql">SQL</td></tr>
+  <tr><td><code>assignee=[[Mary]]</code> &nbsp; <code>track=[[Home]]</code></td><td>ref equality / refList contains — compiled via <code>referencedBy {id, sourceField}</code>, <em>not</em> a <code>where</code> clause (ref codecs carry no <code>where</code> capability by design)</td><td class="sql">SQL</td></tr>
+  <tr><td><code>tags="daily"</code></td><td>contains on a plain string <code>list</code> — <code>list</code> codecs are not <code>where</code>-queryable (<code>codecs.ts</code>; <code>compileWhereClause</code> rejects them), and there is no reference projection to lean on</td><td class="js">JS tail</td></tr>
+  <tr><td><code>snooze</code> &nbsp; <code>!snooze</code></td><td>bare key = exists / not-exists (unambiguous: types are <code>#</code>-prefixed, content terms quoted)</td><td class="sql">SQL</td></tr>
+  <tr><td><code>refs=[[Some Page]]</code></td><td>references that page via any field (<code>referencedBy</code> without <code>sourceField</code>)</td><td class="sql">SQL</td></tr>
+  <tr><td><code>under=[[Projects]]</code></td><td>ancestor scope. Requires a bounding term in the same query (§3.1's gate); a bare <code>under=</code> is a parse-time error with a fix-it hint ("add a type or property term").</td><td class="sql">SQL</td></tr>
+  <tr><td><code>childof=self</code> / <code>childof=[[X]]</code></td><td>direct children (row-source routing, §4.1)</td><td class="sql">childrenOf</td></tr>
+  <tr><td><code>"vendor"</code></td><td>content contains — an FTS join against <code>blocks_fts</code> (trigram = real substring semantics), invalidated via the content channel (§3.1). A block's own content is its title line in KM, so there is no separate title term. Sub-trigram-length terms (&lt; 3 chars) fall back to the JS tail.</td><td class="sql">SQL</td></tr>
+  <tr><td><code>created&gt;2026-01-01</code> &nbsp; <code>updated&lt;today-90d</code></td><td>timestamp pseudo-fields (columns)</td><td class="js">JS tail</td></tr>
+  <tr><td><code>(status=open | deadline&lt;=today)</code></td><td>or-group across predicates; <code>!</code> prefix negates any term or group</td><td class="js">JS tail</td></tr>
+</table>
+</div>
+
+<p>Terms AND by juxtaposition — matching the engine's shape (<code>match</code>=AND, <code>exclude</code>=NOR, types=OR) — so the compiler's job is a clean split: every SQL-marked term joins the <code>TypedBlockQuery</code>; or-groups, pseudo-fields, and any term the engine rejects join the JS tail, and the UI marks tail terms ("evaluated client-side"). The or-group syntax exists precisely so boolean trees have a <em>surface</em>, not just an escape hatch — field evidence (§6) shows real corpora use them.</p>
+
+<aside class="callout">
+  <p><strong>Name resolution & renames — the one rule.</strong> The text is the <em>sole</em> stored artifact. Names resolve against the schema registry at parse time (which is cheap and reactive). There is no shadow copy of resolved ids — a second storage location would need a sync invariant and a which-wins rule, and hand edits (CLI, agents) would bypass it. Instead:</p>
+  <ul>
+    <li>A <code>name^fieldId</code> exact form is part of the grammar for stability-critical terms (Tana Paste's <code>^nodeID::</code> precedent). The UI's query builder emits it when two registered schemas share a display name.</li>
+    <li><strong>Renaming a schema rewrites query texts</strong>: the rename action (today <code>propertyPanel/actions.ts: renameProperty</code>; post-#288, slice B2's rename machinery) gains a pass over <code>table</code> blocks rewriting the renamed term. Same class of work as #288's rename-reproject, and it composes with it.</li>
+    <li>An unresolvable name is a <strong>visible term error</strong> on the table (that term shows as errored; the rest of the query still runs) — never a silent empty result and never a silent fallback to a different schema.</li>
+  </ul>
+</aside>
+
+<h3 id="storage">4.4 View definition storage</h3>
+
+<ul>
+  <li><strong>Content = the query, in a <code>```table</code> fence</strong> — an unambiguous boundary (the plain-text alternative leaves "is line 2 more query or prose?" undefined), edit-mode-friendly (edit = raw text, parse errors render as an error placeholder, never a crash), and greppable/authorable by agents.</li>
+  <li><strong>Named views = <code>table:view</code> child blocks</strong> of the table block, each holding its view config in props (columns, sort, group, view type, column widths; the block's content is the view's name). Views thereby have block identity — addressable by <code>((id))</code> (which is how per-view embedding works, no bespoke embed type), referenceable, commentable — and the stable-id-not-name lesson comes free. The table block's own props hold only the default-view ref. View children are typed and <strong>excluded from row sources</strong>: a <code>childof=</code> row set skips <code>table:view</code> blocks, the same exclusion class as #288's field rows — otherwise a node viewed as a table would show its own view-config blocks as rows.</li>
+  <li><strong>Tweak layer = <code>UiState</code>-scoped props</strong>: active view on the table block; unsaved sort/filter/column tweaks on the view block they tweak. Casual interactions (header-click sort) write <em>this</em> layer; an explicit <strong>"save view"</strong> promotes tweaks into the view block's durable props. Honesty required by the code: <code>ChangeScope.UiState</code> <em>uploads and syncs</em> — it is a second synced layer distinguished by undo-exclusion and convention, not a per-user store. In a single-user workspace that behaves exactly like Tana's personal layer; true per-user tweaks need a per-user ui-state home and are future work, not claimed now.</li>
+  <li>Children-as-rows mode works identically: "view as table" gives the viewed block its own <code>table:view</code> child (excluded from its row set, per above). The config is block-anchored: every pane showing that block sees the same table (per-pane divergence, if ever wanted, belongs to the tweak layer keyed by panel — out of scope).</li>
+</ul>
+
+<h3 id="editing">4.5 Editing model</h3>
+
+<ul>
+  <li><strong>Write path</strong>: cells write <code>setProperty(rowId, schema, value)</code>, one undo group per gesture. Never raw cell JSON, never field-row children — the dual-write keeps both worlds converged.</li>
+  <li><strong>Commit cadence: Enter/blur, not keystrokes.</strong> A per-keystroke <code>setProperty</code> would be a per-keystroke transaction <em>and</em> a per-keystroke re-resolution of the view (§4.7). The editor holds local state until commit.</li>
+  <li><strong>Sort/group hold while editing.</strong> Editing the sorted column would otherwise move the row under the open editor (the subscription re-fires on your own write; remounting an active editor mid-typing is a known bug class). While any cell editor is open, membership/sort changes are applied to the model but the open row's position is pinned; the view settles on commit.</li>
+  <li><strong>New row lifecycle</strong>: the bottom placeholder creates the block, applies back-fill, and stays <strong>pinned</strong> (out of sort order, exempt from membership filtering) until the user commits the row — otherwise a row that doesn't yet satisfy the query vanishes mid-typing, and a sorted view teleports it away as soon as it matches. Back-fill taxonomy, explicit: type terms → add the type; <code>=</code> predicates → set the value; <code>childof=</code>/<code>under=</code> → choose the parent (direct child for <code>childof</code>; for <code>under</code>, create under that ancestor); <code>refs=[[X]]</code> → not back-filled; comparisons, negations, or-groups, content terms → not back-filled. If non-back-fillable positive terms remain unsatisfied at commit, the row keeps its pin with a "doesn't match this view's query" marker rather than disappearing.</li>
+  <li><strong>Row expansion</strong>: an expanded row mounts the real nested block renderer (the row's sub-outline, editable) — the thing Tana tables can't do. Column-cell editing and expansion are independent.</li>
+  <li>Row-level actions reuse block actions (open in panel, etc.) rather than inventing table-specific ones.</li>
+</ul>
+
+<h3 id="grid">4.6 Grid implementation</h3>
+
+<p>Survey of React table/spreadsheet libraries (2026-07-12; sizes from bundlephobia, licenses/peers from the repos): <strong>TanStack Table v8 — headless — is the fit.</strong> MIT, ~15 KB gz, React-19-native, actively maintained; sorting, grouping, row expansion, column sizing/order/pinning all exist as headless state and the DOM is entirely ours. That last property is the decisive one three times over: cells are ValuePreset editors and ref chips (real React components with app context), expanded rows mount the nested block renderer, and keyboard handling must compose with KM's shortcut-surface dispatch and class-based logical focus rather than fight them with a packaged grid's global handlers. Runner-up: adazzle's <code>react-data-grid</code> (15 KB gz, zero deps, MIT, React ^19.2, excellent built-in keyboard nav) if build-it-yourself proves too costly. Eliminated: AG Grid Community & MUI X (row grouping / master-detail paywalled), Glide Data Grid (canvas: React 18 peer cap, custom cells are hand-drawn, grouping half-shipped), Handsontable (non-commercial license), react-datasheet-grid (no sort/group/expand).</p>
+
+<aside class="callout warn">
+  <p><strong>Cap + "show more" first; virtualization deferred — deliberately.</strong> KM's focus restoration and scroll-to-focused read the DOM; with windowed rows the focused block's row may not be mounted at all. Virtualizing in v1 would re-open that class of bug while keyboard nav doesn't even exist yet. v1 renders a capped page (grouping-aware) with "show more"; row virtualization (TanStack Virtual, ~7 KB) lands only together with the keyboard/focus work, designed as one unit (scroll-to-index before focus application).</p>
+  <p><strong>Focus model</strong>: KM logical focus stays on the <code>table</code> block itself (the viewport); cell focus is table-internal, in-memory state. Table rows are not KM-focusable blocks in v1 — the alternative (every row a focusable block location) collides with panel-level focus arbitration and is exactly the seam virtualization breaks; revisit with evidence.</p>
+</aside>
+
+<p>Other rendering rules, inherited from hard-won list-view experience downstream: never subscribe to a second block per row (ref-chip labels come from a shared lookup built once per view, cover images are IntersectionObserver-gated); keep per-row work O(1). Mobile: v1 tables are read-only on narrow viewports (horizontal-scroll container; cell editing is desktop-first) — a dense editable grid is the worst iOS surface to debug and shouldn't gate the rest.</p>
+
+<h3 id="perf">4.7 Reactivity & cost budget</h3>
+
+<p>One <code>subscribeBlocks</code> handle per table. Per-row hydration deps mean out-of-band edits (another pane, another device) reach cells with no per-row subscriptions — verified plumbing, and the reason cells can be "live" cheaply. The costs to budget, not hide:</p>
+
+<ul>
+  <li><strong>Any write to any matched row re-runs the query</strong> (SQL + full rehydrate + JS tail). At thousands of matched rows this is the dominant cost — mitigations, in order: the render cap bounds React work (the tail sort still runs over the full set); commit-on-Enter bounds self-inflicted re-runs; LIMIT/ORDER pushdown (§3.2) if profiling says the tail hurts.</li>
+  <li><strong>Property channels over-fire</strong> (name-keyed per workspace) — a busy property on unrelated blocks re-resolves the view. Acceptable at current scales; the fix, if ever needed, is engine-side channel narrowing, not view-side caching.</li>
+</ul>
+
+<h2 id="phasing">5. Phasing</h2>
+
+<ol>
+  <li><strong>Read-only substrate.</strong> Fenced query text → parser → <code>TypedBlockQuery</code> compiler + JS-tail evaluator; one subscription; TanStack table with cap+show-more; named views as <code>table:view</code> children + tweak layer; embedding via the generic block-embed affordance. (A tested JS evaluator for filter trees + sort/group/limit exists downstream — §6 — and ports directly.)</li>
+  <li><strong>Editing.</strong> ValuePreset cell editors + <code>setProperty</code>; commit/hold/pin semantics (§4.5); add-column flow with the "add to type template" suggestion; new-row back-fill; keyboard nav (cell-focus store + shortcut context).</li>
+  <li><strong>Children-as-rows.</strong> <code>childof=self</code> routing, "view as table" affordance, row expansion mounting the nested renderer.</li>
+  <li><strong>Depth.</strong> Grouping UI (kanban drag in a cards variant writes the grouped property), query-builder UI emitting the text grammar, engine pushdowns as warranted, virtualization + focus model as one unit, per-type default views only with evidence.</li>
+</ol>
+
+<h2 id="evidence">6. Field evidence: the downstream corpus</h2>
+
+<p>A downstream deployment (spolakh's workspace) has run a predecessor for a month: an Obsidian-Bases port ("bases v1") rendering read-only tables from <code>.base</code> YAML over a workspace-wide <code>byType('page')</code> scan with JS filtering. Its corpus is the best available evidence for what real queries need:</p>
+
+<ul>
+  <li><strong>116 live table definitions</strong> (124 at import). <strong>18 of 116 use <code>or:</code> groups across predicates</strong> — or-groups are not a theoretical need; a grammar without an OR surface cannot express ~16% of a real corpus. (Hence §4.3's group syntax, and hence "JS tail" rather than "unsupported".)</li>
+  <li>Constructs in live use that shaped the grammar beyond types + properties: title-contains (KM's content term, §4.3), mtime/ctime comparisons (the timestamp pseudo-fields), string-list contains, and a path-prefix folder test (import-provenance-specific; maps to <code>under=</code> only where vault folders became ancestry — a per-corpus migration judgment, not a grammar rule).</li>
+  <li><strong>Most of that corpus filters on unregistered (import-provenance) props</strong>, which <code>compileWhereClause</code> rejects by design — so migrated-corpus terms evaluate in the JS tail unless schemas are minted for them. The SQL-pushdown win applies fully to <em>typed</em> queries (<code>#task status=open</code>), which are the design center here; the honest statement for legacy corpora is "same evaluation as before, behind a real grammar".</li>
+  <li>Operational lessons already folded in above: render caps beat naive full renders (its 100-row cap); one shared query, never per-row subscriptions; edit mode = raw text with error placeholders is a fine authoring UX.</li>
+</ul>
+
+<h2 id="open">7. Open questions</h2>
+
+<ul>
+  <li><strong>OR pushdown</strong>: is the JS tail enough long-term, or should <code>match</code> gain <code>anyOf</code> groups? Proposal: ship with the tail, measure; the grammar doesn't change either way.</li>
+  <li><strong>Per-user tweak layer</strong>: worth a real per-user ui-state home for multi-user workspaces, or does the synced tweak layer suffice until multi-user view usage is real?</li>
+  <li><strong>Ghost-slot alignment</strong>: default columns for <code>#type</code> should equal the outline's post-#288 ghost-slot set — align the two default computations when that registry shape lands (slice B) rather than guessing now.</li>
+  <li><strong>Timestamp pushdown</strong>: <code>created</code>/<code>updated</code> terms are JS-tail v1; a <code>where</code>-on-columns engine extension would make several common queries fully SQL. Worth it only with profiling evidence.</li>
+</ul>
+
+</main>
+</body>
+</html>
