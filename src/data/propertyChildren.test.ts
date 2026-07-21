@@ -223,6 +223,69 @@ describe('flipped workspace (properties_migration = children)', () => {
   })
 })
 
+describe('tx.unsetProperty', () => {
+  it('cell workspace: removes just the key, no children involved', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await childrenRows('p')).toEqual([])
+  })
+
+  it('flipped workspace: removes the cell key AND soft-deletes the field-row subtree, one undo step', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await liveFieldRows('p')).toHaveLength(1)
+
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    // Cell key gone; the MATERIALIZE removal branch soft-deleted the field row.
+    expect(await cellValue('p')).toBeUndefined()
+    expect(await liveFieldRows('p')).toEqual([])
+
+    // One undo restores both the cell key and the field-row subtree.
+    await repo.undo(ChangeScope.BlockDefault)
+    expect(await cellValue('p')).toBe('done')
+    expect(await liveFieldRows('p')).toHaveLength(1)
+  })
+
+  it('is a targeted delete — an unrelated sibling key survives (no whole-bag clobber)', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    // Seed two keys via one raw bag write, then unset only `status`.
+    await repo.tx(tx => tx.update('p', {properties: {[statusSchema.name]: 'done', other: 'keep'}}),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    const bag = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', ['p'],
+    )
+    expect(JSON.parse(bag.properties_json)).toEqual({other: 'keep'})
+  })
+
+  it('is a no-op when the key is already absent', async () => {
+    await seedWorkspace('cell')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    await sharedDb.db.execute('DELETE FROM row_events')
+    await repo.tx(tx => tx.unsetProperty('p', statusSchema),
+      {scope: ChangeScope.BlockDefault})
+    // No write → the no-WHEN update row_event trigger never fires for `p`.
+    const updates = await sharedDb.db.getAll<{id: number}>(
+      `SELECT id FROM row_events WHERE block_id = 'p' AND kind = 'update'`,
+    )
+    expect(updates).toEqual([])
+  })
+})
+
 describe('flipped workspace — ref-typed property values are editable `((id))` (#16)', () => {
   const RELATED_FIELD_ID = 'field-related-children'
   const relatedSchema = defineProperty<string>('related', {

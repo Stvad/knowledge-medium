@@ -777,6 +777,44 @@ export class TxImpl implements Tx {
     this.record(id, before, after)
   }
 
+  async unsetProperty<T>(
+    id: string,
+    schema: PropertySchema<T>,
+    opts?: TxWriteOpts,
+  ): Promise<void> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+    // Same scope-consistency guard as setProperty (see there): a stale schema
+    // must not admit a delete under a scope whose read-only/undo policy differs
+    // from the definition's current one.
+    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
+      throw new PropertySchemaScopeMismatchError(
+        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
+      )
+    }
+    if (before.properties[resolvedSchema.name] === undefined) return // absent → no-op
+    const properties = {...before.properties}
+    delete properties[resolvedSchema.name]
+    const after: BlockData = {
+      ...before,
+      properties,
+      ...this.metadataPatch(id, before, opts?.skipMetadata),
+    }
+    await this.ctx.txDb.execute(
+      `UPDATE blocks SET properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      [JSON.stringify(properties), after.updatedAt, after.userUpdatedAt, after.updatedBy, id],
+    )
+    this.pinWorkspace(before.workspaceId)
+    this.record(id, before, after)
+    // No inline child delete: in a child-backed workspace the same-tx
+    // MATERIALIZE processor's key-removal branch soft-deletes the field-row
+    // subtree for the now-removed key (which resolves to a schema), the mirror
+    // of setProperty's inline dual-write being idempotent with MATERIALIZE's
+    // create branch. Reusing that one canonical removal path (subtree relocate
+    // of user sub-children included) beats duplicating it here.
+  }
+
   async getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)

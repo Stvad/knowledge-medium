@@ -186,6 +186,18 @@ export interface Tx {
     opts?: TxWriteOpts,
   ): Promise<void>
 
+  /** Remove ONE property key — the codec-aware counterpart to `setProperty`
+   *  (there is no "set to undefined"). Resolves schema identity and checks
+   *  scope exactly like `setProperty`, then drops just that key from the bag:
+   *  a TARGETED delete, never a whole-bag replace, so it cannot clobber a
+   *  sibling key a peer synced in. In a child-backed workspace the same-tx
+   *  MATERIALIZE processor reconciles the field-row subtree delete from the
+   *  removed key (soft-delete, recoverable via history); un-flipped it is a
+   *  cell-only removal. No-op when the key is already absent. Throws
+   *  `PropertySchemaIdentityError` if the schema has no resolvable definition,
+   *  same as `setProperty`. */
+  unsetProperty<T>(id: string, schema: PropertySchema<T>, opts?: TxWriteOpts): Promise<void>
+
   /** `getProperty`: reads SQL/cache and applies `codec.decode`. Returns
    *  the schema's `defaultValue` if the property is absent. */
   getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T>
