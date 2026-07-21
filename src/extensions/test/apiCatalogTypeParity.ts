@@ -13,7 +13,7 @@
 // gone), and the barrel lived in `src/`. This fixture restores exactly that
 // guarantee for the type surface — one `export type { … } from '<importPath>'`
 // per catalog module that declares types. If a listed type is renamed or
-// removed, `tsc -b` (run by `yarn run check`) fails here. Re-exporting a type
+// removed, `tsc -b` (run by `pnpm run check`) fails here. Re-exporting a type
 // by name never instantiates it, so this is robust to generic types and is
 // fully erased at runtime (zero cost, loads nothing).
 //
@@ -130,6 +130,7 @@ export type {
   PropertySchemaEntry,
   ResolvedPropertySchema,
   TypeContribution,
+  TypeSeedDeclaration,
 } from '@/data/api/index.js'
 
 export type { FocusedBlockLocation } from '@/data/properties.js'

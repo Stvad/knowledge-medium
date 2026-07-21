@@ -66,7 +66,7 @@ describe('extensionApiCatalog — importPath maps to an exact emitted file', () 
 })
 
 // `apiCatalogTypeParity.ts` re-exports every catalog type from its module, so
-// `tsc -b` (in `yarn run check`) fails if a listed type is renamed/removed —
+// `tsc -b` (in `pnpm run check`) fails if a listed type is renamed/removed —
 // restoring the guarantee the barrel's `export type { … }` gave. This asserts
 // the complementary direction: every `types[]` name in the catalog is actually
 // covered there, under the matching module, so the tsc guard can't miss one.

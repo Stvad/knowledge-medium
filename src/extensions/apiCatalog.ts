@@ -216,9 +216,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/api/index.js',
-    description: 'Data-layer public API — property/type authoring (defineBlockType, defineProperty, seedProperty, codecs, ChangeScope). Directory module: import the explicit /index.js.',
+    description: 'Data-layer public API — property/type authoring (seedType, defineProperty, seedProperty, codecs, ChangeScope). Directory module: import the explicit /index.js.',
     exports: [
-      'defineBlockType', 'defineProperty', 'definePropertyEditorOverride', 'seedProperty', 'seedType',
+      'defineProperty', 'definePropertyEditorOverride', 'seedProperty', 'seedType',
       'codecs', 'ChangeScope', 'INFRASTRUCTURE_TYPE_DISPLAY',
     ],
     types: [
@@ -230,8 +230,8 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/facets.js',
-    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds and types.',
-    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'typeSeedsFacet', 'typesFacet'],
+    description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds.',
+    exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'typeSeedsFacet'],
     types: [],
   },
   {
