@@ -1,15 +1,17 @@
 /**
  * no-raw-synced-table-writes — static half of the "raw write to a synced
  * table silently never uploads" bug class (GitHub issue #404 item 1). See
- * `src/data/syncedTableWriteGuard.ts` for the full writeup, the runtime guard,
- * and — importantly — the reasoning behind the recognizer below, which this
- * file MIRRORS rather than imports (ESLint loads rule files untranspiled, and
- * the app tsconfigs don't enable `allowJs`, so neither side can import the
- * other).
+ * `src/data/syncedTableWriteGuard.ts` for the full writeup and the runtime
+ * guard.
  *
- * `src/test/syncedTableSqlParserParity.test.ts` runs both copies over one
- * corpus and fails if they ever disagree — that test is what keeps this
- * duplication honest, so update both sides together.
+ * The recognizer itself — `syncedWriteTarget` and its design rationale (why
+ * it's position-independent, the single-quote second pass, the
+ * destructive-DDL narrowing) — lives in `src/data/syncedTableSqlRecognizer.js`
+ * and is imported directly, not mirrored: it's plain JS with no TypeScript
+ * syntax, so ESLint (which loads rule files untranspiled) can `import` it
+ * with no build step, the same way this rule file itself loads. The runtime
+ * guard consumes the identical file via a co-located `.d.ts`. One parser, two
+ * callers — see that module's doc for the algorithm.
  *
  * The rule flags any string / template literal in `src/` whose SQL writes to
  * `blocks`, `workspaces`, or `workspace_members`, so a new raw-write
@@ -23,191 +25,7 @@
  * overrides in eslint.config.js, each with a comment explaining why.
  */
 
-/** Mirrors `SYNCED_TABLES` in syncedTableWriteGuard.ts. */
-const SYNCED_TABLES = new Set(['blocks', 'workspaces', 'workspace_members'])
-
-/**
- * Replace comments and single-quoted string literals with equivalent-length
- * runs of spaces, so the scan below sees SQL structure only.
- *
- * Comments become whitespace because that is what they are to SQLite — which
- * is what makes `UPDATE /* note *\/ blocks SET …` a real write that a
- * `\s+`-joined pattern missed. String literals are blanked so prose can't fake
- * a match (`INSERT INTO log VALUES ('update blocks now')`); a write can never
- * hide INSIDE a literal, so blanking them loses nothing.
- *
- * Double-quoted / backtick / bracket identifiers are KEPT — `UPDATE "blocks"`
- * is a real write and the quoted name is the target.
- */
-const blankCommentsAndStrings = (sql, keepStrings = false) => {
-  let out = ''
-  for (let i = 0; i < sql.length; i++) {
-    const ch = sql[i]
-    if (ch === '-' && sql[i + 1] === '-') {
-      const nl = sql.indexOf('\n', i)
-      const end = nl === -1 ? sql.length : nl
-      out += ' '.repeat(end - i)
-      i = end - 1
-      continue
-    }
-    if (ch === '/' && sql[i + 1] === '*') {
-      const close = sql.indexOf('*/', i)
-      const end = close === -1 ? sql.length : close + 2
-      out += ' '.repeat(end - i)
-      i = end - 1
-      continue
-    }
-    if (ch === "'" && !keepStrings) {
-      let j = i + 1
-      while (j < sql.length) {
-        if (sql[j] === "'") {
-          if (sql[j + 1] === "'") { j += 2; continue }
-          break
-        }
-        j++
-      }
-      const end = Math.min(j + 1, sql.length)
-      out += ' '.repeat(end - i)
-      i = end - 1
-      continue
-    }
-    out += ch
-  }
-  return out
-}
-
-/** Strip one layer of identifier quoting: "x", `x`, [x], 'x'. */
-const unquote = (ident) =>
-  ident.replace(/^["'`[]/, '').replace(/["'`\]]$/, '')
-
-/**
- * The bare table name of a possibly schema-qualified, possibly quoted table
- * reference: `main.blocks`, `"main"."blocks"`, `[main].[blocks]` → `blocks`.
- * SQLite accepts a schema prefix on a DML target, and `UPDATE main.blocks`
- * writes the very same synced table. A dot INSIDE a quoted identifier doesn't
- * split, so a (pathological) table literally named `"a.b"` resolves to `a.b`.
- *
- * Deliberately over-approximates: a write to `temp.blocks` — a different table
- * in the temp schema — also reads as `blocks`. No such table exists here.
- */
-const unqualifiedTableName = (ref) => {
-  const parts = []
-  let current = ''
-  let quote = null
-  for (const ch of ref) {
-    if (quote !== null) {
-      current += ch
-      if (ch === quote || (quote === '[' && ch === ']')) quote = null
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`' || ch === '[') {
-      quote = ch
-      current += ch
-      continue
-    }
-    if (ch === '.') {
-      parts.push(current)
-      current = ''
-      continue
-    }
-    current += ch
-  }
-  parts.push(current)
-  // `main . blocks` — trim the whitespace SQLite allows around the dot.
-  return unquote(parts[parts.length - 1].trim()).toLowerCase()
-}
-
-/** One name part: a quoted identifier (which may contain anything, including
- *  dots and spaces) or a bare run of non-delimiter characters. */
-const NAME_PART = String.raw`(?:"[^"]*"|` + '`[^`]*`' + String.raw`|\[[^\]]*\]|[^\s(;.,]+)`
-
-/** As {@link NAME_PART}, but also accepting a SINGLE-quoted name. SQLite
- *  really does take `UPDATE 'blocks' SET …` as a write to the table (verified
- *  against the engine, not inferred) — a misfeature, but a live one. This
- *  spelling is scanned separately, over text whose string literals are still
- *  intact, because the main scan blanks them: a name can hide in a literal,
- *  and prose can fake a write from inside one. */
-const NAME_PART_Q = String.raw`(?:'[^']*'|` + NAME_PART.slice(3)
-
-/** A possibly schema-qualified table reference, allowing whitespace around the
- *  dots — SQLite accepts `UPDATE main . blocks`, and a capture that stopped at
- *  the first whitespace saw only `main` and read it as an unsynced table
- *  (PR #386 review). */
-const QUALIFIED_NAME = `(${NAME_PART}(?:\\s*\\.\\s*${NAME_PART})*)`
-const QUALIFIED_NAME_Q = `(${NAME_PART_Q}(?:\\s*\\.\\s*${NAME_PART_Q})*)`
-
-/** DML shapes, matched ANYWHERE in the sanitized text (see the module doc).
- *  `\b` on the leading verb keeps `reinsert into x` / a column named
- *  `last_update` from matching. */
-const DML_PATTERNS = [
-  new RegExp(String.raw`\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+` + QUALIFIED_NAME, 'gi'),
-  new RegExp(String.raw`\bupdate\s+(?:or\s+\w+\s+)?` + QUALIFIED_NAME, 'gi'),
-  new RegExp(String.raw`\bdelete\s+from\s+` + QUALIFIED_NAME, 'gi'),
-]
-
-/** The same shapes, but for a target spelled with SINGLE quotes. Run over
- *  strings-intact text, so the match is only trusted when the NAME ITSELF is
- *  quoted — that is what keeps prose out: in `VALUES ('update blocks now')`
- *  the token after `update` is bare `blocks`, so nothing matches here, while
- *  `UPDATE 'blocks'` does. */
-const QUOTED_NAME_DML_PATTERNS = [
-  new RegExp(String.raw`\b(?:insert(?:\s+or\s+\w+)?|replace)\s+into\s+` + QUALIFIED_NAME_Q, 'gi'),
-  new RegExp(String.raw`\bupdate\s+(?:or\s+\w+\s+)?` + QUALIFIED_NAME_Q, 'gi'),
-  new RegExp(String.raw`\bdelete\s+from\s+` + QUALIFIED_NAME_Q, 'gi'),
-]
-
-/**
- * Every table this SQL writes to, lowercased and unqualified, in the order
- * found. Scans the whole text — nested, prefixed, and multi-statement writes
- * all surface, because position is not part of the question (module doc).
- */
-/** Destructive DDL — mirror of `DDL_PATTERNS` in syncedTableWriteGuard.ts.
- *  DROP TABLE and the structure-REMOVING ALTER forms only: the bootstrap runs
- *  `ALTER TABLE blocks/workspaces ADD COLUMN` and hangs its triggers off
- *  `blocks` through the guarded handle, so matching DDL wholesale would brick
- *  startup. Pinned against the runtime copy by the parser-parity test. */
-const DDL_PATTERNS = [
-  new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?` + QUALIFIED_NAME, 'gi'),
-  new RegExp(String.raw`\balter\s+table\s+` + QUALIFIED_NAME + String.raw`\s+(?:rename|drop)\b`, 'gi'),
-]
-
-const QUOTED_NAME_DDL_PATTERNS = [
-  new RegExp(String.raw`\bdrop\s+table\s+(?:if\s+exists\s+)?` + QUALIFIED_NAME_Q, 'gi'),
-  new RegExp(String.raw`\balter\s+table\s+` + QUALIFIED_NAME_Q + String.raw`\s+(?:rename|drop)\b`, 'gi'),
-]
-
-const writeTargets = (sql) => {
-  const targets = []
-  const collect = (text, patterns, quotedOnly) => {
-    for (const pattern of patterns) {
-      pattern.lastIndex = 0
-      for (const match of text.matchAll(pattern)) {
-        // The strings-intact pass only trusts a name that is itself quoted;
-        // an unquoted match there could be text inside a literal.
-        if (quotedOnly && !match[1].includes("'")) continue
-        targets.push(unqualifiedTableName(match[1]))
-      }
-    }
-  }
-  // Hoisted per the runtime copy: one blanking walk per variant, not per
-  // pattern set.
-  const blanked = blankCommentsAndStrings(sql)
-  const stringsIntact = blankCommentsAndStrings(sql, true)
-  collect(blanked, DML_PATTERNS, false)
-  collect(blanked, DDL_PATTERNS, false)
-  collect(stringsIntact, QUOTED_NAME_DML_PATTERNS, true)
-  collect(stringsIntact, QUOTED_NAME_DDL_PATTERNS, true)
-  return targets
-}
-
-/**
- * The first SYNCED table this SQL writes to, or null. This is what a guard
- * should ask — it owns the `SYNCED_TABLES` membership test so the three call
- * sites (runtime guard, agent bridge, lint rule) can't drift on what counts
- * as synced.
- */
-const syncedWriteTarget = (sql) =>
-  writeTargets(sql).find(target => SYNCED_TABLES.has(target)) ?? null
+import { syncedWriteTarget } from '../src/data/syncedTableSqlRecognizer.js'
 
 /** The static text a literal AST node contributes, for target matching only.
  *  A template literal's interpolated expressions are dropped (not
