@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 //
 // Exercises the bridge's data commands (`backlinks`, `grouped-backlinks`,
 // `data-model`, `page`, `daily-note`, `search`) end-to-end against a real

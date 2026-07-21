@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 
 // File-scoped IndexedDB polyfill (vitest isolates modules per file).
 import 'fake-indexeddb/auto'

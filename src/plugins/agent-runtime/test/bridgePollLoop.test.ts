@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startAgentRuntimeBridge } from '../bridge.ts'
 import type { AgentRuntimeBridgeOptions } from '../protocol.ts'

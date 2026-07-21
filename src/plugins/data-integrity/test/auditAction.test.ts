@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // The queue + openDialog the view handler drives. getDialogQueue returns this

@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createElement } from 'react'
 import { ProcessorRejection } from '@/data/api'

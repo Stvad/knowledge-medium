@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /**
  * Interaction fuzz suite: random sequences of DEFAULT ACTION dispatches
  * (the handler layer between keystrokes and mutators) against a real

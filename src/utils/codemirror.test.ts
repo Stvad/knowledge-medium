@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import { EditorSelection, EditorState, type Extension, type StateCommand, type Transaction } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { autocompletion, completionKeymap, completionStatus, startCompletion } from '@codemirror/autocomplete'

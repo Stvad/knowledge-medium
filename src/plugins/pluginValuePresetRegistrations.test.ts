@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 import {describe, expect, it} from 'vitest'
 import type {AnyCodec, AnyValuePresetCore} from '@/data/api'
 import {resolveFacetRuntimeSync} from '@/facets/facet'

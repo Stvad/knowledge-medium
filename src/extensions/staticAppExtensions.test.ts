@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 //
 // Boot-composition smoke test. The full provider+plugin tree is never mounted
 // by the unit suite (App.tsx is bound to the live PowerSync boot), so a plugin

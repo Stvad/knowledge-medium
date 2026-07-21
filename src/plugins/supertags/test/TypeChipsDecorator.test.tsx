@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+// @vitest-environment happy-dom
 /** Component contract of the chip row: which chips link to a type
  *  definition (user-defined only — kernel/plugin types have no backing
  *  block), how a chip click routes through the navigation opener, and
