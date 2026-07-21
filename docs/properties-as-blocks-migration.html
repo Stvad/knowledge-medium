@@ -475,13 +475,30 @@
   reserved per-definition <code>childBacked</code> field is no longer consumed). §2, §6, §7, §10, §11, and §12 are trimmed against it — the largest
   simplifications: both §6 hard requirements are met, the sync-off's old per-row
   classifiability machinery is superseded by the workspace-level cutover, and the
-  two-phase bootstrap's hard half dissolves into a pure computation. Types are <em>not</em> yet
-  seeded (unification slice C pending) — nothing here depends on them.
-  <strong>Last verified against code:</strong> 2026-07-19 (initial rewrite 2026-07-01
+  two-phase bootstrap's hard half dissolves into a pure computation. Types were
+  <em>not</em> yet seeded when this block was written; the types cutover has since
+  landed — see the 2026-07-21 note above.<br>
+  <strong>Rebased 2026-07-21 onto master <code>7d5bb21b</code>:</strong> the
+  unification <em>types cutover</em> landed (slices C1–C4c + dynamic type seeds) —
+  every block type, kernel included, is now a seeded definition block with a
+  materialized, read-only backing block. Nothing in this plan changes; three
+  things strengthen: the auto-claim "types precedent" (§7, AC) is now the
+  <em>universal live mechanism</em>, not an analogy; the §9 parent-guard's
+  standing example (<code>block-type:properties</code> ref values targeting
+  property-schema blocks) is materialized reality on every type block, so the
+  guard is ubiquitous, not edge-case; and a type's inline <code>properties</code>
+  now <em>auto-contribute</em> own-owned property definition seeds
+  (<code>harvestNestedPropertySeeds</code>, master <code>62096388</code>), which
+  narrows §9's orphan class — an enabled extension self-seeds, so the §6 runbook
+  rule shifts from "convert everything" toward "enable everything you intend to
+  keep". Unification B′ also landed (transitional schema paths deleted), and the
+  repo toolchain moved yarn→pnpm (command references updated).<br>
+  <strong>Last verified against code:</strong> 2026-07-21 (initial rewrite 2026-07-01
   against <code>8a6f22cd</code>; spot-verifications through 07-09; unification
   re-ground 07-15 against post-#364 master; implementation re-ground 07-17 against
   PR #386 at <code>7e878b6e</code>; UX round + divergence-note refresh 07-19 at
-  <code>12609823</code>).
+  <code>12609823</code>; master rebase + types-cutover re-check 07-21 at
+  <code>7d5bb21b</code>).
 </aside>
 
 <aside class="reading-guide">
@@ -1353,7 +1370,11 @@ lookup recognition uses) — the routing shim ships in slice B3.
   key-minting path creates the definition), and repaired by the sweep, which
   synthesizes on encountering a definition-less key from a raw writer or import. Two
   runbook consequences: synthesis runs <em>before</em> the flip, and unconverted
-  dynamic extensions convert to seeds before it too — otherwise synthesis mints a
+  dynamic extensions convert to seeds before it too — a class the types cutover
+  has since narrowed (master <code>62096388</code>: an enabled extension's
+  dynamic type seeds and inline <code>properties</code> auto-contribute
+  definition blocks, so "convert" is mostly "enable"; what's left is extensions
+  that stay disabled, and bag-writers that never declare schemas) — otherwise synthesis mints a
   user-origin definition for their keys and the later seed conversion collides with
   it in the winner machinery, stranding field rows on the loser's fieldId. (A key
   that momentarily lacks a definition anyway is mechanically inert, not wrong: no
@@ -1392,8 +1413,9 @@ workspace column), so the slices here consume them rather than build them:
     code-constant fork between client versions is not expressible, and every device
     reads the same bit after workspace sync. The definitions-exist invariant rides
     synced data for every origin since unification; a dynamic extension not yet
-    converted to seed declarations (the transitional dual-path, until its B′ deletion
-    slice) has no definition block — the runbook converts it before the flip, and a
+    converted to seed declarations (B′ has since landed on master, deleting the
+    transitional dual-path; enabled extensions now self-seed via dynamic type
+    seeds + inline-property harvest) has no definition block — the runbook converts it before the flip, and a
     straggler's keys are inert-until-swept (callout above) — the safe default either
     way. What remains ours: moving the column in
     either direction is a <em>migration</em> — run a final projection pass, then
@@ -1443,7 +1465,9 @@ name-resolution tier only existed because properties weren't blocks. Post-unific
 definitions <em>are</em> blocks, and blocks already have exactly one name mechanism —
 the alias index. Types are the standing precedent: a type block claims its label as an
 alias and <code>[[Person]]</code> resolves through the generic index with no
-"type-name tier". <code>[[name]]</code> therefore stops being the identity carrier and
+"type-name tier" — and since the master types cutover (2026-07-21 note), that
+precedent is universal: every type, kernel included, is a seeded definition
+block whose materialized backing block claims its label. <code>[[name]]</code> therefore stops being the identity carrier and
 becomes a deferred <em>affordance</em> — the auto-claim step (§11).
 </p>
 
@@ -1636,7 +1660,9 @@ supabase skill if it's kept.
     guard is load-bearing (PR-review P2): a ref-typed <em>value</em> pointing at a
     definition block gets stamped with that definition's id by the derive processor
     exactly as a field row would (<code>block-type:properties</code> values are the
-    standing example — a refList whose targets are all property-schema blocks);
+    standing example — a refList whose targets are all property-schema blocks; since
+    the master types cutover these refs are materialized on <em>every</em> type
+    block, so the case is ubiquitous, not an edge);
     without the guard, render/filter/projection would hide or reinterpret those
     values as nested fields. Recognition is <em>form-agnostic</em> (PR #386, §7): the
     column encodes "this whole block is exactly this reference" for either bracket
@@ -2396,7 +2422,7 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         (UiState-scoped churn additionally rides its provenance knob, §6).
         Before flipping it on, size it: run
         <code>select count(*) from blocks where properties_json != '{}' and deleted = 0</code>
-        (and a key histogram) against production via <code>yarn agent sql</code>, or
+        (and a key histogram) against production via <code>pnpm agent sql</code>, or
         the same against Supabase with <code>deleted = false</code> —
         <code>public.blocks.deleted</code> is a Postgres <code>boolean</code>
         (consolidated initial migration), so the SQLite integer form errors there
@@ -2698,7 +2724,7 @@ no infrastructure needed:
 
 <ol>
   <li><strong>Read-side floor (zero setup, live client):</strong>
-    <code>yarn agent sql all</code> timing the aggregate join — field rows
+    <code>pnpm agent sql all</code> timing the aggregate join — field rows
     (<code>reference_target_id</code> restricted to <em>registered schema
     fieldIds</em>; plain <code>IS NOT NULL</code> also catches ordinary
     exact-reference rows the derive processor stamps, over-counting the join and
@@ -2714,7 +2740,7 @@ no infrastructure needed:
     chunked UPDATEs of ~1k rows/tx. Wall-clock it; multiply by ~3× for the
     browser.</li>
   <li><strong>Browser-fidelity write test (live client, safe):</strong>
-    <code>yarn agent eval</code> a chunked pass writing to a scratch copy
+    <code>pnpm agent eval</code> a chunked pass writing to a scratch copy
     (<code>CREATE TABLE bench_projection AS SELECT id, properties_json FROM
     blocks</code>, then UPDATE the copy) — real OPFS write throughput without touching
     live columns.</li>
