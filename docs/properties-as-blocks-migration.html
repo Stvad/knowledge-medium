@@ -462,6 +462,17 @@
   owners (§9); search/recents filtering is pinned to the C flip, not slice D
   (§11); materializer-minted rows are born classified — both creation paths stamp
   the column at <code>create</code> (§5).<br>
+  <strong>Revised 2026-07-21 (PR-review round 28):</strong> the inline-on-delete
+  exemption widens to <em>field rows</em> — deleting a definition would otherwise
+  inline its text into every <code>((fieldId))</code> row in the same tx, before
+  B2's tombstone-resolution can matter (§9, B2); §7's "content is the name"
+  claim is corrected to as-built — user definitions are created with
+  <em>empty</em> content (the registry recovers the name), so B2 carries a
+  name→content mirror with write-through and backfill (§7, B2); and the C
+  fence's "residual window" hedge is replaced by the structural
+  workspace-before-block delivery guarantee (one stream, staged blocks
+  materialize after the checkpoint the workspace row hydrates at), recorded as
+  a sync-config invariant (C).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -1459,8 +1470,20 @@ shape</strong>: field-row content is <code>((fieldId))</code>
 (<code>referenceBlockContentForId</code>), the local <code>reference_target_id</code>
 derives <em>purely textually</em> (block-ref → id — no name lookup of any kind), and the
 human-readable name is recovered from the definition wherever it's needed: the cell key
-at projection time, the rendered label (a block-ref renders its target's label, and a
-definition block's own content <em>is</em> its name). Why the reversal stuck: the
+at projection time, the rendered label. One as-built caveat sharpens this
+(PR-review round 28): today the recovery runs through the <em>registry</em>
+(<code>property-schema:name</code> on the definition row) — a definition block's
+own <code>content</code> is its name only for <em>seeded</em> definitions
+(seeds write <code>content: seed.name</code>); the user-schema creation path
+(<code>addSchema</code> → <code>userSchemasService</code>) leaves content empty
+and stores the label solely in the name field. Registry-reading surfaces
+(projection, slice D's <code>FieldBlockRenderer</code>) are unaffected, but a
+<em>generic</em> block-ref render of <code>((fieldId))</code> — backlink
+previews, pre-D surfaces, readable markdown export — would show a blank label.
+B2 therefore carries a <strong>name→content mirror</strong> for user
+definitions: <code>addSchema</code> writes <code>content = name</code>, renames
+write the mirror through (the same B2 registry-diff funnel that re-keys the
+cell), and a one-shot backfill aligns existing user definitions. Why the reversal stuck: the
 name-resolution tier only existed because properties weren't blocks. Post-unification,
 definitions <em>are</em> blocks, and blocks already have exactly one name mechanism —
 the alias index. Types are the standing precedent: a type block claims its label as an
@@ -1792,9 +1815,16 @@ supabase skill if it's kept.
 
   <dt><strong>Deleting a referenced block keeps the value dangling — never inline
     it.</strong></dt>
-  <dd>Decided in #404 (item 4): <code>inlineDeletedBlockReferences</code> must
-    <em>skip</em> property value children. Inlining a deleted target rewrites
-    the value's <code>((deletedId))</code> into prose — which clears its derived
+  <dd>Decided in #404 (item 4), widened by PR-review round 28:
+    <code>inlineDeletedBlockReferences</code> must <em>skip recognized property
+    machinery</em> — ref-typed value children <strong>and field rows</strong>.
+    The field-row half is what makes the B2 definition-deletion rule (below,
+    §11) coherent at all: field rows parse into <code>block_references</code>
+    (the "used by" edge above), so deleting a <em>definition</em> would inline
+    the definition's text into every <code>((fieldId))</code> field row in the
+    same delete tx — destroying the exact-ref shape before tombstone-resolvable
+    recognition ever gets a say. Inlining a deleted target rewrites
+    the row's <code>((deletedId))</code> into prose — which clears its derived
     column, silently drops the key at the next projection, and is irreversible
     (the id is gone). Left dangling, the value keeps identity: soft-delete means
     the target is a tombstone, so restoring it snaps the property back — exactly
@@ -2287,11 +2317,22 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         the migrations run under the References maintenance bucket (never on
         cmd-Z); unconvertible values are reported via the user-error channel, never
         silently unset; <code>addSchema</code> rejects <code>]]</code>-lossy names.
+        B2 also carries the §7 <em>name→content mirror</em> (PR-review round 28):
+        user definitions are created with empty content today, so
+        <code>addSchema</code> starts writing <code>content = name</code>, renames
+        write the mirror through this same funnel, and a one-shot backfill aligns
+        existing user definitions — without it, a generic block-ref render of
+        <code>((fieldId))</code> shows a blank label.
         B2 also owns the third definition lifecycle event, <em>deletion</em>
         (PR-review P2, round 26): a soft-deleted definition dropping out of the
         registry would silently un-classify every <code>((fieldId))</code> row —
         machinery surfacing as ordinary orphan subtrees, cell keys stranded. The
-        rule is the same identity-preserving one as §9's dangling-value decision:
+        rule is the same identity-preserving one as §9's dangling-value decision —
+        and it has a same-tx precondition (PR-review round 28): the
+        inline-deleted-refs processor must exempt recognized machinery rows
+        (§9's dangling entry), or the delete tx itself rewrites every
+        <code>((fieldId))</code> row into inlined prose before any
+        tombstone-resolution can matter. With that exemption in place:
         <em>recognition keeps resolving tombstoned definitions</em> (classification
         is about shape, not liveness — rows stay field rows, display marks them
         as belonging to a deleted property), the delete flow surfaces the
@@ -2394,11 +2435,22 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <em>(3)</em> the drain-every-device closure extends to <em>observed the
         flip</em> — every online device confirms the new column value before
         anything uploads — and only then <em>(4)</em> the backfill's upload burst.
-        A device that syncs up later can still receive rows before its workspace
-        row: that residual window is render-only under the traversal polarity
-        (rows briefly show as ordinary content; #389's flip-arrival invalidation
-        snaps them in), and an edit made to machinery in that window is exactly
-        the sweep-reported divergence class. An earlier
+        For late-syncing devices no fence is needed, because
+        <strong>workspace-before-block delivery is structural</strong>
+        (PR-review round 28 pressed on the earlier "render-only window" hedge —
+        rightly, since an edit to a machinery row in such a window would mangle
+        its exact-ref shape; the answer is the window cannot occur): the
+        workspaces column and blocks ride <em>one</em> sync stream (the config
+        deliberately groups the related tables), so they share checkpoints — and
+        the blocks path is <em>staged</em> (<code>blocks_synced</code> → the
+        observer materializes strictly after the checkpoint applies) while the
+        <code>workspaces</code> table hydrates directly at the checkpoint. By the
+        time any backfilled row becomes app-visible, the workspace row from the
+        same-or-earlier checkpoint is already readable. This is an invariant on
+        the sync config, recorded here so it survives refactors: the workspaces
+        stream must never be split from (or deprioritized below) the blocks
+        stream, or the guarantee — and with it the safety of every late syncer —
+        silently evaporates. An earlier
         revision put a pre-flip triage step here for pre-existing whole-block
         <code>[[name]]</code> rows the flip would retroactively reinterpret
         (PR-review P2); under §7's id-content shape that hazard is <em>almost</em>
