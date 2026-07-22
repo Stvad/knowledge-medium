@@ -79,6 +79,15 @@ const collectRenames = (
     const beforeMeta = before ? parsePropertyDefinitionMetadata(before) : null
     if (!beforeMeta || beforeMeta.name === afterMeta.name) continue
     const resolution = ctx.resolvePropertySchemaField(workspaceId, after.id)
+    // A definition SHADOWED at tx start (two defs sharing a name, §6) resolves
+    // as identity-unavailable here, so we skip it — its consuming cells stay
+    // projected under the old name until the next value edit fires PROJECT (no
+    // data loss: the id-addressed field row + value children are untouched).
+    // Re-keying a shadowed def would need the tangled shadowing×projection
+    // model that #389 item 8 owns, not a bolt-on here. (The OLD deferred batch
+    // caught an *un-shadowing* rename via its schedule-time resolve; that
+    // incidental coverage is intentionally traded for the same-tx undo
+    // coherence, and folded into the #389 item-8 reconcile.)
     if (resolution.status !== 'resolved') continue
     renames.push({
       fieldId: after.id,

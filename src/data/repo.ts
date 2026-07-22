@@ -3116,8 +3116,14 @@ export class Repo {
         // uploads normally, never exposed to cmd-Z. Writes are
         // skipMetadata — machinery, not "last edited".
         scope: ChangeScope.References,
+        // This pass now handles codec-TYPE changes (renames are same-tx, see
+        // core.migratePropertyRename), so a single plan is usually a re-encode
+        // (oldName === newName) — only a COMBINED rename+codec edit still shows
+        // an arrow. Word it to match rather than print "Foo -> Foo".
         description: plans.length === 1
-          ? `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`
+          ? (plans[0].change.oldName === plans[0].schema.name
+            ? `re-encode property definition ${plans[0].schema.name}`
+            : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
           : `migrate ${plans.length} property definitions`,
       })
     }
