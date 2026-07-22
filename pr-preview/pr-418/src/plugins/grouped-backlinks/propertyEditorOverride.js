@@ -1,0 +1,2 @@
+import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{groupedBacklinksDefaultsProp as t}from"./config.js";import{GroupedBacklinksDefaultsEditor as n}from"./GroupedBacklinksConfigEditor.js";var r=e(t,{label:`Grouped backlinks defaults`,Editor:n});export{r as groupedBacklinksDefaultsUi};
+//# sourceMappingURL=propertyEditorOverride.js.map
