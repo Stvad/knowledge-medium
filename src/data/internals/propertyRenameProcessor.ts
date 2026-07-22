@@ -45,10 +45,9 @@ import {
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import {
-  isInsidePropertySubtreeWalk,
   isPropertyFieldInstance,
-  propertiesEqual,
   propertyChildContentToEncodedValue,
+  rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from '@/data/propertyChildren'
 
@@ -138,70 +137,51 @@ const consumingParentIds = async (
 }
 
 /** Re-key one parent's cell for every rename that owns a field row under it.
- *  Whole change-set applied atomically (drop ALL old names before assigning
- *  ANY new one) so a name SWAP (`a→b` + `b→a` in one tx) never leaves an
- *  intermediate `{b: <a>}` that clobbers b — the same reasoning the deferred
- *  batch documents. */
-const rekeyParent = async (
+ *  The shared `rekeyParentPropertyCell` owns the parent guard, the §9 ancestry
+ *  gate, and the swap-safe drop-all-then-set-all apply; this supplies only the
+ *  per-parent PLAN — project each renamed field's FIRST parseable value under
+ *  the tx-start (rename-unchanged) codec, drop the old name, set the new. */
+const rekeyParent = (
   ctx: SameTxCtx,
   parentId: string,
   renames: readonly RenamedDefinition[],
   isFieldDefinition: IsPropertyFieldDefinition,
   memo: Map<string, boolean>,
-): Promise<void> => {
-  const tx = ctx.tx
-  const parent = await tx.get(parentId)
-  if (parent === null || parent.deleted) return
-  // A parent whose own chain passes through a field row is property-subtree
-  // interior (a ref-typed value pointing at this definition, a comment): its
-  // children are values, never field rows — never re-key.
-  if (await isInsidePropertySubtreeWalk(
-    parentId, (id) => tx.get(id), isFieldDefinition, memo,
-  )) return
-
-  const siblings = await tx.childrenOf(parentId, undefined)
-  const oldNames: string[] = []
-  const assignments: Array<{name: string; value: unknown}> = []
-  for (const rename of renames) {
-    let projected: unknown
-    let hasProjection = false
-    let sawFieldRow = false
-    for (const sibling of siblings) {
-      if ((sibling.referenceTargetId ?? null) !== rename.fieldId) continue
-      if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
-      sawFieldRow = true
-      if (hasProjection) continue
-      const values = await tx.childrenOf(sibling.id, undefined)
-      for (const value of values) {
-        try {
-          projected = propertyChildContentToEncodedValue(
-            rename.schema, value.content, value.referenceTargetId ?? null,
-          )
-          hasProjection = true
-          break
-        } catch {
-          // Unparseable value — a rename doesn't change the codec, so this is a
-          // pre-existing stale value; try the next, and if none parse the new
-          // key stays unset (the old key is still dropped — §9: cell derives
-          // from children, so a stale value shows unset until re-set).
+): Promise<void> =>
+  rekeyParentPropertyCell(ctx.tx, parentId, isFieldDefinition, memo, async (siblings) => {
+    const oldNames: string[] = []
+    const assignments: Array<{name: string; value: unknown}> = []
+    for (const rename of renames) {
+      let projected: unknown
+      let hasProjection = false
+      let sawFieldRow = false
+      for (const sibling of siblings) {
+        if ((sibling.referenceTargetId ?? null) !== rename.fieldId) continue
+        if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
+        sawFieldRow = true
+        if (hasProjection) continue
+        const values = await ctx.tx.childrenOf(sibling.id, undefined)
+        for (const value of values) {
+          try {
+            projected = propertyChildContentToEncodedValue(
+              rename.schema, value.content, value.referenceTargetId ?? null,
+            )
+            hasProjection = true
+            break
+          } catch {
+            // Unparseable value — a rename doesn't change the codec, so this is a
+            // pre-existing stale value; try the next, and if none parse the new
+            // key stays unset (the old key is still dropped — §9: cell derives
+            // from children, so a stale value shows unset until re-set).
+          }
         }
       }
+      if (!sawFieldRow) continue
+      oldNames.push(rename.oldName)
+      if (hasProjection) assignments.push({name: rename.newName, value: projected})
     }
-    if (!sawFieldRow) continue
-    oldNames.push(rename.oldName)
-    if (hasProjection) assignments.push({name: rename.newName, value: projected})
-  }
-  if (oldNames.length === 0) return
-
-  const next = {...parent.properties}
-  for (const oldName of oldNames) delete next[oldName]
-  for (const {name, value} of assignments) next[name] = value
-  if (propertiesEqual(parent.properties, next)) return
-  // skipMetadata: machinery re-key symmetric with the deferred batch's cell
-  // writes — not a "last edited" bump. Runs LAST in the kernel order so this
-  // `properties` write is not re-seen by MATERIALIZE (see the file header).
-  await tx.update(parentId, {properties: next}, {skipMetadata: true})
-}
+    return {oldNames, assignments}
+  })
 
 export const MIGRATE_PROPERTY_RENAME_PROCESSOR = defineSameTxProcessor({
   name: MIGRATE_PROPERTY_RENAME_PROCESSOR_NAME,

@@ -115,10 +115,9 @@ import type {
 } from './internals/propertyDefinitionMigrations'
 import {
   encodedPropertyValueToChildContent,
-  isInsidePropertySubtreeWalk,
   isPropertyFieldInstance,
-  propertiesEqual,
   propertyChildContentToEncodedValue,
+  rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from './propertyChildren'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
@@ -2998,113 +2997,90 @@ export class Repo {
         }
 
         for (const parentId of chunk) {
-          const parent = await tx.get(parentId)
-          if (parent === null || parent.deleted) continue
-          // The candidates are this parent's OWN children, so one walk from the
-          // parent decides them all: if the parent chain passes through a field
-          // row, every child here is property-subtree interior, not a field row.
-          if (await isInsidePropertySubtreeWalk(
-            parentId, (id) => tx.get(id), isFieldDefinition, subtreeMemo,
-          )) continue
-
-          // Field-row content is `((fieldId))` — id-addressed and rename-stable
-          // (§7), so there is nothing to retitle: the row already carries
-          // `reference_target_id = change.fieldId` precisely because its content
-          // is that id-ref. A rename changes no child content, so PROJECT never
-          // fires for it; the cell write below DOES fire MATERIALIZE (it watches
-          // `properties`), which is exactly why every old name must be dropped
-          // before any new one is assigned — see the method doc.
-          const siblings = await tx.childrenOf(parentId, undefined)
-          const oldNames: string[] = []
-          const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
-
-          for (const {change, schema} of plans) {
-            let projected: unknown
-            let hasProjection = false
-            let parentUnconvertible = 0
-            let sawFieldRow = false
-            // Re-encode + re-key once per parent (a parent's projection reads
-            // ALL its field rows for this schema in deterministic order).
-            // Two conditions, not one: the fieldId equality selects THIS
-            // definition's field rows specifically (isPropertyFieldInstance
-            // has no notion of "which" definition); isPropertyFieldInstance
-            // reuses the shared §9 recognizer (root rule + isFieldDefinition,
-            // same closure isInsidePropertySubtreeWalk uses above) instead of
-            // trusting the stored column outright — it's a no-op here for
-            // the root half (`siblings` are all actual children of `parent`,
-            // so `parentId` is never null) AND for the resolvability half
-            // (`isFieldDefinition(change.fieldId)` is always true here — see
-            // `isFieldDefinition`'s own comment above), kept only for
-            // symmetry with the ancestor walk's use of the same recognizer.
-            for (const sibling of siblings) {
-              if (
-                (sibling.referenceTargetId ?? null) !== change.fieldId
-                || !isPropertyFieldInstance(sibling, isFieldDefinition)
-              ) continue
-              sawFieldRow = true
-              const values = await tx.childrenOf(sibling.id, undefined)
-              for (const value of values) {
-                try {
-                  const encoded = propertyChildContentToEncodedValue(
-                    schema, value.content, value.referenceTargetId ?? null,
-                  )
-                  if (!hasProjection) {
-                    projected = encoded
-                    hasProjection = true
+          // Shared swap-safe re-key: the helper owns the parent guard, the §9
+          // ancestry gate, and the drop-all-then-set-all apply (symmetric with
+          // the same-tx rename processor). This computePlan is the codec half —
+          // it re-encodes value children under the (possibly new) codec and
+          // reports unconvertibles.
+          await rekeyParentPropertyCell(
+            tx, parentId, isFieldDefinition, subtreeMemo,
+            async (siblings) => {
+              const oldNames: string[] = []
+              const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+              for (const {change, schema} of plans) {
+                let projected: unknown
+                let hasProjection = false
+                let parentUnconvertible = 0
+                let sawFieldRow = false
+                // Field-row content is `((fieldId))` — id-addressed and
+                // rename-stable (§7), nothing to retitle. Two conditions select
+                // THIS definition's field rows: the fieldId equality picks them
+                // out (isPropertyFieldInstance has no notion of "which"
+                // definition); isPropertyFieldInstance reuses the shared §9
+                // recognizer (a no-op here for the root half — siblings are all
+                // actual children — and the resolvability half —
+                // `isFieldDefinition(change.fieldId)` is always true here — kept
+                // for symmetry with the ancestor walk).
+                for (const sibling of siblings) {
+                  if (
+                    (sibling.referenceTargetId ?? null) !== change.fieldId
+                    || !isPropertyFieldInstance(sibling, isFieldDefinition)
+                  ) continue
+                  sawFieldRow = true
+                  const values = await tx.childrenOf(sibling.id, undefined)
+                  for (const value of values) {
+                    try {
+                      const encoded = propertyChildContentToEncodedValue(
+                        schema, value.content, value.referenceTargetId ?? null,
+                      )
+                      if (!hasProjection) {
+                        projected = encoded
+                        hasProjection = true
+                      }
+                      // Canonicalize the child content under the (possibly new)
+                      // codec so the stored text matches what setProperty would
+                      // write.
+                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                      if (value.content !== canonical) {
+                        await tx.update(value.id, {content: canonical}, {skipMetadata: true})
+                      }
+                    } catch {
+                      parentUnconvertible += 1
+                    }
                   }
-                  // Canonicalize the child content under the (possibly new)
-                  // codec so the stored text matches what setProperty would
-                  // write.
-                  const canonical = encodedPropertyValueToChildContent(schema, encoded)
-                  if (value.content !== canonical) {
-                    await tx.update(value.id, {content: canonical}, {skipMetadata: true})
-                  }
-                } catch {
-                  parentUnconvertible += 1
                 }
+                // This parent carries no field row for this definition — its
+                // cell keys for it are none of this change's business.
+                if (!sawFieldRow) continue
+                if (parentUnconvertible > 0) {
+                  unconvertibleByField.set(
+                    change.fieldId,
+                    (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
+                  )
+                }
+
+                if (change.oldName !== schema.name) oldNames.push(change.oldName)
+                if (hasProjection) {
+                  assignments.push({name: schema.name, value: projected, unset: false})
+                } else if (parentUnconvertible === 0) {
+                  assignments.push({name: schema.name, value: undefined, unset: true})
+                }
+                // else (all-unconvertible): leave the new key unset — no
+                // assignment.
+                //   - rename: the old key is dropped and the new key stays
+                //     absent → the cell shows unset for the unparseable values,
+                //     §9's contract. Re-keying the stale value under the new name
+                //     would violate §9 (cell derives from children).
+                //   - no rename: the existing key rides untouched (no old name to
+                //     drop, no assignment) so a stale-but-fixable value stays
+                //     visible; the next valid edit reprojects and heals it
+                //     (§5 pending-reprojection).
+                // This pass NEVER deletes value rows, so they stay live
+                // unconditionally and the unconvertible COUNT is surfaced below.
               }
-            }
-            // This parent carries no field row for this definition — its cell
-            // keys for it are none of this change's business.
-            if (!sawFieldRow) continue
-            if (parentUnconvertible > 0) {
-              unconvertibleByField.set(
-                change.fieldId,
-                (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
-              )
-            }
-
-            if (change.oldName !== schema.name) oldNames.push(change.oldName)
-            if (hasProjection) {
-              assignments.push({name: schema.name, value: projected, unset: false})
-            } else if (parentUnconvertible === 0) {
-              assignments.push({name: schema.name, value: undefined, unset: true})
-            }
-            // else (all-unconvertible): leave the new key unset — no assignment.
-            //   - rename: the old key is dropped below and the new key stays
-            //     absent → the cell shows unset for the unparseable values, §9's
-            //     contract. Re-keying the stale value under the new name would
-            //     violate §9 (cell derives from children), so we don't.
-            //   - no rename: the existing key rides untouched (no old name to
-            //     drop, no assignment) so a stale-but-fixable value stays
-            //     visible; the next valid edit reprojects and heals it
-            //     (§5 pending-reprojection).
-            // This pass NEVER deletes value rows, so they stay live
-            // unconditionally and the unconvertible COUNT is surfaced below.
-          }
-
-          // Drop EVERY old name before assigning ANY new one: a swap's old name
-          // is another plan's new name, so interleaving would delete what a
-          // previous plan just wrote (and strand the other definition's value).
-          const nextProperties = {...parent.properties}
-          for (const oldName of oldNames) delete nextProperties[oldName]
-          for (const assignment of assignments) {
-            if (assignment.unset) delete nextProperties[assignment.name]
-            else nextProperties[assignment.name] = assignment.value
-          }
-          if (!propertiesEqual(parent.properties, nextProperties)) {
-            await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
-          }
+              return {oldNames, assignments}
+            },
+          )
         }
       }, {
         // References, not BlockDefault (adversarial-review blocker): a

@@ -313,6 +313,56 @@ export const isInsidePropertySubtreeWalk = async (
   return resolved
 }
 
+/** The names to drop and the assignments to set on ONE parent's cell — the
+ *  divergent value-handling half of a definition re-key, computed by the
+ *  caller from the parent's live children. */
+export interface CellRekeyPlan {
+  readonly oldNames: readonly string[]
+  readonly assignments: ReadonlyArray<{name: string; value: unknown; unset?: boolean}>
+}
+
+/** Apply a swap-safe property-cell re-key to one parent — shared by the same-tx
+ *  rename processor (`core.migratePropertyRename`) and the deferred codec-change
+ *  batch (`Repo.runPropertyDefinitionMigrationBatch`). Owns the parts that must
+ *  stay IDENTICAL across both, so the load-bearing invariant lives in one place:
+ *   - the parent guard (skip a missing/deleted parent);
+ *   - the §9 ancestry gate — a parent whose chain passes through a field row is
+ *     property-subtree interior (its children are values/comments, never field
+ *     rows), so it is never re-keyed;
+ *   - the SWAP-SAFE apply — drop EVERY old name before assigning ANY new one, so
+ *     a name swap (`a<->b` in one tx) never leaves an intermediate `{b:<a>}` that
+ *     clobbers b (and `propertiesEqual` skips the write when nothing changed).
+ *  `computePlan` receives the parent's live children and returns the drops +
+ *  assignments — the ONLY part the two callers differ in (rename projects the
+ *  first parseable value under the tx-start codec; the batch iterates all
+ *  values, canonicalizes them under the possibly-new codec, and counts
+ *  unconvertibles). The write is `skipMetadata` machinery, not a "last edited"
+ *  bump. */
+export const rekeyParentPropertyCell = async (
+  tx: Tx,
+  parentId: string,
+  isFieldDefinition: IsPropertyFieldDefinition,
+  memo: Map<string, boolean>,
+  computePlan: (children: readonly BlockData[]) => Promise<CellRekeyPlan>,
+): Promise<void> => {
+  const parent = await tx.get(parentId)
+  if (parent === null || parent.deleted) return
+  if (await isInsidePropertySubtreeWalk(
+    parentId, (id) => tx.get(id), isFieldDefinition, memo,
+  )) return
+  const {oldNames, assignments} = await computePlan(
+    await tx.childrenOf(parentId, undefined),
+  )
+  const next = {...parent.properties}
+  for (const name of oldNames) delete next[name]
+  for (const assignment of assignments) {
+    if (assignment.unset) delete next[assignment.name]
+    else next[assignment.name] = assignment.value
+  }
+  if (propertiesEqual(parent.properties, next)) return
+  await tx.update(parentId, {properties: next}, {skipMetadata: true})
+}
+
 /** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the
  *  field row `source` is a value child of, or null when `source` isn't a
  *  property value child at all. Recognition reuses the canonical
