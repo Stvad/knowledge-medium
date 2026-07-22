@@ -296,8 +296,35 @@ export const materializePropertyChildrenForExistingRow = async (
 
     try {
       schema.codec.decode(encoded)
-    } catch {
-      continue
+    } catch (cause) {
+      // The cell holds a value that doesn't decode under its schema's codec —
+      // almost always a raw `tx.update({properties})` that bypassed
+      // `setProperty`'s encode step (setProperty can't produce an undecodable
+      // value). Silently skipping here left the cell and the value child
+      // PERMANENTLY divergent: the cell keeps the junk, the child keeps its
+      // stale value, and PROJECT never reconciles them (it watches content,
+      // not `properties`) — so in a flipped workspace the junk even syncs to
+      // peers. Reject the write instead — a processor throw propagates out of
+      // the writeTransaction and rolls the whole tx back atomically, so the
+      // bad cell value never lands (PR #386 review, F2; Vlad).
+      //
+      // Deliberately ASYMMETRIC with PROJECT, which DROPS the cell key for an
+      // undecodable *child* value (see find-replace's forced-write path):
+      // there the child is user-authored truth we must preserve, so we drop
+      // the derived cell projection; here the raw cell write is ITSELF the
+      // mistake, with no authored form to keep — so we refuse it.
+      //
+      // NOTE for slice C's backfill: it points this same helper at whole
+      // workspaces, where a PRE-EXISTING legacy junk value must not abort the
+      // entire flip. That caller must catch per row and report the offending
+      // block, not let one bad value throw the whole pass.
+      throw new Error(
+        `Cannot materialize property "${name}" on block ${row.id}: its cell ` +
+        `value does not decode under the "${schema.codec.type}" codec. Write ` +
+        `property values through tx.setProperty / block.set, not a raw ` +
+        `tx.update({properties}).`,
+        {cause},
+      )
     }
 
     const content = encodedPropertyValueToChildContent(schema, encoded)

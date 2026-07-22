@@ -160,6 +160,34 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await liveFieldRows('p')).toEqual([])
   })
 
+  it('rejects a raw cell write whose value does not decode (no silent cell/child divergence)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'p')
+    // Establish a valid materialized value first.
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    expect(await cellValue('p')).toBe('done')
+
+    // A raw whole-bag write of an UNDECODABLE value (null for a non-null
+    // string codec) — the kind of mistake setProperty can't produce. It must
+    // be REJECTED, not silently skipped: the old skip left the cell = null
+    // while the value child stayed 'done', diverging forever (PROJECT never
+    // reconciles a raw `properties` write).
+    await expect(
+      repo.tx(tx => tx.update('p', {properties: {[statusSchema.name]: null}}),
+        {scope: ChangeScope.BlockDefault}),
+    ).rejects.toThrow(/does not decode/)
+
+    // Rolled back atomically: the prior valid value survives in BOTH forms.
+    expect(await cellValue('p')).toBe('done')
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
+    expect(values).toHaveLength(1)
+    expect(values[0]!.content).toBe('done')
+  })
+
   it('re-setting the property updates the ONE value child (no duplicates)', async () => {
     await seedWorkspace('children')
     const repo = setup()
