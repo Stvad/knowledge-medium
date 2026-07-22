@@ -1,0 +1,2 @@
+var e=60,t=60*e,n=24*t;function r(r,i){if(!r||!i)return``;let a=Math.floor((i-r)/1e3);if(a<e)return`just now`;if(a<t)return`${Math.floor(a/e)}m ago`;if(a<n)return`${Math.floor(a/t)}h ago`;let o=Math.floor(a/n);return o<7?`${o}d ago`:new Date(r).toLocaleDateString(void 0,{month:`short`,day:`numeric`,year:`numeric`})}function i(e){return e?new Date(e).toLocaleString(void 0,{year:`numeric`,month:`short`,day:`numeric`,hour:`numeric`,minute:`2-digit`}):``}export{i as formatAbsoluteDateTime,r as formatRelativeTime};
+//# sourceMappingURL=relativeTime.js.map
