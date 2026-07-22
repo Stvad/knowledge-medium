@@ -954,8 +954,10 @@ there are authoritative.
     form</em> — resolves it and writes the target id into
     <code>reference_target_id</code> in the same transaction, and stamps
     <code>is_field_form</code> for the marked block-ref form only (a marked
-    <em>alias</em>, <code>::[[name]]</code>, sets neither the bit nor — until the
-    §7 import seam canonicalizes it — a schema binding; §9 recognition).
+    <em>alias</em>, <code>::[[name]]</code>, stamps <em>neither column</em> —
+    no bit, no <code>reference_target_id</code> — until the
+    §7 import seam canonicalizes it: a bound target without the bit would be
+    the lookalike state §7 forbids; §9 recognition, PR #417 review).
     As shipped (PR #386, pre-grammar — the two-column condition is on the branch
     delta):
     <code>((id))</code> resolves <em>purely textually</em> — the id is the content —
@@ -972,11 +974,17 @@ there are authoritative.
 
   <dt><strong><code>core.projectPropertyChildren</code></strong> (permanent)</dt>
   <dd>
-    Watches <code>content / referenceTargetId / parentId / orderKey / deleted</code>.
+    Watches <code>content / referenceTargetId / isFieldForm / parentId /
+    orderKey / deleted</code> — the bit is a watched field (PR #417 review:
+    projection's classification and value-set both read it, so a bit-only
+    change — an arrival repair, the catch-up sweep stamping existing marked
+    rows after the column ships — must re-project; bulk repair paths that
+    write the bit raw enqueue projection for the affected parents
+    explicitly).
     For each changed row, walks up at most two levels to find affected
     (parent, fieldId) pairs — both <em>before</em> and <em>after</em> sides of a move —
     and rebuilds that parent's <code>properties_json</code> key from the field row's
-    value children — its <code>is_field_form = 0</code> children only, per §9's
+    value children — its <code>is_field_form IS NOT 1</code> children only, per §9's
     binding selection discipline (a nested marked row materialized under the
     field row is that row's own machinery, never a value candidate). This is what keeps <em>manual tree edits</em> of field/value rows
     convergent with the cell. Registration order is load-bearing (PR-review P2): the
@@ -995,7 +1003,7 @@ there are authoritative.
     children for removed keys, collapse duplicates — every find/primary/duplicate
     step selecting by the bit per §9's discipline (field row =
     <code>is_field_form = 1</code> child targeting the fieldId; values = the
-    <code>is_field_form = 0</code> children; a duplicate field row's own marked
+    <code>is_field_form IS NOT 1</code> children; a duplicate field row's own marked
     children fold as field rows, never as values). Minted field-row content is the
     marked form, <code>::((fieldId))</code> (§7 — the branch's bare-ref mint
     predates the 07-22 grammar and is on the delta checklist). Rows it creates are <em>born
@@ -1215,9 +1223,13 @@ arrived row:
       into one, content-equal values fold with them, and <em>divergent</em> values
       persist as peer siblings, so a genuine concurrent conflict is surfaced in the
       tree rather than silently resolved — except view-state-flagged keys
-      (§9's merge entry): there the reconcile keeps the deterministic first
-      survivor (<code>order_key, id</code> order — no target exists at this
-      site) and drops the rest silently. Until the reconcile visits the parent,
+      (§9's merge entry): there the reconcile keeps the <em>newest</em> value —
+      <code>updated_at</code> LWW, matching the cell era's same-key semantics
+      (PR #417 review: an order-key survivor would let an older collapse toggle
+      win arbitrarily), with <code>order_key, id</code> only as the
+      deterministic tiebreak for equal clocks (no target exists at this site;
+      the merge <em>gesture</em> stays target-wins — an explicit user act, not
+      a clock race) — and drops the rest silently. Until the reconcile visits the parent,
       duplicate rows persist until some unrelated local edit
       happens to touch it.</li>
   </ul>
@@ -1573,10 +1585,15 @@ surface.
     marked <em>alias</em> form <code>::[[name]]</code> is input/import surface
     only — it never classifies (§9 condition 1).</dd>
   <dt><strong>Columns</strong></dt>
-  <dd><code>reference_target_id</code> (stamped for marked <em>and</em> unmarked
-    ref forms — purely textual for <code>((id))</code>, the generic alias
-    lookup for <code>[[name]]</code>) · <code>is_field_form</code> (marked block-ref
-    form only) — both local, derived, never synced, rebuilt from content by the
+  <dd><code>reference_target_id</code> (stamped for both <em>unmarked</em> ref
+    forms — purely textual for <code>((id))</code>, the generic alias
+    lookup for <code>[[name]]</code> — and for the marked <em>block-ref</em>
+    form) · <code>is_field_form</code> (marked block-ref
+    form only). A marked <em>alias</em>, <code>::[[name]]</code>, stamps
+    <strong>neither column</strong> — binding its target without the bit would
+    mint the bound lookalike §7's seam rule forbids; it stays fully inert until
+    the import seam rewrites it. Both columns local, derived, never synced,
+    rebuilt from content by the
     same repair paths.</dd>
   <dt><strong>Predicate</strong></dt>
   <dd><code>is_field_form = 1</code> ∧ <code>parent_id IS NOT NULL</code> ∧
@@ -1584,8 +1601,10 @@ surface.
     rationale and contract).</dd>
   <dt><strong>Roles</strong></dt>
   <dd><code>::</code> children of any block = its field rows · a field row's
-    value set = its <code>is_field_form = 0</code> children (a binding
-    selection discipline, §9) · children of value rows = ordinary content.</dd>
+    value set = its <code>is_field_form IS NOT 1</code> children (a binding
+    selection discipline, §9) · <em>non-</em><code>::</code> children of value
+    rows = ordinary content (a <code>::</code> child of a value row is that
+    value's own field row — the first rule wins at every depth).</dd>
 </dl>
 
 <p>
@@ -1904,12 +1923,17 @@ supabase skill if it's kept.
     <em>ownership</em> question — "which field row owns this descendant" — which
     is containment, not identity, and is inherently positional: B3's scope
     routing (a structural edit deep in a property subtree routes under the
-    owning schema's scope) and
-    hidden-subtree pruning still walk up to the nearest <code>::</code>
-    ancestor (backlink presentation needs no walk — it is a single parent hop,
-    the References entry's rule; PR #417 review: deleting the walk
+    owning schema's scope) walks to the <em>nearest</em> <code>::</code>
+    ancestor — the directly-owning field; hidden-subtree pruning's upward form
+    (search/recents filtering classifying an arbitrary hit) checks
+    <em>every</em> field ancestor — any hidden one suppresses, since a visible
+    field materialized inside a hidden field's subtree must not leak its rows
+    into default surfaces (PR #417 review; top-down render pruning gets this
+    free by never descending into a hidden field row). Backlink presentation
+    needs no walk — it is a single parent hop,
+    the References entry's rule. (PR #417 review: deleting the walk
     <em>outright</em> would silently
-    re-route value-descendant edits under the caller's BlockDefault scope). The
+    re-route value-descendant edits under the caller's BlockDefault scope.) The
     surviving walk is much simpler than the deleted one: each hop is
     independently classified by the flat predicate, so it carries none of the
     memo-invalidation coupling to the tx engine that made the recognition walk
@@ -1919,14 +1943,21 @@ supabase skill if it's kept.
     materialize their own bags like every other block, and no cell-only depth
     carve-out exists anywhere (the §6/§11 "every key leaves the cell" promise
     finally holds without exception). <strong>A field row's value set is exactly
-    its children with <code>is_field_form = 0</code></strong> — <em>including</em>
+    its children with <code>is_field_form IS NOT 1</code></strong> (the bit is
+    NULL for every underived/unmarked row — ordinary value children are never
+    stamped <code>0</code>, so an equality test against <code>0</code> silently
+    excludes every real value; PR #417 review caught an earlier draft's
+    <code>= 0</code> phrasing, and the JS predicate treats
+    <code>null/undefined</code> as false the same way) — <em>including</em>
     plain <code>((id))</code> refs to
     definition blocks, which are unambiguous now that field-ness is marked
     (<code>block-type:properties</code> values — a refList whose targets are all
     property-schema blocks, materialized on every type block since the types
     cutover — render as values by construction; the parent guard that existed to
     protect them, and the escape-rule alternative briefly considered for them,
-    are both unnecessary). Children of value rows are ordinary content, and a
+    are both unnecessary). Non-<code>::</code> children of value rows are
+    ordinary content — a <code>::</code> child of a value row is the value's
+    own field row, the any-depth rule again — and a
     content block anywhere in a property subtree carries field rows of its own
     with full standing. The value-set definition is a <strong>binding selection
     discipline</strong>, not display guidance (PR #417 areview — the
@@ -2055,7 +2086,7 @@ supabase skill if it's kept.
 
   <dt><strong>Value decoding.</strong></dt>
   <dd>Spike: first parseable value child wins (order-key order over the
-    <code>is_field_form = 0</code> children — §9's selection discipline); unparseable children are
+    <code>is_field_form IS NOT 1</code> children — §9's selection discipline); unparseable children are
     skipped. If <em>no</em> child parses, the projection <em>removes</em> the key from
     the cell. (This rule — and default-vs-unset below — presupposes a <em>live field
     row</em>; a cell key with no child rows at all is pending materialization and is
@@ -2110,7 +2141,7 @@ supabase skill if it's kept.
   <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped).</strong></dt>
   <dd>PR #386 (divergence item 7) replaced both rev 1's "keep extras, pick lowest
     orderKey" and the spike's delete-all-duplicates: <strong>a field row holds a
-    <em>set</em> of value children — its <code>is_field_form = 0</code> children
+    <em>set</em> of value children — its <code>is_field_form IS NOT 1</code> children
     (§9's selection discipline) — deduped by content.</strong> Content-equal
     duplicates fold (soft-delete; the relocate rule survives for their
     user-authored sub-children — a comment thread under a folding duplicate moves
@@ -2534,8 +2565,9 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <code>is_field_form</code></strong> — same local-column treatment
         (<code>BLOCK_LOCAL_COLUMNS</code>, boot ALTER, partial index
         <code>WHERE is_field_form = 1</code>), stamped in the same textual derive
-        pass under the §7 grammar box's derivation rule (either ref form stamps
-        the target; only the marked block-ref form sets the bit); every
+        pass under the §7 grammar box's derivation rule (unmarked forms and the
+        marked block-ref form stamp the target; only the marked block-ref form
+        sets the bit; marked aliases stamp neither column); every
         repair/derive-at-arrival/undo-seam
         rule below covers both columns identically. Write metadata splits by path (§5): the same-tx
         processor rides the triggering edit's upload; the bulk paths write raw CAS,
