@@ -1,19 +1,23 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Control the gating providers + the resolver singleton the down-lane wiring reads.
+// Control the gating providers + the per-user resolver the down-lane wiring reads.
 const h = vi.hoisted(() => ({
   remoteActive: true,
-  userId: 'user-1' as string | null,
   replicate: vi.fn(async () => ({ ok: true, status: 'present' as const })),
+  // Every userId `getAssetResolverForUser` was called with, in call order — lets a
+  // test pin WHICH user the pass bound its resolver to (review #424 P2).
+  resolverForUserCalls: [] as string[],
 }))
 vi.mock('@/data/repoProvider.js', async (orig) => ({
   ...(await orig<typeof import('@/data/repoProvider.js')>()),
   isRemoteSyncActive: () => h.remoteActive,
-  getActiveUserId: () => h.userId,
 }))
 vi.mock('./assetResolver.js', () => ({
-  getAssetResolver: () => ({ resolve: vi.fn(), replicate: h.replicate }),
+  getAssetResolverForUser: (userId: string) => {
+    h.resolverForUserCalls.push(userId)
+    return { resolve: vi.fn(), replicate: h.replicate }
+  },
 }))
 
 import { ChangeScope } from '@/data/api'
@@ -38,8 +42,8 @@ const USER = 'user-1'
 let sharedDb: TestDb
 let repo: Repo
 
-const buildRepo = (): Repo => {
-  const r = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } })
+const buildRepo = (userId: string = USER): Repo => {
+  const r = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: userId } })
   r.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,
@@ -97,8 +101,8 @@ beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   repo = buildRepo()
   h.remoteActive = true
-  h.userId = USER
   h.replicate.mockClear()
+  h.resolverForUserCalls.length = 0
 })
 afterEach(() => {
   repo.stopSyncObserver()
@@ -173,6 +177,7 @@ describe('runDownLaneReconcile — gating', () => {
     // front; empty here since the in-memory byte store holds nothing).
     expect(h.replicate).toHaveBeenCalledWith({ workspaceId: WS, contentHash: 'sha256:aaaa' }, expect.any(Set))
     expect(h.replicate).toHaveBeenCalledWith({ workspaceId: WS, contentHash: 'sha256:bbbb' }, expect.any(Set))
+    expect(h.resolverForUserCalls).toEqual([USER]) // bound to repo.user.id, once for the whole pass
   })
 
   it('is a no-op in local-only mode (nothing to fetch from) — never walks or replicates', async () => {
@@ -182,10 +187,30 @@ describe('runDownLaneReconcile — gating', () => {
     expect(h.replicate).not.toHaveBeenCalled()
   })
 
-  it('is a no-op when signed out', async () => {
+  // The "signed out" no-op used to be exercised here by nulling a global
+  // `getActiveUserId()` independent of `repo`. Now that the user id comes from
+  // `repo.user.id`, that state is unreachable through this call site: a live
+  // `Repo` always carries a concrete user (RepoProvider throws before
+  // constructing one without a signed-in user), so there's no "signed out but
+  // holding a repo" case left to model at the unit level.
+
+  it('binds the resolver to the CALLED-WITH repo.user.id, not a value shared across calls (review #424 P2 — the account-switch race)', async () => {
+    // Models a down-lane pass for one user's repo, then a second pass for a
+    // DIFFERENT user's repo against the same workspace/db — standing in for a
+    // stale in-flight pass (started under the old user) outliving an account
+    // switch, whose live ambient reads (had it used the shared `getAssetResolver()`
+    // singleton instead) would have drifted to the NEW active user mid-pass. Every
+    // user-scoped read `runDownLaneReconcile` makes — including which resolver it
+    // asks for — must come from the `Repo` it was invoked with, not any shared/
+    // ambient value, so two back-to-back calls for two different repos resolve
+    // two DIFFERENT users, in call order, never mixing scope.
+    const otherRepo = buildRepo('user-2')
     await addMediaBlock('m1', 'a0', 'sha256:aaaa')
-    h.userId = null
-    await runDownLaneReconcile(repo, WS)
-    expect(h.replicate).not.toHaveBeenCalled()
+
+    await runDownLaneReconcile(repo, WS) // repo.user.id === USER ('user-1')
+    await runDownLaneReconcile(otherRepo, WS) // otherRepo.user.id === 'user-2'
+
+    expect(h.resolverForUserCalls).toEqual([USER, 'user-2'])
+    otherRepo.stopSyncObserver()
   })
 })

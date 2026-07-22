@@ -40,15 +40,10 @@ import {
   DATE_SCRUB_COMMIT_GESTURE,
   DATE_SCRUB_GESTURE,
 } from './dateScrubGesture.ts'
+import { isMobileViewport } from '@/utils/viewport.js'
 
 /** Arbitration key (also the recognizer id); equals the PROGRESS gesture name. */
 export const DATE_SCRUB_GESTURE_ID = DATE_SCRUB_GESTURE
-
-const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
-const isMobileViewport = (): boolean =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
 
 /** Midpoint horizontal travel that distinguishes a deliberate scrub from a
  *  pinch (midpoint ~stationary) or a two-finger vertical scroll (dy dominates). */

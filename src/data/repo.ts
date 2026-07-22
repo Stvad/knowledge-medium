@@ -416,7 +416,7 @@ interface ReferenceTargetStamp {
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
-  user: User
+  readonly user: User
   /** Read-only mode disables `BlockDefault` / `References` writes;
    *  UI-state and UserPrefs writes still pass through and queue to
    *  ps_crud — server-side rejection (RLS) lands in the rejection

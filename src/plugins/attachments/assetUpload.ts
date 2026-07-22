@@ -213,7 +213,7 @@ export const captureMediaFromFiles = async (
   // resolver. Capture touches no remote session (it only stages + writes the block
   // via `repo`), so once bound it is fully self-consistent — a mid-capture account
   // switch can't split it across accounts.
-  const userId = getActiveUserId()
+  const userId = repo.user.id
   if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
   const deps = captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) })
   const results: MediaCaptureResult[] = []

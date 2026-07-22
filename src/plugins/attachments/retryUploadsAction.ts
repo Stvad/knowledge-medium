@@ -17,7 +17,6 @@
  * image-insert actions.
  */
 import { RefreshCw } from 'lucide-react'
-import { getActiveUserId } from '@/data/repoProvider.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { runUploadRecovery } from './assetUpload.js'
 import { RETRY_UPLOADS_ACTION_ID } from './uploadLaneStatus.js'
@@ -29,8 +28,8 @@ export const retryFailedUploadsAction: ActionConfig<typeof ActionContextTypes.GL
   description: 'Retry failed media uploads',
   context: ActionContextTypes.GLOBAL,
   icon: RefreshCw,
-  handler: () => {
-    const userId = getActiveUserId()
+  handler: ({uiStateBlock}) => {
+    const userId = uiStateBlock.repo.user.id
     if (!userId || retryInFlight) return // one retry at a time — swallow double-clicks
     retryInFlight = runUploadRecovery(userId)
     void retryInFlight.finally(() => {

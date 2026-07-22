@@ -13,8 +13,12 @@
  * `Shift`) so the same physical chord always serialises identically.
  */
 
-export const isMacPlatform = (): boolean =>
-  typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+// `isMacPlatform` now lives in the shared platform module (`src/utils/platform.ts`)
+// so every $mod/Mac-glyph check agrees. Imported (this file uses it below) AND
+// re-exported, so `useKeyInspector.ts` (which imports it from here) keeps a
+// single import surface — same pattern as the `normalizeChord` re-export below.
+import { isMacPlatform } from '@/utils/platform.js'
+export { isMacPlatform }
 
 /** Map raw `KeyboardEvent.key` values to tinykeys' canonical names. */
 const KEY_ALIASES: Record<string, string> = {

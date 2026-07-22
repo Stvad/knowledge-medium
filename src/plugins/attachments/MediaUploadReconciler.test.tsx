@@ -13,9 +13,8 @@ const h = vi.hoisted(() => ({
   db: { currentStatus: { hasSynced: false }, registerListener: () => () => {} } as unknown,
 }))
 
-vi.mock('@/context/repo.js', () => ({ useRepo: () => ({ id: 'repo' }) }))
+vi.mock('@/context/repo.js', () => ({ useRepo: () => ({ id: 'repo', user: { id: h.activeUserId } }) }))
 vi.mock('@/data/repoProvider.js', () => ({
-  getActiveUserId: () => h.activeUserId,
   getPowerSyncDb: () => h.db,
 }))
 vi.mock('./assetUpload.js', () => ({

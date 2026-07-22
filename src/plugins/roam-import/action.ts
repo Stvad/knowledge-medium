@@ -3,7 +3,7 @@ import {
   ActionConfig,
   ActionContextTypes,
 } from '@/shortcuts/types.js'
-import { parseAppHash } from '@/utils/routing.js'
+import { activeWorkspaceIdPreferringHash } from '@/utils/navigation.js'
 import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
@@ -37,17 +37,7 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
             return
           }
 
-          // Prefer the URL hash over `repo.activeWorkspaceId` —
-          // the hash is the source of truth for what workspace
-          // the user is viewing, and `repo.activeWorkspaceId`
-          // can lag behind it (the active id flips inside
-          // App.tsx's async getInitialBlock chain, which awaits
-          // workspace lookup + role check before settling).
-          // If the user clicks the import shortcut shortly after
-          // switching workspaces, reading repo state alone would
-          // route the import into the prior workspace.
-          const workspaceId = parseAppHash(window.location.hash).workspaceId
-            ?? repo.activeWorkspaceId
+          const workspaceId = activeWorkspaceIdPreferringHash(repo)
           if (!workspaceId) {
             console.error('[roam-import] no active workspace')
             banner.fail('Roam import failed: no active workspace')

@@ -47,6 +47,8 @@ import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { navigateInPanel } from './panelHistory'
 import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
+import { parseAppHash } from '@/utils/routing'
+import { isMobileViewport } from '@/utils/viewport'
 import {
   insertPanelRow,
   insertSidebarStackedPanel,
@@ -143,11 +145,6 @@ const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   return getLayoutSessionBlock(uiState, getLayoutSessionId())
 }
-
-const isMobileViewport = (): boolean =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(max-width: 767px)').matches
 
 const setActivePanel = async (
   layoutSessionBlock: Block,
@@ -711,6 +708,19 @@ export const resolveGlobalCommandTarget = async (
   const blockId = repo.block(dest.panelId).peekProperty(topLevelBlockIdProp)
   return typeof blockId === 'string' ? {blockId, workspaceId: dest.workspaceId} : null
 }
+
+/** The active workspace, preferring the URL hash over `repo.activeWorkspaceId`.
+ *  The hash is the source of truth for what workspace the user is VIEWING;
+ *  `repo.activeWorkspaceId` can lag behind it during async bootstrap (the
+ *  active id flips inside App.tsx's `getInitialBlock` chain, which awaits a
+ *  workspace lookup + role check before settling) or shortly after a
+ *  workspace switch. A command fired in that window would otherwise route
+ *  into the prior workspace. Falls back to `repo.activeWorkspaceId` once the
+ *  hash carries no workspace of its own (e.g. very first boot). (Originally
+ *  identified in the roam-import action; hoisted here once the same
+ *  read-hash-first-then-repo idiom showed up at several call sites.) */
+export const activeWorkspaceIdPreferringHash = (repo: Repo): string | null =>
+  parseAppHash(window.location.hash).workspaceId ?? repo.activeWorkspaceId
 
 export interface OpenBlockContext {
   blockId: string
