@@ -214,7 +214,60 @@ saying so is the disposition.</td></tr>
 same treatment (one seed call site + context/store for consumers) in its own change.</td></tr>
 </table></div>
 
-<h3>The broader sweep — non-injected seams beyond layout (upstream ask)</h3>
+<h3>The DI lens — direct-read globals with a bypassed channel (the <code>getLayoutSessionId</code> pattern elsewhere)</h3>
+
+<p>The maintainer's actual ask: find every global that shared logic <em>reads directly</em> where the
+value should flow in via an injection channel — the exact shape of <code>getLayoutSessionId</code>.
+Full sweep of <code>src/</code>, every claim line-verified. Headline: the codebase largely does this
+right — <code>clientLocalSettings</code>' consumers all take it as an overridable default parameter
+(<code>settings: ClientLocalSettings = clientLocalSettings</code>), which is the pattern the fixes
+below should copy — and the violations cluster tightly:</p>
+
+<div class="tblwrap"><table>
+<tr><th>#</th><th>Global / idiom</th><th>Bypassed channel</th><th>Consumers to fix</th></tr>
+<tr><td><strong>1</strong></td>
+<td><code>getActiveUserId()</code> (<span class="filepath">src/data/repoProvider.ts:124</span>)</td>
+<td><code>repo.user.id</code> / <code>useUser()</code> — <strong>already in scope at the call
+sites</strong>: 4 of 6 have <code>repo</code> as a parameter or <code>useRepo()</code> in the same
+component.</td>
+<td>6 sites, all in attachments: <code>retryUploadsAction.ts:33</code> (ignores its injected
+dependencies entirely), <code>assetUpload.ts:216</code>, <code>assetDownLane.ts:83</code>,
+<code>MediaDownLaneReplicator.tsx:64</code>, <code>MediaUploadReconciler.tsx:30,48</code>. Two
+uses stay by design: the <code>isActiveUser</code> live-guard inside <code>runLanePass</code>
+(account-switch check mid-drain) and the <code>getUserId</code> callback field wired into the
+asset-resolver singleton — both already the correct callback shape.</td></tr>
+<tr><td><strong>2</strong></td>
+<td>The <code>parseAppHash(window.location.hash).workspaceId ?? repo.activeWorkspaceId</code> idiom
+— copy-pasted with its justification comment.</td>
+<td>No shared accessor exists despite <code>routing.ts</code>/<code>navigation.ts</code> owning both
+halves; extract one <code>hash-first workspace resolver</code> and call it.</td>
+<td>4 sites: <code>roam-import/action.ts:49</code>, <code>daily-notes/actions.ts:112</code>,
+<code>daily-notes/index.ts:135</code>, <code>onboarding/action.ts:55</code>.</td></tr>
+<tr><td><strong>3</strong></td>
+<td>"Is this a Mac" re-derived inline 4×.</td>
+<td><code>isMacPlatform</code> is already exported
+(<span class="filepath">keybindings-settings/keyCapture.ts:16</span>); hoist to
+<code>utils/platform.ts</code> and import.</td>
+<td><code>canonicalizeChord.ts:84</code> (subtly different regex!), quick-find / find-replace /
+command-palette <code>HeaderItem.tsx:6</code>.</td></tr>
+<tr><td><strong>4</strong></td>
+<td>Mobile-viewport check triplicated in non-React code (raw <code>matchMedia('(max-width:
+767px)')</code>).</td>
+<td>None exists for non-React consumers (<code>useIsMobile()</code> can't serve pointer-loop
+recognizers — documented in <code>continuousGestures.ts:664</code>); extract one
+<code>isMobileViewport()</code> sharing the breakpoint constant with the hook.</td>
+<td><code>navigation.ts:147</code>, <code>dateScrubRecognizer.ts:48</code>,
+<code>swipeRecognizer.ts:44</code>.</td></tr>
+<tr><td>—</td>
+<td colspan="3">Verified no-action (correct seed shape or genuine device singletons):
+<code>getClientId</code> (1 caller), <code>isInstalledAppDisplayMode</code> (internal + 1),
+<code>lastWorkspace</code> accessors (1 caller each, pre-repo bootstrap — the seed shape done
+right), <code>clientLocalSettings</code>/theme-persistence/<code>modePin</code>/<code>keyStore</code>
+(parameterized correctly), clipboard/reload/history (the browser action <em>is</em> the effect),
+agent-bridge hash params (self-contained pairing protocol).</td></tr>
+</table></div>
+
+<h3>The broader sweep — missing registries beyond layout</h3>
 
 <p>A codebase-wide audit for the same anti-pattern, to unblock extension points this design doesn't
 itself need. Honest headline first: the facet system is already open almost everywhere it matters —
