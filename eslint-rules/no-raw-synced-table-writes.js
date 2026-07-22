@@ -37,14 +37,27 @@
 import { syncedWriteTarget } from '../src/data/syncedTableSqlRecognizer.js'
 
 /** The static text an expression contributes, for target matching only. A
- *  template literal's interpolated expressions are dropped (not substituted);
- *  a `+` concatenation is folded only when BOTH sides are fully static, so a
- *  synced write split across string literals — `'UPDATE ' + 'blocks' + …` — is
- *  still seen as one statement. Any dynamic operand collapses the whole fold to
- *  `null` (see the module doc on why dropping beats guessing). */
+ *  template literal's STATIC interpolations are folded in (`${'blocks'}` →
+ *  `blocks`) and its dynamic ones drop out; a `+` concatenation is folded when
+ *  BOTH sides are static, so a synced write split across string literals —
+ *  `'UPDATE ' + 'blocks' + …` — or hidden in a static interpolation —
+ *  `UPDATE ${'blocks'} …` — is still seen as one statement. Any dynamic operand
+ *  contributes nothing (see the module doc on why dropping beats guessing). */
 const literalSqlText = (node) => {
   if (node.type === 'Literal') return typeof node.value === 'string' ? node.value : null
-  if (node.type === 'TemplateLiteral') return node.quasis.map(q => q.value.raw).join('')
+  if (node.type === 'TemplateLiteral') {
+    // Interleave the static quasis with any STATICALLY-foldable interpolation
+    // (`${'blocks'}`, a static `+` sub-chain, a nested static template). A
+    // dynamic `${expr}` folds to null and drops out — the same "give up on the
+    // dynamic part, keep the literal parts" contract as a `+` with a dynamic
+    // operand. Folding static interpolations catches a target that lives inside
+    // one, e.g. `UPDATE ${'blocks'} SET …`, which dropping every `${…}` missed.
+    let out = node.quasis[0].value.raw
+    for (let i = 0; i < node.expressions.length; i++) {
+      out += (literalSqlText(node.expressions[i]) ?? '') + node.quasis[i + 1].value.raw
+    }
+    return out
+  }
   if (node.type === 'BinaryExpression' && node.operator === '+') {
     const left = literalSqlText(node.left)
     if (left === null) return null

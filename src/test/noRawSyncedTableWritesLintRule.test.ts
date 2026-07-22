@@ -120,6 +120,14 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
           code: `db.execute('UPDATE ' + 'blocks' + setClause)`,
           errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
         },
+        // The target hidden inside a STATIC template interpolation — the quasis
+        // carry the keyword, `${'blocks'}` carries the table. Folding the static
+        // interpolation reconstructs `UPDATE blocks SET …` (the dynamic `?` param
+        // isn't in the SQL string, only in the args), so it's flagged.
+        {
+          code: "db.execute(`UPDATE ${'blocks'} SET content = ? WHERE id = ?`)",
+          errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
+        },
       ],
     },
   )
