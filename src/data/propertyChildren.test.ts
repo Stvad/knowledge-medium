@@ -397,6 +397,45 @@ describe('tx.setProperties (batch set + unset)', () => {
     expect(updates).toHaveLength(1)
   })
 
+  it('a set value that is ALSO unset is discarded, not encoded — an invalid discarded value does not abort the clear', async () => {
+    const countSchema = defineProperty<number>('count', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const repo = await setupWithTwo('cell')
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-count-definition',
+      [{
+        metadata: {
+          fieldId: 'field-count-children', workspaceId: WS, createdAt: 1,
+          name: countSchema.name, changeScope: countSchema.changeScope,
+          hidden: false, origin: 'user' as const,
+        },
+        schema: countSchema,
+      }],
+      {workspaceId: WS},
+    )
+    await createBlock(repo, 'p')
+    await repo.tx(tx => tx.setProperty('p', countSchema, 5),
+      {scope: ChangeScope.BlockDefault})
+
+    // `NaN` is invalid for the number codec (encode throws). Because `count` is
+    // ALSO unset in the same batch, the discarded set value must be skipped
+    // rather than encoded — otherwise the whole batch throws instead of applying
+    // the explicit clear (Codex #386). unset wins.
+    await repo.tx(tx => tx.setProperties('p', {
+      set: [propertyValue(countSchema, Number.NaN)],
+      unset: [countSchema],
+    }), {scope: ChangeScope.BlockDefault})
+
+    const bag = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', ['p'],
+    )
+    expect(JSON.parse(bag.properties_json)).toEqual({})
+  })
+
   it('does not clobber a sibling key absent from the batch', async () => {
     const repo = await setupWithTwo('cell')
     await createBlock(repo, 'p')
@@ -1543,14 +1582,18 @@ describe('content <-> value codecs: ref values are `((id))`, read via reference_
 
   // Regression (PR #386 review): `referenceBlockContentForId` was hardened to
   // refuse ids it cannot round-trip, which made the ordinary "clear a ref
-  // property" path — `codecs.ref` encodes a cleared value as `''` — throw and
-  // roll back the whole transaction. An empty ref is the ABSENCE of a
+  // property" path — `codecs.ref` encodes a cleared value as EXACTLY `''` —
+  // throw and roll back the whole transaction. An empty ref is the ABSENCE of a
   // reference, so it renders as empty content: the row survives, its derived
   // column stays NULL, and the projection reads the key as unset.
-  it('renders a cleared ref value as empty content instead of throwing', () => {
+  it('renders an exactly-empty ref as empty content, but rejects a whitespace-only id', () => {
     expect(propertyValueToChildContent(refSchema, '')).toBe('')
     expect(encodedPropertyValueToChildContent(refSchema, '')).toBe('')
-    expect(propertyValueToChildContent(refSchema, '   ')).toBe('')
+    // A whitespace-only id is a MALFORMED reference, not a clear (Codex #386):
+    // matching it as "empty" would silently unset the property; it must reach
+    // `referenceBlockContentForId`, which throws on whitespace/parens ids.
+    expect(() => propertyValueToChildContent(refSchema, '   ')).toThrow()
+    expect(() => encodedPropertyValueToChildContent(refSchema, '   ')).toThrow()
   })
 
   it('reads the ref back from the column (the bare id lands in the cell)', () => {

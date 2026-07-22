@@ -141,13 +141,16 @@ const encodedValueToContent = (schema: AnyPropertySchema, encoded: unknown): str
     // only the child content is reference-shaped.
     if (typeof encoded !== 'string') return JSON.stringify(encoded)
     // An EMPTY ref is not a reference — it is the absence of one. `codecs.ref`
-    // encodes a cleared/default ref as `''`, and rendering that as `(())`
-    // would be unparseable content that `referenceBlockContentForId` now
-    // (correctly) refuses, aborting the whole tx over a normal "clear this
-    // property" write. Empty content is exactly right here: the row survives,
-    // its derived column stays NULL, and the projection reads the key as
-    // unset — the same shape as prose typed into a ref value.
-    if (encoded.trim() === '') return ''
+    // encodes a cleared/default ref as EXACTLY `''`, and rendering that as
+    // `(())` would be unparseable content that `referenceBlockContentForId`
+    // refuses, aborting the whole tx over a normal "clear this property" write.
+    // Empty content is right here: the row survives, its derived column stays
+    // NULL, and the projection reads the key as unset. Match `''` EXACTLY, not
+    // `.trim() === ''`: a whitespace-only id is a MALFORMED reference (not a
+    // clear), so it must reach `referenceBlockContentForId` — which throws on a
+    // whitespace/parens id — rather than silently unsetting the property here,
+    // the same silent property-loss that guard exists to prevent (Codex #386).
+    if (encoded === '') return ''
     return referenceBlockContentForId(encoded)
   }
   if (

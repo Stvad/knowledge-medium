@@ -866,8 +866,15 @@ export class TxImpl implements Tx {
     // a key named in BOTH lists ends up removed (unset wins — an explicit
     // caller intent to clear takes precedence over a stale set in the batch).
     const properties = {...before.properties}
-    for (const {schema, value} of sets) properties[schema.name] = schema.codec.encode(value)
     const unsetNames = new Set(unsets.map(schema => schema.name))
+    // Encode only the sets that SURVIVE the unsets. A key named in BOTH lists is
+    // cleared (unset wins), so encoding its discarded — possibly stale/invalid —
+    // set value (NaN for a number, a removed enum option) would throw the whole
+    // batch instead of applying the explicit clear. Symmetric with the child
+    // dual-write below, which already skips unset-shadowed sets.
+    for (const {schema, value} of sets) {
+      if (!unsetNames.has(schema.name)) properties[schema.name] = schema.codec.encode(value)
+    }
     for (const name of unsetNames) delete properties[name]
     if (jsonValuesEqual(before.properties, properties)) return // net no-op
     // Eager child dual-write, symmetric with setProperty/unsetProperty: delete
