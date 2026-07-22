@@ -139,7 +139,9 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   const hover = useBulletHover(hasHoverSections && !isMobile)
 
   const openBlockInfo = () => {
-    void openDialog(BlockInfoDialog, {block, sections: hoverSections})
+    // Pass the originating panel so the dialog's in-block links target it
+    // rather than the active panel (the dialog mounts outside the panel tree).
+    void openDialog(BlockInfoDialog, {block, sections: hoverSections, panelId})
   }
 
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so

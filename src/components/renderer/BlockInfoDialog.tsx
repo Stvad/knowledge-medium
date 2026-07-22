@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog.js'
 import { FallbackComponent } from '@/components/util/error.js'
+import { NestedBlockContextProvider } from '@/context/block.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { BlockRenderer } from '@/types.js'
 import type { Block } from '@/data/block'
@@ -23,16 +24,24 @@ import type { Block } from '@/data/block'
 export interface BlockInfoDialogProps {
   block: Block
   sections: readonly BlockRenderer[]
+  /** Panel the dialog was opened from — DialogHost mounts us as a sibling of
+   *  the panel tree (no ambient panel context), so we re-seed it below and
+   *  in-block links (author pages) target the originating panel instead of
+   *  silently replacing the active one. */
+  panelId?: string
 }
 
 export const BlockInfoDialog = ({
   block,
   sections,
+  panelId,
   cancel,
 }: DialogContextProps<null> & BlockInfoDialogProps): ReactElement => (
-  // Non-modal + no overlay: the card's author links navigate the app
-  // underneath, so a focus-trapping dimmed modal would leave the destination
-  // unreachable until the dialog is dismissed. Mirrors ConsistencyAuditDialog.
+  // Non-modal + no overlay so author links stay navigable underneath (a
+  // focus-trapping dimmed modal would leave the destination unreachable). Same
+  // modal={false}+hideOverlay as ConsistencyAuditDialog, but we intentionally
+  // keep Radix's default outside-click-to-dismiss — this is a disposable info
+  // popup, not a task dialog whose state needs protecting.
   <Dialog
     open
     modal={false}
@@ -44,13 +53,15 @@ export const BlockInfoDialog = ({
       <DialogHeader>
         <DialogTitle>Block info</DialogTitle>
       </DialogHeader>
-      <div className="flex flex-col gap-2">
-        {sections.map((Section, index) => (
-          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-            <Section block={block}/>
-          </ErrorBoundary>
-        ))}
-      </div>
+      <NestedBlockContextProvider overrides={{panelId}}>
+        <div className="flex flex-col gap-2">
+          {sections.map((Section, index) => (
+            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+              <Section block={block}/>
+            </ErrorBoundary>
+          ))}
+        </div>
+      </NestedBlockContextProvider>
     </DialogContent>
   </Dialog>
 )

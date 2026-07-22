@@ -114,6 +114,10 @@ export function useBulletHover(enabled: boolean): BulletHoverController {
         }
         pendingTimer.current = window.setTimeout(() => {
           pendingTimer.current = null
+          // Defense-in-depth for a real-browser jank race where the mirror
+          // effect's cancelPending() is scheduled but hasn't run before this
+          // timer fires. Unreachable under the tests' synchronous act(), but a
+          // cheap guard for a genuinely-possible (if rare) main-thread stall.
           if (!enabledRef.current) return
           setAnchorEl(el)
           setOpen(true)
@@ -170,10 +174,18 @@ export function BulletHoverCard({open, anchorEl, hoverProps, children}: BulletHo
   return createPortal(
     <div
       ref={setFloatingElement}
-      role="tooltip"
+      // Portalled to <body>, but React events still bubble through the React
+      // tree to the block shell — a click on the card would otherwise
+      // focus/edit/select the underlying block. Mark it ignored (belt) and stop
+      // pointer/click propagation at the boundary (suspenders). No
+      // role="tooltip": the card holds interactive links, which that role
+      // forbids; the mouse handlers keep the hover-intent alive.
+      data-block-interaction="ignore"
       style={floatingStyle}
       onMouseEnter={hoverProps.onMouseEnter}
       onMouseLeave={hoverProps.onMouseLeave}
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
       className="bullet-hover-card z-50 min-w-[13rem] max-w-[20rem] rounded-md border border-border bg-background text-foreground shadow-md p-2.5"
     >
       {children}

@@ -43,7 +43,9 @@ const useCardMeta = (block: Block): CardMeta | undefined =>
   })
 
 const Author = ({userId, workspaceId}: {userId: string; workspaceId: string}): ReactNode => {
-  const {name, blockId} = useUserPage(userId)
+  // Resolve the user page in the block's own workspace so the name and the
+  // link href agree even when it isn't the active workspace.
+  const {name, blockId} = useUserPage(userId, workspaceId)
   // Hook must run unconditionally; the handler is only wired when there's a
   // user page to open.
   const openUser = useOpenBlock({blockId: blockId ?? '', workspaceId})
