@@ -111,6 +111,15 @@ describe('no-raw-synced-table-writes ESLint rule', () => {
           code: `db.execute('DELETE FROM blocks WHERE id = ' + id)`,
           errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
         },
+        // A static prefix that carries the whole keyword+table ahead of a
+        // DYNAMIC suffix — the outer `+` can't fold, but the inner static
+        // sub-chain `'UPDATE ' + 'blocks'` is checked at its largest static
+        // boundary, so the known `blocks` target is still caught (and reported
+        // exactly once, not doubled by the fully-static case above).
+        {
+          code: `db.execute('UPDATE ' + 'blocks' + setClause)`,
+          errors: [{ messageId: 'rawSyncedWrite', data: { table: 'blocks' } }],
+        },
       ],
     },
   )

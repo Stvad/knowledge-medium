@@ -21,9 +21,14 @@
  * resolved statically — the interpolation is dropped rather than guessed at,
  * so the site isn't flagged. Known limitation of a literal-text rule. The same
  * goes for a `+` concatenation with a NON-static operand (`'UPDATE ' + name`):
- * the fold gives up (returns null), and the literal parts are re-examined on
- * their own, so a statement whose keyword+table survive in one literal is still
- * caught. Only a fully-static split (`'UPDATE ' + 'blocks'`) is reconstructed.
+ * the fold gives up (returns null) at that boundary, and the literal parts are
+ * re-examined on their own, so a statement whose keyword+table survive in one
+ * literal is still caught. A `+` chain is checked at its LARGEST static
+ * boundary, so both a fully-static split (`'UPDATE ' + 'blocks'`) AND a static
+ * prefix carrying the target ahead of a dynamic suffix
+ * (`'UPDATE ' + 'blocks' + setClause`) are reconstructed and flagged; only a
+ * split that scatters the keyword and table across a dynamic operand
+ * (`'UPDATE ' + name + 'blocks'`) escapes.
  *
  * A small handful of files are legitimately exempt — see the `files`-scoped
  * overrides in eslint.config.js, each with a comment explaining why.
@@ -92,12 +97,24 @@ const noRawSyncedTableWrites = {
     return {
       Literal: check,
       TemplateLiteral: check,
-      // Fold `+` concatenations at the OUTERMOST `+` only — a nested sub-chain
-      // would re-fold a prefix and report twice. Operand literals are still
-      // visited individually, so a dynamic-operand concat whose keyword+table
-      // survive in one literal keeps its existing coverage.
+      // Fold `+` concatenations at the LARGEST statically-foldable boundary:
+      // check a `+` node when it folds to static text AND its parent `+` (if
+      // any) does NOT — the parent's own fold would already cover it otherwise.
+      //   - fully-static chain `a+b+c`: only the outermost folds under a
+      //     non-`+` parent, so it reports ONCE (no double-report from `a+b`);
+      //   - static prefix + dynamic suffix `'UPDATE ' + 'blocks' + setClause`:
+      //     the outer `+` folds to null (dynamic `setClause`) and is skipped,
+      //     but the inner `'UPDATE ' + 'blocks'` folds to static text under a
+      //     null-folding parent, so its known `blocks` target is still caught.
+      // Operand literals are also visited individually (the Literal handler),
+      // preserving coverage when the target survives whole in one literal.
       "BinaryExpression[operator='+']"(node) {
-        if (node.parent?.type === 'BinaryExpression' && node.parent.operator === '+') return
+        if (literalSqlText(node) === null) return
+        const parent = node.parent
+        if (
+          parent?.type === 'BinaryExpression' && parent.operator === '+'
+          && literalSqlText(parent) !== null
+        ) return
         check(node)
       },
     }
