@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-medium/agent-dispatch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Dispatch note-graph triggers to local agent CLIs: backlink mentions, query-change watchers, durable graph lifecycle state, and optional channel delivery.",
   "keywords": [
     "agent",
@@ -43,7 +43,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@knowledge-medium/agent-cli": "^0.3.0",
+    "@knowledge-medium/agent-cli": "workspace:^",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.0.0"
   },

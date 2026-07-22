@@ -1,9 +1,19 @@
 packages:
   - packages/*
 
-# agent-dispatch depends on agent-cli via a plain semver range (NOT workspace:)
-# because the publish pipeline runs plain `npm publish`, which does not rewrite
-# workspace: protocol ranges. This keeps yarn-1-style local linking instead.
+# In-workspace deps use the workspace: protocol (agent-dispatch -> agent-cli
+# is workspace:^), so they always resolve to the in-repo package — a plain
+# semver range silently falls back to the stale published version the moment
+# the local version leaves the range (0.x minors count as breaking). To make
+# that publishable, scripts/publish-packages.mjs's --pack mode runs `pnpm
+# pack` (NOT plain `npm pack`), which rewrites workspace:^ to a concrete
+# ^<version> range in the packed tarball's manifest; --publish then ships
+# that tarball as-is with plain `npm publish` (no workspace resolution left
+# to do by then).
+#
+# linkWorkspacePackages only affects plain semver ranges (it links them
+# yarn-1-style when satisfiable); kept as belt-and-suspenders for any future
+# dep that forgets the workspace: protocol.
 linkWorkspacePackages: true
 
 # pnpm blocks dependency build scripts by default; these two genuinely need
