@@ -508,7 +508,8 @@
   (slice A); discovery is an indexed flat predicate, never a content parse at
   read time. The §6 all-scopes decision was re-raised (display-tier complexity)
   and re-affirmed — UI state materializes; merge gains the one view-state rule
-  (UiState-scoped divergence resolves silently, §9). The A/B branch's minted
+  (view-state-flagged divergence resolves silently — a per-definition
+  merge-policy flag, not bare scope keying, §9). The A/B branch's minted
   form and positional recognition now <em>trail</em> this doc — the 07-17
   "code is authoritative" note is qualified until the branch lands the delta
   checklist.<br>
@@ -1212,7 +1213,10 @@ arrived row:
       rows (recognizable by <code>is_field_form</code> + <code>reference_target_id</code>) up to their parent and
       dedups there — <em>union-with-dedupe</em> (§9): the duplicate field rows fold
       into one, content-equal values fold with them, and <em>divergent</em> values
-      persist as peer siblings, so a genuine concurrent conflict is surfaced in the
+      persist as peer siblings — view-state-flagged keys excepted (§9's merge
+      entry): there the reconcile keeps the deterministic first survivor
+      (<code>order_key, id</code> order — no target exists at this site) and
+      drops the rest silently — so a genuine concurrent conflict is surfaced in the
       tree rather than silently resolved. Until the reconcile visits the parent,
       duplicate rows persist until some unrelated local edit
       happens to touch it.</li>
@@ -1351,7 +1355,7 @@ toggle rewrites one value row in place (no new rows, no tombstone churn), and
 same-key concurrent writes converge on the same row under content-LWW, matching
 bag behavior where it was fine and beating it where it wasn't. View state needs
 exactly one special case, and it lives in merge policy, not storage: the
-UiState divergence rule (§9).
+view-state divergence rule (per-definition merge-policy flag, §9).
 </p>
 
 <p>
@@ -1427,8 +1431,11 @@ read-only policy — <code>tx.setProperty</code> enforces
 <code>scopePoliciesEquivalent</code> today, and an outline edit of a
 <code>UserPrefs</code> field row would route the equivalent write around it, landing
 in the wrong undo bucket. Block-level ops on a recognized property-subtree row must
-resolve their scope from the owning definition (the same <code>resolveField</code>
-lookup recognition uses) — the routing shim ships in slice B3.
+resolve their scope from the owning definition — via the shadow-tolerant
+<em>schema-returning</em> metadata lookup (§9 recognition, condition 3's
+extension), never bare <code>resolveField</code>, whose winner-enforcing miss on
+a shadowed loser would land the write in the wrong policy bucket — the routing
+shim ships in slice B3.
 </p>
 
 <div class="callout">
@@ -1567,7 +1574,8 @@ surface.
     only — it never classifies (§9 condition 1).</dd>
   <dt><strong>Columns</strong></dt>
   <dd><code>reference_target_id</code> (stamped for marked <em>and</em> unmarked
-    ref forms, purely textual) · <code>is_field_form</code> (marked block-ref
+    ref forms — purely textual for <code>((id))</code>, the generic alias
+    lookup for <code>[[name]]</code>) · <code>is_field_form</code> (marked block-ref
     form only) — both local, derived, never synced, rebuilt from content by the
     same repair paths.</dd>
   <dt><strong>Predicate</strong></dt>
@@ -1844,8 +1852,10 @@ supabase skill if it's kept.
     retroactive-reinterpretation trap this grammar killed: a pasted
     <code>::[[status]]</code> would flip to a live field row — children become
     values, projection writes the owner's synced cell — the moment auto-claim
-    makes the name definition-resolvable; AC's link-reclaim therefore also
-    skips marked-alias rows (§11 AC). <em>(2)</em> Its parent is non-null (root half:
+    makes the name definition-resolvable. AC's link-reclaim skips marked-alias
+    rows for the adjacent reason: with the bit never set, a re-pointed target
+    could not classify, but it would create a <em>bound lookalike</em> outside
+    the §7 seam's visibility rule (§11 AC). <em>(2)</em> Its parent is non-null (root half:
     a workspace-root row has no owner to be a field <em>of</em> — its marker is just
     content; the SQL twins carry the same <code>parent_id IS NOT NULL</code>
     clause). <em>(3)</em> <code>reference_target_id</code> resolves via the
@@ -1894,9 +1904,10 @@ supabase skill if it's kept.
     <em>ownership</em> question — "which field row owns this descendant" — which
     is containment, not identity, and is inherently positional: B3's scope
     routing (a structural edit deep in a property subtree routes under the
-    owning schema's scope), the backlink presented-as-owner mapping, and
+    owning schema's scope) and
     hidden-subtree pruning still walk up to the nearest <code>::</code>
-    ancestor (PR #417 review: deleting the walk <em>outright</em> would silently
+    ancestor (backlink presentation needs no walk — it is a single parent hop,
+    the References entry's rule) (PR #417 review: deleting the walk <em>outright</em> would silently
     re-route value-descendant edits under the caller's BlockDefault scope). The
     surviving walk is much simpler than the deleted one: each hop is
     independently classified by the flat predicate, so it carries none of the
@@ -2104,7 +2115,8 @@ supabase skill if it's kept.
     user-authored sub-children — a comment thread under a folding duplicate moves
     to the survivor, and both dedup call sites must fold identically);
     <em>divergent</em> values are <strong>never deleted</strong> — they persist as
-    peer siblings under the field row. Projection reads the first parseable value,
+    peer siblings under the field row (view-state-flagged keys excepted: the
+    merge entry's silent-resolve rule, below). Projection reads the first parseable value,
     so the visibly-first value owns the cell while the others stay in the tree as
     a surfaced conflict; concurrent dual-writes from two devices converge to
     sibling values rather than one silently winning. This dissolves the earlier
@@ -2475,8 +2487,10 @@ reconcile, <code>core.restore</code> re-materialization, and materializing
 pre-existing cells when a definition arrives late or on flip — all dormant at
 <code>'cell'</code>, all landing with the flip enablement (slice C's checklist
 inherits that issue; note the 07-22 grammar retires the set's
-<em>ancestor</em>-flip members — classification no longer reads ancestors —
-so the issue list should be re-trimmed with the branch delta). Two items left the bucket as <em>resolved on the branch</em>
+<em>ancestor</em>-flip members for <em>recognition</em> — classification no
+longer reads ancestors — while the §9 ownership-walk consumers (scope routing,
+hidden-subtree pruning) keep a narrower ancestor-change invalidation need; the
+issue list should be re-trimmed with the branch delta, not emptied). Two items left the bucket as <em>resolved on the branch</em>
 rather than deferred: the merge relocate-stamp-clear is gone (union-with-dedupe,
 §9) and value-row backlink de-dup is handled at the display layer (§9). Two
 companion issues carry what #389 doesn't: <strong>#404</strong> — <em>pre-flip</em>
@@ -2909,10 +2923,11 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         ordinary page to the definition once it claims the name) survives as a
         link-target concern only, rebuilt with cell reprojection as before —
         and it <strong>skips marked-alias rows</strong> (<code>::[[name]]</code>
-        verbatim leftovers): re-pointing one would light it up as a live field
-        row retroactively, the exact trap this step no longer has (§9
-        condition 1; the §7 import seam is the only thing that may bind a
-        marked alias, at paste time, visibly).
+        verbatim leftovers): with §9 condition 1 the bit is never set, so a
+        re-pointed target could not classify the row — but it would create a
+        <em>bound lookalike</em>, exactly the state §7's seam-visibility rule
+        forbids (the §7 import seam is the only thing that may bind a marked
+        alias, at paste time, visibly).
         <em>Name-collision pastes</em>
         (same-named schema, incompatible codec) become reachable then and lean on the
         §9 sweep report; alias collision semantics ride the alias machinery's
