@@ -1558,6 +1558,28 @@ surface.
 
 <h2 id="s7">7. Field-row content: <code>::((fieldId))</code> + derived columns</h2>
 
+<dl id="grammar-box">
+  <dt><strong>Marker</strong></dt>
+  <dd><code>::</code> + one whole-block block-ref → <code>::((fieldId))</code>;
+    matched on <em>trimmed</em> content, no space between marker and ref; the
+    embedded ref inherits the exact-ref grammar's id canonicalization. The
+    marked <em>alias</em> form <code>::[[name]]</code> is input/import surface
+    only — it never classifies (§9 condition 1).</dd>
+  <dt><strong>Columns</strong></dt>
+  <dd><code>reference_target_id</code> (stamped for marked <em>and</em> unmarked
+    ref forms, purely textual) · <code>is_field_form</code> (marked block-ref
+    form only) — both local, derived, never synced, rebuilt from content by the
+    same repair paths.</dd>
+  <dt><strong>Predicate</strong></dt>
+  <dd><code>is_field_form = 1</code> ∧ <code>parent_id IS NOT NULL</code> ∧
+    shadow-tolerant-resolves ∧ workspace flipped (§9 has each condition's
+    rationale and contract).</dd>
+  <dt><strong>Roles</strong></dt>
+  <dd><code>::</code> children of any block = its field rows · a field row's
+    value set = its <code>is_field_form = 0</code> children (a binding
+    selection discipline, §9) · children of value rows = ordinary content.</dd>
+</dl>
+
 <p>
 Rev 1 specified field-row content as <code>((schema-id))</code>; the spike switched to
 <code>[[Schema Name]]</code> with a two-tier resolution (schema-name winner map first,
@@ -1597,7 +1619,11 @@ classifies. <code>::</code> won over the Tana-style <code>&gt;</code> because
 every serializer and paste path — while <code>::</code> has no line-start meaning
 in markdown (no escape rule anywhere) and is the property glyph of the
 Roam/Logseq lineage; single <code>:</code> lost on trigger false-positives
-(emoticons, prose colons). The
+(emoticons, prose colons).
+</p>
+
+<p>
+The
 human-readable name is recovered from the definition wherever it's needed: the cell key
 at projection time, the rendered label. One as-built caveat sharpens this
 (PR-review round 28): today the recovery runs through the <em>registry</em>
@@ -1612,7 +1638,11 @@ previews, pre-D surfaces, readable markdown export — would show a blank label.
 B2 therefore carries a <strong>name→content mirror</strong> for user
 definitions: <code>addSchema</code> writes <code>content = name</code>, renames
 write the mirror through (the same B2 registry-diff funnel that re-keys the
-cell), and a one-shot backfill aligns existing user definitions. Why the reversal stuck: the
+cell), and a one-shot backfill aligns existing user definitions.
+</p>
+
+<p>
+Why the reversal stuck: the
 name-resolution tier only existed because properties weren't blocks. Post-unification,
 definitions <em>are</em> blocks, and blocks already have exactly one name mechanism —
 the alias index. Types are the standing precedent: a type block claims its label as an
@@ -2489,10 +2519,9 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <code>is_field_form</code></strong> — same local-column treatment
         (<code>BLOCK_LOCAL_COLUMNS</code>, boot ALTER, partial index
         <code>WHERE is_field_form = 1</code>), stamped in the same textual derive
-        pass: the parser recognizes both the bare exact-ref forms and the marked
-        <code>::</code> form, stamps <code>reference_target_id</code> for
-        <em>either</em> (backlinks/retarget stay uniform over machinery), and sets
-        the bit only for the marked form; every repair/derive-at-arrival/undo-seam
+        pass under the §7 grammar box's derivation rule (either ref form stamps
+        the target; only the marked block-ref form sets the bit); every
+        repair/derive-at-arrival/undo-seam
         rule below covers both columns identically. Write metadata splits by path (§5): the same-tx
         processor rides the triggering edit's upload; the bulk paths write raw CAS,
         no metadata, no uploads. The rest of the ship list: the
@@ -3270,20 +3299,12 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
       <td>A plugin-less client keeps cell authority for a custom-codec key (C)</td>
     </tr>
     <tr>
-      <td><strong>Recognition = marked form + parent-not-null + resolution +
-        workspace flip; content-intrinsic, no position.</strong> A
-        field row's content is <code>::((fieldId))</code> — the derived
-        <code>is_field_form</code> bit records the marked grammar, the
-        <code>reference_target_id</code> resolves a definition
-        (shadow-tolerant), the parent is non-null, and the
-        workspace is flipped (<code>properties_migration</code> at or past
-        <code>'children'</code> — never an equality test). Classification is
-        identical at every depth and move-proof. Roles are content-derived (§9):
-        <code>::</code> children of any block are its field rows (machinery rows'
-        own bags materialize), non-<code>::</code> children of a field row are its
-        values — plain <code>((id))</code> refs to definitions included — and
-        unmarked <code>[[name]]</code>/<code>((id))</code> rows are never
-        machinery.</td>
+      <td><strong>Recognition = the §7 grammar box's predicate;
+        content-intrinsic, no position.</strong> Flip comparison is at-or-past
+        <code>'children'</code>, never an equality test. Move-proof at any
+        non-root position; roles and the value-set selection discipline are
+        §7/§9's — unmarked <code>[[name]]</code>/<code>((id))</code> rows are
+        never machinery.</td>
       <td><a href="#s9">§9</a></td>
       <td>Rendering, hidden filtering, the visible-view opt-in
         (<code>hidePropertyChildren</code>), projection, dedup walk</td>
