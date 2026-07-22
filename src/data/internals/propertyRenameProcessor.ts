@@ -65,13 +65,15 @@ interface RenamedDefinition {
 
 /** Definition blocks in `changedRows` whose NAME changed this tx. A brand-new
  *  definition (no `before`) has no existing consumer cells to re-key, and a
- *  shadowed/unavailable fieldId can't be reprojected — both are skipped. */
+ *  shadowed/unavailable fieldId can't be reprojected — both are skipped, as is
+ *  a rename onto a name a DIFFERENT non-renaming definition already owns. */
 const collectRenames = (
   ctx: SameTxCtx,
   workspaceId: string,
   changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
 ): RenamedDefinition[] => {
-  const renames: RenamedDefinition[] = []
+  // Pass 1: candidate renames (name changed, definition resolvable at tx start).
+  const candidates: RenamedDefinition[] = []
   for (const {before, after} of changedRows) {
     if (after === null || after.deleted) continue
     const afterMeta = parsePropertyDefinitionMetadata(after)
@@ -89,14 +91,32 @@ const collectRenames = (
     // incidental coverage is intentionally traded for the same-tx undo
     // coherence, and folded into the #389 item-8 reconcile.)
     if (resolution.status !== 'resolved') continue
-    renames.push({
+    candidates.push({
       fieldId: after.id,
       oldName: beforeMeta.name,
       newName: afterMeta.name,
       schema: resolution.schema,
     })
   }
-  return renames
+  // Pass 2: drop a rename onto a COLLIDING new name. The tx-start resolver
+  // still maps the renamed field under its OLD name, so it can't tell us who
+  // wins the new name post-commit. If some OTHER definition already owns the
+  // new name and is NOT itself renaming away from it, re-keying our value under
+  // that name would overwrite that owner's cell projection with the wrong value
+  // (found by Codex on PR #386) — the renamed field is likely shadowed there,
+  // not the winner. Leave the whole re-key to the post-commit registry rebuild
+  // + PROJECT / slice-C reconcile under the shadowing model (#389 item 8). A
+  // SWAP (`a<->b`) is preserved: each new name is owned by a peer that IS
+  // renaming away, so it isn't a real collision.
+  const renamedFieldIds = new Set(candidates.map(c => c.fieldId))
+  return candidates.filter(c => {
+    const owner = ctx.resolvePropertySchemaName(workspaceId, c.newName)
+    return !(
+      owner.status === 'resolved'
+      && owner.schema.fieldId !== c.fieldId
+      && !renamedFieldIds.has(owner.schema.fieldId)
+    )
+  })
 }
 
 const consumingParentIds = async (

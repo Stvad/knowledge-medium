@@ -487,6 +487,42 @@ describe('simultaneous name swap (a -> b AND b -> a in one rebuild)', () => {
     expect(await liveFieldRow('host', FIELD_A)).toBe(fieldA)
     expect(await liveFieldRow('host', FIELD_B)).toBe(fieldB)
   })
+
+  it('does NOT clobber an existing owner when a rename collides with its name', async () => {
+    // `alpha` renamed onto `beta`, which a DIFFERENT def (B) still owns and is
+    // NOT renaming away from. Without the collision guard the re-key would drop
+    // `alpha` and overwrite the `beta` cell with alpha's value — but B is the
+    // one that keeps projecting `beta`. The whole re-key must be skipped and
+    // left to the post-commit registry + PROJECT / #389 item 8.
+    await seedWorkspace('children')
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setActiveWorkspaceId(WS)
+    await seedDefinitionBlock(repo, FIELD_A, 'alpha')
+    await seedDefinitionBlock(repo, FIELD_B, 'beta')
+    publishPair(repo, alpha, beta)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'host', workspaceId: WS, parentId: null, orderKey: 'k-host', content: 'host',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('host', alpha, 'alpha-value'),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('host', beta, 'beta-value'),
+      {scope: ChangeScope.BlockDefault})
+    const fieldA = await liveFieldRow('host', FIELD_A)
+    const fieldB = await liveFieldRow('host', FIELD_B)
+
+    await repo.tx(tx => tx.setProperty(FIELD_A, propertyNameProp, 'beta'),
+      {scope: ChangeScope.BlockDefault})
+
+    // `beta` still carries B's value (NOT clobbered with `alpha-value`); the
+    // re-key was skipped wholesale, so the cell is untouched and both field
+    // rows stay live.
+    expect(await cell('host')).toEqual({alpha: 'alpha-value', beta: 'beta-value'})
+    expect(await liveFieldRow('host', FIELD_A)).toBe(fieldA)
+    expect(await liveFieldRow('host', FIELD_B)).toBe(fieldB)
+  })
 })
 
 describe('name round-trip guard (§7)', () => {
