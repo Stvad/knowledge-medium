@@ -31,7 +31,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review. <strong>Last verified against code:</strong> 2026-07-21 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review; round 8 (2026-07-22) adds the codebase-wide seam audit (§"The broader sweep"), App/main sentinel-comment policy, and the two-PR rollout split — implementation of PR 1 (core seam + globals) starting. <strong>Last verified against code:</strong> 2026-07-22 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -214,6 +214,59 @@ saying so is the disposition.</td></tr>
 same treatment (one seed call site + context/store for consumers) in its own change.</td></tr>
 </table></div>
 
+<h3>The broader sweep — non-injected seams beyond layout (upstream ask)</h3>
+
+<p>A codebase-wide audit for the same anti-pattern, to unblock extension points this design doesn't
+itself need. Honest headline first: the facet system is already open almost everywhere it matters —
+block renderers, markdown pipeline (remark plugins/components), CodeMirror extensions, header
+items, app/panel mounts, system pages, sidebar sections, property schemas, themes, keybindings,
+paste decisions, action contexts (<code>BuiltInActionContextType | (string &amp; {})</code>) all
+compose via facets with documented precedence/last-wins, and <code>keyedMapFacet</code>/<code>dedupById</code>
+warn rather than silently drop. The remaining gaps:</p>
+
+<div class="tblwrap"><table>
+<tr><th>Tier</th><th>Finding</th><th>What an extension cannot do</th><th>Disposition</th></tr>
+<tr><td><strong>A</strong></td>
+<td><strong>Search has no source/ranking registry.</strong> One kernel query
+(<code>core.searchByContent</code>, <span class="filepath">src/data/internals/kernelQueries.ts:1008</span>)
++ one hardcoded scorer (<code>blockSearchTextScore</code>,
+<span class="filepath">src/utils/linkTargetAutocomplete.ts:265</span>) feed all three consumers:
+quick-find, <code>[[</code>-autocomplete, and the agent <code>search</code> command. The only
+"override" is the unintended one — shadowing the query name via keyed-map last-wins (a
+<code>console.warn</code>, not a seam).</td>
+<td>Add a second search source (attachment OCR, code-block text, semantic/vector search) merged and
+ranked alongside content matches. Directly blocks the in-browser semantic-search extension from
+integrating with quick-find.</td>
+<td>A <code>searchSourcesFacet</code> (<code>{source, query, weight}</code> list) merged before
+scoring, replacing the hardcoded query+scorer pair.</td></tr>
+<tr><td><strong>B</strong></td>
+<td>Spatial navigation's non-navigable-surface list is a closed Set:
+<code>NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])</code>
+(<span class="filepath">src/plugins/spatial-navigation/walker.ts:52</span>, consulted at :114).</td>
+<td>A custom surface renderer (grid/kanban/canvas) can't exempt its cells from the global arrow-key
+walker.</td>
+<td>Small facet (or metadata on the existing surface-props contribution) instead of the Set.</td></tr>
+<tr><td><strong>B</strong></td>
+<td>The pre-paint theme flash-prevention script hardcodes the default theme ids + storage key in
+<code>index.html:20-32</code>, kept in sync with
+<code>DEFAULT_THEME_ID_LIGHT/_DARK</code>/<code>THEME_STORAGE_KEY</code> by comment only.</td>
+<td>An extension replacing the default theme can't stop the reload flash — the inline script must
+run pre-bundle, so no facet can reach it.</td>
+<td>Keep the mechanism (structural); generate the literals from the constants at build time so they
+can't desync.</td></tr>
+<tr><td><strong>C</strong></td>
+<td>Leave-with-rationale, verified still-current: <code>ChangeScope</code> closed enum (explicitly
+documented as intentional, data-layer spec §5.8); sync transport/auth singletons
+(<code>repoProvider</code>, Supabase client — infra substrate, not a plugin surface); attachment
+blob store (deliberate compile-time swap seam, not runtime); <code>window.React</code>/<code>ReactDOM</code>
+assignment in <code>main.tsx:30</code> (author comment says purpose forgotten; nothing in
+<code>src/</code> reads it — candidate for removal, not injection); and the module
+<code>CallbackSet</code> buses (dialogs/toast/keyboard-viewport/etc.) — each mirrors one genuinely
+singular browser resource and gates no facet-eligible decision.</td>
+<td>—</td>
+<td>Documented dispositions; no machinery.</td></tr>
+</table></div>
+
 <h3>What the provider looks like</h3>
 
 <p>It needs <strong>no new facet</strong> — the seam is "App mounts the root through the registry +
@@ -225,7 +278,13 @@ ASAP" intent (App.tsx has outgrown its boot role).</p>
   <code>&lt;BlockComponent blockId={root.id}/&gt;</code> under <code>{layoutBoundary:true}</code>,
   and keep <em>only</em> the always-on hashchange listener that must survive the no-layout states
   (locked/waiting — <code>App.tsx:260</code> — where there's no projection yet to re-resolve the
-  workspace). Its projection effect (<code>App.tsx:188-220</code>) moves out.</li>
+  workspace). Its projection effect (<code>App.tsx:188-220</code>) moves out. <strong>And it stays
+  thin by policy, not just refactor</strong> (upstream ask): the extraction PR adds sentinel
+  comments to <code>App.tsx</code> and <code>main.tsx</code> stating the rule for future agents —
+  these files are boot shims; do not grow them; any new app-root behavior goes into an overridable
+  seam (a block renderer, a facet contribution, or the layout-root renderer) — with a pointer to
+  this doc. Boot files accrete precisely because each addition looks too small to refuse; the
+  comment makes the refusal cheap.</li>
   <li><strong>Default layout-root renderer.</strong> A <code>RendererContribution</code> matching
   the root context that does what App's effect does today: resolve the single session via
   <code>getLayoutSessionId()</code>, mount it, own one <code>PanelLayoutProjection</code> through a
@@ -556,34 +615,50 @@ two perspectives, once mounted in the visible one, immediately hydrates its hidd
   write back to the definition, and when?</li>
 </ul>
 
-<h2>Rollout sketch</h2>
+<h2>Rollout: two PRs (upstream-agreed sequencing)</h2>
+
+<h3>PR 1 — the core seam + un-hardcoding globals (no perspective code)</h3>
+
+<p>Behavior-identical refactor; needs no perspectives to justify it and ships alone.</p>
 
 <ol>
-  <li>Core, stands alone: <strong>extract the default layout-root renderer</strong> — move App's
-  projection effect + root mount into a <code>RendererContribution</code> +
-  <code>usePanelLayoutProjection</code> hook; App shrinks to resolving + mounting the root. Behavior
-  identical (single session); this is the "App.tsx got too big" cleanup and needs no perspectives to
-  justify it.</li>
-  <li>Core: retire the globals per §"Retiring the globals" — render-tree callers read
+  <li><strong>Extract the default layout-root renderer</strong> — move App's projection effect +
+  root mount into a <code>RendererContribution</code> + <code>usePanelLayoutProjection</code> hook
+  (carrying the StrictMode <code>disposed</code>-guard, workspace-switch teardown, and the
+  version-bump feedback to <code>getInitialLayout</code>); App shrinks to resolving + mounting the
+  root and the always-on no-layout hashchange listener.</li>
+  <li><strong>Retire the globals</strong> per §"Retiring the globals" — render-tree callers read
   <code>layoutSessionBlockId</code> from context, imperative callers switch to the store-backed
-  <code>getActiveLayoutSessionId()</code>, the raw global shrinks to the base-id seed; projection
-  construction fully owned by the renderer; <code>panelHistory.clear</code> wired to eviction.
-  This is what makes the root overridable.</li>
-  <li>Video plugin: wire <code>onPlay</code>/<code>onPause</code> so <code>isPlaying</code> tracks
-  native play state (makes Activity reveal a no-op for the enforcement effect; a latent correctness
-  fix on its own).</li>
-  <li>Core: active-session store + <code>LayoutSessionHost</code> override behind a default-off
-  switch; single-session behavior unchanged; inactive sessions wrapped in uniform
-  <code>&lt;Activity mode="hidden"&gt;</code>. The spike must confirm a <em>native-play</em> video
-  (not a <code>seekTo</code>-started one) still plays <strong>after switching back</strong> —
-  checking only while hidden gives a false pass (see hiding policy).</li>
-  <li>Core: input gating + DOM-selector disambiguation + single-active-projection rebinding; verify
-  with two hand-made sessions in the sandbox (native-play video in one, switch away and back,
-  confirm it's still playing and the other perspective's layout is intact).</li>
-  <li>Extension: synced perspective registry + per-device deterministic session ids, migration from
-  localStorage snapshots into the registry, expiry sweep deletes session subtrees, bar →
+  <code>getActiveLayoutSessionId()</code> (defaults to the base id — no behavior change), the raw
+  global shrinks to the base-id seed; plus whatever the broader audit (§below) marks as
+  cheap-to-fix-in-passing.</li>
+  <li><strong>Sentinel comments in <code>App.tsx</code>/<code>main.tsx</code></strong>: boot shims,
+  do not grow; new app-root behavior goes into an overridable seam (block renderer / facet), with a
+  pointer to this doc.</li>
+  <li><strong>Video plugin: wire <code>onPlay</code>/<code>onPause</code></strong> so
+  <code>isPlaying</code> tracks native play state — a latent correctness fix on its own, and the
+  prerequisite for Activity-hiding media later.</li>
+</ol>
+
+<h3>PR 2 — perspectives (builds on PR 1)</h3>
+
+<ol>
+  <li>Active-session store + <code>LayoutSessionHost</code> override behind a default-off switch;
+  inactive sessions wrapped in uniform <code>&lt;Activity mode="hidden"&gt;</code>. The spike must
+  confirm a <em>native-play</em> video (not a <code>seekTo</code>-started one) still plays
+  <strong>after switching back</strong> — checking only while hidden gives a false pass (see hiding
+  policy).</li>
+  <li>Input gating + DOM-selector disambiguation + single-active-projection rebinding +
+  <code>panelHistory.clear</code> on eviction; verify with two sessions in the sandbox (native-play
+  video in one, switch away and back, confirm it's still playing and the other perspective's layout
+  is intact).</li>
+  <li><code>;persp=</code> on the workspace URL segment (the full change set from §"Perspective in
+  the URL" — parse-out before the workspaceId compare, build-side emit, popstate→active-session
+  listener).</li>
+  <li>Extension side: synced perspective registry + per-device deterministic session ids, migration
+  from localStorage snapshots into the registry, expiry sweep deletes session subtrees, bar →
   <code>appMountsFacet</code>.</li>
-  <li>Sandbox-verify the full loop, then promote + upstream.</li>
+  <li>Sandbox-verify the full loop, then promote.</li>
 </ol>
 
 </body>
