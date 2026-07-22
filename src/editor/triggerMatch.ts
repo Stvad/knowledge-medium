@@ -79,13 +79,13 @@ const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean =>
  *  caught downstream by the editor's syntax-tree literal check; this
  *  keeps the raw matcher from firing on bare, schemeless URLs too. */
 const tokenBeforeHasSlash = (text: string, triggerPos: number): boolean =>
-  /\/[^\s]*$/.test(text.slice(0, triggerPos))
+  /\/\S*$/.test(text.slice(0, triggerPos))
 
-/** Whether a sibling trigger char at `sibPos` would itself fire — i.e.
- *  own the input — so the current walk (whose cursor is `pos`) must
- *  yield to it. Yielding to a sibling that CAN'T fire would leave a dead
- *  zone where no source opens, so this must mirror each trigger's OWN
- *  firing rules, not a rough approximation:
+/** Whether a sibling trigger char at `sibPos` would itself own the input
+ *  — so the current walk (whose cursor is `pos`) must yield to it.
+ *  Yielding to a sibling that owns NOTHING leaves a dead zone where no
+ *  source opens, so this checks the sibling's own PREFIX rules that
+ *  decide whether it fires standalone:
  *   - The sibling's query runs from `sibPos + 1` to `pos`. It can't fire
  *     if that query starts with a space (`@C# dev` — the `#` query would
  *     be ` dev`). But when the sibling sits right at the cursor
@@ -94,9 +94,20 @@ const tokenBeforeHasSlash = (text: string, triggerPos: number): boolean =>
  *     char (`sibPos + 1 < pos`), never at `text[pos]` (content past the
  *     cursor that belongs to no query).
  *   - `@` bows out after a word char (email-like).
- *   - `#` may glue onto a word but not a doubled `##`, and — like the
- *     real `#` matcher below — bows out inside a URL-path token
- *     (`@ a/b#c` must NOT yield to the `#`, which can't fire there). */
+ *   - `#` may glue onto a word but not a doubled `##`, and bows out
+ *     inside a URL-path token (`@ a/b#c` must NOT yield to the `#`,
+ *     which can't fire there — nothing owns that spot, so `@` should).
+ *
+ *  Deliberately does NOT check the `[`/`[[`/`((` ownership guards the
+ *  matcher applies below. Those aren't the sibling's own rules: a
+ *  sibling inside an unclosed `((` blockref (or `[[` wikilink) can't
+ *  fire ITSELF, but the blockref/wikilink autocomplete OWNS that cursor
+ *  position, so declining to fire the current trigger (yielding) is
+ *  still correct — mirroring those guards to NOT yield would make the
+ *  current trigger fire and double-fire with the bracket source (e.g.
+ *  `@((#`, where the `((#` blockref dropdown is what opens). The
+ *  bare-`[` case is moot: the walk hard-stops on `[`/`]` before the
+ *  outer trigger could fire anyway. */
 const siblingWouldFire = (text: string, sibPos: number, pos: number): boolean => {
   const afterPos = sibPos + 1
   if (afterPos < pos && text[afterPos] === ' ') return false
