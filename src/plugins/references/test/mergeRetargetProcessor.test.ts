@@ -407,13 +407,14 @@ describe('references.retargetMergedBlockReferences', () => {
       ).toBe(false)
     })
 
-    it('skips value AND entry for a ref field whose scope is not policy-equivalent to the merge tx', async () => {
-      // The value rewrite lands via the raw `properties` patch in the
-      // merge tx (BlockDefault), bypassing setProperty's per-field scope
-      // routing — so a UiState-scoped ref pointer must be left alone
-      // entirely (value AND entry, like the absent-schema branch), not
-      // silently mutated inside an undoable document merge (Codex
-      // review on PR #371).
+    it('retargets value AND entry even for a ref field whose scope is not policy-equivalent to the merge tx', async () => {
+      // A merge must not leave a pointer dangling at the tombstoned source,
+      // so it retargets a ref field's value+entry REGARDLESS of the field's
+      // declared scope — matching the value-child content path, which always
+      // retargets. The write lands under the merge's BlockDefault scope, so
+      // the retarget is undoable with the merge (undoing the merge restores
+      // the pointer). Overriding the field's default scope is exactly right
+      // for a merge (Vlad, PR #386 F7 — reversing the earlier PR #371 skip).
       const pinnedProp = refTestSeed('pinned-view', 'ref', ChangeScope.UiState)
       await resetTestDb(sharedDb.db)
       const {repo, cache} = createTestRepo({
@@ -449,11 +450,11 @@ describe('references.retargetMergedBlockReferences', () => {
       const ref = cache.getSnapshot('ref')!
       // Policy-equivalent field: rewritten as usual.
       expect(ref.properties.reviewer).toBe('into')
-      // UiState field: value AND entry untouched.
-      expect(ref.properties['pinned-view']).toBe('from')
+      // UiState field: NOW ALSO retargeted — no dangling pointer at `from`.
+      expect(ref.properties['pinned-view']).toBe('into')
       expect(ref.references).toEqual(normalizeReferences([
         {id: 'into', alias: 'into', sourceField: 'reviewer'},
-        {id: 'from', alias: 'from', sourceField: 'pinned-view'},
+        {id: 'into', alias: 'into', sourceField: 'pinned-view'},
       ]))
     })
   })
