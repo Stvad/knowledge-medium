@@ -3,10 +3,14 @@
  *  the fiddly parts — especially the wikilink-ownership parsing — can
  *  only be fixed in one place.
  *
- *  Trigger shape: `<trigger><query>` with no word character before the
- *  trigger (so emails / URL anchors like `a@b`, `page#section` don't
- *  fire) and no `[`/`]` in the query (the wikilink autocomplete owns
- *  `[[…`). The query may contain single spaces ("Blue Bottle Coffee",
+ *  Trigger shape: `<trigger><query>` and no `[`/`]` in the query (the
+ *  wikilink autocomplete owns `[[…`). What may precede the trigger is
+ *  trigger-specific: `@` never fires after a word character (so emails
+ *  like `a@b` don't fire), while `#` may be glued straight onto the tail
+ *  of a word (`title#todo` — so tagging a one-word block needs no
+ *  throwaway space) and bows out only inside a URL path
+ *  (`example.com/page#section` is an anchor, not a tag). The query may
+ *  contain single spaces ("Blue Bottle Coffee",
  *  "Meeting Note") — a double space, other whitespace, or the
  *  length/word caps end it so prose after a bare `@word`/`#word`
  *  doesn't keep the dropdown alive. A query that starts with a space
@@ -29,6 +33,13 @@ export interface CharTriggerOptions {
    *  half-typed `#` tag. (The `@` place trigger doesn't set this:
    *  `@@name` has no competing syntax.) */
   rejectDoubledTrigger?: boolean
+  /** Allow the trigger to fire when a word character sits immediately
+   *  before it (`title#todo`), instead of treating that as email- /
+   *  anchor-like and bowing out. The `#` type trigger sets this so a tag
+   *  can be glued onto a word without a throwaway leading space; a `/`
+   *  earlier in the same token still bows out (URL path). The `@` place
+   *  trigger leaves it off — `user@host` must stay an email. */
+  allowWordCharBefore?: boolean
 }
 
 /** All registered trigger chars. The walk breaks on a SIBLING trigger
@@ -61,6 +72,33 @@ const MAX_QUERY_WORDS = 6
 const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean =>
   /\[\[[^\]]*$/.test(text.slice(0, beforePos))
 
+/** True when a word-glued `#` (`allowWordCharBefore`) actually sits at
+ *  the tail of a URL path (`example.com/page#section`) rather than on a
+ *  plain word (`title`) — signalled by a `/` earlier in the same
+ *  whitespace-delimited token. Scheme URLs (`http://…/#a`) are also
+ *  caught downstream by the editor's syntax-tree literal check; this
+ *  keeps the raw matcher from firing on bare, schemeless URLs too. */
+const tokenBeforeHasSlash = (text: string, triggerPos: number): boolean => {
+  let start = triggerPos
+  while (start > 0 && !/\s/.test(text[start - 1])) start -= 1
+  return text.slice(start, triggerPos).includes('/')
+}
+
+/** Whether a sibling trigger char at `sibPos` (with `afterPos` the index
+ *  just after it) would itself fire — i.e. own the input — so the
+ *  current walk must yield to it. Mirrors each trigger's own prefix
+ *  rules (`@` bows out after a word char; `#` allows the word-glue but
+ *  not a doubled `##`) plus the shared "a query can't start with a
+ *  space" rule. Yielding to a sibling that CAN'T fire would leave a dead
+ *  zone where no source opens (see the `@C# dev` case in
+ *  triggerMatch.test.ts, where the `#` query would start with a space). */
+const siblingWouldFire = (text: string, sibPos: number, afterPos: number): boolean => {
+  if (text[afterPos] === ' ') return false
+  const before = sibPos > 0 ? text[sibPos - 1] : ''
+  if (text[sibPos] === '#') return before !== '#'
+  return !/\w/.test(before)
+}
+
 /** Pure trigger-detection helper. Callers export thin per-char
  *  wrappers (`matchAtTrigger`, `matchHashTrigger`) for their
  *  CompletionSources and tests. */
@@ -86,10 +124,11 @@ export const matchCharTrigger = (
     const c = text[i - 1]
     if (c === trigger) break
     // A sibling trigger closer to the cursor owns this input — but
-    // only a VIABLE one. A sibling disqualified by its own word-char
-    // guard (`C#`, `user@`) can't fire, so yielding to it would leave
-    // a dead zone where NO source opens; treat it as query text.
-    if (TRIGGER_CHARS.has(c) && !(i >= 2 && /\w/.test(text[i - 2]))) return null
+    // only a VIABLE one that could actually fire. A sibling that can't
+    // (`C# dev` where the `#` query would start with a space, `user@`
+    // where `@` bows out after a word) is treated as query text;
+    // yielding to it would leave a dead zone where NO source opens.
+    if (TRIGGER_CHARS.has(c) && siblingWouldFire(text, i - 1, i)) return null
     if (c === ' ') {
       if (i >= 2 && text[i - 2] === ' ') return null
     } else if (/\s/.test(c)) {
@@ -107,9 +146,16 @@ export const matchCharTrigger = (
   if (query.split(' ').filter(w => w.length > 0).length > MAX_QUERY_WORDS) return null
 
   const triggerPos = i - 1
-  // Word char immediately before the trigger → email-like / URL
-  // anchor (`a@b`, `page#section`); skip.
-  if (triggerPos > 0 && /\w/.test(text[triggerPos - 1])) return null
+  // Word char immediately before the trigger. `@` treats it as
+  // email-like (`a@b`, `user@host`) and bows out. `#` allows a tag
+  // glued onto the tail of a word (`title#todo`) so tagging a one-word
+  // block needs no throwaway space — except inside a URL path
+  // (`example.com/page#section` is an anchor), spotted by a `/` earlier
+  // in the same token.
+  if (triggerPos > 0 && /\w/.test(text[triggerPos - 1])) {
+    if (!opts.allowWordCharBefore) return null
+    if (tokenBeforeHasSlash(text, triggerPos)) return null
+  }
   if (opts.rejectDoubledTrigger && triggerPos > 0 && text[triggerPos - 1] === trigger) return null
   // Trigger directly preceded by `[` → inside a half-typed `[[@foo`; skip.
   if (triggerPos > 0 && text[triggerPos - 1] === '[') return null

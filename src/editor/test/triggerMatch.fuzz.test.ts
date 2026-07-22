@@ -114,7 +114,7 @@ const triggerArb: fc.Arbitrary<'@' | '#'> = fc.constantFrom('@', '#')
  *  which is orthogonal to `rejectDoubledTrigger`, and this keeps the
  *  suite differentialing against what production code actually calls. */
 const optsFor = (trigger: '@' | '#'): CharTriggerOptions =>
-  trigger === '#' ? {rejectDoubledTrigger: true} : {}
+  trigger === '#' ? {rejectDoubledTrigger: true, allowWordCharBefore: true} : {}
 
 describe('matchCharTrigger', () => {
   it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts:73-133)', () => {

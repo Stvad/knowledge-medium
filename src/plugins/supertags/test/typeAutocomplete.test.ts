@@ -34,7 +34,14 @@ describe('matchHashTrigger', () => {
     expect(matchHashTrigger('##task', 6)).toBeNull()
   })
 
-  it('does NOT match with a word char before the # (URL anchors)', () => {
+  it('DOES match a tag glued onto the tail of a word (title#todo)', () => {
+    // The one-word-block case: `#` should fire without a throwaway
+    // leading space (unlike `@`, which stays email-strict).
+    expect(matchHashTrigger('title#todo', 10)).toEqual({from: 5, query: 'todo'})
+    expect(matchHashTrigger('title#', 6)).toEqual({from: 5, query: ''})
+  })
+
+  it('does NOT match inside a URL path (slash earlier in the token)', () => {
     expect(matchHashTrigger('example.com/page#section', 24)).toBeNull()
   })
 })
@@ -201,6 +208,22 @@ describe('typeTagCompletionSource', () => {
     const result = await source(contextFor('note #rec', 9))
     expect(result).toMatchObject({from: 5, to: 9, filter: false})
     expect(result!.options.map(o => o.label)).toEqual(['Task', 'Create type "Recipe"'])
+  })
+
+  it('opens on a word-glued # once a query char is typed, but not on the bare glued # (C#/F# footgun)', async () => {
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async () => {},
+    })
+    // Bare glued `#` (`C#`) stays closed — one stray Enter here would
+    // otherwise mis-tag the block.
+    expect(await source(contextFor('C#', 2))).toBeNull()
+    // …but an explicit invocation still opens it.
+    expect(await source(contextFor('C#', 2, true))).toMatchObject({from: 1, to: 2})
+    // A query char makes it an intentional tag → opens.
+    expect(await source(contextFor('title#t', 7))).toMatchObject({from: 5, to: 7})
+    // A spaced (non-glued) empty `#` is a deliberate gesture → still opens.
+    expect(await source(contextFor('note #', 6))).toMatchObject({from: 5, to: 6})
   })
 
   it('returns null for zero candidates unless explicitly invoked', async () => {

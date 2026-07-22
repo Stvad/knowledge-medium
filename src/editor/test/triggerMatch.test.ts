@@ -27,9 +27,37 @@ describe('matchCharTrigger', () => {
     expect(at('@blue ', 6)).toEqual({from: 0, query: 'blue '})
   })
 
-  it('does NOT match with a word char before the trigger (emails, URL anchors)', () => {
+  it('does NOT match with a word char before the trigger by default (emails)', () => {
     expect(at('a@b', 3)).toBeNull()
     expect(at('user@example', 12)).toBeNull()
+  })
+
+  it('allowWordCharBefore lets the trigger glue onto a word (title#todo); off by default', () => {
+    expect(matchCharTrigger('title#todo', 10, '#', {allowWordCharBefore: true}))
+      .toEqual({from: 5, query: 'todo'})
+    expect(matchCharTrigger('title#', 6, '#', {allowWordCharBefore: true}))
+      .toEqual({from: 5, query: ''})
+    // Same input, option off → still bows out.
+    expect(matchCharTrigger('title#todo', 10, '#')).toBeNull()
+  })
+
+  it('allowWordCharBefore still bows out inside a URL path (a slash in the trigger token)', () => {
+    expect(matchCharTrigger('example.com/page#section', 24, '#', {allowWordCharBefore: true}))
+      .toBeNull()
+    // A slash in an EARLIER token doesn't count — only the token the
+    // trigger sits at the tail of.
+    expect(matchCharTrigger('a/b word#tag', 12, '#', {allowWordCharBefore: true}))
+      .toEqual({from: 8, query: 'tag'})
+  })
+
+  it('a word-glued # wins over an earlier @ — the @ walk yields, no double-fire', () => {
+    // Now that `#todo` can glue onto `word`, the `#` source owns it, so
+    // the `@` walk must yield; otherwise `@` swallows `cafe word#todo`
+    // into a place query while `#` also fires into the same dropdown.
+    const hashOpts = {rejectDoubledTrigger: true, allowWordCharBefore: true}
+    expect(matchCharTrigger('meet @cafe word#todo', 20, '#', hashOpts))
+      .toEqual({from: 15, query: 'todo'})
+    expect(at('meet @cafe word#todo', 20)).toBeNull()
   })
 
   it('does NOT match inside [[wikilink]] brackets', () => {
