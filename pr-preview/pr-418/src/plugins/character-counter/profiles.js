@@ -1,2 +1,0 @@
-import{defineFacet as e,isFunction as t}from"../../facets/facet.js";var n=`raw`,r=e({id:`character-counter.profiles`,combine:e=>{let t=new Map;for(let n of e)t.has(n.id)&&console.warn(`[character-counter.profiles] duplicate registration for "${n.id}"; last-wins per facet convention`),t.set(n.id,n);return t},empty:()=>new Map,validate:e=>{if(typeof e!=`object`||!e)return!1;let n=e;return typeof n.id==`string`&&t(n.useCount)}});export{n as RAW_CHARACTER_COUNT_PROFILE_ID,r as characterCountProfilesFacet};
-//# sourceMappingURL=profiles.js.map
