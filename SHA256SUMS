@@ -1721,7 +1721,7 @@ f9bb82f7783b12e0b4dbb105be10bdfc217bd6976b7b97899e899a15760f0755  ./node_modules
 2cb42a10efc69a82a897cd972dae554ee9ab4df09e6fbbc4e6b4e86873dc0a04  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-b84ad448dab38f548effd17d888f91ace5dc2b4e0dbd5ecddb830e793d6a1f76  ./src/appVersion.js
+670101e1e6d410c0a49772a9248c06e3942d6bdfc9b5949c9af16365007b819a  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2092,8 +2092,8 @@ dec7e530e459c1efacf70eefa5496fc11a345afda70865990e2c9af041f638a1  ./src/editor/i
 f4a81f471c0dca397c1d47844de17b24636135dfde3c8fd47f027647041f344f  ./src/editor/insertImage.js.map
 a9f857a72c4abd010282159a94d6b761812473f19c12dd84058166af481a2a18  ./src/editor/syntaxContext.js
 819381f7ec9d49f9859f86985c154c0e0791edc4bf80b2b146de221a38783e2b  ./src/editor/syntaxContext.js.map
-9cf50e574bd5153244ba6e109ecad796fc8f8cf8521838f0a025d0cd506636b2  ./src/editor/triggerMatch.js
-2266a05a068e81dd5e32dedf27278d53dea851722245495e8af8733a1096d9ea  ./src/editor/triggerMatch.js.map
+6168231457c8668087897c3b6347565b88ba9272f0e82e08a4240a7dfe2c737e  ./src/editor/triggerMatch.js
+9326d2eefe73456a757c363f8d4a7ed01a13851304c23c92af9c075344b4d4ac  ./src/editor/triggerMatch.js.map
 c81ae20063645f506a414a83578ef4defbfcf572c19fa86c266c3982a2487b02  ./src/extensions/AppRuntimeProvider.js
 4c26df20299897941c431461ace43c989be22fbba6bcb53ef9d033fa6bc3a402  ./src/extensions/AppRuntimeProvider.js.map
 44202324582610336bcf8faffd6f0910cc2bc8c338c26f3fbc1cdc0c25897da0  ./src/extensions/BlockFocusShellDecorator.js
@@ -2916,8 +2916,8 @@ fd150c1f8b2c6f30296a2a48173e5dbe4663f01fc4817f70a38c4433affbaeb4  ./src/plugins/
 b88267c9660228eb59c2fba823a6f9f08845a548a3ffea6e5e8fba34525b901c  ./src/plugins/supertags/codeMirrorExtensions.js.map
 9b18d3156ab5d37a49e6387f5d6b0a3a18230f90600c23acebf07f0842de7161  ./src/plugins/supertags/index.js
 27c6e54aa085c25b3996c345413387579f283dd402c37f6ea00d6e470be773a0  ./src/plugins/supertags/index.js.map
-4860064dfe242f8dad49dff8ec97e3d728323f3ecef52f3f698e2e88a9fb9a78  ./src/plugins/supertags/typeAutocomplete.js
-bb0097bed6f841c46297dc86e6f2287d9cc9595dd482c53765b35c5e6a4b3fe2  ./src/plugins/supertags/typeAutocomplete.js.map
+f9c69269a9298da0a9848d64ffb72cf44d00f72694e09d4692f4161460914668  ./src/plugins/supertags/typeAutocomplete.js
+3abaec4be8d0c1b8b79cc1109b36bbf4f13d77912f10361aac4973ea583e7dcc  ./src/plugins/supertags/typeAutocomplete.js.map
 9ec2dac4c4d92905597bd44d061a0cad383a13182460b3b2e345f8cd28ca70ba  ./src/plugins/swipe-quick-actions/SwipeActionMenu.js
 dbb793e60ab0137001292d4f56e7b96b444a5728555722d3df67d61ebc742578  ./src/plugins/swipe-quick-actions/SwipeActionMenu.js.map
 4ed29de6e88c0b18b00973e00198619590fe3275bd860ca6b881e1a7d47fdc18  ./src/plugins/swipe-quick-actions/actions.js
@@ -3202,8 +3202,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-e8e1f89bd4973abb6a997a744237b55a80fc3cc3fb063a9501bf2c2221b2919e  ./sw.js
-5aabab18ddb42c2e8ea78ab4dfd9b32d32bf7fc947ba8a24c0935fd1ee1504d2  ./version.json
+856969df512c31101834bcafaaec21a157af896d1645d10c5889316d286bd5af  ./sw.js
+95b7ae7dc6b44423d8ef4cfe2734633e0b7662685cbe010cd8e269d014c64a9a  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
