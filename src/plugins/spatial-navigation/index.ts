@@ -11,6 +11,7 @@ import {
 } from './actions.ts'
 import { PanelFocusRecovery } from './PanelFocusRecovery.tsx'
 import { spatialNavigationShellDecorator } from './shell.ts'
+import { spatialNavExclusionsFacet } from './exclusionsFacet.ts'
 
 const panelFocusRecoveryMount: PanelMountContribution = {
   id: 'spatial-navigation.panel-focus-recovery',
@@ -34,6 +35,10 @@ export const spatialNavigationPlugin: AppExtension = systemToggle({
   // (backlink edited out, parent collapsed), recover to the nearest
   // rendered neighbor instead of leaving the panel with a dead focus pointer.
   panelMountsFacet.of(panelFocusRecoveryMount, {source: 'spatial-navigation'}),
+  // Core's own surface exclusion — see `exclusionsFacet.ts`. A plugin with a
+  // custom `data-block-surface` (grid/kanban/canvas renderer) contributes its
+  // own surface name here to exempt its cells from the arrow-key walker.
+  spatialNavExclusionsFacet.of('breadcrumb', {source: 'spatial-navigation'}),
 ])
 
 export {
@@ -46,6 +51,7 @@ export {
 
 export {
   __resetSpatialNavigationForTesting,
+  DEFAULT_NON_NAVIGABLE_SURFACES,
   findRecoveryAnchor,
   horizontalNeighborPanel,
   locateInstance,
@@ -55,3 +61,8 @@ export {
   stackSiblingPanel,
   verticalNeighbor,
 } from './walker.ts'
+
+export {
+  resolveSpatialNavExclusions,
+  spatialNavExclusionsFacet,
+} from './exclusionsFacet.ts'
