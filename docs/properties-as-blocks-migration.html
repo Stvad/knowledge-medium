@@ -493,7 +493,7 @@
   field-ness travels in content at any depth and every positional rule dies with it
   <em>as a recognition input</em> (full list and code symbols: §9; a simpler
   ownership walk — "which field owns this descendant" — survives for B3 scope
-  routing and backlink presentation), and the
+  routing and hidden-subtree pruning), and the
   field-row-own-bag carve-out is deleted (§9, §7, §5). Recognition =
   derived form bit + parent-not-null + shadow-tolerant resolution + flip;
   classification is <em>move-proof</em> (a merge hoist can't reclassify a row).
@@ -1213,11 +1213,11 @@ arrived row:
       rows (recognizable by <code>is_field_form</code> + <code>reference_target_id</code>) up to their parent and
       dedups there — <em>union-with-dedupe</em> (§9): the duplicate field rows fold
       into one, content-equal values fold with them, and <em>divergent</em> values
-      persist as peer siblings — view-state-flagged keys excepted (§9's merge
-      entry): there the reconcile keeps the deterministic first survivor
-      (<code>order_key, id</code> order — no target exists at this site) and
-      drops the rest silently — so a genuine concurrent conflict is surfaced in the
-      tree rather than silently resolved. Until the reconcile visits the parent,
+      persist as peer siblings, so a genuine concurrent conflict is surfaced in the
+      tree rather than silently resolved — except view-state-flagged keys
+      (§9's merge entry): there the reconcile keeps the deterministic first
+      survivor (<code>order_key, id</code> order — no target exists at this
+      site) and drops the rest silently. Until the reconcile visits the parent,
       duplicate rows persist until some unrelated local edit
       happens to touch it.</li>
   </ul>
@@ -1907,7 +1907,8 @@ supabase skill if it's kept.
     owning schema's scope) and
     hidden-subtree pruning still walk up to the nearest <code>::</code>
     ancestor (backlink presentation needs no walk — it is a single parent hop,
-    the References entry's rule) (PR #417 review: deleting the walk <em>outright</em> would silently
+    the References entry's rule; PR #417 review: deleting the walk
+    <em>outright</em> would silently
     re-route value-descendant edits under the caller's BlockDefault scope). The
     surviving walk is much simpler than the deleted one: each hop is
     independently classified by the flat predicate, so it carries none of the
@@ -2473,7 +2474,7 @@ both dedup helpers, merge's field map, rename's <code>computePlan</code>) on
 the bit — replacing <code>isInsidePropertySubtreeWalk</code>/its SQL
 twins and the materialize/project/re-key interior gates <em>as recognition
 inputs</em> with the simpler §9 ownership walk that B3 scope routing and
-backlink presentation still need, the merge
+hidden-subtree pruning still need, the merge
 view-state rule with its per-definition policy flag, and the B2
 definition-merge re-key). It lands dormant: every workspace reads
 <code>properties_migration = 'cell'</code>, and master's suite passes unmodified.
