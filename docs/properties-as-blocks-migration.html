@@ -1921,11 +1921,18 @@ supabase skill if it's kept.
     recursive twins, and the materialize/project/re-key interior gates are all
     deleted <em>as recognition inputs</em>. What survives is the narrower
     <em>ownership</em> question — "which field row owns this descendant" — which
-    is containment, not identity, and is inherently positional: B3's scope
+    is containment, not identity, and is inherently positional. Both walks
+    <strong>start at the row itself</strong> (PR #417 review: a field row is
+    its own owner — a structural op on the field row takes its scope from its
+    <em>own</em> definition, and a hidden field row suppresses <em>itself</em>;
+    ancestor-only walks would fall back to BlockDefault for a top-level
+    UserPrefs field row and fail to suppress a hidden field row hit by
+    search): B3's scope
     routing (a structural edit deep in a property subtree routes under the
-    owning schema's scope) walks to the <em>nearest</em> <code>::</code>
-    ancestor — the directly-owning field; hidden-subtree pruning's upward form
-    (search/recents filtering classifying an arbitrary hit) checks
+    owning schema's scope) then walks to the <em>nearest</em> <code>::</code>
+    row — self or ancestor, the directly-owning field; hidden-subtree
+    pruning's upward form
+    (search/recents filtering classifying an arbitrary hit) checks self and
     <em>every</em> field ancestor — any hidden one suppresses, since a visible
     field materialized inside a hidden field's subtree must not leak its rows
     into default surfaces (PR #417 review; top-down render pruning gets this
@@ -2327,10 +2334,15 @@ supabase skill if it's kept.
     one → it is <em>adopted</em> (absence is not a conflict — consistent with
     the source-only adoption rule below); a dropped loser's user-authored
     sub-children relocate exactly as the content-equal fold relocates them,
-    never silently deleted. And the rule binds <em>every</em> dedup site, not
-    just the merge gesture — the §5 sync-arrival reconcile dedup applies the
-    same policy (two devices' concurrent collapse toggles are the motivating
-    case, and they meet in the reconcile, not in <code>mergeBlocksInTx</code>).
+    never silently deleted. And the <em>exception</em> binds <em>every</em>
+    dedup site — silent resolution, no conflict siblings, for view-state keys
+    everywhere — while the <em>winner rule</em> is per-site (PR #417 review:
+    "same policy" overclaimed): target-wins at the merge <em>gesture</em> (an
+    explicit user act), newest-<code>updated_at</code> at the §5 sync-arrival
+    reconcile, where no target exists and a clock-blind rule would let an
+    older collapse toggle win (two devices' concurrent toggles are the
+    motivating case, and they meet in the reconcile, not in
+    <code>mergeBlocksInTx</code>; §5 states the clocked rule).
     It lives in merge/dedup policy —
     not in storage, recognition, or traversal.
     Orphan-alias cleanup deletes generated field rows under alias seats;
@@ -2731,10 +2743,16 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         the merge tx: every consuming owner's cell keeps <code>name(A)</code> —
         a key whose definition is tombstoned, which nothing may delete (§5's
         never-delete rule) and nothing can re-back, permanently blocking the
-        cell-off gate. The rule: a definition merge runs the <em>same cell
-        re-key as a rename</em> (drop <code>name(A)</code>, project under
-        <code>name(B)</code>) in the same tx through B2's funnel, with the
-        ordering pinned; until that exists, definition-vs-definition merges are
+        cell-off gate. The rule: a definition merge is rename <em>and</em> potentially codec
+        change combined (PR #417 review: A's values were encoded under A's
+        preset — retargeted under B with a different codec, the next projection
+        would skip them as invalid and the property reads unset) — so it runs
+        the rename-style cell re-key <em>plus</em> B2's codec-change
+        re-encode/validate pass over the retargeted rows (unconvertible values
+        report via the user-error channel, never silently unset) in the same tx
+        through B2's funnel, with the ordering pinned; incompatible presets
+        refuse the merge up front. Until that exists,
+        definition-vs-definition merges are
         refused, not silently degraded.
         <strong>B3 (integration):</strong> merge/orphan/panel-layout handling — as
         shipped, merge is <em>union-with-dedupe</em> (§9): content-equal values
