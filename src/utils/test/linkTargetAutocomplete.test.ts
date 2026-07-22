@@ -6,9 +6,11 @@ import { aliasesProp } from '@/data/properties.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
+import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
 import {
   labelForBlockData,
   searchAliasLabels,
+  searchBlocksAcrossSources,
   searchLinkTargetIdCandidates,
   searchLinkTargets,
   searchLinkTargetsProgressively,
@@ -326,5 +328,157 @@ describe('link target autocomplete helpers', () => {
     })
 
     expect(out.map(candidate => candidate.value)).toEqual(['My Dating notes'])
+  })
+})
+
+describe('searchBlocksAcrossSources (searchSourcesFacet merge point)', () => {
+  it('with no extra sources contributed, reproduces the pre-facet default ranking (exact > prefix > substring)', async () => {
+    // Same score buckets `orderBlockSearchRows` used to compute inline —
+    // this pins that `coreContentSearchSource` alone (the only
+    // `searchSourcesFacet` contribution here) is a behavior-preserving
+    // relocation of that logic, not a rewrite.
+    await create({id: 'substring', content: 'we love dating shows'})
+    await create({id: 'exact', content: 'dating'})
+    await create({id: 'prefix', content: 'dating apps'})
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'dating',
+      limit: 10,
+    })
+
+    expect(results.map(block => block.id)).toEqual(['exact', 'prefix', 'substring'])
+
+    // limit:0 yields 0 results even though the (mocked or real) source
+    // doesn't itself enforce the hint.
+    expect(await searchBlocksAcrossSources(env.repo, {workspaceId: WS, query: 'dating', limit: 0})).toEqual([])
+  })
+
+  it('honors a limit above the candidate ceiling — fetchLimit floors at `limit`, not capped at 200', async () => {
+    // Old fetchLimit formula was `min(limit*4, 200)`, so any requested
+    // limit above 200 (e.g. an agent `search --limit 250`) capped the
+    // underlying SQL fetch at 200 regardless of how many rows the
+    // caller actually wanted — silently truncating results a direct
+    // `searchByContent({limit})` call would have returned in full. Mock
+    // `searchByContent` to honor whatever limit it's asked for (like the
+    // real query does) and assert all 250 rows make it through the
+    // merge to the final result.
+    const requestedLimit = 250
+    const rows = Array.from({length: requestedLimit}, (_, i) =>
+      blockData(`row-${i}`, `dating item ${String(i).padStart(3, '0')}`))
+    const searchByContent = vi.fn(({limit}: {limit: number}) => ({
+      load: () => Promise.resolve(rows.slice(0, limit)),
+    }))
+    const repo = {
+      query: {searchByContent},
+    } as unknown as Repo
+
+    const results = await searchBlocksAcrossSources(repo, {
+      workspaceId: WS,
+      query: 'dating',
+      limit: requestedLimit,
+    })
+
+    expect(results).toHaveLength(requestedLimit)
+  })
+
+  it('merges a plugin-contributed second source with core content search, ranked by score', async () => {
+    // Core's own hit is a prefix match (score 200); the toy source
+    // reports a higher score for a block core's text scorer would never
+    // surface (no literal substring overlap) — standing in for e.g. a
+    // semantic-search extension.
+    await create({id: 'core-hit', content: 'sync notes'})
+    const semanticHit = blockData('semantic-hit', 'totally unrelated content')
+
+    const toySource: SearchSourceContribution = {
+      id: 'test.toy',
+      search: async () => [{block: semanticHit, score: 250}],
+    }
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:toy-source', [toySource])
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'sync',
+      limit: 10,
+    })
+
+    expect(results.map(block => block.id)).toEqual(['semantic-hit', 'core-hit'])
+  })
+
+  it('dedupes a block id contributed by two sources, ranking by the max score but keeping the freshest payload', async () => {
+    // Core matches "shared" as a prefix hit (score 200) with its real DB
+    // content and a real (freshly-written) `userUpdatedAt`. The toy
+    // source reports the SAME block id at a higher score (999) but with
+    // a STALE payload (`blockData`'s default `userUpdatedAt: 1`) —
+    // standing in for an index copy of the block that's fallen behind
+    // live data. The surviving RANK must reflect the higher score (so a
+    // confident source still promotes the row over a lower-scored one),
+    // but the surviving PAYLOAD must be the fresher, real copy — not the
+    // stale content that happened to win on score alone.
+    await create({id: 'shared', content: 'sync notes'})
+    await create({id: 'lower-score', content: 'sync other stuff'})
+    const stale = blockData('shared', 'STALE BOOSTED CONTENT')
+
+    const toySource: SearchSourceContribution = {
+      id: 'test.toy',
+      search: async () => [{block: stale, score: 999}],
+    }
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:toy-source', [toySource])
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'sync',
+      limit: 10,
+    })
+
+    // 'shared' ranks first — its surviving score is the toy source's
+    // 999, not core's own (lower) text-match score.
+    expect(results.map(block => block.id)).toEqual(['shared', 'lower-score'])
+    // ...but its payload is the fresher, real DB copy — not the stale
+    // toy-source content that won on score.
+    expect(results[0].content).toBe('sync notes')
+  })
+
+  it('drops a source that throws without failing the others', async () => {
+    await create({id: 'core-hit', content: 'sync notes'})
+
+    const brokenSource: SearchSourceContribution = {
+      id: 'test.broken',
+      search: async () => {
+        throw new Error('boom')
+      },
+    }
+    env.repo.setRuntimeContributions(searchSourcesFacet, 'test:broken-source', [brokenSource])
+
+    const results = await searchBlocksAcrossSources(env.repo, {
+      workspaceId: WS,
+      query: 'sync',
+      limit: 10,
+    })
+
+    expect(results.map(block => block.id)).toEqual(['core-hit'])
+  })
+
+  it('rethrows when every contributed source fails, instead of resolving to an empty result', async () => {
+    // The single-source/fallback case (no `searchSourcesFacet` runtime
+    // wired at all) is the common shape this regresses: before the fix,
+    // a throwing `coreContentSearchSource` was swallowed to `[]` here,
+    // silently hiding a failed `searchByContent` call from every
+    // consumer (the agent `search` command, quick-find). Per-source
+    // isolation (the test above) still holds when at least one source
+    // succeeds — this only rethrows when ALL of them fail.
+    const repo = {
+      query: {
+        searchByContent: vi.fn(() => ({
+          load: () => Promise.reject(new Error('db exploded')),
+        })),
+      },
+    } as unknown as Repo
+
+    await expect(searchBlocksAcrossSources(repo, {
+      workspaceId: WS,
+      query: 'sync',
+      limit: 10,
+    })).rejects.toThrow('db exploded')
   })
 })

@@ -1,6 +1,12 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties.js'
+import {
+  searchSourcesFacet,
+  type SearchSourceArgs,
+  type SearchSourceCandidate,
+  type SearchSourceContribution,
+} from '@/data/facets.js'
 import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
 
 /** How many candidate rows to pull from SQL before JS ranking. The pre-
@@ -273,23 +279,140 @@ const blockSearchTextScore = (content: string, query: string): number => {
   return SCORE_BLOCK_FULL_SUBSTRING - Math.min(idx, SCORE_BLOCK_FULL_SUBSTRING)
 }
 
-const orderBlockSearchRows = (
-  rows: BlockData[],
-  query: string,
-  recentBlockIds: ReadonlyArray<string> | undefined,
-  limit: number,
-): BlockData[] => {
-  const scored = rows.map((row, index) => ({
-    row,
-    index,
-    score: blockSearchTextScore(row.content, query) +
-      blockSearchRecencyBoost(row.id, recentBlockIds),
-  }))
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score
-    return a.index - b.index
-  })
-  return scored.slice(0, limit).map(item => item.row)
+/** Core's own content search, expressed as the default `searchSourcesFacet`
+ *  contribution (id `'core.content'`) — a thin wrapper over the kernel
+ *  `searchByContent` query plus the pre-existing text-relevance score, so
+ *  it slots into the merge point below exactly like a plugin-contributed
+ *  source (e.g. a future semantic-search extension) would. Registered in
+ *  `kernelDataExtension.ts` so it's present on every `Repo` (kernel-only
+ *  or full app runtime), matching how the other kernel query/mutator
+ *  defaults are wired. */
+export const coreContentSearchSource: SearchSourceContribution = {
+  id: 'core.content',
+  search: async (repo, {workspaceId, query, limit, recentBlockIds}) => {
+    // Over-fetch so the score below (which promotes exact/prefix/recent
+    // hits over the SQL engine's own rank) has room to reorder before the
+    // merge point's final slice to `limit`. Same multiplier/ceiling as the
+    // alias fuzzy search above — one over-fetch policy for this file.
+    // Floored at `limit` itself: a caller asking for more than the
+    // ceiling must still get `limit` rows back, not silently truncated to
+    // the ceiling (the ceiling is a headroom cap for the common case, not
+    // a hard maximum on the result size).
+    const fetchLimit = Math.max(limit, Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING))
+    const rows = await repo.query.searchByContent({workspaceId, query, limit: fetchLimit}).load()
+    return rows.map((block): SearchSourceCandidate => ({
+      block,
+      score: blockSearchTextScore(block.content, query) +
+        blockSearchRecencyBoost(block.id, recentBlockIds),
+    }))
+  },
+}
+
+/** Of two candidates for the SAME block id, pick which one's `block`
+ *  payload should survive the merge. Ranking always uses the max score
+ *  across duplicates (see `searchBlocksAcrossSources`), but the payload
+ *  itself can come from a stale index copy — e.g. a semantic-search
+ *  source's own snapshot of the block lagging live data — so prefer
+ *  whichever candidate's `block.userUpdatedAt` (the user-facing
+ *  "last edited" timestamp, `src/data/api/blockData.ts`) is newest,
+ *  falling back to the higher-scored candidate when timestamps tie or
+ *  either is missing/non-numeric. */
+const freshestCandidatePayload = (
+  a: SearchSourceCandidate,
+  b: SearchSourceCandidate,
+): SearchSourceCandidate => {
+  const aTime = a.block.userUpdatedAt
+  const bTime = b.block.userUpdatedAt
+  if (typeof aTime === 'number' && typeof bTime === 'number' && aTime !== bTime) {
+    return aTime > bTime ? a : b
+  }
+  return a.score >= b.score ? a : b
+}
+
+/** Fan out `query` to every contributed `searchSourcesFacet` source (core's
+ *  content search plus whatever plugins add), merge their candidates, and
+ *  rank by `score` descending — the shared substrate behind link-target
+ *  search below, and every other block-content search surface
+ *  (block-ref insertion completion, the agent `search` command). With no
+ *  extra sources contributed this degenerates to exactly
+ *  `coreContentSearchSource`'s own ranking — same query, same score, same
+ *  order as before this facet existed.
+ *
+ *  A source that throws is logged and dropped so one bad contribution
+ *  can't fail every consumer's search — AS LONG AS at least one other
+ *  source succeeds. If every contributed source throws (including the
+ *  common single-source case, where core is the only contribution), the
+ *  first error is rethrown instead of resolving to an empty result —
+ *  matching the pre-facet behavior where a failed `searchByContent` call
+ *  surfaced to the caller (agent `search` returned `{ok:false}`;
+ *  quick-find's progressive-search fence threw). Ties (equal score) keep
+ *  the order candidates were produced in — `Array.prototype.sort` is
+ *  stable, and that order is source-registration order then
+ *  within-source order — so a single-source call reproduces that
+ *  source's own ordering exactly. Same block id from two sources
+ *  survives once, ranked at the MAX score across the duplicates; its
+ *  `block` payload is picked by `freshestCandidatePayload` (newest
+ *  `userUpdatedAt` wins, falling back to the higher-scored candidate on
+ *  a tie/missing timestamp) so a stale index copy can't shadow live
+ *  data just because it scored higher.
+ *
+ *  A `repo` with no `FacetRuntime` wired (a hand-built test double, or a
+ *  `Repo` read before its first `setFacetRuntime`) still gets core
+ *  content search — the facet is an ADDITIVE seam on top of "search
+ *  works", not a hard prerequisite for it. */
+export const searchBlocksAcrossSources = async (
+  repo: Repo,
+  args: SearchSourceArgs,
+): Promise<BlockData[]> => {
+  if (args.limit <= 0) return []
+
+  const sources = repo.facetRuntime?.read(searchSourcesFacet)
+  const contributions = sources && sources.size > 0
+    ? [...sources.values()]
+    : [coreContentSearchSource]
+
+  const failures: {index: number; error: unknown}[] = []
+  const candidateLists = await Promise.all(
+    contributions.map(async (source, index) => {
+      try {
+        return await source.search(repo, args)
+      } catch (error) {
+        console.error(`[searchBlocksAcrossSources] source "${source.id}" threw`, error)
+        failures.push({index, error})
+        return []
+      }
+    }),
+  )
+
+  // Every source failed (including the single-source case) — there is
+  // nothing to rank, and silently returning [] would hide the failure
+  // from every consumer. Rethrow deterministically by contribution
+  // order, not settle order.
+  if (failures.length === contributions.length) {
+    failures.sort((a, b) => a.index - b.index)
+    throw failures[0].error
+  }
+
+  const merged = candidateLists.flat()
+
+  const byId = new Map<string, SearchSourceCandidate>()
+  for (const candidate of merged) {
+    const existing = byId.get(candidate.block.id)
+    if (!existing) {
+      byId.set(candidate.block.id, candidate)
+      continue
+    }
+    const payload = freshestCandidatePayload(existing, candidate)
+    byId.set(candidate.block.id, {
+      block: payload.block,
+      score: Math.max(existing.score, candidate.score),
+    })
+  }
+
+  return [...byId.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, args.limit)
+    .map(candidate => candidate.block)
 }
 
 export const searchLinkTargetsProgressively = async (
@@ -318,15 +441,23 @@ export const searchLinkTargetsProgressively = async (
     limit,
     recentBlockIds,
   })
-  // Over-fetch content matches so the block orderer has room to promote
-  // MRU / raw-text wins before the final display limit is applied.
-  const fetchLimit = Math.min(limit * ALIAS_CANDIDATE_MULTIPLIER, ALIAS_CANDIDATE_CEILING)
+  // Routed through the shared multi-source merge point (not a direct
+  // `searchByContent` call) so a contributed `searchSourcesFacet` source
+  // participates here too. `searchBlocksAcrossSources` internally
+  // over-fetches and reorders (MRU / raw-text wins promoted) before its
+  // own slice to `limit` — see `coreContentSearchSource`. It only
+  // rejects when EVERY contributed source failed; the ok/error fence
+  // below turns that rejection into the `throw` further down, so a
+  // total search failure still surfaces to this call's caller (not a
+  // silently empty result) — same as calling `searchByContent` directly
+  // did before this facet existed.
   const blockRowsPromise = trimmed.length >= MIN_CONTENT_SEARCH_LEN
-    ? repo.query.searchByContent({
+    ? searchBlocksAcrossSources(repo, {
         workspaceId,
         query: trimmed,
-        limit: fetchLimit,
-      }).load().then(
+        limit,
+        recentBlockIds,
+      }).then(
         rows => ({ok: true as const, rows}),
         error => ({ok: false as const, error}),
       )
@@ -345,8 +476,7 @@ export const searchLinkTargetsProgressively = async (
   const blockRows = await blockRowsPromise
   if (!blockRows.ok) throw blockRows.error
 
-  const orderedBlockRows = orderBlockSearchRows(blockRows.rows, trimmed, recentBlockIds, limit)
-  const blocks = blockMatchesFromRows(orderedBlockRows, seenBlockIds)
+  const blocks = blockMatchesFromRows(blockRows.rows, seenBlockIds)
   const result = {aliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result
