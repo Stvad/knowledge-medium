@@ -220,9 +220,12 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
         hoverProps={hover.cardHoverProps}
       >
         {hoverSections.map((Section, index) => (
-          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+          // Extension boundary (error + Suspense): a contributed section may
+          // throw OR suspend (e.g. block.read()); either must stay contained
+          // to this row, not bubble out of the block renderer.
+          <ExtensionRenderBoundary key={index}>
             <Section block={block}/>
-          </ErrorBoundary>
+          </ExtensionRenderBoundary>
         ))}
       </BulletHoverCard>
     </>

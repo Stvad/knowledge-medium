@@ -8,14 +8,13 @@
  * sections, so there's a single source of content for both surfaces.
  */
 import type { ReactElement } from 'react'
-import { ErrorBoundary } from 'react-error-boundary'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog.js'
-import { FallbackComponent } from '@/components/util/error.js'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import type { BlockRenderer } from '@/types.js'
@@ -59,9 +58,9 @@ export const BlockInfoDialog = ({
       <NestedBlockContextProvider overrides={panelId ? {panelId} : {}}>
         <div className="flex flex-col gap-2">
           {sections.map((Section, index) => (
-            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+            <ExtensionRenderBoundary key={index}>
               <Section block={block}/>
-            </ErrorBoundary>
+            </ExtensionRenderBoundary>
           ))}
         </div>
       </NestedBlockContextProvider>
