@@ -5,9 +5,9 @@
  *  (markdown, wikilinks, click semantics) instead of a custom
  *  string-truncating row. */
 
-import { useSyncExternalStore } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
+import { useMinuteClock } from '@/hooks/useMinuteClock.js'
 import { RECENTS_PAGE_TYPE } from '@/data/blockTypes.js'
 import type { BlockData } from '@/data/api'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
@@ -19,21 +19,8 @@ import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewpor
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 
 const RECENTS_LIMIT = 50
-const CLOCK_TICK_MS = 60_000
 const ROW_ESTIMATED_HEIGHT_PX = 64
 const ROW_OVERSCAN_PX = 600
-
-// Minute-grained clock as an external store — keeps the render pure
-// (no Date.now() in the body) while letting "3m ago" labels drift on
-// their own while the page is open.
-const subscribeClock = (listener: () => void) => {
-  const id = window.setInterval(listener, CLOCK_TICK_MS)
-  return () => window.clearInterval(id)
-}
-const getClockSnapshot = () => Math.floor(Date.now() / CLOCK_TICK_MS) * CLOCK_TICK_MS
-const getServerClockSnapshot = () => 0
-const useMinuteClock = () =>
-  useSyncExternalStore(subscribeClock, getClockSnapshot, getServerClockSnapshot)
 
 const formatRelative = (ts: number, now: number): string => {
   if (now === 0) return ''

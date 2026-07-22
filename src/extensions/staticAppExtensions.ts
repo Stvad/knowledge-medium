@@ -40,6 +40,7 @@ import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
+import { blockInfoPlugin } from '@/plugins/block-info'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
 import { appIntentsPlugin } from '@/plugins/app-intents'
@@ -148,6 +149,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   dbMaintenancePlugin({repo}),
   startupMetricsPlugin,
   updateIndicatorPlugin,
+  blockInfoPlugin,
   agentRuntimePlugin,
   agentDispatchCompanionPlugin,
   roamImportPlugin({repo}),
