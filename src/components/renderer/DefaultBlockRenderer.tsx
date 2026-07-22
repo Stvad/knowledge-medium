@@ -13,6 +13,9 @@ import {
 } from '@/data/properties.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
+import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
+import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
+import { openDialog } from '@/utils/dialogs.js'
 import { useRef, useMemo } from 'react'
 import { Block } from '../../data/block'
 import {
@@ -42,6 +45,7 @@ import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
+  blockBulletHoverFacet,
   blockChildrenFooterFacet,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
@@ -111,13 +115,33 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
   )
 }
 
-const BlockBullet = ({block}: { block: Block }) => {
+const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: BlockResolveContext }) => {
   const repo = useRepo()
+  const runtime = useAppRuntime()
   const {panelId} = useBlockContext()
+  const isMobile = useIsMobile()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const hasChildren = useHasChildren(block)
+
+  // Bullet hover-card sections contributed by plugins (block-info, …). Empty
+  // on a stock build — then the hover-intent and "Block info" menu item below
+  // are inert / hidden, so the bullet behaves exactly as before.
+  const resolveBulletHover = runtime.read(blockBulletHoverFacet)
+  const hoverSections = useMemo(
+    () => resolveBulletHover(resolveContext),
+    [resolveBulletHover, resolveContext],
+  )
+  const hasHoverSections = hoverSections.length > 0
+  // Desktop-only hover; touch users reach the same content via the context
+  // menu's "Block info" item (which works with a mouse too).
+  const hover = useBulletHover(hasHoverSections && !isMobile)
+
+  const openBlockInfo = () => {
+    // Pass the originating panel — see BlockInfoDialogProps.panelId.
+    void openDialog(BlockInfoDialog, {block, sections: hoverSections, panelId})
+  }
 
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
@@ -125,54 +149,86 @@ const BlockBullet = ({block}: { block: Block }) => {
   const onClick = useOpenBlock({blockId: block.id, workspaceId})
 
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <a
-          href={buildAppHash(workspaceId, block.id)}
-          className="bullet-link flex items-center justify-center h-6 w-5"
-          onClick={onClick}
-        >
-          <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
-        </a>
-      </ContextMenuTrigger>
-      <ContextMenuPortal>
-        <ContextMenuContent
-          className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
-        >
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => copyBlockId(block)}
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <a
+            href={buildAppHash(workspaceId, block.id)}
+            className="bullet-link flex items-center justify-center h-6 w-5"
+            onClick={(event) => {
+              hover.close()
+              onClick(event)
+            }}
+            onMouseEnter={hover.anchorHoverProps.onMouseEnter}
+            onMouseLeave={hover.anchorHoverProps.onMouseLeave}
           >
-            Copy ID
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => copyBlockRef(block)}
+            <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
+          </a>
+        </ContextMenuTrigger>
+        <ContextMenuPortal>
+          <ContextMenuContent
+            className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
           >
-            Copy Block Ref
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => copyBlockEmbed(block)}
-          >
-            Copy Block Embed
-          </ContextMenuItem>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => zoomIn(block, workspaceId, panelId)}
-          >
-            Zoom In
-          </ContextMenuItem>
-          <ContextMenuSeparator className="h-px bg-border my-1"/>
-          <ContextMenuItem
-            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => setShowProperties(!showProperties)}
-          >
-            {showProperties ? 'Hide' : 'Show'} Properties
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenuPortal>
-    </ContextMenu>
+            {hasHoverSections && (
+              <>
+                <ContextMenuItem
+                  className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+                  onSelect={openBlockInfo}
+                >
+                  Block info
+                </ContextMenuItem>
+                <ContextMenuSeparator className="h-px bg-border my-1"/>
+              </>
+            )}
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockId(block)}
+            >
+              Copy ID
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockRef(block)}
+            >
+              Copy Block Ref
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockEmbed(block)}
+            >
+              Copy Block Embed
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => zoomIn(block, workspaceId, panelId)}
+            >
+              Zoom In
+            </ContextMenuItem>
+            <ContextMenuSeparator className="h-px bg-border my-1"/>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => setShowProperties(!showProperties)}
+            >
+              {showProperties ? 'Hide' : 'Show'} Properties
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenuPortal>
+      </ContextMenu>
+      <BulletHoverCard
+        open={hover.open}
+        anchorEl={hover.anchorEl}
+        hoverProps={hover.cardHoverProps}
+      >
+        {hoverSections.map((Section, index) => (
+          // Extension boundary (error + Suspense): a contributed section may
+          // throw OR suspend (e.g. block.read()); either must stay contained
+          // to this row, not bubble out of the block renderer.
+          <ExtensionRenderBoundary key={index}>
+            <Section block={block}/>
+          </ExtensionRenderBoundary>
+        ))}
+      </BulletHoverCard>
+    </>
   )
 }
 
@@ -647,7 +703,7 @@ export function DefaultBlockRenderer(
         <>
           <div className="block-controls flex items-center">
             {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block}/>
+            <BlockBullet block={block} resolveContext={resolveContext}/>
           </div>
           {isMobile && hasChildren && (
             <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
@@ -657,7 +713,7 @@ export function DefaultBlockRenderer(
         </>
       )
     }
-  }, [block])
+  }, [block, resolveContext])
 
   const HeaderSlot = useMemo<ComponentType>(() => {
     return function BlockHeaderSlot() {

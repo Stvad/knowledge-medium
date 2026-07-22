@@ -102,10 +102,13 @@ export function useUserBlock(): Block {
  *  yet) `name` falls back to the raw id and `blockId` is omitted — so
  *  attribution degrades to the prior plain-text behaviour rather than
  *  rendering a link to a block that doesn't exist. */
-export function useUserPage(userId: string): {name: string; blockId?: string} {
+export function useUserPage(userId: string, workspaceId?: string): {name: string; blockId?: string} {
   const repo = useRepo()
-  const workspaceId = requireWorkspaceId(repo, 'useUserPage')
-  const id = userPageBlockId(workspaceId, userId)
+  // Resolve against the caller-supplied workspace when given (attribution for
+  // a block whose workspace may not be the active one — e.g. a non-modal info
+  // dialog left open across a workspace switch), else the active workspace.
+  const resolvedWorkspaceId = workspaceId ?? requireWorkspaceId(repo, 'useUserPage')
+  const id = userPageBlockId(resolvedWorkspaceId, userId)
   const block = repo.block(id)
   const resolved = useHandle(block, {
     selector: doc => doc

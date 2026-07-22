@@ -170,6 +170,20 @@ export type BlockChildrenFooterContribution =
 export type BlockChildrenFooterResolver =
   (context: BlockResolveContext) => readonly BlockRenderer[]
 
+// Slot for sections rendered inside a block's bullet hover-card — block
+// metadata (created/edited/by, counts, id) lives here. Mirrors
+// `blockHeaderFacet`: each contribution returns a renderer (or null/
+// undefined/false to opt out for this block); `BlockBullet` shows a
+// floating card populated with all returned components in contribution
+// order when the bullet is hovered. When NO contribution returns a
+// renderer, the bullet attaches no hover listeners and renders no card —
+// the feature is pure opt-in and costs nothing on a stock build.
+export type BlockBulletHoverContribution =
+  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
+
+export type BlockBulletHoverResolver =
+  (context: BlockResolveContext) => readonly BlockRenderer[]
+
 // Block layout — owns the entire shape of a block as rendered (the
 // outer wrapper, controls placement, collapse behavior, and where the
 // content/children/footer slots sit). The default vertical layout lives
@@ -328,6 +342,23 @@ export const blockChildrenFooterFacet = defineFacet<
   },
   empty: () => () => [],
   validate: isFunction<BlockChildrenFooterContribution>,
+})
+
+export const blockBulletHoverFacet = defineFacet<
+  BlockBulletHoverContribution,
+  BlockBulletHoverResolver
+>({
+  id: 'core.block-bullet-hover',
+  combine: contributions => context => {
+    const result: BlockRenderer[] = []
+    for (const contribution of contributions) {
+      const renderer = contribution(context)
+      if (renderer) result.push(renderer)
+    }
+    return result
+  },
+  empty: () => () => [],
+  validate: isFunction<BlockBulletHoverContribution>,
 })
 
 export const blockLayoutFacet = defineVariantFacet<BlockResolveContext, BlockLayout>({
