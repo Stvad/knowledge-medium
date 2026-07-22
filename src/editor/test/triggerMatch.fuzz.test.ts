@@ -81,7 +81,7 @@ import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { matchCharTrigger, type CharTriggerOptions } from '../triggerMatch'
 
-const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', ' ', '\t', 'a', 'b'] as const
+const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', '/', ' ', '\t', 'a', 'b'] as const
 
 const randomTextArb: fc.Arbitrary<string> = fc
   .array(fc.constantFrom(...STRUCTURAL_CHARS), {minLength: 0, maxLength: 30})
@@ -165,6 +165,26 @@ describe('matchCharTrigger', () => {
           const insideBlockrefSpan = result.from >= spanStart && result.from < pos
           expect(insideBlockrefSpan).toBe(false)
         }
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('the two production wrappers never both fire at one cursor position (sibling ownership: nearest viable trigger owns it — no merged double-fire dropdown, no dead zone masked as a double-fire)', () => {
+    // `autocompletion()` is installed once with no `override`
+    // (src/editor/autocomplete.ts), so if BOTH the `@` and `#` sources
+    // returned a match at the same cursor they'd merge into one dropdown
+    // and each fire a query for the other's text. The sibling-ownership
+    // walk exists precisely to make exactly one trigger own any position.
+    // This property is what the missing-slash-guard and the
+    // afterPos-vs-pos boundary bugs both violated (both let `@` and `#`
+    // fire together on `@C#`-shaped input); the `/` now in the alphabet
+    // reaches the URL-path branch that hid the first of those.
+    fc.assert(
+      fc.property(caseArb, ({text, pos}) => {
+        const atFires = matchCharTrigger(text, pos, '@', optsFor('@')) !== null
+        const hashFires = matchCharTrigger(text, pos, '#', optsFor('#')) !== null
+        expect(atFires && hashFires).toBe(false)
       }),
       fuzzParams(300),
     )

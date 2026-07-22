@@ -60,6 +60,35 @@ describe('matchCharTrigger', () => {
     expect(at('meet @cafe word#todo', 20)).toBeNull()
   })
 
+  it('the @ walk does NOT yield to a # sibling that sits in a URL path (no dead zone)', () => {
+    // The `#` in `a/b#c` can't fire (URL-path guard), so `@` must NOT
+    // yield to it — otherwise neither source opens and the `@`
+    // place-autocomplete silently dies whenever a slash-token with a `#`
+    // appears later on the line.
+    const hashOpts = {rejectDoubledTrigger: true, allowWordCharBefore: true}
+    expect(matchCharTrigger('@a/b#c', 6, '#', hashOpts)).toBeNull()
+    expect(at('@a/b#c', 6)).toEqual({from: 0, query: 'a/b#c'})
+  })
+
+  it('sibling viability is decided by the query end (cursor), not the char past the cursor', () => {
+    // The `#` sits right at the cursor → its query is empty → it owns
+    // the position, so `@` yields the SAME way regardless of what
+    // (unrelated) text follows the cursor. Before the fix, `@C#| dev`
+    // fired a garbage place query for "C#" while `@C#|zzz` dead-zoned.
+    expect(at('@C# dev', 3)).toBeNull()
+    expect(at('@C#zzz', 3)).toBeNull()
+    expect(at('@C#', 3)).toBeNull()
+    // …and once a real query char follows the # (query no longer empty),
+    // the space-after-# rule applies at the query start as before.
+    expect(at('@C# dev', 7)).toEqual({from: 0, query: 'C# dev'})
+  })
+
+  it('the URL-path guard fires even when the slash sits immediately before the # (/#)', () => {
+    const hashOpts = {rejectDoubledTrigger: true, allowWordCharBefore: true}
+    expect(matchCharTrigger('foo/#bar', 8, '#', hashOpts)).toBeNull()
+    expect(matchCharTrigger('see docs/#install', 17, '#', hashOpts)).toBeNull()
+  })
+
   it('does NOT match inside [[wikilink]] brackets', () => {
     expect(at('[[@foo', 6)).toBeNull()
     expect(at('[[foo @bar', 10)).toBeNull()
