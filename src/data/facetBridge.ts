@@ -425,17 +425,24 @@ export class FacetBridge {
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
           }
-          // Rename / codec-change migrations (PR #288 §7/§9, slice B2): diff
-          // the registry snapshots by durable fieldId. Every rename source —
-          // panel edit, outline edit, synced-in definition change — funnels
-          // through this rebuild, so this is the single trigger seam. Same
-          // workspace only (the helper refuses cross-workspace diffs).
-          const definitionChanges = changedPropertyDefinitions(
+          // Codec-TYPE-change migrations (PR #288 §7/§9, slice B2): diff the
+          // registry snapshots by durable fieldId. RENAMES are no longer
+          // scheduled here — they are re-keyed atomically in the editing tx by
+          // the `core.migratePropertyRename` same-tx processor (one undoable
+          // step, no deferred plan-capture staleness, no half-migrated window).
+          // A codec-TYPE change still needs this deferred pass because it must
+          // build the NEW codec to re-encode values, which the same-tx registry
+          // snapshot can't. A combined rename+codec edit rides both: the
+          // processor re-keys the cell, this pass re-encodes values under the
+          // new codec — both converge on the new cell key. Same workspace only
+          // (the helper refuses cross-workspace diffs); synced-in changes are
+          // reconciled on the flipped-workspace open path (#389 item 2).
+          const codecChanges = changedPropertyDefinitions(
             previousPropertyDefinitions, propertyDefinitions,
-          )
-          if (definitionChanges.length > 0 && propertyDefinitions) {
+          ).filter(change => change.codecChanged)
+          if (codecChanges.length > 0 && propertyDefinitions) {
             target.schedulePropertyDefinitionMigrations(
-              propertyDefinitions.workspaceId, definitionChanges,
+              propertyDefinitions.workspaceId, codecChanges,
             )
           }
           // No property-SPECIFIC reference-target rederive here. Recognition

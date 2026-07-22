@@ -1,0 +1,202 @@
+/**
+ * Same-tx property-definition RENAME (PR #288 §7/§9, PR #386 follow-up).
+ *
+ * A rename re-keys every consuming parent's cell (drop the old name, project
+ * the new name from the field row's value) ATOMICALLY in the same tx that
+ * edits the definition block's name — so the rename and its fan-out land as
+ * ONE undoable step, not a deferred deep-idle batch (which was non-undoable,
+ * had no completion marker, and captured a stale schema plan). This replaces
+ * the rename half of `Repo.schedulePropertyDefinitionMigrations`; a codec-TYPE
+ * change still rides that deferred path (it needs the NEW codec, which the
+ * same-tx registry snapshot can't build).
+ *
+ * ── Two facts make this subtle ──
+ *
+ * 1. The registry snapshot the processor resolves against is frozen at TX
+ *    START (`SameTxCtx`), so it still maps the OLD name → this definition and
+ *    does NOT yet know the new name. That's fine — we read old/new name from
+ *    the definition block's own before/after (`parsePropertyDefinitionMetadata`),
+ *    and the codec is unchanged by a rename, so the tx-start schema
+ *    (`resolvePropertySchemaField`) is the correct codec for reprojection.
+ *
+ * 2. Because the registry is stale in-tx, `MATERIALIZE_PROPERTY_CHILDREN`
+ *    would still resolve the DROPPED old name to this definition and take its
+ *    `encoded === undefined` DELETE branch — tombstoning the very field rows a
+ *    rename must keep. The deferred batch dodged this only by running
+ *    post-commit (registry already rebuilt → old name resolves to nothing).
+ *    We dodge it by ORDERING: this processor runs LAST in
+ *    `KERNEL_SAME_TX_PROCESSORS`, after MATERIALIZE/PROJECT, so the
+ *    consuming-parent cell re-key it writes is never re-seen by MATERIALIZE in
+ *    the same single-pass. (A later tx that touches such a parent sees a
+ *    rebuilt registry where the old name resolves to nothing, so no delete.)
+ *    The rename test asserts field rows SURVIVE.
+ *
+ * Synced-in renames don't run this pass (sync-apply is not `repo.tx`); they
+ * are reconciled on the flipped-workspace open path (slice C / #389 item 2).
+ * Flip-gated: dormant in a 'cell' workspace.
+ */
+
+import {
+  defineSameTxProcessor,
+  type AnyPropertySchema,
+  type AnySameTxProcessor,
+  type BlockData,
+  type SameTxCtx,
+} from '@/data/api'
+import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
+import {
+  isInsidePropertySubtreeWalk,
+  isPropertyFieldInstance,
+  propertiesEqual,
+  propertyChildContentToEncodedValue,
+  type IsPropertyFieldDefinition,
+} from '@/data/propertyChildren'
+
+export const MIGRATE_PROPERTY_RENAME_PROCESSOR_NAME = 'core.migratePropertyRename'
+
+interface RenamedDefinition {
+  readonly fieldId: string
+  readonly oldName: string
+  readonly newName: string
+  /** Tx-start schema for `fieldId` — OLD name, but the codec is unchanged by a
+   *  rename, so it correctly decodes the field row's value for reprojection. */
+  readonly schema: AnyPropertySchema
+}
+
+/** Definition blocks in `changedRows` whose NAME changed this tx. A brand-new
+ *  definition (no `before`) has no existing consumer cells to re-key, and a
+ *  shadowed/unavailable fieldId can't be reprojected — both are skipped. */
+const collectRenames = (
+  ctx: SameTxCtx,
+  workspaceId: string,
+  changedRows: ReadonlyArray<{before: BlockData | null; after: BlockData | null}>,
+): RenamedDefinition[] => {
+  const renames: RenamedDefinition[] = []
+  for (const {before, after} of changedRows) {
+    if (after === null || after.deleted) continue
+    const afterMeta = parsePropertyDefinitionMetadata(after)
+    if (!afterMeta) continue
+    const beforeMeta = before ? parsePropertyDefinitionMetadata(before) : null
+    if (!beforeMeta || beforeMeta.name === afterMeta.name) continue
+    const resolution = ctx.resolvePropertySchemaField(workspaceId, after.id)
+    if (resolution.status !== 'resolved') continue
+    renames.push({
+      fieldId: after.id,
+      oldName: beforeMeta.name,
+      newName: afterMeta.name,
+      schema: resolution.schema,
+    })
+  }
+  return renames
+}
+
+const consumingParentIds = async (
+  ctx: SameTxCtx,
+  workspaceId: string,
+  fieldIds: readonly string[],
+): Promise<string[]> => {
+  // `parent_id IS NOT NULL`: a stamped workspace-root row is user content, not
+  // a field row (§9 root half) — never re-key it.
+  const rows = await ctx.db.getAll<{parent_id: string | null}>(
+    `SELECT DISTINCT parent_id FROM blocks
+      WHERE workspace_id = ? AND reference_target_id IN (${fieldIds.map(() => '?').join(', ')})
+        AND deleted = 0 AND parent_id IS NOT NULL`,
+    [workspaceId, ...fieldIds],
+  )
+  const set = new Set<string>()
+  for (const row of rows) if (row.parent_id !== null) set.add(row.parent_id)
+  return [...set]
+}
+
+/** Re-key one parent's cell for every rename that owns a field row under it.
+ *  Whole change-set applied atomically (drop ALL old names before assigning
+ *  ANY new one) so a name SWAP (`a→b` + `b→a` in one tx) never leaves an
+ *  intermediate `{b: <a>}` that clobbers b — the same reasoning the deferred
+ *  batch documents. */
+const rekeyParent = async (
+  ctx: SameTxCtx,
+  parentId: string,
+  renames: readonly RenamedDefinition[],
+  isFieldDefinition: IsPropertyFieldDefinition,
+  memo: Map<string, boolean>,
+): Promise<void> => {
+  const tx = ctx.tx
+  const parent = await tx.get(parentId)
+  if (parent === null || parent.deleted) return
+  // A parent whose own chain passes through a field row is property-subtree
+  // interior (a ref-typed value pointing at this definition, a comment): its
+  // children are values, never field rows — never re-key.
+  if (await isInsidePropertySubtreeWalk(
+    parentId, (id) => tx.get(id), isFieldDefinition, memo,
+  )) return
+
+  const siblings = await tx.childrenOf(parentId, undefined)
+  const oldNames: string[] = []
+  const assignments: Array<{name: string; value: unknown}> = []
+  for (const rename of renames) {
+    let projected: unknown
+    let hasProjection = false
+    let sawFieldRow = false
+    for (const sibling of siblings) {
+      if ((sibling.referenceTargetId ?? null) !== rename.fieldId) continue
+      if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
+      sawFieldRow = true
+      if (hasProjection) continue
+      const values = await tx.childrenOf(sibling.id, undefined)
+      for (const value of values) {
+        try {
+          projected = propertyChildContentToEncodedValue(
+            rename.schema, value.content, value.referenceTargetId ?? null,
+          )
+          hasProjection = true
+          break
+        } catch {
+          // Unparseable value — a rename doesn't change the codec, so this is a
+          // pre-existing stale value; try the next, and if none parse the new
+          // key stays unset (the old key is still dropped — §9: cell derives
+          // from children, so a stale value shows unset until re-set).
+        }
+      }
+    }
+    if (!sawFieldRow) continue
+    oldNames.push(rename.oldName)
+    if (hasProjection) assignments.push({name: rename.newName, value: projected})
+  }
+  if (oldNames.length === 0) return
+
+  const next = {...parent.properties}
+  for (const oldName of oldNames) delete next[oldName]
+  for (const {name, value} of assignments) next[name] = value
+  if (propertiesEqual(parent.properties, next)) return
+  // skipMetadata: machinery re-key symmetric with the deferred batch's cell
+  // writes — not a "last edited" bump. Runs LAST in the kernel order so this
+  // `properties` write is not re-seen by MATERIALIZE (see the file header).
+  await tx.update(parentId, {properties: next}, {skipMetadata: true})
+}
+
+export const MIGRATE_PROPERTY_RENAME_PROCESSOR = defineSameTxProcessor({
+  name: MIGRATE_PROPERTY_RENAME_PROCESSOR_NAME,
+  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  apply: async (event, ctx) => {
+    if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
+    const renames = collectRenames(ctx, event.workspaceId, event.changedRows)
+    if (renames.length === 0) return
+    const parentIds = await consumingParentIds(
+      ctx, event.workspaceId, renames.map(r => r.fieldId),
+    )
+    if (parentIds.length === 0) return
+    const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
+      const resolution = ctx.resolvePropertySchemaField(event.workspaceId, fieldId)
+      return resolution.status === 'resolved'
+        || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
+    }
+    const memo = new Map<string, boolean>()
+    for (const parentId of parentIds) {
+      await rekeyParent(ctx, parentId, renames, isFieldDefinition, memo)
+    }
+  },
+})
+
+export const propertyRenameSameTxProcessors: ReadonlyArray<AnySameTxProcessor> = [
+  MIGRATE_PROPERTY_RENAME_PROCESSOR,
+]

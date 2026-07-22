@@ -2,9 +2,18 @@
 /**
  * Slice B2 (PR #288 §7/§9): rename-reproject + codec-change re-encode.
  * A definition rename or codec change under a durable fieldId triggers a
- * child-indexed migration pass — field-row retitle ([[old]] → [[new]]),
- * cell re-key, value re-encode, with unconvertible values reported — all
- * flip-gated (dormant in a 'cell' workspace).
+ * child-indexed migration — cell re-key, value re-encode, with unconvertible
+ * values reported — both flip-gated (dormant in a 'cell' workspace).
+ *
+ * The two triggers now run on DIFFERENT paths (PR #386 follow-up): a RENAME
+ * is a same-tx processor (`MIGRATE_PROPERTY_RENAME_PROCESSOR`,
+ * `internals/propertyRenameProcessor.ts`) — it fires inside the same
+ * `repo.tx` that edits the definition block's name, so the rename and its
+ * consuming-cell fan-out land as ONE undoable step. A codec-TYPE change
+ * still rides the deferred deep-idle batch this file's `republish` helper
+ * drains (it needs the NEW codec, which the same-tx registry snapshot can't
+ * build). Field rows are id-addressed (`((fieldId))`, §7) either way, so
+ * neither path retitles them — only the name-keyed cell re-keys.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +22,8 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
+import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { changedPropertyDefinitions } from './internals/propertyDefinitionMigrations'
 import type { Repo } from './repo'
 
@@ -31,7 +42,6 @@ const schemaWith = (name: string, codec = codecs.string as typeof codecs.string 
 // the instance handed to setProperty.
 const statusString = schemaWith('status')
 const statusNumber = schemaWith('status', codecs.number)
-const stateString = schemaWith('state')
 // Rename AND codec change in the SAME republish (status/string -> state2/number).
 const state2Number = schemaWith('state2', codecs.number)
 
@@ -125,6 +135,73 @@ const seedProperty = async (
   return {fieldRowId: field.id, valueRowId: valueRow.id}
 }
 
+/** A REAL property-schema definition block — `types: ['property-schema']`
+ *  plus `propertyNameProp`/`propertyChangeScopeProp`, the shape
+ *  `parsePropertyDefinitionMetadata` recognizes. This is the row the
+ *  same-tx rename processor reads before/after; registering the schema in
+ *  the projected facet (`publishDefinition`, above) is the SEPARATE
+ *  tx-start identity/codec lookup (`ctx.resolvePropertySchemaField`) — a
+ *  rename test needs BOTH, at the same `fieldId`.
+ *
+ *  This block deliberately omits a presetId, so the app's OWN live
+ *  `userSchemasProjector` bridge (which reacts to any `'property-schema'`
+ *  row) can't build real behavior for it and publishes metadata-only,
+ *  WARNING "no presetId" — racing our manual override for the same fieldId
+ *  key in `projectedPropertyDefinitionsFacet`. Waiting here for that
+ *  reaction to land (metadata visible in the registry) before returning
+ *  means a caller who publishes its OWN override right after is guaranteed
+ *  to register LATER and so win the facet's "last-wins" dedup — otherwise
+ *  the projector's reaction can land asynchronously AFTER the override and
+ *  silently reclobber it (a real race, not a hypothetical one — this is
+ *  what made the naive "create then publish" ordering still flaky). */
+const seedDefinitionBlock = async (
+  repo: Repo, fieldId: string, name: string,
+): Promise<void> => {
+  await repo.tx(async tx => {
+    await tx.create({
+      id: fieldId, workspaceId: WS, parentId: null, orderKey: `k-${fieldId}`, content: name,
+      properties: {
+        types: [PROPERTY_SCHEMA_TYPE],
+        [propertyNameProp.name]: name,
+        [propertyChangeScopeProp.name]: ChangeScope.BlockDefault,
+      },
+    })
+  }, {scope: ChangeScope.BlockDefault})
+  await vi.waitFor(() => {
+    if (repo.propertyDefinitions?.definitionsByFieldId.get(fieldId)?.name !== name) {
+      throw new Error(`[test] ${fieldId} not yet visible in the property-definitions registry`)
+    }
+  })
+}
+
+/** Rename a real definition block's name in ONE tx — this is what actually
+ *  triggers `MIGRATE_PROPERTY_RENAME_PROCESSOR` (a same-tx processor; no
+ *  timer drain needed, unlike the deferred codec-change path below). */
+const renameDefinitionBlock = async (
+  repo: Repo, fieldId: string, newName: string,
+): Promise<void> => {
+  await repo.tx(tx => tx.setProperty(fieldId, propertyNameProp, newName),
+    {scope: ChangeScope.BlockDefault})
+}
+
+/** `setup()` PLUS a real definition block at `FIELD_ID` — for the rename
+ *  tests, which (unlike the codec-change tests) need a real block to edit.
+ *  ORDER matters here: `seedDefinitionBlock` alone (no presetId) is also
+ *  picked up by the live `userSchemasProjector` bridge, which publishes a
+ *  metadata-only ("no presetId", `schema` omitted) contribution at the SAME
+ *  fieldId key — so publishing our override AFTER the block exists is what
+ *  makes it the surviving "last-wins" registration (facet dedup convention,
+ *  `keyedMapFacet`) instead of getting shadowed by the schema-less one. */
+const setupWithRealDefinition = async (
+  initial: ReturnType<typeof schemaWith> = statusString,
+): Promise<Repo> => {
+  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+  repo.setActiveWorkspaceId(WS)
+  await seedDefinitionBlock(repo, FIELD_ID, initial.name)
+  publishDefinition(repo, initial)
+  return repo
+}
+
 describe('changedPropertyDefinitions (diff)', () => {
   it('never diffs across workspaces', () => {
     const metadata = (workspaceId: string) => ({
@@ -149,11 +226,11 @@ describe('changedPropertyDefinitions (diff)', () => {
 describe('rename migration (flipped workspace)', () => {
   it('re-keys consuming cells; field-row content is id-stable across the rename', async () => {
     await seedWorkspace('children')
-    const repo = setup()
+    const repo = await setupWithRealDefinition()
     const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'done')
     expect(await cell('p')).toEqual({status: 'done'})
 
-    await republish(repo, stateString)
+    await renameDefinitionBlock(repo, FIELD_ID, 'state')
 
     // Field rows address the definition BY ID (`((fieldId))`, §7), so a rename
     // never retitles their content — only the name-keyed cell re-keys.
@@ -164,7 +241,7 @@ describe('rename migration (flipped workspace)', () => {
 
   it('is dormant in an un-flipped workspace', async () => {
     await seedWorkspace('cell')
-    const repo = setup()
+    const repo = await setupWithRealDefinition()
     await repo.tx(async tx => {
       await tx.create({
         id: 'p', workspaceId: WS, parentId: null, orderKey: 'k', content: 'host',
@@ -173,44 +250,61 @@ describe('rename migration (flipped workspace)', () => {
     await repo.tx(tx => tx.setProperty('p', statusString, 'done'),
       {scope: ChangeScope.BlockDefault})
 
-    await republish(repo, stateString)
+    await renameDefinitionBlock(repo, FIELD_ID, 'state')
 
-    // Cell keeps the old key (today's rename semantics), no children exist.
+    // Cell keeps the old key (today's rename semantics), no children exist —
+    // the flip gate (`isPropertyChildBackedWorkspace`) keeps the same-tx
+    // processor dormant in a 'cell' workspace, so no re-key happens.
     expect(await cell('p')).toEqual({status: 'done'})
   })
 
-  it('still applies after the active workspace moves on twice before the idle drain', async () => {
-    // Repro for a PR #386 review defect: `propertySchemaResolverFor` only
-    // serves the ACTIVE workspace or the immediately-previous one (one-deep
-    // retention) and fails closed otherwise. The migration pass is deferred
-    // to a deep-idle job — if the user switches workspaces twice before that
-    // job fires, WS falls out of BOTH slots and a run-time re-resolve would
-    // silently return zero plans, dropping the migration with no retry.
+  // The deferred-path "workspace moves on twice before the idle drain" repro
+  // (PR #386 review defect: `propertySchemaResolverFor`'s one-deep active/
+  // previous-workspace retention going stale before a deferred deep-idle job
+  // fired) was removed here. A same-tx rename has no deferred plan that can
+  // go stale — it runs inside the SAME tx that edits the definition block,
+  // so there is no idle-drain window left for this staleness to occur in.
+
+  it('a rename does NOT tombstone the field row or value child', async () => {
     await seedWorkspace('children')
-    const repo = setup()
+    const repo = await setupWithRealDefinition()
     const {fieldRowId, valueRowId} = await seedProperty(repo, 'p', 'done')
+
+    await renameDefinitionBlock(repo, FIELD_ID, 'state')
+
+    // The DANGEROUS trap the processor's file header documents: the tx-start
+    // registry still maps the OLD name ('status') -> this definition, so if
+    // MATERIALIZE_PROPERTY_CHILDREN re-saw the re-keyed cell (old key
+    // dropped), it would read that as a user delete and tombstone these very
+    // rows. The rename processor runs LAST in `KERNEL_SAME_TX_PROCESSORS` to
+    // dodge that — assert the rows actually survived it.
+    for (const id of [fieldRowId, valueRowId]) {
+      const row = await sharedDb.db.get<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row.deleted, `${id} deleted`).toBe(0)
+    }
+  })
+
+  it('a rename is ONE undoable step', async () => {
+    await seedWorkspace('children')
+    const repo = await setupWithRealDefinition()
+    await seedProperty(repo, 'p', 'done')
     expect(await cell('p')).toEqual({status: 'done'})
 
-    vi.useFakeTimers()
-    // Schedules the migration while WS is still active — this is the moment
-    // the fix captures the resolved plan.
-    publishDefinition(repo, stateString)
-    // A→B→C: WS (A) is neither active nor the retained-previous workspace
-    // once this returns. Each switch must reach a REAL primed snapshot for
-    // the new workspace (not just flip `activeWorkspaceId`) — otherwise the
-    // registry rebuild keeps re-publishing `null`, which leaves WS parked as
-    // "previous" forever and never actually reproduces the defect.
-    repo.setActiveWorkspaceId('ws-other-1')
-    await repo.whenPropertyDefinitionsReady('ws-other-1')
-    repo.setActiveWorkspaceId('ws-other-2')
-    await repo.whenPropertyDefinitionsReady('ws-other-2')
-    await vi.runAllTimersAsync()
-    await repo.awaitPropertyDefinitionMigrations()
-    vi.useRealTimers()
-
-    expect(await rowContent(fieldRowId)).toBe(`((${FIELD_ID}))`)
+    await renameDefinitionBlock(repo, FIELD_ID, 'state')
     expect(await cell('p')).toEqual({state: 'done'})
-    expect(await rowContent(valueRowId)).toBe('done')
+
+    await repo.undo(ChangeScope.BlockDefault)
+
+    // Both halves of the atomic rename — the definition block's own name AND
+    // the consuming cell's re-key — revert together, in the one undo step.
+    const defRow = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [FIELD_ID],
+    )
+    expect((JSON.parse(defRow.properties_json) as Record<string, unknown>)[propertyNameProp.name])
+      .toBe('status')
+    expect(await cell('p')).toEqual({status: 'done'})
   })
 })
 
@@ -319,9 +413,6 @@ describe('simultaneous name swap (a -> b AND b -> a in one rebuild)', () => {
   const FIELD_B = 'field-swap-b'
   const alpha = schemaWith('alpha')
   const beta = schemaWith('beta')
-  // The swapped pair: the SAME fieldIds now carry each other's old names.
-  const alphaRenamedToBeta = schemaWith('beta')
-  const betaRenamedToAlpha = schemaWith('alpha')
 
   const publishPair = (repo: Repo, a: typeof alpha, b: typeof beta): void => {
     repo.setRuntimeContributions(
@@ -357,6 +448,11 @@ describe('simultaneous name swap (a -> b AND b -> a in one rebuild)', () => {
     await seedWorkspace('children')
     const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
     repo.setActiveWorkspaceId(WS)
+    // Real blocks FIRST, then the facet override — see `setupWithRealDefinition`
+    // for why the order matters (the blocks' own live schema-bridge projector
+    // races the manual override for the same fieldId keys).
+    await seedDefinitionBlock(repo, FIELD_A, 'alpha')
+    await seedDefinitionBlock(repo, FIELD_B, 'beta')
     publishPair(repo, alpha, beta)
 
     await repo.tx(async tx => {
@@ -375,12 +471,14 @@ describe('simultaneous name swap (a -> b AND b -> a in one rebuild)', () => {
     expect(fieldA).toBeDefined()
     expect(fieldB).toBeDefined()
 
-    // The swap, in ONE rebuild.
-    vi.useFakeTimers()
-    publishPair(repo, alphaRenamedToBeta, betaRenamedToAlpha)
-    await vi.runAllTimersAsync()
-    await repo.awaitPropertyDefinitionMigrations()
-    vi.useRealTimers()
+    // The swap, in ONE tx: both definition blocks' names edited together, so
+    // the processor's changed-rows batch sees BOTH renames and applies them
+    // atomically (drop all old names before assigning any new one — see the
+    // processor's `rekeyParent` comment) rather than one at a time.
+    await repo.tx(async tx => {
+      await tx.setProperty(FIELD_A, propertyNameProp, 'beta')
+      await tx.setProperty(FIELD_B, propertyNameProp, 'alpha')
+    }, {scope: ChangeScope.BlockDefault})
 
     // Each definition's value follows ITS fieldId to its new name — nothing is
     // clobbered by the other pass, and neither field row is tombstoned by the
