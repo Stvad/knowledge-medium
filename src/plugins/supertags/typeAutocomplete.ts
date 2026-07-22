@@ -73,10 +73,12 @@ export type TypeTagCandidate =
 const RESULT_CAP = 12
 
 /** `#` trigger detection — the shared matcher with the stacked-hash
- *  guard on (`##foo` is heading territory, not a tag). Exported for
- *  direct testing. */
+ *  guard on (`##foo` is heading territory, not a tag) and word-glue
+ *  allowed (`title#todo` fires, so tagging a one-word block needs no
+ *  throwaway leading space; URL paths like `example.com/page#section`
+ *  still bow out). Exported for direct testing. */
 export const matchHashTrigger = (text: string, pos: number): TriggerMatch | null =>
-  matchCharTrigger(text, pos, '#', {rejectDoubledTrigger: true})
+  matchCharTrigger(text, pos, '#', {rejectDoubledTrigger: true, allowWordCharBefore: true})
 
 const labelOf = (type: TypeContribution): string => type.label ?? type.id
 
@@ -334,6 +336,15 @@ export const typeTagCompletionSource = (
     const line = state.doc.lineAt(pos)
     const match = matchHashTrigger(line.text, pos - line.from)
     if (!match) return null
+    // A `#` glued onto a word with nothing typed after it (`C#`, `F#`,
+    // `A#`) is ambiguous with an ordinary token — popping the full type
+    // list there would put the block one stray Enter away from a mis-tag.
+    // Hold the dropdown until the first query char turns it into an
+    // intentional tag (`title#p…`); a spaced / line-start `#` is already
+    // a deliberate gesture, so it still opens on the empty query.
+    // Explicit invocation (Ctrl-Space) always opens.
+    const gluedToWord = match.from > 0 && /\w/.test(line.text[match.from - 1])
+    if (gluedToWord && match.query === '' && !explicit) return null
     // `#word` is exactly what literal spans look like (`#define` in a
     // fence, a CSS `#id` in backticks, `http://…/#anchor`) — and with
     // the dropdown open, Enter accepts the auto-selected "Create type"

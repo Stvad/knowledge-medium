@@ -81,7 +81,7 @@ import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { matchCharTrigger, type CharTriggerOptions } from '../triggerMatch'
 
-const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', ' ', '\t', 'a', 'b'] as const
+const STRUCTURAL_CHARS = ['[', ']', '(', ')', '#', '@', '/', ' ', '\t', 'a', 'b'] as const
 
 const randomTextArb: fc.Arbitrary<string> = fc
   .array(fc.constantFrom(...STRUCTURAL_CHARS), {minLength: 0, maxLength: 30})
@@ -114,7 +114,7 @@ const triggerArb: fc.Arbitrary<'@' | '#'> = fc.constantFrom('@', '#')
  *  which is orthogonal to `rejectDoubledTrigger`, and this keeps the
  *  suite differentialing against what production code actually calls. */
 const optsFor = (trigger: '@' | '#'): CharTriggerOptions =>
-  trigger === '#' ? {rejectDoubledTrigger: true} : {}
+  trigger === '#' ? {rejectDoubledTrigger: true, allowWordCharBefore: true} : {}
 
 describe('matchCharTrigger', () => {
   it('never throws for a registered trigger, and a non-null result is self-consistent (triggerMatch.ts:73-133)', () => {
@@ -165,6 +165,30 @@ describe('matchCharTrigger', () => {
           const insideBlockrefSpan = result.from >= spanStart && result.from < pos
           expect(insideBlockrefSpan).toBe(false)
         }
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('the two production wrappers never both fire at one cursor position (sibling ownership: at most one trigger owns any position — no merged double-fire dropdown)', () => {
+    // `autocompletion()` is installed once with no `override`
+    // (src/editor/autocomplete.ts), so if BOTH the `@` and `#` sources
+    // returned a match at the same cursor they'd merge into one dropdown
+    // and each fire a query for the other's text. The sibling-ownership
+    // walk exists precisely to make at most one trigger own any position.
+    // This is the invariant the afterPos-vs-pos boundary bug violated:
+    // it let `@` and `#` fire together on `@C#`-shaped input (the `#`'s
+    // empty-query match plus `@`'s `C#` place query). Note this catches
+    // DOUBLE-fires only; the missing-slash-guard bug was the opposite
+    // failure — a dead zone (BOTH null on `@a/b#c`) — which this property
+    // can't see, so that class is pinned by the example tests in
+    // triggerMatch.test.ts instead. The `/` now in the alphabet exercises
+    // the URL-path branch either bug could hide behind.
+    fc.assert(
+      fc.property(caseArb, ({text, pos}) => {
+        const atFires = matchCharTrigger(text, pos, '@', optsFor('@')) !== null
+        const hashFires = matchCharTrigger(text, pos, '#', optsFor('#')) !== null
+        expect(atFires && hashFires).toBe(false)
       }),
       fuzzParams(300),
     )
