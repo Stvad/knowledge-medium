@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-medium/agent-cli",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "CLI, local HTTP bridge, and graph MCP server for driving the Knowledge Medium app from local agents.",
   "keywords": [
     "cli",
