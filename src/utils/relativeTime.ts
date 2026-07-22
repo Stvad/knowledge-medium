@@ -8,10 +8,11 @@ const DAY = 24 * HOUR
 
 /** Compact "time ago" label: "just now" under a minute, then "5m" / "3h"
  *  / "2d" ago, then an absolute short date past a week. Returns '' for a
- *  missing/zero timestamp so callers can omit the line. Clock skew (a
- *  timestamp slightly ahead of `now`) collapses to "just now". */
+ *  missing/zero timestamp, or a zero `now` (the SSR / pre-hydration clock
+ *  snapshot), so callers can omit the line. Clock skew (a timestamp slightly
+ *  ahead of `now`) collapses to "just now". */
 export function formatRelativeTime(ts: number, now: number): string {
-  if (!ts) return ''
+  if (!ts || !now) return ''
   const sec = Math.floor((now - ts) / 1000)
   if (sec < MINUTE) return 'just now'
   if (sec < HOUR) return `${Math.floor(sec / MINUTE)}m ago`

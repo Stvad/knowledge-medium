@@ -58,76 +58,91 @@ const NOOP_HANDLERS: HoverHandlers = {
 export function useBulletHover(enabled: boolean): BulletHoverController {
   const [open, setOpen] = useState(false)
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
-  const openTimer = useRef<number | null>(null)
-  const closeTimer = useRef<number | null>(null)
+  // At most one timer is ever pending: an open and a close can't be armed at
+  // once (entering re-arms open only while closed; leaving arms close only
+  // while open), so a single ref models the whole state machine.
+  const pendingTimer = useRef<number | null>(null)
 
-  const cancelOpen = useCallback(() => {
-    if (openTimer.current !== null) {
-      window.clearTimeout(openTimer.current)
-      openTimer.current = null
-    }
-  }, [])
-  const cancelClose = useCallback(() => {
-    if (closeTimer.current !== null) {
-      window.clearTimeout(closeTimer.current)
-      closeTimer.current = null
+  const cancelPending = useCallback(() => {
+    if (pendingTimer.current !== null) {
+      window.clearTimeout(pendingTimer.current)
+      pendingTimer.current = null
     }
   }, [])
 
   const close = useCallback(() => {
-    cancelOpen()
-    cancelClose()
+    cancelPending()
     setOpen(false)
-  }, [cancelOpen, cancelClose])
+  }, [cancelPending])
 
-  // Tidy any pending timers on unmount.
-  useEffect(() => () => {
-    cancelOpen()
-    cancelClose()
-  }, [cancelOpen, cancelClose])
+  // Mirror `enabled` into a ref, and cancel any in-flight timer the moment we
+  // become disabled (mobile breakpoint crossed, plugin toggled off). Clearing
+  // a timeout in an effect is a plain external-system teardown — no setState
+  // here — and the ref lets a timer that somehow still fires bail instead of
+  // resurrecting the card.
+  const enabledRef = useRef(enabled)
+  useEffect(() => {
+    enabledRef.current = enabled
+    if (!enabled) cancelPending()
+  }, [enabled, cancelPending])
+
+  // Reset the persisted `open` when disabled. set-state-during-render is
+  // React's blessed reset-on-prop-change idiom; a reset *effect* trips the
+  // cascading-render lint. Without this, an `open` that survived the disable
+  // would resurface — anchored to a now-stale bullet — the instant `enabled`
+  // returns true, since the exposed value is just `enabled && open`.
+  const [prevEnabled, setPrevEnabled] = useState(enabled)
+  if (prevEnabled !== enabled) {
+    setPrevEnabled(enabled)
+    if (!enabled && open) setOpen(false)
+  }
+
+  // Tidy any pending timer on unmount.
+  useEffect(() => cancelPending, [cancelPending])
 
   const anchorHoverProps = useMemo<HoverHandlers>(() => {
     if (!enabled) return NOOP_HANDLERS
     return {
       onMouseEnter: event => {
         const el = event.currentTarget
-        cancelClose()
+        cancelPending()
         // Re-anchor immediately if already open (e.g. the card re-entered
         // from a neighbouring bullet); otherwise arm the open timer.
         if (open) {
           setAnchorEl(el)
           return
         }
-        if (openTimer.current !== null) return
-        openTimer.current = window.setTimeout(() => {
-          openTimer.current = null
+        pendingTimer.current = window.setTimeout(() => {
+          pendingTimer.current = null
+          if (!enabledRef.current) return
           setAnchorEl(el)
           setOpen(true)
         }, OPEN_DELAY_MS)
       },
       onMouseLeave: () => {
-        cancelOpen()
+        cancelPending()
         if (!open) return
-        closeTimer.current = window.setTimeout(() => {
-          closeTimer.current = null
+        pendingTimer.current = window.setTimeout(() => {
+          pendingTimer.current = null
           setOpen(false)
         }, CLOSE_DELAY_MS)
       },
     }
-  }, [enabled, open, cancelClose, cancelOpen])
+  }, [enabled, open, cancelPending])
 
   const cardHoverProps = useMemo<HoverHandlers>(() => {
     if (!enabled) return NOOP_HANDLERS
     return {
-      onMouseEnter: () => cancelClose(),
+      onMouseEnter: () => cancelPending(),
       onMouseLeave: () => {
-        closeTimer.current = window.setTimeout(() => {
-          closeTimer.current = null
+        cancelPending()
+        pendingTimer.current = window.setTimeout(() => {
+          pendingTimer.current = null
           setOpen(false)
         }, CLOSE_DELAY_MS)
       },
     }
-  }, [enabled, cancelClose])
+  }, [enabled, cancelPending])
 
   return {open: enabled && open, anchorEl, anchorHoverProps, cardHoverProps, close}
 }

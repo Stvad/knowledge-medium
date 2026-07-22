@@ -63,6 +63,7 @@ export type {
 } from '@/extensions/core.js'
 
 export type {
+  BlockBulletHoverContribution,
   BlockChildrenFooterContribution,
   BlockClickContribution,
   BlockHeaderContribution,

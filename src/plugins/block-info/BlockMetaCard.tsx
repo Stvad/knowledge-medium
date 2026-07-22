@@ -14,6 +14,7 @@ import { useHandle } from '@/hooks/block.js'
 import { useMinuteClock } from '@/hooks/useMinuteClock.js'
 import { useUserPage } from '@/data/globalState.js'
 import { buildAppHash } from '@/utils/routing.js'
+import { useOpenBlock } from '@/utils/navigation.js'
 import { formatAbsoluteDateTime, formatRelativeTime } from '@/utils/relativeTime.js'
 
 interface CardMeta {
@@ -43,14 +44,25 @@ const useCardMeta = (block: Block): CardMeta | undefined =>
 
 const Author = ({userId, workspaceId}: {userId: string; workspaceId: string}): ReactNode => {
   const {name, blockId} = useUserPage(userId)
-  if (blockId) {
-    return (
-      <a href={buildAppHash(workspaceId, blockId)} className="hover:underline">
-        by {name}
-      </a>
-    )
-  }
-  return <span>by {name}</span>
+  // Hook must run unconditionally; the handler is only wired when there's a
+  // user page to open.
+  const openUser = useOpenBlock({blockId: blockId ?? '', workspaceId})
+  return (
+    <span>
+      by{' '}
+      {blockId ? (
+        <a
+          href={buildAppHash(workspaceId, blockId)}
+          className="hover:underline"
+          onClick={openUser}
+        >
+          {name}
+        </a>
+      ) : (
+        name
+      )}
+    </span>
+  )
 }
 
 const MetaRow = ({

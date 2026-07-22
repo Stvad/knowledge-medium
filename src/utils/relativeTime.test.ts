@@ -9,8 +9,10 @@ const DAY = 24 * HOUR
 describe('formatRelativeTime', () => {
   const now = Date.UTC(2026, 6, 22, 12, 0, 0)
 
-  it('returns empty string for a missing/zero timestamp', () => {
+  it('returns empty string for a missing/zero timestamp or a zero clock', () => {
     expect(formatRelativeTime(0, now)).toBe('')
+    // SSR / pre-hydration snapshot: no wall clock yet.
+    expect(formatRelativeTime(now, 0)).toBe('')
   })
 
   it('collapses sub-minute and future (clock-skew) timestamps to "just now"', () => {

@@ -219,7 +219,9 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
         hoverProps={hover.cardHoverProps}
       >
         {hoverSections.map((Section, index) => (
-          <Section key={index} block={block}/>
+          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+            <Section block={block}/>
+          </ErrorBoundary>
         ))}
       </BulletHoverCard>
     </>
