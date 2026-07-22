@@ -139,8 +139,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   const hover = useBulletHover(hasHoverSections && !isMobile)
 
   const openBlockInfo = () => {
-    // Pass the originating panel so the dialog's in-block links target it
-    // rather than the active panel (the dialog mounts outside the panel tree).
+    // Pass the originating panel — see BlockInfoDialogProps.panelId.
     void openDialog(BlockInfoDialog, {block, sections: hoverSections, panelId})
   }
 

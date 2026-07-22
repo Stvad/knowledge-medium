@@ -53,7 +53,10 @@ export const BlockInfoDialog = ({
       <DialogHeader>
         <DialogTitle>Block info</DialogTitle>
       </DialogHeader>
-      <NestedBlockContextProvider overrides={{panelId}}>
+      {/* Only override when we actually have a panel, so a bare `undefined`
+          can't blank an inherited panelId should DialogHost ever move under a
+          panel-scoped context (today it mounts as a root-level sibling). */}
+      <NestedBlockContextProvider overrides={panelId ? {panelId} : {}}>
         <div className="flex flex-col gap-2">
           {sections.map((Section, index) => (
             <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
