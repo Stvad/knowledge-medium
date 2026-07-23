@@ -98,6 +98,31 @@ export type SameTxProcessor = {
         events: ReadonlyArray<string>
       }
   readonly apply: (event: SameTxEvent, ctx: SameTxCtx) => Promise<void>
+  /** Derivation-liveness re-run (issue #402). When true, the commit
+   *  pipeline runs this processor a SECOND time after the full
+   *  single pass, over just the rows that were written after the
+   *  processor's first run — so a derivation whose input a later
+   *  processor rewrote (plugin content rewrites after kernel
+   *  DERIVE/PROJECT, a kernel stamp after MATERIALIZE's ancestry
+   *  read, …) re-derives from final inputs instead of committing
+   *  stale. Field-watch only (`defineSameTxProcessor` enforces it).
+   *
+   *  Opting in is a CONTRACT: apply must be idempotent (early-return
+   *  when the derived output already matches) — the re-run pass is
+   *  bounded at one and relies on idempotence, not a fixpoint, for
+   *  convergence. The re-run event's `changedRows.before` is the
+   *  tx-start state (same as pass one), so transition detection must
+   *  tolerate seeing an already-handled transition again. */
+  readonly rerunOnDirtyRows?: boolean
+  /** Explicit-intent channel (issue #402): when true, rows written by
+   *  this processor are NOT marked dirty for the re-run pass — its
+   *  writes are declared settled (already convergent with every
+   *  derivation, or deliberately final in a way a re-derivation must
+   *  not second-guess). The canonical consumer is
+   *  `core.migratePropertyRename`, whose consuming-cell re-keys would
+   *  otherwise be re-read by a re-run MATERIALIZE against the stale
+   *  tx-start registry and misinterpreted as a user's key deletion. */
+  readonly settledWrites?: boolean
 }
 
 export interface SameTxEvent {
@@ -175,7 +200,20 @@ export class ProcessorRejection extends Error {
 
 export const defineSameTxProcessor = (
   processor: SameTxProcessor,
-): SameTxProcessor => processor
+): SameTxProcessor => {
+  // The re-run pass collects rows by diffing watched FIELDS against the
+  // dirty-row set; an event-watch processor has no field diff to re-run
+  // against (its events already fired once, and re-delivering them would
+  // be a duplicate dispatch, not a re-derivation). Fail at definition
+  // time, not silently at commit time.
+  if (processor.rerunOnDirtyRows && processor.watches.kind !== 'field') {
+    throw new Error(
+      `Same-tx processor "${processor.name}" declares rerunOnDirtyRows but has ` +
+      `an event watch — the derivation re-run pass is field-watch only.`,
+    )
+  }
+  return processor
+}
 
 /** Variance-erased same-tx processor type for heterogeneous
  *  collections (the engine's facet registry). Parallel to
