@@ -1605,10 +1605,12 @@ surface.
     link — follow-the-name semantics, dormant until names resolve to
     definitions (§9 condition 1, §11 AC).</dd>
   <dt><strong>Columns</strong></dt>
-  <dd><code>reference_target_id</code> (stamped for both <em>unmarked</em> ref
-    forms — purely textual for <code>((id))</code>, the generic alias
-    lookup for <code>[[name]]</code> — and for the marked <em>block-ref</em>
-    form) · <code>is_field_form</code> (both <em>marked</em> bracket forms —
+  <dd><code>reference_target_id</code> (stamped for <em>all four</em>
+    combinations — both bracket forms, marked or unmarked, each through its
+    usual branch: purely textual for <code>((id))</code>, the generic alias
+    lookup + late-binding for <code>[[name]]</code>; PR #417 review caught the
+    marked-alias omission, which would have specced bit=1/target=NULL rows
+    that never classify) · <code>is_field_form</code> (both <em>marked</em> bracket forms —
     each derives through the same branch as its unmarked twin: textual for
     <code>::((id))</code>, alias lookup + late-binding for
     <code>::[[name]]</code>). Both columns local, derived, never synced,
@@ -1646,7 +1648,19 @@ definition inline — <em>create-on-write lives only here</em>, in the watched
 input flow (owner ruling: paste never auto-creates — importing fifty
 <code>::[[whatever]]</code> lines must not silently mint fifty definitions;
 a pasted unresolvable row sits visibly unbound with a per-row "create
-property?" affordance). Beyond that there is <strong>no seam at all</strong>
+property?" affordance). The boundary has one <em>enforcement point</em> in
+existing machinery (PR #417 review, confirmed against
+<code>referencesProcessor.ts</code>/<code>targets.ts</code>): parseReferences
+queues every wikilink for <code>ensureAliasTarget</code>, which mints a page
+alias seat on lookup miss — left alone, a pasted <code>::[[whatever]]</code>
+would silently auto-create a <em>page</em> that then owns the name and gets
+AC's later definition claim <em>refused</em> (<code>alias.collision</code>),
+locking the name away from the declared field intent. So the references
+processor <strong>skips alias-seat ensure for whole-block marked-alias
+rows</strong> (form-keyed) — the embedded ref still parses and late-binds
+when a claimant appears; only the seat-minting is suppressed. This is the one
+deliberate special case uniform resolution keeps, and it is the create
+boundary itself, not resolution machinery. Beyond that there is <strong>no seam at all</strong>
 (owner decision, 07-22 second round, superseding this revision's earlier
 import-canonicalization step): a pasted or hand-written
 <code>::[[name]]</code> is <em>not rewritten</em> — the embedded ref resolves
@@ -1899,9 +1913,18 @@ supabase skill if it's kept.
     (id-only-at-first falls out as sequencing, no flag). Two semantics follow
     and are deliberate: id rows are <em>identity-pinned</em> (the round-29
     shadow tolerance applies to them — losers stay resolvable); name rows
-    <em>follow the name</em> — they re-bind to whatever wins it (a rename or
-    winner flip re-binds or unbinds them; values re-decode under the new
-    codec, failures landing in the invalid-values story). <em>(2)</em> Its parent is non-null (root half:
+    <em>follow the name</em>, with the lifecycle the wikilink machinery
+    already implements (PR #417 review, confirmed against
+    <code>renameProcessor.ts</code>): once <em>bound</em>, a rename rides
+    <code>references.renameBacklinks</code> — the embedded span is rewritten
+    (<code>::[[status]]</code> → <code>::[[state]]</code>, the marker
+    surviving since only the span changes), so bound name rows follow their
+    definition through renames exactly like links; <em>unbinding</em> is the
+    deletion/claim-release case (no span rewrite happens there — the row goes
+    dormant, B2's matrix); and <em>re-binding to a new claimant</em> applies
+    to rows that were unbound when the name changed hands (values re-decode
+    under the new codec, failures landing in the invalid-values story).
+    <em>(2)</em> Its parent is non-null (root half:
     a workspace-root row has no owner to be a field <em>of</em> — its marker is just
     content; the SQL twins carry the same <code>parent_id IS NOT NULL</code>
     clause). <em>(3)</em> <code>reference_target_id</code> resolves via the
@@ -2302,8 +2325,14 @@ supabase skill if it's kept.
     depth-based</strong> (re-specified for the <code>::</code> grammar — the
     earlier "value rows and deeper" rule predated nested machinery, and
     PR #417 review caught that it would drop or misattribute a machinery row's
-    own property uses): what's filtered is <em>value rows'</em> duplicate edges —
-    they duplicate the owner's reprojected edge — while <em>every</em> field
+    own property uses): what's filtered is only the <em>duplicate</em> class —
+    a whole-block ref <em>value</em> under a ref-typed field, whose edge
+    duplicates the owner's projected fieldId-keyed edge
+    (<code>projectPropertyReferences</code> emits parent edges for ref/refList
+    codecs only, PR #417 review ×2) — while an inline <code>[[Foo]]</code>
+    mention <em>inside</em> a scalar/text value is a unique edge with no owner
+    duplicate and is <em>kept</em>, presented as the owner like everything
+    machinery-interior; and <em>every</em> field
     row's edge, at any depth, is unique and is kept;
     the inline backlink count applies the same role rule. Kept, but
     <em>presented as the parent</em> (PR-review P2, round 27, generalized): the
@@ -2797,7 +2826,14 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         re-encode/validate pass over the retargeted rows (unconvertible values
         report via the user-error channel, never silently unset) in the same tx
         through B2's funnel, with the ordering pinned; incompatible presets
-        refuse the merge up front. Until that exists,
+        refuse the merge up front. Name-form rows are covered by the same tx
+        (PR #417 review: the id-form retarget alone would strand them
+        following A's dead name): folding A into B moves A's alias, so the
+        <em>alias-rename lifecycle</em> (<code>renameBacklinks</code>, §9)
+        rewrites bound <code>::[[A-name]]</code> spans toward B in the merge
+        tx, landing those rows in the same re-encode/re-key pass as the id
+        rows; marked-alias rows <em>unresolvable</em> at merge time are listed
+        in the merge report. Until all of that exists,
         definition-vs-definition merges are
         refused, not silently degraded.
         <strong>B3 (integration):</strong> merge/orphan/panel-layout handling — as
