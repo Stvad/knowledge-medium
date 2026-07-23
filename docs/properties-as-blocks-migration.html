@@ -1706,7 +1706,14 @@ form-keyed special-casing in the hot references path, and it re-opened a
 rebind gap since the ensure call is the binding mechanism for misses). The
 embedded wikilink mints/binds an alias seat on lookup miss like any wikilink
 (<code>ensureAliasTarget</code> — a page seat is not the definition
-auto-creation the ruling forbids; it is existing universal link behavior),
+auto-creation the ruling forbids; it is existing universal link behavior.
+PR #417 review pinned the <em>single mint owner</em>: the ensure lives only
+in the references pass (<code>buildSourcePlan</code>/<code>applySourcePlan</code>),
+which pairs every insertion <em>it</em> performs with the 4s orphan-cleanup
+enqueue (<code>newlyInsertedAliasTargetIds</code>) — the §5 derive only
+<em>looks up</em>, never ensures, so no second minter exists to bypass that
+bookkeeping; when tx ordering puts the mint after the derive, the seat id
+lands on the row via the standard alias late-binding),
 the row binds to whatever owns the name, fails recognition's condition 3,
 and renders as an inert field-looking row carrying the "create property?"
 affordance — which, when invoked, creates the definition <em>and rewrites
@@ -1744,7 +1751,15 @@ author" is stale)), the
 conflict surface marks those merge-recommended and the bulk claim batches
 them into one reviewable approve-list — prompted, never silent (an
 auto-yield rule was considered and rejected: it was itself a silent
-mutation). Beyond that there is <strong>no seam at all</strong>
+mutation). One materialize-everything ripple is pinned with the seat
+lifecycle (PR #417 review, confirmed against the processor's own leaf-only
+comment): <code>cleanupOrphanAliasesProcessor</code> raw-<code>tx.delete</code>s
+its orphans on the recorded assumption that seats are childless ("created
+empty so it has no children to cascade") — post-C a seat carries
+backfill-generated machinery children, so the 4s orphan cleanup graduates to
+the canonical subtree delete (<code>deleteSubtreeInTx</code> /
+<code>repo.mutate.delete</code>, the escape hatch the comment already names)
+or it strands live machinery rows under a tombstoned parent. Beyond that there is <strong>no seam at all</strong>
 (owner decision, 07-22 second round, superseding this revision's earlier
 import-canonicalization step): a pasted or hand-written
 <code>::[[name]]</code> is <em>not rewritten</em> — the embedded ref resolves
@@ -2344,10 +2359,21 @@ supabase skill if it's kept.
     anywhere else, <em>unmarked</em> (the field row's own content embeds the same
     exact-ref grammar behind its <code>::</code> marker, so a ref value targeting a
     definition block is unambiguous, §9 recognition) — while the <em>cell</em> keeps a bare id
-    (<code>codecs.ref</code> unchanged). The read path returns the row's derived
-    <code>reference_target_id</code>, which stays NULL unless the content is a
-    resolvable exact ref — so prose typed into a ref property ("people type text
-    into a ref property, like a log") is unparseable, the projection skips it, and
+    (<code>codecs.ref</code> unchanged). The gate is the decode step's
+    <em>form check</em>, not column nullness (PR #417 review — this entry's
+    earlier "stays NULL unless exact ref" phrasing was wrong about the
+    mechanism, and dangerously so once the uniform derive was spelled out:
+    <code>reference_target_id</code> stamps for whole-block <em>wikilinks</em>
+    too, seat-minting included, so trusting any non-null target would
+    silently coerce a typed <code>[[Mary]]</code> — or a typo'd
+    <code>[[Marry]]</code> binding a fresh empty seat — into a valid ref
+    value): the projection's decode, a derive-time pass that may parse
+    content, accepts the <em>id-carrying</em> forms only (today
+    <code>parseBlockRefTarget</code>'s exact anchor; the aliased blockref is
+    the natural widening when the ref-codec pass takes it up). Prose typed
+    into a ref property ("people type text
+    into a ref property, like a log") — whole-block wikilinks included —
+    fails that check, the projection skips it, and
     the key reads unset while the row keeps its text, instead of a log silently
     coercing into a fake block id as bare-id storage did. It also puts property
     refs on the reference-maintenance rails: merge-retarget rewrites
