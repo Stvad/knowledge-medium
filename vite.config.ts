@@ -7,6 +7,7 @@ import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
 import {reactImportMapProductionPlugin} from './vite-plugins/reactImportMapMode'
 import {unifySrcJsUrlsPlugin} from './vite-plugins/unifySrcJsUrls'
+import {injectThemeBootDefaultsPlugin} from './vite-plugins/injectThemeBootDefaults'
 import {resolveAppVersion} from './scripts/app-version'
 // import noBundlePlugin from 'vite-plugin-no-bundle';
 
@@ -96,6 +97,12 @@ export default defineConfig(({command}) => {
                 },
             },
             reactImportMapProductionPlugin(),
+            // Substitutes the theme-boot placeholder tokens in index.html's
+            // pre-paint script with the source-of-truth values from
+            // src/themeBootDefaults.ts — see that file and
+            // vite-plugins/injectThemeBootDefaults.ts. Runs for both `pnpm
+            // dev` (per-request) and `pnpm build` via transformIndexHtml.
+            injectThemeBootDefaultsPlugin(),
             // See vite-plugins/unifySrcJsUrls.ts for the full rationale.
             // Tests in vite-plugins/test/unifySrcJsUrls.test.ts.
             isDev && unifySrcJsUrlsPlugin(),
