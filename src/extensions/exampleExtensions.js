@@ -70,7 +70,7 @@ export default actionsFacet.of({
     // peekProperty reads below are sync. The root is included in the subtree
     // and filtered out at the consumer boundary so the subtree query stays
     // includeRoot=true (the only shape we keep going forward).
-    const subtreeWithRoot = await repo.query.subtree({id: topLevelId}).load()
+    const subtreeWithRoot = await repo.query.subtree({id: topLevelId, hidePropertyChildren: true}).load()
     const subtree = subtreeWithRoot.filter(d => d.id !== topLevelId)
     // If anything is uncollapsed, collapse all; otherwise expand all.
     const anyExpanded = subtree.some(
