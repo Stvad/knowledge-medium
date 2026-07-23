@@ -56,6 +56,7 @@ import {
   type AnyPostCommitProcessor,
   type CommittedEvent,
   type ProcessorCtx,
+  type ProcessorReadDb,
   type TypeRegistrySnapshot,
   type Tx,
 } from '@/data/api'
@@ -95,6 +96,28 @@ const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
     AND source.deleted = 0
   LIMIT 1
 `
+
+/** Committed-state probe: does any LIVE source still reference
+ *  `targetId`? Shared by the mint-time orphan cleanup and the
+ *  reference-drop reaper. */
+const hasLiveReferrer = async (
+  db: ProcessorReadDb,
+  workspaceId: string,
+  targetId: string,
+): Promise<boolean> =>
+  (await db.getOptional<{present: number}>(
+    SELECT_LIVE_REFERENCE_SOURCE_SQL,
+    [workspaceId, targetId],
+  )) !== null
+
+/** The definition ids whose field rows are a seat's own GENERATED
+ *  property machinery in a child-backed workspace (alias / types,
+ *  materialized at mint). One source of truth for both the reaper's
+ *  read-phase children gate and `reapSeatsInTx`'s in-tx guard/sweep. */
+const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
+  propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+  propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+])
 
 /** Parse-basis fingerprint of a row's parse-relevant columns (content,
  *  properties, references), serialized together so the write phase can
@@ -337,11 +360,11 @@ const claimLiteralDateAliases = async (
   targetId: string,
   iso: string,
   aliases: readonly string[],
-): Promise<boolean> => {
+): Promise<void> => {
   const literals = [...new Set(aliases.filter(alias => alias !== iso))]
-  if (literals.length === 0) return false
+  if (literals.length === 0) return
   const target = await tx.get(targetId)
-  if (target === null || target.deleted) return false
+  if (target === null || target.deleted) return
   let existing: readonly string[]
   try {
     const encoded = target.properties[aliasesProp.name]
@@ -353,17 +376,16 @@ const claimLiteralDateAliases = async (
     // must never un-claim the target's ISO. Losing a live binding is
     // worse than leaving the literal unclaimed, so skip the claim for
     // this target; it degrades to the pre-claim first-writer behavior.
-    return false
+    return
   }
   const missing = literals.filter(literal => !existing.includes(literal))
-  if (missing.length === 0) return false
+  if (missing.length === 0) return
   // skipMetadata: derived bookkeeping, same as the source-references
   // write in applySourcePlan — advances updatedAt for sync but must not
   // stamp userUpdatedAt/updatedBy, or a background re-parse of some
   // unrelated source makes the target look freshly user-edited.
   try {
     await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
-    return true
   } catch (err) {
     // Swallow ONLY alias-collision aborts. The alias-update trigger
     // deletes and re-inserts ALL of the target's aliases, re-checking
@@ -380,7 +402,6 @@ const claimLiteralDateAliases = async (
     // first-writer behavior for this target only (adversarial review
     // on PR #384).
     if (parseAliasCollisionError(err) === null) throw err
-    return false
   }
 }
 
@@ -579,11 +600,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     // Read phase — gather actual orphans without holding a writer slot.
     const orphans: string[] = []
     for (const id of ids) {
-      const source = await ctx.db.getOptional<{present: number}>(
-        SELECT_LIVE_REFERENCE_SOURCE_SQL,
-        [workspaceId, id],
-      )
-      if (source === null) orphans.push(id)
+      if (!(await hasLiveReferrer(ctx.db, workspaceId, id))) orphans.push(id)
     }
     if (orphans.length === 0) return
 
@@ -611,10 +628,7 @@ const reapSeatsInTx = async (
 ): Promise<void> => {
   await ctx.repo.tx(async tx => {
     const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
-    const generatedFieldIds = new Set([
-      propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
-      propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
-    ])
+    const generatedFieldIds = generatedSeatFieldIds(workspaceId)
     for (const id of ids) {
       // Re-read in-tx: a racer may have deleted (or hard-removed) the
       // seat since the read phase — nothing to reap then.
@@ -722,18 +736,10 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     const workspaceId = event.workspaceId
     const readSeat = aliasSeatReaderFromDb(ctx.db)
     const isChildBacked = await readIsChildBackedWorkspace(ctx.db, workspaceId)
-    const generatedFieldIds = new Set([
-      propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
-      propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
-    ])
-    const stillReferenced = async (id: string): Promise<boolean> =>
-      (await ctx.db.getOptional<{present: number}>(
-        SELECT_LIVE_REFERENCE_SOURCE_SQL,
-        [workspaceId, id],
-      )) !== null
+    const generatedFieldIds = generatedSeatFieldIds(workspaceId)
     const candidates: string[] = []
     for (const id of dropped) {
-      if (await stillReferenced(id)) continue
+      if (await hasLiveReferrer(ctx.db, workspaceId, id)) continue
       const seat = await readSeat(id)
       if (seat === null || seat.deleted) continue
       if (parseLiteralDailyPageTitle(seat.content) !== null) continue
@@ -760,7 +766,7 @@ export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
     // window to roughly write-lock acquisition (docblock residual).
     const orphans: string[] = []
     for (const id of candidates) {
-      if (!(await stillReferenced(id))) orphans.push(id)
+      if (!(await hasLiveReferrer(ctx.db, workspaceId, id))) orphans.push(id)
     }
     if (orphans.length === 0) return
 

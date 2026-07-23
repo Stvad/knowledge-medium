@@ -417,15 +417,17 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         const collectMs = performance.now() - collectStartedAt
         const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
         if (changedRows.length === 0 && emittedEvents.length === 0) {
-          watermarks.set(processor.name, writeGen)
           if (collectMs >= 1) {
             timing.sameTxProcessorRuns.push(
               {name: processor.name, changedRows: 0, collectMs, applyMs: 0},
             )
           }
-          continue
+        } else {
+          await applyProcessor(processor, changedRows, emittedEvents, collectMs)
         }
-        await applyProcessor(processor, changedRows, emittedEvents, collectMs)
+        // Watermark recorded after EVERY slot — fired or skipped — so
+        // pass two's "dirtied since it ran" reads the same point in the
+        // sequence either way.
         watermarks.set(processor.name, writeGen)
       }
 
@@ -459,7 +461,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       // truly untouched no-op inside the idempotent processors.
       for (const processor of sameTxProcessors.values()) {
         if (processor.rerunOnDirtyRows !== true) continue
-        if (processor.watches.kind !== 'field' || processor.watches.table !== 'blocks') continue
+        // Field-watch only (defineSameTxProcessor enforces this at
+        // definition time; the check backstops hand-built literals).
+        if (processor.watches.kind !== 'field') continue
         const watermark = watermarks.get(processor.name) ?? 0
         const collectStartedAt = performance.now()
         const changedRows: ChangedRow[] = []

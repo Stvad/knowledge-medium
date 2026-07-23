@@ -186,21 +186,25 @@ describe('net-zero watched-field revert (Codex review on PR #428)', () => {
 })
 
 describe('merge retarget → kernel derivations (same tx)', () => {
+  const F = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+  const T = '99999999-9999-4999-8999-999999999999'
+  /** root + merge source F + merge target T + owner block `s`. */
+  const seedMergePair = (repo: Repo): Promise<void> =>
+    repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: F, workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'From'})
+      await tx.create({id: T, workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'To'})
+      await tx.create({id: 's', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'owner'})
+    }, {scope: ChangeScope.BlockDefault})
+
   // Matrix row: "mergeRetarget content → PROJECT" on a VALUE CHILD whose
   // string-typed text merely CONTAINS ((fromId)) — no ref-property path
   // patches the cell, so before the re-run pass the child moved and the
   // owner's cell kept naming the merged-away block (issue comment,
   // instance 3).
   it('re-projects the owner cell after a string value child containing ((fromId)) is retargeted', async () => {
-    const F = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
-    const T = '99999999-9999-4999-8999-999999999999'
     const repo = await setup()
-    await repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: F, workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'From'})
-      await tx.create({id: T, workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'To'})
-      await tx.create({id: 's', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'owner'})
-    }, {scope: ChangeScope.BlockDefault})
+    await seedMergePair(repo)
     await repo.tx(tx => tx.setProperty('s', statusSchema, `see ((${F}))`),
       {scope: ChangeScope.BlockDefault})
     // Let parseReferences index the value child's ((F)) mark, so the
@@ -223,15 +227,8 @@ describe('merge retarget → kernel derivations (same tx)', () => {
   // sync arrival), so no content rewrite converged it. Before the re-run
   // pass the child kept naming the merged-away block.
   it('re-materializes the backing child after a raw ref-cell rewrite', async () => {
-    const F = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
-    const T = '99999999-9999-4999-8999-999999999999'
     const repo = await setup()
-    await repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: F, workspaceId: WS, parentId: 'root', orderKey: 'a1', content: 'From'})
-      await tx.create({id: T, workspaceId: WS, parentId: 'root', orderKey: 'a2', content: 'To'})
-      await tx.create({id: 's', workspaceId: WS, parentId: 'root', orderKey: 'a3', content: 'owner'})
-    }, {scope: ChangeScope.BlockDefault})
+    await seedMergePair(repo)
     await repo.tx(tx => tx.setProperty('s', relatedSchema, F),
       {scope: ChangeScope.BlockDefault})
     await repo.awaitProcessors()
