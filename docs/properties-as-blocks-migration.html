@@ -1747,7 +1747,14 @@ seat row, so <code>updated_at</code> stays 0):
 stay the real user and the reconcile gate reads the sentinel, no
 <code>system:</code> prefix exists (pinned by <code>systemMint.test</code>;
 the <code>targets.ts</code> docblock still saying "system:&lt;userId&gt;
-author" is stale)), the
+author" is stale). The sentinel is <em>sufficient, never necessary</em>
+(review ×3: a tombstone <em>restore</em> is an update —
+<code>createOrRestoreTargetBlock</code> revives a paste→delete→re-paste seat
+via <code>tx.restore</code>, pinned to <code>updatedAt &gt; 0</code> by the
+same test — so an untouched restored seat carries a nonzero stamp; the
+<em>deciding</em> test is always the seed-shape comparison, which the
+restore path itself re-establishes: content refreshed to the alias, stale
+claims stripped, seed properties rewritten)), the
 conflict surface marks those merge-recommended and the bulk claim batches
 them into one reviewable approve-list — prompted, never silent (an
 auto-yield rule was considered and rejected: it was itself a silent
@@ -1906,7 +1913,17 @@ affordance, not a classification prerequisite (§11 AC).
   <li><strong>Names are hygiene now, not identity.</strong> <code>addSchema</code> and
     the rename flow reject <code>]]</code>-lossy names
     (<code>isRoundTrippableReferenceLabel</code>, shipped) so names stay clean for
-    the future <code>[[name]]</code> affordance and for export — but an invalid name
+    the future <code>[[name]]</code> affordance and for export — and, with the
+    <code>::</code> grammar, they also reject names whose trimmed form matches
+    the <em>marked field grammar</em> (any name starting <code>::</code> is the
+    trigger syntax; PR #417 review found the sharp case: the B2 name→content
+    mirror writes <code>content = name</code>, so a property named
+    <code>::((someFieldId))</code> would turn its own definition block into a
+    row that classifies as a field row post-flip — machinery minted by a
+    <em>system</em> write, exactly the silent path the grammar forbids;
+    rejecting at the two name flows keeps the mirror unconditional, and
+    existing offenders surface in the mirror backfill's report rather than
+    silently classifying). An invalid name still
     can no longer corrupt field-row identity, so the same-tx definition-name
     validator an earlier revision required (PR-review P2, rounds 22) is deleted;
     hygiene at the two flows plus a preflight report over existing names suffices.
@@ -2048,9 +2065,14 @@ supabase skill if it's kept.
     what happens to a backlink span depends only on <em>where α lives
     afterwards</em>. <em>Rename</em> (same claimant, α→β):
     <code>references.renameBacklinks</code> rewrites the span
-    (<code>::[[status]]</code> → <code>::[[state]]</code>; lossy names fall
-    back to the aliased-blockref form — under the generalized marker still a
-    field row) — rows follow their definition. <em>Handoff</em> (another live
+    (<code>::[[status]]</code> → <code>::[[state]]</code>; a lossy β falls
+    back to the aliased-blockref form — still a field row under the
+    generalized marker, and the fallback label carries the same
+    render→parse guard as release/export (PR #417 review:
+    <code>replacementFor</code> renders the <em>old</em> alias as the label,
+    so an α containing <code>]</code>/newline would silently sanitize —
+    marked rows whose fallback label is lossy go to canonical
+    <code>::((A))</code> instead)) — rows follow their definition. <em>Handoff</em> (another live
     block claims α in the same flow — definition merge, property-wins):
     <strong>no rewrite</strong> — spans keep following the name to the new
     claimant via ordinary late-binding. This requires re-keying the lifecycle
@@ -2091,8 +2113,16 @@ supabase skill if it's kept.
     semantics rather than a fix: the re-derive follows the name uniformly
     (miss → seat, exactly as prose wikilinks behave in the same window
     today), the arriving rewrite's content change re-derives the row back to
-    the definition, and a stray window-minted seat is ordinary
-    orphan-alias-seat cleanup. A user edit landing in the window keeps its
+    the definition, and a stray window-minted seat is collected by a pinned
+    <em>rewrite-side</em> cleanup enqueue (PR #417 review corrected "ordinary
+    cleanup" here: the mint's own 4s orphan check runs while the
+    <code>::[[old]]</code> row still <em>references</em> the seat — alive,
+    skipped, never re-checked — so the seat would survive the later rewrite
+    and squat the released name): when the rename rewrite's surgical
+    reference swap drops the last reference to a target, it re-enqueues the
+    same orphan job for that target, restricted to provably-untouched
+    machine seats (the §7 <code>aliasSeatSeed</code> predicate — never a real
+    page whose last backlink happened to be rewritten). A user edit landing in the window keeps its
     content (the rewrite's later-edit-wins skip) — the row then reads as an
     unbound marked row with the create/rebind affordance, the standard
     honest state, never silent reinterpretation.
