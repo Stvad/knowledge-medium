@@ -66,7 +66,13 @@ import {
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
-import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
+import {
+  aliasSeatReaderFromDb,
+  ensureAliasTarget,
+  isAliasSeatSlotId,
+  matchesAliasSeatSeed,
+  resolveAliasSeatId,
+} from '@/data/targets'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
@@ -582,38 +588,144 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
 
     // Write phase — soft-delete the orphans. Single tx so the deletes
     // are atomic and produce one command_events row.
-    await ctx.repo.tx(async tx => {
-      // The seat was created empty, but in a child-backed workspace its OWN
-      // generated properties (alias / types) materialize as hidden field
-      // rows (PR #288 §9) — delete those alongside the seat or they dangle
-      // live under the tombstone. Only machinery-generated field rows go;
-      // user content under a seat (there should be none) is left alone.
-      // Flip-gated (§9): generated field rows exist only in child-backed
-      // workspaces. In an un-flipped workspace a column match under a seat
-      // is by construction user-authored content — never machinery's to
-      // delete.
-      const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
-      const generatedFieldIds = new Set([
-        propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
-        propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
-      ])
-      for (const id of orphans) {
-        // No block references it — orphan. Soft-delete the seat, then its
-        // generated field rows (with their value children).
-        await tx.delete(id)
-        if (!sweepGeneratedFieldRows) continue
-        const children = await tx.childrenOf(id, undefined)
-        for (const child of children) {
-          const target = child.referenceTargetId ?? null
-          if (target !== null && generatedFieldIds.has(target)) {
-            await deleteSubtreeInTx(tx, child.id)
-          }
+    await reapSeatsInTx(ctx, workspaceId, orphans, CLEANUP_ORPHAN_ALIASES_PROCESSOR)
+  },
+})
+
+/** Soft-delete orphaned seats in one tx (shared by the mint-time cleanup
+ *  above and the reference-drop reaper below). In a child-backed
+ *  workspace a seat's OWN generated properties (alias / types)
+ *  materialize as hidden field rows (PR #288 §9) — delete those
+ *  alongside the seat or they dangle live under the tombstone. Only
+ *  machinery-generated field rows go; user content under a seat is left
+ *  alone. Flip-gated (§9): generated field rows exist only in
+ *  child-backed workspaces — in an un-flipped one, a column match under
+ *  a seat is by construction user-authored content, never machinery's
+ *  to delete. */
+const reapSeatsInTx = async (
+  ctx: ProcessorCtx,
+  workspaceId: string,
+  ids: readonly string[],
+  processorName: string,
+): Promise<void> => {
+  await ctx.repo.tx(async tx => {
+    const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
+    const generatedFieldIds = new Set([
+      propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+      propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+    ])
+    for (const id of ids) {
+      // Re-read in-tx: a racer may have deleted (or hard-removed) the
+      // seat since the read phase — nothing to reap then.
+      const current = await tx.get(id)
+      if (current === null || current.deleted) continue
+      // Soft-delete the seat, then its generated field rows (with their
+      // value children).
+      await tx.delete(id)
+      if (!sweepGeneratedFieldRows) continue
+      const children = await tx.childrenOf(id, undefined)
+      for (const child of children) {
+        const target = child.referenceTargetId ?? null
+        if (target !== null && generatedFieldIds.has(target)) {
+          await deleteSubtreeInTx(tx, child.id)
         }
       }
-    }, {
-      scope: ChangeScope.References,
-      description: `processor: ${CLEANUP_ORPHAN_ALIASES_PROCESSOR}`,
-    })
+    }
+  }, {
+    scope: ChangeScope.References,
+    description: `processor: ${processorName}`,
+  })
+}
+
+// ──── references.reapOrphanAliasSeats ────
+
+export const REAP_ORPHAN_ALIAS_SEATS_PROCESSOR = 'references.reapOrphanAliasSeats'
+
+/** Reference-target ids a row-state actually contributes to the live
+ *  backlink index: none while tombstoned or absent (the index joins on
+ *  `source.deleted = 0`, so a source's soft-delete releases its refs). */
+const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
+  row === null || row.deleted
+    ? new Set<string>()
+    : new Set(row.references.map(ref => ref.id))
+
+/** Rewrite-side orphan-seat re-enqueue (issue #402): when a
+ *  reference-dropping write removes the LAST live reference to a
+ *  machine-minted alias seat, nothing used to re-check the seat — its
+ *  one mint-time check (4s after creation) ran while the referencing
+ *  row was still live, and skipped ids are never re-enqueued. The seat
+ *  then survives indefinitely, squatting the released name (concrete
+ *  path: a client re-derives `[[old]]` in a rename window, minting a
+ *  seat; the arriving rename rewrite then drops the reference).
+ *
+ *  Same derived-transition→schedule shape as `core.aliasClaimRederive`,
+ *  for the opposite transition: reference count → zero. Watches the
+ *  `references` column diff (plus `deleted`, since tombstoning a source
+ *  releases its refs) rather than relying on any particular rewriter to
+ *  remember a schedule call.
+ *
+ *  Collection gate — ALL of, checked per dropped target:
+ *   - no live source still references it (committed-state index probe);
+ *   - the row is live and matches `aliasSeatSeed` exactly (shape);
+ *   - its id is a deterministic seat-slot id for its own content
+ *     (machine-mint discriminator — a user-created page can share the
+ *     seed shape byte-for-byte, e.g. quick-find's create-page, but
+ *     never the uuidv5 slot id);
+ *   - not date-shaped (§7.6 daily-note exemption — belt on top of the
+ *     id gate, which already excludes the daily namespace);
+ *   - no live children beyond the seat's own generated field rows.
+ *  A wrongly-skipped seat is the safe miss (it just keeps squatting
+ *  until the alias is re-typed and re-dropped); a wrong DELETE of a
+ *  user page is the failure this gate stack exists to make unreachable.
+ *  If a re-reference lands concurrently, the seat-slot probe restores
+ *  the pristine tombstone on the next parse — convergent either way. */
+export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
+  name: REAP_ORPHAN_ALIAS_SEATS_PROCESSOR,
+  watches: {kind: 'field', table: 'blocks', fields: ['references', 'deleted']},
+  apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
+    const dropped = new Set<string>()
+    for (const row of event.changedRows) {
+      const before = liveReferenceTargetIds(row.before)
+      const after = liveReferenceTargetIds(row.after)
+      for (const id of before) {
+        if (!after.has(id)) dropped.add(id)
+      }
+    }
+    if (dropped.size === 0) return
+
+    const workspaceId = event.workspaceId
+    const readSeat = aliasSeatReaderFromDb(ctx.db)
+    const generatedFieldIds = new Set([
+      propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+      propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+    ])
+    const orphans: string[] = []
+    for (const id of dropped) {
+      const source = await ctx.db.getOptional<{present: number}>(
+        SELECT_LIVE_REFERENCE_SOURCE_SQL,
+        [workspaceId, id],
+      )
+      if (source !== null) continue
+      const seat = await readSeat(id)
+      if (seat === null || seat.deleted) continue
+      if (parseLiteralDailyPageTitle(seat.content) !== null) continue
+      if (!matchesAliasSeatSeed(seat)) continue
+      if (!isAliasSeatSlotId(id, seat.content, workspaceId)) continue
+      if (seat.hasLiveChildren) {
+        const children = await ctx.db.getAll<{reference_target_id: string | null}>(
+          'SELECT reference_target_id FROM blocks WHERE parent_id = ? AND deleted = 0',
+          [id],
+        )
+        const onlyGeneratedChildren = children.every(child =>
+          child.reference_target_id !== null
+          && generatedFieldIds.has(child.reference_target_id))
+        if (!onlyGeneratedChildren) continue
+      }
+      orphans.push(id)
+    }
+    if (orphans.length === 0) return
+
+    await reapSeatsInTx(ctx, workspaceId, orphans, REAP_ORPHAN_ALIAS_SEATS_PROCESSOR)
   },
 })
 
@@ -622,4 +734,5 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
 export const referencesPostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
   parseReferencesProcessor,
   cleanupOrphanAliasesProcessor,
+  reapOrphanAliasSeatsProcessor,
 ]

@@ -29,7 +29,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
-import { computeAliasSeatId } from '@/data/targets'
+import { aliasSeatSeed, computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
@@ -1483,8 +1483,113 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
   })
 })
 
+describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', () => {
+  it('a rewrite (not a clear) that drops the last mark reaps the seat — the rename-window shape', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'see [[foo]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect((await env.read(aliasId('foo')))!.deleted).toBe(0)
+
+    // The reference-dropping rewrite (what renameBacklinks produces for a
+    // source bound under the removed name): the mint-time 4s check already
+    // ran and skipped, so only the drop transition can collect this seat.
+    await env.repo.mutate.setContent({id: 'src', content: 'see nothing now'})
+    await flush()
+    expect((await env.read(aliasId('foo')))!.deleted).toBe(1)
+  })
+
+  it('soft-deleting the last referrer releases its refs and reaps the seat', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[bar]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect((await env.read(aliasId('bar')))!.deleted).toBe(0)
+
+    await env.repo.tx(tx => tx.delete('src'), {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect((await env.read(aliasId('bar')))!.deleted).toBe(1)
+  })
+
+  it('NEVER collects a user-created page, even one byte-identical to the seat seed shape', async () => {
+    // quick-find's create-page writes exactly the seat seed shape
+    // (content + alias + PAGE_TYPE) — at a RANDOM id. The seat-slot id
+    // gate is the machine-mint discriminator, so build the strongest
+    // possible impostor: the literal seed shape on a non-slot id.
+    const seed = aliasSeatSeed('realpage')
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'user-made-page', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: seed.content, properties: {...seed.properties},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: '[[realpage]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const refs = JSON.parse((await env.read('src'))!.references_json)
+    expect(refs).toEqual([{id: 'user-made-page', alias: 'realpage'}])
+
+    // Drop the page's last backlink — the reaper must skip it.
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read('user-made-page'))!.deleted).toBe(0)
+  })
+
+  it('reaps a seat in a child-backed workspace, sweeping its generated field rows', async () => {
+    // In a flipped workspace every seat has GENERATED property children
+    // (alias / types field rows) from the moment it is minted — the
+    // reaper's children gate must tolerate exactly those and nothing
+    // else, or it could never collect a seat there.
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[qux]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('qux')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    // Sanity: the seat's properties materialized as live generated children.
+    const childrenBefore = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(childrenBefore.length).toBeGreaterThan(0)
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush()
+    expect((await env.read(seatId))!.deleted).toBe(1)
+    // The generated field rows went with it — nothing dangles live under
+    // the tombstone.
+    const childrenAfter = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(childrenAfter).toEqual([])
+  })
+
+  it('keeps a seat that a concurrent re-reference rescues (still referenced at check time)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[baz]]'})
+      await tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'also [[baz]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(aliasId('baz')))!.deleted).toBe(0)
+  })
+})
+
 describe('parseReferences — orphan cleanup (§7.5)', () => {
-  it('typing [[foo]] then deleting the text within 4s → cleanup soft-deletes the orphan', async () => {
+  it('typing [[foo]] then deleting the text → the reference drop reaps the orphan seat', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[foo]]'}),
       {scope: ChangeScope.BlockDefault},
@@ -1492,13 +1597,12 @@ describe('parseReferences — orphan cleanup (§7.5)', () => {
     await flush()
     expect((await env.read(aliasId('foo')))!.deleted).toBe(0)
     // Clear the text — references go to []; foo's target now has no
-    // referrer.
+    // referrer. references.reapOrphanAliasSeats (#402) observes the drop
+    // in the parse tx's own dispatch and reaps promptly — no reliance on
+    // the mint-time 4s check, which ran while `src` still referenced the
+    // seat, skipped it, and would never have re-enqueued it.
     await env.repo.mutate.setContent({id: 'src', content: ''})
     await flush()
-    // Cleanup hasn't fired yet — still scheduled for 4s.
-    expect((await env.read(aliasId('foo')))!.deleted).toBe(0)
-    // Advance timers past the 4s mark.
-    await flush(4000)
     expect((await env.read(aliasId('foo')))!.deleted).toBe(1)
   })
 
