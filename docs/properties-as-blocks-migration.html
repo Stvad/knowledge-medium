@@ -395,7 +395,8 @@
   <code>row_events</code> holds discarded bags (§5); the flip-column trigger blocks
   clients only — rollback stays executable (§6); orphan synthesis validates names,
   mints deterministic ids, and re-encodes on retarget (§9); the flip runbook triages
-  pre-existing prose <code>[[name]]</code> rows (§11 C); scope routing for structural
+  pre-existing prose <code>[[name]]</code> rows (§11 C — superseded 07-22:
+  unmarked rows never classify, no such triage exists); scope routing for structural
   edits of non-BlockDefault property subtrees (§6, B3); copy/export applies
   visibility policy (§9); search/recents filtering joins the invisibility half (B1);
   the <code>workspaces</code> column ships with the local-ALTER + NULL-fallback
@@ -1608,12 +1609,12 @@ surface.
   <dd><code>reference_target_id</code> (stamped for <em>all four</em>
     combinations — both bracket forms, marked or unmarked, each through its
     usual branch: purely textual for <code>((id))</code>, the generic alias
-    lookup + late-binding for <code>[[name]]</code>; PR #417 review caught the
-    marked-alias omission, which would have specced bit=1/target=NULL rows
-    that never classify) · <code>is_field_form</code> (both <em>marked</em> bracket forms —
-    each derives through the same branch as its unmarked twin: textual for
-    <code>::((id))</code>, alias lookup + late-binding for
-    <code>::[[name]]</code>). Both columns local, derived, never synced,
+    lookup + late-binding for <code>[[name]]</code>) ·
+    <code>is_field_form</code> (both <em>marked</em> bracket forms —
+    <strong>pure syntax</strong>, stamped whether or not the name resolves
+    (PR #417 review ×2): only the <em>target</em> column late-binds, so
+    bit=1/target=NULL is the legitimate unbound-field-intent state the
+    flip/AC runbooks enumerate). Both columns local, derived, never synced,
     rebuilt from content by the
     same repair paths.</dd>
   <dt><strong>Predicate</strong></dt>
@@ -1647,20 +1648,26 @@ autocomplete over the schema registry, and the committed row is
 definition inline — <em>create-on-write lives only here</em>, in the watched
 input flow (owner ruling: paste never auto-creates — importing fifty
 <code>::[[whatever]]</code> lines must not silently mint fifty definitions;
-a pasted unresolvable row sits visibly unbound with a per-row "create
-property?" affordance). The boundary has one <em>enforcement point</em> in
-existing machinery (PR #417 review, confirmed against
-<code>referencesProcessor.ts</code>/<code>targets.ts</code>): parseReferences
-queues every wikilink for <code>ensureAliasTarget</code>, which mints a page
-alias seat on lookup miss — left alone, a pasted <code>::[[whatever]]</code>
-would silently auto-create a <em>page</em> that then owns the name and gets
-AC's later definition claim <em>refused</em> (<code>alias.collision</code>),
-locking the name away from the declared field intent. So the references
-processor <strong>skips alias-seat ensure for whole-block marked-alias
-rows</strong> (form-keyed) — the embedded ref still parses and late-binds
-when a claimant appears; only the seat-minting is suppressed. This is the one
-deliberate special case uniform resolution keeps, and it is the create
-boundary itself, not resolution machinery. Beyond that there is <strong>no seam at all</strong>
+a pasted row whose name resolves to no <em>definition</em> is inert but
+behaves exactly like a link, seat-mint included — PR #417 review corrected an
+earlier "sits unbound" description, and an interim parse-time seat-mint
+suppression for marked rows was <em>reverted</em> (owner ruling: it was
+form-keyed special-casing in the hot references path, and it re-opened a
+rebind gap since the ensure call is the binding mechanism for misses). The
+embedded wikilink mints/binds an alias seat on lookup miss like any wikilink
+(<code>ensureAliasTarget</code> — a page seat is not the definition
+auto-creation the ruling forbids; it is existing universal link behavior),
+the row binds to whatever owns the name, fails recognition's condition 3,
+and renders as an inert field-looking row carrying the "create property?"
+affordance. The seat-squatting consequence — a minted seat owns the name,
+so the later definition claim collides — needs <strong>no new rule</strong>:
+the AC claimant preflight already surfaces every collision for prompted
+resolution, and since "untouched machine-minted seat" is provable
+(deterministic <code>ALIAS_NS</code> id + no user content/children), the
+conflict surface marks those merge-recommended and the bulk claim batches
+them into one reviewable approve-list — prompted, never silent (an
+auto-yield rule was considered and rejected: it was itself a silent
+mutation). Beyond that there is <strong>no seam at all</strong>
 (owner decision, 07-22 second round, superseding this revision's earlier
 import-canonicalization step): a pasted or hand-written
 <code>::[[name]]</code> is <em>not rewritten</em> — the embedded ref resolves
@@ -3040,7 +3047,12 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         user-authored-only (§7, round 29): seeded type backing blocks
         deliberately claim <em>no</em> alias today, so the bulk claim here must
         cover <em>seeded and user</em> property definitions explicitly rather
-        than assuming seeds "already work like types". Under the <code>::</code>
+        than assuming seeds "already work like types" — and the seeded half
+        writes through the seed-owned lifecycle path (the Automation-scoped
+        seed upgrade), not the ordinary user path: the seed-write guard
+        rejects normal BlockDefault bag edits of valid seed definitions, so a
+        uniform user-path bulk claim would silently fail exactly the seeded
+        half (PR #417 review). Under the <code>::</code>
         grammar (07-22) this step's stakes shrink: <strong>recognition never
         consults names</strong> — hand-authoring runs on the registry-backed
         <code>::</code> input flow with no auto-claim dependency (§7), an
@@ -3080,7 +3092,10 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         references"</strong> (owner call, follow-up not blocker): a generic
         copy-boundary mechanism rendering id refs as <code>[[name]]</code> on the way
         out — which is what makes markdown export readable and cross-workspace
-        property paste meaningful (§7); the §8/§9 structural cross-workspace rules
+        property paste meaningful (§7); name-form export only when the name
+        <em>round-trips</em> — a definition whose claim was refused or never
+        ran exports id-form, or the paste would re-bind the property to
+        whatever owns the name (PR #417 review); the §8/§9 structural cross-workspace rules
         (clear-and-re-derive, seed-strip, de-structure) activate alongside it if a
         structural move ships.
       </p>
