@@ -16,6 +16,12 @@
  * `definitionSeedsFacet`. The workspace-bound registry synthesizes behavior
  * and durable identities from the declarations before their blocks exist.
  *
+ * Also registers the default `searchSourcesFacet` contribution
+ * (`coreContentSearchSource`, id `core.content`) — core's own content
+ * search, expressed as a facet contribution so plugins can add a merged,
+ * ranked second search source (e.g. semantic search) alongside it. See
+ * `src/utils/linkTargetAutocomplete.ts` for the merge point.
+ *
  * No facet sources beyond the data layer here — UI facets
  * (renderers, actions, contexts) live in their own extensions.
  */
@@ -28,6 +34,7 @@ import {
   postCommitProcessorsFacet,
   queriesFacet,
   sameTxProcessorsFacet,
+  searchSourcesFacet,
   systemPagesFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
@@ -45,6 +52,7 @@ import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import { kernelValuePresetCores } from '@/data/kernelValuePresetCores'
 import { userSchemasProjector } from '@/data/userSchemasService'
 import { userTypesProjector } from '@/data/userTypesService'
+import { coreContentSearchSource } from '@/utils/linkTargetAutocomplete.js'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
 
@@ -58,6 +66,7 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_PROCESSORS.map(p => postCommitProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_SAME_TX_PROCESSORS.map(p => sameTxProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_QUERIES.map(q => queriesFacet.of(q, {source: 'kernel'})),
+  searchSourcesFacet.of(coreContentSearchSource, {source: 'kernel'}),
   KERNEL_PROPERTY_SEEDS.map(seed => definitionSeedsFacet.of(seed, {source: 'kernel'})),
   // C4a: kernel types are code seeds now — contributed to `typeSeedsFacet` (not
   // the static `typesFacet`) so the materializer mints their backing blocks and

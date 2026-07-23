@@ -18,6 +18,7 @@ import type {
   AnySameTxProcessor,
   AnyValuePresetCore,
   AnyValuePresetPresentation,
+  BlockData,
   ChangeScope,
   Tx,
 } from '@/data/api'
@@ -291,3 +292,61 @@ export const definitionBlockProjectorFacet = defineFacet<
   id: 'data.definitionBlockProjectors',
   validate: isDefinitionBlockProjector,
 })
+
+/** One block-search hit contributed by a `searchSourcesFacet` source.
+ *
+ *  `score` is on the SAME scale core uses for its own text relevance —
+ *  `blockSearchTextScore` + `blockSearchRecencyBoost` in
+ *  `src/utils/linkTargetAutocomplete.ts` (roughly 0-300, plus a small
+ *  recency bonus) — because the merge point ranks candidates from every
+ *  source together by `score` desc with no per-source normalization. A
+ *  source with a fundamentally different relevance model (e.g. cosine
+ *  similarity from a vector index) should map its confidence onto this
+ *  same rough magnitude so its hits interleave sensibly with core's
+ *  instead of always sorting to the top or the bottom. Pre-scoring (vs.
+ *  returning raw fields for a shared scorer to rank) is the deliberate
+ *  choice here: it lets a source own a relevance signal core's text
+ *  scorer can't compute (e.g. embedding distance) while still letting
+ *  core's own contribution be a thin wrapper — see
+ *  `coreContentSearchSource`, which just tags `searchByContent` rows
+ *  with the pre-existing text score. */
+export interface SearchSourceCandidate {
+  readonly block: BlockData
+  readonly score: number
+}
+
+export interface SearchSourceArgs {
+  readonly workspaceId: string
+  readonly query: string
+  /** Desired result count AFTER merge + rank across all sources. A
+   *  source may over-fetch internally for its own reranking headroom
+   *  (core's does — see `coreContentSearchSource`) but shouldn't return
+   *  drastically more than this, since every candidate it returns
+   *  participates in the cross-source sort at the merge point. */
+  readonly limit: number
+  readonly recentBlockIds?: ReadonlyArray<string>
+}
+
+/** A pluggable block-search backend. `search` is called alongside every
+ *  other contributed source at the shared merge point
+ *  (`searchBlocksAcrossSources`, `src/utils/linkTargetAutocomplete.ts`) —
+ *  one call per source per search, its candidates merged with everyone
+ *  else's, ranked by `score` desc, and deduped by block id: the
+ *  surviving score is the MAX across duplicates, but the surviving
+ *  `block` payload is whichever duplicate's `userUpdatedAt` is newest
+ *  (falling back to the higher-scored one on a tie/missing timestamp),
+ *  so a stale index copy can't shadow live data just because it scored
+ *  higher. A source that throws is logged and dropped so it can't take
+ *  down another source's results — UNLESS every contributed source
+ *  throws, in which case the merge point rethrows the first error
+ *  rather than resolving to an empty result. Core registers its FTS
+ *  content search under id `'core.content'` (`coreContentSearchSource`,
+ *  wired in `kernelDataExtension.ts`) — with no other contributions,
+ *  the merge point degenerates to exactly that source, so search
+ *  behaves identically to before this facet existed. */
+export interface SearchSourceContribution {
+  readonly id: string
+  search: (repo: Repo, args: SearchSourceArgs) => Promise<readonly SearchSourceCandidate[]>
+}
+
+export const searchSourcesFacet = keyedMapFacet<SearchSourceContribution>('data.searchSources', s => s.id)

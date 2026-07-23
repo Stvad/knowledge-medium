@@ -9,7 +9,7 @@ import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.js'
-import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.js'
+import { searchAliasLabels, searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { loadRecentBlockIds } from '@/plugins/quick-find/recents.js'
 
 const referenceAutocompleteTheme = EditorView.theme({
@@ -154,12 +154,15 @@ const buildBlockrefSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       if (!workspaceId) return []
 
       const query = filter.trim()
+      // Shared merge point (searchSourcesFacet), not a direct
+      // `searchByContent` call, so a contributed search source (e.g.
+      // semantic search) is reachable from block-ref completion too.
       const blocks = query
-        ? await repo.query.searchByContent({
+        ? await searchBlocksAcrossSources(repo, {
           workspaceId,
           query,
           limit: 12,
-        }).load()
+        })
         : await repo.query.recentBlocks({
           workspaceId,
           limit: 12,

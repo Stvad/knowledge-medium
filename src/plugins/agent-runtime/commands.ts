@@ -17,6 +17,7 @@ import {
 } from '@/plugins/grouped-backlinks/resolveConfig.js'
 import type { GroupedBacklinksConfig } from '@/plugins/grouped-backlinks/config.js'
 import { parseRelativeDate } from '@/utils/relativeDate.js'
+import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
@@ -1233,7 +1234,10 @@ const runSearchCommand = async (
   const workspaceId = commandWorkspaceId(repo, command.workspaceId)
   const limit = typeof command.limit === 'number' ? command.limit : 50
 
-  const rows = await repo.query.searchByContent({workspaceId, query, limit}).load()
+  // Shared merge point (searchSourcesFacet), not a direct
+  // `searchByContent` call, so a contributed search source (e.g. semantic
+  // search) is reachable from the agent `search` command too.
+  const rows = await searchBlocksAcrossSources(repo, {workspaceId, query, limit})
   return {
     query,
     workspaceId,
