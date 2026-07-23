@@ -634,6 +634,22 @@ const reapSeatsInTx = async (
       // seat since the read phase — nothing to reap then.
       const current = await tx.get(id)
       if (current === null || current.deleted) continue
+      // In-tx SHAPE re-check (PR #428 adversarial review): a queued
+      // user tx can ADOPT the seat between the read phase and this
+      // write lock — rename it (quick-find, title edit) or set a
+      // property — and the children guard below can't see either. The
+      // referrer probe genuinely can't run in-tx (`Tx` can't read
+      // `block_references`), but the shape gates CAN, so re-run them
+      // on the in-tx row: still byte-identical to the machine seed,
+      // and still sitting at a deterministic slot id for its OWN
+      // current content (a rename moves content off the slot-id
+      // namespace, failing the second check). Safe for the mint-time
+      // caller too — its ids are always fresh `ensureAliasTarget`
+      // mints (date-shaped aliases never enter its list, per the §7.6
+      // routing in targets.ts), which pass unless a user adopted the
+      // seat inside the 4s window: exactly the case to skip.
+      if (!matchesAliasSeatSeed(current)) continue
+      if (!isAliasSeatSlotId(id, current.content, workspaceId)) continue
       // In-tx children guard, for BOTH callers: a live child that isn't
       // the seat's own generated machinery is user content (someone
       // nested notes under the fresh page — reachable inside the
@@ -648,6 +664,28 @@ const reapSeatsInTx = async (
           })
         : children
       if (blockingChildren.length > 0) continue
+      // Deep guard (PR #428 adversarial review): the direct-children
+      // gate can't see user content nested INSIDE a generated field
+      // row's subtree — §9 keeps value children visible, so "a comment
+      // thread under a property value child is arbitrarily deep user
+      // content" (subtreeDelete.ts) is reachable under a seat, and the
+      // `deleteSubtreeInTx` sweep below would take it. A machine-minted
+      // seat's generated subtree is exactly field row → leaf value
+      // child; any grandchild with live children of its own is user
+      // content, and skipping the whole seat is the safe miss.
+      let deepUserContent = false
+      for (const child of children) {
+        const target = child.referenceTargetId ?? null
+        if (target === null || !generatedFieldIds.has(target)) continue
+        for (const grandchild of await tx.childrenOf(child.id, undefined)) {
+          if ((await tx.childrenOf(grandchild.id, undefined)).length > 0) {
+            deepUserContent = true
+            break
+          }
+        }
+        if (deepUserContent) break
+      }
+      if (deepUserContent) continue
       // Soft-delete the seat, then its generated field rows (with their
       // value children).
       await tx.delete(id)
@@ -718,7 +756,23 @@ const liveReferenceTargetIds = (row: BlockData | null): ReadonlySet<string> =>
  *  phase narrows the window to roughly write-lock acquisition; a loss
  *  degrades to the standard wikilink-at-pristine-tombstone state, which
  *  the seat-slot probe restores on the next parse of that alias —
- *  convergent, never data loss. */
+ *  convergent, never data loss.
+ *
+ *  Second documented residual (cross-device; PR #428 adversarial
+ *  review): the reap is a LOCAL decision against this device's
+ *  committed state. A peer that nested user content under the seat
+ *  while offline syncs those children in AFTER the tombstone — sync
+ *  arrival bypasses the `parent_deleted` trigger — leaving them live
+ *  under a deleted parent, and the stranded subtree breaks the
+ *  restore path (`isRestorableTransientTombstone` requires no live
+ *  children), so a later `[[alias]]` re-type mints a FRESH slot
+ *  rather than restoring this one. The rows are not deleted, but
+ *  they stay orphaned from the alias until an arrival-side reconcile
+ *  (restore a machine-minted tombstone when a live child arrives
+ *  under it) exists — follow-up noted on issue #402. The mint-time
+ *  cleanup has carried the same residual since it shipped, bounded
+ *  to its 4s window; this reaper widens exposure to every
+ *  last-reference drop, which is why it is worth stating here. */
 export const reapOrphanAliasSeatsProcessor = definePostCommitProcessor({
   name: REAP_ORPHAN_ALIAS_SEATS_PROCESSOR,
   watches: {kind: 'field', table: 'blocks', fields: ['references', 'deleted']},

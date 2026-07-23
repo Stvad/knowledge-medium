@@ -1614,6 +1614,78 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     await flush(5000)
     expect((await env.read(aliasId('baz')))!.deleted).toBe(0)
   })
+
+  it('keeps a seat the user ADOPTED between the orphan check and the reap tx (in-tx shape re-check)', async () => {
+    // The reap gates run on committed state OUTSIDE the write tx; a user
+    // tx that adopts the seat can land in between (PR #428 adversarial
+    // review). Deterministic stand-in for that race: the MINT-TIME
+    // cleanup's read phase probes only referrers — no shape gates — so a
+    // seat renamed before its 4s check reaches `reapSeatsInTx` exactly
+    // like a seat adopted mid-race, and only the in-tx re-check
+    // (seed shape + slot id against the row's CURRENT content) stands
+    // between the rename and a wrong tombstone of the user's page.
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[adoptme]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('adoptme')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+
+    // The user adopts the page: rename moves its content off the slot-id
+    // namespace (alias.sync keeps the alias in step, so the shape stays
+    // byte-identical to `aliasSeatSeed('My Real Page')` — the slot-id
+    // check is what must catch this).
+    await env.repo.mutate.setContent({id: seatId, content: 'My Real Page'})
+    // Drop the reference so the pending 4s mint check sees an orphan.
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+
+    const seat = await env.read(seatId)
+    expect(seat!.deleted).toBe(0)
+    expect(seat!.content).toBe('My Real Page')
+  })
+
+  it('keeps a child-backed seat when user content is nested INSIDE a generated field row subtree', async () => {
+    // §9 keeps value children visible, so a comment thread under a
+    // property VALUE child is reachable user content. The direct-children
+    // gate sees only generated field rows and passes — the deep guard in
+    // `reapSeatsInTx` must catch the nested comment, or the
+    // deleteSubtreeInTx sweep takes it with the machinery (PR #428
+    // adversarial review).
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[nest]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('nest')
+    const [fieldRow] = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(fieldRow).toBeDefined()
+    const [valueChild] = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [fieldRow!.id],
+    )
+    expect(valueChild).toBeDefined()
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'nested-comment', workspaceId: WS, parentId: valueChild!.id, orderKey: 'a0',
+        content: 'a comment the user nested under the value',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('nested-comment'))!.deleted).toBe(0)
+  })
 })
 
 describe('parseReferences — orphan cleanup (§7.5)', () => {

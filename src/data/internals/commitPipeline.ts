@@ -30,6 +30,7 @@ import type {
   AnyPostCommitProcessor,
   AnyPropertySchema,
   AnySameTxProcessor,
+  BlockData,
   ChangedRow,
   RepoTxOptions,
   SameTxEmittedEvent,
@@ -136,6 +137,120 @@ const sameTxFieldChanged = (
   const a = (before as unknown as Record<string, unknown>)[field]
   const b = (after as unknown as Record<string, unknown>)[field]
   return a === b ? false : JSON.stringify(a) !== JSON.stringify(b)
+}
+
+/** Field paths one recorded write touched: `properties.<key>` per
+ *  changed bag key, the field name for every other changed field. Same
+ *  JSON-equality semantics as `sameTxFieldChanged`, but per WRITE (this
+ *  write's before/after from the `onWrite` hook), not per tx — the
+ *  settled-write baseline needs to know which paths each individual
+ *  write moved so a settled amendment and a later unsettled write to
+ *  the same row stay distinguishable. */
+const changedWritePaths = (
+  before: BlockData | null,
+  after: BlockData | null,
+): string[] => {
+  const paths: string[] = []
+  const fields = new Set([
+    ...Object.keys(before ?? {}),
+    ...Object.keys(after ?? {}),
+  ])
+  fields.delete('properties')
+  const b = before as unknown as Record<string, unknown> | null
+  const a = after as unknown as Record<string, unknown> | null
+  for (const field of fields) {
+    const x = b?.[field]
+    const y = a?.[field]
+    if (x === y ? false : JSON.stringify(x) !== JSON.stringify(y)) paths.push(field)
+  }
+  const beforeBag = before?.properties ?? {}
+  const afterBag = after?.properties ?? {}
+  for (const key of new Set([...Object.keys(beforeBag), ...Object.keys(afterBag)])) {
+    const x = beforeBag[key]
+    const y = afterBag[key]
+    if (x === y ? false : JSON.stringify(x) !== JSON.stringify(y)) {
+      paths.push(`properties.${key}`)
+    }
+  }
+  return paths
+}
+
+const jsonEq = (a: unknown, b: unknown): boolean =>
+  a === b ? true : JSON.stringify(a) === JSON.stringify(b)
+
+/** The re-run pass's `before` for one row. Built so a field path diffs
+ *  against the net `after` iff it changed since TX START **or** since
+ *  the processor's WATERMARK — and never when its last writer was a
+ *  `settledWrites` processor. Two baselines because each alone hides a
+ *  real case (both found on PR #428):
+ *   - tx-start alone: a later processor restoring a field to its
+ *     tx-start value after the derivation ran on the intermediate value
+ *     nets to zero — invisible to an apply that diffs field content
+ *     internally (MATERIALIZE's changed-name computation), leaving
+ *     value children synced to the intermediate bag.
+ *   - watermark alone: a write the processor's own gates SKIPPED in
+ *     pass one (a bag written on a then-field-row that DERIVE later
+ *     un-stamps) is part of the watermark state, so it never diffs and
+ *     the re-run does nothing with it.
+ *  Settled-last paths read as their final values on top of the merge —
+ *  a settled amendment is baseline, never delta (see the
+ *  `settledFieldPaths` declaration for the laundering failure).
+ *  `txStart === null` (row inserted this tx) passes through as null:
+ *  every path already diffs maximally against a null before, and the
+ *  destructive misread the settled mask exists to stop (a settled
+ *  key-UNSET diffing as a user deletion) is unrepresentable there. */
+const rerunBefore = (
+  txStart: BlockData | null,
+  atWatermark: BlockData | null,
+  after: BlockData | null,
+  settled: ReadonlySet<string> | undefined,
+): BlockData | null => {
+  if (txStart === null || after === null) return txStart
+  if (atWatermark === null) return txStart
+  const merged = {...atWatermark, properties: {...atWatermark.properties}}
+  const m = merged as unknown as Record<string, unknown>
+  const ts = txStart as unknown as Record<string, unknown>
+  const af = after as unknown as Record<string, unknown>
+  const fields = new Set([
+    ...Object.keys(txStart), ...Object.keys(atWatermark), ...Object.keys(after),
+  ])
+  fields.delete('properties')
+  for (const field of fields) {
+    if (settled?.has(field)) {
+      m[field] = af[field]
+      continue
+    }
+    if (jsonEq(m[field], af[field]) && !jsonEq(ts[field], af[field])) {
+      m[field] = ts[field]
+    }
+  }
+  const hasOwn = (bag: Record<string, unknown>, key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(bag, key)
+  const keys = new Set([
+    ...Object.keys(txStart.properties),
+    ...Object.keys(atWatermark.properties),
+    ...Object.keys(after.properties),
+  ])
+  for (const key of keys) {
+    const inAfter = hasOwn(after.properties, key)
+    if (settled?.has(`properties.${key}`)) {
+      if (inAfter) merged.properties[key] = after.properties[key]
+      else delete merged.properties[key]
+      continue
+    }
+    const wmEqAfter = hasOwn(merged.properties, key) === inAfter
+      && jsonEq(merged.properties[key], after.properties[key])
+    const tsEqAfter = hasOwn(txStart.properties, key) === inAfter
+      && jsonEq(txStart.properties[key], after.properties[key])
+    if (wmEqAfter && !tsEqAfter) {
+      if (hasOwn(txStart.properties, key)) {
+        merged.properties[key] = txStart.properties[key]
+      } else {
+        delete merged.properties[key]
+      }
+    }
+  }
+  return merged
 }
 
 /** Per-same-tx-processor timing sample for one tx (PR #288 §12: the
@@ -276,6 +391,36 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const rowWriteGens = new Map<string, number>()
   let writeGen = 0
   let settleWrites = false
+  // Second half of the settled-write channel: per row, the field paths
+  // (`properties.<key>` for bag keys, a top-level field name otherwise)
+  // whose LAST writer was a settled processor. Suppressing dirtiness
+  // alone is not enough — once any UNSETTLED writer dirties the same
+  // row, the re-run's tx-start→net diff would surface the settled
+  // amendments as if they were user intent (adversarial review on PR
+  // #428: PROJECT's deliberate cell unset plus an alias.sync write to
+  // the same owner made the re-run MATERIALIZE read the unset as a user
+  // key-deletion and tombstone a live field row and its user-edited
+  // value child). The re-run pass therefore masks settled-last paths
+  // out of each eligible row's `before` (before := net after for that
+  // path), so a settled amendment is baseline, never delta. Unsettled
+  // writes UN-mark exactly the paths they touch — last writer wins,
+  // matching the strictly sequential processor order, which is what
+  // keeps a genuine unsettled re-key (merge retarget moving a cell
+  // between definition keys) fully visible to the re-run.
+  const settledFieldPaths = new Map<string, Set<string>>()
+  // Per-row write log (every write, settled or not, with the generation
+  // current AFTER that write): lets the re-run pass reconstruct a row's
+  // state AS OF a processor's watermark. The re-run's `before` must be
+  // "what this processor last saw", not the tx-start state — a later
+  // processor can restore a field to its tx-start value after the
+  // derivation ran on the intermediate value, and a tx-start baseline
+  // makes that restore invisible to an apply that diffs field content
+  // internally (MATERIALIZE's changedPropertyNames — Codex review on PR
+  // #428: pass two fired on the dirty row but computed no changed names,
+  // leaving value children synced to the intermediate bag). Entries hold
+  // references to the same `after` objects the primitives built — no
+  // copying.
+  const rowWriteLog = new Map<string, Array<{gen: number, after: BlockData | null}>>()
   const afterCommitJobs: AfterCommitJob[] = []
   const sameTxEvents: SameTxEmittedEvent[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
@@ -332,8 +477,24 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       sameTxEvents,
       now,
       newId,
-      onWrite: (id) => {
-        if (!settleWrites) rowWriteGens.set(id, ++writeGen)
+      onWrite: (id, before, after) => {
+        if (settleWrites) {
+          let paths = settledFieldPaths.get(id)
+          if (paths === undefined) settledFieldPaths.set(id, paths = new Set())
+          for (const path of changedWritePaths(before, after)) paths.add(path)
+        } else {
+          rowWriteGens.set(id, ++writeGen)
+          const paths = settledFieldPaths.get(id)
+          if (paths !== undefined) {
+            for (const path of changedWritePaths(before, after)) paths.delete(path)
+          }
+        }
+        // Log EVERY write (settled ones under the unbumped generation:
+        // they fold into "state as of" whatever watermark covers that
+        // generation, which is exactly their declared-baseline intent).
+        let log = rowWriteLog.get(id)
+        if (log === undefined) rowWriteLog.set(id, log = [])
+        log.push({gen: writeGen, after})
       },
     })
     // Important: any tx.run calls in the user fn push onto
@@ -449,28 +610,54 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       // construction already convergent (MATERIALIZE/PROJECT are mutual
       // inverses whose round-trip no-ops; DERIVE/NORMALIZE re-derive to
       // the same value), so a third pass would no-op. Writes from
-      // `settledWrites` processors (the rename re-key) never mark rows
-      // dirty, which is what keeps the stale-registry MATERIALIZE
-      // misread out of this pass entirely.
+      // `settledWrites` processors (the rename re-key, PROJECT's cell
+      // writes) never mark rows dirty, AND their field paths are masked
+      // out of the re-run diff below (`maskSettledPaths`) — dirtiness
+      // suppression alone leaks the moment an unsettled co-writer
+      // dirties the same row (see the `settledFieldPaths` declaration
+      // for the laundering failure this closes).
       // Dispatch on DIRTINESS, not on the net tx field diff: a later
       // writer can revert a watched field to its tx-start value after a
       // derivation ran on the intermediate value (net diff empty, derived
       // state stale — Codex review on PR #428), so any post-watermark
-      // write makes the row eligible. `before` stays the tx-start state —
-      // same event shape as pass one — and rows whose watched fields are
-      // truly untouched no-op inside the idempotent processors.
+      // write makes the row eligible. `before` is the tx-start state
+      // (same event shape as pass one) except for settled-last field
+      // paths, which read as their net-after values; rows whose watched
+      // fields are truly untouched no-op inside the idempotent
+      // processors.
       for (const processor of sameTxProcessors.values()) {
         if (processor.rerunOnDirtyRows !== true) continue
-        // Field-watch only (defineSameTxProcessor enforces this at
-        // definition time; the check backstops hand-built literals).
+        // Field-watch on the blocks table only. defineSameTxProcessor
+        // enforces field-kind at definition time (nothing enforces the
+        // table — today the watch type only admits 'blocks'); both
+        // checks backstop hand-built literals, mirroring
+        // collectSameTxFieldMatches.
         if (processor.watches.kind !== 'field') continue
+        if (processor.watches.table !== 'blocks') continue
         const watermark = watermarks.get(processor.name) ?? 0
         const collectStartedAt = performance.now()
         const changedRows: ChangedRow[] = []
         for (const [id, gen] of rowWriteGens) {
           if (gen <= watermark) continue
           const entry = snapshots.get(id)
-          if (entry) changedRows.push({id, before: entry.before, after: entry.after})
+          if (!entry) continue
+          // Reconstruct the row as of THIS processor's watermark (last
+          // logged write at gen ≤ watermark; tx-start when every write
+          // came later), then merge with tx-start into the two-baseline
+          // re-run `before` — see `rerunBefore` for why either baseline
+          // alone hides a real case.
+          let atWatermark = entry.before
+          const log = rowWriteLog.get(id)
+          if (log !== undefined) {
+            for (const record of log) {
+              if (record.gen > watermark) break
+              atWatermark = record.after
+            }
+          }
+          const before = rerunBefore(
+            entry.before, atWatermark, entry.after, settledFieldPaths.get(id),
+          )
+          changedRows.push({id, before, after: entry.after})
         }
         const collectMs = performance.now() - collectStartedAt
         if (changedRows.length === 0) continue

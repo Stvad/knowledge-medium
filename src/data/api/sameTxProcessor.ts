@@ -110,18 +110,48 @@ export type SameTxProcessor = {
    *  Opting in is a CONTRACT: apply must be idempotent (early-return
    *  when the derived output already matches) — the re-run pass is
    *  bounded at one and relies on idempotence, not a fixpoint, for
-   *  convergence. The re-run event's `changedRows.before` is the
-   *  tx-start state (same as pass one), so transition detection must
-   *  tolerate seeing an already-handled transition again. */
+   *  convergence. The re-run event's `changedRows.before` is a MERGED
+   *  baseline: a field path diffs against `after` iff it changed
+   *  since TX START or since this processor's pass-one WATERMARK
+   *  (either baseline alone hides a real case — a net-zero
+   *  restore-to-tx-start is invisible from tx-start, and a write the
+   *  processor's own gates skipped in pass one is invisible from the
+   *  watermark; both found on PR #428), except that field paths whose
+   *  last writer was a `settledWrites` processor read as their final
+   *  values and never diff (see `settledWrites`). Transition
+   *  detection must still tolerate seeing an already-handled
+   *  transition again.
+   *
+   *  Ordering caveat the re-run does NOT lift: pass two runs in
+   *  registration order, so an earlier re-run processor reads columns
+   *  a LATER re-run processor derives (e.g. MATERIALIZE's re-run
+   *  reads the stored `referenceTargetId` BEFORE DERIVE's re-run
+   *  refreshes it) as of pass one. Every current content rewriter
+   *  inline-recomputes the stamp it invalidates (merge retarget,
+   *  inline-deleted-refs, alias sync all do); a rewriter that skips
+   *  that recompute and leans on the re-run alone leaves earlier
+   *  re-run processors reading a stale column — there is no third
+   *  pass. */
   readonly rerunOnDirtyRows?: boolean
-  /** Explicit-intent channel (issue #402): when true, rows written by
-   *  this processor are NOT marked dirty for the re-run pass — its
-   *  writes are declared settled (already convergent with every
-   *  derivation, or deliberately final in a way a re-derivation must
-   *  not second-guess). The canonical consumer is
-   *  `core.migratePropertyRename`, whose consuming-cell re-keys would
-   *  otherwise be re-read by a re-run MATERIALIZE against the stale
-   *  tx-start registry and misinterpreted as a user's key deletion. */
+  /** Explicit-intent channel (issue #402): declares this processor's
+   *  writes settled — already convergent with every derivation, or
+   *  deliberately final in a way a re-derivation must not
+   *  second-guess. Two enforcement halves in the commit pipeline:
+   *  rows written by this processor are NOT marked dirty for the
+   *  re-run pass, and the field paths it wrote are MASKED out of the
+   *  re-run diff (`before` reads their final values) even when an
+   *  unsettled co-writer later dirties the same row — without the
+   *  mask, that co-write would launder the settled amendment into the
+   *  re-run as apparent user intent (PR #428 adversarial review). A
+   *  later unsettled write to the same field path un-settles it: last
+   *  writer wins, matching the sequential processor order. Canonical
+   *  consumers: `core.migratePropertyRename`, whose consuming-cell
+   *  re-keys would otherwise be re-read by a re-run MATERIALIZE
+   *  against the stale tx-start registry and misinterpreted as a
+   *  user's key deletion, and PROJECT's cell writes (including the
+   *  deliberate lossy key-unset for an unparseable value child, which
+   *  a re-run MATERIALIZE must never treat as a user deleting the
+   *  property). */
   readonly settledWrites?: boolean
 }
 

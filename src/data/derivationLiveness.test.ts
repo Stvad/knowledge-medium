@@ -183,6 +183,62 @@ describe('net-zero watched-field revert (Codex review on PR #428)', () => {
     // The stamp reflects the FINAL content, not the intermediate prose.
     expect(row.reference_target_id).toBe(X)
   })
+
+  // Same class, one level deeper (Codex on PR #428, round 2): dirtiness
+  // dispatch alone is not enough for an apply that diffs field content
+  // INTERNALLY. MATERIALIZE computes changed property names from the
+  // event's before/after — with a tx-start `before`, a later processor
+  // restoring the bag to its tx-start value yields an empty name diff,
+  // and the value child stays synced to the intermediate value while
+  // the cell reads the original. The re-run `before` must be the state
+  // as of the processor's own watermark.
+  it('re-materializes the value child when a plugin reverts the bag after MATERIALIZE ran', async () => {
+    const reverter = defineSameTxProcessor({
+      name: 'test.revertBag',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      apply: async (event, ctx) => {
+        for (const row of event.changedRows) {
+          if (row.after?.content !== 'revert-my-bag') continue
+          const bag = {...row.after.properties}
+          if (bag[statusSchema.name] === 'v-original') continue
+          bag[statusSchema.name] = 'v-original'
+          await ctx.tx.update(row.id, {properties: bag})
+        }
+      },
+    })
+    await seedFlippedWorkspace()
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      sameTxProcessorsFacet.of(reverter, {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-liveness-definitions',
+      [definitionContribution(STATUS_FIELD_ID, statusSchema)],
+      {workspaceId: WS},
+    )
+    await repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', statusSchema, 'v-original'),
+      {scope: ChangeScope.BlockDefault})
+    const [fieldRow] = await liveFieldRows('p', STATUS_FIELD_ID)
+
+    // One tx: the bag moves to the intermediate value (pass-one
+    // MATERIALIZE syncs the value child to it), then the content write
+    // triggers the plugin, which restores the bag — net bag diff zero.
+    await repo.tx(async tx => {
+      await tx.setProperty('p', statusSchema, 'v-intermediate')
+      await tx.update('p', {content: 'revert-my-bag'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await cellOf('p', statusSchema.name)).toBe('v-original')
+    // The value child converged with the FINAL bag, not the intermediate.
+    const [value] = await childrenOf(fieldRow!.id)
+    expect(value!.content).toBe('v-original')
+  })
 })
 
 describe('merge retarget → kernel derivations (same tx)', () => {
@@ -320,6 +376,55 @@ describe('alias reverse-sync → PROJECT (same tx)', () => {
     // The re-run PROJECT saw the plugin's rewrite: `c` now denotes the
     // status property of `p`, and the first parseable value projected.
     expect(await cellOf('p', statusSchema.name)).toBe('done')
+  })
+})
+
+describe('settled-write laundering (PR #428 adversarial review)', () => {
+  // Suppressing dirtiness is only half the settled-write channel: pass-2
+  // eligibility is per ROW, so once any UNSETTLED processor dirties the
+  // same row, a naive tx-start→net diff would surface the settled
+  // amendments as if they were user intent. Concretely: one tx makes a
+  // ref-typed value child unparseable (pass-1 PROJECT drops the owner's
+  // cell key — settled, deliberate, §9 keeps the rows visible/fixable)
+  // AND renames the owner (alias.sync — unsettled — rewrites the owner's
+  // aliases after PROJECT ran). Without the settled-path mask, the re-run
+  // MATERIALIZE reads the dropped key as a user deletion and
+  // deleteSubtreeInTx's the live field row plus the user's just-edited
+  // value child — the exact outcome settledWrites exists to prevent.
+  it('does not let an unsettled co-write expose PROJECT\'s cell unset to the re-run MATERIALIZE', async () => {
+    const repo = await setup()
+    const T = '99999999-9999-4999-8999-999999999999'
+    await repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: T, workspaceId: WS, parentId: 'p', orderKey: 'a1', content: 'target'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', aliasesProp, ['page']),
+      {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('p', relatedSchema, T),
+      {scope: ChangeScope.BlockDefault})
+    const [fieldRow] = await liveFieldRows('p', RELATED_FIELD_ID)
+    const [value] = await childrenOf(fieldRow!.id)
+    expect(value!.content).toBe(`((${T}))`)
+
+    // ONE tx: the §9 unparseable edit + the rename that makes alias.sync
+    // co-dirty the owner after PROJECT's watermark.
+    await repo.tx(async tx => {
+      await tx.update(value!.id, {content: 'garbage not a ref'})
+      await tx.update('p', {content: 'renamed'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The unsettled co-write really happened (A1 replaced the alias) —
+    // without it this test wouldn't exercise the laundering path at all.
+    expect(await cellOf('p', aliasesProp.name)).toEqual(['renamed'])
+    // PROJECT's deliberate lossy unset survived the re-run…
+    expect(await cellOf('p', relatedSchema.name)).toBeUndefined()
+    // …and the rows stayed live and fixable instead of being tombstoned
+    // as a phantom "user key deletion".
+    const [fieldRowAfter] = await liveFieldRows('p', RELATED_FIELD_ID)
+    expect(fieldRowAfter).toBeDefined()
+    const [valueAfter] = await childrenOf(fieldRowAfter!.id)
+    expect(valueAfter!.content).toBe('garbage not a ref')
+    expect(valueAfter!.deleted).toBe(0)
   })
 })
 
