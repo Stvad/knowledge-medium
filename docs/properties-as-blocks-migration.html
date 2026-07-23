@@ -513,6 +513,22 @@
   form and positional recognition now <em>trail</em> this doc — the 07-17
   "code is authoritative" note is qualified until the branch lands the delta
   checklist.<br>
+  <strong>Revised 2026-07-22, second round (owner: uniform marked-alias
+  resolution):</strong> the <code>::[[name]]</code> special-casing is
+  deleted — the marker carries field-intent, and the embedded ref resolves
+  exactly as refs resolve everywhere (either bracket form sets the bit; the
+  alias form binds via the existing alias lookup/late-binding — no import
+  canonicalization step, no marked-alias derive exclusion, no reclaim-skip).
+  The retroactivity ban is re-scoped to its true target: <em>unmarked</em>
+  content never becomes machinery; a <em>marked</em> row binding late is
+  declared intent catching up (§7, §9, AC). Id form stays canonical
+  (minted by machinery + autocomplete, rename-stable, identity-pinned);
+  name-form rows are the pasted minority with follow-the-name semantics.
+  Create-on-write lives only in the input flow — paste never auto-creates,
+  unbound rows carry a create affordance (§7). The deletion matrix lands in
+  B2 (id = tombstone-resolving, stays live marked-deleted; name = live-claims
+  only, goes dormant, follows re-claims), and the inline-on-delete exemption
+  re-keys on the form bit for order-independence (§9, B2).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -953,11 +969,12 @@ there are authoritative.
     token — <em>or the <code>::</code> marker + one block-ref token, the §7 field
     form</em> — resolves it and writes the target id into
     <code>reference_target_id</code> in the same transaction, and stamps
-    <code>is_field_form</code> for the marked block-ref form only (a marked
-    <em>alias</em>, <code>::[[name]]</code>, stamps <em>neither column</em> —
-    no bit, no <code>reference_target_id</code> — until the
-    §7 import seam canonicalizes it: a bound target without the bit would be
-    the lookalike state §7 forbids; §9 recognition, PR #417 review).
+    <code>is_field_form</code> for <em>both</em> marked bracket forms — the
+    marked forms derive exactly like their unmarked twins (owner decision,
+    07-22 second round: no marked-alias exclusion branch; a
+    <code>::[[name]]</code> row's target binds via the same alias
+    lookup/late-binding as any link, and classification follows resolution —
+    §9 recognition).
     As shipped (PR #386, pre-grammar — the two-column condition is on the branch
     delta):
     <code>((id))</code> resolves <em>purely textually</em> — the id is the content —
@@ -1581,18 +1598,20 @@ surface.
   <dt><strong>Marker</strong></dt>
   <dd><code>::</code> + one whole-block block-ref → <code>::((fieldId))</code>;
     matched on <em>trimmed</em> content, no space between marker and ref; the
-    embedded ref inherits the exact-ref grammar's id canonicalization. The
-    marked <em>alias</em> form <code>::[[name]]</code> is input/import surface
-    only — it never classifies (§9 condition 1).</dd>
+    embedded ref inherits the exact-ref grammar's id canonicalization. Either
+    bracket form is legal: <code>::((fieldId))</code> is <em>canonical</em>
+    (machinery + autocomplete mint it; rename-stable);
+    <code>::[[name]]</code> resolves live through the alias index like any
+    link — follow-the-name semantics, dormant until names resolve to
+    definitions (§9 condition 1, §11 AC).</dd>
   <dt><strong>Columns</strong></dt>
   <dd><code>reference_target_id</code> (stamped for both <em>unmarked</em> ref
     forms — purely textual for <code>((id))</code>, the generic alias
     lookup for <code>[[name]]</code> — and for the marked <em>block-ref</em>
-    form) · <code>is_field_form</code> (marked block-ref
-    form only). A marked <em>alias</em>, <code>::[[name]]</code>, stamps
-    <strong>neither column</strong> — binding its target without the bit would
-    mint the bound lookalike §7's seam rule forbids; it stays fully inert until
-    the import seam rewrites it. Both columns local, derived, never synced,
+    form) · <code>is_field_form</code> (both <em>marked</em> bracket forms —
+    each derives through the same branch as its unmarked twin: textual for
+    <code>::((id))</code>, alias lookup + late-binding for
+    <code>::[[name]]</code>). Both columns local, derived, never synced,
     rebuilt from content by the
     same repair paths.</dd>
   <dt><strong>Predicate</strong></dt>
@@ -1623,18 +1642,21 @@ The marker is <em>typed and stored identically</em> (owner ruling — no
 trigger/storage decoupling): typing <code>::</code> at block start opens field-name
 autocomplete over the schema registry, and the committed row is
 <code>::((fieldId))</code>, with an unresolvable name creating the
-definition inline. That commit-the-id-form step is a <strong>new seam, not a
-borrowed one</strong> (PR #417 review: an earlier draft said "the same
-canonicalization every <code>[[…]]</code> ref already performs" — no such
-mechanism exists; wikilinks keep their name text and resolve at reference
-level, content never rewritten). It has exactly two homes: <em>(1)</em> the
-input flow above — autocomplete inserts the id form directly, the name never
-touches stored content; <em>(2)</em> an <strong>import canonicalization
-step</strong> on the markdown paste path — a whole-block
-<code>::[[name]]</code> line resolves through the registry winner and rewrites
-to <code>::((fieldId))</code> at paste time; unresolvable, it stays verbatim
-and never classifies (§9's bit is block-ref-form-only), rendering as visibly
-unbound rather than silently lookalike. The match is strict whole-block on
+definition inline — <em>create-on-write lives only here</em>, in the watched
+input flow (owner ruling: paste never auto-creates — importing fifty
+<code>::[[whatever]]</code> lines must not silently mint fifty definitions;
+a pasted unresolvable row sits visibly unbound with a per-row "create
+property?" affordance). Beyond that there is <strong>no seam at all</strong>
+(owner decision, 07-22 second round, superseding this revision's earlier
+import-canonicalization step): a pasted or hand-written
+<code>::[[name]]</code> is <em>not rewritten</em> — the embedded ref resolves
+live exactly as unmarked <code>[[name]]</code> links resolve (the alias
+lookup + late-binding the derive already has), and the row binds when the
+name resolves to a definition, sits visibly unbound otherwise. The id form
+stays <em>canonical</em> — machinery and autocomplete always mint
+<code>::((fieldId))</code>, which is rename-stable; a name-form row is the
+pasted/hand-edited minority and carries <em>follow-the-name</em> semantics
+by construction (§9). The match is strict whole-block on
 <em>trimmed</em> content — <code>trim(content) = '::' + blockRef</code>, no
 space between marker and ref, and the embedded ref inherits the exact-ref
 grammar's id canonicalization (PR #417 review: outer-whitespace and id-case
@@ -1861,20 +1883,25 @@ supabase skill if it's kept.
     content is the marked field form — <code>::</code> + a whole-block
     <em>block-ref</em>
     (<code>::((fieldId))</code>; §7), recorded at derive time in the local
-    <code>is_field_form</code> bit. <strong>The block-ref form only</strong>
-    (PR #417 review ×2 — the exact-ref grammar also has an alias form, and
-    admitting it would contradict this revision's own safety claims): a marked
-    alias, <code>::[[name]]</code>, <em>never</em> sets the bit — it is an
-    input/import surface, canonicalized to <code>::((fieldId))</code> by the §7
-    seam when the name resolves to a definition, and inert verbatim content
-    otherwise. Letting the alias form classify would resurrect the
-    retroactive-reinterpretation trap this grammar killed: a pasted
-    <code>::[[status]]</code> would flip to a live field row — children become
-    values, projection writes the owner's synced cell — the moment auto-claim
-    makes the name definition-resolvable. AC's link-reclaim skips marked-alias
-    rows for the adjacent reason: with the bit never set, a re-pointed target
-    could not classify, but it would create a <em>bound lookalike</em> outside
-    the §7 seam's visibility rule (§11 AC). <em>(2)</em> Its parent is non-null (root half:
+    <code>is_field_form</code> bit — <strong>either bracket form</strong>
+    (owner decision, 07-22 second round, superseding this revision's earlier
+    block-ref-only rule and its seam apparatus): the embedded ref resolves
+    exactly as refs resolve everywhere, so a marked alias
+    <code>::[[name]]</code> binds through the alias index and late-binding
+    like any link. The retroactivity concern that motivated the old exclusion
+    was mis-transferred from <em>unmarked</em> prose: a plain
+    <code>[[status]]</code> comment becoming machinery at claim time is
+    reinterpretation of link-intent — still structurally impossible, unmarked
+    rows never classify — but a <code>::</code>-marked row lighting up when
+    its name resolves is the system <em>catching up to declared field
+    intent</em>; nobody types <code>::[[status]]</code> as prose. Pre-AC no
+    name resolves to a definition, so the alias half is naturally dormant
+    (id-only-at-first falls out as sequencing, no flag). Two semantics follow
+    and are deliberate: id rows are <em>identity-pinned</em> (the round-29
+    shadow tolerance applies to them — losers stay resolvable); name rows
+    <em>follow the name</em> — they re-bind to whatever wins it (a rename or
+    winner flip re-binds or unbinds them; values re-decode under the new
+    codec, failures landing in the invalid-values story). <em>(2)</em> Its parent is non-null (root half:
     a workspace-root row has no owner to be a field <em>of</em> — its marker is just
     content; the SQL twins carry the same <code>parent_id IS NOT NULL</code>
     clause). <em>(3)</em> <code>reference_target_id</code> resolves via the
@@ -2126,7 +2153,13 @@ supabase skill if it's kept.
     it.</strong></dt>
   <dd>Decided in #404 (item 4), widened by PR-review round 28:
     <code>inlineDeletedBlockReferences</code> must <em>skip recognized property
-    machinery</em> — ref-typed value children <strong>and field rows</strong>.
+    machinery</em> — ref-typed value children <strong>and field rows</strong> —
+    keyed on the marked <em>form</em> (the bit) and value position, not on live
+    classification (owner round, 07-22: a bound <code>::[[name]]</code> row
+    whose definition dies in the same delete tx has already lost resolution
+    when the processor asks — form-keying makes the exemption
+    order-independent, or the tx inlines the name into the row and destroys
+    the marker shape).
     The field-row half is what makes the B2 definition-deletion rule (below,
     §11) coherent at all: field rows parse into <code>block_references</code>
     (the "used by" edge above), so deleting a <em>definition</em> would inline
@@ -2577,9 +2610,9 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <code>is_field_form</code></strong> — same local-column treatment
         (<code>BLOCK_LOCAL_COLUMNS</code>, boot ALTER, partial index
         <code>WHERE is_field_form = 1</code>), stamped in the same textual derive
-        pass under the §7 grammar box's derivation rule (unmarked forms and the
-        marked block-ref form stamp the target; only the marked block-ref form
-        sets the bit; marked aliases stamp neither column); every
+        pass under the §7 grammar box's derivation rule (each form derives through
+        its usual branch; the bit stamps for the marked form, either
+        bracket); every
         repair/derive-at-arrival/undo-seam
         rule below covers both columns identically. Write metadata splits by path (§5): the same-tx
         processor rides the triggering edit's upload; the bulk paths write raw CAS,
@@ -2732,7 +2765,20 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         used-by count (§9 backlinks answer it directly) and offers the drain
         (unset everywhere) as the explicit destructive variant, and restoring the
         definition snaps everything back. Reversible by default; mass-unset only
-        by deliberate choice. And the <em>fourth</em> lifecycle event,
+        by deliberate choice. That is the <em>id-form</em> column of the
+        deletion matrix; the <em>name form</em> differs in kind (owner round,
+        07-22: the alias index is a registry of <em>live</em> claims, so a name
+        cannot tombstone-resolve the way a fieldId can): on definition
+        deletion a <code>::[[name]]</code> row <em>unbinds and goes dormant</em> —
+        unclassifies, values stop projecting, key reads unset, nothing
+        destroyed, rendered as the visible unbound state — and revives when the
+        definition (or any definition) claims the name again, re-binding to the
+        <em>new winner</em> if there is one (values re-decode under its codec;
+        failures are the invalid-values story). Both forms preserve the
+        baseline — no deletion event ever silently removes property data — and
+        the asymmetry is the §9 semantics stated once more: id rows are
+        identity-pinned, name rows follow the living name, exactly as links
+        do. And the <em>fourth</em> lifecycle event,
         definition <em>merge</em> (PR #417 areview — reachable today via the
         merge picker, and the designed remedy for alias collisions once AC
         claims names): the retarget rewrite itself works by construction
@@ -2872,9 +2918,10 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         already in the <em>marked</em> form — enumerable by the
         <code>is_field_form</code> bit slice A stamps, expected ~zero
         pre-flip (a typed or pasted <code>::((id))</code> line; marked-alias
-        <code>::[[name]]</code> rows never set the bit and stay inert — §9
-        condition 1 — so they are not in the flip's blast radius, only in the
-        import seam's) — triage any
+        <code>::[[name]]</code> rows carry the bit too but bind to nothing
+        pre-AC — names don't resolve to definitions yet — so the flip lights
+        only <em>resolvable</em> marked rows, and the AC runbook lists
+        newly-binding name rows at claim time) — triage any
         hits: they were authored as fields or pasted field-row lines; keep or
         reword. The <code>[[name]]</code> triage obligation at auto-claim
         disappears entirely — claiming a name can no longer reinterpret prose
@@ -2962,23 +3009,25 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         consults names</strong> — hand-authoring runs on the registry-backed
         <code>::</code> input flow with no auto-claim dependency (§7), an
         unmarked <code>[[name]]</code> link can never become machinery, and the
-        step's old trap list is mostly dead. What the claim buys is navigation
-        and readability: <code>[[status]]</code> links resolve to the definition
-        page, and <code>::[[name]]</code> becomes the readable export form of a
-        field row, resolving back on import through the §7 import
-        canonicalization seam (rewrite-at-paste; never via recognition). The old retroactive-reinterpretation
-        trap — every pre-existing <code>[[name]]</code> row lighting up as a
-        hidden field row at claim time — is <em>structurally impossible now</em>
-        (no triage obligation remains); the reference-target <em>reclaim</em>
+        step's old trap list is mostly dead. What the claim buys is navigation,
+        readability, and <em>name-form binding</em>:
+        <code>[[status]]</code> links resolve to the definition
+        page; <code>::[[name]]</code> becomes the readable export form of a
+        field row, resolving back on import <em>like any link</em> (no rewrite
+        step — §7's uniform-resolution ruling); and this is the moment
+        pre-existing marked-alias rows <em>bind</em>. The trap distinction is
+        now intent-based, not form-based: an <em>unmarked</em>
+        <code>[[name]]</code> row lighting up as machinery remains structurally
+        impossible (no triage obligation); a <em>marked</em>
+        <code>::[[name]]</code> row lighting up at claim time is declared
+        intent catching up — by design, with the claim runbook <em>listing</em>
+        newly-bound name rows per definition (visibility, not blocking). The
+        reference-target <em>reclaim</em>
         (re-pointing already-bound <code>[[status]]</code> link rows from an
-        ordinary page to the definition once it claims the name) survives as a
-        link-target concern only, rebuilt with cell reprojection as before —
-        and it <strong>skips marked-alias rows</strong> (<code>::[[name]]</code>
-        verbatim leftovers): with §9 condition 1 the bit is never set, so a
-        re-pointed target could not classify the row — but it would create a
-        <em>bound lookalike</em>, exactly the state §7's seam-visibility rule
-        forbids (the §7 import seam is the only thing that may bind a marked
-        alias, at paste time, visibly).
+        ordinary page to the definition once it claims the name) is rebuilt
+        with cell reprojection as before and runs <em>uniformly</em> — marked
+        rows re-point too, which under uniform resolution is simply their
+        binding arriving.
         <em>Name-collision pastes</em>
         (same-named schema, incompatible codec) become reachable then and lean on the
         §9 sweep report; alias collision semantics ride the alias machinery's
