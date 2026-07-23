@@ -1,1 +1,0 @@
-{"version":3,"file":"kernelProcessors.js","names":["AnyPostCommitProcessor","KERNEL_PROCESSORS","ReadonlyArray"],"sources":["../../../../src/data/internals/kernelProcessors.ts"],"sourcesContent":["import type { AnyPostCommitProcessor } from '@/data/api'\n\nexport const KERNEL_PROCESSORS: ReadonlyArray<AnyPostCommitProcessor> = []\n"],"mappings":"AAEA,IAAaC,EAA2D,EAAE"}
