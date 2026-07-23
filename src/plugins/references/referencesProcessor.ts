@@ -439,29 +439,23 @@ const applySourcePlan = async (
     for (const alias of aliases) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
     }
-    const claimedNewLiterals = await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
-    // §9 arrival-order repair, LOCAL half (mirror of the aliasesToEnsure path
-    // below): a whole-block `[[2026-01-05]]` — or long-form — row written
-    // before this daily-note target existed derived its reference_target_id to
-    // NULL, and nothing content-driven revisits it. The target's creation (or
-    // a newly-claimed literal on an existing target) is the trigger. Deferred +
-    // batched on Repo; the per-open sweep covers pre-sweep writes.
-    if (ensured.inserted || claimedNewLiterals) {
-      ctx.repo.scheduleReferenceTargetNameRederive(plan.workspaceId, [iso, ...aliases])
-    }
+    // §9 arrival-order repair (a whole-block `[[2026-01-05]]` — or
+    // long-form — row written before this daily-note target existed
+    // derived its reference_target_id to NULL) is no longer scheduled
+    // here: the kernel `core.aliasClaimRederive` hook observes this tx's
+    // alias gains (the seat insert AND any newly-claimed literal) and
+    // schedules the batched rederive centrally (issue #402 — per-caller
+    // schedule calls were the forget-me failure mode).
+    await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
     if (ensured.inserted) newlyInserted.push(ensured.id)
     retarget(predicted, ensured.id, alias)
-    // §9 arrival-order repair, LOCAL half (adversarial-review round 2): a
-    // whole-block `[[alias]]` row written before this seat existed derived
-    // its local reference_target_id to NULL, and nothing content-driven
-    // revisits it — the seat's creation is the trigger. Deferred + batched
-    // on Repo; no-op pre-sweep (the per-open sweep covers those).
-    if (ensured.inserted) {
-      ctx.repo.scheduleReferenceTargetNameRederive(plan.workspaceId, [alias])
-    }
+    // The §9 arrival-order repair (late-binding rederive of NULL-stamped
+    // `[[alias]]` rows) rides the kernel `core.aliasClaimRederive` hook,
+    // which observes the seat's alias claim in this tx's own post-commit
+    // dispatch — no per-caller schedule call (issue #402).
   }
   // Retargeting invalidates the read phase's referencesChanged verdict —
   // recompute it the same canonical-to-canonical way buildSourcePlan does
