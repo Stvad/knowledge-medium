@@ -33,7 +33,7 @@ describe('applyKeybindingOverrides', () => {
     expect(applyKeybindingOverrides(actions, [])).toBe(actions)
   })
 
-  it('rewrites a single action’s keys when an override matches', () => {
+  it('rewrites a single action’s keys when an override matches — installed normalised, not verbatim', () => {
     const actions = [action('a', ActionContextTypes.NORMAL_MODE, 'ctrl+a')]
     const out = applyKeybindingOverrides(actions, [userOverride({
       actionId: 'a',
@@ -41,7 +41,9 @@ describe('applyKeybindingOverrides', () => {
       binding: {keys: 'ctrl+shift+a'},
     })])
 
-    expect(out[0]!.defaultBinding).toEqual({keys: 'ctrl+shift+a'})
+    // `ctrl` is a spelling tinykeys can't dispatch; the normalised form is
+    // what gets installed so the override actually fires (issue #388).
+    expect(out[0]!.defaultBinding).toEqual({keys: 'Control+Shift+a'})
   })
 
   it('lets an unbound override clear the default binding entirely', () => {
@@ -72,7 +74,7 @@ describe('applyKeybindingOverrides', () => {
       binding: {keys: 'ctrl+b'},
     })])
 
-    expect(out[0]!.defaultBinding).toEqual({keys: 'ctrl+b'})
+    expect(out[0]!.defaultBinding).toEqual({keys: 'Control+b'})
   })
 
   it('strips a default chord that another action’s override claims in the same context', () => {
@@ -87,7 +89,7 @@ describe('applyKeybindingOverrides', () => {
     })])
 
     expect(out[0]!.defaultBinding).toBeUndefined()
-    expect(out[1]!.defaultBinding).toEqual({keys: 'cmd+k'})
+    expect(out[1]!.defaultBinding).toEqual({keys: '$mod+k'})
   })
 
   it('keeps the un-claimed chords of a multi-chord default', () => {
@@ -156,8 +158,8 @@ describe('applyKeybindingOverrides', () => {
       userOverride({actionId: 'b', context: ActionContextTypes.NORMAL_MODE, binding: {keys: 'cmd+k'}}),
     ])
 
-    expect(out[0]!.defaultBinding).toEqual({keys: 'cmd+k'})
-    expect(out[1]!.defaultBinding).toEqual({keys: 'cmd+k'})
+    expect(out[0]!.defaultBinding).toEqual({keys: '$mod+k'})
+    expect(out[1]!.defaultBinding).toEqual({keys: '$mod+k'})
   })
 
   it('ignores a default whose action has no binding to begin with', () => {
@@ -171,6 +173,26 @@ describe('applyKeybindingOverrides', () => {
     expect(out[0]!.defaultBinding).toBeUndefined()
   })
 
+  it('a dispatch-dead override spelling is installed live instead of stripping the chord out of existence (issue #388)', () => {
+    // Pre-fix: the override's raw `ctrl+x` was installed verbatim on the
+    // claimer (tinykeys knows `Control`, not `ctrl` — never fires) while
+    // its canonical claim stripped the victim's live `Control+x` default.
+    // Net effect: the chord dispatched NOTHING. Canonical install keeps
+    // the strip AND makes the claimer actually own the chord.
+    const actions = [
+      action('victim', ActionContextTypes.NORMAL_MODE, 'Control+x'),
+      action('claimer', ActionContextTypes.NORMAL_MODE, 'cmd+j'),
+    ]
+    const out = applyKeybindingOverrides(actions, [userOverride({
+      actionId: 'claimer',
+      context: ActionContextTypes.NORMAL_MODE,
+      binding: {keys: 'ctrl+x'},
+    })])
+
+    expect(out[0]!.defaultBinding).toBeUndefined()
+    expect(out[1]!.defaultBinding).toEqual({keys: 'Control+x'})
+  })
+
   it('preserves the action’s existing eventOptions through a rewrite', () => {
     const a = action('a', ActionContextTypes.NORMAL_MODE, 'cmd+a')
     a.defaultBinding = {keys: 'cmd+a', eventOptions: {preventDefault: false}}
@@ -181,7 +203,7 @@ describe('applyKeybindingOverrides', () => {
     })])
 
     expect(out[0]!.defaultBinding).toEqual({
-      keys: 'cmd+b',
+      keys: '$mod+b',
       eventOptions: {preventDefault: false},
     })
   })

@@ -3,6 +3,7 @@ import {
   canonicalizeChord,
   matchesMouseEvent,
   normalizeChord,
+  normalizeChordSequence,
   pointerBindingDescriptor,
   type MouseChordDescriptor,
   type MouseEventLike,
@@ -145,6 +146,17 @@ describe('pointerBindingDescriptor', () => {
     expect(pointerBindingDescriptor({kind: 'mouse', detail: 2, phase: 'pointerdown'})).toEqual({
       kind: 'mouse', button: 0, detail: 2, mods: [], phase: 'pointerdown',
     })
+  })
+})
+
+describe('normalizeChordSequence', () => {
+  it('normalises each press of a sequence, preserving the key\'s case', () => {
+    // The install form for keybinding overrides (issue #388): modifier
+    // aliases fold to dispatch-live names, display case survives — unlike
+    // canonicalizeChord, which case-folds because it's a comparison key.
+    expect(normalizeChordSequence('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(normalizeChordSequence('ctrl+ArrowDown')).toBe('Control+ArrowDown')
+    expect(normalizeChordSequence('')).toBe('')
   })
 })
 

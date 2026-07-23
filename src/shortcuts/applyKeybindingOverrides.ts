@@ -8,8 +8,18 @@
  *   1. **Direct override.** For each action, the last matching entry in
  *      `overrides` wins (the runtime feeds them in ascending precedence,
  *      so a user-prefs entry at precedence 100 trumps a plugin entry at
- *      precedence 0). A `keys` binding replaces `defaultBinding.keys`;
- *      an `unbound: true` binding clears `defaultBinding` entirely.
+ *      precedence 0). A `keys` binding replaces `defaultBinding.keys`
+ *      — installed NORMALISED (`normalizeChordSequence`), never
+ *      verbatim: the collision-strip index (rule 2) buckets claims
+ *      canonically, so installing the author's raw spelling would let a
+ *      dispatch-dead spelling (`ctrl+x` — tinykeys knows `Control`, not
+ *      `ctrl`) strip a live `Control+x` default while itself never
+ *      firing (issue #388). Normalising folds modifier aliases to the
+ *      names tinykeys dispatches while keeping the key's display case;
+ *      claim and install can't disagree because canonicalizeChord of the
+ *      normalised form equals canonicalizeChord of the raw form. User
+ *      prefs keep the author's spelling — only the effective binding
+ *      changes. An `unbound: true` binding clears `defaultBinding`.
  *
  *   2. **Default loses to override on chord collision.** When some
  *      override claims chord ⌘K for action B, any *other* action A
@@ -35,7 +45,7 @@ import {
   type KeybindingOverride,
   type KeyOverrideBound,
 } from './keybindingOverrides.ts'
-import { canonicalizeChord, toChordArray } from './canonicalizeChord.ts'
+import { canonicalizeChord, normalizeChordSequence, toChordArray } from './canonicalizeChord.ts'
 
 const fromChordArray = (chords: readonly string[]): KeyCombination | readonly KeyCombination[] =>
   chords.length === 1 ? chords[0]! : chords
@@ -130,7 +140,9 @@ const applyToAction = (
       ...action,
       defaultBinding: {
         ...(action.defaultBinding ?? {}),
-        keys: direct.binding.keys as KeyCombination | KeyCombination[],
+        keys: fromChordArray(
+          toChordArray(direct.binding.keys).map(chord => normalizeChordSequence(chord)),
+        ) as KeyCombination | KeyCombination[],
       },
     }
   }

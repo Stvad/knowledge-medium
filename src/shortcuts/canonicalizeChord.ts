@@ -167,6 +167,21 @@ export const normalizeChord = (chord: string): string =>
   formatPress(parsePress(chord))
 
 /**
+ * Sequence-aware `normalizeChord` — normalises each space-separated press.
+ * Unlike `canonicalizeChord` (a COMPARISON key: also case-folds the final
+ * key), the output preserves the key's authored case, so it is the right
+ * form for INSTALLING a binding: modifier aliases fold to the names
+ * tinykeys actually dispatches (`ctrl` → `Control`, `cmd` → `$mod`) while
+ * the display spelling stays intact (`ArrowDown`, not `arrowdown`).
+ * Canonical-bucket agreement holds by construction:
+ * `canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)`
+ * (both sides run the same parse/format; canonicalize just adds the case
+ * fold) — pinned by keybindingOverrides.fuzz.test.ts.
+ */
+export const normalizeChordSequence = (chord: string): string =>
+  splitSequence(chord).map(normalizeChord).join(' ')
+
+/**
  * `KeyboardEvent.code` key tokens that tinykeys can only match through its
  * case-SENSITIVE `event.code` path, because their `event.key` differs from
  * the token: code `Digit1`→key `'1'`, `Period`→`'.'`, `Space`→`' '`,
