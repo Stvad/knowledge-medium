@@ -2830,15 +2830,15 @@ implementation</strong> and keep it open until its content is fully accounted fo
 </p>
 
 <p>
-<strong>Status (2026-07-17, refreshed 07-19 at <code>12609823</code>): slices A and
-B are implemented — PR #386</strong>, extracted
+<strong>Status (2026-07-17, refreshed 07-23: slices A and
+B are implemented and merged to master — PR #386, merge <code>b51975798</code></strong>), extracted
 from the spike against post-unification master, hardened through three adversarial
 review rounds plus two Codex waves, and carrying the deliberate divergences this doc
 now reflects (§7 id-content, §9 traversal polarity, §6's
 as-shipped trigger). <strong>One divergence now runs the other way</strong> (07-22):
-the branch mints bare <code>((fieldId))</code> content and classifies via a
+the merged code mints bare <code>((fieldId))</code> content and classifies via a
 positional interior-ancestry walk — both superseded by the <code>::</code>
-grammar (§7/§9); the branch owes the delta (mint form + the registry-backed
+grammar (§7/§9); master now owes the delta (mint form + the registry-backed
 <code>::</code> input flow (§7 — no import seam exists, per the
 uniform-resolution ruling),
 derive parsing the marked form and stamping <code>is_field_form</code>, the flat
