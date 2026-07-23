@@ -1717,8 +1717,17 @@ resolution, and since "untouched machine-minted seat" is provable
 still equal to the code's <code>aliasSeatSeed(alias)</code> shape — the single
 source of truth the restorable-tombstone predicate already compares against;
 PR #417 review corrected "no user content" here, a seat is minted with
-<code>content = alias</code> plus page/alias properties — + no children, with
-the <code>systemMint</code> <em>pristine sentinel</em> as corroboration:
+<code>content = alias</code> plus page/alias properties — + no children
+<em>beyond backfill-generated machinery</em> (review ×2: post-C every bag
+materializes, §6 — the seat's own seed-written alias/type properties project
+as field/value children, so a literal childless test fails exactly the
+machine seats it exists to catch; the test is "no user-authored children,
+and property children re-project to nothing beyond
+<code>aliasSeatSeed(alias)</code>'s bag", classified via the §7 named
+predicates), with
+the <code>systemMint</code> <em>pristine sentinel</em> as corroboration
+(unaffected by the backfill — materialization writes child rows, never the
+seat row, so <code>updated_at</code> stays 0):
 <code>updated_at = 0</code>, held until a real edit ratchets it off zero —
 <em>not</em> authorship, which review ×2 corrected against
 <code>txEngine.buildNewBlockRow</code>: <code>created_by</code>/<code>updated_by</code>
@@ -2015,7 +2024,15 @@ supabase skill if it's kept.
     meaning-preserving pinned form <code>[α](((A)))</code> — today's
     no-successor behavior — which for a marked row yields
     <code>::[α](((A)))</code>: still a field row, identity-pinned to the
-    released claimant, tombstone-resolvable like any id row. Release
+    released claimant, tombstone-resolvable like any id row. The rewrite
+    carries the same label guard pinned for export (PR #417 review:
+    <code>renderAliasedBlockref</code> strips <code>]</code>/newline, so a
+    lossy α would silently change the displayed name): render, parse back,
+    compare — on a lossy label a <em>marked</em> row falls back to canonical
+    <code>::((A))</code> (its label is recovered from the definition at
+    render time via the name→content mirror), while prose keeps the
+    sanitized-label blockref, the lifecycle's existing documented trade-off.
+    Release
     therefore never unbinds machinery and mints no seat (seats arise only
     from names that never resolved — §7's paste case). <em>Re-binding to a
     new claimant</em> applies to rows still in name form when α changes hands
@@ -2982,11 +2999,19 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         enumerates <em>all</em> of A's marked referrers via the reference
         table before the alias surgery (§9 ordering invariant) and runs the
         re-encode/re-key pass over them in one sweep — id, aliased, and name
-        forms alike. Even a stray pin-to-loser rewrite is now harmless:
-        <code>::[A-name](((A)))</code> is still a field row under the
-        generalized grammar, and the textual retarget's substring match
-        rewrites <code>((A))</code>→<code>((B))</code> inside the aliased
-        form too. Marked rows <em>unresolvable</em> at merge time are listed
+        forms alike. The generalized grammar removes only the
+        <em>ejection</em> risk of a stray pin-to-loser rewrite
+        (<code>::[A-name](((A)))</code> is still a field row) — not the
+        mispin (PR #417 review corrected this revision's "harmless" claim:
+        the legacy plan fires <em>post-commit</em>, after the merge tx — the
+        retarget sweep has already run and can never touch the newly
+        inserted <code>((A))</code>, so the row would stay pinned to
+        tombstoned A and the consuming cell keyed to the loser). The §9
+        lifecycle re-keying is therefore a <strong>hard precondition</strong>
+        of definition merge — equivalently, the merge flow
+        suppresses/drains the legacy pin-to-loser plan before its alias
+        surgery — not belt-and-suspenders. Marked rows
+        <em>unresolvable</em> at merge time are listed
         in the merge report. Until all of that exists,
         definition-vs-definition merges are
         refused, not silently degraded.
