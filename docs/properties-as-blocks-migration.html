@@ -1682,8 +1682,13 @@ A/B implementation (PR #386) went back to bare id-content; <strong>the 2026-07-2
 owner decision keeps id-addressing and adds the <code>::</code> field marker — the
 canonical shape is <code>::((fieldId))</code></strong>: the marker carries
 field-ness <em>in the content itself</em>, the embedded exact ref carries identity,
-and the local <code>reference_target_id</code> still
-derives <em>purely textually</em> (block-ref → id — no name lookup of any kind), now
+and for the id-carrying forms (<code>((id))</code>, <code>[label](((id)))</code>)
+the local <code>reference_target_id</code> still
+derives <em>purely textually</em> (ref → id, no name lookup — PR #417 review:
+this sentence predated the marked wikilink form and must not be read as a
+blanket rule; <code>::[[name]]</code> derives through the generic alias
+lookup + late-binding exactly as the grammar box states, or a resolved name
+row would never receive the target condition 3 requires), now
 alongside a second local <code>is_field_form</code> bit recording that the marked
 grammar matched (§9 — recognition and SQL discovery read the bits, never the text).
 The marker is <em>typed and stored identically</em> (owner ruling — no
@@ -1859,9 +1864,15 @@ affordance, not a classification prerequisite (§11 AC).
     while every workspace reads <code>'cell'</code>). What id-content defers is <em>readable</em> markdown and
     cross-workspace transfer: the designed home is <strong>"copy resolves
     references"</strong> — a generic copy-boundary mechanism (not property-specific)
-    that renders id refs as <code>[[name]]</code> on the way out, paired with
-    auto-claim on the import side so <code>[[name]]</code> resolves back to the
-    definition. Until both exist, a cross-workspace paste of property rows carries
+    that renders id ref <em>spans</em> as name form on the way out, paired with
+    auto-claim on the import side so the name resolves back to the
+    definition. Span-level is the load-bearing qualifier (PR #417 review): the
+    <code>::</code> marker is literal content around the span, so a field row
+    exports as <code>::((fieldId))</code> → <code>::[[name]]</code> with the
+    marker preserved by construction — never bare <code>[[name]]</code>, which
+    under the marked grammar would paste back as ordinary prose, not
+    machinery (a lossy-label name keeps the marked aliased form instead, §11
+    AC's export guard). Until both exist, a cross-workspace paste of property rows carries
     uuid refs that degrade to honest unknown-field rows (§9's existing
     rule). Follow-up, not a blocker (owner call).</li>
   <li><strong>Typing a field by hand — un-deferred: the <code>::</code> input flow
@@ -2055,7 +2066,21 @@ supabase skill if it's kept.
     property-wins pinned order): <em>content rewrites run before alias-index
     surgery</em> — a flow that wants spans pinned or canonicalized rewrites
     first; whatever still carries α afterwards follows the successor-keyed
-    rule.
+    rule. The invariant's scope is <em>flows that own both sides</em> (merge,
+    property-wins, delete/release) — the rename case is necessarily outside
+    it (PR #417 review): the rename rewrite <em>consumes</em> the alias diff,
+    and a synced-in rename arrives with the alias already moved, so no flow
+    exists that could rewrite first. The resulting window — a client or
+    repair pass re-deriving <code>::[[old]]</code> from content after the
+    alias moved but before the rewrite arrives — has specified, benign
+    semantics rather than a fix: the re-derive follows the name uniformly
+    (miss → seat, exactly as prose wikilinks behave in the same window
+    today), the arriving rewrite's content change re-derives the row back to
+    the definition, and a stray window-minted seat is ordinary
+    orphan-alias-seat cleanup. A user edit landing in the window keeps its
+    content (the rewrite's later-edit-wins skip) — the row then reads as an
+    unbound marked row with the create/rebind affordance, the standard
+    honest state, never silent reinterpretation.
     <em>(2)</em> Its parent is non-null (root half:
     a workspace-root row has no owner to be a field <em>of</em> — its marker is just
     content; the SQL twins carry the same <code>parent_id IS NOT NULL</code>
