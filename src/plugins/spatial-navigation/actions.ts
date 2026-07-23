@@ -43,7 +43,15 @@ import {
   resolveCurrentAnchor,
   verticalNeighbor,
 } from './walker.ts'
+import { resolveSpatialNavExclusions } from './exclusionsFacet.ts'
 import { activatePanelRowInTx } from '@/utils/panelLayoutProjection'
+
+/** Resolve the live excluded-surface set once per handler entry, off the
+ *  ui-state block's repo — the non-React access path
+ *  (`Block['repo']['facetRuntime']`) since these handlers run outside
+ *  React and have no `useAppRuntime()`. See `exclusionsFacet.ts`. */
+const excludedSurfacesFor = (uiStateBlock: Block): ReadonlySet<string> =>
+  resolveSpatialNavExclusions(uiStateBlock.repo.facetRuntime)
 
 /**
  * Locate the anchor instance to walk from. Prefers the live DOM
@@ -64,7 +72,7 @@ const currentInstance = (
   const focusedLocation = deps.renderScopeId
     ? {blockId: block.id, renderScopeId: deps.renderScopeId}
     : peekFocusedBlockLocation(uiStateBlock)
-  return resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
+  return resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excludedSurfacesFor(uiStateBlock))
 }
 
 const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] | null => {
@@ -91,7 +99,7 @@ export const extendSelectionToSpatialTarget = async (
   const anchorBlockId = currentState?.anchorBlockId ?? currentLocation?.blockId
   if (!anchorBlockId) return false
 
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfacesFor(uiStateBlock))
   const orderedLocations = locationsOf(instances)
   if (!orderedLocations) return false
   const targetIndex = instances.indexOf(target)
@@ -121,9 +129,10 @@ const extendSelectionVertical = async (
   if (!uiStateBlock) return false
   if (typeof document === 'undefined') return false
 
+  const excludedSurfaces = excludedSurfacesFor(uiStateBlock)
   const focusedLocation = peekFocusedBlockLocation(uiStateBlock)
   if (!focusedLocation) return false
-  const current = resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
+  const current = resolveCurrentAnchor(uiStateBlock.id, focusedLocation, excludedSurfaces)
   if (!current) return true
 
   const currentLocation = locationOf(current)
@@ -142,7 +151,7 @@ const extendSelectionVertical = async (
     return true
   }
 
-  const next = verticalNeighbor(current, direction)
+  const next = verticalNeighbor(current, direction, excludedSurfaces)
   if (!next) return true
   await extendSelectionToSpatialTarget(deps, next)
   return true
@@ -184,6 +193,7 @@ const moveVertical = async (
     : peekFocusedBlockLocation(uiStateBlock)
   const current = currentInstance(deps)
   if (!current) return Boolean(expectedLocation)
+  const excludedSurfaces = excludedSurfacesFor(uiStateBlock)
 
   // Recovery-anchor settle: the focused block instance is gone (e.g. a
   // backlink was just rescheduled away) and `resolveCurrentAnchor`
@@ -205,7 +215,7 @@ const moveVertical = async (
     return true
   }
 
-  const next = verticalNeighbor(current, direction)
+  const next = verticalNeighbor(current, direction, excludedSurfaces)
   if (!next) return true // boundary — handled, no move
   const destPanel = next.closest<HTMLElement>('[data-panel-id]')
   if (!destPanel) return true
@@ -244,14 +254,17 @@ const moveHorizontal = async (
   // top-level (the panel's `topLevelBlockIdProp` aligned to its
   // outline root).
   const destLocation = peekFocusedBlockLocation(destPanelBlock)
-    ?? findFirstInstanceLocation(destPanel)
+    ?? findFirstInstanceLocation(destPanel, excludedSurfacesFor(uiStateBlock))
   if (!destLocation) return false
   await crossPanelFocus(uiStateBlock, destPanelId, destLocation)
   return true
 }
 
-const findFirstInstanceLocation = (panel: HTMLElement): FocusedBlockLocation | undefined => {
-  for (const instance of panelInstances(panel)) {
+const findFirstInstanceLocation = (
+  panel: HTMLElement,
+  excludedSurfaces: ReadonlySet<string>,
+): FocusedBlockLocation | undefined => {
+  for (const instance of panelInstances(panel, excludedSurfaces)) {
     const location = locationOf(instance)
     if (location) return location
   }
@@ -307,7 +320,7 @@ const jumpToPanelEdge = async (
   if (typeof document === 'undefined') return false
   const panel = panelById(uiStateBlock.id)
   if (!panel) return false
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfacesFor(uiStateBlock))
   if (instances.length === 0) return false
   const target = edge === 'first' ? instances[0] : instances[instances.length - 1]
   const location = locationOf(target)

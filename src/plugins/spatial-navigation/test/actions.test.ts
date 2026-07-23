@@ -22,6 +22,13 @@ import {
 import { extendSelectionDown } from '@/shortcuts/blockActions.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
 import { getSpatialNavigationDispatchDecorators } from '@/plugins/spatial-navigation/actions.js'
+import {
+  resolveSpatialNavExclusions,
+  spatialNavExclusionsFacet,
+} from '@/plugins/spatial-navigation/exclusionsFacet.js'
+import { DEFAULT_NON_NAVIGABLE_SURFACES } from '@/plugins/spatial-navigation/walker.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -82,14 +89,17 @@ const seedPanelAndBlocks = async (repo: Repo): Promise<void> => {
   }, {scope: ChangeScope.UiState})
 }
 
-const buildPanelDom = (instances: Array<{blockId: string; renderScopeId: string}>): void => {
+const buildPanelDom = (
+  instances: Array<{blockId: string; renderScopeId: string; surface?: string}>,
+): void => {
   const panel = document.createElement('div')
   panel.dataset.panelId = 'panel'
-  for (const {blockId, renderScopeId} of instances) {
+  for (const {blockId, renderScopeId, surface} of instances) {
     const el = document.createElement('div')
     el.dataset.blockNavItem = 'true'
     el.dataset.blockId = blockId
     el.dataset.renderScopeId = renderScopeId
+    if (surface) el.dataset.blockSurface = surface
     panel.appendChild(el)
   }
   document.body.appendChild(panel)
@@ -459,5 +469,72 @@ describe('spatial navigation vertical actions', () => {
       blockId: 'X',
       renderScopeId: 'panel:missing:X',
     })
+  })
+})
+
+// Integration coverage for the contributable exclusion seam
+// (`exclusionsFacet.ts`): `exclusionsFacet.test.ts` proves the walker itself
+// respects a contributed surface; these two tests prove it through the real
+// consumer path instead — an actual repo/runtime carrying a plugin
+// contribution, driven through the real `moveVertical` dispatch decorator —
+// plus the inverse guard pinning the partial-runtime fallback.
+describe('spatial navigation exclusion facet — real consumer path', () => {
+  it('skips a plugin-contributed surface via moveVertical, the same way it skips breadcrumb', async () => {
+    // Swap in a runtime carrying a plugin's own contribution alongside
+    // core's — the same shape `createTestRepo({extensions})` builds — on the
+    // already-seeded `env.repo` rather than a second `createTestRepo()` call:
+    // a second Repo instance over the same shared db mints colliding tx
+    // sequence numbers (`createTestRepo`'s own doc comment CAVEAT).
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      spatialNavExclusionsFacet.of('breadcrumb', {source: 'spatial-navigation'}),
+      spatialNavExclusionsFacet.of('kanban-cell', {source: 'test-kanban-plugin'}),
+    ]))
+
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'cell', renderScopeId: 'panel:cell', surface: 'kanban-cell'},
+      {blockId: 'B', renderScopeId: 'panel:B'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    // Lands on B, skipping the kanban-cell-surfaced instance in between —
+    // the plugin-contributed exclusion working through the real dispatch
+    // path (moveVertical -> excludedSurfacesFor -> resolveSpatialNavExclusions),
+    // not just a direct walker call. The same-panel step writes via a
+    // fire-and-forget `void focusBlock(...)` (actions.ts), so poll rather
+    // than assert immediately after `action.handler` resolves.
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'B',
+        renderScopeId: 'panel:B',
+      })
+    })
+  })
+
+  it('resolves to the breadcrumb default on a bare kernel-only repo (no spatial-navigation contributions)', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: USER})
+    expect(repo.facetRuntime).not.toBeNull()
+    // Pins the fix for the MEDIUM finding: `Repo` installs a kernel-only
+    // facet runtime by default (`installKernelRuntime` in repo.ts), which is
+    // exactly what a bare `createTestRepo()` harness gets — non-null, but
+    // without the spatial-navigation plugin's 'breadcrumb' contribution. That
+    // must resolve to the pre-facet default, not silently "exclude nothing".
+    expect(resolveSpatialNavExclusions(repo.facetRuntime)).toEqual(DEFAULT_NON_NAVIGABLE_SURFACES)
   })
 })

@@ -22,6 +22,13 @@ import {
  *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
  *   Block visibility target: `data-block-visibility-target="true"`
  *
+ * Excluded surfaces: which `data-block-surface` values the walker skips
+ * (core excludes `breadcrumb` only — see `DEFAULT_NON_NAVIGABLE_SURFACES`
+ * and `exclusionsFacet.ts`). The walker itself stays facet-agnostic (pure
+ * DOM + a plain `ReadonlySet<string>` parameter, matching `root: ParentNode
+ * = document` below) — callers resolve the live set once per entry and
+ * thread it down, rather than the walker reaching into module/global state.
+ *
  * Direction model:
  *
  *   `up`/`down`: walk block instances within the current panel in
@@ -49,7 +56,14 @@ const PANEL_SELECTOR = '[data-panel-id]'
 const COLUMN_SELECTOR = '[data-layout-column-id]'
 const VISIBILITY_TARGET_SELECTOR = '[data-block-visibility-target="true"]'
 
-const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
+/** Default exclusion set used whenever a caller doesn't thread a resolved
+ *  one through (e.g. a direct unit-test call, or the early-boot path with
+ *  no facet runtime yet) — preserves the pre-facet behavior exactly.
+ *  `exclusionsFacet.ts`'s core contribution seeds the live facet with the
+ *  same single value, so normal app usage (which always resolves and
+ *  threads a facet-backed set) sees identical output with zero extra
+ *  contributions. */
+export const DEFAULT_NON_NAVIGABLE_SURFACES: ReadonlySet<string> = new Set(['breadcrumb'])
 
 /**
  * Session-only per-panel hint about the focused block's neighborhood.
@@ -109,20 +123,23 @@ export const locationOf = (el: HTMLElement): FocusedBlockLocation | null => {
   return blockId && renderScopeId ? {blockId, renderScopeId} : null
 }
 
-const isNavigable = (el: HTMLElement): boolean => {
+const isNavigable = (el: HTMLElement, excludedSurfaces: ReadonlySet<string>): boolean => {
   const surface = surfaceOf(el)
-  if (surface && NON_NAVIGABLE_SURFACES.has(surface)) return false
+  if (surface && excludedSurfaces.has(surface)) return false
   return true
 }
 
-export const panelInstances = (panel: HTMLElement): HTMLElement[] => {
+export const panelInstances = (
+  panel: HTMLElement,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement[] => {
   const all = Array.from(panel.querySelectorAll<HTMLElement>(NAV_ITEM_SELECTOR))
   // Filter to instances actually inside this panel (not inside a nested
   // panel that might appear in the DOM tree — defensive; layout doesn't
   // currently nest panels, but the selector match alone wouldn't catch
   // it).
   return all.filter(el => {
-    if (!isNavigable(el)) return false
+    if (!isNavigable(el, excludedSurfaces)) return false
     if (!locationOf(el)) return false
     const ownPanel = el.closest<HTMLElement>(PANEL_SELECTOR)
     return ownPanel === panel
@@ -237,10 +254,11 @@ const findSameDepthSibling = (
 export const rememberInstancePosition = (
   panelId: string,
   instanceEl: HTMLElement,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): void => {
   const panel = panelById(panelId)
   if (!panel) return
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfaces)
   const idx = instances.indexOf(instanceEl)
   if (idx < 0) return
   const location = locationOf(instanceEl)
@@ -296,10 +314,11 @@ export const rememberInstancePosition = (
 export const findRecoveryAnchor = (
   panelId: string,
   forLocation: FocusedBlockLocation,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   const panel = panelById(panelId)
   if (!panel) return null
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfaces)
   if (instances.length === 0) return null
 
   const hint = lastPositionByPanel.get(panelId)
@@ -346,15 +365,16 @@ export const findRecoveryAnchor = (
 export const resolveCurrentAnchor = (
   panelId: string,
   focusedLocation: FocusedBlockLocation | undefined,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   if (!focusedLocation) return null
   const panel = panelById(panelId)
   if (!panel) return null
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfaces)
   if (instances.length === 0) return null
   const live = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, focusedLocation))
   if (live) return live
-  return findRecoveryAnchor(panelId, focusedLocation)
+  return findRecoveryAnchor(panelId, focusedLocation, excludedSurfaces)
 }
 
 /**
@@ -381,10 +401,11 @@ export const locateInstance = (
     focusedLocation?: FocusedBlockLocation
   },
   root: ParentNode = document,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   const panel = panelById(panelId, root)
   if (!panel) return null
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfaces)
   if (instances.length === 0) return null
 
   if (hints.focusedLocation) {
@@ -400,11 +421,17 @@ export const locateInstance = (
   return instances[0] ?? null
 }
 
-export const firstInstanceIn = (panel: HTMLElement): HTMLElement | null =>
-  panelInstances(panel)[0] ?? null
+export const firstInstanceIn = (
+  panel: HTMLElement,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null =>
+  panelInstances(panel, excludedSurfaces)[0] ?? null
 
-export const lastInstanceIn = (panel: HTMLElement): HTMLElement | null => {
-  const all = panelInstances(panel)
+export const lastInstanceIn = (
+  panel: HTMLElement,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null => {
+  const all = panelInstances(panel, excludedSurfaces)
   return all.length > 0 ? all[all.length - 1] : null
 }
 
@@ -421,10 +448,11 @@ export const lastInstanceIn = (panel: HTMLElement): HTMLElement | null => {
 export const verticalNeighbor = (
   current: HTMLElement,
   direction: 'up' | 'down',
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   const panel = panelOf(current)
   if (!panel) return null
-  const instances = panelInstances(panel)
+  const instances = panelInstances(panel, excludedSurfaces)
   const idx = instances.indexOf(current)
   if (idx === -1) return null
 
@@ -437,7 +465,9 @@ export const verticalNeighbor = (
   // Exhausted in-panel — try stack-sibling.
   const sibling = stackSiblingPanel(panel, direction)
   if (!sibling) return null
-  return direction === 'down' ? firstInstanceIn(sibling) : lastInstanceIn(sibling)
+  return direction === 'down'
+    ? firstInstanceIn(sibling, excludedSurfaces)
+    : lastInstanceIn(sibling, excludedSurfaces)
 }
 
 /**
