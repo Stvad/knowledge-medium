@@ -1,0 +1,6 @@
+import{selectionStateProp as e}from"../data/properties.js";var t=(e,t)=>{let n=t>0?`  `.repeat(t):``;return`${n}- ${e.split(`
+`).join(`
+`+n+`  `)}`},n=async e=>{let n=await e.repo.query.subtree({id:e.id,hidePropertyChildren:!0}).load();if(n.length===0)throw Error(`No block data could be serialized for block with id ${e.id}`);return n.length===1?{markdown:n[0].content,blocks:n}:{markdown:n.map(e=>t(e.content,e.depth)).join(`
+`),blocks:n}},r=e=>new ClipboardItem({"text/plain":new Blob([e.markdown],{type:`text/plain`})}),i=async e=>navigator.clipboard.write([r(e)]),a=async e=>i(await n(e)),o=t=>t.peekProperty(e),s=async(e,t)=>{let r=(await Promise.all(e.map(e=>t.block(e)).map(async e=>{try{return await n(e)}catch(t){return console.error(`Failed to serialize block ${e.id}:`,t),null}}))).filter(e=>e!==null);if(r.length===0)throw Error(`No block data could be serialized for copying`);return{markdown:r.map(e=>e.markdown).join(`
+`),blocks:r.flatMap(e=>e.blocks)}},c=async(e,t)=>{if(!e||!t)return;let n=o(e);if(!n?.selectedBlockIds?.length){console.log(`No blocks selected to copy`);return}await i(await s(n.selectedBlockIds,t))};export{a as copyBlockToClipboard,c as copySelectedBlocksToClipboard,n as serializeBlock,s as serializeSelectedBlocks};
+//# sourceMappingURL=copy.js.map

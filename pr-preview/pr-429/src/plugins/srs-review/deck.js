@@ -1,0 +1,2 @@
+import{getOrCreateKernelPage as e,kernelPageBlockId as t}from"../../data/kernelPage.js";import{SRS_REVIEW_DECK_TYPE as n}from"./schema.js";var r=`c3f1a9d4-2b8e-4f57-bc6a-1e9d8a4f2c70`,i=`SRS Review`,a=e=>t(e,r),o=(t,a)=>e(t,a,{namespace:r,alias:i,markerType:n});export{o as getOrCreateReviewDeck,a as reviewDeckBlockId};
+//# sourceMappingURL=deck.js.map

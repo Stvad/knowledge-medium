@@ -1,0 +1,2 @@
+import{dedupById as e,defineFacet as t}from"../../facets/facet.js";import{isActionRefContribution as n}from"../../shortcuts/actionRefItems.js";var r=`exit_edit_mode_cm`,i=t({id:`mobile-keyboard-toolbar.items`,combine:e(`mobile-keyboard-toolbar.items`),validate:n});export{r as EXIT_EDIT_ACTION_ID,i as mobileKeyboardToolbarItemsFacet};
+//# sourceMappingURL=facet.js.map

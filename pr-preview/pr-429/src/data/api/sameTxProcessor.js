@@ -1,0 +1,2 @@
+var e=class extends Error{constructor(e,t,n){super(e),this.code=t,this.meta=n,this.name=`ProcessorRejection`}},t=e=>e;export{e as ProcessorRejection,t as defineSameTxProcessor};
+//# sourceMappingURL=sameTxProcessor.js.map

@@ -1,0 +1,2 @@
+import{RESCHEDULE_BLOCK_DATE_ACTION_ID as e}from"../daily-notes/rescheduleAction.js";import{srsBlockDateAdapter as t}from"./srsBlockDateAdapter.js";var n={actionId:e,apply:e=>({...e,isVisible:n=>{let r=n.block;return r&&t.canHandle(r)?!0:e.isVisible?.(n)??!0}})};export{n as srsRescheduleDecorator};
+//# sourceMappingURL=rescheduleDecorator.js.map

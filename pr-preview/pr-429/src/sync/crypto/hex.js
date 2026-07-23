@@ -1,0 +1,2 @@
+var e=`0123456789abcdef`,t=t=>{let n=``;for(let r of t)n+=e[r>>4]+e[r&15];return n},n=e=>{if(e.length%2!=0)throw Error(`hexToBytes: odd-length hex string (${e.length} chars)`);let t=new Uint8Array(e.length/2);for(let n=0;n<t.length;n++){let r=Number.parseInt(e.slice(n*2,n*2+2),16);if(!/^[0-9a-fA-F]{2}$/.test(e.slice(n*2,n*2+2)))throw Error(`hexToBytes: non-hex characters at offset ${n*2}`);t[n]=r}return t};export{t as bytesToHex,n as hexToBytes};
+//# sourceMappingURL=hex.js.map
