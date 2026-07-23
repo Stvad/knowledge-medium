@@ -1766,7 +1766,14 @@ empty so it has no children to cascade") — post-C a seat carries
 backfill-generated machinery children, so the 4s orphan cleanup graduates to
 the canonical subtree delete (<code>deleteSubtreeInTx</code> /
 <code>repo.mutate.delete</code>, the escape hatch the comment already names)
-or it strands live machinery rows under a tombstoned parent. Beyond that there is <strong>no seam at all</strong>
+or it strands live machinery rows under a tombstoned parent — and the
+cascade is <em>gated on the seat-shape predicate</em>, not just
+no-live-references (review ×2: a user can open a freshly minted seat, add
+content or children, then remove the original <code>[[name]]</code> before
+the delayed job runs — reference-free, yet user-authored; the cleanup
+deletes only rows still matching <code>aliasSeatSeed(alias)</code> with no
+user-authored children — generated property children ignored — and skips
+anything else as the ordinary page it has become). Beyond that there is <strong>no seam at all</strong>
 (owner decision, 07-22 second round, superseding this revision's earlier
 import-canonicalization step): a pasted or hand-written
 <code>::[[name]]</code> is <em>not rewritten</em> — the embedded ref resolves
@@ -1923,7 +1930,13 @@ affordance, not a classification prerequisite (§11 AC).
     <em>system</em> write, exactly the silent path the grammar forbids;
     rejecting at the two name flows keeps the mirror unconditional, and
     existing offenders surface in the mirror backfill's report rather than
-    silently classifying). An invalid name still
+    silently classifying — and the <em>seed</em> path carries the same check
+    (review ×2: seeds bypass both flows —
+    <code>isPropertySeedDeclaration</code> requires only a non-empty name and
+    <code>definitionSeeds</code> writes <code>content = seed.name</code> — so
+    seed validation rejects grammar-shaped names too, the same loud-drop
+    treatment as duplicate seed names, covering kernel/plugin declarations
+    and the dynamic-extension harvest alike)). An invalid name still
     can no longer corrupt field-row identity, so the same-tx definition-name
     validator an earlier revision required (PR-review P2, rounds 22) is deleted;
     hygiene at the two flows plus a preflight report over existing names suffices.
@@ -2941,9 +2954,13 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         defeats auto-merging outright — PR #285's merges had to be repaired by hand
         around it).
       </p>
-      <p class="deliv">No behavior change for existing data — both local columns
-        stay NULL/unset
-        except on exact-reference and marked rows. Behavior is reversible by dropping the
+      <p class="deliv">No behavior change for existing data — the form bit
+        stays NULL/unset except on marked rows, and the target column stamps
+        exactly the §5/§7 uniform scope: whole-block exact refs, aliased
+        blockrefs, and <em>unmarked whole-block wikilinks</em> too (PR #417
+        review — an earlier phrasing here omitted the wikilink half, which
+        the alias late-binding and the ref-value form-check story both
+        assume). Behavior is reversible by dropping the
         processor; the local ALTER is one-way in practice (SQLite column drops are
         table rebuilds) — acceptable for an additive nullable local column, but say
         it out loud.</p>
@@ -3081,6 +3098,15 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         spans are enumerable without parsing content; once bound, a name
         row's <em>columns</em> are identical to an id row's, which is why
         column reads can't distinguish them and the rewrite keys on the edge),
+        behind a <em>references-parse fence</em> shared with the merge sweep
+        (PR #417 review: those edges are written by the post-commit
+        <code>references.parseReferences</code> pass, not the same-tx derive
+        — a <code>::[[status]]</code> row typed just before the definition's
+        delete/merge may not be in the table yet, and the enumeration would
+        silently miss it; both flows are prompted one-shots, so they drain
+        pending reference parsing for the workspace before enumerating —
+        cheap, and the same-tx <code>is_field_form</code> bit doubles as the
+        audit check that the drained table covers every marked row),
         and it runs in the delete flow <em>before</em> the claim drops — the
         §9 ordering invariant instantiated (superseding the 07-22 "release
         direction of the late-binding re-derive" mechanism and its
@@ -3116,7 +3142,14 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         enumerates <em>all</em> of A's marked referrers via the reference
         table before the alias surgery (§9 ordering invariant) and runs the
         re-encode/re-key pass over them in one sweep — id, aliased, and name
-        forms alike. The generalized grammar removes only the
+        forms alike — and for the no-rewrite name forms the sweep
+        <em>explicitly restamps</em> their derived columns and swaps their
+        raw ref edges A→B in the same tx (PR #417 review: the derive is
+        content-triggered and a handoff makes no content edit, and the
+        additive late-binding only fills NULL targets — without the explicit
+        restamp a bound <code>::[[α]]</code> row would stay classified and
+        reprojected under merged-away A until some unrelated edit touched it;
+        this is the bound-row reclaim mechanism, the same one AC rebuilds). The generalized grammar removes only the
         <em>ejection</em> risk of a stray pin-to-loser rewrite
         (<code>::[A-name](((A)))</code> is still a field row) — not the
         mispin (PR #417 review corrected this revision's "harmless" claim:
@@ -3337,11 +3370,19 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         deliberately claim <em>no</em> alias today, so the bulk claim here must
         cover <em>seeded and user</em> property definitions explicitly rather
         than assuming seeds "already work like types" — and the seeded half
-        writes through the seed-owned lifecycle path (the Automation-scoped
-        seed upgrade), not the ordinary user path: the seed-write guard
+        writes through the seed-owned lifecycle path (Automation-scoped),
+        not the ordinary user path: the seed-write guard
         rejects normal BlockDefault bag edits of valid seed definitions, so a
         uniform user-path bulk claim would silently fail exactly the seeded
-        half (PR #417 review). Under the <code>::</code>
+        half (PR #417 review). That path must be a real <em>repair/update
+        pass over existing live seed rows</em>, not just revised-seed
+        creation (review ×2: <code>materializeSeeds</code> skips live rows —
+        it inserts missing ones and only warns when a stored revision trails
+        — so in an already-materialized workspace neither the materializer
+        nor the guarded user path would ever write the alias/PAGE_TYPE claim,
+        and <code>::[[name]]</code> imports would stay unbound for every
+        kernel/plugin property; AC ships the Automation-scoped upgrade that
+        stamps existing seed rows). Under the <code>::</code>
         grammar (07-22) this step's stakes shrink: <strong>recognition never
         consults names</strong> — hand-authoring runs on the registry-backed
         <code>::</code> input flow with no auto-claim dependency (§7), an
@@ -3635,8 +3676,14 @@ no infrastructure needed:
   <li><strong>Read-side floor (zero setup, live client):</strong>
     <code>pnpm agent sql all</code> timing the aggregate join — field rows
     (the §7 named predicate: <code>is_field_form = 1</code> <em>and</em>
-    <code>reference_target_id</code> restricted to <em>registered schema
-    fieldIds</em>; plain <code>IS NOT NULL</code> catches ordinary
+    <code>reference_target_id</code> restricted to the
+    <em>tombstone-tolerant</em> fieldId set — registered schemas <em>plus</em>
+    tombstoned definition rows, the same set recognition's condition-3
+    tombstone leg reads (PR #417 review: the live registry drops deleted
+    definitions, so a registered-only restriction silently excludes the
+    still-machinery rows of a deleted-but-undrained property and could
+    green-light the cell-off while B2's deletion leg still relies on them
+    being projected); plain <code>IS NOT NULL</code> catches ordinary
     exact-reference rows, and the fieldId restriction alone still counts
     <em>unmarked</em> ref rows pointing at definition blocks — either way
     over-counting the join and
