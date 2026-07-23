@@ -134,6 +134,7 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
         'id', ${e}.id,
         'workspaceId', ${e}.workspace_id,
         'parentId', ${e}.parent_id,
+        'referenceTargetId', ${e}.reference_target_id,
         'orderKey', ${e}.order_key,
         'content', ${e}.content,
         'properties', json(${e}.properties_json),
