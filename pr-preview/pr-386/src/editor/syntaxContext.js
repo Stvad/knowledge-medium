@@ -1,2 +1,0 @@
-import{syntaxTree as e}from"../../node_modules/.pnpm/@codemirror_language@6.12.3/node_modules/@codemirror/language/dist/index.js";var t=new Set([`FencedCode`,`CodeBlock`,`InlineCode`,`CodeText`,`URL`,`HTMLBlock`,`HTMLTag`,`Comment`,`CommentBlock`,`Entity`]),n=(n,r)=>{for(let i=e(n).resolveInner(r,-1);i;i=i.parent)if(t.has(i.name))return!0;return!1};export{n as isInsideLiteralMarkdown};
-//# sourceMappingURL=syntaxContext.js.map

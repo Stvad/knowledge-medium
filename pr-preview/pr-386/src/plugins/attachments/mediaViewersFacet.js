@@ -1,2 +1,0 @@
-import{dedupById as e,defineFacet as t}from"../../facets/facet.js";var n=e=>{if(typeof e!=`object`||!e)return!1;let t=e;return typeof t.id==`string`&&typeof t.match==`function`&&typeof t.Component==`function`&&typeof t.eager==`boolean`},r=`attachments.media-viewers`,i=t({id:r,combine:e(r),validate:n});export{r as MEDIA_VIEWERS_FACET_ID,n as isMediaViewerContribution,i as mediaViewersFacet};
-//# sourceMappingURL=mediaViewersFacet.js.map
