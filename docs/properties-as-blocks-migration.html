@@ -2878,6 +2878,70 @@ keep-dangling, §9, and its movement item was withdrawn in favor of the §9/§10
 movement design) — and <strong>#402</strong>, same-tx derivation liveness.
 </p>
 
+<h3 id="lifecycle-work-items">Lifecycle work items — consolidated from the PR #417 review rounds</h3>
+
+<p>
+The review rounds after the 07-23 grammar fold produced no semantic changes
+but a stack of <em>implementation contracts</em>, pinned until now only in
+inline parentheticals across §7/§9/B2/AC. Consolidated here by mechanism so
+the implementer doesn't mine prose (each item cites the section holding its
+rationale). The first group is deliberately <em>not</em> a list of bespoke
+fixes: those items are <strong>acceptance cases for issue #402</strong>'s
+structural fix — the write-generation second kernel pass plus the
+alias-list-change kernel hook — which this doc treats as their home; building
+them as one-off flow patches would reproduce the per-caller forget-me failure
+#402 exists to end.
+</p>
+
+<ol>
+  <li><strong>Derivation liveness — #402 acceptance cases.</strong>
+    <em>(a)</em> Definition-merge owner-cell re-projection (B2; already
+    #402's third GAP row — the same defect described from both directions):
+    the write-generation pass re-projects owner cells the retarget touched.
+    <em>(b)</em> Handoff restamp (§9, B2 merge): the alias-list hook
+    schedules the name-span rederive on any claim change — no per-flow
+    restamp calls — with one extension #402 doesn't yet name: the rederive
+    needs a <em>bound-row</em> re-resolution mode (today it is strictly
+    additive, NULL→target; re-pointing bound rows is the reclaim AC
+    rebuilds). <em>(c)</em> Rewrite-side orphan-cleanup re-enqueue (§9
+    rename window): a reference-dropping rewrite schedules the orphan check
+    for targets whose last reference it removed — the same
+    derived-transition→schedule shape, gated on the seat predicate
+    (item 4).</li>
+  <li><strong>Alias-lifecycle re-keying (standalone).</strong>
+    <code>replacementFor</code> consults α's post-tx claimant (handoff → no
+    rewrite; release → pin) — a hard precondition of definition merge (§9,
+    B2); the delete flow triggers the release rewrite explicitly (a bare
+    tombstone leaves no properties diff — §9); the label round-trip guard
+    (render → parse back → compare) applies at <em>every</em> span-rendering
+    site — export (AC), release (§9), rename fallback (§9), property-wins
+    prose pins (AC) — marked rows falling back to canonical id form, prose
+    to sanitized-label + report.</li>
+  <li><strong>Recognition &amp; predicates (standalone).</strong> The
+    tombstone-resolved leg of condition 3 — a fieldId-keyed read consulting
+    tombstoned definition rows (today <code>propertyDefinitionMetadata</code>
+    drops them) — plus the same tolerance in the schema-returning lookup
+    (§9); the two named selection predicates as defined-once fragments every
+    site composes (§7); the ref-codec decode's id-carrying form check, never
+    column nullness (§9); sync-off/readiness scans on the tombstone-tolerant
+    fieldId set (§11 cell end-state).</li>
+  <li><strong>Seats &amp; cleanup (standalone).</strong>
+    <code>cleanupOrphanAliasesProcessor</code> graduates to the canonical
+    subtree delete, gated on the seat-shape predicate — still matches
+    <code>aliasSeatSeed(alias)</code>, no user-authored children, generated
+    property children ignored (§7); the same predicate is AC's
+    merge-recommended test, the pristine sentinel sufficient-never-necessary
+    (§7); delete/merge referrer enumeration runs behind the
+    references-parse fence, the same-tx bit as its audit (B2).</li>
+  <li><strong>Hygiene &amp; seeds (standalone).</strong> Grammar-shaped
+    names rejected at <code>addSchema</code>/rename <em>and</em> at seed
+    validation/harvest (§7); AC's seeded half is an Automation-scoped repair
+    pass over existing live seed rows — <code>materializeSeeds</code> skips
+    them (AC); and a one-line comment fix someday: the
+    <code>targets.ts</code> docblock's stale "system:&lt;userId&gt; author"
+    claim (§7).</li>
+</ol>
+
 <div class="phases">
 
   <div class="phase">
@@ -3149,7 +3213,10 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         additive late-binding only fills NULL targets — without the explicit
         restamp a bound <code>::[[α]]</code> row would stay classified and
         reprojected under merged-away A until some unrelated edit touched it;
-        this is the bound-row reclaim mechanism, the same one AC rebuilds). The generalized grammar removes only the
+        this is the bound-row reclaim mechanism, the same one AC rebuilds —
+        and the structural home for the restamp scheduling and the
+        owner-cell re-projection alike is <strong>#402</strong>, §11 work
+        items). The generalized grammar removes only the
         <em>ejection</em> risk of a stray pin-to-loser rewrite
         (<code>::[A-name](((A)))</code> is still a field row) — not the
         mispin (PR #417 review corrected this revision's "harmless" claim:
