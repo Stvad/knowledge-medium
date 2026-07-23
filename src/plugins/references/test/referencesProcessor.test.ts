@@ -1540,6 +1540,34 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect((await env.read('user-made-page'))!.deleted).toBe(0)
   })
 
+  it('keeps a seat with ANY live child in an un-flipped workspace (generated-row tolerance is flip-gated)', async () => {
+    // In an un-flipped workspace nothing generates property children, so
+    // a child under a seat is user-authored by construction — even one
+    // whose content block-refs the alias field DEFINITION id (the
+    // impostor shape). reapSeatsInTx wouldn't sweep it (flip-gated), so
+    // collecting the seat would strand the child live under a tombstone
+    // (Codex review on PR #428).
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[kid]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('kid')
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'user-child', workspaceId: WS, parentId: seatId, orderKey: 'a0',
+        content: 'a note the user wrote under the page',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('user-child'))!.deleted).toBe(0)
+  })
+
   it('reaps a seat in a child-backed workspace, sweeping its generated field rows', async () => {
     // In a flipped workspace every seat has GENERATED property children
     // (alias / types field rows) from the moment it is minted — the

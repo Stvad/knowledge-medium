@@ -14,9 +14,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty, defineSameTxProcessor } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { projectedPropertyDefinitionsFacet, sameTxProcessorsFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { aliasesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 
@@ -135,6 +137,51 @@ describe('defineSameTxProcessor validation', () => {
       rerunOnDirtyRows: true,
       apply: async () => {},
     })).toThrow(/field-watch only/)
+  })
+})
+
+describe('net-zero watched-field revert (Codex review on PR #428)', () => {
+  // A later processor can rewrite a watched field BACK to its tx-start
+  // value after a derivation ran on the intermediate value: the net tx
+  // diff is empty, but the derived state describes the intermediate
+  // value. The re-run pass must dispatch on dirtiness (any post-watermark
+  // write), never on the net field diff.
+  it('re-derives from the final content when a plugin reverts it after DERIVE ran', async () => {
+    const X = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const reverter = defineSameTxProcessor({
+      name: 'test.revertContent',
+      watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+      apply: async (event, ctx) => {
+        for (const row of event.changedRows) {
+          const target = row.after?.properties['revert-to']
+          if (typeof target !== 'string') continue
+          if (row.after!.content !== target) {
+            await ctx.tx.update(row.id, {content: target})
+          }
+        }
+      },
+    })
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      sameTxProcessorsFacet.of(reverter, {source: 'test'}),
+    ]))
+    await repo.tx(async tx => {
+      await tx.create({id: 'r', workspaceId: WS, parentId: null, orderKey: 'a0', content: `((${X}))`})
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await rowOf('r')).reference_target_id).toBe(X)
+
+    // One tx: content moves to prose (pass-one DERIVE clears the stamp),
+    // then the plugin reverts it — net content diff is zero.
+    await repo.tx(async tx => {
+      await tx.update('r', {content: 'plain prose'})
+      await tx.update('r', {properties: {'revert-to': `((${X}))`}})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await rowOf('r')
+    expect(row.content).toBe(`((${X}))`)
+    // The stamp reflects the FINAL content, not the intermediate prose.
+    expect(row.reference_target_id).toBe(X)
   })
 })
 

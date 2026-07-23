@@ -102,17 +102,11 @@ export interface PowerSyncDb {
 const collectSameTxFieldMatches = (
   processor: AnySameTxProcessor,
   snapshots: SnapshotsMap,
-  /** Derivation re-run pass (issue #402): restrict the collect to rows
-   *  written after the processor's first run. `before` stays the tx-start
-   *  state — same shape as pass one, so idempotent processors see an
-   *  already-handled change again and no-op on it. */
-  onlyIds?: ReadonlySet<string>,
 ): ChangedRow[] => {
   if (processor.watches.kind !== 'field') return []
   if (processor.watches.table !== 'blocks') return []
   const out: ChangedRow[] = []
   for (const [id, entry] of snapshots) {
-    if (onlyIds !== undefined && !onlyIds.has(id)) continue
     if (processor.watches.fields.some(f => sameTxFieldChanged(entry.before, entry.after, f as string))) {
       out.push({id, before: entry.before, after: entry.after})
     }
@@ -456,17 +450,24 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       // `settledWrites` processors (the rename re-key) never mark rows
       // dirty, which is what keeps the stale-registry MATERIALIZE
       // misread out of this pass entirely.
+      // Dispatch on DIRTINESS, not on the net tx field diff: a later
+      // writer can revert a watched field to its tx-start value after a
+      // derivation ran on the intermediate value (net diff empty, derived
+      // state stale — Codex review on PR #428), so any post-watermark
+      // write makes the row eligible. `before` stays the tx-start state —
+      // same event shape as pass one — and rows whose watched fields are
+      // truly untouched no-op inside the idempotent processors.
       for (const processor of sameTxProcessors.values()) {
         if (processor.rerunOnDirtyRows !== true) continue
+        if (processor.watches.kind !== 'field' || processor.watches.table !== 'blocks') continue
         const watermark = watermarks.get(processor.name) ?? 0
         const collectStartedAt = performance.now()
-        const dirtyIds = new Set<string>()
+        const changedRows: ChangedRow[] = []
         for (const [id, gen] of rowWriteGens) {
-          if (gen > watermark) dirtyIds.add(id)
+          if (gen <= watermark) continue
+          const entry = snapshots.get(id)
+          if (entry) changedRows.push({id, before: entry.before, after: entry.after})
         }
-        const changedRows = dirtyIds.size === 0
-          ? []
-          : collectSameTxFieldMatches(processor, snapshots, dirtyIds)
         const collectMs = performance.now() - collectStartedAt
         if (changedRows.length === 0) continue
         await applyProcessor(processor, changedRows, [], collectMs)
