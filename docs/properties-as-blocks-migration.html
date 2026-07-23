@@ -476,7 +476,8 @@
   a sync-config invariant (C).<br>
   <strong>Revised 2026-07-21, follow-up PR (PR-review round 29, arrived at
   merge):</strong> classification runs through the <em>shadow-tolerant
-  checker</em> — resolved OR shadowed classifies — not bare
+  checker</em> — resolved OR shadowed classifies (widened 07-23:
+  + tombstone-resolved, the B2 deletion leg — §9) — not bare
   <code>resolveField</code>, whose winner-enforcing semantics would unclassify
   every shadowed loser's rows (§9; the as-built
   <code>isFieldDefinitionCheckerFor</code>, on the PR #386 branch, already
@@ -1826,11 +1827,23 @@ affordance, not a classification prerequisite (§11 AC).
     minted; the reclaim of already-bound rows was dead code until auto-claim and is
     rebuilt <em>with</em> auto-claim, together with cell reprojection); the
     rename-retitle pass and its content/name lock-step reasoning; and
-    name-validity-as-identity. <strong>Renames are content-stable</strong>: children
-    and field-row content survive a rename untouched, and only the name-keyed
+    name-validity-as-identity. <strong>Renames are content-stable for the
+    canonical id forms</strong>: <code>::((fieldId))</code> and
+    <code>::[label](((fieldId)))</code> rows survive a rename untouched (the
+    aliased label is author-owned display text and may drift, like any
+    aliased link), and only the name-keyed
     <em>cell</em> re-keys — B2's migration pass, detected by a per-fieldId
     registry-snapshot diff so every rename source (panel edit, outline edit of the
-    definition block, a synced-in rename) funnels through one seam.
+    definition block, a synced-in rename) funnels through one seam. Post-AC,
+    bound <em>name-form</em> rows are the deliberate exception (PR #417
+    review — this bullet predated the live <code>::[[name]]</code> form):
+    they follow the rename by <em>content rewrite</em>, the §9 rename case
+    (<code>renameBacklinks</code> rewriting <code>::[[status]]</code> →
+    <code>::[[state]]</code> in its post-commit References tx). No B2 step
+    and no race: the cell re-key is fieldId-keyed and a name row's target
+    column is rename-invariant, so projection converges whichever seam lands
+    first — B2's rename contract lists the span rewrite as a companion
+    effect, not a step it owns.
     <code>references_json</code> re-keys with it: <code>sourceField =
     schema.name</code>, so the cell re-key runs through the processor pipeline (the
     references reprojection recomputes <code>sourceField</code>), never
@@ -2054,17 +2067,30 @@ supabase skill if it's kept.
     it would unclassify every shadowed loser's rows, contradicting §6; the
     as-built checker, <code>isFieldDefinitionCheckerFor</code>, wraps it and
     classifies on <em>resolved OR shadowed</em>, every other reason
-    unclassifies — that disjunction is the contract, pin it so a resolver
-    refactor can't silently narrow it; the checker lives on PR #386
+    unclassifies; the checker lives on PR #386
     (<code>txEngine.ts</code>), this doc's authoritative implementation branch —
-    it is not on master until A/B merges). One extension pinned with it
+    it is not on master until A/B merges). The pinned contract is one leg
+    <em>wider</em> than the as-built disjunction (PR #417 review caught the
+    contradiction with B2's deletion rule): <strong>resolved OR shadowed OR
+    tombstone-resolved</strong>. Today a soft-deleted definition never reaches
+    the registry at all (<code>propertyDefinitionMetadata</code> returns
+    <code>null</code> on <code>row.deleted</code>, so <code>resolveField</code>
+    reports it unavailable) — classifying through that would un-classify every
+    row of a deleted property and strand its cell keys, the exact outcome
+    B2's identity-preserving deletion rule forbids. The tombstone leg is a
+    B2-required checker extension — a fieldId-keyed read that consults
+    tombstoned definition rows directly (soft-delete keeps the bag, so the
+    metadata is readable) — and the widened disjunction is the contract to
+    pin so a resolver refactor can't silently narrow it. One extension pinned with it
     (PR #417 review): consumers that need the definition's <em>metadata</em>, not
     a boolean — B3 scope routing needs the owning schema's
     <code>changeScope</code>, merge needs its merge policy, value decode needs
     the codec — use a shadow-tolerant <em>schema-returning</em> lookup: a
     fieldId-keyed read of the definition row and its parsed metadata,
-    winner-independent (shadowing is <em>name</em> authority, not row
-    readability). Routing a shadowed loser's rows through bare
+    winner-independent <em>and tombstone-tolerant</em> (shadowing is
+    <em>name</em> authority, not row readability — and deletion, likewise, is
+    not unreadability: the inline-exemption and merge-policy consumers read
+    it mid-delete-tx). Routing a shadowed loser's rows through bare
     <code>resolveField</code> would classify them as machinery while losing the
     very scope that decides their write-policy bucket. <em>(4)</em> <em>The
     workspace is flipped</em>
@@ -2313,9 +2339,19 @@ supabase skill if it's kept.
     never on live classification (owner round, 07-22: a bound
     <code>::[[name]]</code> row whose definition dies in the same delete tx
     has already lost resolution when the processor asks). The field-row half
-    keys on the marked <em>form</em> (the bit) — order-independent by
-    construction, or the tx inlines the name into the row and destroys the
-    marker shape. The value-child half keys on value position <em>plus the
+    keys on <em>recognition through the tombstone-tolerant checker</em> — the
+    full four-condition predicate, with condition 3 answered by the tombstone
+    leg above rather than the live registry (PR #417 review corrected a
+    bit-only phrasing: the bare bit over-exempts rows that are explicitly
+    <em>not</em> machinery — pre-flip marked content, root marked rows,
+    marked rows targeting an ordinary page or foreign id — and those should
+    keep degrading like the prose-shaped rows they are when their target
+    dies, or they carry dangling refs forever). Order-independence survives
+    without a bit shortcut: the checker reads definition rows, not the live
+    alias index or registry, and the one same-tx alias case — a marked-alias
+    row whose definition dies in that very delete tx — has already been
+    rewritten to id-carrying form by the release rewrite, which the ordering
+    invariant runs first. The value-child half keys on value position <em>plus the
     owning field's codec</em> being ref/refList, read through the
     shadow-tolerant schema-returning lookup (condition-3 extension above) —
     tombstone-tolerant, so it answers even mid-delete-tx and
@@ -3273,7 +3309,14 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         same canonicalization the create affordance performs, in bulk) and
         pin prose links to the page in the aliased form
         (<code>[status](((pageId)))</code>) — the flow's meaning-preserving
-        choice for prose — <em>then</em> move the name to the definition. A definition
+        choice for prose, carrying the same label guard as export/release
+        (PR #417 review: <code>renderAliasedBlockref</code> strips
+        <code>]</code>/newline, so a lossy page alias would silently change
+        the displayed link text; prose has no id-form fallback that preserves
+        display, so on a lossy label the prompted flow does what prompted
+        flows do — list the affected rows and their sanitized labels in the
+        resolution report, visible rather than silent) —
+        <em>then</em> move the name to the definition. A definition
         whose claim was refused stays id-addressable but never becomes
         name-resolvable; that state must be visible, not a silent bulk-claim
         casualty. Pairs with <strong>"copy resolves
