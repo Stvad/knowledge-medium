@@ -465,6 +465,14 @@ export const collapseDuplicateFieldRow = async (
 export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  // Issue #402: re-runs over rows dirtied after it ran, so (a) a plugin's
+  // raw bag write (merge retarget) grows/updates its backing children in
+  // the same tx, and (b) a row that STOPPED being a field row this tx
+  // (derive cleared the stamp after this processor's stale-column
+  // ancestry read skipped it) still gets its bag materialized. The
+  // rename processor's cell re-keys are settledWrites and never reach
+  // this re-run — see MIGRATE_PROPERTY_RENAME_PROCESSOR.
+  rerunOnDirtyRows: true,
   apply: async (event, ctx) => {
     // Workspace flip gate (§6): one predicate, checked once — a tx pins a
     // single workspace, and un-flipped workspaces are fully dormant.
@@ -479,6 +487,22 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['content', 'referenceTargetId', 'parentId', 'orderKey', 'deleted']},
+  // Issue #402: a plugin rewriting field/value-row content after this
+  // ran (merge retarget on a value child or on a definition's field
+  // rows, alias reverse-sync turning a child into `((fieldId))`,
+  // deleted-ref inlining) re-projects the owner's cell here instead of
+  // leaving it keyed to pre-rewrite children.
+  rerunOnDirtyRows: true,
+  // settledWrites: the cell this processor writes is a DERIVED READ
+  // SURFACE over the children (§5's one-direction rule) — nothing may
+  // re-derive truth from it. Concretely, the projection is lossy on
+  // purpose: an unparseable value child unsets the cell key while the
+  // rows stay visible/fixable (§9), and a re-run MATERIALIZE reading
+  // that unset as a user's key deletion would tombstone the very rows
+  // the rule preserves. MATERIALIZE stays unsettled by the same logic
+  // in reverse: its child writes ARE truth, and pass-two DERIVE needs
+  // to see them to stamp fresh value children.
+  settledWrites: true,
   apply: async (event, ctx) => {
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const lookups = lookupsFor(ctx, event.workspaceId)

@@ -102,11 +102,17 @@ export interface PowerSyncDb {
 const collectSameTxFieldMatches = (
   processor: AnySameTxProcessor,
   snapshots: SnapshotsMap,
+  /** Derivation re-run pass (issue #402): restrict the collect to rows
+   *  written after the processor's first run. `before` stays the tx-start
+   *  state — same shape as pass one, so idempotent processors see an
+   *  already-handled change again and no-op on it. */
+  onlyIds?: ReadonlySet<string>,
 ): ChangedRow[] => {
   if (processor.watches.kind !== 'field') return []
   if (processor.watches.table !== 'blocks') return []
   const out: ChangedRow[] = []
   for (const [id, entry] of snapshots) {
+    if (onlyIds !== undefined && !onlyIds.has(id)) continue
     if (processor.watches.fields.some(f => sameTxFieldChanged(entry.before, entry.after, f as string))) {
       out.push({id, before: entry.before, after: entry.after})
     }
@@ -265,6 +271,17 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const txSeq = newTxSeq()
   const source = sourceForScope(scope)
   const snapshots: SnapshotsMap = newSnapshotsMap()
+  // Derivation-liveness bookkeeping (issue #402): a monotonically
+  // increasing write generation per recorded row write, and the latest
+  // generation per row. The same-tx pass records a per-processor
+  // watermark after its slot; the re-run pass visits only rows whose
+  // generation exceeds a processor's watermark — i.e. rows some LATER
+  // writer dirtied after that processor already ran. Writes made while
+  // a `settledWrites` processor is applying are the explicit-intent
+  // channel: declared convergent/final, they never mark rows dirty.
+  const rowWriteGens = new Map<string, number>()
+  let writeGen = 0
+  let settleWrites = false
   const afterCommitJobs: AfterCommitJob[] = []
   const sameTxEvents: SameTxEmittedEvent[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
@@ -321,6 +338,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       sameTxEvents,
       now,
       newId,
+      onWrite: (id) => {
+        if (!settleWrites) rowWriteGens.set(id, ++writeGen)
+      },
     })
     // Important: any tx.run calls in the user fn push onto
     // `mutatorCalls` after the dispatch wrapper's initial entry. We
@@ -351,19 +371,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // doc on RunTxParams.
     if (!isReplay && sameTxProcessors.size > 0 && (snapshots.size > 0 || sameTxEvents.length > 0)) {
       const sameTxStartedAt = performance.now()
-      for (const processor of sameTxProcessors.values()) {
-        const collectStartedAt = performance.now()
-        const changedRows = collectSameTxFieldMatches(processor, snapshots)
-        const collectMs = performance.now() - collectStartedAt
-        const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
-        if (changedRows.length === 0 && emittedEvents.length === 0) {
-          if (collectMs >= 1) {
-            timing.sameTxProcessorRuns.push(
-              {name: processor.name, changedRows: 0, collectMs, applyMs: 0},
-            )
-          }
-          continue
-        }
+      const applyProcessor = async (
+        processor: AnySameTxProcessor,
+        changedRows: ChangedRow[],
+        emittedEvents: SameTxEmittedEvent[],
+        collectMs: number,
+      ): Promise<void> => {
         // workspaceId is guaranteed here: field matches require a
         // snapshot-producing write, and tx.emitEvent refuses to run
         // before the tx has pinned a workspace.
@@ -371,20 +384,25 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
           throw new Error('same-tx processor matched without a pinned workspace')
         }
         const applyStartedAt = performance.now()
-        await processor.apply(
-          {
-            txId,
-            scope,
-            user,
-            workspaceId: meta.workspaceId,
-            changedRows,
-            emittedEvents,
-          },
-          {
-            tx, db: txDb, propertySchemas,
-            resolvePropertySchemaName, resolvePropertySchemaField,
-          },
-        )
+        settleWrites = processor.settledWrites === true
+        try {
+          await processor.apply(
+            {
+              txId,
+              scope,
+              user,
+              workspaceId: meta.workspaceId,
+              changedRows,
+              emittedEvents,
+            },
+            {
+              tx, db: txDb, propertySchemas,
+              resolvePropertySchemaName, resolvePropertySchemaField,
+            },
+          )
+        } finally {
+          settleWrites = false
+        }
         timing.sameTxChangedRows += changedRows.length
         timing.sameTxProcessorRuns.push({
           name: processor.name,
@@ -392,6 +410,66 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
           collectMs,
           applyMs: performance.now() - applyStartedAt,
         })
+      }
+
+      // Pass one: the single pass, registration order (kernel processors
+      // precede plugin ones). Each processor's watermark is recorded
+      // AFTER its slot, so its own writes never re-trigger it and only
+      // LATER writers count as "dirtied since it ran".
+      const watermarks = new Map<string, number>()
+      for (const processor of sameTxProcessors.values()) {
+        const collectStartedAt = performance.now()
+        const changedRows = collectSameTxFieldMatches(processor, snapshots)
+        const collectMs = performance.now() - collectStartedAt
+        const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
+        if (changedRows.length === 0 && emittedEvents.length === 0) {
+          watermarks.set(processor.name, writeGen)
+          if (collectMs >= 1) {
+            timing.sameTxProcessorRuns.push(
+              {name: processor.name, changedRows: 0, collectMs, applyMs: 0},
+            )
+          }
+          continue
+        }
+        await applyProcessor(processor, changedRows, emittedEvents, collectMs)
+        watermarks.set(processor.name, writeGen)
+      }
+
+      // Pass two — the derivation-liveness re-run (issue #402). A
+      // derivation that ran early in the pass can have its INPUT
+      // rewritten by a later processor in the same tx (a plugin content
+      // rewrite after PROJECT, a raw properties write after MATERIALIZE,
+      // a kernel stamp after MATERIALIZE's ancestry read) — leaving the
+      // derived state describing pre-rewrite content. Rather than
+      // hand-patching each such cell (three ad-hoc idioms existed, and
+      // three consecutive reviews each found a matrix cell the audits
+      // missed), re-run the opted-in derivation processors over just the
+      // rows written after their first run.
+      //
+      // Bounded at ONE re-run — no fixpoint, per the single-pass
+      // contract. Convergence rests on the opted-in processors'
+      // idempotence (§5 invariant 1): a residual write left by a
+      // pass-two processor for an EARLIER pass-two processor is by
+      // construction already convergent (MATERIALIZE/PROJECT are mutual
+      // inverses whose round-trip no-ops; DERIVE/NORMALIZE re-derive to
+      // the same value), so a third pass would no-op. Writes from
+      // `settledWrites` processors (the rename re-key) never mark rows
+      // dirty, which is what keeps the stale-registry MATERIALIZE
+      // misread out of this pass entirely.
+      for (const processor of sameTxProcessors.values()) {
+        if (processor.rerunOnDirtyRows !== true) continue
+        const watermark = watermarks.get(processor.name) ?? 0
+        const collectStartedAt = performance.now()
+        const dirtyIds = new Set<string>()
+        for (const [id, gen] of rowWriteGens) {
+          if (gen > watermark) dirtyIds.add(id)
+        }
+        const changedRows = dirtyIds.size === 0
+          ? []
+          : collectSameTxFieldMatches(processor, snapshots, dirtyIds)
+        const collectMs = performance.now() - collectStartedAt
+        if (changedRows.length === 0) continue
+        await applyProcessor(processor, changedRows, [], collectMs)
       }
       timing.sameTxMs = performance.now() - sameTxStartedAt
     }

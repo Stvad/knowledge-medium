@@ -57,6 +57,11 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME = 'core.blockTypeTypeify'
 export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
   name: BLOCK_TYPE_TYPEIFY_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  // Issue #402: a plugin write that tags a row `block-type` AFTER this
+  // ran (it's first in the pass) still gets completed into a full type
+  // this tx. Every step is ensure-present, so re-seeing an
+  // already-completed transition no-ops.
+  rerunOnDirtyRows: true,
   apply: async (event, ctx) => {
     for (const row of event.changedRows) {
       // Fire only on the transition INTO block-type — not on every later
