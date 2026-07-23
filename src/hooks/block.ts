@@ -303,7 +303,10 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
  *  non-rendering callers (counting / id-only scans). */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
+  // Display hook: the outline shows the visible view (recognized property
+  // field rows excluded, §9). Structural traversals use the everything-by-
+  // default query instead.
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
     selector: ids => ids ?? EMPTY_STRING_ARRAY,
   }) as string[]
 
@@ -317,7 +320,8 @@ export const useChildIds = (block: Block): string[] =>
  *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.children({id: block.id}), {
+  // Display hook: visible view (property field rows excluded, §9).
+  return useHandle(block.repo.query.children({id: block.id, hidePropertyChildren: true}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -334,7 +338,7 @@ export const useChildren = (block: Block): Block[] => {
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true, hidePropertyChildren: true}), {
     selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
 
@@ -393,7 +397,8 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.subtree({id: block.id}), {
+  // Display hook: visible view (property field rows excluded, §9).
+  return useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }

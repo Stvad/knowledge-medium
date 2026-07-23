@@ -22,7 +22,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, type BlockReference } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -31,7 +31,7 @@ import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { definitionSeedsFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -1674,5 +1674,123 @@ describe('parseReferences — workspace-switch reprojection', () => {
     expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([
       {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
     ])
+  })
+})
+
+describe('parseReferences — property field rows reference their definition, never mint a phantom page (§9, PR #386 review)', () => {
+  // A flipped (child-backed) workspace: `setProperty` dual-writes a field row
+  // whose content is `((fieldId))` — a by-id ref to the property DEFINITION.
+  // It parses like any other block ref, so the field row carries a reference
+  // to its definition: the "used by" edge (a definition's backlinks become
+  // every block that uses the property — desirable, and it keeps field rows
+  // in `block_references` so definition merge/rename retarget reaches them).
+  // Because the content is `((id))`, not `[[name]]`, it can never mint a
+  // user-visible alias page — that guarantee is the id-addressing FORM, not
+  // any parse-level suppression. (The former `isPropertyMachineryRow` was
+  // dropped: recognition-based suppression is unnecessary here and its
+  // per-workspace resolver failed closed in background workspaces — #389 B.)
+  // A real fieldId is the definition block's UUID; `((uuid))` is what
+  // parseBlockRefs recognizes (a non-UUID synthetic id would never parse into
+  // a block ref, masking the un-suppressed behavior this test asserts).
+  const FIELD_ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+  const statusSchema = defineProperty('status', {
+    codec: codecs.string,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  beforeEach(async () => {
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [WS],
+    )
+    env.repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-status-definition',
+      [{
+        metadata: {
+          fieldId: FIELD_ID,
+          workspaceId: WS,
+          createdAt: 1,
+          name: statusSchema.name,
+          changeScope: statusSchema.changeScope,
+          hidden: false,
+          origin: 'user' as const,
+        },
+        schema: statusSchema,
+      }],
+      {workspaceId: WS},
+    )
+  })
+
+  it('setProperty creates a field row that references its definition; no phantom alias page is minted', async () => {
+    // Guard against a swallowed `[processorRunner] processor "..." failed`
+    // making this pass vacuously: spy on console.error so a processor crash
+    // fails the test loudly instead.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'host', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'host'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(
+      tx => tx.setProperty('host', statusSchema, 'done'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // No alias-target page named "status" — the `((fieldId))` content is a
+    // by-id ref, so it can never mint a page (the guarantee is the addressing
+    // form, not parse suppression).
+    expect(await env.read(aliasId('status'))).toBeNull()
+
+    // The field row now carries a reference to its definition — the "used by"
+    // edge (under the dropped isPropertyMachineryRow this was suppressed to []).
+    const field = await env.h.db.getOptional<{id: string; references_json: string}>(
+      `SELECT id, references_json FROM blocks
+        WHERE parent_id = 'host' AND reference_target_id = ? AND deleted = 0`,
+      [FIELD_ID],
+    )
+    expect(field).not.toBeNull()
+    const refs = JSON.parse(field!.references_json) as Array<{id: string}>
+    expect(refs.map(r => r.id)).toEqual([FIELD_ID])
+  })
+
+  it('a ROOT row with content [[status]] is parsed as a normal wikilink (user content, not machinery)', async () => {
+    // A workspace-root row (parentId === null) is never a field row (§9 root
+    // half), so its `[[status]]` content is ordinary user content: a normal
+    // alias target IS minted and the row gets a normal alias backlink — even
+    // though "status" is a property schema name in this flipped workspace.
+    // (Held under the dropped isPropertyMachineryRow via its root exemption,
+    // and still holds now that parse suppression is gone entirely.)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await env.repo.tx(
+      tx => tx.create({id: 'root-status', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[status]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush(4000)
+
+    expect(errorSpy, `processor crashed: ${errorSpy.mock.calls.map(c => c.join(' ')).join('; ')}`)
+      .not.toHaveBeenCalled()
+    errorSpy.mockRestore()
+
+    // A normal alias-target page named "status" WAS created — root position
+    // exempts the row from isPropertyMachineryRow's suppression even though
+    // "status" is a property schema name in this flipped workspace.
+    const target = await env.read(aliasId('status'))
+    expect(target).not.toBeNull()
+    expect(target!.deleted).toBe(0)
+    const aliases = JSON.parse(target!.properties_json).alias as string[]
+    expect(aliases).toEqual(['status'])
+
+    // ...and the root row carries a normal alias backlink/reference to it.
+    const refs = JSON.parse((await env.read('root-status'))!.references_json)
+    expect(refs).toEqual([{id: aliasId('status'), alias: 'status'}])
   })
 })

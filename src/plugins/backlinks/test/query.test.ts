@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -30,6 +30,7 @@ import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,
   mergeBacklinksFilters,
+  propertyMachinerySourceIds,
 } from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
@@ -219,6 +220,129 @@ describe('backlinksDataExtension query', () => {
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
     expect(out).toEqual([])
+  })
+
+  describe('property-machinery source exclusion (#20)', () => {
+    const FLIP_WS = 'ws-flip'
+    const seedFlipped = async () => {
+      await sharedDb.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'flip ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [FLIP_WS],
+      )
+    }
+    const createIn = (args: {
+      id: string; parentId?: string | null; content?: string
+      referenceTargetId?: string | null; references?: BlockReference[]
+    }) =>
+      env.repo.tx(tx => tx.create({
+        id: args.id, workspaceId: FLIP_WS, parentId: args.parentId ?? null,
+        orderKey: `k-${args.id}`, content: args.content ?? '',
+        referenceTargetId: args.referenceTargetId, references: args.references ?? [],
+      }), {scope: ChangeScope.BlockDefault})
+
+    it('excludes a property VALUE source by default; rawSources returns it', async () => {
+      await seedFlipped()
+      // `D` is a recognized property definition; `F` is a field row stamped at
+      // it; `V` is F's value child carrying a `[[Foo]]` reference (the hidden
+      // machinery source); `Q` is an ordinary block referencing Foo.
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'Foo'})
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D'})
+      await createIn({id: 'V', parentId: 'F', references: [{id: 'Foo', alias: 'Foo'}]})
+      await createIn({id: 'Q', references: [{id: 'Foo', alias: 'Foo'}]})
+
+      // Sanity: both sources are in the raw index.
+      const raw = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'Foo', rawSources: true}).load())
+      expect(raw.sort()).toEqual(['Q', 'V'])
+
+      // Default view drops the hidden value-row source (the owning block's
+      // cell reprojection is what carries this backlink, not `V`).
+      const filtered = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'Foo'}).load())
+      expect(filtered).toEqual(['Q'])
+    })
+
+    it('keeps a field row as a source for its OWN definition (the "used by" edge)', async () => {
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'O'})
+      // The field row references its own definition — post-suppression-removal
+      // this is the edge that answers "which blocks use property `status`?".
+      await createIn({
+        id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D',
+        references: [{id: 'D', alias: 'D'}],
+      })
+      // An INTERIOR row that also points at D is still machinery: its backlink
+      // would duplicate the owner's reprojected edge and be sourced from a
+      // hidden row.
+      await createIn({id: 'V', parentId: 'F', references: [{id: 'D', alias: 'D'}]})
+
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: FLIP_WS, id: 'D'}).load())
+      expect(out).toEqual(['F'])
+    })
+
+    it('unions machinery across chunk boundaries (SQLite variable-cap safety)', async () => {
+      await seedFlipped()
+      await createIn({id: 'D', content: 'status'})
+      await sharedDb.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+        [FLIP_WS],
+      )
+      await createIn({id: 'O'})
+      await createIn({id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D'})
+      // Two value children (machinery) and one ordinary block; with chunkSize 1
+      // each source is its own query, so a union bug would drop all but the last.
+      await createIn({id: 'V1', parentId: 'F'})
+      await createIn({id: 'V2', parentId: 'F'})
+      await createIn({id: 'Q'})
+
+      const machinery = await propertyMachinerySourceIds(
+        env.h.db, ['V1', 'Q', 'V2'], 1,
+      )
+      expect([...machinery].sort()).toEqual(['V1', 'V2'])
+    })
+
+    it('converges (does not hang or error) when a source sits under a cyclic, non-matching ancestor chain (issue #404 item 8b)', async () => {
+      await seedFlipped()
+      // A 2-cycle (issue #183 shape) with no field row anywhere on it —
+      // seeded via raw SQL, not tx.move, since tx.move's cycle-validation
+      // would refuse to create this structurally. Such a cycle is exactly
+      // what a pair of concurrent sync-applied moves can still produce; the
+      // `up` walk under test must stay correct (and bounded) when it does.
+      const cyclicPair = `
+        INSERT INTO blocks
+          (id, workspace_id, parent_id, order_key, content, properties_json,
+           references_json, created_at, updated_at, created_by, updated_by, deleted)
+        VALUES (?, ?, ?, 'a0', '', '{}', '[]', 0, 0, 'u', 'u', 0)
+      `
+      await sharedDb.db.execute(cyclicPair, ['cx', FLIP_WS, 'cy'])
+      await sharedDb.db.execute(cyclicPair, ['cy', FLIP_WS, 'cx'])
+      await createIn({id: 'under-cycle', parentId: 'cx'})
+
+      const machinery = await propertyMachinerySourceIds(env.h.db, ['under-cycle'])
+      expect(machinery.size).toBe(0)
+    })
+
+    it('does not filter in an un-flipped workspace (no machinery exists)', async () => {
+      await create({id: 'Foo2', workspaceId: WS})
+      await create({id: 'src', workspaceId: WS, references: [{id: 'Foo2', alias: 'Foo2'}]})
+      const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY](
+        {workspaceId: WS, id: 'Foo2'}).load())
+      expect(out).toEqual(['src'])
+    })
   })
 
   it('scopes to workspaceId', async () => {
@@ -535,7 +659,7 @@ describe('backlinksDataExtension query', () => {
     // A concurrent client adds a reference src → target. It arrives via the
     // Layout B sync path: staged into blocks_synced, materialized by the
     // observer. A newer updated_at wins the LWW gate (real server writes do).
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: 'src', workspaceId: WS, parentId: null, orderKey: 'key-src',
       content: '', properties: {}, references: [{id: 'target', alias: 'T'}],
       createdAt: 0, updatedAt: 9_000_000_000_000, userUpdatedAt: 9_000_000_000_000, createdBy: 'remote', updatedBy: 'remote', deleted: false,

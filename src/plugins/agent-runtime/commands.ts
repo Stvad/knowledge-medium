@@ -24,6 +24,8 @@ import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete.js'
+import { syncedWriteTarget } from '@/data/syncedTableWriteGuard.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
@@ -162,12 +164,40 @@ const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
   return data
 }
 
+/** Guard for the bridge's raw `sql` verb (any mode — `execute` is the common
+ *  shape, but `all`/`get`/`optional` reach the same `repo.db` connection and
+ *  could carry a write statement too). A raw write to a synced table
+ *  (`blocks`, `workspaces`, `workspace_members`) bypasses `repo.tx`: it
+ *  leaves `tx_context.source = NULL` so the upload trigger never fires (the
+ *  write is local-only — see `syncedTableWriteGuard.ts`), AND it skips the
+ *  kernel's post-commit derivations (block_types, reference normalization,
+ *  property projection), desyncing derived state. `allowSyncedWrite` is the
+ *  explicit, one-call opt-out for a deliberate surgical fix. */
+const assertSyncedTableWriteAllowed = (sql: string, allowSyncedWrite: boolean): void => {
+  if (allowSyncedWrite) return
+  // Scans the whole statement text — CTE prefixes, later statements, and
+  // trigger bodies included (see syncedTableWriteGuard.ts).
+  const target = syncedWriteTarget(sql)
+  if (target === null) return
+  throw new Error(
+    `sql: refusing to write to synced table "${target}" via raw SQL — this bypasses ` +
+      'repo.tx, so the write leaves tx_context.source = NULL (never uploads to the ' +
+      'server or other clients) and skips the kernel derivations (block_types, ' +
+      'reference normalization, property projection), desyncing derived state. Use ' +
+      'create-block / update-block / run-action (which go through repo.tx) for a normal ' +
+      'write. For a deliberate surgical fix, pass --allow-synced-write on the CLI ' +
+      '(or {allowSyncedWrite: true} on the command body) to override this check.',
+  )
+}
+
 const runSql = async (
   repo: Repo,
   sql: string,
   params: unknown[] = [],
   mode: SqlMode = 'all',
+  allowSyncedWrite = false,
 ) => {
+  assertSyncedTableWriteAllowed(sql, allowSyncedWrite)
   if (mode === 'get') return repo.db.get(sql, params)
   if (mode === 'optional') return repo.db.getOptional(sql, params)
   if (mode === 'execute') return repo.db.execute(sql, params)
@@ -489,7 +519,10 @@ const reconcileMarkdownSubtree = async (
         // foreign children remain, and a child under a parent that is itself
         // doomed bubbles up again until it lands under a surviving ancestor.
         const target = doomed.parentId ?? parentId
-        const foreign = (await tx.childrenOf(doomed.id, workspaceId))
+        // Visible view: a property field row is machinery OWNED by `doomed`
+        // (not foreign content), so it must not be rescued/reparented — it
+        // goes with `doomed` in the subtree-delete below.
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId, {hidePropertyChildren: true}))
           .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
         if (foreign.length > 0) {
           // Land the rescued children in the doomed node's OWN slot (between
@@ -510,7 +543,13 @@ const reconcileMarkdownSubtree = async (
             lower = orderKey
           }
         }
-        await tx.delete(doomed.id)
+        // Subtree-delete (not single-row): after foreign content is rescued
+        // above, `doomed`'s only remaining descendants are its own property
+        // field/value machinery, which must be tombstoned with it rather
+        // than stranded live under the tombstone (§9). In an un-flipped
+        // workspace there is no machinery, so this equals the single-row
+        // delete it replaces.
+        await deleteSubtreeInTx(tx, doomed.id)
       }
     }
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
@@ -540,6 +579,15 @@ const updateRuntimeBlock = async (
       : input.replaceProperties
         ? structuredClone(input.properties) as Record<string, unknown>
         : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
+    // Deliberately the RAW bag write, not the typed setProperty/setProperties:
+    // `input.properties` is arbitrary external JSON (raw-encoded values, often
+    // schema-less keys from agent extensions). The typed primitives would throw
+    // on an unresolvable schema or an undecodable value; the raw write + the
+    // same-tx MATERIALIZE processor instead reconciles the schema-backed,
+    // decodable subset into children (create/update, and delete-by-omission on
+    // a `replaceProperties` replace) and gracefully leaves the rest cell-only
+    // (MATERIALIZE skips keys it can't resolve/decode). Read-inside-tx above
+    // already closed the TOCTOU clobber this verb was once flagged for.
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
@@ -1314,10 +1362,16 @@ export const createAgentRuntimeContext = ({
     db: repo.db,
     runtime,
     safeMode,
-    sql: (sql, params, mode) => runSql(repo, sql, params, mode),
+    sql: (sql, params, mode, allowSyncedWrite) => runSql(repo, sql, params, mode, allowSyncedWrite),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
-    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
+    // The visible outline: `get-subtree` (and the MCP `subtree` tool, and
+    // agent-dispatch's prompt render) already surface each row's property BAG,
+    // so emitting field/value rows too would show the same properties a second
+    // time as `((fieldId))` blocks pretending to be user content. Agents that
+    // genuinely want raw storage have `sql` (PR #386 review).
+    getSubtree: async rootId =>
+      await repo.query.subtree({id: rootId, hidePropertyChildren: true}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
@@ -1376,7 +1430,7 @@ export const executeCommand = async (
         throw new Error('mode must be one of: all, get, optional, execute')
       }
 
-      return context.sql(sql, getParams(command.params), mode)
+      return context.sql(sql, getParams(command.params), mode, command.allowSyncedWrite === true)
     }
 
     case 'get-block':

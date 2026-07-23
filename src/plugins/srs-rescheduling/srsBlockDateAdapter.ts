@@ -76,12 +76,7 @@ export const srsBlockDateAdapter: BlockDateAdapter = {
       await repo.tx(async tx => {
         const row = await tx.get(block.id)
         if (!row || !getBlockTypes(row).includes(SRS_SM25_TYPE)) return
-        await tx.update(block.id, {
-          properties: {
-            ...row.properties,
-            [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(targetDaily.id),
-          },
-        })
+        await tx.setProperty(block.id, srsNextReviewDateProp, targetDaily.id)
         written = true
       }, {scope: ChangeScope.BlockDefault, description: 'set srs next review date'})
 

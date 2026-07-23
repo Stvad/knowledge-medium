@@ -170,7 +170,7 @@ const createNodeInActivePanelFromGlobalContext = async (
 
   const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
   await layoutSessionBlock.load()
-  const rows = await repo.query.subtree({id: layoutSessionBlock.id}).load()
+  const rows = await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
   const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
   const activePanelRow =
@@ -419,7 +419,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         await repo.load(uiStateBlock.id, {ancestors: true})
         const root = getRootBlock(repo.block(uiStateBlock.id))
-        const blocks = await repo.query.subtree({id: root.id}).load()
+        // The visible outline, not raw storage: property field rows are a
+        // per-workspace representation of the cell, and `importState` replays
+        // only content/structure — so exported machinery would land in the
+        // target as ordinary `((fieldId))` rows rather than as properties.
+        const blocks = await repo.query.subtree({id: root.id, hidePropertyChildren: true}).load()
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')

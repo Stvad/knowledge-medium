@@ -140,6 +140,25 @@ export const defineProperty = <T>(
   schema: Omit<PropertySchema<T>, 'name'>,
 ): PropertySchema<T> => ({ name, ...schema })
 
+/** One `(schema, value)` pair for `tx.setProperties`. Build these with
+ *  `propertyValue` so `value` is type-checked against `schema` at the call
+ *  site; the batch list itself is variance-erased (`AnyPropertyAssignment`),
+ *  the same escape `AnyPropertySchema` uses for heterogeneous storage. */
+export interface PropertyAssignment<T> {
+  readonly schema: PropertySchema<T>
+  readonly value: T
+}
+
+/** Pair a schema with a value for a `tx.setProperties` batch, enforcing
+ *  `value: T` matches `schema: PropertySchema<T>` at the call site. */
+export const propertyValue = <T>(
+  schema: PropertySchema<T>,
+  value: T,
+): PropertyAssignment<T> => ({ schema, value })
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPropertyAssignment = PropertyAssignment<any>
+
 /** Helper for the rare property that needs a per-definition editor override.
  *  Pass the seed handle the override presents; its `seedKey` is the join key
  *  (name-independent, immune to renames). Most plugins should NOT reach for

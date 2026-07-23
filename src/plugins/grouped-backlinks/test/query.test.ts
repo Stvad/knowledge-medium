@@ -1148,4 +1148,64 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(sorted(noteGroup!.sourceIds)).toEqual(['src-1', 'src-2'])
     })
   })
+
+  // PR #386 review: grouped backlinks resolve their own source ids instead of
+  // routing through `backlinks.forBlock`, so the flip-gated machinery
+  // exclusion has to be applied here too — otherwise a hidden property value
+  // row is filtered out of Linked References and the inline count but still
+  // shows up grouped, duplicating the owner's projected property backlink.
+  describe('property-machinery source exclusion (§9)', () => {
+    const seedDefinitionAndFieldRow = async () => {
+      await create({id: 'target', content: 'Target'})
+      await create({id: 'defn', content: 'status'})
+      await env.h.db.execute(
+        `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+         VALUES ('defn', ?, 'property-schema')`,
+        [WS],
+      )
+      await create({id: 'owner', content: 'Owner'})
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: 'field', workspaceId: WS, parentId: 'owner', orderKey: 'a0',
+          content: '((defn))', referenceTargetId: 'defn',
+        })
+        await tx.create({
+          id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
+          content: '[[Target]]', references: [{id: 'target', alias: 'Target'}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await create({id: 'ordinary', references: [{id: 'target', alias: 'Target'}]})
+    }
+
+    const setFlip = (state: string) =>
+      env.h.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, ?)`,
+        [WS, state],
+      )
+
+    it('drops a hidden value-row source in a flipped workspace', async () => {
+      await seedDefinitionAndFieldRow()
+      await setFlip('children')
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary'])
+    })
+
+    it('is dormant in an un-flipped workspace', async () => {
+      await seedDefinitionAndFieldRow()
+
+      const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+        workspaceId: WS,
+        id: 'target',
+      }).load()
+
+      expect(sorted(out.unfilteredSourceIds)).toEqual(['ordinary', 'value'])
+    })
+  })
 })

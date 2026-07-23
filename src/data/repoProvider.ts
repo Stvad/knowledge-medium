@@ -38,8 +38,10 @@ import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  ensureBlockLocalColumns,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
@@ -48,6 +50,7 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
   ensureWorkspaceE2eeColumns,
+  ensureWorkspacePropertiesMigrationColumn,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -348,6 +351,15 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  // Idempotent local migration: add the LOCAL-only derived columns
+  // (`reference_target_id`) to an existing `blocks` table. MUST run before
+  // the CLIENT_SCHEMA_STATEMENTS loop below — the recreated row_events
+  // trigger bodies reference the column (SQLite accepts a CREATE TRIGGER
+  // against a missing column and only fails at fire time). `blocks_synced`
+  // deliberately does NOT get it (never synced; PR #288 §11 slice A). The
+  // index is created after so it exists on upgrading devices too.
+  await ensureBlockLocalColumns(powerSyncDb)
+  await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   // Idempotent local migration: add `group_id` to an existing
   // tx_context / row_events (undo grouping, issue #306). MUST run
   // before ANY re-creation of the row_events trigger bodies — that
@@ -369,6 +381,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
   // above is a no-op when the table already exists). §7 / e2ee-design.
   await ensureWorkspaceE2eeColumns(powerSyncDb)
+  // Properties-as-blocks rollout lever (PR #288 §6) — nullable; absence
+  // reads as 'cell' (dormant) via parseWorkspaceRow.
+  await ensureWorkspacePropertiesMigrationColumn(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 

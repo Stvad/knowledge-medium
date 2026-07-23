@@ -9,7 +9,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
 import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
@@ -588,7 +588,7 @@ describe('repo.subscribeBlocks', () => {
     // A brand-new typed block arrives via the sync path: staged into
     // blocks_synced, materialized by the observer. New id ⇒ no prior local
     // row, so no pending-upload gate to clear.
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: 'remote-todo', workspaceId: WS, parentId: null, orderKey: 'a0',
       content: '', properties: {[typesProp.name]: ['todo']}, references: [],
       createdAt: 0, updatedAt: 0, userUpdatedAt: 0, createdBy: 'remote', updatedBy: 'remote', deleted: false,

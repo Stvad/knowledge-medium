@@ -15,8 +15,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
+  blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -43,18 +44,19 @@ export const noKey: GetCek = async () => null
 /** Constant materializability resolver ('copy' plaintext / 'decrypt' e2ee / 'defer'). */
 export const constMat = (m: Materializability): GetMaterializability => () => m
 
-const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 const INSERT_BLOCK_SQL =
-  `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) ` +
-  `VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+  `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+  `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 
 /** Positional staging-row params with the three content columns replaced by
- *  already-encoded (ciphertext) strings — for e2ee materialization tests. */
+ *  already-encoded (ciphertext) strings — for e2ee materialization tests.
+ *  Storage-only (13 params, `blockToSyncedRowParams`) — `blocks_synced` never
+ *  carries the local-only columns. */
 export const stagingCiphertextParams = (
   meta: BlockData,
   wire: { content: string; properties_json: string; references_json: string },
 ): unknown[] => {
-  const params = blockToRowParams(meta)
+  const params = blockToSyncedRowParams(meta)
   params[4] = wire.content
   params[5] = wire.properties_json
   params[6] = wire.references_json
@@ -107,6 +109,11 @@ export interface StartObserverOpts {
   onError?: (err: unknown) => void
   getInvalidationRules?: () => readonly InvalidationRule[]
   throttleMs?: number
+  /** Derive-at-arrival lookups (PR #288 slice A). Omitted by default so
+   *  storage-focused tests skip derivation, mirroring the prod-optional dep. */
+  referenceTargetLookups?: MaterializeDeps['referenceTargetLookups']
+  /** §9 alias-repair hook passthrough (deferred executor lives on Repo). */
+  onAliasTargetsAdded?: MaterializeDeps['onAliasTargetsAdded']
 }
 
 export interface StartedObserver {
@@ -143,7 +150,12 @@ export const setupObserverTestDb = () => {
       db: env.db,
       cache,
       handleStore: { invalidate: n => notifications.push(n) },
-      deps: { getMaterializability: opts.getMaterializability, getCek: opts.getCek ?? noKey },
+      deps: {
+        getMaterializability: opts.getMaterializability,
+        getCek: opts.getCek ?? noKey,
+        referenceTargetLookups: opts.referenceTargetLookups,
+        onAliasTargetsAdded: opts.onAliasTargetsAdded,
+      },
       onCycleDetected: opts.onCycleDetected,
       throttleMs: opts.throttleMs ?? 5,
       drainChunkSize: opts.drainChunkSize,
@@ -160,7 +172,7 @@ export const setupObserverTestDb = () => {
     start,
     seedLocalBlock: (d: BlockData) => env.db.execute(INSERT_BLOCK_SQL, blockToRowParams(d)),
     stageRow: (d: BlockData, params?: unknown[]) =>
-      env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToRowParams(d)),
+      env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToSyncedRowParams(d)),
     deleteStagingRow: (id: string) =>
       env.db.execute(BLOCKS_SYNCED_RAW_TABLE.delete.sql, [id]),
     blocks: () =>

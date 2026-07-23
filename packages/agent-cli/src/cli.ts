@@ -678,7 +678,11 @@ cli
 
 cli
   .command('sql <mode> <sql> [paramsJson]', wireDescription('sql'))
-  .action(async (mode: string, sql: string, paramsJson: string | undefined) => {
+  .option(
+    '--allow-synced-write',
+    'Override the refusal to write to a synced table (blocks/workspaces/workspace_members) via raw SQL — such a write bypasses repo.tx, so it never uploads and skips the kernel derivations. Use deliberately.',
+  )
+  .action(async (mode: string, sql: string, paramsJson: string | undefined, options: {allowSyncedWrite?: boolean}) => {
     // Parse mode + params through the schemas so an invalid `--mode`
     // or non-array params fails fast with a clear error instead of
     // round-tripping to the bridge for a less specific rejection.
@@ -690,7 +694,13 @@ cli
     if (!Array.isArray(params)) {
       throw new Error('paramsJson must be a JSON array')
     }
-    await runAndPrint({type: 'sql', mode: parsedMode.data, sql, params})
+    await runAndPrint({
+      type: 'sql',
+      mode: parsedMode.data,
+      sql,
+      params,
+      ...(options.allowSyncedWrite ? {allowSyncedWrite: true} : {}),
+    })
   })
 
 cli

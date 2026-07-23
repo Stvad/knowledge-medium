@@ -4,15 +4,17 @@ import {
   isRefCodec,
   isRefListCodec,
   normalizeReferences,
-  scopePoliciesEquivalent,
   type AnyPropertySchema,
   type AnySameTxProcessor,
   type BlockData,
   type BlockReference,
   type CoreBlockMergedEvent,
   type SameTxCtx,
-  type Tx,
 } from '@/data/api'
+import {
+  deriveReferenceTargetId,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
 import {
   parseReferences,
   renderAliasedBlockref,
@@ -112,12 +114,13 @@ const retargetReferenceContent = (
 }
 
 const retargetSource = async (
-  tx: Tx,
+  ctx: SameTxCtx,
   sourceId: string,
   event: CoreBlockMergedEvent,
   aliasRewrites: ReadonlyMap<string, string>,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): Promise<void> => {
+  const tx = ctx.tx
   const current = await tx.get(sourceId)
   if (current === null || current.deleted) return
 
@@ -132,19 +135,25 @@ const retargetSource = async (
   // in the first place (pre-existing incoherence isn't ours to mutate).
   const nextProperties = {...current.properties}
   let propertiesChanged = false
-  // Eligibility for the value+entry rewrite: schema present, ref-typed,
-  // and scope-equivalent. The scope check matters because the value
-  // lands via the raw `properties` patch below, in THIS tx's scope —
-  // bypassing setProperty's per-field scope routing. A field whose
-  // declared scope isn't policy-equivalent to the merge tx's (e.g. a
-  // UiState/UserPrefs ref pointer) must not be mutated by a
-  // document-scoped merge: leave value AND entry alone, like the
-  // absent-schema branch (the entry stays value-tied and re-parses
-  // consistently).
+  // Eligibility for the value+entry rewrite: schema present and ref-typed.
+  // The field's DECLARED scope is deliberately IGNORED. A merge must not
+  // leave a pointer dangling at the tombstoned source, so it retargets
+  // ref/refList values regardless of the field's own scope — the same thing
+  // the value-child CONTENT path (`retargetReferenceContent` below) already
+  // does unconditionally. Gating the cell here but not the child made the
+  // two disagree (the child's `((from))` retargeted, PROJECT then rebuilt
+  // the cell the guard had "protected"); dropping the gate makes cell and
+  // child converge (PR #386 review, F7). The value lands via the raw
+  // `properties` patch below in THIS tx's scope (BlockDefault), which makes
+  // the retarget undoable-with-the-merge — the correct semantics: undoing
+  // the merge restores the pointer. A plain `set` picks the field's default
+  // undo/routing bucket; a merge is exactly a case where overriding that is
+  // right (Vlad, PR #386). Safe because BlockDefault is the STRICTEST
+  // read-only policy, so touching a permissive-scope field can't bypass a
+  // read-only gate, and every scope uploads to the server regardless.
   const isEligibleField = (field: string): boolean => {
     const schema = propertySchemas.get(field)
-    if (!schema || !(isRefCodec(schema.codec) || isRefListCodec(schema.codec))) return false
-    return scopePoliciesEquivalent(schema.changeScope, tx.meta.scope)
+    return !!schema && (isRefCodec(schema.codec) || isRefListCodec(schema.codec))
   }
   // Collect eligible fields from BOTH directions:
   //  - stored entries pointing at fromId (a field whose VALUE was
@@ -190,8 +199,26 @@ const retargetSource = async (
     aliasRewrites,
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references'>> = {}
-  if (nextContent !== current.content) patch.content = nextContent
+  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId'>> = {}
+  if (nextContent !== current.content) {
+    patch.content = nextContent
+    // `core.deriveReferenceTarget` already ran earlier in this same tx pass
+    // (kernel processors precede plugin ones) and stamped the column from
+    // the PRE-retarget content. A whole-block `((old))` row would otherwise
+    // keep `referenceTargetId: old` even though content now reads
+    // `((new))` — recompute from the rewritten content so the column and
+    // content never disagree.
+    const lookups = sameTxReferenceTargetLookups(tx)
+    const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
+    // This is always an update of an existing row (never a create), so an
+    // unresolvable alias (`undefined`) clears the column rather than
+    // preserving a caller-provided id the way the derive processor's
+    // create path does.
+    const nextTargetId = derived ?? null
+    if ((current.referenceTargetId ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+  }
   // This write (including the properties bag) runs under the merge tx's
   // BlockDefault scope, so if a canonical seed bag ever gains a ref/
   // refList-typed field, merging a block referenced BY a seed definition
@@ -228,7 +255,7 @@ const retargetMergedBlockReferences = async (
     event.aliasRewrites.map(({fromAlias, toAlias}) => [fromAlias, toAlias]),
   )
   for (const id of sourceIds) {
-    await retargetSource(ctx.tx, id, event, aliasRewrites, ctx.propertySchemas)
+    await retargetSource(ctx, id, event, aliasRewrites, ctx.propertySchemas)
   }
 }
 

@@ -26,6 +26,8 @@ import {
 import { panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
+import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
+import { visibleChildrenOf } from '@/data/visibleChildren'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -342,7 +344,7 @@ const loadSubtreeRowsInTx = async (
 ): Promise<BlockData[]> => {
   const rows: BlockData[] = [root]
   const visit = async (parentId: string): Promise<void> => {
-    const children = await tx.childrenOf(parentId, root.workspaceId)
+    const children = await visibleChildrenOf(tx, parentId, root.workspaceId)
     for (const child of children) {
       rows.push(child)
       await visit(child.id)
@@ -486,7 +488,7 @@ export const insertPanelRow = async (
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
 
-    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
@@ -517,7 +519,7 @@ const insertPanelAtStartOfStackInTx = async (
     blockId: string
   },
 ): Promise<string> => {
-  const children = await tx.childrenOf(args.stackId, args.workspaceId)
+  const children = await visibleChildrenOf(tx, args.stackId, args.workspaceId)
   const orderKey = keyBetween(null, children[0]?.orderKey ?? null)
   return createPanelRowInTx(repo, tx, {
     workspaceId: args.workspaceId,
@@ -551,7 +553,7 @@ export const insertSidebarStackedPanel = async (
       }
 
       if (source?.parentId === layoutSessionBlock.id) {
-        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+        const topLevelSiblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
@@ -586,7 +588,7 @@ export const insertSidebarStackedPanel = async (
       }
     }
 
-    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await visibleChildrenOf(tx, layoutSessionBlock.id, parent.workspaceId)
     const previous = siblings.at(-1)
     const stackId = await createPanelStackRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
@@ -661,9 +663,13 @@ export const deletePanelRow = async (
     const nextActivePanelId = deletingActivePanel
       ? nextActivePanelAfterClose(row, parent, rowsBeforeDelete)
       : undefined
-    await tx.delete(panelId)
+    // Subtree deletes (PR #288 §9): panel rows are UiState property hosts —
+    // in a flipped workspace their bags materialize as hidden field/value
+    // children, and a bare tx.delete would strand those live under the
+    // tombstone (still indexed/uploaded).
+    await deleteLayoutRowSubtreeInTx(tx, panelId)
     for (const stackId of stackIdsToDelete) {
-      await tx.delete(stackId)
+      await deleteLayoutRowSubtreeInTx(tx, stackId)
     }
     if (deletingActivePanel && layoutSession) {
       await tx.setProperty(layoutSession.id, activePanelIdProp, nextActivePanelId)
@@ -753,8 +759,18 @@ export const reconcilePanelRows = async (
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
 
+    // Removed layout rows are deleted WITH their whole subtree
+    // (`deleteLayoutRowSubtreeInTx`), same as `deletePanelRow`. Hierarchical
+    // editing: anything meant to survive a reconcile is moved out of the doomed
+    // subtree FIRST — the reused panels are relocated into the freshly-built
+    // stacks by `materializeSlots` (`tx.move`), and unmatched panels are leaves
+    // with nothing to preserve. So by delete time each doomed row's subtree
+    // holds only what should go: its hidden property-field machinery (a flipped
+    // workspace's materialized UiState props) and husk stacks that are their own
+    // `stackRowsToDelete` entries (idempotent re-delete). A bare `tx.delete`
+    // would instead strand that machinery live under the tombstone (#8).
     for (const slot of rowsToDelete) {
-      await tx.delete(slot.row.id)
+      await deleteLayoutRowSubtreeInTx(tx, slot.row.id)
       deletedPanelRowIds.push(slot.row.id)
     }
 
@@ -824,7 +840,7 @@ export const reconcilePanelRows = async (
     await materializeSlots(targetSlots, layoutSessionBlock.id)
 
     for (const stackRow of stackRowsToDelete) {
-      await tx.delete(stackRow.id)
+      await deleteLayoutRowSubtreeInTx(tx, stackRow.id)
     }
 
     // Either/or: an inbound `;active` names a row THIS reconcile just
@@ -908,7 +924,7 @@ export const applyCurrentLayoutUrl = async ({
     ? degradeSublayoutSlots(route.slots)
     : route.slots
 
-  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load()
+  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
   if (targetSlots.length === 0) {
@@ -927,7 +943,7 @@ export const applyCurrentLayoutUrl = async ({
   // store them). Cannot loop: replaceState fires no event, and a second
   // pass over the replaced hash compares equal.
   const finalRows = changed
-    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load()
+    ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
     : currentRows
   const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows)
   const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots))
@@ -993,7 +1009,7 @@ export class PanelLayoutProjection {
 
   async start(): Promise<void> {
     if (this.unsubscribeRows || this.unsubscribeUrl) return
-    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id})
+    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true})
     const initialRows = await rowsHandle.load()
     this.lastSlots = layoutSlotsFromRows(this.layoutSessionBlock.id, initialRows)
     this.unsubscribeRows = rowsHandle.subscribe(rows => {
@@ -1051,7 +1067,7 @@ export class PanelLayoutProjection {
             // the generation check skips the pass when a live subscription
             // event was processed after drain (its rows are newer).
             const generationAtDrain = this.outboundGeneration
-            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id}).load()
+            const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true}).load()
             // Re-check after the await: a NEW inbound may have queued during
             // the load (and rows events suppressed under it re-set the flag).
             // Bail WITHOUT clearing — that inbound's own drain owns the flag

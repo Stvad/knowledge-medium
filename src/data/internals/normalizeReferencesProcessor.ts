@@ -28,6 +28,12 @@ import {
   type AnySameTxProcessor,
 } from '@/data/api'
 import { BLOCK_TYPE_KERNEL_PROCESSORS } from './blockTypeTypeifyProcessor'
+import { DERIVE_REFERENCE_TARGET_PROCESSOR } from './referenceTargetProcessor'
+import {
+  MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
+  PROJECT_PROPERTY_CHILDREN_PROCESSOR,
+} from './propertyChildrenProcessor'
+import { MIGRATE_PROPERTY_RENAME_PROCESSOR } from './propertyRenameProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -48,19 +54,43 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
       const canonical = normalizeReferences(row.after.references)
       // Already canonical? Skip — saves a no-op write + UPDATE.
       if (referencesEqual(canonical, row.after.references)) continue
-      // `skipMetadata: true` so the normalization doesn't bump
-      // `updatedAt` / `updatedBy` — it's a bookkeeping write, not
-      // a user intent. Same convention used by parseReferences when
-      // it updates the projected references column.
+      // `skipMetadata: true` keeps `userUpdatedAt` / `updatedBy` untouched —
+      // canonicalizing is derived bookkeeping, not a user edit, so it must not
+      // float the row to the top of "recent" or change its "edited by". But
+      // `updatedAt` STILL advances (skipMetadata does not suppress it —
+      // metadataPatch always returns it): `references_json` is a SYNCED
+      // column, so a change to it must carry a new row version like any other
+      // synced edit, or a peer's LWW gate would drop the canonical value. Same
+      // convention as parseReferences' projection write next door.
       await ctx.tx.update(row.id, {references: canonical}, {skipMetadata: true})
     }
   },
 })
 
+// Single pass, registration order. Block-type typeify runs FIRST: its bag
+// amendments (page type, label, aliases) are raw/setProperty cell writes,
+// and in a child-backed workspace those must still be ahead of materialize
+// or the value children go stale until an unrelated edit (PR #386 review).
+// The residual trade: a transition-into-block-type written by PROJECT
+// itself (hand-editing a hidden `types` VALUE row) no longer re-fires
+// typeify this tx — machinery-row surgery, self-heals on the next bag
+// write. Then the §5 trio: materialize (cell→children) before derive so a
+// raw cell write's fresh field/value rows get their column stamped in the
+// same tx; project (children→cell) after both so a tree-side edit
+// reprojects from settled children. Each write is idempotent, so a
+// dual-write round-trip through the trio no-ops. Typeify still precedes
+// the alias plugin's content<->alias sync (kernel before plugins), so a
+// freshly-tagged block-type block claims its label alias before any
+// reconciliation.
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
-  NORMALIZE_REFERENCES_PROCESSOR,
-  // Runs ahead of the alias plugin's content<->alias sync (kernel
-  // processors precede plugin ones), so a freshly-tagged block-type
-  // block claims its label alias before any reconciliation.
   ...BLOCK_TYPE_KERNEL_PROCESSORS,
+  MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR,
+  DERIVE_REFERENCE_TARGET_PROCESSOR,
+  PROJECT_PROPERTY_CHILDREN_PROCESSOR,
+  NORMALIZE_REFERENCES_PROCESSOR,
+  // Runs LAST: it re-keys consuming-parent cells for a definition rename, and
+  // the stale in-tx registry would make MATERIALIZE read the dropped old name
+  // as a user delete and tombstone the field rows if it ran afterward. See
+  // propertyRenameProcessor.ts header.
+  MIGRATE_PROPERTY_RENAME_PROCESSOR,
 ]

@@ -187,7 +187,7 @@ describe('agent runtime commands', () => {
     // though production registers it. The fix swaps in
     // resolveAppRuntime, which mirrors the production walk.
     //
-    // The vitest jsdom env can't resolve `@/…` app modules (e.g.
+    // The vitest happy-dom env can't resolve `@/…` app modules (e.g.
     // `@/extensions/core.js`) from inside a Babel-compiled blob URL, so
     // we stub the compile to
     // emit the AppExtension shape directly. The compile is just a
@@ -232,7 +232,7 @@ describe('agent runtime commands', () => {
 
   it('enable-extension / disable-extension flip the overrides map', async () => {
     // enable now also grants the device-local approval (#67), which would
-    // otherwise load real Babel + a blob-URL import (unsupported in jsdom),
+    // otherwise load real Babel + a blob-URL import (unsupported in happy-dom),
     // so stub the compile pipeline to a synthetic module.
     const restore = __setCompileImplForTest(async () => ({default: []}))
     try {
@@ -361,6 +361,151 @@ describe('agent runtime commands', () => {
     } finally {
       restore()
     }
+  })
+
+  it('sql execute refuses a raw write to a synced table (blocks) by default', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-target',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard target'},
+    )
+
+    await expect(executeCommand({
+      commandId: 'sql-guard-1',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'UPDATE blocks SET content = ? WHERE id = ?',
+      params: ['raw-write', 'sql-guard-target'],
+    }, env.context)).rejects.toThrow(/refusing to write to synced table "blocks"/)
+
+    // The raw write must never have landed.
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-target'],
+    )
+    expect(row?.content).toBe('original')
+  })
+
+  // SQLite lets a WITH clause prefix DML, so `WITH … UPDATE blocks` is a real
+  // raw write whose first token is `WITH` — it used to sail past the guard
+  // (PR #386 review). Recursive-CTE READS are the bridge's bread and butter,
+  // so they must keep working.
+  it('sql refuses a CTE-prefixed write but still allows a CTE-prefixed read', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-cte',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard cte target'},
+    )
+
+    await expect(executeCommand({
+      commandId: 'sql-guard-cte-1',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'WITH ids AS (SELECT id FROM blocks WHERE id = ?) '
+        + 'UPDATE blocks SET content = ? WHERE id IN (SELECT id FROM ids)',
+      params: ['sql-guard-cte', 'raw-write'],
+    }, env.context)).rejects.toThrow(/refusing to write to synced table "blocks"/)
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-cte'],
+    )
+    expect(row?.content).toBe('original')
+
+    const read = await executeCommand({
+      commandId: 'sql-guard-cte-2',
+      type: 'sql',
+      mode: 'all',
+      sql: 'WITH RECURSIVE up(id) AS (SELECT id FROM blocks WHERE id = ?) SELECT id FROM up',
+      params: ['sql-guard-cte'],
+    }, env.context)
+    expect(read).toEqual([{id: 'sql-guard-cte'}])
+  })
+
+  it('sql execute allows the same write once allowSyncedWrite opts in', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-override',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard override target'},
+    )
+
+    await executeCommand({
+      commandId: 'sql-guard-2',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'UPDATE blocks SET content = ? WHERE id = ?',
+      params: ['raw-write', 'sql-guard-override'],
+      allowSyncedWrite: true,
+    }, env.context)
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['sql-guard-override'],
+    )
+    expect(row?.content).toBe('raw-write')
+  })
+
+  it('sql select and writes to a LOCAL table (block_aliases) are unaffected by the guard', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'sql-guard-select',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'selectable',
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed sql-guard select target'},
+    )
+
+    // A read against the synced `blocks` table is never a "write" — the
+    // guard must not touch it.
+    const selectResult = await executeCommand({
+      commandId: 'sql-guard-select-1',
+      type: 'sql',
+      mode: 'all',
+      sql: 'SELECT content FROM blocks WHERE id = ?',
+      params: ['sql-guard-select'],
+    }, env.context) as Array<{content: string}>
+    expect(selectResult).toEqual([{content: 'selectable'}])
+
+    // A raw write to a LOCAL derived-index table (not in SYNCED_TABLES)
+    // must go through unguarded.
+    await executeCommand({
+      commandId: 'sql-guard-local-write',
+      type: 'sql',
+      mode: 'execute',
+      sql: 'INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower) VALUES (?, ?, ?, ?)',
+      params: ['sql-guard-select', WS, 'Manual Alias', 'manual alias'],
+    }, env.context)
+
+    const aliasRow = await env.h.db.get<{alias: string}>(
+      'SELECT alias FROM block_aliases WHERE block_id = ?',
+      ['sql-guard-select'],
+    )
+    expect(aliasRow?.alias).toBe('Manual Alias')
   })
 
   it('verify lists per-extension contribution ids (renderers, appMounts)', async () => {

@@ -67,4 +67,64 @@ describe('convertEmptyChildBlockToProperty', () => {
     expect(repo.block('parent').peekProperty(showPropertiesProp)).toBeUndefined()
     expect(repo.block('child').peek()?.deleted).toBe(false)
   })
+
+  it('does not convert a block that owns property content (would delete its data)', async () => {
+    // A block with properties but empty content and no VISIBLE children. In a
+    // child-backed workspace its property field/value rows are hidden from the
+    // visible childIds facade the guard reads, so converting would `delete()`
+    // the block and strand/soft-delete that property data (incl. value-row
+    // comments). Guarding on the properties cell is flip-independent — the same
+    // block in a non-flipped workspace holds the data in its cell and must be
+    // protected too.
+    await repo.tx(tx => tx.update('child', {properties: {note: 'kept'}}),
+      {scope: ChangeScope.BlockDefault})
+
+    const converted = await convertEmptyChildBlockToProperty(repo.block('child'), repo)
+
+    expect(converted).toBe(false)
+    expect(repo.block('parent').peekProperty(showPropertiesProp)).toBeUndefined()
+    expect(repo.block('child').peek()?.deleted).toBe(false)
+  })
+
+  it('does not convert a block whose only children are HIDDEN property rows with an empty cell', async () => {
+    // The state a forced find-replace / broken value-row edit leaves in a
+    // child-backed workspace: a live field row + value child under `child`, but
+    // PROJECT has dropped the cell key because the value stopped decoding. The
+    // visible childIds facade hides the field row (§9) AND `data.properties` is
+    // empty, so both the cell guard and a visible-only child check would pass —
+    // the STRUCTURAL child list is what protects the field/value rows (and any
+    // value-row comments) from being subtree-deleted by the conversion.
+    const FIELD_DEF = '99999999-9999-4999-8999-999999999999'
+    await h.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES ('ws-1', 'ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+    )
+    await repo.tx(async tx => {
+      await tx.create({
+        id: FIELD_DEF, workspaceId: 'ws-1', parentId: null, orderKey: 'zz',
+        content: 'note', properties: {types: ['property-schema']},
+      })
+      await tx.create({
+        id: 'field', workspaceId: 'ws-1', parentId: 'child',
+        referenceTargetId: FIELD_DEF, orderKey: 'a0', content: `((${FIELD_DEF}))`,
+      })
+      await tx.create({
+        id: 'value', workspaceId: 'ws-1', parentId: 'field', orderKey: 'a0',
+        content: 'kept',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // The field row is hidden from the visible facade and the cell is empty:
+    // exactly the both-look-empty state the fix must still refuse.
+    expect(await repo.block('child').childIds.load()).toEqual([])
+    expect(repo.block('child').peek()?.properties).toEqual({})
+
+    const converted = await convertEmptyChildBlockToProperty(repo.block('child'), repo)
+
+    expect(converted).toBe(false)
+    expect(repo.block('child').peek()?.deleted).toBe(false)
+    expect(repo.block('field').peek()?.deleted).toBe(false)
+    expect(repo.block('value').peek()?.deleted).toBe(false)
+  })
 })

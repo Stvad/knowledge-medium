@@ -56,6 +56,7 @@ describe('parseWorkspaceRow — E2EE columns', () => {
     update_time: 2,
     encryption_mode: 'none',
     wk_canary: null,
+    properties_migration: null,
   }
 
   it('carries encryption_mode / wk_canary into the domain object (not dropped)', () => {

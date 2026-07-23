@@ -67,7 +67,9 @@ import { isRetainableAbsentRef, projectPropertyReferences } from './referencePro
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -144,6 +146,7 @@ interface SourcePlan {
  *  state lookup, and produce a SourcePlan describing what the write
  *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
  *  hits committed state. */
+
 const buildSourcePlan = async (
   ctx: ProcessorCtx,
   source: BlockData,
@@ -327,11 +330,11 @@ const claimLiteralDateAliases = async (
   targetId: string,
   iso: string,
   aliases: readonly string[],
-): Promise<void> => {
+): Promise<boolean> => {
   const literals = [...new Set(aliases.filter(alias => alias !== iso))]
-  if (literals.length === 0) return
+  if (literals.length === 0) return false
   const target = await tx.get(targetId)
-  if (target === null || target.deleted) return
+  if (target === null || target.deleted) return false
   let existing: readonly string[]
   try {
     const encoded = target.properties[aliasesProp.name]
@@ -343,16 +346,17 @@ const claimLiteralDateAliases = async (
     // must never un-claim the target's ISO. Losing a live binding is
     // worse than leaving the literal unclaimed, so skip the claim for
     // this target; it degrades to the pre-claim first-writer behavior.
-    return
+    return false
   }
   const missing = literals.filter(literal => !existing.includes(literal))
-  if (missing.length === 0) return
+  if (missing.length === 0) return false
   // skipMetadata: derived bookkeeping, same as the source-references
   // write in applySourcePlan — advances updatedAt for sync but must not
   // stamp userUpdatedAt/updatedBy, or a background re-parse of some
   // unrelated source makes the target look freshly user-edited.
   try {
     await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
+    return true
   } catch (err) {
     // Swallow ONLY alias-collision aborts. The alias-update trigger
     // deletes and re-inserts ALL of the target's aliases, re-checking
@@ -369,6 +373,7 @@ const claimLiteralDateAliases = async (
     // first-writer behavior for this target only (adversarial review
     // on PR #384).
     if (parseAliasCollisionError(err) === null) throw err
+    return false
   }
 }
 
@@ -434,12 +439,29 @@ const applySourcePlan = async (
     for (const alias of aliases) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
     }
-    await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
+    const claimedNewLiterals = await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
+    // §9 arrival-order repair, LOCAL half (mirror of the aliasesToEnsure path
+    // below): a whole-block `[[2026-01-05]]` — or long-form — row written
+    // before this daily-note target existed derived its reference_target_id to
+    // NULL, and nothing content-driven revisits it. The target's creation (or
+    // a newly-claimed literal on an existing target) is the trigger. Deferred +
+    // batched on Repo; the per-open sweep covers pre-sweep writes.
+    if (ensured.inserted || claimedNewLiterals) {
+      ctx.repo.scheduleReferenceTargetNameRederive(plan.workspaceId, [iso, ...aliases])
+    }
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
     if (ensured.inserted) newlyInserted.push(ensured.id)
     retarget(predicted, ensured.id, alias)
+    // §9 arrival-order repair, LOCAL half (adversarial-review round 2): a
+    // whole-block `[[alias]]` row written before this seat existed derived
+    // its local reference_target_id to NULL, and nothing content-driven
+    // revisits it — the seat's creation is the trigger. Deferred + batched
+    // on Repo; no-op pre-sweep (the per-open sweep covers those).
+    if (ensured.inserted) {
+      ctx.repo.scheduleReferenceTargetNameRederive(plan.workspaceId, [alias])
+    }
   }
   // Retargeting invalidates the read phase's referencesChanged verdict —
   // recompute it the same canonical-to-canonical way buildSourcePlan does
@@ -567,13 +589,32 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     // Write phase — soft-delete the orphans. Single tx so the deletes
     // are atomic and produce one command_events row.
     await ctx.repo.tx(async tx => {
+      // The seat was created empty, but in a child-backed workspace its OWN
+      // generated properties (alias / types) materialize as hidden field
+      // rows (PR #288 §9) — delete those alongside the seat or they dangle
+      // live under the tombstone. Only machinery-generated field rows go;
+      // user content under a seat (there should be none) is left alone.
+      // Flip-gated (§9): generated field rows exist only in child-backed
+      // workspaces. In an un-flipped workspace a column match under a seat
+      // is by construction user-authored content — never machinery's to
+      // delete.
+      const sweepGeneratedFieldRows = await tx.isPropertyChildBackedWorkspace(workspaceId)
+      const generatedFieldIds = new Set([
+        propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+        propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+      ])
       for (const id of orphans) {
-        // No block references it — orphan. Soft-delete (the §7 cleanup
-        // is leaf-only by construction; the alias target was created
-        // empty so it has no children to cascade). tx.delete on the raw
-        // primitive is leaf-aware enough for v1; if a future processor
-        // wants subtree-cleanup it would call repo.mutate.delete instead.
+        // No block references it — orphan. Soft-delete the seat, then its
+        // generated field rows (with their value children).
         await tx.delete(id)
+        if (!sweepGeneratedFieldRows) continue
+        const children = await tx.childrenOf(id, undefined)
+        for (const child of children) {
+          const target = child.referenceTargetId ?? null
+          if (target !== null && generatedFieldIds.has(target)) {
+            await deleteSubtreeInTx(tx, child.id)
+          }
+        }
       }
     }, {
       scope: ChangeScope.References,

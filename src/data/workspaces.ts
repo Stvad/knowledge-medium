@@ -9,6 +9,7 @@ import type {
 } from '@/types'
 import type { Repo } from './repo'
 import {
+  parsePropertiesMigration,
   parseWorkspaceMemberRow,
   parseWorkspaceRow,
   type WorkspaceMemberRow,
@@ -41,6 +42,10 @@ type RpcWorkspaceRow = {
   // the domain Workspace so the optimistic prime preserves the canary.
   encryption_mode: string
   wk_canary: string | null
+  // Properties-as-blocks rollout lever (PR #288 §6). Optional: RPCs
+  // deployed before the column exist return rows without it; absence
+  // parses as 'cell' (dormant).
+  properties_migration?: string | null
 }
 
 const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
@@ -51,6 +56,7 @@ const parseRpcWorkspace = (row: RpcWorkspaceRow): Workspace => ({
   updateTime: toNumber(row.update_time),
   encryptionMode: row.encryption_mode,
   wkCanary: row.wk_canary,
+  propertiesMigration: parsePropertiesMigration(row.properties_migration),
 })
 
 // @projects: workspace_members
@@ -349,13 +355,15 @@ export const listWorkspaceMembersWithEmails = async (
 // ---------------------------------------------------------------------------
 
 const SELECT_LOCAL_WORKSPACES_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode,
+         wk_canary, properties_migration
   FROM workspaces
   ORDER BY create_time ASC, id ASC
 `
 
 const SELECT_LOCAL_WORKSPACE_BY_ID_SQL = `
-  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary
+  SELECT id, name, owner_user_id, create_time, update_time, encryption_mode,
+         wk_canary, properties_migration
   FROM workspaces
   WHERE id = ?
   LIMIT 1
@@ -539,11 +547,14 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
   // would reset encryption_mode/wk_canary to their column defaults
   // (none/null) — nulling a synced canary in the RPC-before-sync window and
   // making an E2EE workspace look plaintext on a fresh create until sync
-  // catches up (§7).
+  // catches up (§7). Same reasoning for properties_migration: dropping it
+  // would locally reset a flipped workspace to 'cell', silently routing
+  // property writes down the cell-only path until PowerSync replays the row.
   await repo.db.execute(
     `INSERT OR REPLACE INTO workspaces
-       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary,
+        properties_migration)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       workspace.id,
       workspace.name,
@@ -552,6 +563,7 @@ const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<vo
       workspace.updateTime,
       workspace.encryptionMode,
       workspace.wkCanary,
+      workspace.propertiesMigration,
     ],
   )
 }
@@ -636,6 +648,7 @@ export const ensureLocalPersonalWorkspace = async (
     // Local-only personal workspace is always plaintext.
     encryptionMode: 'none',
     wkCanary: null,
+    propertiesMigration: 'cell',
   }
   const member: WorkspaceMembership = {
     id: memberId,

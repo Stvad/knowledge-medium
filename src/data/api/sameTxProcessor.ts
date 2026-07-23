@@ -46,7 +46,7 @@
  */
 
 import type { BlockData } from './blockData'
-import type { AnyPropertySchema } from './propertySchema'
+import type { AnyPropertySchema, PropertySchemaResolution } from './propertySchema'
 import type { ChangeScope } from './changeScope'
 import type { ChangedRow } from './processor'
 import type { Tx } from './tx'
@@ -128,6 +128,27 @@ export interface SameTxCtx {
   db: SameTxReadDb
   /** Merged property-schema registry snapshotted at tx start. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Resolve a property-schema NAME against `workspaceId`'s deterministic
+   *  fleet-wide winner map — the same tx-start-captured identity primitive
+   *  `tx.setProperty` resolves through (schema unification §7). `resolved`
+   *  carries the branded `ResolvedPropertySchema` (with `fieldId`);
+   *  shadowed/ambiguous names come back as a structured
+   *  `identity-unavailable`, never a per-client guess. Synchronous — pure
+   *  snapshot lookups. */
+  resolvePropertySchemaName(
+    workspaceId: string,
+    name: string,
+  ): PropertySchemaResolution<unknown>
+  /** Resolve a durable fieldId (definition block id) against the same
+   *  snapshot — the recognition primitive for field rows
+   *  (`reference_target_id` → schema). Shadowed definitions resolve as
+   *  `identity-unavailable` with reason 'shadowed' (their field rows keep
+   *  classifying at read sites, but they are excluded from the name map
+   *  and cell projection — unification §7). */
+  resolvePropertySchemaField(
+    workspaceId: string,
+    fieldId: string,
+  ): PropertySchemaResolution<unknown>
 }
 
 /** Thrown by a same-tx processor to reject the user's tx. The

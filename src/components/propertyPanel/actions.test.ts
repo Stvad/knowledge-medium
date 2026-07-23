@@ -5,7 +5,6 @@ import {
   ChangeScope,
   codecs,
   defineProperty,
-  PropertySchemaScopeMismatchError,
   type AnyPropertySchema,
 } from '@/data/api'
 import type {Block} from '@/data/block'
@@ -202,49 +201,85 @@ describe('property panel action visibility guards', () => {
     expect(addSchema).not.toHaveBeenCalled()
   })
 
-  // A UserPrefs (allow, non-hidden) captured scope is the reachable case: a
-  // UiState capture would be filtered as hidden before reaching the tx.
-  const scopeDriftBlock = (resolvedScope: ChangeScope) => {
-    const captured = defineProperty<string>('pref:foo', {
-      codec: codecs.string,
-      defaultValue: '',
-      changeScope: ChangeScope.UserPrefs,
-    })
+  // deleteProperty now routes a SCHEMA'd key through tx.unsetProperty, which
+  // owns the scope-consistency guard (resolved scope vs the tx's admitted
+  // scope) — the drift protection that used to be inlined here lives in the
+  // engine now (see the unsetProperty scope-mismatch test). A SCHEMA-LESS key
+  // has no resolvable definition, so it stays a raw tx.update.
+  // `get` returns the CURRENT (in-tx) bag — distinct from the snapshot the
+  // caller passes as `args.properties`, so a test can prove the write is built
+  // from the fresh read, not the stale snapshot.
+  const deleteBlock = (properties: Record<string, unknown> = {}) => {
     const update = vi.fn()
-    const resolvePropertySchema = vi.fn(async () => ({...captured, changeScope: resolvedScope}))
+    const unsetProperty = vi.fn()
+    const get = vi.fn(async () => ({id: 'block-1', properties}))
     const tx = vi.fn(async (cb: (t: unknown) => Promise<void>) => {
-      await cb({resolvePropertySchema, update})
+      await cb({update, unsetProperty, get})
     })
     const block = {
       id: 'block-1',
       repo: {propertyDefinitions: null, propertySchemas: new Map(), tx},
     } as unknown as Block
-    return {captured, update, block}
+    return {update, unsetProperty, get, block}
   }
 
-  it('rejects a delete whose captured scope policy differs from the live resolved scope', async () => {
-    // Captured UserPrefs (allow) but the definition now resolves BlockDefault
-    // (reject): raw tx.update would bypass the read-only gate without this check.
-    const {captured, update, block} = scopeDriftBlock(ChangeScope.BlockDefault)
-    await expect(deleteProperty({
+  it('routes a schema-backed delete through the scope-checked unsetProperty, not a raw tx.update', async () => {
+    const schema = defineProperty<string>('pref:foo', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.UserPrefs,
+    })
+    const {update, unsetProperty, block} = deleteBlock()
+    await deleteProperty({
       block,
-      properties: {[captured.name]: 'v'},
-      schemas: new Map([[captured.name, captured]]),
+      properties: {[schema.name]: 'v'},
+      schemas: new Map([[schema.name, schema]]),
       uis: new Map(),
-      name: captured.name,
-    })).rejects.toThrow(PropertySchemaScopeMismatchError)
+      name: schema.name,
+    })
+    expect(unsetProperty).toHaveBeenCalledWith('block-1', schema)
     expect(update).not.toHaveBeenCalled()
   })
 
-  it('deletes when the captured and resolved scope policies match', async () => {
-    const {captured, update, block} = scopeDriftBlock(ChangeScope.UserPrefs)
+  it('removes a schema-less key with a raw tx.update (no resolvable definition to unset through)', async () => {
+    const {update, unsetProperty, block} = deleteBlock({'unregistered:key': 'v', keep: 'me'})
     await deleteProperty({
       block,
-      properties: {[captured.name]: 'v'},
-      schemas: new Map([[captured.name, captured]]),
+      properties: {'unregistered:key': 'v', keep: 'me'},
+      schemas: new Map(), // no schema for the deleted name
       uis: new Map(),
-      name: captured.name,
+      name: 'unregistered:key',
     })
-    expect(update).toHaveBeenCalledWith('block-1', {properties: {}})
+    expect(update).toHaveBeenCalledWith('block-1', {properties: {keep: 'me'}})
+    expect(unsetProperty).not.toHaveBeenCalled()
+  })
+
+  // The raw whole-bag write must be built from the CURRENT bag read inside the
+  // tx, not the panel's captured `args.properties` — otherwise a property some
+  // other write changed between the panel opening and this commit is clobbered
+  // back to its snapshot value.
+  it('renameProperty writes the FRESH in-tx bag, not the stale panel snapshot', async () => {
+    const {update, block} = deleteBlock({a: 1, b: 99}) // `b` concurrently changed
+    await renameProperty({
+      block,
+      properties: {a: 1, b: 2}, // stale snapshot
+      schemas: new Map(),
+      uis: new Map(),
+      oldName: 'a',
+      newName: 'c',
+    })
+    expect(update).toHaveBeenCalledWith('block-1', {properties: {b: 99, c: 1}})
+  })
+
+  it('deleteProperty (schema-less) writes the FRESH in-tx bag, not the stale snapshot', async () => {
+    const {update, block} = deleteBlock({a: 1, b: 99}) // `b` concurrently changed
+    await deleteProperty({
+      block,
+      properties: {a: 1, b: 2}, // stale snapshot
+      schemas: new Map(),
+      uis: new Map(),
+      name: 'a',
+    })
+    expect(update).toHaveBeenCalledWith('block-1', {properties: {b: 99}})
   })
 })

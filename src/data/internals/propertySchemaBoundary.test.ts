@@ -395,6 +395,51 @@ describe('typed property identity boundary', () => {
     expect(repo.block('scope-target').get(seed)).toBe('ok')
   })
 
+  it('unsetProperty rejects a resolved-vs-admitted scope mismatch too (shared guard)', async () => {
+    // unsetProperty shares assertPropertyWriteScope with setProperty, so the
+    // same stale-scope bypass must be refused on the delete path (this is the
+    // coverage the property panel used to hold inline before deleteProperty
+    // delegated to unsetProperty).
+    const seed = seedProperty({
+      seedKey: 'system:test-plugin/property/unset-scope-check',
+      revision: 1,
+      name: 'unset-scope-check',
+      preset: 'string',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-unset-scope-check', [seed])
+    await repo.tx(
+      tx => tx.create({id: 'unset-scope-target', workspaceId: WS, parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await repo.tx(
+      tx => tx.setProperty('unset-scope-target', seed, 'present'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await expect(repo.tx(
+      tx => tx.unsetProperty('unset-scope-target', seed),
+      {scope: ChangeScope.UiState},
+    )).rejects.toMatchObject({name: 'PropertySchemaScopeMismatchError'})
+    // The value survived the rejected delete.
+    expect(repo.block('unset-scope-target').get(seed)).toBe('present')
+
+    // A matching-scope unset clears it.
+    await repo.tx(
+      tx => tx.unsetProperty('unset-scope-target', seed),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.block('unset-scope-target').peek()!.properties['unset-scope-check']).toBeUndefined()
+  })
+
   it('accepts a write whose resolved scope differs from the tx scope but shares its policy', async () => {
     // The guard compares by POLICY (read-only behavior + undoability), NOT scope
     // identity. BlockDefault and References share a policy, so a References tx

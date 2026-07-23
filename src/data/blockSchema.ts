@@ -9,6 +9,14 @@ export interface BlockRow {
   id: string
   workspace_id: string
   parent_id: string | null
+  /** LOCAL-only derived column (properties-as-blocks migration, slice A):
+   *  set when the row's whole content is exactly one reference token.
+   *  Exists on `blocks` only — never on `blocks_synced`, never uploaded,
+   *  never in a sync payload; every device derives it independently from
+   *  content (see `BLOCK_LOCAL_COLUMNS`). Optional because rows read from
+   *  `blocks_synced` (and pre-migration row_events snapshots) don't carry
+   *  it; `parseBlockRow` normalizes absence to `null`. */
+  reference_target_id?: string | null
   order_key: string
   content: string
   properties_json: string
@@ -57,25 +65,77 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'deleted', definition: 'deleted INTEGER NOT NULL DEFAULT 0'},
 ] as const satisfies readonly BlockStorageColumn[]
 
+/** LOCAL-only columns on the live `blocks` table — never synced. Not part of
+ *  `BLOCK_STORAGE_COLUMNS`, so they are excluded from everything that list
+ *  derives: the PowerSync sync-rule projection (`scripts/gen-sync-config.ts`),
+ *  the `blocks_synced` staging schema + raw-table put, the upload envelopes
+ *  (`BLOCK_UPLOAD_COLUMNS` in clientSchema.ts), and the sync materializer's
+ *  UPSERT (whose `ON CONFLICT DO UPDATE` therefore preserves them on
+ *  arrival). Every device derives these columns independently from synced
+ *  state. Existing installs get them via `ensureBlockLocalColumns` (the
+ *  CREATE below only applies to fresh tables).
+ *
+ *  `reference_target_id` (properties-as-blocks migration, slice A): the
+ *  resolved target when the row's whole content is exactly one reference
+ *  token (`((uuid))` / `[[alias]]`) — for property field rows this is the
+ *  schema's fieldId. Kept local by owner decision (PR #288 §8/§11): a synced
+ *  plaintext copy would leak reference-edge metadata that e2ee workspaces
+ *  encrypt, and no server-side consumer exists. */
+export const BLOCK_LOCAL_COLUMNS = [
+  {name: 'reference_target_id', definition: 'reference_target_id TEXT'},
+] as const satisfies readonly {readonly name: keyof BlockRow; readonly definition: string}[]
+
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
+
+/** Column list for reads/writes against the live `blocks` table (synced
+ *  storage columns + local-only columns). `blocks_synced` reads must keep
+ *  using the storage-only list. */
+export const BLOCKS_TABLE_COLUMN_NAMES: readonly (keyof BlockRow)[] = [
+  ...BLOCK_COLUMN_NAMES,
+  ...BLOCK_LOCAL_COLUMNS.map(column => column.name),
+]
 
 const formatSqlList = (items: readonly string[], indentSize: number) => {
   const indent = ' '.repeat(indentSize)
   return items.map(item => `${indent}${item}`).join(',\n')
 }
 
-export const SELECT_BLOCK_COLUMNS_SQL = BLOCK_COLUMN_NAMES.join(',\n  ')
+/** Full `blocks`-table column list (includes local-only columns). Every
+ *  current consumer reads the live `blocks` table; a `blocks_synced` read
+ *  must NOT use this (staging carries storage columns only). */
+export const SELECT_BLOCK_COLUMNS_SQL = BLOCKS_TABLE_COLUMN_NAMES.join(',\n  ')
 
 export const buildQualifiedBlockColumnsSql = (tableName: string) =>
-  BLOCK_COLUMN_NAMES
+  BLOCKS_TABLE_COLUMN_NAMES
     .map(columnName => `${tableName}.${columnName} AS ${columnName}`)
     .join(',\n  ')
 
 export const CREATE_BLOCKS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS blocks (
-${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
+${formatSqlList(
+    [...BLOCK_STORAGE_COLUMNS, ...BLOCK_LOCAL_COLUMNS].map(column => column.definition),
+    6,
+  )}
   )
 `
+
+/** Idempotent boot migration: add the local-only columns to a pre-existing
+ *  `blocks` table (`CREATE TABLE IF NOT EXISTS` never alters an existing
+ *  table). `blocks_synced` deliberately stays storage-only — it mirrors the
+ *  server row shape. Runs before the client-schema trigger recreation so
+ *  trigger bodies referencing the column never bind a missing column. */
+export const ensureBlockLocalColumns = async (db: {
+  execute(sql: string, params?: unknown[]): Promise<unknown>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{name: string}>(`PRAGMA table_info(blocks)`)
+  if (columns.length === 0) return
+  for (const column of BLOCK_LOCAL_COLUMNS) {
+    if (!columns.some(existing => existing.name === column.name)) {
+      await db.execute(`ALTER TABLE blocks ADD COLUMN ${column.definition}`)
+    }
+  }
+}
 
 /** Layout B staging table (design doc §9.2). PowerSync's blocks stream is
  *  retargeted to row_type `blocks_synced`, so EVERY downloaded row —
@@ -104,6 +164,16 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_active
   ON blocks (workspace_id)
   WHERE deleted = 0
+`
+
+/** Partial index over the local derived column: field-row recognition and
+ *  "rows referencing target X" scans (rename retitle, projection walks) hit
+ *  `(workspace_id, reference_target_id, parent_id)`; the `IS NOT NULL`
+ *  predicate keeps it tiny — only exact-reference rows have the column set. */
+export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_reference_target_parent
+  ON blocks (workspace_id, reference_target_id, parent_id)
+  WHERE deleted = 0 AND reference_target_id IS NOT NULL
 `
 
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
@@ -139,6 +209,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
   {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
   {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
+  {key: 'referenceTargetId', sqlExpression: rowRef => `${rowRef}.reference_target_id`},
   {key: 'orderKey', sqlExpression: rowRef => `${rowRef}.order_key`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
@@ -175,6 +246,9 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
   parentId: row.parent_id,
+  // Local-only column: absent on `blocks_synced` rows and pre-migration
+  // row_events snapshots — normalize to null (optional-in, null-out).
+  referenceTargetId: row.reference_target_id ?? null,
   orderKey: row.order_key,
   content: row.content,
   properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}),
@@ -203,8 +277,13 @@ type BlockRowParams = [
   createdBy: string,
   updatedBy: string,
   deleted: 0 | 1,
+  referenceTargetId: string | null,
 ]
 
+/** Positional params for an INSERT into the live `blocks` table — ordered
+ *  storage columns first, then local columns (matching
+ *  `BLOCKS_TABLE_COLUMN_NAMES` / txEngine's `INSERT_SQL`). NOT for
+ *  `blocks_synced` (staging binds storage columns only). */
 export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.id,
   blockData.workspaceId,
@@ -219,4 +298,12 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.createdBy,
   blockData.updatedBy,
   blockData.deleted ? 1 : 0,
+  blockData.referenceTargetId ?? null,
 ]
+
+/** Positional params for the `blocks_synced` staging put (and any other
+ *  storage-columns-only bind): `blockToRowParams` minus the trailing
+ *  local-only columns — staging mirrors the server row shape and never
+ *  carries them. */
+export const blockToSyncedRowParams = (blockData: BlockData): unknown[] =>
+  blockToRowParams(blockData).slice(0, BLOCK_STORAGE_COLUMNS.length)

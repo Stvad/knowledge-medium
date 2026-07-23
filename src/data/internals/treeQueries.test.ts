@@ -26,6 +26,8 @@ import {
   CHILDREN_SQL,
   IS_DESCENDANT_OF_SQL,
   SUBTREE_SQL,
+  VISIBLE_CHILDREN_SQL,
+  VISIBLE_SUBTREE_SQL,
 } from './treeQueries'
 
 interface Seed {
@@ -247,5 +249,84 @@ describe('CHILDREN_SQL', () => {
     ])
     const rows = await h.db.getAll<{id: string}>(CHILDREN_SQL, ['sd-p'])
     expect(rows.map(r => r.id)).toEqual(['sd-2'])
+  })
+})
+
+describe('VISIBLE_CHILDREN_SQL / VISIBLE_SUBTREE_SQL — cyclic ancestor chain (issue #404 item 8b)', () => {
+  // The §9 "up" ancestry walks these embed lacked the visited-id guard the
+  // descendant CTEs above carry. Classification still CONVERGES on a cyclic
+  // DB either way (a short cycle is fully visited well within the depth-100
+  // cap, guard or not) — the guard's value is bounding the wasted work, not
+  // changing the answer, so these tests pin CORRECTNESS on a cyclic ancestor
+  // chain (the guard's SQL edit didn't regress classification) rather than
+  // trying to observe the bounded-work improvement itself, which the
+  // EXISTS/DISTINCT wrapping these walks live in makes unobservable from the
+  // result set.
+  let h: TestDb
+  const WS = 'ws-vis-cycle'
+  const DEF = 'def-cycle'
+
+  beforeAll(async () => {
+    h = await createTestDb()
+    // Shared, static fixture for every test in this describe (workspace flip
+    // + the one property-schema definition) — inserted once since `h` isn't
+    // reset between the two `it`s here; each test uses its own disjoint
+    // block ids so they don't collide.
+    await h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'cycle test ws', 'user-1'],
+    )
+    await h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, 'property-schema')`,
+      [DEF, WS],
+    )
+  })
+  afterAll(async () => { await h.cleanup() })
+
+  const insertBlock = (row: {
+    id: string
+    parent_id: string | null
+    reference_target_id?: string | null
+    order_key?: string
+  }) => h.db.execute(
+    `INSERT INTO blocks
+       (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+        created_at, updated_at, created_by, updated_by, deleted, reference_target_id)
+      VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', 0, ?)`,
+    [row.id, WS, row.parent_id, row.order_key ?? 'a0', row.reference_target_id ?? null],
+  )
+
+  it('a cyclic non-matching ancestor chain converges: a look-alike field row under it still hides as machinery', async () => {
+    // P's own ancestor chain cycles X <-> Y forever with no field row
+    // anywhere on it (issue #183 shape — concurrent moves under sync can
+    // produce this without ever passing through tx.move's cycle guard).
+    await insertBlock({id: 'X', parent_id: 'Y'})
+    await insertBlock({id: 'Y', parent_id: 'X'})
+    await insertBlock({id: 'P', parent_id: 'X'})
+
+    // An ordinary child stays visible either way.
+    await insertBlock({id: 'C', parent_id: 'P', order_key: 'a0'})
+    // A child that LOOKS like a field row of DEF (own column stamped) is
+    // machinery UNLESS P is itself interior to a property subtree. P's
+    // ancestor chain has no field row on it (just the X<->Y cycle), so this
+    // one must still be filtered out.
+    await insertBlock({id: 'F', parent_id: 'P', reference_target_id: DEF, order_key: 'a1'})
+
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_CHILDREN_SQL, ['P', 'P'])
+    expect(rows.map(r => r.id)).toEqual(['C'])
+  })
+
+  it('VISIBLE_SUBTREE_SQL root_exempt converges the same way for a root reached via a cyclic ancestor chain', async () => {
+    await insertBlock({id: 'X2', parent_id: 'Y2'})
+    await insertBlock({id: 'Y2', parent_id: 'X2'})
+    await insertBlock({id: 'P2', parent_id: 'X2'})
+    await insertBlock({id: 'F2', parent_id: 'P2', reference_target_id: DEF, order_key: 'a1'})
+
+    // root_exempt should resolve false (P2 is not interior), so the subtree
+    // rooted at P2 still prunes F2 as machinery.
+    const rows = await h.db.getAll<{id: string}>(VISIBLE_SUBTREE_SQL, ['P2', 'P2'])
+    expect(rows.map(r => r.id)).toEqual(['P2'])
   })
 })

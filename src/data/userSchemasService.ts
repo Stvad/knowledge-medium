@@ -33,6 +33,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
@@ -218,6 +219,17 @@ export class UserSchemasService {
   async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
     const name = args.name.trim()
     if (!name) throw new Error('[addSchema] name is required')
+    // A schema name must survive the `[[wikilink]]` round trip — `]]` is
+    // lossy there. Field rows are now id-addressed (`((fieldId))`, PR #288 §7)
+    // and no longer embed the name, so this is name hygiene (a name that
+    // can't be written as a clean `[[name]]` reference) rather than a hard
+    // field-row-content requirement; it could be relaxed as a follow-up.
+    if (!isRoundTrippableReferenceLabel(name)) {
+      throw new Error(
+        `[addSchema] name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]]; `
+        + 'rename without "]]"',
+      )
+    }
 
     // Capture the generation before the first await. Creation is a
     // definition-identity write: synthesis is available synchronously, but

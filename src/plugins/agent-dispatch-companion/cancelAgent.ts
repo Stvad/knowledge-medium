@@ -14,6 +14,7 @@ import {
   type ActionConfig,
 } from '@/shortcuts/types.js'
 import { AGENT_PROPS } from './chipState.ts'
+import { agentCancelProp } from './schema.ts'
 
 export const CANCEL_AGENT_ACTION_ID = 'agent-dispatch.cancel'
 
@@ -27,9 +28,9 @@ export const cancelAgent = async (block: Block): Promise<void> => {
     // block that already finished (or was never claimed) would be a
     // no-op signal the daemon has no reason to see.
     if (fresh.properties[AGENT_PROPS.status] !== 'running') return
-    await tx.update(block.id, {
-      properties: {...fresh.properties, [AGENT_PROPS.cancel]: Date.now()},
-    })
+    // A single typed set that merges the one key — never a whole-bag replace,
+    // so a status/activity update the daemon syncs in mid-gesture is preserved.
+    await tx.setProperty(block.id, agentCancelProp, Date.now())
   }, {scope: ChangeScope.BlockDefault, description: 'cancel agent'})
 }
 

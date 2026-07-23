@@ -206,4 +206,40 @@ describe('backlinks.countForBlock — handle behaviour', () => {
     })
     await vi.waitFor(() => expect(fired).toEqual([0, 1, 0]))
   })
+
+  // The badge must not count sources the expanded list drops, or the user sees
+  // a phantom backlink that vanishes on expand.
+  it('excludes property-machinery sources in a child-backed workspace (badge/list parity)', async () => {
+    const FLIP_WS = 'ws-flip'
+    await sharedDb.db.execute(
+      `INSERT OR REPLACE INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, 'flip ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+      [FLIP_WS],
+    )
+    const createIn = (args: {
+      id: string; parentId?: string | null; content?: string
+      referenceTargetId?: string | null; references?: BlockReference[]
+    }) =>
+      env.repo.tx(tx => tx.create({
+        id: args.id, workspaceId: FLIP_WS, parentId: args.parentId ?? null,
+        orderKey: `k-${args.id}`, content: args.content ?? '',
+        referenceTargetId: args.referenceTargetId, references: args.references ?? [],
+      }), { scope: ChangeScope.BlockDefault })
+
+    await createIn({ id: 'D', content: 'status' })
+    await sharedDb.db.execute(
+      `INSERT OR IGNORE INTO block_types (block_id, workspace_id, type) VALUES ('D', ?, 'property-schema')`,
+      [FLIP_WS],
+    )
+    await createIn({ id: 'Target' })
+    await createIn({ id: 'O' })
+    await createIn({ id: 'F', parentId: 'O', content: '((D))', referenceTargetId: 'D' })
+    // Hidden value row pointing at Target — the owning block's reprojection
+    // already carries this backlink, so the list drops it and so must the badge.
+    await createIn({ id: 'V', parentId: 'F', references: [{ id: 'Target', alias: 'T' }] })
+    await createIn({ id: 'Q', references: [{ id: 'Target', alias: 'T' }] })
+
+    await expectCount('Target', 1, FLIP_WS)
+  })
 })

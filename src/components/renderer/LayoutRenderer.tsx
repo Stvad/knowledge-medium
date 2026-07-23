@@ -146,7 +146,7 @@ function SlotView({
 export function LayoutRenderer({block}: BlockRendererProps) {
   const isMobile = useIsMobile()
   const [activePanelId] = usePropertyValue(block, activePanelIdProp)
-  const rows = useHandle(block.repo.query.subtree({id: block.id}), {
+  const rows = useHandle(block.repo.query.subtree({id: block.id, hidePropertyChildren: true}), {
     selector: data => data ?? EMPTY_ROWS,
   })
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])

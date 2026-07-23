@@ -93,6 +93,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   awaitReconcileRescans: 'drains a shared job object',
   awaitReprojections: 'drains a shared job object',
   awaitSeedMaterialization: 'drains a shared job object',
+  awaitPropertyDefinitionMigrations: 'drains a shared job object',
+  awaitReferenceTargetDerive: 'drains a shared job object',
   awaitWorkspaceBackfills: 'drains a shared job object',
   drainSyncWorkspace: 'reads this.syncObserver through the chain; never assigns it',
   flushSyncObserver: 'reads this.syncObserver through the chain; never assigns it',
@@ -128,9 +130,17 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runWorkspaceSeedMaterialization: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   materializeSeedKind: 'private; reached only from runWorkspaceSeedMaterialization (delegated schedule* overrides)',
   runSubquery: 'private read',
+  runReferenceTargetDerivePass: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
+  drainNameRederives: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   workspaceSeeds: 'private read; reached only via the DELEGATED schedule/run seed-materialization members',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
+  schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
+  scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
+  stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
+  referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
+  runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
+  runPropertyDefinitionMigrationBatch: 'private; jobs are enqueued via the facetBridge-bound schedule',
   swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──
@@ -205,6 +215,11 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   workspaceBackfillMarkers: 'shared object',
+  referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
+  referenceTargetSweepDone: 'shared Set (session bookkeeping)',
+  pendingNameRederives: 'shared Map (session bookkeeping)',
+  nameRederiveDrainScheduled: 'shared Set (session bookkeeping)',
+  propertyDefinitionMigrationJobs: 'shared job queue (enqueued via constructor-bound facetBridge)',
 }
 
 let sharedDb: TestDb

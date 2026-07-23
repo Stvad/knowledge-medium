@@ -141,9 +141,11 @@ export const jsonValuePresetCore = definePresetCore<unknown>({
 export const optionalJsonValuePresetCore = definePresetCore<unknown | undefined>({
   id: 'optional-json', build: () => codecs.optionalIdentity<unknown>(), defaultValue: undefined,
 })
-/** Internal metadata codec for `property-schema:default`. Unlike
- * `optional-json`, stored null is a meaningful encoded default and must not
- * collapse to absence; unlike `json`, an absent field defaults to undefined. */
+/** Identity codec for a property whose stored value is arbitrary JSON of a
+ * shape a typed codec can't pin — a mixed number|string like `agent:cancel`,
+ * or the internal `property-schema:default` metadata. Unlike `optional-json`,
+ * a stored null is a meaningful encoded value and must not collapse to absence;
+ * unlike `json`, an absent field defaults to undefined. */
 export const rawJsonValuePresetCore = definePresetCore<unknown | undefined>({
   id: 'raw-json', build: () => codecs.unsafeIdentity<unknown | undefined>(), defaultValue: undefined,
 })

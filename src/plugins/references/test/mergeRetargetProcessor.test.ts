@@ -100,6 +100,69 @@ describe('references.retargetMergedBlockReferences', () => {
     ]))
   })
 
+  // Regression (PR #386 review): `core.deriveReferenceTarget` runs earlier
+  // in the same-tx processor pass (kernel processors precede plugin ones)
+  // and stamps `referenceTargetId` from the PRE-retarget content. Without
+  // recomputing it here, a whole-block `((old))` row would keep
+  // `referenceTargetId: old` even after its content became `((new))`.
+  describe('referenceTargetId', () => {
+    it('recomputes referenceTargetId when retargeting stamps a whole-block reference', async () => {
+      const intoId = '44444444-4444-4444-8444-444444444444'
+      const fromId = '55555555-5555-4555-8555-555555555555'
+      const wholeRefId = '66666666-6666-4666-8666-666666666666'
+
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'p2', workspaceId: WS, parentId: null, orderKey: 'b0'})
+        await tx.create({id: intoId, workspaceId: WS, parentId: 'p2', orderKey: 'b0', content: 'Target'})
+        await tx.create({id: fromId, workspaceId: WS, parentId: 'p2', orderKey: 'b1', content: 'Source'})
+        await tx.create({
+          id: wholeRefId,
+          workspaceId: WS,
+          parentId: 'p2',
+          orderKey: 'b2',
+          content: `((${fromId}))`,
+          references: [{id: fromId, alias: fromId}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+
+      expect(env.read(wholeRefId)!.referenceTargetId).toBe(fromId)
+
+      await env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'})
+
+      expect(env.read(wholeRefId)!.content).toBe(`((${intoId}))`)
+      expect(env.read(wholeRefId)!.referenceTargetId).toBe(intoId)
+    })
+
+    it('leaves referenceTargetId null for a partial-content occurrence retargeted by a merge', async () => {
+      const intoId = '77777777-7777-4777-8777-777777777777'
+      const fromId = '88888888-8888-4888-8888-888888888888'
+      const partialRefId = '99999999-9999-4999-8999-999999999999'
+
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'p3', workspaceId: WS, parentId: null, orderKey: 'c0'})
+        await tx.create({id: intoId, workspaceId: WS, parentId: 'p3', orderKey: 'c0', content: 'Target'})
+        await tx.create({id: fromId, workspaceId: WS, parentId: 'p3', orderKey: 'c1', content: 'Source'})
+        await tx.create({
+          id: partialRefId,
+          workspaceId: WS,
+          parentId: 'p3',
+          orderKey: 'c2',
+          content: `see ((${fromId})) here`,
+          references: [{id: fromId, alias: fromId}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+
+      expect(env.read(partialRefId)!.referenceTargetId).toBeNull()
+
+      await env.repo.mutate.merge({intoId, fromId, contentStrategy: 'keepTarget'})
+
+      expect(env.read(partialRefId)!.content).toBe(`see ((${intoId})) here`)
+      expect(env.read(partialRefId)!.referenceTargetId).toBeNull()
+    })
+  })
+
   it('uses alias rewrite metadata from alias-collision merges', async () => {
     await env.repo.tx(async tx => {
       await tx.create({
@@ -344,13 +407,14 @@ describe('references.retargetMergedBlockReferences', () => {
       ).toBe(false)
     })
 
-    it('skips value AND entry for a ref field whose scope is not policy-equivalent to the merge tx', async () => {
-      // The value rewrite lands via the raw `properties` patch in the
-      // merge tx (BlockDefault), bypassing setProperty's per-field scope
-      // routing — so a UiState-scoped ref pointer must be left alone
-      // entirely (value AND entry, like the absent-schema branch), not
-      // silently mutated inside an undoable document merge (Codex
-      // review on PR #371).
+    it('retargets value AND entry even for a ref field whose scope is not policy-equivalent to the merge tx', async () => {
+      // A merge must not leave a pointer dangling at the tombstoned source,
+      // so it retargets a ref field's value+entry REGARDLESS of the field's
+      // declared scope — matching the value-child content path, which always
+      // retargets. The write lands under the merge's BlockDefault scope, so
+      // the retarget is undoable with the merge (undoing the merge restores
+      // the pointer). Overriding the field's default scope is exactly right
+      // for a merge (Vlad, PR #386 F7 — reversing the earlier PR #371 skip).
       const pinnedProp = refTestSeed('pinned-view', 'ref', ChangeScope.UiState)
       await resetTestDb(sharedDb.db)
       const {repo, cache} = createTestRepo({
@@ -386,12 +450,61 @@ describe('references.retargetMergedBlockReferences', () => {
       const ref = cache.getSnapshot('ref')!
       // Policy-equivalent field: rewritten as usual.
       expect(ref.properties.reviewer).toBe('into')
-      // UiState field: value AND entry untouched.
-      expect(ref.properties['pinned-view']).toBe('from')
+      // UiState field: NOW ALSO retargeted — no dangling pointer at `from`.
+      expect(ref.properties['pinned-view']).toBe('into')
       expect(ref.references).toEqual(normalizeReferences([
         {id: 'into', alias: 'into', sourceField: 'reviewer'},
-        {id: 'from', alias: 'from', sourceField: 'pinned-view'},
+        {id: 'into', alias: 'into', sourceField: 'pinned-view'},
       ]))
+    })
+  })
+
+  // PR #386 review raised this as a gap: the properties patch updates the
+  // owner's CELL, but the value child under the field row would keep
+  // `((fromId))` — and the child is PROJECT's truth, so the tombstoned id
+  // would come back. It doesn't happen, and the reason is worth pinning:
+  // removing the parse-level machinery suppression put value rows in
+  // `block_references` like any other row, so the retarget walk reaches the
+  // child directly and rewrites its content. Cell and child converge.
+  describe('property value children in a child-backed workspace', () => {
+    const REF_DEF = '55555555-5555-4555-8555-555555555555'
+    const FROM = '66666666-6666-4666-8666-666666666666'
+    const INTO = '77777777-7777-4777-8777-777777777777'
+
+
+    it('retargets the value child itself, not just the owner cell', async () => {
+      await env.h.db.execute(
+        `INSERT OR REPLACE INTO workspaces
+           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+        [WS],
+      )
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id: REF_DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
+          content: 'related', properties: {types: ['property-schema']},
+        })
+        await tx.create({id: FROM, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'From'})
+        await tx.create({id: INTO, workspaceId: WS, parentId: null, orderKey: 'a2', content: 'Into'})
+        await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a3', content: 'Owner'})
+        await tx.create({
+          id: 'field', workspaceId: WS, parentId: 'owner', orderKey: 'a0',
+          content: `((${REF_DEF}))`,
+        })
+        await tx.create({
+          id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a0',
+          content: `((${FROM}))`, references: [{id: FROM, alias: FROM}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await env.repo.awaitProcessors()
+      expect(env.read('value')!.referenceTargetId).toBe(FROM)
+
+      await env.repo.mutate.merge({fromId: FROM, intoId: INTO})
+      await env.repo.awaitProcessors()
+
+      expect(env.read('value')!.content).toBe(`((${INTO}))`)
+      expect(env.read('value')!.referenceTargetId).toBe(INTO)
+      expect(env.read('value')!.references).toEqual([{id: INTO, alias: INTO}])
     })
   })
 })

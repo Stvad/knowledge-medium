@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from './createTestDb'
-import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema'
+import { BLOCKS_TABLE_COLUMN_NAMES } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
   BLOCK_TYPES_BACKFILL_MARKER_KEY,
@@ -22,11 +22,13 @@ describe('createTestDb harness', () => {
     await h.cleanup()
   })
 
-  it('opens a writable PowerSyncDatabase with the v2 blocks shape', async () => {
+  it('opens a writable PowerSyncDatabase with the v2 blocks shape (storage + local columns)', async () => {
+    // PR #288 slice A: `blocks` = storage columns + LOCAL-only columns
+    // (`reference_target_id`), appended last.
     const cols = (await h.db.getAll<{name: string}>(
       "SELECT name FROM pragma_table_info('blocks') ORDER BY cid",
     )).map(r => r.name)
-    expect(cols).toEqual(BLOCK_STORAGE_COLUMNS.map(c => c.name))
+    expect(cols).toEqual(BLOCKS_TABLE_COLUMN_NAMES)
   })
 
   it('seeds tx_context with one NULL row across all six tx fields', async () => {

@@ -58,7 +58,12 @@ import {
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
-import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
+import {
+  BLOCKS_TABLE_COLUMN_NAMES,
+  buildQualifiedBlockColumnsSql,
+  parseBlockRow,
+  type BlockRow,
+} from '@/data/blockSchema'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
   systemPagesFacet,
@@ -99,6 +104,23 @@ import {
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
 } from './internals/clientSchema'
+import {
+  deriveReferenceTargetId,
+  type ReferenceTargetLookups,
+} from './internals/referenceTargetProcessor'
+import { parseExactReferenceBlockContent } from './referenceBlock'
+import type {
+  PropertyDefinitionChange,
+  PropertyDefinitionMigrationPlan,
+} from './internals/propertyDefinitionMigrations'
+import {
+  encodedPropertyValueToChildContent,
+  isPropertyFieldInstance,
+  propertyChildContentToEncodedValue,
+  rekeyParentPropertyCell,
+  type IsPropertyFieldDefinition,
+} from './propertyChildren'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
   parseAliasCollisionError,
@@ -113,6 +135,7 @@ import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
@@ -378,6 +401,18 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
+/** One CAS-guarded `reference_target_id` write for `stampReferenceTargets`.
+ *  Strictly ADDITIVE: callers pass only rows the scan saw at a NULL column,
+ *  and the CAS re-checks (NULL column, unchanged content) inside the write tx
+ *  — so a concurrent local edit or sync arrival that already owns the column
+ *  since the scan is never clobbered. Re-pointing an already-stamped row is
+ *  deliberately out of scope (see `drainNameRederives`). */
+interface ReferenceTargetStamp {
+  id: string
+  scannedContent: string
+  targetId: string
+}
+
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
@@ -557,6 +592,29 @@ export class Repo {
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Workspaces whose reference-target catch-up sweep ran THIS SESSION
+   *  (adversarial-review round 2: a durable once-ever marker permanently
+   *  missed definitions/aliases that arrived while the app was closed or
+   *  the workspace inactive). Cost honesty: the CANDIDATE SET shrinks after
+   *  the first run, but the LIKE prefilter itself is an O(table) scan on
+   *  every open (~50ms native / a few hundred ms in-browser at 350k rows) —
+   *  deep idle, once per workspace open; a partial expression index on the
+   *  content-shape predicate is the escape hatch if it ever matters. */
+  private readonly referenceTargetSweepDone = new Set<string>()
+  /** Accumulated `[[name]]`/alias re-derive requests per workspace, drained
+   *  in ONE batched scan per drain (never one scan per name). Names only
+   *  accumulate after the workspace's sweep ran (pre-sweep, the sweep
+   *  covers them); a drain that finds the registry pointed elsewhere leaves
+   *  the set intact and re-arms when that workspace's registry primes. */
+  private readonly pendingNameRederives = new Map<string, Set<string>>()
+  private readonly nameRederiveDrainScheduled = new Set<string>()
+  /** In-flight reference-target derive passes — drained by
+   *  `awaitReferenceTargetDerive()`, same pattern. */
+  private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** In-flight rename-reproject / codec re-encode migration passes
+   *  (PR #288 §7/§9, slice B2) — drained by
+   *  `awaitPropertyDefinitionMigrations()`, same pattern. */
+  private readonly propertyDefinitionMigrationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -881,11 +939,26 @@ export class Repo {
         if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
+        // Re-arm name-rederive drains parked while this workspace's registry
+        // wasn't primed (drainNameRederives leaves the pending set intact in
+        // that case).
+        if (
+          incomingWorkspaceId !== null
+          && (this.pendingNameRederives.get(incomingWorkspaceId)?.size ?? 0) > 0
+          && !this.nameRederiveDrainScheduled.has(incomingWorkspaceId)
+        ) {
+          this.nameRederiveDrainScheduled.add(incomingWorkspaceId)
+          this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(incomingWorkspaceId))
+        }
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
+      getPropertyDefinitions: () => this._propertyDefinitionRegistry,
+      schedulePropertyDefinitionMigrations: (workspaceId, changes) => {
+        this.schedulePropertyDefinitionMigrations(workspaceId, changes)
+      },
     })
     this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
     // Identity stability for query handles is provided by the
@@ -919,15 +992,30 @@ export class Repo {
    *  flushing. */
   startSyncObserver(options?: SyncObserverOptions): BlocksSyncedObserver {
     if (this.syncObserver) this.syncObserver.dispose()
+    // Production passes the §6 mode/key resolver (initRepo). Tests omit it
+    // and fall back to plaintext copy-through with no key — the historical
+    // behavior, so non-e2ee tests are unaffected.
+    const policyDeps = this.syncObserverDeps
+      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
     this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
-      // Production passes the §6 mode/key resolver (initRepo). Tests omit it
-      // and fall back to plaintext copy-through with no key — the historical
-      // behavior, so non-e2ee tests are unaffected.
-      deps: this.syncObserverDeps
-        ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
+      deps: {
+        ...policyDeps,
+        // Derive-at-arrival seam (PR #288 slice A): always attached — the
+        // LOCAL `reference_target_id` column must track content for
+        // sync-applied rows on every device, e2ee included (derivation runs
+        // over decrypted content). Resolution mirrors
+        // `core.deriveReferenceTarget`: schema-name winner map first, then
+        // the `block_aliases` index read on the open write tx (so
+        // same-window alias/definition arrivals resolve).
+        referenceTargetLookups: policyDeps.referenceTargetLookups
+          ?? (tx => this.referenceTargetLookupsVia(tx)),
+        onAliasTargetsAdded: policyDeps.onAliasTargetsAdded
+          ?? ((workspaceId, aliases) =>
+            this.scheduleReferenceTargetNameRederive(workspaceId, aliases)),
+      },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
@@ -1462,6 +1550,8 @@ export class Repo {
       (ws, freshlyCreated) => this.scheduleWorkspaceSeedMaterialization(ws, freshlyCreated)
     const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
       this.scheduleReconcileRescan(ws)
+    const scheduleReferenceTargetDerivePass: Repo['scheduleReferenceTargetDerivePass'] = (ws) =>
+      this.scheduleReferenceTargetDerivePass(ws)
     // Field-assigning members: run with the facade as `this`, the
     // assignment would create a shadow property on the facade and the
     // real repo would never see it (silent state divergence). Delegate
@@ -1483,6 +1573,7 @@ export class Repo {
       addType, removeType, toggleType, setBlockTypes,
       scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
       scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
+      scheduleReferenceTargetDerivePass,
       setActiveWorkspaceId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
@@ -2456,6 +2547,584 @@ export class Repo {
           `[workspaceBackfills] "${backfill.id}" failed for workspace ${workspaceId}: ${reason}`,
         )
       }
+    }
+  }
+
+  /**
+   * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
+   * column (PR #288 slice A). The column is derived per device and never
+   * synced, so rows that predate it — an upgrading device's whole DB, or a
+   * fresh device's rows synced before the schema registry primed — sit at
+   * NULL until this pass sweeps them; from then on the same-tx processor
+   * (local writes) and the materializer's derive-at-arrival (sync writes)
+   * maintain it incrementally.
+   *
+   * Deferred off the workspace-open critical path (`scheduleDeepIdle`, same
+   * scheme as its sibling passes) and marker-gated once per workspace. Derives
+   * textually (`((id))`) or through the alias index (`[[alias]]`) — no schema
+   * registry needed for resolution — but still scheduled after
+   * `whenPropertyDefinitionsReady` so the sweep runs against the pinned active
+   * workspace (its once-per-session gate below). NOT gated on writability: the
+   * writes are local bookkeeping (source-NULL raw UPDATEs of a never-uploaded
+   * column), safe in a read-only workspace.
+   */
+  scheduleReferenceTargetDerivePass(workspaceId: string): void {
+    if (!workspaceId) return
+    this.referenceTargetDeriveJobs.schedule(() =>
+      // Swallow + log a transient sweep failure rather than leak an unhandled
+      // rejection (the idle-job runner only does `.finally`, like the sibling
+      // `drainNameRederives` guards its own body). The sweep marker is left
+      // UNSET on throw, so the next workspace open retries — the pass is
+      // strictly additive (`reference_target_id IS NULL`), never a re-stamp,
+      // so a partial run can't double-stamp or clobber.
+      this.runReferenceTargetDerivePass(workspaceId).catch((err) => {
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(`[referenceTargetDerive] workspace ${workspaceId} sweep failed: ${reason}`)
+      }),
+    )
+  }
+
+  /** Test helper — drains derive passes whose deferral timer has fired.
+   *  Mirror of `awaitWorkspaceBackfills`. */
+  async awaitReferenceTargetDerive(): Promise<void> {
+    await this.referenceTargetDeriveJobs.drain()
+  }
+
+  private async runReferenceTargetDerivePass(workspaceId: string): Promise<void> {
+    if (this.referenceTargetSweepDone.has(workspaceId)) return
+    // Run only while this workspace is the pinned/active one — if the user
+    // switched away before the deferred job fired, skip WITHOUT the marker so
+    // the next open retries. (Resolution itself no longer needs the registry:
+    // `((id))` derives textually and `[[alias]]` through the alias index.)
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+
+    // Candidate prefilter in SQL (cheap LIKEs over one workspace, one-time);
+    // the real grammar check is `parseExactReferenceBlockContent` inside
+    // `deriveReferenceTargetId`. Deleted rows are included deliberately: a
+    // tombstone restored later arrives content-unchanged, so nothing would
+    // re-derive it. `reference_target_id IS NULL` keeps the pass strictly
+    // additive — it never second-guesses a processor- or arrival-derived
+    // value. Lean scan (id + content): the write phase re-reads fresh rows
+    // in-tx, so full rows here would only feed stale snapshots.
+    const candidates = await this.db.getAll<{id: string; content: string}>(
+      `SELECT id, content FROM blocks
+        WHERE workspace_id = ?
+          AND reference_target_id IS NULL
+          AND (
+            (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+            OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+          )`,
+      [workspaceId],
+    )
+
+    const lookups = this.referenceTargetLookupsVia()
+
+    const updates: ReferenceTargetStamp[] = []
+    for (const row of candidates) {
+      const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
+      // Column is already NULL, so unresolved (`undefined`) and non-reference
+      // (`null`) alike mean "nothing to write".
+      if (typeof derived === 'string') {
+        updates.push({
+          id: row.id, scannedContent: row.content, targetId: derived,
+        })
+      }
+    }
+
+    await this.stampReferenceTargets(updates)
+
+    this.referenceTargetSweepDone.add(workspaceId)
+    // Defense only — pre-sweep scheduling never accumulates. Note the
+    // narrow accepted window: an alias/definition arriving between this
+    // sweep's candidate SELECT and this line is dropped for the session
+    // and healed by the NEXT open's sweep.
+    this.pendingNameRederives.delete(workspaceId)
+  }
+
+  /** The one construction site for reference-target resolution outside a
+   *  repo.tx (PR #288 slice A): the `block_aliases` index read on `reader` —
+   *  the open sync-arrival write tx, or the auto-commit connection for the
+   *  idle passes. Mirrors `core.deriveReferenceTarget` (a `((id))` block-ref
+   *  resolves textually, `[[alias]]` through this lookup); the two must
+   *  resolve identically or the column diverges across write paths. */
+  private referenceTargetLookupsVia(
+    reader: {getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>} = this.db,
+  ): ReferenceTargetLookups {
+    return {
+      aliasTargetId: async (alias, workspaceId) => {
+        if (alias === '' || workspaceId === '') return null
+        const row = await reader.getOptional<{id: string}>(
+          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+          [workspaceId, alias],
+        )
+        return row?.id ?? null
+      },
+    }
+  }
+
+  /** Chunked raw column stamps, materializer-style: source-NULL (upload
+   *  triggers skip; row_events tags 'sync'), no repo.tx — a tx would advance
+   *  `updated_at` (the LWW row-version) for a purely local derivation.
+   *
+   *  Compare-and-set per row (adversarial-review fix): callers scan/derive
+   *  outside the write lock, so a concurrent local edit or sync arrival can
+   *  change content (the processor/arrival owns the column from then on). A
+   *  bare UPDATE would stamp a stale target that nothing ever repairs — the
+   *  row would misclassify as a field row post-flip. Only rows still at
+   *  (scanned content, NULL column) are written, and snapshots come from the
+   *  in-tx fresh rows, never scan-time state. */
+  private async stampReferenceTargets(
+    updates: readonly ReferenceTargetStamp[],
+  ): Promise<void> {
+    const CHUNK = 200
+    for (let i = 0; i < updates.length; i += CHUNK) {
+      const chunk = updates.slice(i, i + CHUNK)
+      const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
+      await this.db.writeTransaction(async tx => {
+        await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
+        for (const {id, scannedContent, targetId} of chunk) {
+          const freshRow = await tx.getOptional<BlockRow>(
+            `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
+            [id],
+          )
+          if (
+            freshRow === null
+            || (freshRow.reference_target_id ?? null) !== null
+            || freshRow.content !== scannedContent
+          ) continue
+          await tx.execute(
+            'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
+            [targetId, id],
+          )
+          const before = parseBlockRow(freshRow)
+          snapshots.set(id, {before, after: {...before, referenceTargetId: targetId}})
+        }
+      })
+      if (snapshots.size === 0) continue
+      // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
+      // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
+      // reject the repair and row-version-driven invalidation sees nothing.
+      // Refresh already-cached snapshots directly (never populate cold rows)
+      // and notify handles. NEVER regress a newer cached row: in the sync
+      // ack-to-echo window the cache can legitimately be AHEAD of disk, and
+      // the LWW gate this bypasses exists precisely to protect that — only
+      // replace a snapshot the stamped disk row is at least as new as.
+      for (const {after} of snapshots.values()) {
+        const cached = this.cache.getSnapshot(after.id)
+        if (cached !== undefined && cached.updatedAt <= after.updatedAt) {
+          this.cache.setSnapshot(after)
+        }
+      }
+      this.handleStore.invalidate(
+        snapshotsToChangeNotification(snapshots, this.invalidationRules),
+      )
+    }
+  }
+
+  /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
+   *  arrival-order repair, adversarial-review fix): `[[name]]` rows written
+   *  or synced BEFORE their definition existed derived to NULL, and nothing
+   *  content-driven ever revisits them — the definition's later
+   *  arrival/creation must enqueue this pass. Scheduled by the facet bridge
+   *  when a registry rebuild shows a fieldId with no previous entry (the
+   *  boot-time first snapshot diffs against null and is deliberately
+   *  skipped — the once-per-workspace catch-up pass covers it, running
+   *  after registry readiness). Not flip-gated: the column is slice-A
+   *  machinery, maintained everywhere. */
+  scheduleReferenceTargetNameRederive(
+    workspaceId: string,
+    names: readonly string[],
+  ): void {
+    if (!workspaceId || names.length === 0) return
+    // Pre-sweep, the per-open sweep covers every name — don't accumulate
+    // (on a fresh device EVERY page arrival gains aliases; queuing them all
+    // would just re-run the sweep's own scan).
+    if (!this.referenceTargetSweepDone.has(workspaceId)) return
+    const pending = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
+    for (const name of names) if (name !== '') pending.add(name)
+    this.pendingNameRederives.set(workspaceId, pending)
+    if (this.nameRederiveDrainScheduled.has(workspaceId)) return
+    this.nameRederiveDrainScheduled.add(workspaceId)
+    this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
+  }
+
+  /** ONE batched candidate scan per drain (the LIKE prefilter the sweep
+   *  uses, workspace-scoped, NULL-column only), matched in JS against the
+   *  pending name set via the real grammar (which tolerates inner padding a
+   *  SQL equality can't). A drain whose workspace registry isn't primed
+   *  leaves the set intact — `applyTypesAndSchemas` re-arms it when that
+   *  workspace's registry lands. */
+  private async drainNameRederives(workspaceId: string): Promise<void> {
+    this.nameRederiveDrainScheduled.delete(workspaceId)
+    const pending = this.pendingNameRederives.get(workspaceId)
+    if (!pending || pending.size === 0) return
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+    this.pendingNameRederives.delete(workspaceId)
+    try {
+      // Strictly additive (`reference_target_id IS NULL`, like the sweep):
+      // late-bind rows that derived to NULL because their target didn't exist
+      // yet — a generic alias minted mid-session (referencesProcessor enqueues
+      // the name when it creates the seat) repairs `[[Foo]]` rows written
+      // before page Foo existed. Re-pointing an ALREADY-stamped row is
+      // deliberately NOT done: `reference_target_id`'s only consumers are
+      // property field-row recognition (is-target-a-definition), and
+      // definitions aren't name-resolvable yet, so a non-NULL re-point would
+      // change nothing any reader observes. That reclaim (with the cell
+      // reprojection a raw stamp currently skips) belongs to the auto-claim
+      // work that makes definitions name-resolvable.
+      const candidates = await this.db.getAll<{id: string; content: string}>(
+        `SELECT id, content FROM blocks
+          WHERE workspace_id = ?
+            AND reference_target_id IS NULL
+            AND (
+              (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+              OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+            )`,
+        [workspaceId],
+      )
+      const lookups = this.referenceTargetLookupsVia()
+      const updates: ReferenceTargetStamp[] = []
+      for (const row of candidates) {
+        const exact = parseExactReferenceBlockContent(row.content)
+        if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
+        const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
+        if (typeof derived === 'string') {
+          updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+        }
+      }
+      await this.stampReferenceTargets(updates)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
+      // Re-queue AND re-arm so the repair isn't consumed by a transient
+      // failure (without the re-arm the names would sit until the next
+      // alias event / registry rebuild / app open).
+      const requeued = this.pendingNameRederives.get(workspaceId) ?? new Set<string>()
+      for (const name of pending) requeued.add(name)
+      this.pendingNameRederives.set(workspaceId, requeued)
+      if (!this.nameRederiveDrainScheduled.has(workspaceId)) {
+        this.nameRederiveDrainScheduled.add(workspaceId)
+        this.referenceTargetDeriveJobs.schedule(() => this.drainNameRederives(workspaceId))
+      }
+    }
+  }
+
+  /**
+   * Rename-reproject + codec re-encode migration pass (PR #288 §7/§9, slice
+   * B2). Scheduled by the facet bridge when a registry rebuild shows a
+   * definition's NAME or codec TYPE changed under its durable fieldId —
+   * renames break silently without it: children survive untouched (the
+   * column, not the label, is authoritative) but the cell stays keyed by the
+   * dead name and every schema-aware reader falls back to `defaultValue`.
+   *
+   * Per change, one child-indexed sweep (the `reference_target_id` partial
+   * index): retitle stale field-row content (`[[old]]` → `[[new]]` — markdown
+   * export and cross-workspace re-derive-by-content bind the name), re-encode
+   * value children to the new codec's canonical content where they convert,
+   * and re-key each consuming parent's cell (drop the old key; project the
+   * new one from the first parseable value). Writes ride ordinary repo.tx —
+   * field-row content and cells are synced state, and the flip-gated
+   * processors' idempotence makes the overlap free.
+   *
+   * Values that can't convert under a codec change are REPORTED (§9: "N
+   * values can't convert" must be user-visible, not a silent unset) via the
+   * user-error toast channel; the rows stay visible/fixable in the tree.
+   *
+   * Flip-gated: an un-flipped workspace has no recognized field rows and its
+   * renames keep today's semantics; skipped entirely (no marker — this pass
+   * is change-driven, not once-per-workspace).
+   */
+  schedulePropertyDefinitionMigrations(
+    workspaceId: string,
+    changes: readonly PropertyDefinitionChange[],
+  ): void {
+    if (this.isReadOnly || !workspaceId || changes.length === 0) return
+    // Resolve NOW, not when the deferred job runs. `changes` comes from this
+    // workspace's OWN registry rebuild (the facet bridge calls
+    // `applyTypesAndSchemas` then this method synchronously, in the same
+    // tick), so `propertySchemaResolverFor(workspaceId)` is guaranteed to
+    // serve it faithfully here. The batch itself is deferred to a deep-idle
+    // job, and `propertySchemaResolverFor` only retains the active workspace
+    // or the immediately-previous one (one-deep) — by the time the job runs
+    // the user may have switched workspaces twice more, which would evict
+    // `workspaceId` from both slots and make a run-time re-resolve fail
+    // closed (empty plans, migration silently dropped with no retry, #386
+    // review). Capturing the resolved plan here instead means it describes
+    // THIS change and can never go stale from a LATER, unrelated workspace
+    // switch. A fieldId that doesn't resolve (shadowed / unavailable, §6) is
+    // dropped from the plan — the same skip the run-time check used to do,
+    // just performed here instead.
+    const resolver = this.propertySchemaResolverFor(workspaceId)
+    const plans: PropertyDefinitionMigrationPlan[] = changes.flatMap(change => {
+      const resolution = resolver.resolveField(change.fieldId)
+      return resolution.status === 'resolved' ? [{change, schema: resolution.schema}] : []
+    })
+    if (plans.length === 0) return
+    this.propertyDefinitionMigrationJobs.schedule(() =>
+      this.runPropertyDefinitionMigrations(workspaceId, plans, resolver),
+    )
+  }
+
+  /** Test helper — drains migration passes whose deferral timer has fired. */
+  async awaitPropertyDefinitionMigrations(): Promise<void> {
+    await this.propertyDefinitionMigrationJobs.drain()
+  }
+
+  private async runPropertyDefinitionMigrations(
+    workspaceId: string,
+    plans: readonly PropertyDefinitionMigrationPlan[],
+    resolver: PropertySchemaResolver,
+  ): Promise<void> {
+    if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) return
+    try {
+      await this.runPropertyDefinitionMigrationBatch(workspaceId, plans, resolver)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      const names = plans.map(({change}) => `"${change.newName}" (${change.fieldId})`).join(', ')
+      console.error(`[propertyDefinitionMigrations] ${names} failed: ${reason}`)
+    }
+  }
+
+  /** Re-key + re-encode every parent touched by THIS rebuild's definition
+   *  changes, applying each parent's whole change set in ONE cell write.
+   *
+   *  Per-change passes are unsafe when two definitions SWAP names (`a→b` and
+   *  `b→a` in one rebuild). Migrating `a→b` first writes the intermediate cell
+   *  `{b: <a's value>}`, which (1) clobbers b's value outright and (2) removes
+   *  key `a` — and because `a` now resolves through the FINAL name map to the
+   *  OTHER definition, the same-tx materializer (which watches `properties`)
+   *  reads that removal as a user delete and tombstones that definition's field
+   *  row before its own pass runs. No ordering avoids it: a swap is a cycle.
+   *
+   *  Applying a parent's whole set at once has no intermediate state: every
+   *  old name is dropped BEFORE any new name is assigned, so a swap lands as
+   *  `{a: <b's value>, b: <a's value>}` in a single write and the materializer
+   *  never sees a key go missing. */
+  private async runPropertyDefinitionMigrationBatch(
+    workspaceId: string,
+    plans: readonly PropertyDefinitionMigrationPlan[],
+    resolver: PropertySchemaResolver,
+  ): Promise<void> {
+    // `plans` arrives pre-resolved (schedule-time capture, see
+    // `schedulePropertyDefinitionMigrations`) and `resolver` is the SAME
+    // instance that resolved it — both frozen against the registry snapshot
+    // as of that moment, immune to any workspace switch that happens while
+    // this deferred batch sits queued or runs. Shadowed/unavailable
+    // definitions were already excluded from `plans` there (§6) — nothing to
+    // re-key for them.
+
+    // `parent_id IS NOT NULL`: §9 root half — a stamped workspace-root row
+    // is user content (never a field row); retitling it would rewrite the
+    // user's text.
+    // Chunked like the parent pass below: one bound variable per changed field
+    // would otherwise blow SQLITE_MAX_VARIABLE_NUMBER on a big registry rebuild
+    // (a large sync or scripted schema change), and the caller only LOGS the
+    // throw — so every affected cell would silently stay unmigrated.
+    // The Set is load-bearing, not tidiness: `SELECT DISTINCT` only dedupes
+    // WITHIN one statement, so a parent holding field rows for two changed
+    // definitions that land in different chunks would otherwise be migrated
+    // twice.
+    const fieldIds = plans.map(plan => plan.change.fieldId)
+    const FIELD_PROBE_CHUNK = 500
+    const parentIdSet = new Set<string>()
+    for (let i = 0; i < fieldIds.length; i += FIELD_PROBE_CHUNK) {
+      const fieldChunk = fieldIds.slice(i, i + FIELD_PROBE_CHUNK)
+      const candidates = await this.db.getAll<{parent_id: string | null}>(
+        `SELECT DISTINCT parent_id FROM blocks
+          WHERE workspace_id = ? AND reference_target_id IN (${fieldChunk.map(() => '?').join(', ')})
+            AND deleted = 0 AND parent_id IS NOT NULL`,
+        [workspaceId, ...fieldChunk],
+      )
+      for (const row of candidates) {
+        if (row.parent_id !== null) parentIdSet.add(row.parent_id)
+      }
+    }
+    const parentIds = [...parentIdSet]
+    if (parentIds.length === 0) return
+
+    // Per changed definition, for the user-facing unparseable-values report.
+    const unconvertibleByField = new Map<string, number>()
+    const CHUNK = 100
+    for (let i = 0; i < parentIds.length; i += CHUNK) {
+      const chunk = parentIds.slice(i, i + CHUNK)
+      await this.tx(async tx => {
+        // §9 ancestry rule, memoized per tx (fresh per chunk — a fresh `tx()`
+        // per chunk sees the previous chunk's own committed writes, and the
+        // memo shouldn't outlive the tx it was walked against): a row whose
+        // parent chain passes through a field row is a VALUE/comment (e.g. a
+        // ref-typed value pointing at this very definition), not a field row
+        // — never retitle or re-key those.
+        //
+        // `isFieldDefinition` closes over the batch's captured `resolver`
+        // (schedule-time snapshot, captured in
+        // `schedulePropertyDefinitionMigrations` and threaded through as a
+        // parameter — NOT re-derived here). It used to call
+        // `this.propertySchemaResolverFor(workspaceId)` fresh per
+        // chunk, but that has the exact same one-deep active/previous fail-
+        // closed behavior as the outer resolve this method used to do: once
+        // the deferred batch's own workspace fell out of retention (further
+        // switches while THIS batch's chunks are still running), every
+        // fieldId — including the ones `plans` already proved resolvable —
+        // would stop resolving, `isPropertyFieldInstance` below would reject
+        // every sibling, and the batch would silently re-key nothing despite
+        // having non-empty plans. Reusing the captured `resolver` fixes that:
+        // it's bound to a real snapshot for the life of the batch, not to
+        // whatever workspace happens to be live when a chunk executes. This
+        // also covers ancestor fieldIds unrelated to `plans` (arbitrary other
+        // definitions encountered walking up from `parentId`), which a
+        // plans-only lookup can't answer — the resolver is what actually knows
+        // "is this fieldId some (possibly shadowed) definition in this
+        // workspace's registry", not just "is it one of the migrating ones".
+        //
+        // Trade-off: this is a fixed snapshot for the whole batch, so a
+        // genuinely concurrent definition change landing between chunks (or
+        // between schedule time and the batch running) isn't picked up
+        // here — but that's an independent, separately-diffed registry
+        // rebuild, so it schedules its OWN follow-up migration; it doesn't
+        // need this pass to also notice it. For the `plans` fieldIds
+        // specifically, `isFieldDefinition(change.fieldId)` is now
+        // provably always true (same resolver instance that already proved
+        // `change.fieldId` resolves when `plans` was built) — the guard below
+        // stays for the root-half/shared-recognizer symmetry with the
+        // ancestor walk, not as a live re-check.
+        const subtreeMemo = new Map<string, boolean>()
+        const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
+          const rowResolution = resolver.resolveField(fieldId)
+          return rowResolution.status === 'resolved'
+            || (rowResolution.status === 'identity-unavailable' && rowResolution.reason === 'shadowed')
+        }
+
+        for (const parentId of chunk) {
+          // Shared swap-safe re-key: the helper owns the parent guard, the §9
+          // ancestry gate, and the drop-all-then-set-all apply (symmetric with
+          // the same-tx rename processor). This computePlan is the codec half —
+          // it re-encodes value children under the (possibly new) codec and
+          // reports unconvertibles.
+          await rekeyParentPropertyCell(
+            tx, parentId, isFieldDefinition, subtreeMemo,
+            async (siblings) => {
+              const oldNames: string[] = []
+              const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
+              for (const {change, schema} of plans) {
+                let projected: unknown
+                let hasProjection = false
+                let parentUnconvertible = 0
+                let sawFieldRow = false
+                // Field-row content is `((fieldId))` — id-addressed and
+                // rename-stable (§7), nothing to retitle. Two conditions select
+                // THIS definition's field rows: the fieldId equality picks them
+                // out (isPropertyFieldInstance has no notion of "which"
+                // definition); isPropertyFieldInstance reuses the shared §9
+                // recognizer (a no-op here for the root half — siblings are all
+                // actual children — and the resolvability half —
+                // `isFieldDefinition(change.fieldId)` is always true here — kept
+                // for symmetry with the ancestor walk).
+                for (const sibling of siblings) {
+                  if (
+                    (sibling.referenceTargetId ?? null) !== change.fieldId
+                    || !isPropertyFieldInstance(sibling, isFieldDefinition)
+                  ) continue
+                  sawFieldRow = true
+                  const values = await tx.childrenOf(sibling.id, undefined)
+                  for (const value of values) {
+                    try {
+                      const encoded = propertyChildContentToEncodedValue(
+                        schema, value.content, value.referenceTargetId ?? null,
+                      )
+                      if (!hasProjection) {
+                        projected = encoded
+                        hasProjection = true
+                      }
+                      // Canonicalize the child content under the (possibly new)
+                      // codec so the stored text matches what setProperty would
+                      // write.
+                      const canonical = encodedPropertyValueToChildContent(schema, encoded)
+                      if (value.content !== canonical) {
+                        await tx.update(value.id, {content: canonical}, {skipMetadata: true})
+                      }
+                    } catch {
+                      parentUnconvertible += 1
+                    }
+                  }
+                }
+                // This parent carries no field row for this definition — its
+                // cell keys for it are none of this change's business.
+                if (!sawFieldRow) continue
+                if (parentUnconvertible > 0) {
+                  unconvertibleByField.set(
+                    change.fieldId,
+                    (unconvertibleByField.get(change.fieldId) ?? 0) + parentUnconvertible,
+                  )
+                }
+
+                if (change.oldName !== schema.name) oldNames.push(change.oldName)
+                if (hasProjection) {
+                  assignments.push({name: schema.name, value: projected, unset: false})
+                } else if (parentUnconvertible === 0) {
+                  assignments.push({name: schema.name, value: undefined, unset: true})
+                }
+                // else (all-unconvertible): leave the new key unset — no
+                // assignment.
+                //   - rename: the old key is dropped and the new key stays
+                //     absent → the cell shows unset for the unparseable values,
+                //     §9's contract. Re-keying the stale value under the new name
+                //     would violate §9 (cell derives from children).
+                //   - no rename: the existing key rides untouched (no old name to
+                //     drop, no assignment) so a stale-but-fixable value stays
+                //     visible; the next valid edit reprojects and heals it
+                //     (§5 pending-reprojection).
+                // This pass NEVER deletes value rows, so they stay live
+                // unconditionally and the unconvertible COUNT is surfaced below.
+              }
+              return {oldNames, assignments}
+            },
+          )
+        }
+      }, {
+        // References, not BlockDefault (adversarial-review blocker): a
+        // BlockDefault tx lands on the user's cmd-Z stack — a rename backing
+        // thousands of field rows would flood/evict their history, clear
+        // redo, and a stray undo would revert a migration chunk with no
+        // re-run path (the pass is change-driven, no marker). References is
+        // the maintenance bucket the ref-reprojection pass already uses:
+        // uploads normally, never exposed to cmd-Z. Writes are
+        // skipMetadata — machinery, not "last edited".
+        scope: ChangeScope.References,
+        // This pass now handles codec-TYPE changes (renames are same-tx, see
+        // core.migratePropertyRename), so a single plan is usually a re-encode
+        // (oldName === newName) — only a COMBINED rename+codec edit still shows
+        // an arrow. Word it to match rather than print "Foo -> Foo".
+        description: plans.length === 1
+          ? (plans[0].change.oldName === plans[0].schema.name
+            ? `re-encode property definition ${plans[0].schema.name}`
+            : `migrate property definition ${plans[0].change.oldName} -> ${plans[0].schema.name}`)
+          : `migrate ${plans.length} property definitions`,
+      })
+    }
+
+    // §9: a codec change that strands values must be user-visible, never a
+    // silent unset. The rows stay in the tree, fixable by hand. Reported per
+    // definition — one rebuild can change several.
+    for (const {change, schema} of plans) {
+      const unconvertible = unconvertibleByField.get(change.fieldId) ?? 0
+      if (unconvertible === 0) continue
+      // Claim only what's true: this pass never deletes a value row, so the
+      // text is preserved verbatim. It does NOT promise a surface — value
+      // children sit under a field row, and the visible view prunes field
+      // rows (§9), so post-flip they are reachable through the property
+      // rows, not by scrolling the outline. Naming the outline here would
+      // send the user somewhere the values demonstrably aren't (#386 review).
+      const message =
+        `${unconvertible} value${unconvertible === 1 ? '' : 's'} for property `
+        + `"${schema.name}" could not convert to the new type; their original `
+        + `text is preserved unchanged`
+      console.warn(`[propertyDefinitionMigrations] ${message}`)
+      this.userErrorListeners.notify(new ProcessorRejection(
+        message, 'property.codec-change.unconvertible',
+        {fieldId: change.fieldId, name: schema.name, count: unconvertible},
+      ))
     }
   }
 

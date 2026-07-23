@@ -3,6 +3,7 @@ import { Block } from '../data/block'
 import type { Repo } from '../data/repo'
 import { isCollapsedProp } from '@/data/properties.js'
 import { revealChildren } from '@/data/mutators'
+import { visibleChildrenOf } from '@/data/visibleChildren'
 import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
@@ -163,7 +164,7 @@ const resolveRootDestination = async (
     placement,
   }: Required<Pick<PasteOptions, 'position' | 'placement'>> & Pick<PasteOptions, 'scopeRootId'>,
 ): Promise<RootDestination> => {
-  const targetChildren = await tx.childrenOf(target.id, target.workspaceId)
+  const targetChildren = await visibleChildrenOf(tx, target.id, target.workspaceId)
   const targetIsScopeRoot = scopeRootId === target.id
   const targetHasVisibleChildren = targetChildren.length > 0 && !isCollapsed(target.properties)
   const rootsAsChildren = targetIsScopeRoot ||

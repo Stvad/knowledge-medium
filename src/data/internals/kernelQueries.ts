@@ -32,7 +32,16 @@ import {
   type TypedBlockQueryReferenceFilter,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
-import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
+import {
+  ANCESTORS_SQL,
+  CHILDREN_IDS_SQL,
+  CHILDREN_SQL,
+  manyAncestorsSql,
+  SUBTREE_SQL,
+  VISIBLE_CHILDREN_IDS_SQL,
+  VISIBLE_CHILDREN_SQL,
+  VISIBLE_SUBTREE_SQL,
+} from './treeQueries'
 import {
   assertAncestorWalkBounded,
   buildCandidatesCte,
@@ -500,19 +509,34 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
  *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
  *  dispatcher's handle-store key. Dep declaration mirrors the legacy
- *  `repo.subtree(id)` factory in `repo.ts`. */
-export const subtreeQuery = defineQuery<{id: string}, SubtreeRow[]>({
+ *  `repo.subtree(id)` factory in `repo.ts`.
+ *
+ *  Returns the FULL subtree by default (property field/value machinery
+ *  included) — the structural view, so a consumer never silently misses
+ *  machinery. The display-visible view — excluding recognized machinery in
+ *  a child-backed workspace (PR #288 §9 — dormant no-op while un-flipped,
+ *  and a no-op if the root itself sits inside property-subtree content, see
+ *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
+ *  true`, the same option `core.children` / `tx.childrenOf` take. The
+ *  outline hooks pass it; structural consumers (copy, navigation) get
+ *  everything. */
+export const subtreeQuery = defineQuery<
+  {id: string; hidePropertyChildren?: boolean},
+  SubtreeRow[]
+>({
   name: 'core.subtree',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({id: z.string(), hidePropertyChildren: z.boolean().optional()}),
   resultSchema: subtreeRowArraySchema,
-  resolve: async ({id}, ctx) => {
+  resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
     // something to match against. Re-declared per-row below; HandleStore
     // tolerates duplicates.
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+    const rows = hidePropertyChildren
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, id])
+      : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
     // hydrateBlocks preserves row order, so `out[i]` ↔ `rows[i]`. depth is
@@ -594,32 +618,55 @@ export const manyAncestorsQuery = defineQuery<
   },
 })
 
-/** Direct children of `id`, ordered `(order_key, id)`. */
-export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
+/** Direct children of `id`, ordered `(order_key, id)`. Returns EVERY child
+ *  by default (property field rows included) — the structural view. The
+ *  display-visible view — excluding recognized field rows in a child-backed
+ *  workspace (PR #288 §9; dormant no-op while un-flipped) — is opt-in via
+ *  `hidePropertyChildren: true` (the outline hooks pass it), the same option
+ *  `tx.childrenOf` takes. */
+export const childrenQuery = defineQuery<
+  {id: string; hidePropertyChildren?: boolean},
+  BlockData[]
+>({
   name: 'core.children',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({id: z.string(), hidePropertyChildren: z.boolean().optional()}),
   resultSchema: blockDataArraySchema,
-  resolve: async ({id}, ctx) => {
+  resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = hidePropertyChildren
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, id])
+      : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
 
 /** Child-id list of `id` (lean shape). With `hydrate: true`, also runs
  *  the full row SELECT and primes the cache — the consumer-facing
- *  variant the React hooks use to avoid N+1 row loads on mount. */
-export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string[]>({
+ *  variant the React hooks use to avoid N+1 row loads on mount. Same
+ *  everything-by-default as `core.children` (the hooks opt into the
+ *  visible view via `hidePropertyChildren: true`). */
+export const childIdsQuery = defineQuery<
+  {id: string; hydrate?: boolean; hidePropertyChildren?: boolean},
+  string[]
+>({
   name: 'core.childIds',
-  argsSchema: z.object({id: z.string(), hydrate: z.boolean().optional()}),
+  argsSchema: z.object({
+    id: z.string(),
+    hydrate: z.boolean().optional(),
+    hidePropertyChildren: z.boolean().optional(),
+  }),
   resultSchema: z.array(z.string()),
-  resolve: async ({id, hydrate = false}, ctx) => {
+  resolve: async ({id, hydrate = false, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const rows = await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+      const rows = hidePropertyChildren
+        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, id])
+        : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
-    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = hidePropertyChildren
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, id])
+      : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the
     // id set. Hydration here is pure cache priming for the React hooks
