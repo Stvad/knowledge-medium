@@ -1718,7 +1718,14 @@ still equal to the code's <code>aliasSeatSeed(alias)</code> shape — the single
 source of truth the restorable-tombstone predicate already compares against;
 PR #417 review corrected "no user content" here, a seat is minted with
 <code>content = alias</code> plus page/alias properties — + no children, with
-the seat's <code>systemMint</code> system authorship as corroboration), the
+the <code>systemMint</code> <em>pristine sentinel</em> as corroboration:
+<code>updated_at = 0</code>, held until a real edit ratchets it off zero —
+<em>not</em> authorship, which review ×2 corrected against
+<code>txEngine.buildNewBlockRow</code>: <code>created_by</code>/<code>updated_by</code>
+stay the real user and the reconcile gate reads the sentinel, no
+<code>system:</code> prefix exists (pinned by <code>systemMint.test</code>;
+the <code>targets.ts</code> docblock still saying "system:&lt;userId&gt;
+author" is stale)), the
 conflict surface marks those merge-recommended and the bulk claim batches
 them into one reviewable approve-list — prompted, never silent (an
 auto-yield rule was considered and rejected: it was itself a silent
@@ -1795,7 +1802,9 @@ markdown (<code>[[name]]</code> links resolving to definition pages;
 <code>::[[name]]</code> as the readable <em>cross-workspace</em> export form —
 in-workspace readable export needs no claim at all since 07-23:
 <code>::[label](((fieldId)))</code> carries the name as display text and
-round-trips losslessly regardless of claim state, §11 AC) — an
+round-trips <em>identity</em> losslessly regardless of claim state; the label
+itself is guarded by §11 AC's render→parse-back check, since the label grammar
+excludes <code>]</code>/newline) — an
 affordance, not a classification prerequisite (§11 AC).
 </p>
 
@@ -3246,14 +3255,24 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         references"</strong> (owner call, follow-up not blocker): a generic
         copy-boundary mechanism rendering id refs readably on the way out.
         The generalized grammar shrinks its property obligations (07-23):
-        <em>readable</em> in-workspace export is free —
+        <em>readable</em> in-workspace export is nearly free —
         <code>::[label](((fieldId)))</code> carries the name as display text
-        and round-trips losslessly regardless of claim state — so
-        <code>[[name]]</code>-form rendering matters only for
+        and round-trips <em>identity</em> losslessly regardless of claim
+        state — with one guard (PR #417 review):
+        <code>renderAliasedBlockref</code> strips <code>]</code>/newline from
+        labels (the parser's label grammar excludes them), so a name
+        containing either would export with a silently altered label; the
+        export path re-uses <code>replacementFor</code>'s established guard
+        pattern — render, parse back, compare — and falls back to canonical
+        <code>::((fieldId))</code> when the label is lossy (B2's name hygiene
+        rejects <code>]]</code>-lossy names, not <code>]</code>/newline, and
+        synced-in names predate any hygiene rule, so the export-time guard is
+        required regardless). <code>[[name]]</code>-form rendering then
+        matters only for
         cross-workspace/interop paste, and only when the name
         <em>round-trips</em>: a definition whose claim was refused or never
-        ran exports the aliased form instead, or the paste would re-bind the
-        property to
+        ran exports the aliased form (label-guarded) or id form instead, or
+        the paste would re-bind the property to
         whatever owns the name (PR #417 review); the §8/§9 structural cross-workspace rules
         (clear-and-re-derive, seed-strip, de-structure) activate alongside it if a
         structural move ships.
