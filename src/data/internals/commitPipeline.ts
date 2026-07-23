@@ -492,6 +492,13 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         // Log EVERY write (settled ones under the unbumped generation:
         // they fold into "state as of" whatever watermark covers that
         // generation, which is exactly their declared-baseline intent).
+        // That fold is sound ONLY in tandem with the settled-path mask:
+        // while the mask survives, the folded value never reaches a
+        // diff, and the mask is removed only by an unsettled write that
+        // CHANGES the path — at which point `after` is authoritative
+        // and the folded baseline at worst turns a "changed" diff into
+        // an equivalent "added" one. Removing masks on any non-change
+        // grounds would break this pairing.
         let log = rowWriteLog.get(id)
         if (log === undefined) rowWriteLog.set(id, log = [])
         log.push({gen: writeGen, after})

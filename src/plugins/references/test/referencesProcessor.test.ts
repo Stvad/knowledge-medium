@@ -1686,6 +1686,44 @@ describe('references.reapOrphanAliasSeats — reference-drop reaping (#402)', ()
     expect((await env.read(seatId))!.deleted).toBe(0)
     expect((await env.read('nested-comment'))!.deleted).toBe(0)
   })
+
+  it('keeps a child-backed seat when a LEAF user note sits directly under a generated field row', async () => {
+    // One level shallower than the nested-comment case (round-2
+    // adversarial review): a childless note dropped BESIDE the value
+    // child passes a has-children-only guard, so the deep guard must
+    // bound the machine subtree by shape — a generated field row is
+    // sweepable only with at most one leaf child. The late orderKey
+    // keeps the cell projection (first parseable value) unchanged, so
+    // the seed-shape gate alone can't catch this.
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[leafnest]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const seatId = aliasId('leafnest')
+    const [fieldRow] = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', [seatId],
+    )
+    expect(fieldRow).toBeDefined()
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'leaf-note', workspaceId: WS, parentId: fieldRow!.id, orderKey: 'zz',
+        content: 'remember: check this page later',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setContent({id: 'src', content: ''})
+    await flush(5000)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect((await env.read('leaf-note'))!.deleted).toBe(0)
+  })
 })
 
 describe('parseReferences — orphan cleanup (§7.5)', () => {

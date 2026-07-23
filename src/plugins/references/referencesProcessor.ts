@@ -664,26 +664,36 @@ const reapSeatsInTx = async (
           })
         : children
       if (blockingChildren.length > 0) continue
-      // Deep guard (PR #428 adversarial review): the direct-children
-      // gate can't see user content nested INSIDE a generated field
-      // row's subtree — §9 keeps value children visible, so "a comment
-      // thread under a property value child is arbitrarily deep user
-      // content" (subtreeDelete.ts) is reachable under a seat, and the
-      // `deleteSubtreeInTx` sweep below would take it. A machine-minted
-      // seat's generated subtree is exactly field row → leaf value
-      // child; any grandchild with live children of its own is user
-      // content, and skipping the whole seat is the safe miss.
+      // Deep guard (PR #428 adversarial review, both rounds): the
+      // direct-children gate can't see user content nested INSIDE a
+      // generated field row's subtree — §9 keeps value children
+      // visible, so "a comment thread under a property value child is
+      // arbitrarily deep user content" (subtreeDelete.ts) is reachable
+      // under a seat, and the `deleteSubtreeInTx` sweep below would
+      // take it. A machine-minted seat's generated subtree is exactly
+      // field row → ONE leaf value child, so anything beyond that
+      // shape blocks the whole seat (the safe miss): a second live
+      // grandchild is a user note dropped beside the value child (or a
+      // merge-divergent multi-value state carrying user data on at
+      // least one side), and a grandchild with live children of its
+      // own is a nested comment thread. Zero grandchildren stays
+      // sweepable — a childless field row is pure machinery.
       let deepUserContent = false
       for (const child of children) {
         const target = child.referenceTargetId ?? null
         if (target === null || !generatedFieldIds.has(target)) continue
-        for (const grandchild of await tx.childrenOf(child.id, undefined)) {
-          if ((await tx.childrenOf(grandchild.id, undefined)).length > 0) {
-            deepUserContent = true
-            break
-          }
+        const grandchildren = await tx.childrenOf(child.id, undefined)
+        if (grandchildren.length > 1) {
+          deepUserContent = true
+          break
         }
-        if (deepUserContent) break
+        if (
+          grandchildren.length === 1
+          && (await tx.childrenOf(grandchildren[0]!.id, undefined)).length > 0
+        ) {
+          deepUserContent = true
+          break
+        }
       }
       if (deepUserContent) continue
       // Soft-delete the seat, then its generated field rows (with their
