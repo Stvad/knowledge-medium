@@ -31,12 +31,14 @@
  * regardless of authored order (`MODIFIER_ORDER` filter — canonicalizeChord.ts:
  * 103,142-144), and token-position independence within a press
  * (`parsePress` collects modifiers wherever they appear —
- * canonicalizeChord.ts:130-141). The final key's own case is preserved,
- * NOT folded (`formatPress` keeps `key` verbatim — canonicalizeChord.ts:
- * 154-155) — so two spellings are only canonically equivalent if they
- * share the key's exact case; the generators below hold the key token
- * fixed per canonical press and only vary modifier spelling/order/case,
- * which is what stays sound under `canonicalizeChord`.
+ * canonicalizeChord.ts:130-141). The final key's case folds to
+ * lowercase for logical keys (tinykeys' `event.key` comparison is
+ * case-insensitive) but is preserved for `event.code`-only tokens
+ * (`CODE_ONLY_KEY` — `Digit1`/`Space`/`KeyA`/… dispatch through the
+ * case-SENSITIVE `event.code` path, so their case is identity). The
+ * generators below hold the key token fixed per canonical press and
+ * only vary modifier spelling/order/case, which is sound under either
+ * fold rule.
  *
  * ──── Properties ────
  *
@@ -44,9 +46,15 @@
  *      folds every spelling of the same chord (mod alias/case/order,
  *      space-separated sequences) to one canonical string.
  * 3. Positive control: a directly-overridden action always ends up with
- *    exactly its override's binding, regardless of any collision
- *    (applyKeybindingOverrides.ts:8-12,112-130 — rule 1 always wins and
- *    was untouched by the bug described below, which affected rule 2).
+ *    the NORMALISED form of its override's binding
+ *    (`normalizeChordSequence` — dispatch-live modifier names, key case
+ *    preserved), regardless of any collision (rule 1 always wins).
+ *    Normalised, not verbatim: rule 2's strip index buckets claims
+ *    canonically, so a verbatim install let a dispatch-dead spelling
+ *    (`ctrl+x` — tinykeys knows `Control`, not `ctrl`) strip a live
+ *    `Control+x` default while itself never firing (issue #388, fixed
+ *    by normalising at install). The 2b warm-up pins the seam this
+ *    relies on: normalising never changes a chord's canonical bucket.
  * 4. The differential this suite exists for: no action that did NOT
  *    receive a direct override may keep a default chord that
  *    canonically collides — via `canonicalizeChord`, not raw string
@@ -108,7 +116,7 @@ import {
   isKeyOverrideUnbound,
   type KeybindingOverride,
 } from '../keybindingOverrides.ts'
-import { canonicalizeChord, toChordArray } from '../canonicalizeChord.ts'
+import { canonicalizeChord, normalizeChordSequence, toChordArray } from '../canonicalizeChord.ts'
 import { contextsOverlap, findKeybindingConflicts } from '../keybindingConflicts.ts'
 import { ActionContextTypes, type ActionConfig, type ActionContextType } from '../types.ts'
 
@@ -144,10 +152,10 @@ const ALIAS_SPELLINGS: Record<ModFamily, readonly string[]> = Object.fromEntries
   MODIFIER_FAMILIES.map(family => [family, ALIAS_WORDS[family].flatMap(caseVariants)]),
 ) as unknown as Record<ModFamily, readonly string[]>
 
-/** Keys held fixed (case-preserved) across spellings of "the same"
- *  press — canonicalizeChord keeps the key's case verbatim
- *  (canonicalizeChord.ts:154-155), so varying it would generate a
- *  genuinely different canonical chord, not an equivalent spelling. */
+/** Keys held fixed across spellings of "the same" press. Logical keys
+ *  now case-fold (so varying case WOULD stay equivalent for them), but
+ *  `CODE_ONLY_KEY` tokens don't — holding the token fixed keeps the
+ *  generator sound for every pool entry without special-casing. */
 const KEY_POOL = ['k', 'a', 'x', 'q', '1', 'ArrowUp', 'F2'] as const
 
 interface CanonicalPress {
@@ -212,6 +220,21 @@ describe('canonicalizeChord', () => {
         ),
         ({rawA, rawB}) => {
           expect(canonicalizeChord(rawA)).toBe(canonicalizeChord(rawB))
+        },
+      ),
+      fuzzParams(200),
+    )
+  })
+
+  // 2b. The install seam rule 1 relies on (see property 3): normalising a
+  // chord for install never moves it to a different canonical bucket, so
+  // what rule 2's strip index claims is exactly what dispatch receives.
+  it('normalizeChordSequence is canonical-preserving: canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)', () => {
+    fc.assert(
+      fc.property(
+        canonicalChordArb.chain(presses => spellChordArb(presses)),
+        raw => {
+          expect(canonicalizeChord(normalizeChordSequence(raw))).toBe(canonicalizeChord(raw))
         },
       ),
       fuzzParams(200),
@@ -341,7 +364,7 @@ const directOverrideFor = (
 // ──── Property 3: positive control ────
 
 describe('applyKeybindingOverrides', () => {
-  it('a directly-overridden action always gets exactly its override\'s binding, regardless of any collision (applyKeybindingOverrides.ts:8-12,112-130)', () => {
+  it('a directly-overridden action always gets the normalised form of its override\'s binding, regardless of any collision (rule 1 + issue #388: normalised install, never verbatim)', () => {
     fc.assert(
       fc.property(caseArb, ({genActions, overrides}) => {
         const actionConfigs = genActions.map(toActionConfig)
@@ -355,7 +378,12 @@ describe('applyKeybindingOverrides', () => {
           if (isKeyOverrideUnbound(direct.binding)) {
             expect(result.defaultBinding).toBeUndefined()
           } else {
-            expect(result.defaultBinding?.keys).toEqual(direct.binding.keys)
+            // Normalised install is the #388 contract: the installed form
+            // shares the raw spelling's canonical bucket (property 2b) and
+            // uses dispatch-live modifier names, so a rule-2 claim can
+            // never out-live its own binding's liveness.
+            expect(toChordArray(result.defaultBinding!.keys))
+              .toEqual(toChordArray(direct.binding.keys).map(chord => normalizeChordSequence(chord)))
           }
         }
       }),
