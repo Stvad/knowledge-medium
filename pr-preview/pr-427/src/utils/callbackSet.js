@@ -1,0 +1,2 @@
+var e=class{listeners=new Set;label;constructor(e){this.label=e}add(e){return this.listeners.add(e),()=>{this.listeners.delete(e)}}notify(...e){for(let t of[...this.listeners])try{t(...e)}catch(e){let t=this.label?` ${this.label}`:``;console.warn(`[CallbackSet${t}] listener threw:`,e)}}get size(){return this.listeners.size}clear(){this.listeners.clear()}};export{e as CallbackSet};
+//# sourceMappingURL=callbackSet.js.map
