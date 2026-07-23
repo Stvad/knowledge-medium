@@ -1663,7 +1663,13 @@ embedded wikilink mints/binds an alias seat on lookup miss like any wikilink
 auto-creation the ruling forbids; it is existing universal link behavior),
 the row binds to whatever owns the name, fails recognition's condition 3,
 and renders as an inert field-looking row carrying the "create property?"
-affordance. The seat-squatting consequence — a minted seat owns the name,
+affordance — which, when invoked, creates the definition <em>and rewrites
+that row to <code>::((newFieldId))</code></em> (PR #417 review:
+<code>addSchema</code> claims no alias pre-AC, so creating alone would leave
+the row seat-bound and still unclassified; the rewrite is a visible content
+edit on the very row the user acted on — canonicalization as a user action,
+not a background pass — optionally offered in bulk for same-named marked
+rows). The seat-squatting consequence — a minted seat owns the name,
 so the later definition claim collides — needs <strong>no new rule</strong>:
 the AC claimant preflight already surfaces every collision for prompted
 resolution, and since "untouched machine-minted seat" is provable
@@ -2818,12 +2824,20 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         deletion matrix; the <em>name form</em> differs in kind (owner round,
         07-22: the alias index is a registry of <em>live</em> claims, so a name
         cannot tombstone-resolve the way a fieldId can): on definition
-        deletion a <code>::[[name]]</code> row <em>unbinds and goes dormant</em> —
+        deletion a <code>::[[name]]</code> row <em>drops out of machinery</em> —
         unclassifies, values stop projecting, key reads unset, nothing
-        destroyed, rendered as the visible unbound state — and revives when the
-        definition (or any definition) claims the name again, re-binding to the
-        <em>new winner</em> if there is one (values re-decode under its codec;
-        failures are the invalid-values story). Both forms preserve the
+        destroyed. Mechanically the released alias re-derives like any
+        wikilink miss, which <em>seats</em> (PR #417 review: the references
+        pass queues <code>ensureAliasTarget</code> on miss, so the row
+        rebinds to a minted page seat rather than clearing to NULL — uniform
+        link behavior, and stable rather than flickering between passes); the
+        row renders as marked-but-bound-to-no-definition either way. Reviving
+        is therefore <em>prompted, not automatic</em>: a restored or
+        re-claiming definition collides with that seat and resolves through
+        the standard empty-seat flow — machine-minted and untouched, so
+        merge-recommended, batched into the approve-list — after which the
+        row re-binds and lights up (values re-decode under the winner's
+        codec; failures are the invalid-values story). Both forms preserve the
         baseline — no deletion event ever silently removes property data — and
         the asymmetry is the §9 semantics stated once more: id rows are
         identity-pinned, name rows follow the living name, exactly as links
@@ -3110,7 +3124,18 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <strong>claimant preflight</strong> — enumerate existing owners of every
         definition name <em>before</em> claiming, surface page-vs-definition
         conflicts for resolution (rename the page's alias, rename the property, or
-        accept page-wins), and record refused claims in the report. A definition
+        accept page-wins), and record refused claims in the report. The
+        <em>property-wins</em> resolution has a pinned internal order
+        (PR #417 review: removing the page's alias fires
+        <code>renameBacklinks</code>, which rewrites <code>[[status]]</code>
+        spans to keep pointing at the <em>page</em> — marked rows included —
+        so the field intents that motivated the resolution would be rewritten
+        away before the claim): <em>first</em> rewrite the marked
+        <code>::[[status]]</code> rows to <code>::((fieldId))</code> (part of
+        the prompted resolution — the same canonicalization the create
+        affordance performs, in bulk), <em>then</em> remove/rename the page's
+        alias — the span rewrite no longer touches the id-form rows and
+        correctly re-titles only prose links toward the page. A definition
         whose claim was refused stays id-addressable but never becomes
         name-resolvable; that state must be visible, not a silent bulk-claim
         casualty. Pairs with <strong>"copy resolves
