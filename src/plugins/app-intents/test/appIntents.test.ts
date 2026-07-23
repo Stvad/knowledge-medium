@@ -7,10 +7,7 @@ import { editorSelection } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
@@ -92,7 +89,7 @@ const seedLandingLayout = async () => {
     })
   }, {scope: ChangeScope.BlockDefault})
   const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-  const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+  const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
   await insertPanelRow(env.repo, layoutSession, 'main-block')
   return {daily, layoutSession}
 }

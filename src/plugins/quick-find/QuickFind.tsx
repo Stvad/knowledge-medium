@@ -33,7 +33,6 @@ import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.js
 import { parseRelativeDate, relativeDateCandidates } from '@/utils/relativeDate.js'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { formatRoamDate } from '@/utils/dailyPage.js'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   searchLinkTargetsProgressively,
   type LinkTargetAliasMatch,
@@ -368,7 +367,7 @@ function QuickFindResources({
     const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
     const [quickFindUIStateBlock, layoutSessionBlock] = await Promise.all([
       getPluginUIStateBlock(repo, workspaceId, user, quickFindUIStateType),
-      getLayoutSessionBlock(rootUIStateBlock, getLayoutSessionId()),
+      getLayoutSessionBlock(rootUIStateBlock, repo.activeLayoutSessionId),
     ])
     return {quickFindUIStateBlock, layoutSessionBlock}
   })(), [repo, user, workspaceId])

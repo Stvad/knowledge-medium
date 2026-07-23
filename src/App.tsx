@@ -1,6 +1,13 @@
+// App is a BOOT SHIM — do not grow it. It owns workspace resolution
+// (getInitialLayout + its cache), the §6 access gates, the TTI mark, the
+// always-on hash watcher, reactive role tracking, and provisioning the
+// layout-root seam value (LayoutRootContext). New app-root behavior goes into
+// an overridable seam instead — a block renderer (like TopLevelRenderer), a
+// facet, or the layout-root hook (usePanelLayoutProjection / LayoutRootContext).
+// See the perspective keep-alive RFC (PR #357).
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
-import { use, useCallback, useEffect, useState } from 'react'
+import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@powersync/react'
 import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.js'
@@ -13,7 +20,7 @@ import { getLocalMemberRole, getLocalWorkspace } from '@/data/workspaces.js'
 import { layoutWorkspaceChanged, parseLayout } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
-import { PanelLayoutProjection } from '@/utils/panelLayoutProjection.js'
+import { LayoutRootContext } from '@/components/renderer/layoutRootContext.js'
 import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
 import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
@@ -185,39 +192,25 @@ const App = () => {
   // null while the workspace is locked (gate shown) — there's no layout yet.
   const layoutSessionBlock = initial.kind === 'ready' ? initial.layoutSessionBlock : null
 
-  useEffect(() => {
-    if (!layoutSessionBlock) return
-    const projection = new PanelLayoutProjection({
-      repo,
-      workspaceId: activeWorkspaceId,
-      layoutSessionBlock,
+  // The URL⇄layout projection itself lives with the layout-root renderer
+  // (usePanelLayoutProjection, called by TopLevelRenderer or an extension
+  // override). App only supplies the seam value: which block is the root, and
+  // the cache-bust callback the projection must invoke on layout hash changes
+  // (so a projected workspace change re-resolves the initial layout).
+  const onLayoutHashChanged = useCallback(() => {
+    const nextHash = getCurrentHash()
+    setHashSnapshot(current => {
+      if (!layoutWorkspaceChanged(current.hash, nextHash)) return current
+      return {hash: nextHash, version: current.version + 1}
     })
-    const syncHash = () => {
-      const nextHash = getCurrentHash()
-      setHashSnapshot(current => {
-        if (!layoutWorkspaceChanged(current.hash, nextHash)) return current
-        return {hash: nextHash, version: current.version + 1}
-      })
-    }
-    const unsubscribe = projection.subscribe(syncHash)
-    let disposed = false
-    void projection.start()
-      .then(() => {
-        if (disposed) {
-          projection.dispose()
-          return
-        }
-        syncHash()
-      })
-      .catch(error => {
-        console.error('[App] Failed to start panel layout projection', error)
-      })
-    return () => {
-      disposed = true
-      unsubscribe()
-      projection.dispose()
-    }
-  }, [repo, activeWorkspaceId, layoutSessionBlock])
+  }, [])
+  const layoutRootContextValue = useMemo(
+    () =>
+      layoutSessionBlock
+        ? {rootBlockId: layoutSessionBlock.id, onLayoutHashChanged}
+        : null,
+    [layoutSessionBlock, onLayoutHashChanged],
+  )
 
   // Reactive role tracking. The imperative setReadOnly inside
   // resolveWorkspace handles the *initial* render (so the first paint
@@ -304,11 +297,13 @@ const App = () => {
   }
 
   return (
-    <BlockContextProvider initialValue={{layoutBoundary: true, safeMode}}>
-      <AppRuntimeProvider safeMode={safeMode}>
-        <BlockComponent blockId={initial.layoutSessionBlock.id}/>
-      </AppRuntimeProvider>
-    </BlockContextProvider>
+    <LayoutRootContext.Provider value={layoutRootContextValue}>
+      <BlockContextProvider initialValue={{layoutBoundary: true, safeMode}}>
+        <AppRuntimeProvider safeMode={safeMode}>
+          <BlockComponent blockId={initial.layoutSessionBlock.id}/>
+        </AppRuntimeProvider>
+      </BlockContextProvider>
+    </LayoutRootContext.Provider>
   )
 }
 

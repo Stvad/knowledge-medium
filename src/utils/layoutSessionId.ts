@@ -57,6 +57,19 @@ const getLayoutSessionStorageTarget = (): LayoutSessionStorageTarget | null => {
   }
 }
 
+/** The per-device BASE layout-session id — a boot-time seed, not "the
+ *  session the user is looking at" (those can diverge once the
+ *  perspectives host lands). Only the boot seed may bind to it directly.
+ *
+ *  `src/utils/test/layoutSessionId.test.ts` is in the allowlist too: it
+ *  pins THIS function's own storage-target selection + memoization (the
+ *  seed's mechanics), which no other file exercises — not a "call
+ *  getLayoutSessionId instead of the injected channel" case the rule is
+ *  otherwise guarding against.
+ *
+ *  @ambient allowIn: src/utils/layoutSessionId.ts, src/data/repo.ts, src/bootstrap/workspaceBootstrap.ts, src/utils/test/layoutSessionId.test.ts
+ *  @ambientMessage getLayoutSessionId is the per-device base id (boot seed only). Use repo.activeLayoutSessionId in imperative code, or the layoutSessionBlockId block context in the render tree (PR 2).
+ */
 export const getLayoutSessionId = (): string => {
   if (memoizedLayoutSessionId) return memoizedLayoutSessionId
   const target = getLayoutSessionStorageTarget()

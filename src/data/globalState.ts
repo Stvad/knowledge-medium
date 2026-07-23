@@ -32,7 +32,6 @@ import {
   isEditingProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
-import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import {
   getLayoutSessionBlock,
   getPluginPrefsBlock,
@@ -64,11 +63,12 @@ export function useRootUIStateBlock(): Block {
   return use(getUIStateBlock(repo, workspaceId, user, {}))
 }
 
-export function useLayoutSessionBlock(layoutSessionId = getLayoutSessionId()): Block {
-  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId))
+export function useLayoutSessionBlock(layoutSessionId?: string): Block {
+  const repo = useRepo()
+  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId ?? repo.activeLayoutSessionId))
 }
 
-export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()): Block[] {
+export function usePanelsForLayoutSession(layoutSessionId?: string): Block[] {
   return useChildren(useLayoutSessionBlock(layoutSessionId))
 }
 

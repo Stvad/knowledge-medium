@@ -45,7 +45,6 @@ import {
   ActionContextTypes,
 } from '@/shortcuts/types.js'
 import { CalendarDays, CalendarPlus } from 'lucide-react'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   activeWorkspaceIdPreferringHash,
   navigate,
@@ -211,7 +210,7 @@ export const dailyNotesActions = (
     context: ActionContextTypes.GLOBAL,
     icon: CalendarPlus,
     handler: async ({uiStateBlock}) => {
-      const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+      const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
       await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
     },
     defaultBinding: {

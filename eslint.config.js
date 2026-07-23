@@ -97,8 +97,8 @@ export default tseslint.config(
       'no-restricted-syntax': ['error', b3CustomEventRestriction],
       // DI-lens audit (PR #357) / table-driven follow-up (PR #424): see
       // ambientAccessors.data.js for the restrictions themselves
-      // (getActiveUserId, navigator.platform, the mobile breakpoint
-      // literal) and their allowlists.
+      // (getActiveUserId, getLayoutSessionId, navigator.platform, the
+      // mobile breakpoint literal) and their allowlists.
       'ambient/ambient-accessors': ['error', { entries: ambientAccessorEntries }],
       // Warn (not error) when a Set of function callbacks reinvents the
       // listener add/notify/unsubscribe loop CallbackSet provides. Soft nudge:

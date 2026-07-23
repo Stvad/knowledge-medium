@@ -131,6 +131,7 @@ import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
+import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
@@ -665,6 +666,10 @@ export class Repo {
   readonly syncObserverDeps?: MaterializeDeps
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
+  /** Backing field for `activeLayoutSessionId` (see getter/setter below).
+   *  `null` means "no override" — the getter falls back to the per-device
+   *  base id. */
+  private _activeLayoutSessionId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
    *  across Repo instances (e.g. lodash.memoize calls in the panel /
    *  user-page bootstrap). Auto-incremented per construction. */
@@ -1288,6 +1293,33 @@ export class Repo {
     }
   }
 
+  // ──── Active-layout-session getter/setter (UI bookkeeping) ────
+
+  /** UI-visible "active" layout-session id — which panel-layout tree
+   *  imperative code (actions, navigation helpers) should treat as "the
+   *  session the user is looking at" (mirrors `activeWorkspaceId` above,
+   *  replacing the module-global `getActiveLayoutSessionId` store it used
+   *  to be). Falls back to the per-device BASE session id
+   *  (`getLayoutSessionId()`, the boot seed) when no override has been
+   *  set — so today, with nothing yet calling `setActiveLayoutSessionId`,
+   *  this getter is behavior-identical to reading the base id directly. */
+  get activeLayoutSessionId(): string {
+    return this._activeLayoutSessionId ?? getLayoutSessionId()
+  }
+
+  /** Override the active layout-session id; `null` restores the
+   *  per-device base id. Nothing on this branch (PR 1) calls this yet —
+   *  it exists so the perspectives host (PR 2), the first caller, has a
+   *  seam to switch sessions without a further Repo change. Unlike
+   *  `setActiveWorkspaceId`, this deliberately does NOT propagate
+   *  anywhere (no facetBridge / runtime notification, no reprime): layout-
+   *  session switching has no reactive consumers yet, so wiring that
+   *  machinery now would be speculative. PR 2 adds both the propagation
+   *  and its first caller together. */
+  setActiveLayoutSessionId(id: string | null): void {
+    this._activeLayoutSessionId = id
+  }
+
   /** Wait until persisted property definitions have produced their first
    * complete workspace snapshot. Bootstrap calls this before typed writes so
    * declaration synthesis cannot temporarily outrank a stored rename/shadow. */
@@ -1561,6 +1593,8 @@ export class Repo {
     // disposed observer it believes is live).
     const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
       this.setActiveWorkspaceId(id)
+    const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
+      this.setActiveLayoutSessionId(id)
     const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
     const undo: Repo['undo'] = (scope) => this.undo(scope)
     const redo: Repo['redo'] = (scope) => this.redo(scope)
@@ -1574,7 +1608,7 @@ export class Repo {
       scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
       scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
       scheduleReferenceTargetDerivePass,
-      setActiveWorkspaceId, setReadOnly, undo, redo,
+      setActiveWorkspaceId, setActiveLayoutSessionId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
   }

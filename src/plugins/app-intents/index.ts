@@ -20,7 +20,6 @@ import { appEffectsFacet, type AppEffect } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { consumeAppIntent } from './appIntents.ts'
 
 export {
@@ -35,7 +34,7 @@ export const appIntentsBootstrapEffect: AppEffect = {
     const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
     const layoutSessionBlock = await getLayoutSessionBlock(
       uiState,
-      getLayoutSessionId(),
+      repo.activeLayoutSessionId,
     )
     await consumeAppIntent(repo, layoutSessionBlock)
   },
