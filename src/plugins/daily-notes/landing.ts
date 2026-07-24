@@ -18,7 +18,7 @@
  * plumbing.
  */
 import type { WorkspaceLandingResolver } from '@/extensions/core.js'
-import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+import { dailyNoteBlockId, getOrCreateDailyNote, journalBlockId, todayIso } from './dailyNotes.ts'
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
   repo,
@@ -40,14 +40,19 @@ export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
     // would sail past and resurrect the deleted parent note. A tombstone means
     // someone deleted it; recovery is never the right moment to bring it back.
     //
-    // Read the row directly: `block.load()` returns null for BOTH a tombstone
+    // The Journal counts too: `getOrCreateDailyNote` calls
+    // `getOrCreateJournalBlock`, which restores a soft-deleted Journal row — so
+    // recovering after a Journal delete would resurrect it and hang a fresh
+    // daily note under it.
+    //
+    // Read the rows directly: `block.load()` returns null for BOTH a tombstone
     // and a missing row, and markMissing's the tombstone on the way, so the
     // Block facade can't tell "deleted" (decline) from "never existed"
     // (creating it is fine and wanted).
-    const row = await repo.db.getOptional<{deleted: number}>(
-      'SELECT deleted FROM blocks WHERE id = ?', [id],
+    const rows = await repo.db.getAll<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id IN (?, ?)', [id, journalBlockId(workspaceId)],
     )
-    if (row?.deleted === 1) return null
+    if (rows.some(row => row.deleted === 1)) return null
   }
   const dailyNote = await getOrCreateDailyNote(repo, workspaceId, iso)
   return dailyNote.id

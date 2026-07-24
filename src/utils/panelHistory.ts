@@ -160,14 +160,21 @@ export class PanelHistoryStore {
    *  is not a user navigation: it's how a caller consumes a destination it
    *  reached some other way (content recovery), and how a dead entry is
    *  dropped (`pruneDeadTop`). Parking either kind on the opposite stack would
-   *  just re-expose it to the other chevron. */
-  dropTop(panelId: string, side: 'back' | 'forward'): void {
+   *  just re-expose it to the other chevron.
+   *
+   *  Pass `expected` to make the drop compare-and-swap: callers that decided
+   *  to drop after an `await` would otherwise discard whatever a concurrent
+   *  navigation pushed in the meantime instead of the entry they inspected.
+   *  Returns whether an entry was actually dropped. */
+  dropTop(panelId: string, side: 'back' | 'forward', expected?: HistoryEntry): boolean {
     const current = this.state.get(panelId)
-    if (!current || current[side].length === 0) return
+    if (!current || current[side].length === 0) return false
+    if (expected !== undefined && current[side][current[side].length - 1] !== expected) return false
     this.state.set(panelId, side === 'back'
       ? {back: current.back.slice(0, -1), forward: current.forward}
       : {back: current.back, forward: current.forward.slice(0, -1)})
     this.notify(panelId)
+    return true
   }
 
   reconcileUrlNavigation(
@@ -421,7 +428,12 @@ const pruneDeadTop = async (
     const top = panelHistory.peek(panelBlock.id, side)
     if (!top) return
     if (top.blockId !== alsoDeadId && await isBlockLive(panelBlock.repo.block(top.blockId))) return
-    panelHistory.dropTop(panelBlock.id, side)
+    // Compare-and-swap on the entry we just inspected: a navigation during the
+    // await above pushes a NEW entry onto this same stack, and a blind drop
+    // would discard THAT instead of the dead one — losing the user's way back
+    // to the page they just left. If the top moved, stop pruning; the caller's
+    // own stale-press guard handles the rest.
+    if (!panelHistory.dropTop(panelBlock.id, side, top)) return
   }
 }
 
@@ -512,7 +524,7 @@ export const recoverPanelOffDeadContent = async (
   }
   if (!stillStranded()) return
   if (targetId) {
-    if (dest) panelHistory.dropTop(panelBlock.id, 'back')
+    if (dest) panelHistory.dropTop(panelBlock.id, 'back', dest)
     panelHistory.enqueueRestore(panelBlock.id, dest?.state)
     await transactPanelContent(
       panelBlock, targetId, dest?.state, 'recover panel off deleted content',

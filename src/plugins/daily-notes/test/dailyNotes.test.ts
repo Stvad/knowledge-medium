@@ -283,6 +283,21 @@ describe('todayDailyNoteLanding', () => {
     expect(id).toBeNull()
     expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
   })
+
+  it('declines when the Journal itself is the tombstone', async () => {
+    // getOrCreateDailyNote calls getOrCreateJournalBlock, which restores a
+    // soft-deleted Journal — so recovering after a Journal delete would
+    // resurrect it and hang a fresh daily note under it.
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    await env.repo.block(journal.id).delete()
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: journal.id,
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, journal.id)).toBe(true)
+  })
 })
 
 describe('idx_blocks_daily_note_date', () => {

@@ -294,6 +294,22 @@ describe('PanelHistoryStore', () => {
       expect(() => store.dropTop('p1', 'back')).not.toThrow()
     })
 
+    it('dropTop with an expected entry refuses to drop a different top', () => {
+      // A caller that decided to drop after an await must not discard whatever
+      // a concurrent navigation pushed in the meantime.
+      store.push('p1', e('b-a'))
+      const inspected = store.peek('p1', 'back')!
+      store.push('p1', e('pushed-during-await'))
+
+      expect(store.dropTop('p1', 'back', inspected)).toBe(false)
+      expect(store.getSnapshot('p1').back.map(x => x.blockId))
+        .toEqual(['b-a', 'pushed-during-await'])
+
+      const top = store.peek('p1', 'back')!
+      expect(store.dropTop('p1', 'back', top)).toBe(true)
+      expect(store.getSnapshot('p1').back.map(x => x.blockId)).toEqual(['b-a'])
+    })
+
     it('dropTop notifies only when something was removed', () => {
       let n = 0
       store.push('p1', e('b-a'))

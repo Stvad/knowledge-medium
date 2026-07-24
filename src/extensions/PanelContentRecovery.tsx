@@ -23,6 +23,16 @@ import { systemToggle } from '@/facets/togglable.js'
  */
 const RECOVERY_DEBOUNCE_MS = 120
 
+/**
+ * Debounce for a block that was ALREADY gone when this pane first pointed at it
+ * — a stale bookmark, a shared link, a browser-history entry for a page deleted
+ * since. Locally, "deleted" and "hasn't synced yet" are the same observation
+ * (no row), so this waits long enough for an initial sync drain to deliver a
+ * page that does exist before concluding it never will. The vanished-under-us
+ * case doesn't need the wait: we watched that block be live.
+ */
+const UNSEEN_RECOVERY_DEBOUNCE_MS = 3_000
+
 /** Resolve the workspace's landing block (today's daily note, by default) off
  *  the live app runtime — the terminal fallback when a recovering pane has no
  *  live history to step back to. Returns null with no runtime / no resolver
@@ -69,12 +79,9 @@ export function PanelContentRecovery({block}: {block: Block}) {
   // always called on a real block (the effect below gates on topLevelBlockId).
   const shown = block.repo.block(topLevelBlockId ?? block.id)
   const shownExists = useBlockExists(shown)
-  /** EVERY block this pane has seen live, not just the latest. Browser
-   *  Back/Forward can reconcile the pane onto a page it showed earlier — if
-   *  that page has since been deleted, a single-slot memo would read it as
-   *  "never seen, still loading" and refuse to recover, stranding the pane on
-   *  the tombstone. Grows with pages visited in this pane, which is bounded by
-   *  the session and holds only ids. */
+  /** Blocks this pane has watched be live. Only used to pick the debounce:
+   *  a page that vanished under us is certainly deleted, while one that was
+   *  never live here might still be syncing in. */
   const seenLiveRef = useRef<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -86,38 +93,48 @@ export function PanelContentRecovery({block}: {block: Block}) {
     if (!topLevelBlockId) return
 
     if (shownExists) {
-      // Confirmed live — remember it so a later disappearance reads as a delete.
       seenLiveRef.current.add(topLevelBlockId)
       return
     }
-    // Not live. Unless we've seen THIS block live, treat it as still-loading
-    // (initial mount), not deleted — don't recover.
-    if (!seenLiveRef.current.has(topLevelBlockId)) return
 
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null
-      // Re-verify at fire time: same shown block, and still gone (not restored
-      // by undo, not a mid-load blip that resolved).
-      if (block.peekProperty(topLevelBlockIdProp) !== topLevelBlockId) return
-      if (block.repo.block(topLevelBlockId).peek()) return
-      seenLiveRef.current.delete(topLevelBlockId)
-      // The landing resolver is passed as a thunk, not a resolved id: it can
-      // write (get-or-create), so it must only run if history yields nothing
-      // live. `recoverPanelOffDeadContent` re-checks that the pane is still
-      // stranded on this block before it writes, covering the case where the
-      // user navigates or undoes while that resolution is in flight.
-      void recoverPanelOffDeadContent(block, topLevelBlockId, () =>
-        resolveLandingId(block.repo, topLevelBlockId),
-      )
-    }, RECOVERY_DEBOUNCE_MS)
+    // Not live — but `useBlockExists` reports "still loading" and "confirmed
+    // missing" identically, and a confirmation produces no further transition
+    // to re-run this effect. So ask the loader directly instead of inferring
+    // absence from what this pane happens to have seen: that inference left
+    // panes stranded forever on any id they never observed live (a stale
+    // bookmark, a shared link, a browser-history entry for a since-deleted
+    // page).
+    let cancelled = false
+    void shown.load().then(data => {
+      if (cancelled || data) return
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null
+        // Re-verify at fire time: same shown block, and still gone (not
+        // restored by undo, not a mid-load blip that resolved).
+        if (block.peekProperty(topLevelBlockIdProp) !== topLevelBlockId) return
+        if (block.repo.block(topLevelBlockId).peek()) return
+        seenLiveRef.current.delete(topLevelBlockId)
+        // The landing resolver is passed as a thunk, not a resolved id: it can
+        // write (get-or-create), so it must only run if history yields nothing
+        // live. `recoverPanelOffDeadContent` re-checks that the pane is still
+        // stranded on this block before it writes, covering the case where the
+        // user navigates or undoes while that resolution is in flight.
+        void recoverPanelOffDeadContent(block, topLevelBlockId, () =>
+          resolveLandingId(block.repo, topLevelBlockId),
+        )
+      }, seenLiveRef.current.has(topLevelBlockId)
+        ? RECOVERY_DEBOUNCE_MS
+        : UNSEEN_RECOVERY_DEBOUNCE_MS)
+    })
 
     return () => {
+      cancelled = true
       if (timerRef.current != null) {
         clearTimeout(timerRef.current)
         timerRef.current = null
       }
     }
-  }, [block, topLevelBlockId, shownExists])
+  }, [block, shown, topLevelBlockId, shownExists])
 
   return null
 }
