@@ -338,3 +338,29 @@ describe('lintExtensionSource — reinvented-core-concept', () => {
     expect(lintExtensionSource(source).map(w => w.rule)).not.toContain('reinvented-core-concept')
   })
 })
+
+describe('lintExtensionSource — generic declarations', () => {
+  it('reads a generic `seedProperty<T>({…})` like a plain one', () => {
+    // The real strength-tracker wrote its sets blob exactly this way; a
+    // scanner matching only the bare `seedProperty(` text skipped it.
+    const source = `
+      export const setsProp = seedProperty<Record<string, StoredSet[]>>({
+        seedKey: extensionPropertySeedKey('sets'),
+        name: 'strength:sets',
+        preset: 'json',
+        defaultValue: [],
+      })
+    `
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('records-in-json-prop')
+  })
+
+  it('tolerates whitespace between the name and its parens', () => {
+    const source = `seedType ({id: 'entry', label: 'Entry'})`
+    expect(lintExtensionSource(source).map(w => w.rule)).toContain('unnamespaced-declaration')
+  })
+
+  it('does not mistake a different function whose name merely ends the same', () => {
+    const source = `mySeedProperty({name: 'done', preset: 'boolean', defaultValue: false})`
+    expect(lintExtensionSource(source)).toEqual([])
+  })
+})

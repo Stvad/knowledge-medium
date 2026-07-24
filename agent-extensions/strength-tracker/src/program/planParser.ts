@@ -299,9 +299,20 @@ const parseSessions = (
         // list carries every option through — resolving down to one
         // exercise per slot happens later, in configFromPlan, where an
         // explicit runtime choice can also override the default.
-        const options = altOptionNodes(child)
+        const optionNodes = altOptionNodes(child)
+        const options = optionNodes
           .map(option => parseExercise(option, session, increments))
           .filter((e): e is ExerciseConfig => e !== null)
+        // An option that DECLARES itself an exercise but can't be read would
+        // otherwise disappear from the switcher without a word — same reason a
+        // declared exercise outside a group warns.
+        for (const option of optionNodes) {
+          if (!isExerciseDef(option)) continue
+          if (parseExercise(option, session, increments)) continue
+          warnings.push(
+            `Session ${session}: or-group option "${plainText(option.content)}" could not be read — dropped from the choices.`,
+          )
+        }
         if (options.length === 0) {
           sessionNotes.push(text)
           if (quantified) {

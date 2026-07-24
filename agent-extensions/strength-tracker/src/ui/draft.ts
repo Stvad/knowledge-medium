@@ -131,7 +131,10 @@ export const liveIdentity = (live: LiveWorkout | undefined): string =>
     ? `${live.id}:${live.exercises.map(e => `${e.id}[${e.sets.map(s => s.id).join(',')}]`).join('|')}`
     : ''
 
-const toExerciseDraft = (ex: DraftExercise): ExerciseDraft => ({
+/** One exercise as the store writes it. Exported because a mid-session
+ *  `or`-group switch materializes a single exercise into an existing
+ *  workout. */
+export const toExerciseDraft = (ex: DraftExercise): ExerciseDraft => ({
   exercise: ex.exercise,
   definitionId: ex.defId,
   unit: ex.unit,
@@ -161,10 +164,23 @@ export const hasAcceptedSets = (draft: readonly DraftExercise[]): boolean =>
 
 /** What "Finish" keeps vs prunes: exercises with ≥1 done set keep only their
  *  done sets (with the derived working weight); exercises with none are
- *  removed. Only meaningful once the draft is materialized (sets have ids). */
-export const finishPlan = (workoutId: string, draft: readonly DraftExercise[]): FinishPlan => {
+ *  removed. Only meaningful once the draft is materialized (sets have ids).
+ *
+ *  `live` is the workout as it exists in the DB. Anything it holds that the
+ *  draft no longer does is pruned too — that's the `or`-group you switched
+ *  away from mid-session, whose blocks would otherwise survive Finish as an
+ *  exercise you didn't do (with its pre-filled sets still open todos). */
+export const finishPlan = (
+  workoutId: string,
+  draft: readonly DraftExercise[],
+  live?: LiveWorkout,
+): FinishPlan => {
   const keep: FinishPlan['keep'] = []
   const removeExerciseIds: string[] = []
+  const draftBlockIds = new Set(draft.map(ex => ex.blockId).filter((id): id is string => id !== undefined))
+  for (const liveEx of live?.exercises ?? []) {
+    if (!draftBlockIds.has(liveEx.id)) removeExerciseIds.push(liveEx.id)
+  }
   for (const ex of draft) {
     if (ex.blockId === undefined) continue
     const doneSets = ex.sets.filter(s => s.done)

@@ -315,6 +315,23 @@ describe('typed program blocks', () => {
       .toEqual([{name: 'Overhead press', defId: 'ohp'}, {name: 'Landmine press', defId: 'landmine'}])
   })
 
+  it('warns when a declared or-group option cannot be read, instead of dropping it silently', () => {
+    const typedOption = (content: string, id: string) =>
+      node(content, [], {id, properties: typed(['strength-exercise-def'])})
+    const plan = node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('or', [
+          typedOption('Overhead press — 3×6–10', 'ohp'),
+          typedOption('Landmine press', 'landmine'),   // no sets anywhere → unreadable
+        ], {id: 'g1', properties: typed(['strength-alt-group'])}),
+      ]),
+    ])
+    const {config, warnings} = configFromPlan(plan)
+    expect(warnings.some(w => w.includes('Landmine press'))).toBe(true)
+    // The readable option still resolves — one bad alternative doesn't sink the slot.
+    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.name).toBe('Overhead press')
+  })
+
   it('carries the definition block id onto the parsed exercise', () => {
     const ex = parseExercise(
       node('Bench press — 3×6–10', [], {id: 'def-bench'}),

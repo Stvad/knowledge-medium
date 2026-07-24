@@ -70,15 +70,21 @@ interface LintRule {
  *  literals; the length cap keeps a mis-parse bounded to one declaration. */
 const declarationChunks = (source: string, fn: string): string[] => {
   const chunks: string[] = []
-  const opener = `${fn}(`
-  let from = 0
+  // A declaration is often generic — `seedProperty<Record<string, Set[]>>({…})`
+  // is exactly the shape the JSON-blob rules exist to catch — and may carry
+  // whitespace before its parens. Matching only the bare `fn(` text would skip
+  // precisely the declarations worth flagging.
+  const opener = new RegExp(String.raw`\b${fn}\s*(?:<[^(){}]*>)?\s*\(`, 'g')
   for (;;) {
-    const start = source.indexOf(opener, from)
-    if (start === -1) break
+    const match = opener.exec(source)
+    if (!match) break
+    const start = match.index
+    // Scan from the '(' the match ended on.
+    const parenAt = start + match[0].length - 1
     let depth = 0
-    let end = start + opener.length - 1
+    let end = parenAt
     const limit = Math.min(source.length, start + 4000)
-    for (let i = start + opener.length - 1; i < limit; i += 1) {
+    for (let i = parenAt; i < limit; i += 1) {
       const ch = source[i]
       if (ch === '(') depth += 1
       else if (ch === ')') {
@@ -90,7 +96,9 @@ const declarationChunks = (source: string, fn: string): string[] => {
       }
     }
     chunks.push(source.slice(start, end + 1))
-    from = start + opener.length
+    // Resume just past this call's name, so a nested declaration inside it
+    // (a property list built inline) still gets its own chunk.
+    opener.lastIndex = parenAt
   }
   return chunks
 }

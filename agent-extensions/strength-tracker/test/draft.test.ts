@@ -96,6 +96,26 @@ describe('overlayLive', () => {
 })
 
 describe('finishPlan', () => {
+  it('prunes an exercise the live workout has but the draft no longer does', () => {
+    // The or-group you switched away from mid-session: its blocks are still in
+    // the workout, and its pre-filled sets are open todos. Finish must take
+    // them with it.
+    const draft = buildDraft(prescription(), 'lb')
+    draft[0].blockId = 'e1'
+    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
+    draft[0].sets[0].done = true
+    const liveWorkout: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [
+        {id: 'e1', exercise: 'Bench press', unit: 'lb', sets: []},
+        {id: 'e-dropped', exercise: 'Suitcase carry', unit: 'lb', sets: []},
+      ],
+    }
+    const plan = finishPlan('w1', draft, liveWorkout)
+    expect(plan.removeExerciseIds).toEqual(['e-dropped'])
+    expect(plan.keep.map(k => k.exerciseId)).toEqual(['e1'])
+  })
+
   const materialized = () => {
     const draft = buildDraft(prescription(), 'lb')
     draft[0].blockId = 'e1'

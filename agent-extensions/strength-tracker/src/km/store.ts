@@ -10,8 +10,8 @@
  *  The read side lives in the pure `history.ts` module (re-exported below).
  */
 
-import {ChangeScope, propertyValue} from '@/data/api/index.js'
-import {createChild} from '@/data/mutators.js'
+import {ChangeScope, propertyValue, type Tx} from '@/data/api/index.js'
+import {createChild, deleteBlock} from '@/data/mutators.js'
 import type {Repo} from '@/data/repo.js'
 import {createTypedChild} from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: it carries the todo type + its
@@ -99,6 +99,40 @@ const setContent = (set: SetDraft, unit: string): string => {
 
 const todoStatus = (done: boolean): 'open' | 'done' => (done ? 'done' : 'open')
 
+/** One exercise entry + its set blocks, inside the caller's transaction.
+ *  Shared by "start the session" and "add this lift mid-session", so an
+ *  entry written either way is identical. */
+const writeExercise = async (
+  repo: Repo,
+  tx: Tx,
+  workoutId: string,
+  ex: ExerciseDraft,
+  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
+): Promise<{id: string; setIds: string[]}> => {
+  const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
+  await tx.setProperty(exId, exerciseProp, ex.exercise)
+  await tx.setProperty(exId, definitionProp, ex.definitionId)
+  await tx.setProperty(exId, unitProp, ex.unit)
+  if (ex.prescribedWeight !== undefined) await tx.setProperty(exId, prescribedWeightProp, ex.prescribedWeight)
+  if (ex.prescribedSets !== undefined) await tx.setProperty(exId, prescribedSetsProp, ex.prescribedSets)
+  await repo.addTypeInTx(tx, exId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
+
+  const setIds: string[] = []
+  for (const s of ex.sets) {
+    const setId = await tx.run(createChild, {parentId: exId, content: setContent(s, ex.unit)})
+    await tx.setProperty(setId, weightProp, s.weight)
+    await tx.setProperty(setId, repsProp, s.reps)
+    await tx.setProperty(setId, rpeProp, s.rpe)
+    await tx.setProperty(setId, sideProp, s.side)
+    await tx.setProperty(setId, completedAtProp, s.completedAt)
+    await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
+    await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
+    await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
+    setIds.push(setId)
+  }
+  return {id: exId, setIds}
+}
+
 // ──── live logging writes ────
 
 /** Create the workout + one child per exercise + one grandchild per set, all
@@ -126,31 +160,25 @@ export const materializeWorkout = async (
 
     const exercises: {id: string; setIds: string[]}[] = []
     for (const ex of draft.exercises) {
-      const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
-      await tx.setProperty(exId, exerciseProp, ex.exercise)
-      await tx.setProperty(exId, definitionProp, ex.definitionId)
-      await tx.setProperty(exId, unitProp, ex.unit)
-      if (ex.prescribedWeight !== undefined) await tx.setProperty(exId, prescribedWeightProp, ex.prescribedWeight)
-      if (ex.prescribedSets !== undefined) await tx.setProperty(exId, prescribedSetsProp, ex.prescribedSets)
-      await repo.addTypeInTx(tx, exId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
-
-      const setIds: string[] = []
-      for (const s of ex.sets) {
-        const setId = await tx.run(createChild, {parentId: exId, content: setContent(s, ex.unit)})
-        await tx.setProperty(setId, weightProp, s.weight)
-        await tx.setProperty(setId, repsProp, s.reps)
-        await tx.setProperty(setId, rpeProp, s.rpe)
-        await tx.setProperty(setId, sideProp, s.side)
-        await tx.setProperty(setId, completedAtProp, s.completedAt)
-        await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
-        await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
-        await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
-        setIds.push(setId)
-      }
-      exercises.push({id: exId, setIds})
+      exercises.push(await writeExercise(repo, tx, workoutId, ex, typeSnapshot))
     }
     return {workoutId, exercises}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
+}
+
+/** Add ONE exercise (and its pre-filled sets) to a workout that already
+ *  exists. This is the mid-session case: you switch an `or`-group to the
+ *  other option because your shoulder complained, and the option you switched
+ *  to has no blocks yet. Same shape as `materializeWorkout` writes, so the
+ *  entry is indistinguishable from one created at the start. */
+export const materializeExercise = async (
+  repo: Repo,
+  workoutId: string,
+  ex: ExerciseDraft,
+): Promise<{id: string; setIds: string[]}> => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot),
+    {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 
 /** Persist one set's current state to its block (in place). Writes the full
@@ -188,7 +216,10 @@ export interface FinishPlan {
  *  what was actually performed. One transaction. */
 export const finishWorkout = async (repo: Repo, plan: FinishPlan): Promise<void> => {
   await repo.tx(async tx => {
-    for (const exId of plan.removeExerciseIds) await tx.delete(exId)
+    // Subtree delete, not `tx.delete`: a skipped exercise still has its
+    // pre-filled set blocks, and those are todo-typed. Tombstoning only the
+    // parent would leave them live — stray open todos under a deleted block.
+    for (const exId of plan.removeExerciseIds) await tx.run(deleteBlock, {id: exId})
     for (const ex of plan.keep) {
       for (const setId of ex.removeSetIds) await tx.delete(setId)
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
