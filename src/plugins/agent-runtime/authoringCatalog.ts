@@ -723,7 +723,7 @@ const guides: AuthoringGuide[] = [
       'Write records with `createTypedChild(repo, tx, {...})` — create, type-tag, and typed properties in one call inside your transaction.',
       'Compose built-ins by listing them in `types`: `[MY_TYPE, TODO_TYPE]` plus the todo `statusProp` gives a real checkbox instead of a private done flag.',
       'Read back with a typed block query over your type id, and let backlinks answer the reverse direction instead of maintaining your own index.',
-      'After installing, run `pnpm agent audit-extension <label>`: it reads the blocks you actually wrote and flags block ids parked in string properties, records buried in JSON, and properties written with no registered schema.',
+      'After installing, run `kmagent audit-extension <label>`: it reads the blocks you actually wrote and flags block ids parked in string properties, records buried in JSON, and properties written with no registered schema. (Inside the app repo the same CLI is `pnpm agent …`.)',
     ],
     preferredModules: [
       '@/data/typedRecords.js',
@@ -735,10 +735,11 @@ const guides: AuthoringGuide[] = [
     ],
     relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [
-      'pnpm agent data-model',
-      'pnpm agent describe-runtime --guide record-grain',
-      'pnpm agent audit-extension <label>',
-      'pnpm agent backlinks <blockId>',
+      'kmagent new-extension "<Name>"',
+      'kmagent data-model',
+      'kmagent describe-runtime --guide record-grain',
+      'kmagent audit-extension <label>',
+      'kmagent backlinks <blockId>',
     ],
     examples: [
       {

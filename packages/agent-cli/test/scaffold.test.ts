@@ -51,8 +51,29 @@ describe('extensionScaffold', () => {
   it('ships a runnable gate and a test', () => {
     const {byPath} = scaffold()
     expect(JSON.parse(byPath.get('package.json')!).scripts.check)
-      .toBe('pnpm run typecheck && pnpm run test && pnpm run build')
+      .toBe('npm run typecheck && npm run test && npm run build')
     expect(byPath.get('test/read.test.ts')).toMatch(/describe\('buildEntries'/)
+  })
+
+  it('stands alone: own dependencies, own `@/` declarations, no repo paths', () => {
+    const {byPath, files} = scaffold()
+    const pkg = JSON.parse(byPath.get('package.json')!)
+    // The published CLI is most authors' only foothold — nothing may resolve
+    // through a checkout of the app.
+    for (const file of files) {
+      expect(file.contents, `${file.path} reaches out of the project`).not.toMatch(/\.\.\/\.\.\/node_modules/)
+    }
+    expect(pkg.devDependencies).toMatchObject({typescript: expect.any(String), vite: expect.any(String), vitest: expect.any(String)})
+    expect(pkg.scripts.types).toMatch(/kmagent types/)
+    expect(JSON.parse(byPath.get('tsconfig.json')!).compilerOptions.paths['@/*']).toEqual(['./types/src/*'])
+    expect(byPath.get('.gitignore')).toMatch(/^types\/$/m)
+  })
+
+  it('tells the author how to install with the CLI, not with repo tooling', () => {
+    const readme = scaffold().byPath.get('README.md')!
+    expect(readme).toMatch(/kmagent install-extension "dist\/Reading List\.js"/)
+    expect(readme).toMatch(/kmagent enable-extension "Reading List"/)
+    expect(readme).not.toMatch(/pnpm agent/)
   })
 
   it('names the bundle after the display name so install/enable use one handle', () => {
