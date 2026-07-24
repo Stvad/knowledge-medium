@@ -55,6 +55,17 @@ describe('buildHistory', () => {
     expect(history[0].exercises[0].prescribedSets).toBe(3)
   })
 
+  it('carries the definition link so progression can follow a renamed lift', () => {
+    const workout = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, dayToDate('2026-07-16')], [FIELD.status, 'done'],
+    ]))
+    const bench = block('e1', 'w1', 'a0', encode([
+      [FIELD.exercise, 'Bench press'], [FIELD.definition, 'def-bench'],
+    ]))
+    const history = buildHistory([workout], [bench], [setBlock('s1', 'e1', 'a0', 135, 10)])
+    expect(history[0].exercises[0].definitionId).toBe('def-bench')
+  })
+
   it('excludes in-progress workouts from history', () => {
     const wip = block('w1', 'page', 'a0', encode([
       [FIELD.session, 'A'], [FIELD.date, dayToDate('2026-07-16')], [FIELD.status, 'in-progress'],

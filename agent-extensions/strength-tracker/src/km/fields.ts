@@ -15,6 +15,13 @@ export const SET_TYPE = 'strength-set'
 export const LAYOFF_TYPE = 'strength-layoff'
 export const SETTINGS_TYPE = 'strength-settings'
 
+// Program side — blocks in the plan outline itself. The plan stays
+// hand-written prose, but a typed block is a declaration: it gets the
+// program property editors, it's queryable ("every exercise I train"), and
+// the parser reads it as intent rather than guessing from wording.
+export const EXERCISE_DEF_TYPE = 'strength-exercise-def'
+export const ALT_GROUP_TYPE = 'strength-alt-group'
+
 export const FIELD = {
   // workout
   session: 'strength:session',
@@ -24,6 +31,11 @@ export const FIELD = {
   status: 'strength:status',
   // exercise entry
   exercise: 'strength:exercise',
+  /** Ref to the plan's exercise-definition block. A real reference, so every
+   *  logged entry shows up in the definition's backlinks ("every night I
+   *  benched") and progression follows the definition across a rename —
+   *  `exercise` stays as the human-readable name and the legacy join key. */
+  definition: 'strength:definition',
   workingWeight: 'strength:workingWeight',
   unit: 'strength:unit',
   prescribedWeight: 'strength:prescribedWeight',
@@ -56,6 +68,25 @@ export const FIELD = {
    *  `or`-group the user is currently tracking. User state, not program
    *  state, so the plan outline stays read-only. */
   altChoices: 'strength:altChoices',
+  // program (blocks in the plan outline) — the parser reads these; they
+  // override whatever the prose on the same line would have implied.
+  targetSets: 'strength:targetSets',
+  repMin: 'strength:repMin',
+  repMax: 'strength:repMax',
+  increment: 'strength:increment',
+  perSide: 'strength:perSide',
+  /** Free-form movement classification (main | accessory | carry |
+   *  bodyweight). `carry`/`bodyweight` mark work the engine never
+   *  load-progresses from a rep count. */
+  kind: 'strength:kind',
+  catchUpIncrement: 'strength:catchUpIncrement',
+  catchUpRpe: 'strength:catchUpRpe',
+  /** On an `or`-group: which option name to track when the user hasn't
+   *  chosen one. */
+  altDefault: 'strength:default',
+  /** The app's own (un-namespaced) type-membership list — read to tell a
+   *  declared exercise definition from a plain note. */
+  blockTypes: 'types',
 } as const
 
 export type WorkoutStatus = 'in-progress' | 'done'

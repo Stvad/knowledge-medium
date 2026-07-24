@@ -263,3 +263,61 @@ describe('or-groups', () => {
     expect(overlay.altDefaults).toEqual({g1: 'Overhead press'})
   })
 })
+
+describe('typed program blocks', () => {
+  const typed = (types: string[], props: Record<string, unknown> = {}) => ({...props, types})
+
+  it('reads a group off its type, whatever the bullet says', () => {
+    const plan = node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('pick one', [node('Overhead press — 3×6–10'), node('Landmine press — 3×6–10')], {
+          id: 'g1', properties: typed(['strength-alt-group']),
+        }),
+      ]),
+    ])
+    expect(parsePlan(plan).altDefaults).toEqual({g1: 'Overhead press'})
+  })
+
+  it('treats only the declared children of a group as options, so a group can carry a description', () => {
+    const option = (content: string, id: string) =>
+      node(content, [], {id, properties: typed(['strength-exercise-def'])})
+    const plan = node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('or', [
+          // Reads as an exercise to the prose rules ("3 sets") — only the
+          // declared children keep it out of the option list.
+          node('alternate cycles — 3 sets each, whichever the shoulder likes'),
+          option('Overhead press — 3×6–10', 'ohp'),
+          option('Landmine press — 3×6–10', 'landmine'),
+        ], {id: 'g1', properties: typed(['strength-alt-group'])}),
+      ]),
+    ])
+    const {config} = configFromPlan(plan)
+    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.altOptions)
+      .toEqual(['Overhead press', 'Landmine press'])
+  })
+
+  it('carries the definition block id onto the parsed exercise', () => {
+    const ex = parseExercise(
+      node('Bench press — 3×6–10', [], {id: 'def-bench'}),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.defId).toBe('def-bench')
+    // A bare line (no block behind it) has nothing to link back to.
+    expect(parseExerciseLine('Bench press — 3×6–10', 'A', {upper: 5, lower: 10})?.defId).toBeUndefined()
+  })
+
+  it('warns about an unreadable exercise even where unquantified prose is expected', () => {
+    const plan = node('**Strength Plan**', [
+      node('**Mini day (Tue, optional)**', [
+        node('Shoulder prep circuit'),
+        node('Bottoms-up KB press', [], {id: 'bukb', properties: typed(['strength-exercise-def'])}),
+      ]),
+    ])
+    const {warnings} = parsePlan(plan)
+    expect(warnings.some(w => w.includes('Bottoms-up KB press'))).toBe(true)
+    // The untyped freeform line is still expected prose, not a parse failure.
+    expect(warnings.some(w => w.includes('Shoulder prep circuit'))).toBe(false)
+  })
+})

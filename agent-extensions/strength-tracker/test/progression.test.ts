@@ -122,6 +122,30 @@ describe('lastEntryFor', () => {
     ]
     expect(lastEntryFor(history, 'Bench press')?.workout.id).toBe('1')
   })
+
+  it('follows the plan block through a rename', () => {
+    const history: WorkoutRecord[] = [{
+      id: '1', date: '2026-07-09T23:00:00', session: 'A',
+      exercises: [{...bench(at(130, 10)), definitionId: 'def-bench'}],
+    }]
+    // The plan block was renamed after this was logged; the id still matches.
+    expect(lastEntryFor(history, 'Barbell bench press', 'def-bench')?.workout.id).toBe('1')
+  })
+
+  it('keeps two definitions that share a name on separate lines', () => {
+    const history: WorkoutRecord[] = [{
+      id: '1', date: '2026-07-09T23:00:00', session: 'A',
+      exercises: [{...bench(at(130, 10)), definitionId: 'def-old'}],
+    }]
+    expect(lastEntryFor(history, 'Bench press', 'def-new')).toBeUndefined()
+  })
+
+  it('falls back to the name for entries logged before definition links', () => {
+    const history: WorkoutRecord[] = [
+      {id: '1', date: '2026-07-09T23:00:00', session: 'A', exercises: [bench(at(130, 10))]},
+    ]
+    expect(lastEntryFor(history, 'Bench press', 'def-bench')?.workout.id).toBe('1')
+  })
 })
 
 describe('roundLoad', () => {

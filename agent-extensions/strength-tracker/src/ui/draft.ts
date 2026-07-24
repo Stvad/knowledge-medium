@@ -28,6 +28,8 @@ export interface DraftSet {
 
 export interface DraftExercise {
   exercise: string
+  /** Plan block behind this row (see `PrescribedExercise.defId`). */
+  defId?: string
   unit: string
   freeform: boolean
   perSide: boolean
@@ -73,6 +75,7 @@ const initialSets = (ex: PrescribedExercise): DraftSet[] => {
 export const buildDraft = (prescription: Prescription, unit: string): DraftExercise[] =>
   prescription.exercises.map(ex => ({
     exercise: ex.exercise,
+    defId: ex.defId,
     unit,
     freeform: ex.freeform,
     perSide: ex.perSide,
@@ -89,17 +92,21 @@ export const buildDraft = (prescription: Prescription, unit: string): DraftExerc
   }))
 
 /** Overlay a live in-progress workout onto the prescription draft: matched by
- *  exercise name, the block's set values + ids replace the pre-filled ones, so
- *  the rendered draft reflects (and can edit) the actual blocks. Exercises the
- *  live workout doesn't have keep their pre-filled sets. */
+ *  plan block (falling back to exercise name), the block's set values + ids
+ *  replace the pre-filled ones, so the rendered draft reflects (and can edit)
+ *  the actual blocks. Exercises the live workout doesn't have keep their
+ *  pre-filled sets. */
 export const overlayLive = (
   draft: readonly DraftExercise[],
   live: LiveWorkout | undefined,
 ): DraftExercise[] => {
   if (!live) return draft.map(ex => ({...ex}))
   const byName = new Map(live.exercises.map(e => [e.exercise, e]))
+  const byDefId = new Map(
+    live.exercises.filter(e => e.definitionId !== undefined).map(e => [e.definitionId as string, e]),
+  )
   return draft.map(ex => {
-    const le = byName.get(ex.exercise)
+    const le = (ex.defId !== undefined ? byDefId.get(ex.defId) : undefined) ?? byName.get(ex.exercise)
     if (!le) return {...ex}
     return {
       ...ex,
@@ -126,6 +133,7 @@ export const liveIdentity = (live: LiveWorkout | undefined): string =>
 
 const toExerciseDraft = (ex: DraftExercise): ExerciseDraft => ({
   exercise: ex.exercise,
+  definitionId: ex.defId,
   unit: ex.unit,
   prescribedWeight: ex.prescribedWeight,
   prescribedSets: ex.prescribedSets,

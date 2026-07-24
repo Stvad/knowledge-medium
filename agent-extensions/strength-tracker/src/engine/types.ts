@@ -18,10 +18,15 @@ export const isFullSession = (session: SessionType): boolean =>
   session === 'A' || session === 'B'
 
 export interface ExerciseConfig {
-  /** Canonical name; the join key against `strength:exercise` on logged
-   *  entries. Renaming here without renaming logged blocks starts a new
-   *  progression line, which is why the UI edits config rather than code. */
+  /** Canonical name; the human-readable join key against
+   *  `strength:exercise` on logged entries, and the only one available for
+   *  a hand-typed plan line. */
   name: string
+  /** The plan block this exercise is defined by, when the config was read
+   *  from an outline. Logged entries record it too, which is what lets a
+   *  rename keep its progression line: identity beats spelling whenever
+   *  both sides have it (see `lastEntryFor`). */
+  defId?: string
   session: SessionType
   /** Working sets prescribed at full health. */
   sets: number
@@ -153,6 +158,8 @@ export interface SetRecord {
 
 export interface ExerciseRecord {
   exercise: string
+  /** The plan block this was performed from, when known. */
+  definitionId?: string
   /** What the engine asked for at the time. Kept so progression judges
    *  "all prescribed sets" against the prescription that was actually
    *  live, not against today's config. */
@@ -186,6 +193,9 @@ export interface LayoffRecord {
 
 export interface PrescribedExercise {
   exercise: string
+  /** Plan block behind this prescription — recorded on the logged entry so
+   *  the log links back to the program. */
+  defId?: string
   sets: number
   repMin?: number
   repMax?: number

@@ -44,6 +44,11 @@ describe('toMaterializeDraft', () => {
     expect(workout.exercises[0].prescribedSets).toBe(3)
   })
 
+  it('records the plan block the exercise came from', () => {
+    const draft = buildDraft(prescription({defId: 'def-bench'}), 'lb')
+    expect(toMaterializeDraft('2026-07-23', 'A', draft).exercises[0].definitionId).toBe('def-bench')
+  })
+
   it('carries rpe and side through', () => {
     const draft = buildDraft(prescription({exercise: 'Waiter carry', sets: 1, perSide: true, freeform: true, repMax: undefined, weight: 40}), 'lb')
     draft[0].sets[0].rpe = 8
@@ -77,6 +82,16 @@ describe('overlayLive', () => {
     const merged = overlayLive(buildDraft(prescription(), 'lb'), undefined)
     expect(merged[0].blockId).toBeUndefined()
     expect(merged[0].sets).toHaveLength(3)
+  })
+
+  it('re-attaches by plan block when the exercise was renamed mid-session', () => {
+    const renamed: LiveWorkout = {
+      ...live,
+      exercises: [{...live.exercises[0], exercise: 'Bench press (comp grip)', definitionId: 'def-bench'}],
+    }
+    const merged = overlayLive(buildDraft(prescription({defId: 'def-bench'}), 'lb'), renamed)
+    expect(merged[0].blockId).toBe('e1')
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s1', 's2'])
   })
 })
 

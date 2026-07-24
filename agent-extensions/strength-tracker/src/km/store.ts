@@ -25,6 +25,7 @@ import {
   altChoicesProp,
   completedAtProp,
   dateProp,
+  definitionProp,
   exerciseProp,
   layoffDaysProp,
   layoffFromProp,
@@ -59,6 +60,10 @@ export interface SetDraft {
 
 export interface ExerciseDraft {
   exercise: string
+  /** Plan block this exercise was prescribed from, when the config came
+   *  from the outline — written as a ref so the definition's backlinks are
+   *  the lift's logged history. */
+  definitionId?: string
   unit: string
   prescribedWeight?: number
   prescribedSets?: number
@@ -118,6 +123,7 @@ export const materializeWorkout = async (
     for (const ex of draft.exercises) {
       const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
       await tx.setProperty(exId, exerciseProp, ex.exercise)
+      await tx.setProperty(exId, definitionProp, ex.definitionId)
       await tx.setProperty(exId, unitProp, ex.unit)
       if (ex.prescribedWeight !== undefined) await tx.setProperty(exId, prescribedWeightProp, ex.prescribedWeight)
       if (ex.prescribedSets !== undefined) await tx.setProperty(exId, prescribedSetsProp, ex.prescribedSets)

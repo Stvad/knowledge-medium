@@ -39,6 +39,11 @@ const str = (row: RowLike, name: string, fallback = ''): string => {
   return typeof raw === 'string' ? raw : fallback
 }
 
+const optStr = (row: RowLike, name: string): string | undefined => {
+  const raw = row.properties[name]
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined
+}
+
 const date = (row: RowLike, name: string): Date | undefined => {
   const raw = row.properties[name]
   if (typeof raw !== 'string') return undefined
@@ -102,6 +107,7 @@ export const buildHistory = (
       session,
       exercises: entries.map(entry => ({
         exercise: str(entry, FIELD.exercise),
+        definitionId: optStr(entry, FIELD.definition),
         prescribedWeight: optNum(entry, FIELD.prescribedWeight),
         prescribedSets: optNum(entry, FIELD.prescribedSets),
         sets: (setsByExercise.get(entry.id) ?? [])
@@ -132,6 +138,9 @@ export interface LiveSet {
 export interface LiveExercise {
   id: string
   exercise: string
+  /** Plan block it was logged from — how the draft re-attaches to the right
+   *  prescription even if the exercise has since been renamed. */
+  definitionId?: string
   unit: string
   prescribedWeight?: number
   prescribedSets?: number
@@ -176,6 +185,7 @@ export const buildLiveWorkouts = (
       exercises: entries.map(entry => ({
         id: entry.id,
         exercise: str(entry, FIELD.exercise),
+        definitionId: optStr(entry, FIELD.definition),
         unit: str(entry, FIELD.unit, 'lb'),
         prescribedWeight: optNum(entry, FIELD.prescribedWeight),
         prescribedSets: optNum(entry, FIELD.prescribedSets),

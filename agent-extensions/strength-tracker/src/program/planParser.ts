@@ -22,6 +22,7 @@ import type {
   ReentryTier,
   SessionType,
 } from '../engine/types'
+import {ALT_GROUP_TYPE, EXERCISE_DEF_TYPE, FIELD} from '../km/fields'
 import {DEFAULT_CONFIG} from './defaults'
 
 const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
@@ -111,6 +112,19 @@ const boolProp = (properties: Record<string, unknown> | undefined, key: string):
   return typeof value === 'boolean' ? value : undefined
 }
 
+/** The block's type membership. Read straight off the raw property map (the
+ *  app stores types there) rather than via the runtime helper, to keep this
+ *  module free of `@/` imports and testable in plain node. */
+const nodeTypes = (node: PlanNode): readonly string[] => {
+  const raw = node.properties?.[FIELD.blockTypes]
+  return Array.isArray(raw) ? raw.filter((t): t is string => typeof t === 'string') : []
+}
+
+/** A block that *declares* itself an exercise — as opposed to one the prose
+ *  rules merely read as one. A declaration is a promise the line is
+ *  quantified, so failing to parse it is worth a warning. */
+export const isExerciseDef = (node: PlanNode): boolean => nodeTypes(node).includes(EXERCISE_DEF_TYPE)
+
 /** Parse one exercise block: structured `strength:*` properties first,
  *  prose (the `content` line, via the same regexes as before) filling in
  *  whatever a property didn't state. The description (`note`) and videos
@@ -146,16 +160,16 @@ export const parseExercise = (
   const proseRepMax = range ? Number(range[3]) : single ? Number(single[2]) : undefined
 
   const props = node.properties
-  const sets = numProp(props, 'strength:targetSets') ?? proseSets
+  const sets = numProp(props, FIELD.targetSets) ?? proseSets
   // No sets from either source means there's nothing to prescribe — decline
   // rather than guess, same as the prose-only parser did.
   if (sets === undefined) return null
 
-  const repMin = numProp(props, 'strength:repMin') ?? proseRepMin
-  const repMax = numProp(props, 'strength:repMax') ?? proseRepMax
-  const increment = numProp(props, 'strength:increment') ?? incrementFor(name, increments.upper, increments.lower)
-  const perSide = boolProp(props, 'strength:perSide') ?? PER_SIDE.test(rest)
-  const kind = strProp(props, 'strength:kind')
+  const repMin = numProp(props, FIELD.repMin) ?? proseRepMin
+  const repMax = numProp(props, FIELD.repMax) ?? proseRepMax
+  const increment = numProp(props, FIELD.increment) ?? incrementFor(name, increments.upper, increments.lower)
+  const perSide = boolProp(props, FIELD.perSide) ?? PER_SIDE.test(rest)
+  const kind = strProp(props, FIELD.kind)
   const freeform = kind === 'carry' || kind === 'bodyweight' ? true : repMax === undefined || FREEFORM.test(rest)
 
   // Description: the line's own prose tail, plus every child's plain text —
@@ -178,9 +192,12 @@ export const parseExercise = (
     perSide,
     freeform,
     note: noteParts.length > 0 ? noteParts.join('\n') : undefined,
-    catchUpIncrement: numProp(props, 'strength:catchUpIncrement'),
-    catchUpRpe: numProp(props, 'strength:catchUpRpe'),
+    catchUpIncrement: numProp(props, FIELD.catchUpIncrement),
+    catchUpRpe: numProp(props, FIELD.catchUpRpe),
     videos: videos.length > 0 ? videos : undefined,
+    // Only a real block can be referenced back to; the line-only wrapper
+    // below passes an empty id and gets no definition link.
+    defId: node.id || undefined,
   }
 }
 
@@ -211,11 +228,23 @@ const SESSION_HEADINGS: ReadonlyArray<{session: SessionType; pattern: RegExp}> =
   {session: 'mini', pattern: /^mini day\b/i},
 ]
 
-/** An `or`-group bullet ("or …" / "either …", or an explicit
- *  `strength:kind: alt-group`) names alternatives rather than a single
- *  exercise — its children are the options. */
+/** An `or`-group bullet names alternatives rather than a single exercise —
+ *  its children are the options. Recognized by the block's type first, then
+ *  by the older `strength:kind: alt-group` marker, then by prose. */
 const isAltGroup = (node: PlanNode, text: string): boolean =>
-  strProp(node.properties, 'strength:kind') === 'alt-group' || /^(or|either)\b/i.test(text)
+  nodeTypes(node).includes(ALT_GROUP_TYPE) ||
+  strProp(node.properties, FIELD.kind) === 'alt-group' ||
+  /^(or|either)\b/i.test(text)
+
+/** The option blocks of an `or`-group. Once any child declares itself an
+ *  exercise definition, only the declared ones are options — that's what
+ *  lets a group carry its own description bullet without it being read as a
+ *  nameless third alternative. Untyped groups keep the old "every child is
+ *  an option" rule. */
+const altOptionNodes = (group: PlanNode): readonly PlanNode[] => {
+  const declared = group.children.filter(isExerciseDef)
+  return declared.length > 0 ? declared : group.children
+}
 
 const parseSessions = (
   root: PlanNode,
@@ -256,7 +285,7 @@ const parseSessions = (
         // list carries every option through — resolving down to one
         // exercise per slot happens later, in configFromPlan, where an
         // explicit runtime choice can also override the default.
-        const options = child.children
+        const options = altOptionNodes(child)
           .map(option => parseExercise(option, session, increments))
           .filter((e): e is ExerciseConfig => e !== null)
         if (options.length === 0) {
@@ -267,7 +296,7 @@ const parseSessions = (
           continue
         }
         const names = options.map(o => o.name)
-        const requestedDefault = strProp(child.properties, 'strength:default')
+        const requestedDefault = strProp(child.properties, FIELD.altDefault)
         const defaultName = requestedDefault && names.includes(requestedDefault) ? requestedDefault : names[0]
         altDefaults[child.id] = defaultName
         for (const option of options) {
@@ -283,7 +312,10 @@ const parseSessions = (
         parsed += 1
       } else {
         sessionNotes.push(text)
-        if (quantified) {
+        // A block typed as an exercise definition is a claim that it *is*
+        // one, so an unreadable line is worth flagging even on the mini day,
+        // where unquantified prose is otherwise expected.
+        if (quantified || isExerciseDef(child)) {
           warnings.push(`Session ${session}: could not read sets/reps from "${text}" — kept as a note.`)
         }
       }

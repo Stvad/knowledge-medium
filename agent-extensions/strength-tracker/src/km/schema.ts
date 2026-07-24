@@ -2,21 +2,27 @@
  *
  *  Everything the extension records is a plain block with typed properties,
  *  so the data stays queryable via SQL, hand-editable in the outline, and
- *  meaningful even if the extension is uninstalled. Three record types:
+ *  meaningful even if the extension is uninstalled.
  *
- *   - **workout** — one per session, child of the Strength Log page.
- *   - **exercise entry** — child of a workout, one per lift. Its sets live
- *     in a single `sets` JSON property (block-prop, not a child-per-set
- *     tree) plus a denormalised `workingWeight`/`exercise`/`date` trio so
- *     the plan's hard requirement — "last working weight for exercise X"
- *     via SQL — is a flat scan, not a tree walk. The extension keeps the
- *     derived trio in step with `sets` on every write.
+ *  Log side (under the Strength Log page):
+ *   - **workout** — one per session; also the live logging state, so it
+ *     carries `status` (in-progress → done).
+ *   - **exercise entry** — child of a workout, one per lift, with a
+ *     denormalised `exercise` name + `workingWeight` so "last working weight
+ *     for exercise X" is a flat scan, and a `definition` ref back to the
+ *     plan block it came from.
+ *   - **set** — child of an entry, one block per set; done-ness composes
+ *     with the built-in todo.
  *   - **layoff** — one per detected break, child of the page.
+ *
+ *  Program side (blocks in the plan outline itself): **exercise definition**
+ *  and **or-group**, carrying the `strength:*` properties the parser reads.
+ *  The plan stays canonical and hand-written — the extension reads it and
+ *  never writes it; the types exist so the outline can *declare* rather than
+ *  be guessed at, and so program edits happen in your notes.
  *
  *  There is also a small **settings** block for the engine knobs the plan
  *  prose doesn't state (rollover hour, per-lift cadence, plan-root id).
- *  The program *content* — exercises, rep ranges, re-entry percentages,
- *  milestones — is read live from the plan outline, never from here.
  */
 
 import {ChangeScope, seedProperty, seedType} from '@/data/api/index.js'
@@ -27,6 +33,8 @@ import {
 
 import type {SessionType} from '../engine/types'
 import {
+  ALT_GROUP_TYPE,
+  EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   FIELD,
   LAYOFF_TYPE,
@@ -38,6 +46,8 @@ import {
 } from './fields'
 
 export {
+  ALT_GROUP_TYPE,
+  EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
   LAYOFF_TYPE,
   SET_TYPE,
@@ -101,6 +111,22 @@ export const exerciseProp = seedProperty({
   name: FIELD.exercise,
   preset: 'string',
   defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** The plan block this entry was performed from. A ref (not a plain id
+ *  string) so it projects into real references: the definition block's
+ *  backlinks become the exercise's whole logged history, and progression
+ *  follows the definition through a rename that `exercise` alone would
+ *  fork. Optional — a hand-written entry, or one logged before the plan
+ *  block was typed, still works off the name. */
+export const definitionProp = seedProperty({
+  seedKey: extensionPropertySeedKey('definition'),
+  revision: 1,
+  name: FIELD.definition,
+  preset: 'optional-ref',
+  config: {targetTypes: [EXERCISE_DEF_TYPE]},
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -300,6 +326,101 @@ export const altChoicesProp = seedProperty<Record<string, string>>({
   changeScope: ChangeScope.UserPrefs,
 })
 
+// ──── Program (blocks in the plan outline) ────
+// The plan is hand-written and canonical; these properties are the
+// machine-readable half of a line the parser would otherwise have to infer
+// from prose. All optional: absent means "read the prose", which is why a
+// hand-typed `3×6–10` still works. Declaring them buys typed editors on the
+// plan block itself — you tune the program in the outline, not in code.
+
+export const targetSetsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('target-sets'),
+  revision: 1,
+  name: FIELD.targetSets,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const repMinProp = seedProperty({
+  seedKey: extensionPropertySeedKey('rep-min'),
+  revision: 1,
+  name: FIELD.repMin,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const repMaxProp = seedProperty({
+  seedKey: extensionPropertySeedKey('rep-max'),
+  revision: 1,
+  name: FIELD.repMax,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const incrementProp = seedProperty({
+  seedKey: extensionPropertySeedKey('increment'),
+  revision: 1,
+  name: FIELD.increment,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const perSideProp = seedProperty({
+  seedKey: extensionPropertySeedKey('per-side'),
+  revision: 1,
+  name: FIELD.perSide,
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** main | accessory | carry | bodyweight — kept as free text rather than an
+ *  enum: it's a human classification the parser only consults for the two
+ *  values that change behaviour, and a plan should be able to invent a word
+ *  without the property rejecting the write. */
+export const kindProp = seedProperty({
+  seedKey: extensionPropertySeedKey('kind'),
+  revision: 1,
+  name: FIELD.kind,
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const catchUpIncrementProp = seedProperty({
+  seedKey: extensionPropertySeedKey('catch-up-increment'),
+  revision: 1,
+  name: FIELD.catchUpIncrement,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const catchUpRpeProp = seedProperty({
+  seedKey: extensionPropertySeedKey('catch-up-rpe'),
+  revision: 1,
+  name: FIELD.catchUpRpe,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Which option an `or`-group tracks until the user picks another. A name,
+ *  not a ref: it's written by hand in the outline next to option lines that
+ *  read as names, and an unmatched name falls back to the first option. */
+export const altDefaultProp = seedProperty({
+  seedKey: extensionPropertySeedKey('alt-default'),
+  revision: 1,
+  name: FIELD.altDefault,
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── Types ────
 
 export const strengthLogType = seedType({
@@ -329,11 +450,45 @@ export const exerciseEntryType = seedType({
   hideFromCompletion: true,
   properties: [
     exerciseProp,
+    definitionProp,
     workingWeightProp,
     unitProp,
     prescribedWeightProp,
     prescribedSetsProp,
   ],
+})
+
+/** An exercise as the *program* defines it — a line in the plan outline, not
+ *  a logged performance. Deliberately completable (unlike the log types): you
+ *  add a lift to the program by typing it into your notes and typing the
+ *  block, and the property editors then spell out what the parser reads. */
+export const exerciseDefType = seedType({
+  seedKey: extensionTypeSeedKey('exercise-def'),
+  revision: 1,
+  id: EXERCISE_DEF_TYPE,
+  label: 'Exercise (program)',
+  description: 'An exercise the program prescribes — a line in the plan outline.',
+  properties: [
+    targetSetsProp,
+    repMinProp,
+    repMaxProp,
+    incrementProp,
+    perSideProp,
+    kindProp,
+    catchUpIncrementProp,
+    catchUpRpeProp,
+  ],
+})
+
+/** A slot the plan fills with one of several exercises ("or"): its children
+ *  are the options, one of which is tracked at a time. */
+export const altGroupType = seedType({
+  seedKey: extensionTypeSeedKey('alt-group'),
+  revision: 1,
+  id: ALT_GROUP_TYPE,
+  label: 'Exercise options',
+  description: 'An either/or slot in the program; its children are the options.',
+  properties: [altDefaultProp],
 })
 
 export const setType = seedType({
@@ -365,13 +520,23 @@ export const settingsType = seedType({
   properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp, altChoicesProp],
 })
 
-export const STRENGTH_TYPES = [strengthLogType, workoutType, exerciseEntryType, setType, layoffType, settingsType]
+export const STRENGTH_TYPES = [
+  strengthLogType,
+  workoutType,
+  exerciseEntryType,
+  setType,
+  layoffType,
+  settingsType,
+  exerciseDefType,
+  altGroupType,
+]
 
 export const STRENGTH_PROPS = [
   sessionProp,
   dateProp,
   statusProp,
   exerciseProp,
+  definitionProp,
   workingWeightProp,
   unitProp,
   prescribedWeightProp,
@@ -391,4 +556,13 @@ export const STRENGTH_PROPS = [
   cadenceDaysProp,
   roundToProp,
   altChoicesProp,
+  targetSetsProp,
+  repMinProp,
+  repMaxProp,
+  incrementProp,
+  perSideProp,
+  kindProp,
+  catchUpIncrementProp,
+  catchUpRpeProp,
+  altDefaultProp,
 ]
