@@ -295,6 +295,47 @@ export const actionContextsFacet = defineFacet<ActionContextConfig, readonly Act
   validate: isActionContextConfig,
 })
 
+/**
+ * A veto on deleting a block THROUGH THE UI. Return a short user-facing reason
+ * to refuse, or null to allow.
+ *
+ * This is a UI-layer affordance, deliberately not a data-layer guard: it exists
+ * to stop a keystroke doing something pointless or destructive-looking, not to
+ * make a row immortal. Programmatic callers (the agent bridge, migrations,
+ * cleanup) go straight to `block.delete()` and are unaffected — the data layer's
+ * own guards (`SeededDefinitionWriteError`, read-only workspaces) are the rules
+ * that genuinely cannot be bypassed.
+ *
+ * The motivating case: pages that are get-or-CREATE by construction (today's
+ * daily note, the Journal). Deleting one doesn't stick — revisiting the date
+ * recreates it — so the gesture reads as broken while still destroying the
+ * page's contents.
+ */
+export type BlockDeletionGuard = (block: Block) => Promise<string | null> | string | null
+
+export const blockDeletionGuardsFacet = defineFacet<BlockDeletionGuard, readonly BlockDeletionGuard[]>({
+  id: 'core.block-deletion-guards',
+  validate: (value): value is BlockDeletionGuard => typeof value === 'function',
+})
+
+/** First refusal reason from any registered guard, or null when every guard
+ *  allows the delete. A throwing guard is logged and treated as "allow" — a
+ *  broken plugin shouldn't be able to make blocks undeletable. */
+export const resolveDeletionRefusal = async (
+  repo: Repo,
+  block: Block,
+): Promise<string | null> => {
+  for (const guard of repo.facetRuntime?.read(blockDeletionGuardsFacet) ?? []) {
+    try {
+      const reason = await guard(block)
+      if (reason) return reason
+    } catch (error) {
+      console.error('[deletion-guard] guard threw; allowing the delete', error)
+    }
+  }
+  return null
+}
+
 /** Plugins contribute landing resolvers; App.tsx tries them in order
  *  on bootstrap-with-empty-layout and uses the first non-null result.
  *  `FacetRuntime` sorts contributions ascending by `precedence`

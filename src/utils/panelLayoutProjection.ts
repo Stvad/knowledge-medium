@@ -1084,14 +1084,24 @@ export class PanelLayoutProjection {
     return this.inboundQueue
   }
 
-  /** Does any pane in `slots` render a block we KNOW is a tombstone? Uses the
-   *  tombstone-aware cache read, which is sync and — on the path that matters,
-   *  a delete this session just committed — always populated. An unloaded or
-   *  live block answers false, so this only ever downgrades a push to a
-   *  replace when we're certain the entry is unreturnable. */
+  /** Does any pane in `slots` render a block confirmed NOT live — a tombstone
+   *  or a confirmed-missing row?
+   *
+   *  Both states have to count. A cached tombstone only survives until someone
+   *  calls `load()` on it: `repo.load` markMissing's the id, which DELETES the
+   *  raw snapshot. `PanelContentRecovery` loads the dead block before it
+   *  retargets, so by the time this runs the tombstone is normally already
+   *  gone and only the missing marker is left — checking `deleted === true`
+   *  alone made this guard inert on the exact path it exists for.
+   *
+   *  `undefined` (never loaded) is not enough: that's the ordinary case for a
+   *  block this client simply hasn't read yet, and must still push. */
   private showsDeletedBlock(slots: readonly LayoutSlot[]): boolean {
     return collectLeafSlots(slots)
-      .some(slot => this.repo.block(slot.blockId).peekRaw()?.deleted === true)
+      .some(slot => {
+        const raw = this.repo.block(slot.blockId).peekRaw()
+        return raw === null || raw?.deleted === true
+      })
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {

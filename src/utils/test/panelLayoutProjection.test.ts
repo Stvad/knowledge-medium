@@ -592,6 +592,11 @@ describe('view-mode navigation semantics', () => {
     await projection.start()
 
     await env.repo.block('a').delete()
+    // Reproduce the REAL sequence: PanelContentRecovery loads the dead block
+    // before retargeting, and `repo.load` markMissing's it — which deletes the
+    // cached tombstone. A guard that only recognised `deleted === true` was
+    // inert here, so the test must do this load or it proves nothing.
+    await env.repo.block('a').load()
     await navigateInPanel(panelBlock(rowA), 'b')
 
     await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/b']))

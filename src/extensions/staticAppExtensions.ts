@@ -2,7 +2,6 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
-import { panelContentRecoveryExtension } from '@/extensions/PanelContentRecovery.js'
 import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
 import { extensionPromptsExtension } from '@/extensions/extensionPromptMount.js'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
@@ -79,10 +78,6 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
-  // Always-on per-panel watchdog: steps a pane off a page that was just
-  // deleted (its own delete, a duplicate pane, a remote delete) onto the
-  // nearest live view, so the delete handlers never have to navigate.
-  panelContentRecoveryExtension,
   appUpdatePromptExtension,
   // Surfaces extension trust prompts (needs-approval / update-available)
   // globally — a per-extension toast + a status-chip indicator — instead of

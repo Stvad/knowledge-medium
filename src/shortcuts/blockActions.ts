@@ -19,6 +19,8 @@ import {
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { resolveDeletionRefusal } from '@/extensions/core.js'
+import { showInfo } from '@/utils/toast.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -277,6 +279,17 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
+
+      // Plugin vetoes on deleting THIS block from the UI (e.g. daily-notes
+      // refuses its own pages, which get-or-create would just recreate).
+      // Multi-select delete fans out through this same handler
+      // (`applyToAllBlocksInSelection`), so it is covered too.
+      await block.load()
+      const refusal = await resolveDeletionRefusal(repo, block)
+      if (refusal) {
+        showInfo(refusal)
+        return
+      }
 
       // No scope-root special case: deleting the root of a surface is an
       // ordinary delete. Delete REMOVES a subtree, it doesn't relocate one

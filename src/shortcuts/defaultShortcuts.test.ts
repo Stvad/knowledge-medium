@@ -42,6 +42,8 @@ import {
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
+import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -1203,6 +1205,30 @@ describe('default CodeMirror shortcuts', () => {
     )
 
     expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+  })
+
+  it('refuses when a registered deletion guard vetoes the block', async () => {
+    // The guard facet is how daily-notes protects its get-or-create pages.
+    // Multi-select delete fans out through this same handler, so it's covered
+    // by the same check.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'protected', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'p'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('protected'), uiStateBlock: env.repo.block('ui'), scopeRootId: 'protected'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
   })
 
   it('deletes a non-focal scope root (a backlink/embed of another block)', async () => {

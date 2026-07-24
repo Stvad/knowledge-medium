@@ -6,13 +6,7 @@ import { useBlockExists } from '@/hooks/block.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import { recoverPanelOffDeadContent } from '@/utils/panelHistory.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
-import {
-  panelMountsFacet,
-  workspaceLandingFacet,
-  type PanelMountContribution,
-} from '@/extensions/core.js'
-import type { AppExtension } from '@/facets/facet.js'
-import { systemToggle } from '@/facets/togglable.js'
+import { workspaceLandingFacet } from '@/extensions/core.js'
 
 /**
  * How long to wait after the shown block first looks gone before committing a
@@ -155,19 +149,6 @@ export function PanelContentRecovery({block}: {block: Block}) {
   return null
 }
 
-const panelContentRecoveryMount: PanelMountContribution = {
-  id: 'core.panel-content-recovery',
-  component: PanelContentRecovery,
-}
-
-/** Always-on (essential) mount: panels must never be left rendering a deleted
- *  page, independent of which navigation plugins are enabled. */
-export const panelContentRecoveryExtension: AppExtension = systemToggle({
-  id: 'system:panel-content-recovery',
-  name: 'Panel content recovery',
-  description:
-    'Steps a panel off a page that was just deleted — its own delete, a duplicate pane, or a remote delete — onto the nearest live view.',
-  essential: true,
-}).of([
-  panelMountsFacet.of(panelContentRecoveryMount, {source: 'core'}),
-])
+// Mounted by `spatialNavigationPlugin`, beside its sibling `PanelFocusRecovery`
+// — this is a navigation nicety, not an invariant. With it off, a pane that
+// loses its page just renders empty until you navigate away.
