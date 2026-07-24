@@ -18,12 +18,19 @@
  * plumbing.
  */
 import type { WorkspaceLandingResolver } from '@/extensions/core.js'
-import { getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
   repo,
   workspaceId,
+  excludeBlockId,
 }) => {
-  const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+  const iso = todayIso()
+  // Decline BEFORE touching the DB when today's note is the excluded block:
+  // `getOrCreateDailyNote` resurrects a soft-deleted row, so calling it here
+  // during delete-recovery would undo the user's delete. The id is a pure
+  // function of (workspace, day), so the check costs nothing.
+  if (excludeBlockId && dailyNoteBlockId(workspaceId, iso) === excludeBlockId) return null
+  const dailyNote = await getOrCreateDailyNote(repo, workspaceId, iso)
   return dailyNote.id
 }

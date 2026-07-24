@@ -70,6 +70,20 @@ beforeEach(async () => { env = await setup() })
 
 const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
 
+/** Create real content rows for `ids`. Panel history holds blocks the pane
+ *  actually displayed, and back/forward now skip entries whose block is gone,
+ *  so any test that exercises the chevrons needs its ids to exist. */
+const seedBlocks = async (ids: readonly string[]): Promise<void> => {
+  await env.repo.tx(async tx => {
+    const orderKeys = keysBetween(null, null, ids.length)
+    for (let i = 0; i < ids.length; i++) {
+      await tx.create({
+        id: ids[i], workspaceId: WS, parentId: null, orderKey: orderKeys[i], content: ids[i],
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'seed content blocks'})
+}
+
 const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
   const parent = layoutSessionBlock()
   await env.repo.tx(async tx => {
@@ -659,6 +673,7 @@ describe('view-mode navigation semantics', () => {
   })
 
   it('chevron forward across the enter boundary re-applies the mode', async () => {
+    await seedBlocks(['plain', 'video'])
     await applyUrl('#ws-1/plain')
     const row = await rowFor('plain')
     const unregister = registerLiveSnapshotter(row)
@@ -693,6 +708,7 @@ describe('view-mode navigation semantics', () => {
   })
 
   it('chevron back restores the moded visit, forward re-clears — one push per step', async () => {
+    await seedBlocks(['plain', 'video'])
     await applyUrl('#ws-1/video;view=m')
     const row = await rowFor('video')
     const unregister = registerLiveSnapshotter(row)
@@ -1417,17 +1433,6 @@ describe('PanelLayoutProjection', () => {
 })
 
 describe('recoverPanelOffDeadContent', () => {
-  const seedBlocks = async (ids: readonly string[]): Promise<void> => {
-    await env.repo.tx(async tx => {
-      const orderKeys = keysBetween(null, null, ids.length)
-      for (let i = 0; i < ids.length; i++) {
-        await tx.create({
-          id: ids[i], workspaceId: WS, parentId: null, orderKey: orderKeys[i], content: ids[i],
-        })
-      }
-    }, {scope: ChangeScope.BlockDefault, description: 'seed content blocks'})
-  }
-
   /** A panel row pointed at `blockId`, with panelHistory reset for the row. */
   const panelShowing = async (blockId: string): Promise<Block> => {
     await createPanelRows([blockId])
@@ -1435,6 +1440,56 @@ describe('recoverPanelOffDeadContent', () => {
     panelHistory.clear(row.id)
     return env.repo.block(row.id)
   }
+
+  it('skips forward entries killed as part of a deleted subtree', async () => {
+    // navigate page -> child, Back to page, then delete page. `child` dies with
+    // the subtree while sitting on the FORWARD stack, where an exact-id purge
+    // of `page` can't see it. Forward must not land the pane on that tombstone.
+    await seedBlocks(['landing', 'page'])
+    await env.repo.mutate.createChild({parentId: 'page', id: 'child', content: 'child'})
+    const panel = await panelShowing('page')
+
+    await navigateInPanel(panel, 'child')
+    await goBackInPanel(panel)
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('page')
+
+    await env.repo.block('page').delete()
+    await recoverPanelOffDeadContent(panel, 'page', async () => 'landing')
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('landing')
+
+    // 'child' is still on the forward stack, and it is now dead.
+    expect(await goForwardInPanel(panel)).toBe(false)
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('landing')
+  })
+
+  it('skips back entries that died since they were pushed', async () => {
+    await seedBlocks(['alive', 'gone', 'page'])
+    const panel = await panelShowing('page')
+    panelHistory.push(panel.id, {blockId: 'alive'})
+    panelHistory.push(panel.id, {blockId: 'gone'})
+
+    await env.repo.block('gone').delete()
+
+    expect(await goBackInPanel(panel)).toBe(true)
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('alive')
+  })
+
+  it('abandons recovery if the pane moved on while it was resolving', async () => {
+    // The watcher debounces, so the pane can navigate (or the delete be undone)
+    // while the fallback resolution is in flight. Recovery must not then yank
+    // the pane off wherever the user actually is.
+    await seedBlocks(['landing', 'page', 'elsewhere'])
+    const panel = await panelShowing('page')
+
+    await env.repo.block('page').delete()
+    await recoverPanelOffDeadContent(panel, 'page', async () => {
+      // Simulate the user navigating during the async fallback resolution.
+      await navigateInPanel(panel, 'elsewhere')
+      return 'landing'
+    })
+
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('elsewhere')
+  })
 
   it('steps back to the nearest LIVE history entry, skipping tombstones', async () => {
     await seedBlocks(['alive', 'doomed-child', 'page'])
@@ -1445,7 +1500,7 @@ describe('recoverPanelOffDeadContent', () => {
 
     await env.repo.block('doomed-child').delete()
     await env.repo.block('page').delete()
-    await recoverPanelOffDeadContent(panel, 'page', null)
+    await recoverPanelOffDeadContent(panel, 'page', async () => null)
 
     // 'doomed-child' is dead, so recovery skipped it and landed on 'alive'.
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('alive')
@@ -1459,7 +1514,7 @@ describe('recoverPanelOffDeadContent', () => {
     const panel = await panelShowing('page')
 
     await env.repo.block('page').delete()
-    await recoverPanelOffDeadContent(panel, 'page', 'landing')
+    await recoverPanelOffDeadContent(panel, 'page', async () => 'landing')
 
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('landing')
   })
@@ -1469,7 +1524,7 @@ describe('recoverPanelOffDeadContent', () => {
     const panel = await panelShowing('page')
 
     await env.repo.block('page').delete()
-    await recoverPanelOffDeadContent(panel, 'page', 'never-existed')
+    await recoverPanelOffDeadContent(panel, 'page', async () => 'never-existed')
 
     // No live destination: don't close or blank the pane, just leave it.
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('page')
@@ -1486,8 +1541,8 @@ describe('recoverPanelOffDeadContent', () => {
 
     await env.repo.block('page').delete()
     // Each pane runs its own recovery (one watcher instance per panel).
-    await recoverPanelOffDeadContent(panelA, 'page', 'landing')
-    await recoverPanelOffDeadContent(panelB, 'page', 'landing')
+    await recoverPanelOffDeadContent(panelA, 'page', async () => 'landing')
+    await recoverPanelOffDeadContent(panelB, 'page', async () => 'landing')
 
     expect(panelA.peekProperty(topLevelBlockIdProp)).toBe('landing')
     expect(panelB.peekProperty(topLevelBlockIdProp)).toBe('landing')

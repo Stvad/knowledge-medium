@@ -32,7 +32,9 @@ import {
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
+  todayIso,
 } from '@/plugins/daily-notes'
+import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
 
 const WS = 'ws-1'
 
@@ -234,6 +236,36 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
     expect(restored.peekProperty(dailyNoteDateProp)?.toISOString())
       .toBe('2026-04-28T00:00:00.000Z')
+  })
+})
+
+describe('todayDailyNoteLanding', () => {
+  it('lands on today’s note, creating it if needed', async () => {
+    const id = await todayDailyNoteLanding({repo: env.repo, workspaceId: WS, freshlyCreated: false})
+    expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
+    expect(await isBlockDeleted(env.repo, id!)).toBe(false)
+  })
+
+  it('declines — without resurrecting — when today’s note is the excluded block', async () => {
+    // Delete-recovery asks for a landing while the deleted page is still the
+    // one the pane shows. Since the resolver is get-or-CREATE and restores
+    // soft-deleted rows, answering here would silently undo the user's delete.
+    const note = await getOrCreateDailyNote(env.repo, WS, todayIso())
+    await env.repo.tx(tx => tx.delete(note.id), {scope: ChangeScope.BlockDefault})
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: note.id,
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
+
+  it('still answers when the excluded block is some other page', async () => {
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'unrelated-page',
+    })
+    expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
   })
 })
 

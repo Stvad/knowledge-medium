@@ -914,17 +914,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Don't merge the scope root into a block outside the surface —
         // there's no visible previous block to merge into here.
-        const {canMergeUp, canDelete} = await structuralEditPolicyForBlock(block, scopeRootId)
+        const {canMergeUp} = await structuralEditPolicyForBlock(block, scopeRootId)
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
         const liveContent = editorView.state.doc.toString()
 
-        // Empty block: delete it and move focus up. Never the scope root —
-        // an emptied zoomed page (split at cursor 0, then Backspace) would
-        // otherwise tombstone the whole rendered surface, the same boundary
-        // delete_block guards (Codex review on the interaction fuzzer).
+        // Empty block: delete it and move focus up. Both branches are gated on
+        // `canMergeUp` because both are the same gesture — "consume this block
+        // and put the cursor on the previous visible one" — and at the scope
+        // root there is no such block. That's a statement about Backspace, not
+        // about deletability: explicit Delete on the scope root IS allowed
+        // (page deletion), it just isn't something Backspace should trigger on
+        // an accidentally-emptied page.
         if (liveContent === '') {
-          if (!canDelete) return
+          if (!canMergeUp) return
           trigger.preventDefault()
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {

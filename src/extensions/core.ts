@@ -37,6 +37,14 @@ export interface WorkspaceLandingContext {
   repo: Repo
   workspaceId: string
   freshlyCreated: boolean
+  /** A block the caller must NOT be landed on, because it is being deleted.
+   *  A resolver that would answer with this id must return null WITHOUT
+   *  touching the DB — resolvers are get-or-create by contract (below), and
+   *  `getOrCreateDailyNote` restores a soft-deleted row, so resolving the
+   *  landing during delete-recovery would silently resurrect the page the
+   *  user just deleted. Decide it from an id you can compute, not from a
+   *  row you had to create first. Unset outside recovery (bootstrap). */
+  excludeBlockId?: string
 }
 
 /** A landing resolver returns the block id to open, or null to defer

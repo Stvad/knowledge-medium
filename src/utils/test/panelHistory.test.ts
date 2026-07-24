@@ -269,16 +269,39 @@ describe('PanelHistoryStore', () => {
     })
   })
 
-  describe('takeBack / forget (content recovery)', () => {
-    it('takeBack pops without recording a forward entry', () => {
+  describe('peek / dropTop / forget (content recovery)', () => {
+    it('peek reads the top of either stack without consuming it', () => {
       store.push('p1', e('b-a'))
       store.push('p1', e('b-b'))
-      expect(store.takeBack('p1')).toEqual(e('b-b'))
+      store.back('p1', e('cur')) // cur -> forward, b-b -> current
+      expect(store.peek('p1', 'back')).toEqual(e('b-a'))
+      expect(store.peek('p1', 'forward')).toEqual(e('cur'))
+      // Non-consuming: repeat reads see the same entries.
+      expect(store.peek('p1', 'back')).toEqual(e('b-a'))
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: [e('cur')]})
+      expect(store.peek('p2', 'back')).toBeNull()
+    })
+
+    it('dropTop discards without reconstructing on the opposite stack', () => {
+      store.push('p1', e('b-a'))
+      store.push('p1', e('b-b'))
+      store.dropTop('p1', 'back')
       // Unlike back(), the popped entry does NOT reappear on forward — recovery
       // must not park the dead page where a Forward click would re-expose it.
       expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: []})
-      expect(store.takeBack('p1')).toEqual(e('b-a'))
-      expect(store.takeBack('p1')).toBeNull()
+      store.dropTop('p1', 'back')
+      expect(store.getSnapshot('p1')).toEqual({back: [], forward: []})
+      expect(() => store.dropTop('p1', 'back')).not.toThrow()
+    })
+
+    it('dropTop notifies only when something was removed', () => {
+      let n = 0
+      store.push('p1', e('b-a'))
+      store.subscribe('p1', () => { n += 1 })
+      store.dropTop('p1', 'forward') // forward stack is empty
+      expect(n).toBe(0)
+      store.dropTop('p1', 'back')
+      expect(n).toBe(1)
     })
 
     it('forget drops the block from both stacks, keeping the rest', () => {

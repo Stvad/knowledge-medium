@@ -48,10 +48,20 @@
  *  - structural invariants: no cycles, no live orphans, no order-key
  *    collisions, single workspace.
  *  - scope-root protection: ROOT stays live at the workspace root —
- *    every structural handler must refuse to indent/outdent/delete/
- *    merge-away the scope root (structuralEditPolicyForBlock;
- *    blockActions.ts indent/outdent guards, split_block_cm's
- *    isScopeRoot branch, delete_empty_block_cm's canMergeUp).
+ *    every structural handler must refuse to RELOCATE the scope root
+ *    across the surface boundary: indent / outdent / merge-away
+ *    (structuralEditPolicyForBlock; blockActions.ts indent/outdent
+ *    guards, split_block_cm's isScopeRoot branch,
+ *    delete_empty_block_cm's canMergeUp).
+ *
+ *    Explicit DELETE of the scope root is deliberately NOT in that set:
+ *    it's the page-deletion gesture, and refusing it is the regression
+ *    this oracle once encoded (see structuralEditPolicy's docblock).
+ *    Deleting ROOT is legal but empties the seeded tree, leaving every
+ *    later op in a sequence a no-op and the structural oracles nothing
+ *    to check — so it's excluded from the op stream below, the same way
+ *    navigation/panel actions are, and covered by targeted tests in
+ *    defaultShortcuts.test.ts instead.
  *
  * Undo/redo run as ACTIONS inside sequences (handler-level paths); the
  * exact undo-all snapshot round-trip stays the kernel fuzzer's job —
@@ -329,6 +339,9 @@ const runCase = async (
         focusedId = await env.firstLive()
         await focusBlock(uiStateBlock, focusedId)
       }
+      // Page deletion is legal but ends the sequence's usefulness — see the
+      // scope-root note in the docblock.
+      if (id === 'delete_block' && focusedId === ROOT) continue
       const block = repo.block(focusedId)
 
       const base = {uiStateBlock, scopeRootId: ROOT}

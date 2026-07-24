@@ -147,19 +147,27 @@ export class PanelHistoryStore {
     return next
   }
 
-  /** Pop the most recent back entry WITHOUT recording a forward entry.
-   *  Unlike `back()` this is not a user "go back" — it's used by content
-   *  recovery to consume back entries while hunting for a still-live
-   *  destination after the shown block was deleted, where parking the dead
-   *  page on the forward stack would just re-expose the tombstone. Returns the
-   *  popped entry, or null when the back stack is empty. */
-  takeBack(panelId: string): HistoryEntry | null {
+  /** The most recent entry on one of a panel's stacks, without consuming it. */
+  peek(panelId: string, side: 'back' | 'forward'): HistoryEntry | null {
     const current = this.state.get(panelId)
-    if (!current || current.back.length === 0) return null
-    const next = current.back[current.back.length - 1]
-    this.state.set(panelId, {back: current.back.slice(0, -1), forward: current.forward})
+    if (!current) return null
+    const stack = current[side]
+    return stack[stack.length - 1] ?? null
+  }
+
+  /** Pop the most recent entry off one of a panel's stacks and DISCARD it —
+   *  no reconstruction on the opposite stack. Unlike `back()`/`forward()` this
+   *  is not a user navigation: it's how a caller consumes a destination it
+   *  reached some other way (content recovery), and how a dead entry is
+   *  dropped (`pruneDeadTop`). Parking either kind on the opposite stack would
+   *  just re-expose it to the other chevron. */
+  dropTop(panelId: string, side: 'back' | 'forward'): void {
+    const current = this.state.get(panelId)
+    if (!current || current[side].length === 0) return
+    this.state.set(panelId, side === 'back'
+      ? {back: current.back.slice(0, -1), forward: current.forward}
+      : {back: current.back, forward: current.forward.slice(0, -1)})
     this.notify(panelId)
-    return next
   }
 
   reconcileUrlNavigation(
@@ -381,11 +389,50 @@ export const navigateInPanel = async (
   await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel', {viewMode: options.viewMode})
 }
 
+/** True once `block`'s row is loaded and live (not tombstoned/missing). */
+const isBlockLive = async (block: Block): Promise<boolean> => {
+  if (block.peek()) return true
+  await block.load()
+  return block.peek() !== null
+}
+
+/**
+ * Drop entries from the top of one of a panel's stacks while the destination is
+ * gone, so the next consumer lands on something live.
+ *
+ * A history entry can die at any moment and for reasons this panel never sees:
+ * its page deleted in another pane, deleted remotely and synced in, or swept up
+ * as a DESCENDANT of some deleted ancestor. No delete-time purge can enumerate
+ * those — by the time anything hears about a subtree delete the subtree is
+ * already tombstoned and can't be walked to collect its ids. So the stacks are
+ * validated at CONSUMPTION time instead: whatever went stale surfaces at the
+ * top eventually and is dropped there, whatever killed it.
+ *
+ * Lazy on purpose — only the leading run of dead entries is loaded, never the
+ * whole stack. `alsoDeadId` treats an id as dead regardless of what the loader
+ * says, for the recovery path where the caller already knows the page is gone.
+ */
+const pruneDeadTop = async (
+  panelBlock: Block,
+  side: 'back' | 'forward',
+  alsoDeadId?: string,
+): Promise<void> => {
+  for (;;) {
+    const top = panelHistory.peek(panelBlock.id, side)
+    if (!top) return
+    if (top.blockId !== alsoDeadId && await isBlockLive(panelBlock.repo.block(top.blockId))) return
+    panelHistory.dropTop(panelBlock.id, side)
+  }
+}
+
 /** Step the panel one entry back. Captures the current visit's state onto
- *  forward, then restores the destination's snapshot (focused block, scroll). */
+ *  forward, then restores the destination's snapshot (focused block, scroll).
+ *  Dead entries at the top of the stack are dropped first, so Back never lands
+ *  the pane on a tombstone; if that empties the stack, this is a no-op. */
 export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false
+  await pruneDeadTop(panelBlock, 'back')
   const dest = panelHistory.back(panelBlock.id, {
     blockId: current,
     state: panelHistory.snapshot(panelBlock.id),
@@ -397,9 +444,14 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   return true
 }
 
+/** Mirror of `goBackInPanel` for the forward stack — including the dead-entry
+ *  prune, which is what keeps Forward off a descendant of a page that was
+ *  deleted while it sat on the forward stack (navigate P → C, Back to P, delete
+ *  P: C is tombstoned with the rest of P's subtree). */
 export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false
+  await pruneDeadTop(panelBlock, 'forward')
   const dest = panelHistory.forward(panelBlock.id, {
     blockId: current,
     state: panelHistory.snapshot(panelBlock.id),
@@ -410,47 +462,51 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   return true
 }
 
-/** True once `block`'s row is loaded and live (not tombstoned/missing). */
-const isBlockLive = async (block: Block): Promise<boolean> => {
-  if (block.peek()) return true
-  await block.load()
-  return block.peek() !== null
-}
-
 /** Recover a panel that is currently showing a now-deleted block. Steps back
  *  through history to the nearest STILL-LIVE entry — skipping tombstones, which
  *  is what handles a back stack pointing INTO the deleted subtree (its
  *  descendants are all dead) — else falls back to `fallbackId` (the workspace
  *  landing page). The dead current page is never parked on the forward stack
  *  (unlike `goBackInPanel`), and every remaining reference to `deadBlockId` is
- *  purged from the stacks afterwards, so neither chevron can return to the
- *  tombstone. A no-op when no live destination exists — leaves the pane as-is
- *  rather than closing it. Each pane runs its own recovery, so a page open in
- *  several panes is retargeted in all of them. */
+ *  purged from the stacks afterwards. Entries that die deeper in either stack
+ *  aren't chased here — `pruneDeadTop` catches them when a chevron reaches
+ *  them. A no-op when no live destination exists — leaves the pane as-is rather
+ *  than closing it. Each pane runs its own recovery, so a page open in several
+ *  panes is retargeted in all of them. */
 export const recoverPanelOffDeadContent = async (
   panelBlock: Block,
   deadBlockId: string,
-  fallbackId: string | null,
+  /** Terminal fallback, resolved LAZILY — only when history yields nothing
+   *  live. Landing resolvers are get-or-create (they may write), so a pane
+   *  that recovers via history must not pay for one. */
+  resolveFallback: () => Promise<string | null>,
 ): Promise<void> => {
   const repo = panelBlock.repo
-  let dest: HistoryEntry | null = null
-  for (
-    let entry = panelHistory.takeBack(panelBlock.id);
-    entry;
-    entry = panelHistory.takeBack(panelBlock.id)
-  ) {
-    if (entry.blockId !== deadBlockId && (await isBlockLive(repo.block(entry.blockId)))) {
-      dest = entry
-      break
+  /** Is this recovery still the right thing to do? Every step below awaits, and
+   *  in that time the user can navigate the pane, close it, or undo the delete —
+   *  after which recovering would yank the pane off wherever they actually are.
+   *  Re-checked before anything is consumed AND again immediately before the
+   *  write, since the gap between them is where the loads happen. */
+  const stillStranded = () =>
+    panelBlock.peekProperty(topLevelBlockIdProp) === deadBlockId
+    && !repo.block(deadBlockId).peek()
+  if (!stillStranded()) return
+
+  await pruneDeadTop(panelBlock, 'back', deadBlockId)
+  const dest = panelHistory.peek(panelBlock.id, 'back')
+  let targetId = dest?.blockId ?? null
+  if (!targetId) {
+    const fallbackId = await resolveFallback()
+    // `!== deadBlockId` is belt-and-braces — a resolver is contracted to
+    // decline the excluded id (`WorkspaceLandingContext.excludeBlockId`) — but
+    // landing here would strand the pane right back on the tombstone.
+    if (fallbackId && fallbackId !== deadBlockId && (await isBlockLive(repo.block(fallbackId)))) {
+      targetId = fallbackId
     }
   }
-  const current = panelBlock.peekProperty(topLevelBlockIdProp)
-  const targetId =
-    dest?.blockId ??
-    (fallbackId && fallbackId !== current && fallbackId !== deadBlockId && (await isBlockLive(repo.block(fallbackId)))
-      ? fallbackId
-      : null)
+  if (!stillStranded()) return
   if (targetId) {
+    if (dest) panelHistory.dropTop(panelBlock.id, 'back')
     panelHistory.enqueueRestore(panelBlock.id, dest?.state)
     await transactPanelContent(
       panelBlock, targetId, dest?.state, 'recover panel off deleted content',

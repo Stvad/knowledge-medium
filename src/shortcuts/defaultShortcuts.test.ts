@@ -555,11 +555,15 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
-  it('refuses to delete the scope root even when it is empty', async () => {
+  it('refuses to Backspace away the scope root even when it is empty', async () => {
     // Reachable from the keyboard: split the zoomed page at cursor 0 (its
     // content moves down), then Backspace at 0 in the now-empty root —
-    // without the canDelete guard the handler tombstoned the whole
+    // without the canMergeUp guard the handler tombstoned the whole
     // rendered surface (Codex review on the interaction fuzzer, PR #371).
+    // This gates the BACKSPACE gesture, which means "consume this block and
+    // put the cursor on the previous visible one" and has nowhere to land at
+    // the scope root. An explicit Delete on the same block IS allowed — that's
+    // page deletion (see the delete_block tests below).
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -1178,11 +1182,12 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isBlockDeleted(env.repo, 'child')).toBe(true)
   })
 
-  it('refuses a focal-page delete without a real panel surface (headless / fuzz safety)', async () => {
-    // A bare UI-state block (agent bridge, fuzz harness) carries no PANEL_TYPE
-    // and has no recovery watcher, so deleting the focal page would strand the
-    // surface on a tombstone with nothing to recover it. Refuse instead — this
-    // is what keeps defaultActions.fuzz.test.ts's scope-root invariant green.
+  it('deletes the focal page headlessly too (no panel surface required)', async () => {
+    // A bare UI-state block (agent bridge, fuzz harness) has no panel row and no
+    // recovery watcher. The delete still goes through: deletion is not a
+    // scope-relative decision, and the handler deliberately doesn't inspect the
+    // surface — recovery is the surface's job, and a headless caller has no
+    // surface to recover.
     await env.repo.tx(async tx => {
       await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -1197,8 +1202,7 @@ describe('default CodeMirror shortcuts', () => {
       {preventDefault: vi.fn()} as unknown as ActionTrigger,
     )
 
-    expect(env.repo.block('page').peekRaw()?.deleted).toBe(false)
-    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('page')
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
   })
 
   it('deletes a non-focal scope root (a backlink/embed of another block)', async () => {

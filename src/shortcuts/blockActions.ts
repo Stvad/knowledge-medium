@@ -16,10 +16,8 @@ import {
   selectionStateProp,
   setIsEditing,
   showPropertiesProp,
-  topLevelBlockIdProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
-import { PANEL_TYPE } from '@/data/blockTypes.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import {
   ActionConfig,
@@ -280,45 +278,25 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      const {isScopeRoot} = await structuralEditPolicyForBlock(block, scopeRootId)
+      // No scope-root special case: deleting the root of a surface is an
+      // ordinary delete. Delete REMOVES a subtree, it doesn't relocate one
+      // across the surface boundary, so unlike indent / outdent / merge-up it
+      // isn't a scope-relative decision at all (see `structuralEditPolicy`).
+      // What the surface does afterwards is the surface's problem: a nested
+      // backlink/embed re-queries, and a panel showing the deleted page is
+      // stepped onto a live destination by the mounted `PanelContentRecovery`
+      // watcher. Keeping deletion and navigation decoupled is what makes the
+      // hard cases fall out for free — multi-pane duplicates, self-embeds of
+      // the focal page, and remote deletes all recover through the one
+      // watcher instead of N special cases here.
+      //
+      // The delete is atomic: a read-only workspace, or a guarded
+      // seed-definition ANYWHERE in the subtree, rolls the whole thing back
+      // and throws. Since nothing else moved, there is no half-state to clean
+      // up and no preflight is needed.
 
-      // The scope root of a panel's focal outline IS its current page. "Delete
-      // this page" is a first-class gesture, but deleting the block in place
-      // would tombstone the surface — so, deliberately, we DON'T navigate
-      // here. We just delete; a mounted `PanelContentRecovery` watcher
-      // reactively steps EVERY pane showing the (now dead) page onto a live
-      // destination (nearest live history entry → workspace landing). That
-      // decoupling is what makes the hard cases fall out for free: multi-pane
-      // duplicates, deleted-block history entries, and same-page self-embeds
-      // all recover through the one watcher instead of N special cases here.
-      if (isScopeRoot) {
-        // Is `block` the pane's own page (the focal outline root, OR a
-        // self-embed/backlink of it — same id)? Then it's a page delete.
-        const isFocalPage = uiStateBlock.peekProperty(topLevelBlockIdProp) === block.id
-        if (isFocalPage) {
-          // A real panel has a mounted recovery watcher to catch the fallout; a
-          // headless caller (agent bridge, fuzz) has a bare uiStateBlock with
-          // no PANEL_TYPE and no watcher, so refuse rather than orphan the
-          // surface. This is also what keeps defaultActions.fuzz.test.ts's
-          // scope-root invariant green.
-          await uiStateBlock.load()
-          if (!uiStateBlock.hasType(PANEL_TYPE)) return
-          // The delete is atomic: a read-only workspace, or a guarded
-          // seed-definition ANYWHERE in the subtree, rolls the whole delete
-          // back and throws — and because nothing else has moved, there is no
-          // half-state to clean up. No preflight needed.
-          await withMoveTransition(async () => {
-            await block.delete()
-          })
-          return
-        }
-        // A non-focal scope root — a backlink entry or embed of ANOTHER block —
-        // is an ordinary, deletable block; the nested surface just re-queries.
-        // Fall through to the normal delete path below.
-      }
-
-      // Beyond the scope-root handling above, `scopeRootId` only locates
-      // the post-delete focus target; the delete itself doesn't need it.
+      // `scopeRootId` only locates the post-delete focus target; the delete
+      // itself doesn't need it.
       // Don't gate the delete on it, so non-React runners that can't
       // inject a scope (the agent-runtime bridge) still delete — they
       // just skip focus recovery.

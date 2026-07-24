@@ -48,6 +48,20 @@ export interface StructuralEditPolicyInput {
  *  - indent / outdent / merge-into-previous are no-ops (they would
  *    restructure across the surface boundary).
  *
+ * Every rule here is about MOVING structure across the surface boundary
+ * — placing, reparenting, or merging a block somewhere the surface
+ * cannot render. That's what makes them scope-relative.
+ *
+ * Deletion is deliberately NOT in this set. Removing a subtree doesn't
+ * relocate anything across the boundary, so a block's position in the
+ * scope says nothing about whether it may be deleted — deleting a page
+ * from its own panel, a backlink entry, or an embed are all ordinary,
+ * wanted gestures. What the surface does once its root is gone is the
+ * surface's concern, not the policy's (a panel is retargeted by
+ * `PanelContentRecovery`, a nested surface just re-queries). A
+ * `canDelete: !isScopeRoot` rule lived here briefly and made page
+ * deletion unreachable from every UI; don't reintroduce it.
+ *
  * The main outline reaches the same answers it always did, because
  * there the scope root simply *is* `topLevelBlockId`. Nested surfaces
  * (backlinks, embeds) now get correct behaviour for free by declaring
@@ -70,19 +84,13 @@ export interface StructuralEditPolicy {
    *  `core.outdent` mutator (it returns `false` and the caller falls
    *  back); this only gates the scope-root case the mutator can't see. */
   canOutdent: boolean
-  /** May Backspace-at-start merge this block into the previous visible
-   *  block? False at the scope root, where the previous visible block
-   *  is outside the surface. */
+  /** May Backspace-at-start consume this block — merging it into the
+   *  previous visible block, or (when empty) removing it and putting the
+   *  cursor there? False at the scope root, where there is no previous
+   *  visible block inside the surface for the gesture to land on. Note
+   *  this gates the *Backspace* gesture, not deletion in general: an
+   *  explicit Delete on the scope root is allowed (see above). */
   canMergeUp: boolean
-  /** May Delete remove this block (and its subtree)? False at the scope
-   *  root: deleting it would tombstone the entire rendered surface out
-   *  from under the panel, with no in-surface block left to recover
-   *  focus to — the same boundary rule as indent/merge. Surfaces with
-   *  no scope (e.g. the agent bridge, which can't inject one) pass
-   *  `scopeRootId: undefined` and stay free to delete anything. Found
-   *  by defaultActions.fuzz.test.ts: delete_block was the only
-   *  structural handler without a scope-root guard. */
-  canDelete: boolean
 }
 
 export const resolveStructuralEditPolicy = (
@@ -97,7 +105,6 @@ export const resolveStructuralEditPolicy = (
     canIndent: !isScopeRoot,
     canOutdent: !isScopeRoot && parentId !== scopeRootId,
     canMergeUp: !isScopeRoot,
-    canDelete: !isScopeRoot,
   }
 }
 

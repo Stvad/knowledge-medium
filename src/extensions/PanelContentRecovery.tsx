@@ -26,8 +26,13 @@ const RECOVERY_DEBOUNCE_MS = 120
 /** Resolve the workspace's landing block (today's daily note, by default) off
  *  the live app runtime — the terminal fallback when a recovering pane has no
  *  live history to step back to. Returns null with no runtime / no resolver
- *  (headless), so recovery degrades to history-only rather than throwing. */
-const resolveLandingId = async (repo: Repo): Promise<string | null> => {
+ *  (headless), so recovery degrades to history-only rather than throwing.
+ *
+ *  `excludeBlockId` is the page being recovered off. Landing resolvers are
+ *  get-or-create, and the daily-note one RESTORES a soft-deleted row — so
+ *  without the exclusion, deleting today's daily note would resolve a landing
+ *  that resurrects it and silently undoes the delete. */
+const resolveLandingId = async (repo: Repo, excludeBlockId: string): Promise<string | null> => {
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return null
   const resolvers = repo.facetRuntime?.read(workspaceLandingFacet) ?? []
@@ -35,7 +40,7 @@ const resolveLandingId = async (repo: Repo): Promise<string | null> => {
   // reverse and take the first non-null, matching the bootstrap landing walk.
   for (let i = resolvers.length - 1; i >= 0; i -= 1) {
     try {
-      const id = await resolvers[i]({repo, workspaceId, freshlyCreated: false})
+      const id = await resolvers[i]({repo, workspaceId, freshlyCreated: false, excludeBlockId})
       if (id) return id
     } catch (error) {
       console.error('[panel-content-recovery] landing resolver threw', error)
@@ -90,8 +95,13 @@ export function PanelContentRecovery({block}: {block: Block}) {
       if (block.peekProperty(topLevelBlockIdProp) !== topLevelBlockId) return
       if (block.repo.block(topLevelBlockId).peek()) return
       seenLiveRef.current = null
-      void resolveLandingId(block.repo).then(fallbackId =>
-        recoverPanelOffDeadContent(block, topLevelBlockId, fallbackId),
+      // The landing resolver is passed as a thunk, not a resolved id: it can
+      // write (get-or-create), so it must only run if history yields nothing
+      // live. `recoverPanelOffDeadContent` re-checks that the pane is still
+      // stranded on this block before it writes, covering the case where the
+      // user navigates or undoes while that resolution is in flight.
+      void recoverPanelOffDeadContent(block, topLevelBlockId, () =>
+        resolveLandingId(block.repo, topLevelBlockId),
       )
     }, RECOVERY_DEBOUNCE_MS)
 
