@@ -1,5 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Force-generated utility vocabulary so dynamically-loaded extensions
+ * (whose source Tailwind never scans) can rely on standard classes. */
+@import "./extension-utilities.css";
 
 @plugin "tailwind-scrollbar";
 
