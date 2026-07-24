@@ -17,7 +17,7 @@ describe('referenceBlockContentForId', () => {
   it('renders an id as whole-block ref content that parses back', () => {
     const content = referenceBlockContentForId(UUID)
     expect(content).toBe(`((${UUID}))`)
-    expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: UUID})
+    expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: UUID, fieldForm: false})
   })
 
   // Ids are normally UUIDs, but `tx.create` and the bridge's `create-block`
@@ -41,7 +41,7 @@ describe('referenceBlockContentForId', () => {
   // deliberately broader than the inline references plugin's UUID-only one.
   it('accepts a non-UUID id that round-trips', () => {
     const content = referenceBlockContentForId('field-status')
-    expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: 'field-status'})
+    expect(parseExactReferenceBlockContent(content)).toEqual({kind: 'blockRef', id: 'field-status', fieldForm: false})
   })
 
   // A case-variant UUID passes the no-parens/no-whitespace check but does NOT
@@ -55,7 +55,7 @@ describe('referenceBlockContentForId', () => {
     const lower = 'abcdef01-1111-4111-8111-1111111111ab'
     const upper = lower.toUpperCase()
     expect(upper).not.toBe(lower)
-    expect(parseExactReferenceBlockContent(`((${upper}))`)).toEqual({kind: 'blockRef', id: lower})
+    expect(parseExactReferenceBlockContent(`((${upper}))`)).toEqual({kind: 'blockRef', id: lower, fieldForm: false})
     expect(() => referenceBlockContentForId(upper)).toThrow(/does not round-trip/)
     expect(referenceBlockContentForId(lower)).toBe(`((${lower}))`)
   })
@@ -64,7 +64,7 @@ describe('referenceBlockContentForId', () => {
 describe('referenceBlockContentForLabel', () => {
   it('renders a label and parses it back', () => {
     expect(parseExactReferenceBlockContent(referenceBlockContentForLabel('Status')))
-      .toEqual({kind: 'alias', alias: 'Status'})
+      .toEqual({kind: 'alias', alias: 'Status', fieldForm: false})
   })
 
   // Lossy by design (documented on the helper): `]]` can't survive the round
@@ -72,5 +72,68 @@ describe('referenceBlockContentForLabel', () => {
   // rendering them here.
   it('escapes `]]` rather than emitting an unparseable wikilink', () => {
     expect(referenceBlockContentForLabel('foo]]bar')).toBe('[[foo] ]bar]]')
+  })
+})
+
+// ──── §7 grammar box: the `::` field marker + the three span forms ────
+
+describe('parseExactReferenceBlockContent — marked field forms', () => {
+  const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+
+  it('parses ::((uuid)) as a marked blockRef (canonical field form)', () => {
+    expect(parseExactReferenceBlockContent(`::((${UUID}))`))
+      .toEqual({kind: 'blockRef', id: UUID, fieldForm: true})
+  })
+
+  it('parses ::[[name]] as a marked alias (pure syntax — resolution-independent)', () => {
+    expect(parseExactReferenceBlockContent('::[[status]]'))
+      .toEqual({kind: 'alias', alias: 'status', fieldForm: true})
+  })
+
+  it('parses ::[label](((uuid))) as a marked aliasedBlockRef', () => {
+    expect(parseExactReferenceBlockContent(`::[status](((${UUID})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: 'status', fieldForm: true})
+  })
+
+  it('parses the unmarked aliased blockref too (target stamps for every form)', () => {
+    expect(parseExactReferenceBlockContent(`[status](((${UUID})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: 'status', fieldForm: false})
+  })
+
+  it('canonicalizes the aliased form id to lowercase, mirroring the plugin regex', () => {
+    expect(parseExactReferenceBlockContent(`[x](((${UUID.toUpperCase()})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: 'x', fieldForm: false})
+  })
+
+  it('keeps the aliased form UUID-only (plugin-mirrored) while exact refs stay broad', () => {
+    expect(parseExactReferenceBlockContent('[x](((not-a-uuid)))')).toBeNull()
+    expect(parseExactReferenceBlockContent('::((not-a-uuid))'))
+      .toEqual({kind: 'blockRef', id: 'not-a-uuid', fieldForm: true})
+  })
+
+  it('allows an empty aliased-form label (renders like a plain ref)', () => {
+    expect(parseExactReferenceBlockContent(`::[](((${UUID})))`))
+      .toEqual({kind: 'aliasedBlockRef', id: UUID, label: '', fieldForm: true})
+  })
+
+  it('matches on trimmed content (outer whitespace policy is pinned — a pasted trailing newline must not flicker classification)', () => {
+    expect(parseExactReferenceBlockContent(`  ::((${UUID}))\n`))
+      .toEqual({kind: 'blockRef', id: UUID, fieldForm: true})
+  })
+
+  it('admits no space between marker and span', () => {
+    expect(parseExactReferenceBlockContent(':: [[status]]')).toBeNull()
+    expect(parseExactReferenceBlockContent(`:: ((${UUID}))`)).toBeNull()
+  })
+
+  it('never reads prose starting with :: as a reference', () => {
+    expect(parseExactReferenceBlockContent('::not a span')).toBeNull()
+    expect(parseExactReferenceBlockContent('::')).toBeNull()
+    expect(parseExactReferenceBlockContent(`::((${UUID})) trailing`)).toBeNull()
+  })
+
+  it('excludes embeds — a transclusion directive, not a marker', () => {
+    expect(parseExactReferenceBlockContent(`::!((${UUID}))`)).toBeNull()
+    expect(parseExactReferenceBlockContent(`!((${UUID}))`)).toBeNull()
   })
 })

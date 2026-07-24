@@ -114,17 +114,14 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
     ),
     isProspectiveFieldRow: (row) => {
       if (row.parentId === null) return false
-      // A field row is any WHOLE-BLOCK reference that resolves to a definition
-      // — form-agnostic (§7). `((fieldId))` resolves textually here (machinery
-      // mints that form); a `[[name]]` whole-block ref ALSO becomes a field
-      // row once a definition is name-resolvable (auto-claim, a later change),
-      // but resolving `[[name]]` needs an async alias lookup this sync same-tx
-      // probe can't do — the one spot that slots in with auto-claim. Today
-      // nothing `[[name]]`-resolves to a definition, so `((id))`-only is
-      // complete; post-derive recognition (`isPropertyFieldInstance`) is
-      // already form-agnostic via the column.
+      // The id-carrying whole-block forms (`((id))`, `[label](((id)))`,
+      // marked or not — §7) resolve textually, so this sync probe covers
+      // them completely. A `[[name]]` whole-block ref needs the async alias
+      // lookup this same-tx probe can't do — post-derive recognition
+      // (`isPropertyFieldInstance`) covers those via the column (mirrors
+      // `TxImpl.isProspectiveFieldRow`).
       const exact = parseExactReferenceBlockContent(row.content)
-      if (exact?.kind !== 'blockRef') return false
+      if (exact === null || exact.kind === 'alias') return false
       return isFieldDefinition(exact.id)
     },
   }

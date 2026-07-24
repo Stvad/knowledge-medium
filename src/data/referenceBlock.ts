@@ -1,33 +1,78 @@
 export type ExactReferenceBlockContent =
-  | {kind: 'alias'; alias: string}
-  | {kind: 'blockRef'; id: string}
+  | {kind: 'alias'; alias: string; fieldForm: boolean}
+  | {kind: 'blockRef'; id: string; fieldForm: boolean}
+  | {kind: 'aliasedBlockRef'; id: string; label: string; fieldForm: boolean}
 
 // Exact reference blocks are allowed to target any concrete block id.
 // Keep this broader grammar scoped to whole-block content; the inline
 // references plugin intentionally stays UUID-only so prose like
-// "((not a ref))" does not become a backlink.
+// "((not a ref))" does not become a backlink. The aliased blockref form
+// is the one exception: it mirrors the references plugin's
+// ALIASED_BLOCK_REF_RE exactly (UUID-only id, no `]`/newline in the
+// label) — that parser owns the form, and a whole-block reading that
+// accepted more would diverge from every inline reader of the same text.
 const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const UUID_RE = new RegExp(`^${UUID_RE_SOURCE}$`, 'i')
 const EXACT_BLOCK_REF_RE = /^\(\(([^()\s]+)\)\)$/
+const EXACT_ALIASED_BLOCK_REF_RE = new RegExp(
+  `^\\[([^\\]\\n]*)\\]\\(\\(\\((${UUID_RE_SOURCE})\\)\\)\\)$`, 'i',
+)
 
 /** The ids `((id))` content can actually round-trip — the same character class
  *  {@link EXACT_BLOCK_REF_RE} accepts inside the parens. */
 const RENDERABLE_BLOCK_REF_ID_RE = /^[^()\s]+$/
 
+/** The `::` field marker (properties-as-blocks §7 grammar box): trimmed
+ *  content = `::` + one whole-block reference span, NO space between marker
+ *  and span. Matching is on the trimmed whole; embeds (`!((id))`) never
+ *  match any span form here. Exported for renderers composing the marked
+ *  form; parsing goes through {@link parseExactReferenceBlockContent}. */
+export const FIELD_FORM_MARKER = '::'
+
+const parseReferenceSpan = (
+  span: string,
+  fieldForm: boolean,
+): ExactReferenceBlockContent | null => {
+  const blockRef = EXACT_BLOCK_REF_RE.exec(span)
+  if (blockRef) {
+    const id = blockRef[1]
+    return {kind: 'blockRef', id: UUID_RE.test(id) ? id.toLowerCase() : id, fieldForm}
+  }
+
+  const aliased = EXACT_ALIASED_BLOCK_REF_RE.exec(span)
+  if (aliased) {
+    return {
+      kind: 'aliasedBlockRef',
+      id: aliased[2].toLowerCase(),
+      label: aliased[1],
+      fieldForm,
+    }
+  }
+
+  if (!span.startsWith('[[') || !span.endsWith(']]')) return null
+  const alias = span.slice(2, -2).trim()
+  if (!alias || alias.includes('[[') || alias.includes(']]')) return null
+  return {kind: 'alias', alias, fieldForm}
+}
+
+/** Parse whole-block reference content: one reference span — exact ref
+ *  `((id))` (broad-id grammar), wikilink `[[alias]]`, or aliased blockref
+ *  `[label](((uuid)))` (plugin-mirrored, UUID-only) — optionally preceded by
+ *  the `::` field marker (`fieldForm: true`; §7 grammar box). A `::` whose
+ *  remainder is not exactly one span is not a reference at all (prose
+ *  beginning with `::` never classifies), and the marker admits no space
+ *  before the span (` :: [[x]]` trims outer whitespace only). */
 export const parseExactReferenceBlockContent = (
   content: string,
 ): ExactReferenceBlockContent | null => {
   const trimmed = content.trim()
-  const blockRef = EXACT_BLOCK_REF_RE.exec(trimmed)
-  if (blockRef) {
-    const id = blockRef[1]
-    return {kind: 'blockRef', id: UUID_RE.test(id) ? id.toLowerCase() : id}
+  if (trimmed.startsWith(FIELD_FORM_MARKER)) {
+    // The marked read is definitive: no span form can itself start with
+    // `::` (spans open with `((` or `[`), so there is no unmarked reading
+    // to fall back to — `::not-a-span` is plain prose, null.
+    return parseReferenceSpan(trimmed.slice(FIELD_FORM_MARKER.length), true)
   }
-
-  if (!trimmed.startsWith('[[') || !trimmed.endsWith(']]')) return null
-  const alias = trimmed.slice(2, -2).trim()
-  if (!alias || alias.includes('[[') || alias.includes(']]')) return null
-  return {kind: 'alias', alias}
+  return parseReferenceSpan(trimmed, false)
 }
 
 export const referenceBlockContentForLabel = (label: string): string =>

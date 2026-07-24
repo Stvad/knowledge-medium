@@ -12,7 +12,7 @@ import {
   kernelContentKey,
 } from '@/data/invalidation'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import {
@@ -236,9 +236,9 @@ export const applyContentReplaceMutator = defineMutator<
         // `core.deriveReferenceTarget` hasn't run yet at this point in the
         // pipeline, so the column still reflects the OLD content.
         const projectedTargetId = schema.codec.type === 'ref'
-          ? (await deriveReferenceTargetId(
+          ? (await deriveReferenceColumns(
               replaced.content, current.workspaceId, sameTxReferenceTargetLookups(tx),
-            )) ?? null
+            )).targetId ?? null
           : current.referenceTargetId ?? null
         const breaksCodec = (() => {
           try {

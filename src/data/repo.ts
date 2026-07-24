@@ -105,7 +105,7 @@ import {
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
 } from './internals/clientSchema'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
@@ -401,16 +401,21 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
-/** One CAS-guarded `reference_target_id` write for `stampReferenceTargets`.
- *  Strictly ADDITIVE: callers pass only rows the scan saw at a NULL column,
+/** One CAS-guarded local-columns write for `stampReferenceTargets` —
+ *  `reference_target_id` plus the `is_field_form` bit (§7 grammar box), both
+ *  from the same derive. Strictly ADDITIVE: callers pass only rows the scan
+ *  saw at a NULL target column,
  *  and the CAS re-checks (NULL column, unchanged content) inside the write tx
- *  — so a concurrent local edit or sync arrival that already owns the column
+ *  — so a concurrent local edit or sync arrival that already owns the columns
  *  since the scan is never clobbered. Re-pointing an already-stamped row is
- *  deliberately out of scope (see `drainNameRederives`). */
+ *  deliberately out of scope (see `drainNameRederives`). `targetId` may be
+ *  null for a marked row whose span doesn't resolve — the bit still stamps
+ *  (pure syntax; only the target late-binds). */
 interface ReferenceTargetStamp {
   id: string
   scannedContent: string
-  targetId: string
+  targetId: string | null
+  isFieldForm: boolean
 }
 
 export class Repo {
@@ -2607,6 +2612,9 @@ export class Repo {
     // additive — it never second-guesses a processor- or arrival-derived
     // value. Lean scan (id + content): the write phase re-reads fresh rows
     // in-tx, so full rows here would only feed stale snapshots.
+    // The `'::%'` probe is the marked-form twin (§7 grammar box): every
+    // content-shape prefilter carries it, or a pasted `::[[future-field]]`
+    // (bit-worthy, target unresolvable) would never be revisited by repair.
     const candidates = await this.db.getAll<{id: string; content: string}>(
       `SELECT id, content FROM blocks
         WHERE workspace_id = ?
@@ -2614,6 +2622,8 @@ export class Repo {
           AND (
             (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
             OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+            OR TRIM(content) LIKE '[%](((%)))'
+            OR TRIM(content) LIKE '::%'
           )`,
       [workspaceId],
     )
@@ -2622,12 +2632,16 @@ export class Repo {
 
     const updates: ReferenceTargetStamp[] = []
     for (const row of candidates) {
-      const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-      // Column is already NULL, so unresolved (`undefined`) and non-reference
-      // (`null`) alike mean "nothing to write".
-      if (typeof derived === 'string') {
+      const derived = await deriveReferenceColumns(row.content, workspaceId, lookups)
+      // Target column is already NULL, so unresolved (`undefined`) and
+      // non-reference (`null`) alike mean "no target to write" — but a
+      // marked row stamps its bit regardless (pure syntax; §9 condition 1).
+      if (typeof derived.targetId === 'string' || derived.isFieldForm) {
         updates.push({
-          id: row.id, scannedContent: row.content, targetId: derived,
+          id: row.id,
+          scannedContent: row.content,
+          targetId: derived.targetId ?? null,
+          isFieldForm: derived.isFieldForm,
         })
       }
     }
@@ -2683,7 +2697,7 @@ export class Repo {
       const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
       await this.db.writeTransaction(async tx => {
         await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
-        for (const {id, scannedContent, targetId} of chunk) {
+        for (const {id, scannedContent, targetId, isFieldForm} of chunk) {
           const freshRow = await tx.getOptional<BlockRow>(
             `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
             [id],
@@ -2692,13 +2706,16 @@ export class Repo {
             freshRow === null
             || (freshRow.reference_target_id ?? null) !== null
             || freshRow.content !== scannedContent
+            // Bit-only stamps (marked row, unresolvable span) skip when the
+            // bit already matches — nothing to write, no snapshot churn.
+            || (targetId === null && (freshRow.is_field_form === 1) === isFieldForm)
           ) continue
           await tx.execute(
-            'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
-            [targetId, id],
+            'UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?',
+            [targetId, isFieldForm ? 1 : null, id],
           )
           const before = parseBlockRow(freshRow)
-          snapshots.set(id, {before, after: {...before, referenceTargetId: targetId}})
+          snapshots.set(id, {before, after: {...before, referenceTargetId: targetId, isFieldForm}})
         }
       })
       if (snapshots.size === 0) continue
@@ -2774,6 +2791,10 @@ export class Repo {
       // change nothing any reader observes. That reclaim (with the cell
       // reprojection a raw stamp currently skips) belongs to the auto-claim
       // work that makes definitions name-resolvable.
+      // `'::[[%'` twin: marked alias rows late-bind exactly like unmarked
+      // ones (§7 — the bit is already stamped by derive; this repairs the
+      // target), and a prefilter without the twin would leave a pasted
+      // `::[[future-field]]` bit=1/target-NULL forever once its name mints.
       const candidates = await this.db.getAll<{id: string; content: string}>(
         `SELECT id, content FROM blocks
           WHERE workspace_id = ?
@@ -2781,6 +2802,7 @@ export class Repo {
             AND (
               (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
               OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+              OR (TRIM(content) LIKE '::[[%' AND TRIM(content) LIKE '%]]')
             )`,
         [workspaceId],
       )
@@ -2789,9 +2811,14 @@ export class Repo {
       for (const row of candidates) {
         const exact = parseExactReferenceBlockContent(row.content)
         if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
-        const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-        if (typeof derived === 'string') {
-          updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+        const derived = await deriveReferenceColumns(row.content, workspaceId, lookups)
+        if (typeof derived.targetId === 'string') {
+          updates.push({
+            id: row.id,
+            scannedContent: row.content,
+            targetId: derived.targetId,
+            isFieldForm: derived.isFieldForm,
+          })
         }
       }
       await this.stampReferenceTargets(updates)
