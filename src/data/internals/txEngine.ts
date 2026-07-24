@@ -82,10 +82,9 @@ import {
   type PropertySchemaResolver,
 } from './propertySchemaResolution'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import { keyAtStart } from '@/data/orderKey'
 import {
-  isInsidePropertySubtreeWalk,
+  isFieldValueChild,
   isPropertyFieldInstance,
   propertyFieldContent,
   propertyValueToChildContent,
@@ -254,11 +253,16 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+// §9 binding selection discipline: field-row selection keys on the BIT as
+// well as the target — without it an unmarked `((fieldId))` link row could
+// be SELECTED as the field row and its first child overwritten with the
+// encoded value.
 const SELECT_PROPERTY_FIELD_CHILD_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks
    WHERE workspace_id = ?
      AND parent_id = ?
      AND reference_target_id = ?
+     AND is_field_form = 1
      AND deleted = 0
    ORDER BY order_key, id`
 /** Existence probes for `tx.hasChildren`. The live-only form keeps the
@@ -333,11 +337,6 @@ export class TxImpl implements Tx {
    *  occur. */
   private readonly childBackedWorkspaceCache = new Map<string, boolean>()
 
-  /** Per-tx memo for the §9 ancestry rule: block id → "its subtree position
-   *  passes through a field row" (so its children are property values /
-   *  comments, never field rows). */
-  private readonly propertySubtreeCache = new Map<string, boolean>()
-
   constructor(ctx: TxImplContext) {
     this.ctx = ctx
     this.meta = ctx.meta
@@ -407,73 +406,17 @@ export class TxImpl implements Tx {
     }
   }
 
-  /** Will `core.deriveReferenceTarget`'s stamp make this row a property
-   *  field row at commit? Content-based twin of the stored-column
-   *  recognition, for gates that run BEFORE the derive processor in the
-   *  same tx (the setProperty dual-write, the materialize processor's
-   *  mirror in propertyChildrenProcessor). Root rows are never field rows
-   *  (§9 positional — a field row is a child of the owning block), so
-   *  their bag writes must keep materializing normally. Direct-target
-   *  check only — it deliberately doesn't re-walk ancestors' content. */
-  private isProspectiveFieldRow(row: BlockData): boolean {
-    if (row.parentId === null) return false
-    // The id-carrying whole-block forms (`((id))`, `[label](((id)))`, marked
-    // or not — §7) resolve textually, so this sync probe covers them
-    // completely. A `[[name]]` whole-block ref needs the async alias lookup
-    // this same-tx probe can't do — post-derive recognition
-    // (`isPropertyFieldInstance`) covers those via the column.
-    const exact = parseExactReferenceBlockContent(row.content)
-    if (exact === null || exact.kind === 'alias') return false
-    return this.isFieldDefinitionCheckerFor(row.workspaceId)(exact.id)
+  /** See the `Tx.isPropertyFieldDefinition` contract — the same checker
+   *  `isFieldDefinitionCheckerFor` builds, exposed per call. */
+  isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean {
+    return this.isFieldDefinitionCheckerFor(workspaceId)(fieldId)
   }
 
-  /** Record one row write's (before, after) into the tx snapshots — and keep
-   *  the §9 ancestry memo from outliving the tree it describes.
-   *
-   *  EVERY primitive funnels through here rather than calling `recordWrite`
-   *  directly, deliberately: `propertySubtreeCache` answers "does this chain
-   *  pass through a field row", derived from exactly `parentId` +
-   *  `referenceTargetId`, and BOTH change mid-tx — `move` re-parents,
-   *  `core.deriveReferenceTarget` stamps, merge relocates. A per-site
-   *  "remember to invalidate" would be one more thing to forget on the next
-   *  primitive; one choke point can't be.
-   *
-   *  Clearing wholesale is the right grain: the walk memoizes EVERY id on the
-   *  chain it walked, so one re-parent can flip the answer for a whole
-   *  subtree, not just the moved row — there is no cheap "which entries did
-   *  this invalidate". The memo only serves visible-view reads, so the cost of
-   *  dropping it is a re-walk on the next such read, while a stale entry
-   *  silently filters a row's values as machinery (or leaks machinery as
-   *  values). */
+  /** Record one row write's (before, after) into the tx snapshots. (The §9
+   *  flat-recognition change deleted the per-tx ancestry memo this choke
+   *  point used to keep honest — classification no longer reads ancestors.) */
   private record(id: string, before: BlockData | null, after: BlockData | null): void {
-    if (
-      (before?.parentId ?? null) !== (after?.parentId ?? null)
-      || (before?.referenceTargetId ?? null) !== (after?.referenceTargetId ?? null)
-    ) {
-      this.propertySubtreeCache.clear()
-    }
     recordWrite(this.ctx.snapshots, id, before, after)
-  }
-
-  /** §9 ancestry rule: role is positional and inherits — everything beneath
-   *  a field row is property-subtree interior (values, comments, ordinary
-   *  content), so listings there never filter "field rows" out (a ref-typed
-   *  VALUE pointing at a definition block would otherwise vanish). Walks the
-   *  parent chain; memoized per tx — see `record` for how that memo is kept
-   *  honest across mid-tx moves and stamps. */
-  private async isInsidePropertySubtree(
-    id: string,
-    isFieldDefinition: IsPropertyFieldDefinition,
-  ): Promise<boolean> {
-    return isInsidePropertySubtreeWalk(
-      id,
-      async (rowId) => {
-        const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [rowId])
-        return row === null ? null : parseBlockRow(row)
-      },
-      isFieldDefinition,
-      this.propertySubtreeCache,
-    )
   }
 
   // ──── Reads ────
@@ -769,20 +712,14 @@ export class TxImpl implements Tx {
   }
 
   /** The child-backing gate for a property write on `row` (schema-independent
-   *  half). True only in a flipped workspace where `row` may hold field rows:
-   *  a field row / property-subtree interior stays cell-only (§9 positional
-   *  rule — recognition could never reclaim nested rows), as does a row whose
-   *  CURRENT content is about to make it a field row (the stored column lags a
-   *  same-tx content edit; PR #386 review). The per-schema half
+   *  half): just the workspace flip. Materialize-everything (§9 flat
+   *  recognition): field rows and value rows materialize their OWN bags like
+   *  every other block — a `::` child of any block is that block's field row
+   *  at any depth, so recognition reclaims nested machinery and no interior /
+   *  prospective carve-out exists. The per-schema half
    *  (`isResolvedPropertySchema`) is checked by the caller. */
   private async isChildBackedRow(row: BlockData): Promise<boolean> {
-    return (
-      await this.isPropertyChildBackedWorkspace(row.workspaceId)
-      && !(await this.isInsidePropertySubtree(
-        row.id, this.isFieldDefinitionCheckerFor(row.workspaceId),
-      ))
-      && !this.isProspectiveFieldRow(row)
-    )
+    return this.isPropertyChildBackedWorkspace(row.workspaceId)
   }
 
   /** Eagerly soft-delete the field-row subtree(s) backing `schema` under
@@ -978,21 +915,19 @@ export class TxImpl implements Tx {
     // view — excluding recognized property field rows in a flipped
     // workspace (§9) — is opt-in via `hidePropertyChildren`. Cheap
     // short-circuits first — un-flipped workspaces (dormant) and listings
-    // with no stamped rows pay only the (per-tx-cached) flip read; the §9
-    // ancestry rule then exempts property-subtree interiors so ref-typed
-    // VALUES pointing at definitions are never misread as nested fields.
-    // Root listings are exempt outright: a field row is positionally a
-    // child of the block that OWNS the property — a workspace-root row
-    // whose content happens to be `[[some property]]` is user content, so
-    // it is never filtered even under `hidePropertyChildren`.
+    // with no marked rows pay only the (per-tx-cached) flip read. The flat
+    // predicate needs no ancestry exemption: only `::` rows can classify,
+    // so a ref-typed VALUE pointing at a definition is never misread — and
+    // a marked row inside a property subtree IS machinery (its parent's own
+    // field row) and filters like any other, at any depth.
+    // Root listings are exempt outright: a field row is a child of the
+    // block that OWNS the property — a workspace-root row whose content
+    // happens to be marked is user content (§9 root half).
     if (parentId === null) return data
     if (options?.hidePropertyChildren !== true || data.length === 0) return data
+    if (!data.some(row => row.isFieldForm === true)) return data
     if (!(await this.isPropertyChildBackedWorkspace(data[0]!.workspaceId))) return data
     const isFieldDefinition = this.isFieldDefinitionCheckerFor(data[0]!.workspaceId)
-    if (!data.some(row => isPropertyFieldInstance(row, isFieldDefinition))) return data
-    if (parentId !== null && await this.isInsidePropertySubtree(parentId, isFieldDefinition)) {
-      return data
-    }
     return data.filter(row => !isPropertyFieldInstance(row, isFieldDefinition))
   }
 
@@ -1370,7 +1305,11 @@ export class TxImpl implements Tx {
       if (existing.content !== propertyFieldContent(schema.fieldId)) {
         await this.update(existing.id, {content: propertyFieldContent(schema.fieldId)})
       }
-      const values = await this.childrenOf(existing.id, undefined)
+      // §9 value set: `is_field_form IS NOT 1` children only — a nested
+      // marked row under the field row is its own machinery, never a value
+      // candidate for overwrite/dedup.
+      const values = (await this.childrenOf(existing.id, undefined))
+        .filter(isFieldValueChild)
       const [primary, ...duplicates] = values
       if (primary) {
         if (primary.content !== content) await this.update(primary.id, {content})
@@ -1410,7 +1349,10 @@ export class TxImpl implements Tx {
     const fieldRowId = await this.create({
       workspaceId: parent.workspaceId,
       parentId: parent.id,
+      // Born classified (§9): both derived columns pre-stamped in the create
+      // so the row classifies and projects within the same single pass.
       referenceTargetId: schema.fieldId,
+      isFieldForm: true,
       orderKey: keyAtStart(null),
       content: propertyFieldContent(schema.fieldId),
     })

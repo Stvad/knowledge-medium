@@ -45,6 +45,7 @@ import {
 } from '@/data/api'
 import { parsePropertyDefinitionMetadata } from '@/data/propertyDefinitionMetadata'
 import {
+  isFieldValueChild,
   isPropertyFieldInstance,
   propertyChildContentToEncodedValue,
   rekeyParentPropertyCell,
@@ -123,11 +124,14 @@ const consumingParentIds = async (
   workspaceId: string,
   fieldIds: readonly string[],
 ): Promise<string[]> => {
-  // `parent_id IS NOT NULL`: a stamped workspace-root row is user content, not
-  // a field row (§9 root half) — never re-key it.
+  // §9 selection discipline: field-row discovery keys on the BIT plus the
+  // target (an unmarked `((fieldId))` link row is not a consumer), and
+  // `parent_id IS NOT NULL` — a marked workspace-root row is user content,
+  // not a field row (§9 root half) — never re-key it.
   const rows = await ctx.db.getAll<{parent_id: string | null}>(
     `SELECT DISTINCT parent_id FROM blocks
       WHERE workspace_id = ? AND reference_target_id IN (${fieldIds.map(() => '?').join(', ')})
+        AND is_field_form = 1
         AND deleted = 0 AND parent_id IS NOT NULL`,
     [workspaceId, ...fieldIds],
   )
@@ -146,9 +150,8 @@ const rekeyParent = (
   parentId: string,
   renames: readonly RenamedDefinition[],
   isFieldDefinition: IsPropertyFieldDefinition,
-  memo: Map<string, boolean>,
 ): Promise<void> =>
-  rekeyParentPropertyCell(ctx.tx, parentId, isFieldDefinition, memo, async (siblings) => {
+  rekeyParentPropertyCell(ctx.tx, parentId, async (siblings) => {
     const oldNames: string[] = []
     const assignments: Array<{name: string; value: unknown}> = []
     for (const rename of renames) {
@@ -160,7 +163,9 @@ const rekeyParent = (
         if (!isPropertyFieldInstance(sibling, isFieldDefinition)) continue
         sawFieldRow = true
         if (hasProjection) continue
-        const values = await ctx.tx.childrenOf(sibling.id, undefined)
+        // §9 value set: bit-filtered — nested marked rows are machinery.
+        const values = (await ctx.tx.childrenOf(sibling.id, undefined))
+          .filter(isFieldValueChild)
         for (const value of values) {
           try {
             projected = propertyChildContentToEncodedValue(
@@ -199,9 +204,8 @@ export const MIGRATE_PROPERTY_RENAME_PROCESSOR = defineSameTxProcessor({
       return resolution.status === 'resolved'
         || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
     }
-    const memo = new Map<string, boolean>()
     for (const parentId of parentIds) {
-      await rekeyParent(ctx, parentId, renames, isFieldDefinition, memo)
+      await rekeyParent(ctx, parentId, renames, isFieldDefinition)
     }
   },
 })

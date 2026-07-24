@@ -380,8 +380,9 @@ describe('findReplaceDataExtension', () => {
       expect(result.replacements).toBe(1)
       expect(result.skippedUnparseableProperty).toBe(0)
       expect(result.retryableSkips).toEqual([])
-      // The field row's content changed like any block's would...
-      expect((await load(field!.id))?.content).toBe('((clobbered))')
+      // The field row's content changed like any block's would (the ::
+      // marker is literal text around the span, so it survives the splice)...
+      expect((await load(field!.id))?.content).toBe('::((clobbered))')
       // ...and the stamp follows the text (a `((id))` ref derives purely
       // textually, no existence check), so it now points at `clobbered` —
       // which is not a definition. The row is therefore no longer a

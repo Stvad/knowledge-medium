@@ -54,12 +54,11 @@ import { keyAtStart, keysBetween } from '@/data/orderKey'
 import {
   encodedPropertyValueToChildContent,
   getPropertyFieldTargetId,
-  isInsidePropertySubtreeWalk,
+  isFieldValueChild,
   propertiesEqual,
   propertyFieldContent,
   propertyChildContentToEncodedValue,
 } from '@/data/propertyChildren'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import { jsonValuesEqual } from './jsonCanonical'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 
@@ -76,56 +75,25 @@ type ResolveNameSchema = (name: string) => (AnyPropertySchema & {fieldId: string
 interface PropertyChildrenLookups {
   resolveFieldSchema: ResolveFieldSchema
   resolveNameSchema: ResolveNameSchema
-  /** §9 positional rule for the WRITE side (adversarial-review round 2):
-   *  does this block's chain (self included) pass through a field row?
-   *  Field-row-ness here counts shadowed losers (they classify at read
-   *  sites), matching the tx-layer checker. Memoized per processor apply. */
-  isInsidePropertySubtree: (id: string | null) => Promise<boolean>
-  /** Will `core.deriveReferenceTarget` stamp this row as a field row at
-   *  commit? Content-based twin of the stored-column recognition — this
-   *  processor runs BEFORE derive in the same-tx chain, so a row whose
-   *  content was just rewritten to `[[schema]]` still carries a stale
-   *  column that `isInsidePropertySubtree`'s first step would misread
-   *  (PR #386 review; mirrors `TxImpl.isProspectiveFieldRow`, including
-   *  the root exemption — root rows are never field rows). */
-  isProspectiveFieldRow: (row: Pick<BlockData, 'content' | 'parentId'>) => boolean
 }
 
-const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => {
-  const isFieldDefinition = (fieldId: string): boolean => {
+// §9 flat recognition deleted the write-side positional machinery this
+// factory used to build (the interior-ancestry walk and the prospective-
+// field-row content probe): classification is content-intrinsic via the
+// `is_field_form` bit, field/value rows materialize their own bags like
+// every other block, and the selection predicates below key on the bit.
+const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookups => ({
+  resolveFieldSchema: (fieldId) => {
     const resolution = ctx.resolvePropertySchemaField(workspaceId, fieldId)
+    return resolution.status === 'resolved' ? resolution.schema : undefined
+  },
+  resolveNameSchema: (name) => {
+    const resolution = ctx.resolvePropertySchemaName(workspaceId, name)
     return resolution.status === 'resolved'
-      || (resolution.status === 'identity-unavailable' && resolution.reason === 'shadowed')
-  }
-  const subtreeMemo = new Map<string, boolean>()
-  return {
-    resolveFieldSchema: (fieldId) => {
-      const resolution = ctx.resolvePropertySchemaField(workspaceId, fieldId)
-      return resolution.status === 'resolved' ? resolution.schema : undefined
-    },
-    resolveNameSchema: (name) => {
-      const resolution = ctx.resolvePropertySchemaName(workspaceId, name)
-      return resolution.status === 'resolved'
-        ? resolution.schema as ResolvedPropertySchema<unknown>
-        : undefined
-    },
-    isInsidePropertySubtree: (id) => isInsidePropertySubtreeWalk(
-      id, (rowId) => ctx.tx.get(rowId), isFieldDefinition, subtreeMemo,
-    ),
-    isProspectiveFieldRow: (row) => {
-      if (row.parentId === null) return false
-      // The id-carrying whole-block forms (`((id))`, `[label](((id)))`,
-      // marked or not — §7) resolve textually, so this sync probe covers
-      // them completely. A `[[name]]` whole-block ref needs the async alias
-      // lookup this same-tx probe can't do — post-derive recognition
-      // (`isPropertyFieldInstance`) covers those via the column (mirrors
-      // `TxImpl.isProspectiveFieldRow`).
-      const exact = parseExactReferenceBlockContent(row.content)
-      if (exact === null || exact.kind === 'alias') return false
-      return isFieldDefinition(exact.id)
-    },
-  }
-}
+      ? resolution.schema as ResolvedPropertySchema<unknown>
+      : undefined
+  },
+})
 
 // ─── children → cell (project) ───────────────────────────────────────────
 
@@ -161,12 +129,22 @@ const collectAffectedProjection = async (
   lookups: PropertyChildrenLookups,
 ): Promise<void> => {
   if (row === null) return
-  addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups)
+  // The row as a FIELD ROW (parent = owning block): §9 selection keys on
+  // the bit — an unmarked ref row is never a field row. The before side of
+  // a bit change carries its own snapshot's bit, so a row that just left
+  // the marked form still re-projects (drops) its old key.
+  if (row.isFieldForm === true) {
+    addAffectedProjection(out, row.parentId, getPropertyFieldTargetId(row), lookups)
+  }
 
   if (row.parentId === null) return
   const parent = await tx.get(row.parentId)
   if (parent === null || parent.parentId === null) return
-  addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups)
+  // The row as a VALUE child (parent = field row → owning block): only a
+  // marked parent is a field row, and only a non-marked row is its value.
+  if (parent.isFieldForm === true && isFieldValueChild(row)) {
+    addAffectedProjection(out, parent.parentId, getPropertyFieldTargetId(parent), lookups)
+  }
 }
 
 /** First parseable value across the field rows for a schema, in
@@ -182,7 +160,10 @@ const firstProjectedFieldValue = async (
   fieldRows: readonly BlockData[],
 ): Promise<unknown | undefined> => {
   for (const fieldRow of fieldRows) {
-    const values = await tx.childrenOf(fieldRow.id, undefined)
+    // §9 value set: `is_field_form IS NOT 1` children only — a nested marked
+    // row materialized under the field row is its own machinery, never a
+    // value candidate.
+    const values = (await tx.childrenOf(fieldRow.id, undefined)).filter(isFieldValueChild)
     for (const value of values) {
       try {
         return propertyChildContentToEncodedValue(
@@ -198,10 +179,14 @@ const firstProjectedFieldValue = async (
   return undefined
 }
 
+// §9 selection: the bit + target pair (the JS twin of
+// SELECT_PROPERTY_FIELD_CHILD_SQL) — without the bit an unmarked
+// `((fieldId))` link row would be selected as the field row.
 const fieldRowsForSchema = (
   children: readonly BlockData[],
   fieldId: string,
-): BlockData[] => children.filter(child => getPropertyFieldTargetId(child) === fieldId)
+): BlockData[] => children.filter(child =>
+  child.isFieldForm === true && getPropertyFieldTargetId(child) === fieldId)
 
 const reprojectParentField = async (
   tx: Tx,
@@ -213,12 +198,11 @@ const reprojectParentField = async (
 
   const parent = await tx.get(affected.parentId)
   if (parent === null || parent.deleted) return
-  // §9 positional rule: only CONTENT blocks host field rows. A ref-typed
-  // VALUE child pointing at a definition looks exactly like a field row of
-  // its (interior) parent — projecting there would parse its comments as
-  // property values and write a junk key into a synced cell.
-  if (await lookups.isInsidePropertySubtree(parent.id)) return
-
+  // No interior gate (§9 flat recognition): ANY block — value rows and
+  // field rows included — hosts field rows via its `::` children, and its
+  // cell projects from them like every other owner's. The old hazard (a
+  // ref-typed value misread as a field row of its parent) is structurally
+  // gone: unmarked rows never classify.
   const children = await tx.childrenOf(affected.parentId, undefined)
   const fieldRows = fieldRowsForSchema(children, affected.fieldId)
   const projected = await firstProjectedFieldValue(tx, schema, fieldRows)
@@ -331,7 +315,8 @@ export const materializePropertyChildrenForExistingRow = async (
       if (primary.content !== fieldContent) {
         await tx.update(primary.id, {content: fieldContent})
       }
-      const values = await tx.childrenOf(primary.id, undefined)
+      // §9 value set: bit-filtered — nested marked rows are machinery.
+      const values = (await tx.childrenOf(primary.id, undefined)).filter(isFieldValueChild)
       const [primaryValue, ...duplicateValues] = values
       if (primaryValue) {
         if (primaryValue.content !== content) {
@@ -358,7 +343,10 @@ export const materializePropertyChildrenForExistingRow = async (
       const fieldRowId = await tx.create({
         workspaceId: row.workspaceId,
         parentId: row.id,
+        // Born classified (§9): both derived columns pre-stamped so the row
+        // classifies and projects within the same single pass.
         referenceTargetId: schema.fieldId,
+        isFieldForm: true,
         orderKey: keyAtStart(null),
         content: propertyFieldContent(schema.fieldId),
       })
@@ -382,17 +370,10 @@ const materializePropertiesForChangedRow = async (
   lookups: PropertyChildrenLookups,
 ): Promise<void> => {
   if (row.after === null || row.after.deleted) return
-  // §9 positional rule: field rows and property-subtree interiors never
-  // grow NESTED field rows — a bag write on a field/value row (e.g. a
-  // UiState prop like system:collapsed once §6 migrates every scope) stays
-  // cell-only there; recognition could never reclaim the nested rows.
-  if (await lookups.isInsidePropertySubtree(row.after.id)) return
-  // The walk above reads the STORED column — stale for a row whose content
-  // was rewritten to `[[schema]]` earlier in this tx (this processor runs
-  // BEFORE derive). Content-based twin of the same gate in tx.setProperty
-  // (PR #386 review): a row about to be stamped as a field row must stay
-  // cell-only, or we'd nest machinery it can never reclaim.
-  if (lookups.isProspectiveFieldRow(row.after)) return
+  // Materialize-everything (§9 flat recognition): field rows and value rows
+  // grow their own `::` children like every other block — recognition
+  // reclaims nested machinery at any depth, so the old interior/prospective
+  // carve-outs are deleted.
   const changedNames = changedPropertyNames(row.before?.properties ?? {}, row.after.properties)
   await materializePropertyChildrenForExistingRow(tx, row.after, lookups, changedNames)
 }
@@ -439,19 +420,41 @@ export const collapseDuplicateFieldRow = async (
   survivorFieldRowId: string,
   duplicate: BlockData,
 ): Promise<void> => {
-  const duplicateValues = await tx.childrenOf(
+  const duplicateChildren = await tx.childrenOf(
     duplicate.id, undefined,
   )
-  for (const value of duplicateValues) {
-    const survivorValues = await tx.childrenOf(
+  for (const child of duplicateChildren) {
+    const survivorChildren = await tx.childrenOf(
       survivorFieldRowId, undefined,
     )
-    const match = survivorValues.find(v => v.content === value.content)
+    // §9 selection discipline: a duplicate's own MARKED children are its
+    // field rows (its own properties' machinery), never value candidates —
+    // routing one through value folding would nest machinery under the
+    // survivor's value or surface it as a peer value. Fold field rows as
+    // field rows, recursively: into the survivor's own field row for the
+    // same fieldId when one exists, else move over intact (it stays a
+    // recognized field row of the survivor — content-intrinsic, move-proof).
+    if (child.isFieldForm === true) {
+      const childFieldId = getPropertyFieldTargetId(child)
+      const survivorOwn = survivorChildren.find(c =>
+        c.isFieldForm === true
+        && childFieldId !== undefined
+        && getPropertyFieldTargetId(c) === childFieldId)
+      if (survivorOwn) {
+        await collapseDuplicateFieldRow(tx, survivorOwn.id, child)
+      } else {
+        const anchor = survivorChildren.at(-1)?.orderKey ?? null
+        await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
+      }
+      continue
+    }
+    const survivorValues = survivorChildren.filter(isFieldValueChild)
+    const match = survivorValues.find(v => v.content === child.content)
     if (match) {
-      await collapseDuplicateValueChild(tx, match.id, value)
+      await collapseDuplicateValueChild(tx, match.id, child)
     } else {
-      const anchor = survivorValues.at(-1)?.orderKey ?? null
-      await tx.move(value.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
+      const anchor = survivorChildren.at(-1)?.orderKey ?? null
+      await tx.move(child.id, {parentId: survivorFieldRowId, orderKey: keysBetween(anchor, null, 1)[0]!})
     }
   }
   await deleteSubtreeInTx(tx, duplicate.id)
@@ -475,7 +478,11 @@ export const MATERIALIZE_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
 
 export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   name: PROJECT_PROPERTY_CHILDREN_PROCESSOR_NAME,
-  watches: {kind: 'field', table: 'blocks', fields: ['content', 'referenceTargetId', 'parentId', 'orderKey', 'deleted']},
+  // `isFieldForm` is watched (PR #417 review): projection's classification
+  // and value-set both read the bit, so a bit-only change (arrival repair,
+  // the catch-up sweep stamping existing marked rows) must re-project; bulk
+  // repair paths that write the bit raw enqueue projection explicitly.
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'referenceTargetId', 'isFieldForm', 'parentId', 'orderKey', 'deleted']},
   apply: async (event, ctx) => {
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const lookups = lookupsFor(ctx, event.workspaceId)

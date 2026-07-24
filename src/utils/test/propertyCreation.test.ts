@@ -107,7 +107,7 @@ describe('convertEmptyChildBlockToProperty', () => {
       })
       await tx.create({
         id: 'field', workspaceId: 'ws-1', parentId: 'child',
-        referenceTargetId: FIELD_DEF, orderKey: 'a0', content: `((${FIELD_DEF}))`,
+        referenceTargetId: FIELD_DEF, orderKey: 'a0', content: `::((${FIELD_DEF}))`,
       })
       await tx.create({
         id: 'value', workspaceId: 'ws-1', parentId: 'field', orderKey: 'a0',

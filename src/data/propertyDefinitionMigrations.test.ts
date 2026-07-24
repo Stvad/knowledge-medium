@@ -232,9 +232,9 @@ describe('rename migration (flipped workspace)', () => {
 
     await renameDefinitionBlock(repo, FIELD_ID, 'state')
 
-    // Field rows address the definition BY ID (`((fieldId))`, §7), so a rename
+    // Field rows address the definition BY ID (`::((fieldId))`, §7), so a rename
     // never retitles their content — only the name-keyed cell re-keys.
-    expect(await rowContent(fieldRowId)).toBe(`((${FIELD_ID}))`)
+    expect(await rowContent(fieldRowId)).toBe(`::((${FIELD_ID}))`)
     expect(await cell('p')).toEqual({state: 'done'})
     expect(await rowContent(valueRowId)).toBe('done')
   })
@@ -393,7 +393,7 @@ describe('codec-change migration', () => {
     // The raw value is preserved as a live row (this is the real guarantee),
     // and the unconvertible count is surfaced to the user.
     expect(await rowContent(valueRowId)).toBe('not a number')
-    expect(await rowContent(fieldRowId)).toBe(`((${FIELD_ID}))`)
+    expect(await rowContent(fieldRowId)).toBe(`::((${FIELD_ID}))`)
     expect(errors).toHaveLength(1)
     expect(errors[0]!.code).toBe('property.codec-change.unconvertible')
     expect(errors[0]!.meta).toMatchObject({count: 1})

@@ -515,7 +515,7 @@ const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
  *  included) — the structural view, so a consumer never silently misses
  *  machinery. The display-visible view — excluding recognized machinery in
  *  a child-backed workspace (PR #288 §9 — dormant no-op while un-flipped,
- *  and a no-op if the root itself sits inside property-subtree content, see
+ *  and pruning at every recognized `::` field row, see
  *  {@link VISIBLE_SUBTREE_SQL}) — is opt-in via `hidePropertyChildren:
  *  true`, the same option `core.children` / `tx.childrenOf` take. The
  *  outline hooks pass it; structural consumers (copy, navigation) get
@@ -535,7 +535,7 @@ export const subtreeQuery = defineQuery<
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id, id])
+      ? await ctx.db.getAll<BlockRow & {depth: number}>(VISIBLE_SUBTREE_SQL, [id])
       : await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
@@ -634,7 +634,7 @@ export const childrenQuery = defineQuery<
   resolve: async ({id, hidePropertyChildren = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, id])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
@@ -660,12 +660,12 @@ export const childIdsQuery = defineQuery<
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
       const rows = hidePropertyChildren
-        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id, id])
+        ? await ctx.db.getAll<{id: string}>(VISIBLE_CHILDREN_IDS_SQL, [id])
         : await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
     const rows = hidePropertyChildren
-      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id, id])
+      ? await ctx.db.getAll<BlockRow>(VISIBLE_CHILDREN_SQL, [id])
       : await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     // declareRowDeps:false — result is the id list; per-row deps would
     // wake the handle on content/property edits that can't change the

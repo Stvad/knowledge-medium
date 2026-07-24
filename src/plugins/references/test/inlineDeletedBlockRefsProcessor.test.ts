@@ -334,7 +334,7 @@ describe('property value children keep a dangling ref instead of inlining (#404)
       await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'owner'})
       await tx.create({
         id: 'field', workspaceId: WS, parentId: 'p', orderKey: 'a1',
-        content: `((${DEF}))`,
+        content: `::((${DEF}))`,
       })
       await tx.create({
         id: 'value', workspaceId: WS, parentId: 'field', orderKey: 'a1',
@@ -361,7 +361,7 @@ describe('property value children keep a dangling ref instead of inlining (#404)
   // to it is an ordinary reference source, so without an exemption they get
   // inlined — content replaced by the definition's text, stamp cleared — and
   // each owner loses its property identity irreversibly. Same argument as the
-  // value case: a dangling `((fieldId))` is restorable (restore the definition
+  // value case: a dangling `::((fieldId))` is restorable (restore the definition
   // and the property comes back), inlined prose is not. §9 already has a home
   // for the interim state: a field row whose definition doesn't resolve
   // degrades to a visible "unknown field" row.
@@ -371,7 +371,7 @@ describe('property value children keep a dangling ref instead of inlining (#404)
     await env.repo.mutate.delete({id: DEF})
 
     expect(env.read(DEF)!.deleted).toBe(true)
-    expect(env.read('field')!.content).toBe(`((${DEF}))`)
+    expect(env.read('field')!.content).toBe(`::((${DEF}))`)
     expect(env.read('field')!.referenceTargetId).toBe(DEF)
   })
 
