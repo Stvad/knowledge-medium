@@ -96,9 +96,13 @@ export const mergeBlocksInTx = async (
   // union-with-dedupe:
   //   - a `from` value equal to `into`'s winning value folds (its
   //     user-authored descendants ride onto `into`'s value);
-  //   - a DIVERGENT `from` value nests under `into`'s winning value child —
-  //     preserved, and never reclassified: §9 recognition needs the `::`
-  //     bit, and a value row doesn't carry one wherever it is moved. That
+  //   - a DIVERGENT `from` value is kept as a peer SIBLING value under the
+  //     survivor field row (NOT nested under the winner as if it were an
+  //     annotation — see `collapseDuplicateFieldRow`): projection reads the
+  //     first value, so the cell keeps the winner while the conflicting one
+  //     stays visible and reconcilable. It is never reclassified either:
+  //     §9 recognition needs the `::` bit, and a value row doesn't carry
+  //     one wherever it is moved. That
   //     is why no derived stamp is cleared here. The old path relocated
   //     losers to ORDINARY content and had to null a definition-shaped
   //     `reference_target_id` to stop them projecting as `into`'s field

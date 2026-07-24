@@ -314,6 +314,20 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     [WS, 'test ws', 'user-1'],
   )
 
+  /** The workspace as it exists before slice C touches it: present, dormant.
+   *  Seeding through this and flipping afterwards is what reproduces the
+   *  real rollout state — cells full of values, no field rows materialized. */
+  const seedDormantWorkspace = (): Promise<unknown> => sharedDb.db.execute(
+    `INSERT INTO workspaces
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+     VALUES (?, ?, ?, 1, 1, 'none', NULL, 'cell')`,
+    [WS, 'test ws', 'user-1'],
+  )
+
+  const flipSeededWorkspace = (): Promise<unknown> => sharedDb.db.execute(
+    `UPDATE workspaces SET properties_migration = 'children' WHERE id = ?`, [WS],
+  )
+
   const cellOf = async (id: string, name: string): Promise<unknown> => {
     const row = await sharedDb.db.get<{properties_json: string}>(
       'SELECT properties_json FROM blocks WHERE id = ?', [id],
@@ -373,5 +387,163 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     // reference and `value` is an ordinary child, not a property value.
     await repo.awaitProcessors()
     expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
+  })
+
+  // The repair is ADDITIVE: it may give an owner a key it lacked, never
+  // change or remove one it already has. This is the state every owner is in
+  // for the whole window between a workspace flipping and its backfill
+  // landing — a full cell, no field rows yet — so a repair that re-projected
+  // it wholesale would read "no parseable value" as "unset this key", and
+  // the follow-on materialize (unsettled, because this write is not the
+  // PROJECT processor's) would read that unset as a user's key deletion and
+  // tombstone the rows. Adversarial review reproduced exactly that.
+  /** The rollout state: seed while dormant (so cells populate with NO field
+   *  rows), then flip. `valueContent` null = the marked row has no child at
+   *  all, so nothing under it parses as a value. */
+  const seedPreFlipOwner = async (
+    repo: Repo, valueContent: string | null,
+  ): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({
+        id: STATUS_FIELD_ID, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'status',
+      })
+      await tx.setProperty('owner', statusSchema, 'pre-existing')
+      // A marked row that will late-bind to the status definition once the
+      // alias is claimed.
+      await tx.create({id: 'row', workspaceId: WS, parentId: 'owner', orderKey: 'a0', content: '::[[Foo]]'})
+      if (valueContent !== null) {
+        await tx.create({id: 'value', workspaceId: WS, parentId: 'row', orderKey: 'a0', content: valueContent})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    // Dormant: the cell holds the value and nothing was materialized.
+    expect(await cellOf('owner', statusSchema.name)).toBe('pre-existing')
+    await flipSeededWorkspace()
+  }
+
+  it('never unsets a cell key the owner already holds, even with no parseable value', async () => {
+    await seedDormantWorkspace()
+    const repo = setup()
+    await runPass(repo)
+    await seedPreFlipOwner(repo, null)
+
+    await claimAlias(repo)
+    await repo.awaitProcessors()
+
+    // The key survives untouched…
+    expect(await cellOf('owner', statusSchema.name)).toBe('pre-existing')
+    // …and so does the row the user authored. A tombstone here is the
+    // materialize cascade the additive rule exists to prevent: the repair
+    // write is not settled, so an unset would read back as a key deletion.
+    const row = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['row'],
+    )
+    expect(row.deleted).toBe(0)
+  })
+
+  it('does not overwrite a cell key the owner already holds', async () => {
+    await seedDormantWorkspace()
+    const repo = setup()
+    await runPass(repo)
+    await seedPreFlipOwner(repo, 'from-children')
+
+    await claimAlias(repo)
+    await repo.awaitProcessors()
+
+    // Children ARE truth post-flip, but reconciling a populated cell against
+    // them is the backfill's job, not a background stamp repair's — and
+    // winning here would also let the unsettled write drive materialize into
+    // rewriting the user's `::[[Foo]]` text to a canonical `::((id))`.
+    expect(await cellOf('owner', statusSchema.name)).toBe('pre-existing')
+    const row = await sharedDb.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?', ['row'],
+    )
+    expect(row.content).toBe('::[[Foo]]')
+  })
+
+  // Dormancy is the entire safety argument for landing this branch ahead of
+  // slice C, and on this path it rests on one line. Without a test, deleting
+  // the flip gate makes a cell-mode workspace's catch-up sweep start writing
+  // user-visible `properties_json` keys, and the whole suite stays green.
+  it('writes nothing in a DORMANT workspace — the flip gate is what arms this', async () => {
+    await seedDormantWorkspace()
+    const repo = setup()
+    await runPass(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({
+        id: STATUS_FIELD_ID, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'status',
+      })
+      await tx.create({id: 'row', workspaceId: WS, parentId: 'owner', orderKey: 'a0', content: '::[[Foo]]'})
+      await tx.create({id: 'value', workspaceId: WS, parentId: 'row', orderKey: 'a0', content: 'done'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    await claimAlias(repo)
+    await repo.awaitProcessors()
+
+    // The stamp still lands — the columns are slice-A machinery, maintained
+    // everywhere — but nothing projects onto the owner.
+    expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
+    expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
+  })
+
+  // The sweep documents itself as "safe in a read-only workspace" because its
+  // writes are local bookkeeping. A projection tx is NOT that: its scope is
+  // rejected in read-only mode, and the throw would escape before the sweep
+  // marks itself done — disabling late-binding for the rest of the session.
+  /** Raw-seeded owner → `::((fieldId))` row → value, all with NULL derived
+   *  columns, so the catch-up SWEEP is what stamps and recognizes them. The
+   *  id form resolves textually, so no alias claim is needed. */
+  const rawSeedSweepFixture = async (): Promise<void> => {
+    await seedRow({id: 'owner', content: 'page'})
+    await seedRow({id: 'row', parentId: 'owner', content: `::((${STATUS_FIELD_ID}))`})
+    await seedRow({id: 'value', parentId: 'row', content: 'done'})
+    await flipSeededWorkspace()
+  }
+
+  // The sweep documents itself as "NOT gated on writability … safe in a
+  // read-only workspace" because its writes are raw local bookkeeping. A
+  // projection tx is NOT that — its scope is rejected in read-only mode, and
+  // the throw escapes before the sweep marks itself done, which disables
+  // late-binding for the rest of the session.
+  it('skips the re-projection in a read-only workspace rather than throwing', async () => {
+    await seedDormantWorkspace()
+    const repo = setup()
+    await rawSeedSweepFixture()
+    repo.setReadOnly(true)
+
+    await expect(runPass(repo)).resolves.toBeUndefined()
+
+    // The local bookkeeping still happened — that part really is read-only
+    // safe — but no cell was written.
+    expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
+    expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
+  })
+
+  it('projects on the same sweep when the workspace IS writable (read-only control)', async () => {
+    await seedDormantWorkspace()
+    const repo = setup()
+    await rawSeedSweepFixture()
+
+    await runPass(repo)
+
+    expect(await cellOf('owner', statusSchema.name)).toBe('done')
+  })
+
+  it('keeps the repair off the user cmd-Z stack', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await runPass(repo)
+    await seedUnresolvedRow(repo, '::[[Foo]]')
+
+    await claimAlias(repo)
+    await vi.waitFor(async () => {
+      expect(await cellOf('owner', statusSchema.name)).toBe('done')
+    })
+
+    // Undo must revert the user's last action (the alias claim), never the
+    // background repair that followed it.
+    await repo.undo(ChangeScope.BlockDefault)
+    expect(await cellOf(STATUS_FIELD_ID, aliasesProp.name)).toBeUndefined()
   })
 })

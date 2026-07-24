@@ -123,6 +123,7 @@ import {
 } from './propertyChildren'
 import {
   reprojectOwnersForRowStates,
+  type ProjectableRow,
   type ProjectionLookups,
 } from './internals/propertyChildrenProcessor'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
@@ -421,6 +422,20 @@ interface ReferenceTargetStamp {
   scannedContent: string
   targetId: string | null
   isFieldForm: boolean
+}
+
+/** What a stamping pass needs to also re-project the owners of rows it turns
+ *  into field rows. `resolver` is CAPTURED at the pass's registry gate and
+ *  threaded through — never re-read at write time. Both passes are deferred
+ *  idle jobs that can span workspace switches, and
+ *  `propertySchemaResolverFor` serves only the active or immediately-previous
+ *  workspace: a run-time re-resolve after two switches fails closed, every
+ *  fieldId stops resolving, and the repair silently becomes a no-op that no
+ *  later scan can find again (the rows are no longer NULL-targeted). Same
+ *  hazard, same fix, as `runPropertyDefinitionMigrationBatch`. */
+interface ReferenceTargetStampContext {
+  readonly workspaceId: string
+  readonly resolver: PropertySchemaResolver
 }
 
 export class Repo {
@@ -2608,6 +2623,12 @@ export class Repo {
     // `((id))` derives textually and `[[alias]]` through the alias index.)
     const registry = this._propertyDefinitionRegistry
     if (!registry || registry.workspaceId !== workspaceId) return
+    // Captured HERE, at the gate that just proved this workspace's registry
+    // is live — not at write time, which is many awaits and possibly two
+    // workspace switches later (see ReferenceTargetStampContext).
+    const stampContext: ReferenceTargetStampContext = {
+      workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
+    }
 
     // Candidate prefilter in SQL (cheap LIKEs over one workspace, one-time);
     // the real grammar check is `parseExactReferenceBlockContent` inside
@@ -2651,7 +2672,7 @@ export class Repo {
       }
     }
 
-    await this.stampReferenceTargets(updates)
+    await this.stampReferenceTargets(updates, stampContext)
 
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
@@ -2695,16 +2716,25 @@ export class Repo {
    *  in-tx fresh rows, never scan-time state. */
   private async stampReferenceTargets(
     updates: readonly ReferenceTargetStamp[],
+    context: ReferenceTargetStampContext,
   ): Promise<void> {
+    // Decide ONCE, before any work: a dormant workspace has no cells to
+    // project, and a read-only one must not be writing them. Checking here
+    // rather than after the loop keeps a dormant device — which is every
+    // device until slice C — from retaining a single row for a repair it
+    // will never run, and keeps the sweep's documented "safe in a read-only
+    // workspace" contract true (the projection tx would be rejected).
+    const reproject = !this.isReadOnly
+      && await readIsChildBackedWorkspace(this.db, context.workspaceId)
     const CHUNK = 200
-    // Rows this pass turned INTO recognized field rows, for the owner-cell
-    // re-projection below. Only the "turns on" direction is reachable here:
-    // the CAS above only writes rows still at a NULL target, and §9
-    // recognition needs a resolved target — so no row this method touches
-    // was recognized beforehand.
-    const newlyRecognized: BlockData[] = []
     for (let i = 0; i < updates.length; i += CHUNK) {
       const chunk = updates.slice(i, i + CHUNK)
+      // Rows THIS chunk turned into recognized field rows. Per chunk, not
+      // per pass: the re-projection then follows its own stamps immediately,
+      // so a crash or a closed tab loses at most one chunk of repair instead
+      // of all of it — and the rows are no longer NULL-targeted, so no later
+      // scan would ever find them again.
+      const newlyRecognized: ProjectableRow[] = []
       const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
       await this.db.writeTransaction(async tx => {
         await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
@@ -2728,8 +2758,17 @@ export class Repo {
           const before = parseBlockRow(freshRow)
           const after = {...before, referenceTargetId: targetId, isFieldForm}
           snapshots.set(id, {before, after})
-          if (targetId !== null && isFieldForm && after.parentId !== null) {
-            newlyRecognized.push(after)
+          // Only the "turns on" direction is reachable: the CAS above writes
+          // only rows still at a NULL target, and §9 recognition needs a
+          // resolved one — so nothing here was a field row beforehand.
+          if (reproject && targetId !== null && isFieldForm && after.parentId !== null) {
+            newlyRecognized.push({
+              id: after.id,
+              parentId: after.parentId,
+              workspaceId: after.workspaceId,
+              referenceTargetId: targetId,
+              isFieldForm,
+            })
           }
         }
       })
@@ -2751,8 +2790,22 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+      if (newlyRecognized.length === 0) continue
+      try {
+        await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
+      } catch (err) {
+        // The stamps are the primary job and they committed; a projection
+        // failure must not abort the pass (the sweep would never set its
+        // marker, disabling late-binding for the whole session). The repair
+        // is additive and idempotent, so any later edit to the subtree
+        // re-projects it through the ordinary processor.
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[referenceTargetStamp] owner re-projection failed for workspace `
+          + `${context.workspaceId}: ${reason}`,
+        )
+      }
     }
-    await this.reprojectOwnersOfStampedFieldRows(newlyRecognized)
   }
 
   /** Owner-cell re-projection for rows a raw stamp just turned into
@@ -2763,52 +2816,47 @@ export class Repo {
    *  owner's cell must gain the key at that moment rather than waiting for
    *  an unrelated edit to the subtree.
    *
-   *  Reachable post-flip only, hence the gate: a hand-typed or imported
-   *  `::[[status]]` written before anything claimed "status" derives to a
-   *  NULL target, and the alias-claim drain (or the next open's sweep)
-   *  resolves it later. Unlike the stamp, this write goes through `repo.tx`
-   *  — it's a cell write on the PARENT, which is ordinary derived state,
+   *  Reachable post-flip only (the caller owns that gate): a hand-typed or
+   *  imported `::[[status]]` written before anything claimed "status"
+   *  derives to a NULL target, and the alias-claim drain (or the next open's
+   *  sweep) resolves it later. Unlike the stamp, this write goes through
+   *  `repo.tx` — it's a cell write on the PARENT, ordinary derived state,
    *  and the projection's `skipMetadata` keeps it off "last edited".
    *
-   *  Running outside the PROJECT processor means the cell write is NOT
-   *  settled, so `core.materializePropertyChildren` sees it as a key
-   *  change. That is safe HERE specifically because this path can only ADD
-   *  a key: recognition just turned on, so the name was absent, and a field
-   *  row with no parseable value leaves it absent (the projection's
-   *  `propertiesEqual` short-circuit — no write at all). The hazard
-   *  `settledWrites` guards against is the opposite direction, a projected
-   *  UNSET read back as a user's key deletion, which cannot occur from
-   *  here. The follow-on materialize then converges on the very children
-   *  the key was projected from: field-row selection is bit+fieldId, so it
-   *  finds the `::[[Foo]]` row rather than minting a canonical twin. */
+   *  ADDITIVE, and that is load-bearing (adversarial review). Running
+   *  outside the PROJECT processor means the cell write is not settled, so
+   *  `core.materializePropertyChildren` reads it as a key change. A `full`
+   *  projection here would therefore be destructive in the ordinary case,
+   *  not an exotic one: between a workspace flipping and its backfill
+   *  landing every owner holds cell keys with NO field rows, so the first
+   *  sweep would project "nothing parses" into an unset, and materialize
+   *  would read that unset as a user deleting the key and tombstone the
+   *  very rows the stamp just recognized — uploading the tombstones. The
+   *  overwrite direction is barred for the same reason: reconciling a
+   *  populated cell against children is the backfill's job.
+   *
+   *  `References`, not `BlockDefault` (the same call the deferred definition
+   *  migration batch makes, for the same reason): a `BlockDefault` tx lands
+   *  on the user's cmd-Z stack, so a background repair would become the
+   *  thing their next undo reverts. */
   private async reprojectOwnersOfStampedFieldRows(
-    rows: readonly BlockData[],
+    rows: readonly ProjectableRow[],
+    context: ReferenceTargetStampContext,
   ): Promise<void> {
     if (rows.length === 0) return
-    const byWorkspace = new Map<string, BlockData[]>()
-    for (const row of rows) {
-      const bucket = byWorkspace.get(row.workspaceId)
-      if (bucket) bucket.push(row)
-      else byWorkspace.set(row.workspaceId, [row])
+    const lookups: ProjectionLookups = {
+      resolveFieldSchema: (fieldId) => {
+        const resolution = context.resolver.resolveField(fieldId)
+        return resolution.status === 'resolved' ? resolution.schema : undefined
+      },
     }
-    for (const [workspaceId, workspaceRows] of byWorkspace) {
-      if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) continue
-      const resolver = this.propertySchemaResolverFor(workspaceId)
-      const lookups: ProjectionLookups = {
-        resolveFieldSchema: (fieldId) => {
-          const resolution = resolver.resolveField(fieldId)
-          return resolution.status === 'resolved' ? resolution.schema : undefined
-        },
-      }
-      const CHUNK = 100
-      for (let i = 0; i < workspaceRows.length; i += CHUNK) {
-        const chunk = workspaceRows.slice(i, i + CHUNK)
-        await this.tx(
-          tx => reprojectOwnersForRowStates(tx, chunk, lookups),
-          {scope: ChangeScope.BlockDefault},
-        )
-      }
-    }
+    await this.tx(
+      tx => reprojectOwnersForRowStates(tx, rows, lookups, 'additive'),
+      {
+        scope: ChangeScope.References,
+        description: 'reproject property cells after reference-target stamp',
+      },
+    )
   }
 
   /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
@@ -2850,6 +2898,10 @@ export class Repo {
     if (!pending || pending.size === 0) return
     const registry = this._propertyDefinitionRegistry
     if (!registry || registry.workspaceId !== workspaceId) return
+    // Captured at the gate, not at write time (see ReferenceTargetStampContext).
+    const stampContext: ReferenceTargetStampContext = {
+      workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
+    }
     this.pendingNameRederives.delete(workspaceId)
     try {
       // Strictly additive (`reference_target_id IS NULL`, like the sweep):
@@ -2893,7 +2945,7 @@ export class Repo {
           })
         }
       }
-      await this.stampReferenceTargets(updates)
+      await this.stampReferenceTargets(updates, stampContext)
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)

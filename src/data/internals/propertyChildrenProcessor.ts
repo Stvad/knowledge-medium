@@ -82,6 +82,29 @@ interface PropertyChildrenLookups {
  *  materialize direction to feed. */
 export type ProjectionLookups = Pick<PropertyChildrenLookups, 'resolveFieldSchema'>
 
+/** The fields the projection direction reads off a changed row. Narrower
+ *  than `BlockData` so a repair path can retain a few columns per stamped
+ *  row instead of whole rows (bags + references) across a workspace scan. */
+export type ProjectableRow =
+  Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId' | 'isFieldForm'>
+
+/**
+ * `full` — the projection is authoritative: children are truth, so a field
+ * set with no parseable value UNSETS the owner's key (§9's default-value
+ * rule). Only correct inside `core.projectPropertyChildren`, whose
+ * `settledWrites` stops the follow-on materialize reading that unset as a
+ * user deleting the key.
+ *
+ * `additive` — the caller did not observe user intent and its write is NOT
+ * settled, so it may only GIVE an owner a key it lacks. Never unset, never
+ * overwrite. This is the raw-stamp repair path: for the whole window between
+ * a workspace flipping and its backfill landing, every owner holds cell keys
+ * with no field rows at all, and a `full` re-projection there would read
+ * "nothing parses" as "unset" and drive materialize into tombstoning the
+ * very rows it just recognized.
+ */
+export type ProjectionMode = 'full' | 'additive'
+
 // §9 flat recognition deleted the write-side positional machinery this
 // factory used to build (the interior-ancestry walk and the prospective-
 // field-row content probe): classification is content-intrinsic via the
@@ -101,6 +124,9 @@ const lookupsFor = (ctx: SameTxCtx, workspaceId: string): PropertyChildrenLookup
 })
 
 // ─── children → cell (project) ───────────────────────────────────────────
+
+const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(properties, name)
 
 interface AffectedProjection {
   readonly parentId: string
@@ -130,7 +156,7 @@ const addAffectedProjection = (
 const collectAffectedProjection = async (
   tx: Tx,
   out: Map<string, AffectedProjection>,
-  row: BlockData | null,
+  row: ProjectableRow | null,
   lookups: ProjectionLookups,
 ): Promise<void> => {
   if (row === null) return
@@ -197,12 +223,20 @@ const reprojectParentField = async (
   tx: Tx,
   affected: AffectedProjection,
   lookups: ProjectionLookups,
+  mode: ProjectionMode,
 ): Promise<void> => {
   const schema = lookups.resolveFieldSchema(affected.fieldId)
   if (!schema) return
 
   const parent = await tx.get(affected.parentId)
   if (parent === null || parent.deleted) return
+  // Additive mode stops at a key the owner already holds — BEFORE the value
+  // scan, since the answer can't change the outcome. Both directions are
+  // unsafe from an unsettled caller: an unset cascades into materialize
+  // tombstoning the rows, and an overwrite silently replaces a cell value
+  // the user still owns (reconciling a populated cell against children is
+  // the backfill's job, not a background repair's).
+  if (mode === 'additive' && hasOwn(parent.properties, schema.name)) return
   // No interior gate (§9 flat recognition): ANY block — value rows and
   // field rows included — hosts field rows via its `::` children, and its
   // cell projects from them like every other owner's. The old hazard (a
@@ -243,22 +277,20 @@ const reprojectParentField = async (
  */
 export const reprojectOwnersForRowStates = async (
   tx: Tx,
-  rowStates: Iterable<BlockData | null>,
+  rowStates: Iterable<ProjectableRow | null>,
   lookups: ProjectionLookups,
+  mode: ProjectionMode,
 ): Promise<void> => {
   const affected = new Map<string, AffectedProjection>()
   for (const row of rowStates) {
     await collectAffectedProjection(tx, affected, row, lookups)
   }
   for (const projection of affected.values()) {
-    await reprojectParentField(tx, projection, lookups)
+    await reprojectParentField(tx, projection, lookups, mode)
   }
 }
 
 // ─── cell → children (materialize) ───────────────────────────────────────
-
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
 
 const changedPropertyNames = (
   before: Record<string, unknown>,
@@ -550,6 +582,9 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
       ctx.tx,
       event.changedRows.flatMap(row => [row.before, row.after]),
       lookupsFor(ctx, event.workspaceId),
+      // Authoritative: this processor's writes ARE settled, which is what
+      // makes the lossy unset safe here and nowhere else.
+      'full',
     )
   },
 })
