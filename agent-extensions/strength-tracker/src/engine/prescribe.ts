@@ -83,6 +83,8 @@ const prescribeExercise = (
     freeform: exercise.freeform,
     note: exercise.note,
     videos: exercise.videos,
+    altGroupKey: exercise.altGroupKey,
+    altOptions: exercise.altOptions,
     lastTime,
   }
 

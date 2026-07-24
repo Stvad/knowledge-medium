@@ -19,6 +19,7 @@ import {
   EXERCISE_ENTRY_TYPE,
   SET_TYPE,
   WORKOUT_TYPE,
+  altChoicesProp,
   completedAtProp,
   dateProp,
   doneProp,
@@ -186,6 +187,22 @@ export const discardWorkout = async (repo: Repo, ids: readonly string[]): Promis
   await repo.tx(async tx => {
     for (const id of ids) await tx.delete(id)
   }, {scope: ChangeScope.BlockDefault, description: 'Discard workout'})
+}
+
+/** Record which option of an `or`-group the user is now tracking. User state
+ *  on the settings block (read-modify-write the choices map), so the plan
+ *  outline stays untouched. */
+export const writeAltChoice = async (
+  repo: Repo,
+  settingsBlockId: string,
+  groupKey: string,
+  exerciseName: string,
+): Promise<void> => {
+  await repo.tx(async tx => {
+    const block = await tx.get(settingsBlockId)
+    const current = (block?.properties[altChoicesProp.name] as Record<string, string> | undefined) ?? {}
+    await tx.setProperty(settingsBlockId, altChoicesProp, {...current, [groupKey]: exerciseName})
+  }, {scope: ChangeScope.UserPrefs, description: 'Choose exercise variant'})
 }
 
 // ──── layoff + shoulder writes (unchanged) ────

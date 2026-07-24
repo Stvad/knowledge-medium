@@ -49,6 +49,12 @@ export interface ExerciseConfig {
   catchUpRpe?: number
   /** Demo/technique links lifted from the plan line's markdown links. */
   videos?: readonly ExerciseVideo[]
+  /** When this exercise is the resolved option of a plan `or`-group: the
+   *  group's stable key (the group block id) and every option's name. The
+   *  engine ignores these — they exist so the UI can offer a switch, and so
+   *  a switch reselects a different option of the same slot. */
+  altGroupKey?: string
+  altOptions?: readonly string[]
 }
 
 export interface ExerciseVideo {
@@ -190,6 +196,8 @@ export interface PrescribedExercise {
   freeform: boolean
   note?: string
   videos?: readonly ExerciseVideo[]
+  altGroupKey?: string
+  altOptions?: readonly string[]
   /** One line explaining where `weight` came from. Always shown: the
    *  plan's whole point is that the number is never a mystery. */
   rationale: string

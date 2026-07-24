@@ -256,7 +256,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       <ol className="flex flex-col gap-3">
         {draft.map((ex, exIdx) => (
           <ExerciseCard
-            key={ex.exercise}
+            key={ex.altGroupKey ?? ex.exercise}
             ex={ex}
             unit={unit}
             readOnly={readOnly}
@@ -264,6 +264,11 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             onCommit={(setIdx, patch) => commitSet(exIdx, setIdx, patch)}
             onToggleDone={(setIdx, done) => toggleDone(exIdx, setIdx, done)}
             onAcceptAll={() => acceptAll(exIdx)}
+            onSwitch={
+              ex.altGroupKey && !readOnly
+                ? name => program.setAltChoice(ex.altGroupKey as string, name)
+                : undefined
+            }
           />
         ))}
       </ol>
@@ -342,6 +347,7 @@ function ExerciseCard({
   onCommit,
   onToggleDone,
   onAcceptAll,
+  onSwitch,
 }: {
   ex: DraftExercise
   unit: string
@@ -350,6 +356,7 @@ function ExerciseCard({
   onCommit: (setIdx: number, patch: Partial<DraftSet>) => void
   onToggleDone: (setIdx: number, done: boolean) => void
   onAcceptAll: () => void
+  onSwitch?: (name: string) => void
 }) {
   const range =
     ex.repMin !== undefined && ex.repMax !== undefined
@@ -382,7 +389,27 @@ function ExerciseCard({
           </button>
         )}
       </div>
-      {ex.note && <div className="mt-1 text-xs text-muted-foreground/70">{ex.note}</div>}
+      {onSwitch && ex.altOptions && ex.altOptions.length > 1 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {ex.altOptions.map(name => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => name !== ex.exercise && onSwitch(name)}
+              aria-pressed={name === ex.exercise}
+              className={
+                'rounded-full px-2.5 py-1 text-xs ' +
+                (name === ex.exercise
+                  ? 'bg-primary/15 font-medium text-primary'
+                  : 'border border-border text-muted-foreground hover:bg-muted')
+              }
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      )}
+      {ex.note && <div className="mt-1 whitespace-pre-line text-xs text-muted-foreground/70">{ex.note}</div>}
       {ex.videos && ex.videos.length > 0 && <VideoLinks videos={ex.videos} />}
       <div className="mt-2 flex flex-col gap-1.5">
         {ex.sets.map((s, i) => (

@@ -4,15 +4,21 @@ import {
   configFromPlan,
   extractVideos,
   mergePlan,
+  parseExercise,
   parseExerciseLine,
   parsePlan,
   type PlanNode,
 } from '../src/program/planParser'
 
-const node = (content: string, children: PlanNode[] = []): PlanNode => ({
-  id: content.slice(0, 8),
+const node = (
+  content: string,
+  children: PlanNode[] = [],
+  extra: {id?: string; properties?: Record<string, unknown>} = {},
+): PlanNode => ({
+  id: extra.id ?? content.slice(0, 8),
   content,
   children,
+  properties: extra.properties,
 })
 
 /** A trimmed but faithful copy of the live plan outline's shape. */
@@ -117,6 +123,31 @@ describe('extractVideos', () => {
   })
 })
 
+describe('parseExercise', () => {
+  it('lets structured properties override the prose line', () => {
+    const ex = parseExercise(
+      node('Bench press — 3×6–10', [], {properties: {'strength:targetSets': 4, 'strength:repMax': 12}}),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.sets).toBe(4)
+    expect(ex?.repMax).toBe(12)
+    // Untouched by a prop, repMin still comes from the prose.
+    expect(ex?.repMin).toBe(6)
+  })
+
+  it('gathers the description from plain child bullets, including a video child', () => {
+    const ex = parseExercise(
+      node('Split squat — 2×8–12/leg', [node('light, knee-friendly'), node('[video](https://youtu.be/x)')]),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.note).toContain('light, knee-friendly')
+    expect(ex?.note).not.toContain('http')
+    expect(ex?.videos).toEqual([{label: 'video', url: 'https://youtu.be/x'}])
+  })
+})
+
 describe('parsePlan', () => {
   it('reads every session exercise from the outline', () => {
     const overlay = parsePlan(samplePlan())
@@ -192,5 +223,43 @@ describe('mergePlan / configFromPlan', () => {
     expect(bench.repMax).toBe(8)
     // A lift the overlay didn't mention keeps its default.
     expect(config.exercises.some(e => e.name === 'Squat')).toBe(true)
+  })
+})
+
+describe('or-groups', () => {
+  /** A single "Session A" with one `or`-group of two options, so we can
+   *  isolate group-resolution behaviour from the rest of the plan. */
+  const altGroupPlan = (groupExtra: {id?: string; properties?: Record<string, unknown>} = {id: 'g1'}) =>
+    node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('or', [node('Overhead press — 3×6–10'), node('Landmine press — 3×6–10')], groupExtra),
+      ]),
+    ])
+
+  it('emits every option, tagged with the group key, and defaults to the first', () => {
+    const {config} = configFromPlan(altGroupPlan())
+    const inGroup = config.exercises.filter(e => e.altGroupKey === 'g1')
+    expect(inGroup).toHaveLength(1)
+    expect(inGroup[0].name).toBe('Overhead press')
+    expect(inGroup[0].altOptions).toEqual(['Overhead press', 'Landmine press'])
+  })
+
+  it('resolves to an explicit runtime choice over the default', () => {
+    const {config} = configFromPlan(altGroupPlan(), {g1: 'Landmine press'})
+    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.name).toBe('Landmine press')
+  })
+
+  it('honors a strength:default property over the first option', () => {
+    const plan = altGroupPlan({
+      id: 'g1',
+      properties: {'strength:kind': 'alt-group', 'strength:default': 'Landmine press'},
+    })
+    const {config} = configFromPlan(plan)
+    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.name).toBe('Landmine press')
+  })
+
+  it('recognizes an "or" bullet by prose alone, without a strength:kind property', () => {
+    const overlay = parsePlan(altGroupPlan({id: 'g1'}))
+    expect(overlay.altDefaults).toEqual({g1: 'Overhead press'})
   })
 })

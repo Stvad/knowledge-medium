@@ -19,6 +19,7 @@ import type {LayoffRecord, Prescription, ProgramConfig, SessionType, WorkoutReco
 import {DEFAULT_CONFIG} from '../program/defaults'
 import {loadConfig} from '../km/config'
 import {getOrCreateSettingsBlock} from '../km/page'
+import {writeAltChoice} from '../km/store'
 import {buildHistory, buildLayoffs, buildLiveWorkouts, type LiveWorkout} from '../km/history'
 import {EXERCISE_ENTRY_TYPE, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from '../km/fields'
 
@@ -35,6 +36,8 @@ export interface ProgramState {
   session: SessionType
   setSession: (session: SessionType | null) => void
   prescription: Prescription
+  /** Track a different option of a plan `or`-group. */
+  setAltChoice: (groupKey: string, exerciseName: string) => void
   reload: () => void
 }
 
@@ -99,6 +102,10 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     session: prescription.session,
     setSession: setSessionOverride,
     prescription,
+    setAltChoice: (groupKey, exerciseName) => {
+      if (!settingsBlockId) return
+      void writeAltChoice(repo, settingsBlockId, groupKey, exerciseName).then(() => setReloadKey(k => k + 1))
+    },
     reload: () => setReloadKey(k => k + 1),
   }
 }

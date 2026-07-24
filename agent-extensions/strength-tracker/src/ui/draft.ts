@@ -38,6 +38,10 @@ export interface DraftExercise {
   rationale: string
   note?: string
   videos?: readonly ExerciseVideo[]
+  /** Set when this exercise is the chosen option of a plan `or`-group, so the
+   *  UI can offer a switch to the other options. */
+  altGroupKey?: string
+  altOptions?: readonly string[]
   sets: DraftSet[]
   /** The exercise entry block once materialized. */
   blockId?: string
@@ -79,6 +83,8 @@ export const buildDraft = (prescription: Prescription, unit: string): DraftExerc
     rationale: ex.rationale,
     note: ex.note,
     videos: ex.videos,
+    altGroupKey: ex.altGroupKey,
+    altOptions: ex.altOptions,
     sets: initialSets(ex),
   }))
 

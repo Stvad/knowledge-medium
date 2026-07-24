@@ -17,6 +17,7 @@ import type {ProgramConfig} from '../engine/types'
 import {DEFAULT_CONFIG} from '../program/defaults'
 import {configFromPlan, type PlanNode} from '../program/planParser'
 import {
+  altChoicesProp,
   cadenceDaysProp,
   planRootProp,
   rolloverHourProp,
@@ -43,7 +44,7 @@ const loadPlanTree = async (repo: Repo, rootId: string): Promise<PlanNode | null
   const build = async (block: BlockData): Promise<PlanNode> => {
     const childData = await repo.block(block.id).children.load()
     const children = await Promise.all((childData ?? []).filter(c => !c.deleted).map(build))
-    return {id: block.id, content: block.content, children}
+    return {id: block.id, content: block.content, properties: block.properties, children}
   }
   return build(root)
 }
@@ -102,7 +103,11 @@ export const loadConfig = async (
     return {config: base, warnings: ['Plan outline could not be read — using the built-in program.'], planRootId}
   }
 
-  const {config, warnings} = configFromPlan(tree)
+  // Which option of each `or`-group the user is currently tracking (user
+  // state on the settings block) resolves the plan's alt-groups to one
+  // exercise per slot.
+  const altChoices = read(settings, altChoicesProp)
+  const {config, warnings} = configFromPlan(tree, altChoices)
   // The plan supplies program content; the settings block supplies engine
   // knobs. Re-apply the knobs so a settings override wins over the default.
   return {config: applySettings(config, settings), warnings, planRootId}
