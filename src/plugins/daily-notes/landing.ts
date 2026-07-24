@@ -26,11 +26,29 @@ export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
   excludeBlockId,
 }) => {
   const iso = todayIso()
-  // Decline BEFORE touching the DB when today's note is the excluded block:
-  // `getOrCreateDailyNote` resurrects a soft-deleted row, so calling it here
-  // during delete-recovery would undo the user's delete. The id is a pure
-  // function of (workspace, day), so the check costs nothing.
-  if (excludeBlockId && dailyNoteBlockId(workspaceId, iso) === excludeBlockId) return null
+  const id = dailyNoteBlockId(workspaceId, iso)
+  if (excludeBlockId) {
+    // Recovery context. `getOrCreateDailyNote` RESTORES a soft-deleted row, so
+    // answering here can undo a delete. Decline when we'd hand back the
+    // excluded block itself (id is a pure function of workspace+day, so this
+    // costs nothing)...
+    if (id === excludeBlockId) return null
+    // ...and, more broadly, whenever today's note is currently a tombstone.
+    // The excluded id is the vanished page of the pane being recovered, which
+    // is NOT necessarily the root of the deleted subtree: a pane zoomed into a
+    // CHILD of today's note recovers with the child's id, and an exact-id check
+    // would sail past and resurrect the deleted parent note. A tombstone means
+    // someone deleted it; recovery is never the right moment to bring it back.
+    //
+    // Read the row directly: `block.load()` returns null for BOTH a tombstone
+    // and a missing row, and markMissing's the tombstone on the way, so the
+    // Block facade can't tell "deleted" (decline) from "never existed"
+    // (creating it is fine and wanted).
+    const row = await repo.db.getOptional<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [id],
+    )
+    if (row?.deleted === 1) return null
+  }
   const dailyNote = await getOrCreateDailyNote(repo, workspaceId, iso)
   return dailyNote.id
 }

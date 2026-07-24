@@ -69,7 +69,13 @@ export function PanelContentRecovery({block}: {block: Block}) {
   // always called on a real block (the effect below gates on topLevelBlockId).
   const shown = block.repo.block(topLevelBlockId ?? block.id)
   const shownExists = useBlockExists(shown)
-  const seenLiveRef = useRef<string | null>(null)
+  /** EVERY block this pane has seen live, not just the latest. Browser
+   *  Back/Forward can reconcile the pane onto a page it showed earlier — if
+   *  that page has since been deleted, a single-slot memo would read it as
+   *  "never seen, still loading" and refuse to recover, stranding the pane on
+   *  the tombstone. Grows with pages visited in this pane, which is bounded by
+   *  the session and holds only ids. */
+  const seenLiveRef = useRef<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -81,12 +87,12 @@ export function PanelContentRecovery({block}: {block: Block}) {
 
     if (shownExists) {
       // Confirmed live — remember it so a later disappearance reads as a delete.
-      seenLiveRef.current = topLevelBlockId
+      seenLiveRef.current.add(topLevelBlockId)
       return
     }
     // Not live. Unless we've seen THIS block live, treat it as still-loading
     // (initial mount), not deleted — don't recover.
-    if (seenLiveRef.current !== topLevelBlockId) return
+    if (!seenLiveRef.current.has(topLevelBlockId)) return
 
     timerRef.current = setTimeout(() => {
       timerRef.current = null
@@ -94,7 +100,7 @@ export function PanelContentRecovery({block}: {block: Block}) {
       // by undo, not a mid-load blip that resolved).
       if (block.peekProperty(topLevelBlockIdProp) !== topLevelBlockId) return
       if (block.repo.block(topLevelBlockId).peek()) return
-      seenLiveRef.current = null
+      seenLiveRef.current.delete(topLevelBlockId)
       // The landing resolver is passed as a thunk, not a resolved id: it can
       // write (get-or-create), so it must only run if history yields nothing
       // live. `recoverPanelOffDeadContent` re-checks that the pane is still

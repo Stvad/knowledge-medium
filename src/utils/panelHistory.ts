@@ -433,6 +433,10 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false
   await pruneDeadTop(panelBlock, 'back')
+  // The prune awaits row loads. If the pane navigated in the meantime this
+  // chevron press is stale: consuming the stack now would pull the pane off the
+  // user's new destination and park the wrong page on Forward.
+  if (panelBlock.peekProperty(topLevelBlockIdProp) !== current) return false
   const dest = panelHistory.back(panelBlock.id, {
     blockId: current,
     state: panelHistory.snapshot(panelBlock.id),
@@ -452,6 +456,8 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false
   await pruneDeadTop(panelBlock, 'forward')
+  // Same stale-press guard as goBackInPanel.
+  if (panelBlock.peekProperty(topLevelBlockIdProp) !== current) return false
   const dest = panelHistory.forward(panelBlock.id, {
     blockId: current,
     state: panelHistory.snapshot(panelBlock.id),

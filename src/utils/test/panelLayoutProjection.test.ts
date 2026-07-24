@@ -1462,6 +1462,32 @@ describe('recoverPanelOffDeadContent', () => {
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('landing')
   })
 
+  it('abandons a chevron press if the pane navigated during the prune', async () => {
+    // pruneDeadTop awaits row loads. A navigation landing in that window makes
+    // the press stale — consuming the stack would yank the pane off the user's
+    // new destination and park the wrong page on Forward.
+    await seedBlocks(['alive', 'gone', 'page', 'elsewhere'])
+    const panel = await panelShowing('page')
+    panelHistory.push(panel.id, {blockId: 'alive'})
+    panelHistory.push(panel.id, {blockId: 'gone'})
+    await env.repo.block('gone').delete()
+
+    // Drive the navigation from inside the prune's load so the interleaving is
+    // deterministic rather than timing-dependent. `repo.block` is id-memoized,
+    // so this is the very instance pruneDeadTop loads.
+    const gone = env.repo.block('gone')
+    const realLoad = gone.load.bind(gone)
+    vi.spyOn(gone, 'load').mockImplementation(async () => {
+      await navigateInPanel(panel, 'elsewhere')
+      return realLoad()
+    })
+
+    expect(await goBackInPanel(panel)).toBe(false)
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('elsewhere')
+    // The stale press consumed nothing: 'alive' is still available to go back to.
+    expect(panelHistory.getSnapshot(panel.id).back.some(e => e.blockId === 'alive')).toBe(true)
+  })
+
   it('skips back entries that died since they were pushed', async () => {
     await seedBlocks(['alive', 'gone', 'page'])
     const panel = await panelShowing('page')

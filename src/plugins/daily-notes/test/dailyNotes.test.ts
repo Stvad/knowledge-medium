@@ -267,6 +267,22 @@ describe('todayDailyNoteLanding', () => {
     })
     expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
   })
+
+  it('declines whenever today’s note is a tombstone, not just on an exact id match', async () => {
+    // A pane zoomed into a CHILD of today's note recovers with the child's id,
+    // so the exact-id check doesn't fire — but answering would still restore
+    // the deleted parent note.
+    const note = await getOrCreateDailyNote(env.repo, WS, todayIso())
+    await env.repo.mutate.createChild({parentId: note.id, id: 'kid', content: 'kid'})
+    await env.repo.block(note.id).delete()
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'kid',
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
 })
 
 describe('idx_blocks_daily_note_date', () => {
