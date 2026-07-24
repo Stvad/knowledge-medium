@@ -16,8 +16,10 @@ import {
   selectionStateProp,
   setIsEditing,
   showPropertiesProp,
+  topLevelBlockIdProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
+import { navigateInPanel } from '@/utils/panelHistory.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import {
   ActionConfig,
@@ -93,6 +95,20 @@ const reorderBlock = async (
   scopeRootId: string | undefined,
 ): Promise<boolean> =>
   repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
+
+/** Zoom a panel out to `page`'s parent — used before deleting the panel's
+ *  current page so the delete lands on a surface that renders the parent
+ *  outline instead of a tombstone of the just-deleted page. Returns false
+ *  when the page has no parent (the workspace root), leaving the caller to
+ *  refuse the delete. Mirrors the zoom-out action's ancestor load +
+ *  navigateInPanel. */
+const zoomPanelToParentOfPage = async (panelBlock: Block, page: Block): Promise<boolean> => {
+  await page.repo.load(page.id, {ancestors: true})
+  const parent = page.parent
+  if (!parent) return false
+  await navigateInPanel(panelBlock, parent.id)
+  return true
+}
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
@@ -278,15 +294,32 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      // Boundary rule: never delete the scope root itself — it would
-      // tombstone the whole rendered surface out from under the panel
-      // (see StructuralEditPolicy.canDelete). Every other structural
-      // handler already refuses at this boundary; found missing here by
-      // defaultActions.fuzz.test.ts.
-      const {canDelete} = await structuralEditPolicyForBlock(block, scopeRootId)
-      if (!canDelete) return
+      const {isScopeRoot} = await structuralEditPolicyForBlock(block, scopeRootId)
 
-      // Beyond the scope-root refusal above, `scopeRootId` only locates
+      // Deleting the scope root in place would tombstone the rendered
+      // surface out from under the panel (see StructuralEditPolicy.canDelete
+      // — every other structural handler refuses at this boundary). But the
+      // scope root of the *main outline* IS the panel's current page, and
+      // "delete this page" is a first-class gesture — historically the only
+      // page-deletion UI. Reconcile the two: when the target is the panel's
+      // own top-level block, zoom the panel out to the page's parent FIRST,
+      // then delete — the surface then renders the parent, never a
+      // tombstone. If the page has no parent (the workspace root) there's
+      // nowhere to go, so we refuse; that also keeps
+      // defaultActions.fuzz.test.ts's scope-root invariant green (its scope
+      // root is the parent-less workspace root). Nested scope roots
+      // (backlinks/embeds) can't reparent a panel, so they stay refused too.
+      if (isScopeRoot) {
+        const isPanelPage = uiStateBlock.peekProperty(topLevelBlockIdProp) === block.id
+        if (!isPanelPage) return
+        if (!(await zoomPanelToParentOfPage(uiStateBlock, block))) return
+        await withMoveTransition(async () => {
+          await block.delete()
+        })
+        return
+      }
+
+      // Beyond the scope-root handling above, `scopeRootId` only locates
       // the post-delete focus target; the delete itself doesn't need it.
       // Don't gate the delete on it, so non-React runners that can't
       // inject a scope (the agent-runtime bridge) still delete — they

@@ -1152,4 +1152,81 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('victim').peek()).toBeNull()
     expect(env.repo.block('victim').peekRaw()?.deleted).toBe(true)
   })
+
+  it('deletes the panel page and zooms the panel out to the parent when Delete targets the top-level block', async () => {
+    // Page deletion: Delete on the panel's own top-level block. The block is
+    // the scope root, so an in-place delete would tombstone the surface — the
+    // handler zooms the panel out to the page's parent first, then deletes.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'page', content: 'page'})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'grandchild', content: 'grandchild'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    // The page (and its subtree) is gone…
+    expect(env.repo.block('page').peekRaw()?.deleted).toBe(true)
+    expect(env.repo.block('grandchild').peekRaw()?.deleted).toBe(true)
+    // …and the panel now renders the parent instead of a tombstone.
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('root')
+  })
+
+  it('refuses to delete the panel page when it is the parent-less workspace root', async () => {
+    // The scope root has nowhere to zoom out to, so there is no surface to
+    // fall back on — the delete is refused (keeps the workspace root live).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'root')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('root'), uiStateBlock, scopeRootId: 'root'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(env.repo.block('root').peekRaw()?.deleted).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('root')
+  })
+
+  it('refuses to delete a nested scope root that is not the panel page (backlink/embed root)', async () => {
+    // A block can be a scope root of a nested surface (an embed / backlink
+    // entry) without being the panel's page. Deleting it can't navigate the
+    // panel, so it stays refused — only the panel's own top-level page zooms
+    // out and deletes.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'root'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'embedded', content: 'embedded'})
+
+    const uiStateBlock = env.repo.block('ui')
+    // Panel shows the root outline; 'embedded' is the scope root of a nested
+    // embed surface, not the panel's top-level block.
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('embedded'), uiStateBlock, scopeRootId: 'embedded'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(env.repo.block('embedded').peekRaw()?.deleted).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('root')
+  })
 })
