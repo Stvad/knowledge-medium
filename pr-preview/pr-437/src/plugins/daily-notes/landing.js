@@ -1,2 +1,2 @@
-import{getOrCreateDailyNote as e,todayIso as t}from"./dailyNotes.js";var n=async({repo:n,workspaceId:r})=>(await e(n,r,t())).id;export{n as todayDailyNoteLanding};
+import{dailyNoteBlockId as e,getOrCreateDailyNote as t,todayIso as n}from"./dailyNotes.js";var r=async({repo:r,workspaceId:i,excludeBlockId:a})=>{let o=n();return a&&e(i,o)===a?null:(await t(r,i,o)).id};export{r as todayDailyNoteLanding};
 //# sourceMappingURL=landing.js.map
