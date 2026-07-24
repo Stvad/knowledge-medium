@@ -1,0 +1,11 @@
+{
+  "name": "strength-tracker-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "../../node_modules/.bin/tsc -p tsconfig.json --noEmit",
+    "test": "../../node_modules/.bin/vitest run --config vitest.config.ts",
+    "build": "../../node_modules/.bin/vite build --config vite.config.ts",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run build"
+  }
+}
