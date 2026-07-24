@@ -35,7 +35,6 @@ import {ShoulderChecklistDialog} from './ShoulderChecklistDialog'
 import type {ProgramState} from './useProgram'
 import {
   buildDraft,
-  draftBlockIds,
   finishPlan,
   hasAcceptedSets,
   liveIdentity,
@@ -77,8 +76,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // In-flight creation, so concurrent taps share it instead of duplicating
   // the workout (see ensureMaterialized). Cleared on reseed.
   const materializingRef = useRef<Promise<MaterializedWorkout> | null>(null)
+  // The ids that creation handed back, so a batch started from one block-less
+  // snapshot (accept-all) doesn't try to create the same exercise again.
+  const materializedRef = useRef<MaterializedWorkout | null>(null)
   // Same, per exercise added mid-session after an `or`-group switch.
-  const pendingExercisesRef = useRef(new Map<number, Promise<{id: string; setIds: string[]}>>())
+  const pendingExercisesRef = useRef(new Map<string, Promise<{id: string; setIds: string[]}>>())
+  // Bumped on every reseed. A create that resolves after a session switch
+  // compares against this and keeps its ids to itself.
+  const seedTokenRef = useRef(0)
 
   // Reseed the editing state only when the underlying identity changes — a
   // session/day switch, a config refine, or the live block structure changing
@@ -100,7 +105,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     seededKeyRef.current = key
     setDraft(overlayLive(buildDraft(prescription, unit), live))
     setWorkoutId(live?.id ?? null)
+    seedTokenRef.current += 1
     materializingRef.current = null
+    materializedRef.current = null
     pendingExercisesRef.current = new Map()
     setStatus(null)
   }, [session, unit, live, prescription])
@@ -115,6 +122,17 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       i !== exIdx ? ex : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch}))},
     )
 
+  /** The draft with the ids a create just handed back stamped into it. */
+  const withBlockIds = (
+    rows: readonly DraftExercise[],
+    mat: MaterializedWorkout,
+  ): DraftExercise[] =>
+    rows.map((ex, i) => ({
+      ...ex,
+      blockId: ex.blockId ?? mat.exercises[i]?.id,
+      sets: ex.sets.map((s, j) => ({...s, blockId: s.blockId ?? mat.exercises[i]?.setIds[j]})),
+    }))
+
   /** Create the workout blocks on the first edit — exactly once.
    *
    *  The in-flight creation is held as a PROMISE, not a boolean: a second tap
@@ -124,17 +142,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  to the block whether or not it was the one that triggered the create. */
   const ensureMaterialized = async (next: DraftExercise[]): Promise<MaterializedWorkout> => {
     if (!materializingRef.current) {
+      const seed = seedTokenRef.current
       materializingRef.current = (async () => {
         const mat = await materializeWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, next))
-        // Thread the created block ids back into the local draft so later edits
-        // write straight to their blocks.
-        setDraft(cur =>
-          cur.map((ex, i) => ({
-            ...ex,
-            blockId: mat.exercises[i]?.id,
-            sets: ex.sets.map((s, j) => ({...s, blockId: mat.exercises[i]?.setIds[j]})),
-          })),
-        )
+        // The session may have been switched while this was in flight. Those
+        // ids belong to the OLD workout, so stamping them into the new draft
+        // would point tonight's edits at last night's blocks.
+        if (seed !== seedTokenRef.current) return mat
+        materializedRef.current = mat
+        setDraft(cur => withBlockIds(cur, mat))
         workoutIdRef.current = mat.workoutId
         setWorkoutId(mat.workoutId)
         return mat
@@ -145,55 +161,68 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
 
   /** Add an exercise the live workout doesn't have yet — you switched an
    *  `or`-group after starting. Without this its edits would have nowhere to
-   *  go, so the lift you actually did wouldn't be logged. */
+   *  go, so the lift you actually did wouldn't be logged. Keyed by the option
+   *  itself, not just its row, so switching the same slot twice creates the
+   *  second option rather than writing into the first one's blocks. */
   const ensureExercise = async (
     next: DraftExercise[],
     exIdx: number,
   ): Promise<{id: string; setIds: string[]} | null> => {
     const workoutId = workoutIdRef.current
     if (!workoutId) return null
-    const pending = pendingExercisesRef.current.get(exIdx)
+    const ex = next[exIdx]
+    const key = `${exIdx}:${ex.defId ?? ex.exercise}`
+    const pending = pendingExercisesRef.current.get(key)
     if (pending) return pending
-    const created = materializeExercise(repo, workoutId, toExerciseDraft(next[exIdx]))
+    const seed = seedTokenRef.current
+    const created = materializeExercise(repo, workoutId, toExerciseDraft(ex))
       .then(result => {
+        if (seed !== seedTokenRef.current) return result
         setDraft(cur =>
-          cur.map((ex, i) => (i !== exIdx ? ex : {
-            ...ex,
+          cur.map((row, i) => (i !== exIdx ? row : {
+            ...row,
             blockId: result.id,
-            sets: ex.sets.map((s, j) => ({...s, blockId: result.setIds[j]})),
+            sets: row.sets.map((s, j) => ({...s, blockId: result.setIds[j]})),
           })),
         )
         return result
       })
-    pendingExercisesRef.current.set(exIdx, created)
+    pendingExercisesRef.current.set(key, created)
     return created
+  }
+
+  /** Which block a set should be written to, creating whatever is missing.
+   *
+   *  Three ways a set can lack a block: the workout doesn't exist yet, it was
+   *  created moments ago in this same batch (accept-all hands every set the
+   *  same block-less snapshot), or its exercise was switched in mid-session.
+   *  Collapsing them here is what keeps accept-all from creating the exercise
+   *  a second time. */
+  const resolveSetBlock = async (
+    next: readonly DraftExercise[],
+    exIdx: number,
+    setIdx: number,
+  ): Promise<string | undefined> => {
+    const set = next[exIdx].sets[setIdx]
+    if (set.blockId) return set.blockId
+    if (!workoutIdRef.current) {
+      const mat = await ensureMaterialized(next as DraftExercise[])
+      return mat.exercises[exIdx]?.setIds[setIdx]
+    }
+    const fromCreate = materializedRef.current?.exercises[exIdx]?.setIds[setIdx]
+    if (fromCreate) return fromCreate
+    const created = await ensureExercise(next as DraftExercise[], exIdx)
+    return created?.setIds[setIdx]
   }
 
   /** Ensure the set has a block, then write it. Reads from `next` so it never
    *  races React state. */
   const persist = async (next: DraftExercise[], exIdx: number, setIdx: number) => {
     if (readOnly) return
-    const set = next[exIdx].sets[setIdx]
-    const exUnit = next[exIdx].unit
-
-    if (!workoutIdRef.current) {
-      const mat = await ensureMaterialized(next)
-      // The snapshot that got written may predate this edit (a second tap
-      // while the create was in flight) — flush it now that a block exists.
-      const blockId = mat.exercises[exIdx]?.setIds[setIdx]
-      if (blockId) await writeSet(repo, blockId, toDraftSet(set), exUnit)
-      return
+    const blockId = await resolveSetBlock(next, exIdx, setIdx)
+    if (blockId) {
+      await writeSet(repo, blockId, toDraftSet(next[exIdx].sets[setIdx]), next[exIdx].unit)
     }
-
-    if (set.blockId) {
-      await writeSet(repo, set.blockId, toDraftSet(set), exUnit)
-      return
-    }
-
-    // No block for this set, but the workout exists: a mid-session switch.
-    const created = await ensureExercise(next, exIdx)
-    const blockId = created?.setIds[setIdx]
-    if (blockId) await writeSet(repo, blockId, toDraftSet(set), exUnit)
   }
 
   const editSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) =>
@@ -224,37 +253,36 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     if (readOnly || busy || !hasAcceptedSets(draft)) return
     setBusy(true)
     try {
-      // Make sure the workout exists and every set block matches local state
-      // before pruning — the finish checkpoint reconciles any un-flushed edit.
-      // Shares any in-flight first-edit materialization rather than racing a
-      // second workout into existence.
-      const mat = workoutIdRef.current ? null : await ensureMaterialized(draftRef.current)
-      const wid = workoutIdRef.current ?? mat?.workoutId
-      if (!wid) throw new Error('Could not create the workout')
-      if (mat) {
-        for (const [i, ex] of draftRef.current.entries()) {
-          for (const [j, s] of ex.sets.entries()) {
-            const blockId = mat.exercises[i]?.setIds[j]
-            if (blockId) await writeSet(repo, blockId, toDraftSet(s), ex.unit)
-          }
+      // Flush every set through the same resolver the edit path uses, so a
+      // Finish pressed mid-materialization (or right after an or-group switch)
+      // creates what's missing instead of racing a second workout.
+      //
+      // The ids are collected into a local copy rather than read back from
+      // `draftRef`: `setDraft` doesn't land synchronously, so pruning off the
+      // ref would see every exercise as block-less and keep NOTHING — the
+      // workout would be marked done with all its pre-filled sets still open.
+      const flushed = draftRef.current.map(ex => ({...ex, sets: ex.sets.map(s => ({...s}))}))
+      for (const [i, ex] of flushed.entries()) {
+        for (const [j, set] of ex.sets.entries()) {
+          const blockId = await resolveSetBlock(flushed, i, j)
+          if (!blockId) continue
+          set.blockId = blockId
+          await writeSet(repo, blockId, toDraftSet(set), ex.unit)
         }
-      } else {
-        for (const [i, ex] of draftRef.current.entries()) {
-          // An exercise switched in mid-session may still be block-less.
-          const created = ex.blockId ? null : await ensureExercise(draftRef.current, i)
-          for (const [j, s] of ex.sets.entries()) {
-            const blockId = s.blockId ?? created?.setIds[j]
-            if (blockId) await writeSet(repo, blockId, toDraftSet(s), ex.unit)
-          }
-        }
+        ex.blockId = ex.blockId
+          ?? materializedRef.current?.exercises[i]?.id
+          ?? (await ensureExercise(flushed, i))?.id
       }
+
+      const wid = workoutIdRef.current
+      if (!wid) throw new Error('Could not create the workout')
 
       const pending = detectPendingLayoff(history, day, config)
       if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
         await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
       }
-      await finishWorkout(repo, finishPlan(wid, draftRef.current, live))
-      const lifts = draftRef.current.filter(ex => ex.sets.some(s => s.done)).length
+      await finishWorkout(repo, finishPlan(wid, flushed, live))
+      const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length
       setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
 
       const fullBefore = history.filter(w => w.session !== 'mini').length
@@ -277,7 +305,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     if (!wid || busy) return
     setBusy(true)
     try {
-      await discardWorkout(repo, draftBlockIds(wid, draftRef.current))
+      await discardWorkout(repo, wid)
       workoutIdRef.current = null
       setWorkoutId(null)
       setDraft(buildDraft(prescription, unit))

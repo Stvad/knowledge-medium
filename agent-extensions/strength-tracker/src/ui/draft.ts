@@ -199,15 +199,3 @@ export const finishPlan = (
   }
   return {workoutId, keep, removeExerciseIds}
 }
-
-/** Every block id under a draft (sets, exercises) plus the workout — for
- *  discarding an abandoned in-progress workout wholesale. */
-export const draftBlockIds = (workoutId: string, draft: readonly DraftExercise[]): string[] => {
-  const ids: string[] = []
-  for (const ex of draft) {
-    for (const s of ex.sets) if (s.blockId) ids.push(s.blockId)
-    if (ex.blockId) ids.push(ex.blockId)
-  }
-  ids.push(workoutId)
-  return ids
-}

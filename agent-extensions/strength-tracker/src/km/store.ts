@@ -228,11 +228,16 @@ export const finishWorkout = async (repo: Repo, plan: FinishPlan): Promise<void>
   }, {scope: ChangeScope.BlockDefault, description: 'Finish workout'})
 }
 
-/** Delete an abandoned in-progress workout and its whole subtree. */
-export const discardWorkout = async (repo: Repo, ids: readonly string[]): Promise<void> => {
-  if (ids.length === 0) return
+/** Delete an abandoned in-progress workout and its whole subtree.
+ *
+ *  Takes the WORKOUT id and cascades, rather than a list the caller
+ *  assembled from its draft: the live workout can hold blocks the draft no
+ *  longer knows about (the `or`-group option you switched away from), and
+ *  those would otherwise stay live — open todo sets under a tombstoned
+ *  workout. */
+export const discardWorkout = async (repo: Repo, workoutId: string): Promise<void> => {
   await repo.tx(async tx => {
-    for (const id of ids) await tx.delete(id)
+    await tx.run(deleteBlock, {id: workoutId})
   }, {scope: ChangeScope.BlockDefault, description: 'Discard workout'})
 }
 

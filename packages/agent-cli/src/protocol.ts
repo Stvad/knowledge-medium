@@ -666,7 +666,12 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'audit-extension': {
     usage: 'kmagent audit-extension <id|label>',
     description: 'Audit the DATA an installed extension wrote, against the grain the app rewards: block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
-    readOnly: true,
+    // Reads only — EXCEPT that resolving the enabled intent goes through
+    // `getPluginPrefsBlock`, which bootstraps the per-user prefs row on a
+    // profile that has never had one. That is a write, so this verb is not
+    // classified read-only rather than quietly breaking a read-only token's
+    // contract.
+    readOnly: false,
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',

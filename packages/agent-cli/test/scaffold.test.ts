@@ -42,10 +42,14 @@ describe('extensionScaffold', () => {
     expect(scaffold().byPath.get('src/schema.ts')!).not.toMatch(/name: '[^']*(done|completed)/i)
   })
 
-  it('namespaces every declared type id and property name', () => {
+  it('namespaces every declared type id and property name with the WHOLE slug', () => {
+    // `reading-list` and `reading-notes` must not both claim `reading:rating`
+    // — property names are global, and the loser silently gets the other's
+    // codec. That's the collision the scaffold's own doctrine warns about.
     const fields = scaffold().byPath.get('src/fields.ts')!
     expect(fields).toMatch(/ENTRY_TYPE = 'reading-list-entry'/)
-    expect(fields).toMatch(/rating: 'reading:rating'/)
+    expect(fields).toMatch(/rating: 'reading-list:rating'/)
+    expect(scaffold('Reading Notes').byPath.get('src/fields.ts')!).toMatch(/rating: 'reading-notes:rating'/)
   })
 
   it('ships a runnable gate and a test', () => {

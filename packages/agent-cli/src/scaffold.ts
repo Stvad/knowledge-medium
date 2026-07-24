@@ -30,6 +30,9 @@ export const slugify = (name: string): string =>
     .replace(/^-+|-+$/g, '')
     .toLowerCase()
 
+/** `reading-list` → `READING_LIST`, for generated constant names. */
+const constantPrefix = (slug: string): string => slug.replace(/-/g, '_').toUpperCase()
+
 /** `reading-list` → `Reading List` (display name + bundle file name). */
 export const titleize = (slug: string): string =>
   slug
@@ -233,8 +236,8 @@ export const entryType = seedType({
   properties: [collectionProp, ratingProp, notedAtProp],
 })
 
-export const ${ns.replace(/-/g, '_').toUpperCase()}_PROPS = [collectionProp, ratingProp, notedAtProp]
-export const ${ns.replace(/-/g, '_').toUpperCase()}_TYPES = [collectionType, entryType]
+export const ${constantPrefix(ns)}_PROPS = [collectionProp, ratingProp, notedAtProp]
+export const ${constantPrefix(ns)}_TYPES = [collectionType, entryType]
 `
 
 const store = (ns: string): string => `/** The write path.
@@ -360,7 +363,7 @@ import {actionsFacet} from '@/extensions/core.js'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 
-import {${ns.replace(/-/g, '_').toUpperCase()}_PROPS, ${ns.replace(/-/g, '_').toUpperCase()}_TYPES} from './schema'
+import {${constantPrefix(ns)}_PROPS, ${constantPrefix(ns)}_TYPES} from './schema'
 
 const source = '${slug}'
 
@@ -374,8 +377,8 @@ const helloAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
 }
 
 export default [
-  ...${ns.replace(/-/g, '_').toUpperCase()}_PROPS.map(prop => definitionSeedsFacet.of(prop, {source})),
-  ...${ns.replace(/-/g, '_').toUpperCase()}_TYPES.map(type => typeSeedsFacet.of(type, {source})),
+  ...${constantPrefix(ns)}_PROPS.map(prop => definitionSeedsFacet.of(prop, {source})),
+  ...${constantPrefix(ns)}_TYPES.map(type => typeSeedsFacet.of(type, {source})),
   actionsFacet.of(helloAction, {source}),
 ]
 `
@@ -477,9 +480,12 @@ export const extensionScaffold = (rawName: string): ScaffoldFile[] => {
   const slug = slugify(rawName)
   if (!slug) throw new Error('new-extension: name must contain at least one letter or digit')
   const title = titleize(slug)
-  // Property namespace: the slug's first segment reads best as a prefix
-  // (`reading-list` → `reading:rating`), and stays a legal property name.
-  const ns = slug.split('-')[0] ?? slug
+  // Property names are GLOBAL, so the namespace has to identify the whole
+  // extension: `reading-list` and `reading-notes` both prefixing `reading:`
+  // would collide on every shared field name, and the loser silently gets
+  // the other's codec — the exact failure the scaffold's own doctrine warns
+  // about. Constants derive from the same slug with a legal identifier.
+  const ns = slug
 
   return [
     {path: 'package.json', contents: packageJson(slug)},
