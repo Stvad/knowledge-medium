@@ -1,0 +1,10 @@
+import{normalizeReferences as e}from"../../data/api/blockData.js";import{CORE_BLOCK_DELETED_EVENT as t}from"../../data/api/events.js";import{defineSameTxProcessor as n}from"../../data/api/sameTxProcessor.js";import"../../data/api/index.js";import{isPropertyFieldRow as r,isPropertyValueRow as i}from"../../data/propertyChildren.js";import{deriveReferenceTargetId as a,sameTxReferenceTargetLookups as o}from"../../data/internals/referenceTargetProcessor.js";import{inlineBlockRefs as s}from"./referenceParser.js";var c=`references.inlineDeletedBlockReferences`,l=`
+  SELECT DISTINCT br.source_id AS id
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND source.deleted = 0
+  ORDER BY source.order_key, source.id
+`,u=(e,t)=>e.id===t&&e.alias===t&&e.sourceField===void 0,d=(e,t,n,r)=>{let i=n.get(e);if(i!==void 0)return i;let a=t.get(e)??``;if(r.has(e))return a;r.add(e);let o=a;for(let i of t.keys())i!==e&&(o=s(o,i,d(i,t,n,r)));return r.delete(e),n.set(e,o),o},f=async(t,n,c,l)=>{let d=t.tx,f=await d.get(n);if(f===null||f.deleted||await i(d,f)||await r(d,f))return;let p=s(f.content,c,l),m=e(f.references.filter(e=>!u(e,c))),h={};if(p!==f.content){h.content=p;let e=o(d),t=await a(p,f.workspaceId,e)??null;(f.referenceTargetId??null)!==t&&(h.referenceTargetId=t)}JSON.stringify(m)!==JSON.stringify(f.references)&&(h.references=m),Object.keys(h).length!==0&&await d.update(f.id,h,{skipMetadata:!0})},p=n({name:c,watches:{kind:`event`,events:[t]},apply:async(e,t)=>{let n=new Map,r=new Map;for(let i of e.emittedEvents){let{blockId:e,workspaceId:a}=i.payload,o=await t.tx.get(e);n.set(e,o?.content??``),r.set(e,a)}let i=new Map;for(let[e,a]of r){let r=await t.db.getAll(l,[a,e]);if(r.length===0)continue;let o=d(e,n,i,new Set);for(let{id:n}of r)await f(t,n,e,o)}}});export{c as INLINE_DELETED_BLOCK_REFERENCES_PROCESSOR,p as inlineDeletedBlockRefsProcessor};
+//# sourceMappingURL=inlineDeletedBlockRefsProcessor.js.map
