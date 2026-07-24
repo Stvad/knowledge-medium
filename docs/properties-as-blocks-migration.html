@@ -1785,9 +1785,17 @@ stays <em>canonical</em> — machinery and autocomplete always mint
 pasted/hand-edited minority and carries <em>follow-the-name</em> semantics
 by construction (§9). The match is strict whole-block on
 <em>trimmed</em> content — <code>trim(content) = '::' + refSpan</code> for
-exactly one whole reference span (implementation: the parser's three
-link-form regexes anchored whole-block — the same extension
-<code>parseBlockRefTarget</code>'s <code>^\(\(uuid\)\)$</code> anchor gets), no
+exactly one whole reference span (implementation: whole-block-anchored
+matchers for the three forms — exact ref and wikilink via the KERNEL's
+whole-block grammar (<code>parseExactReferenceBlockContent</code>), which
+deliberately accepts renderable <em>non-UUID</em> ids for the exact form
+(PR #417 review: caller-supplied ids exist — <code>tx.create</code> and the
+agent bridge accept them, and <code>referenceBlockContentForId</code>
+round-trips them — so pinning the marked form to the references plugin's
+UUID-only <code>parseBlockRefTarget</code> anchor would leave such a
+definition's <code>::((fieldId))</code> rows unstamped and their properties
+stranded; the aliased blockref alone stays UUID-only, mirroring the plugin
+regex that owns that form)), no
 space between marker and span, and the embedded ref inherits its form's
 id canonicalization (PR #417 review: outer-whitespace and id-case
 policy must be pinned or classification flickers per path — a pasted
@@ -1936,7 +1944,24 @@ affordance, not a classification prerequisite (§11 AC).
     <code>definitionSeeds</code> writes <code>content = seed.name</code> — so
     seed validation rejects grammar-shaped names too, the same loud-drop
     treatment as duplicate seed names, covering kernel/plugin declarations
-    and the dynamic-extension harvest alike)). An invalid name still
+    and the dynamic-extension harvest alike)). The check is a rule over
+    <em>every label→whole-block-content mirror</em>, not a property-name
+    special (PR #417 review found the next site by class): <em>type</em>
+    definition blocks mirror the same way — <code>createTypeBlock</code>
+    writes <code>content = trimmedLabel</code> onto the Types page and
+    <code>materializeTypeSeeds</code> writes <code>contentFor: seed =&gt;
+    seed.label</code>, while <code>seedType</code> /
+    <code>isTypeSeedDeclaration</code> require only non-emptiness — so a type
+    labeled <code>::((somePropertyFieldId))</code> would satisfy the flat
+    predicate post-flip and vanish into machinery; the type-label entry
+    paths (user flow + seed validation) compose the same shared
+    grammar-shaped-name predicate. Orphan-key <em>synthesis</em> (§11 flip
+    tooling) is the third entry path: a cell key shaped like the marked
+    grammar must not ride the raw <code>name = key</code> route into a
+    definition whose B2 name→content mirror would then classify — such
+    keys join the empty string as <em>hard flip blockers</em> (resolve by
+    remap/rename before the flip proceeds), keeping the mirror
+    unconditional. An invalid name still
     can no longer corrupt field-row identity, so the same-tx definition-name
     validator an earlier revision required (PR-review P2, rounds 22) is deleted;
     hygiene at the two flows plus a preflight report over existing names suffices.
@@ -2078,14 +2103,17 @@ supabase skill if it's kept.
     what happens to a backlink span depends only on <em>where α lives
     afterwards</em>. <em>Rename</em> (same claimant, α→β):
     <code>references.renameBacklinks</code> rewrites the span
-    (<code>::[[status]]</code> → <code>::[[state]]</code>; a lossy β falls
-    back to the aliased-blockref form — still a field row under the
-    generalized marker, and the fallback label carries the same
-    render→parse guard as release/export (PR #417 review:
-    <code>replacementFor</code> renders the <em>old</em> alias as the label,
-    so an α containing <code>]</code>/newline would silently sanitize —
-    marked rows whose fallback label is lossy go to canonical
-    <code>::((A))</code> instead)) — rows follow their definition. <em>Handoff</em> (another live
+    (<code>::[[status]]</code> → <code>::[[state]]</code>; on a lossy β
+    a <em>marked</em> row goes straight to canonical <code>::((A))</code> —
+    never the aliased-blockref fallback (PR #417 review ×2: the generic
+    <code>replacementFor</code> fallback renders the <em>old</em> alias α
+    as a pinned label, which for machinery is the stale property name
+    displayed forever even when α sanitizes cleanly — and a lossy α would
+    additionally silently sanitize; the canonical form recovers the
+    <em>live</em> name from the definition at render time, which is what
+    rename-stability means). Prose keeps the aliased fallback — preserving
+    the author's display text is the point there, and its label guard is
+    pinned below) — rows follow their definition. <em>Handoff</em> (another live
     block claims α in the same flow — definition merge, property-wins):
     <strong>no rewrite</strong> — spans keep following the name to the new
     claimant via ordinary late-binding. This requires re-keying the lifecycle
@@ -2135,7 +2163,19 @@ supabase skill if it's kept.
     reference swap drops the last reference to a target, it re-enqueues the
     same orphan job for that target, restricted to provably-untouched
     machine seats (the §7 <code>aliasSeatSeed</code> predicate — never a real
-    page whose last backlink happened to be rewritten). A user edit landing in the window keeps its
+    page whose last backlink happened to be rewritten). The rewrite must
+    also still <em>find</em> a window-bound span (PR #417 review): the
+    as-built plan enumerates sources by
+    <code>(target_id, alias)</code> (<code>SELECT_BACKLINK_SOURCES_SQL</code>),
+    so a span whose reference edge already swapped to the window seat — a
+    concurrent references pass on another edit of the same block, or the
+    swap arriving over sync before the plan's read phase — matches the alias
+    but not the target and would be silently skipped, leaving a permanently
+    seat-bound <code>::[[old]]</code> that no later pass owns. The pinned
+    contract: the plan's source enumeration is <em>alias-keyed with a target
+    disjunction</em> — the renaming claimant OR a provably-untouched machine
+    α-keyed seat (the same §7 seat predicate) — so window-bound spans
+    rewrite with the rest. A user edit landing in the window keeps its
     content (the rewrite's later-edit-wins skip) — the row then reads as an
     unbound marked row with the create/rebind affordance, the standard
     honest state, never silent reinterpretation.
@@ -2912,7 +2952,10 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     <code>replacementFor</code> consults α's post-tx claimant (handoff → no
     rewrite; release → pin) — a hard precondition of definition merge (§9,
     B2); the delete flow triggers the release rewrite explicitly (a bare
-    tombstone leaves no properties diff — §9); the label round-trip guard
+    tombstone leaves no properties diff — §9); the rename plan's source
+    enumeration is alias-keyed with the claimant-or-provable-seat target
+    disjunction, and its lossy-name fallback for marked rows is canonical
+    <code>::((A))</code>, never a pinned label (§9); the label round-trip guard
     (render → parse back → compare) applies at <em>every</em> span-rendering
     site — export (AC), release (§9), rename fallback (§9), property-wins
     prose pins (AC) — marked rows falling back to canonical id form, prose
@@ -2931,11 +2974,14 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     <code>aliasSeatSeed(alias)</code>, no user-authored children, generated
     property children ignored (§7); the same predicate is AC's
     merge-recommended test, the pristine sentinel sufficient-never-necessary
-    (§7); delete/merge referrer enumeration runs behind the
-    references-parse fence, the same-tx bit as its audit (B2).</li>
+    (§7); delete/merge referrer enumeration — and AC property-wins span
+    enumeration — runs behind the references-parse fence, the same-tx bit
+    as its audit (B2, AC).</li>
   <li><strong>Hygiene &amp; seeds (standalone).</strong> Grammar-shaped
-    names rejected at <code>addSchema</code>/rename <em>and</em> at seed
-    validation/harvest (§7); AC's seeded half is an Automation-scoped repair
+    names rejected via one shared predicate at every label→content
+    mirror — <code>addSchema</code>/rename, property seed
+    validation/harvest, type labels (<code>createTypeBlock</code> + type
+    seeds), and as hard flip blockers in orphan-key synthesis (§7, §11); AC's seeded half is an Automation-scoped repair
     pass over existing live seed rows — <code>materializeSeeds</code> skips
     them (AC); and a one-line comment fix someday: the
     <code>targets.ts</code> docblock's stale "system:&lt;userId&gt; author"
@@ -2975,8 +3021,10 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         (<code>BLOCK_LOCAL_COLUMNS</code>, boot ALTER, partial index
         <code>WHERE is_field_form = 1</code>), stamped in the same textual derive
         pass under the §7 grammar box's derivation rule (each form derives through
-        its usual branch; the bit stamps for the marked form, either
-        bracket); every
+        its usual branch; the bit stamps for <em>every</em> marked form —
+        all three link forms of the §7 grammar box, aliased blockref
+        included, since release rewrites marked name rows into exactly that
+        form and they must stay recognized); every
         repair/derive-at-arrival/undo-seam
         rule below covers both columns identically. Write metadata splits by path (§5): the same-tx
         processor rides the triggering edit's upload; the bulk paths write raw CAS,
@@ -3194,7 +3242,16 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         re-encode/validate pass over the retargeted rows (unconvertible values
         report via the user-error channel, never silently unset) in the same tx
         through B2's funnel, with the ordering pinned; incompatible presets
-        refuse the merge up front. Name-form rows need <em>no rewrite</em>
+        refuse the merge up front — and incompatible <em>write scopes</em>
+        refuse it the same way (PR #417 review): retargeting A's rows
+        re-buckets every future edit, undo grouping, and read-only policy
+        under B's <code>changeScope</code> for B3 scope routing — the same
+        policy boundary the write path already enforces
+        (<code>scopePoliciesEquivalent</code>, txEngine's
+        <code>assertPropertyWriteScope</code>) — so the preflight requires
+        scope equivalence alongside codec compatibility; a cross-scope merge
+        proceeds only as an explicitly confirmed scoped migration, never an
+        implicit side effect of the re-key. Name-form rows need <em>no rewrite</em>
         (PR #417 review corrected the previous revision here:
         <code>renameBacklinks</code> plans per <em>losing</em> target — its
         rewrite would pin spans to tombstoned A, not B — and runs post-commit
@@ -3493,7 +3550,13 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         <em>property-wins</em> resolution is an instance of the §9 ordering
         invariant, its rewrites explicit flow steps chosen by the prompted
         resolution (the name moving page→definition is a §9 <em>handoff</em>,
-        which by itself rewrites nothing): <em>first</em> rewrite the marked
+        which by itself rewrites nothing): behind the references-parse fence
+        B2 pins for delete/merge (PR #417 review: the marked-row and
+        prose-link sets those steps rewrite come from
+        <code>block_references</code>, which a <code>[[status]]</code> typed
+        just before the prompt hasn't reached — parsing is post-commit — so
+        an unfenced enumeration would miss that freshest span, pin nothing,
+        and let the alias move silently rebind it), <em>first</em> rewrite the marked
         <code>::[[status]]</code> rows to <code>::((fieldId))</code> (the
         same canonicalization the create affordance performs, in bulk) and
         pin prose links to the page in the aliased form
