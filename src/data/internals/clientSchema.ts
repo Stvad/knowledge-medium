@@ -389,6 +389,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
         'workspaceId', ${rowRef}.workspace_id,
         'parentId', ${rowRef}.parent_id,
         'referenceTargetId', ${rowRef}.reference_target_id,
+        'isFieldForm', json(CASE WHEN ${rowRef}.is_field_form = 1 THEN 'true' ELSE 'false' END),
         'orderKey', ${rowRef}.order_key,
         'content', ${rowRef}.content,
         'properties', json(${rowRef}.properties_json),

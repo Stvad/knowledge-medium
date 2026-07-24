@@ -1192,14 +1192,15 @@ export class TxImpl implements Tx {
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, reference_target_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, reference_target_id = ?, is_field_form = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
-        // Undo replay must restore the local derived column too: same-tx
+        // Undo replay must restore the local derived columns too: same-tx
         // processors are skipped on replay (`isReplay`), so nothing
-        // re-derives it — the snapshot is the only source (invariants
+        // re-derives them — the snapshot is the only source (invariants
         // index, PR #288: "undo restores what processors won't re-derive").
         target.referenceTargetId ?? null,
+        target.isFieldForm ? 1 : null,
         target.orderKey,
         target.content,
         JSON.stringify(target.properties),
