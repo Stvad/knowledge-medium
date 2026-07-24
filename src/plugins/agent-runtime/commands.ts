@@ -3,8 +3,8 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
-import { aliasesProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.js'
-import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { aliasesProp, blockTypeTypeIdProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, seedKeyProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { BLOCK_TYPE_TYPE, EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
 import { resolveBacklinksFilter, type BacklinksFilterSpec } from '@/plugins/backlinks/resolveFilter.js'
 import {
@@ -39,15 +39,18 @@ import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
-import { applyToggle } from '@/facets/togglable.js'
+import { applyToggle, isEnabled } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
   approveExtension,
   createCompileCache,
+  hashExtensionSource,
+  readApproval,
   revokeExtensionApproval,
 } from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import { lintExtensionSource } from './extensionLint.ts'
+import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
@@ -69,6 +72,7 @@ import type {
   ReconcileMarkdownSubtreeResult,
   DeleteBlockInput,
   DeleteBlockResult,
+  AuditExtensionResult,
   ExtensionVerificationResult,
   InstallExtensionInput,
   InstallExtensionResult,
@@ -313,12 +317,117 @@ const verifyExtensionBlock = async (
   }
 }
 
+/** Will this extension actually run on this device, and if not, why not?
+ *
+ *  Two independent gates gate every extension: a SYNCED enabled intent, and
+ *  a DEVICE-LOCAL approval pinned to the source's hash. Installing new source
+ *  invalidates the second one, so an update to an enabled extension used to
+ *  land silently dead — the block updated, nothing ran, and writes that
+ *  depended on its schemas went through raw. Reporting both gates (and
+ *  re-pinning below) is what makes that visible instead of mysterious. */
+const readRunState = async (
+  repo: Repo,
+  workspaceId: string,
+  block: BlockData,
+): Promise<{approved: boolean; enabled: boolean; running: boolean}> => {
+  const approval = await readApproval(block.id).catch(() => null)
+  const approved = Boolean(approval) && (await hashExtensionSource(block.content ?? '')) === approval?.sourceHash
+  let enabled = false
+  try {
+    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
+    const overrides = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
+    enabled = isEnabled(userExtensionToggle(block), overrides)
+  } catch {
+    // Prefs unavailable (fresh profile / read failure) — intent reads as
+    // absent, which for a user-installed extension means disabled.
+  }
+  return {approved, enabled, running: approved && enabled}
+}
+
+/** What to do about an extension that isn't running, in one line. */
+const runStateHint = (
+  state: {approved: boolean; enabled: boolean; running: boolean},
+  handle: string,
+): string | undefined => {
+  if (state.running) return undefined
+  return state.enabled && !state.approved
+    ? `Enabled, but this device hasn't approved the current source — it is NOT running here: pnpm agent enable-extension ${handle}`
+    : `Not running yet — enable it on this device: pnpm agent enable-extension ${handle}`
+}
+
+/** The type ids an installed extension has actually SEEDED, read from the
+ *  definition blocks rather than by compiling the source. Two reasons: it
+ *  works for an extension that isn't running, and it reflects the schemas
+ *  the stored data was written against — which is what an audit is about.
+ *  Extension-owned seed keys are `<blockId>/type/<key>` (see
+ *  `dynamicExtensionSeeds.ts`). */
+const seededTypeIds = async (
+  repo: Repo,
+  workspaceId: string,
+  extensionBlockId: string,
+): Promise<string[]> => {
+  const rows = await repo.db.getAll<{typeId: string | null}>(
+    `SELECT json_extract(b.properties_json, '$."${blockTypeTypeIdProp.name}"') AS typeId
+     FROM blocks b JOIN block_types t ON t.block_id = b.id
+     WHERE t.type = ? AND b.workspace_id = ? AND b.deleted = 0
+       AND json_extract(b.properties_json, '$."${seedKeyProp.name}"') LIKE ?`,
+    [BLOCK_TYPE_TYPE, workspaceId, `${encodeURIComponent(extensionBlockId)}/type/%`],
+  )
+  return rows.map(row => row.typeId).filter((id): id is string => typeof id === 'string' && id.length > 0)
+}
+
+/** Audit the data an installed extension has written: does it match the
+ *  grain the app rewards? The source lint (install-time) can only read
+ *  declarations; this reads values, so it can tell a live block id parked in
+ *  a string property from an external id that merely looks like one. */
+const auditRuntimeExtension = async (
+  repo: Repo,
+  input: {id?: string; label?: string},
+): Promise<AuditExtensionResult> => {
+  const workspaceId = resolveWorkspaceId(repo)
+  if (!input.id?.trim() && !input.label?.trim()) {
+    throw new Error('audit-extension requires `id` or `label`')
+  }
+  const found = await findExtensionBlock(repo, workspaceId, input)
+  if (!found) {
+    throw new Error(`No installed extension matches "${input.id ?? input.label}"`)
+  }
+
+  const typeIds = await seededTypeIds(repo, workspaceId, found.block.id)
+  const audit = await auditExtensionData(repo, workspaceId, typeIds)
+  const runState = await readRunState(repo, workspaceId, found.block)
+
+  return {
+    id: found.block.id,
+    label: found.label,
+    ...runState,
+    ...audit,
+    lint: lintExtensionSource(found.block.content ?? ''),
+  }
+}
+
 const mapPosition = (
   position: BlockPosition | undefined,
 ): {kind: 'first'} | {kind: 'last'} | undefined => {
   if (position === undefined || position === 'last') return {kind: 'last'}
   if (position === 'first' || position === 0) return {kind: 'first'}
   return {kind: 'last'}
+}
+
+/** Attach data-model warnings about what this write just stored. They ride
+ *  ALONGSIDE the block's own fields and are never persisted, so a consumer
+ *  reading `.id` / `.properties` is unaffected while the agent still sees
+ *  that (say) it parked a block id in a schema-less property. Reports only
+ *  the keys THIS write supplied, so an update doesn't re-warn about
+ *  everything already on the block. */
+const withGrainWarnings = async (
+  repo: Repo,
+  block: BlockData | null,
+  written: Readonly<Record<string, unknown>> | undefined,
+): Promise<BlockData | (BlockData & {agentWarnings: GrainWarning[]}) | null> => {
+  if (!block) return block
+  const warnings = await writeWarnings(repo, written)
+  return warnings.length > 0 ? {...block, agentWarnings: warnings} : block
 }
 
 const createRuntimeBlock = async (
@@ -339,7 +448,7 @@ const createRuntimeBlock = async (
       position: mapPosition(input.position),
       id: explicitId,
     }) as string
-    return repo.load(id)
+    return withGrainWarnings(repo, await repo.load(id), properties)
   }
 
   const workspaceId = (input.data?.workspaceId as string | undefined) ?? repo.activeWorkspaceId
@@ -359,7 +468,7 @@ const createRuntimeBlock = async (
       references,
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
-  return repo.load(id)
+  return withGrainWarnings(repo, await repo.load(id), properties)
 }
 
 /** App-owned property that tags every block of a reconciled subtree with
@@ -595,7 +704,7 @@ const updateRuntimeBlock = async (
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
-  return repo.load(input.id)
+  return withGrainWarnings(repo, await repo.load(input.id), input.properties)
 }
 
 const moveRuntimeBlock = async (
@@ -676,6 +785,13 @@ const installRuntimeExtension = async (
     : null
 
   if (existing) {
+    // Was THIS device already running this block? If so, the trust decision
+    // has been made and the update arrives through the same authorized local
+    // channel (the paired bridge) — so re-pin it to the new source rather
+    // than leaving the extension silently dead until someone re-enables it.
+    // A block this device never approved stays unapproved: install is not
+    // where trust gets granted for the first time.
+    const wasApproved = Boolean(await readApproval(existing.id).catch(() => null))
     const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)
@@ -695,13 +811,23 @@ const installRuntimeExtension = async (
     const verification = input.verify
       ? await verifyExtensionBlock(repo, context, existing.id)
       : undefined
+    if (wasApproved) {
+      // Best-effort: a source that no longer transpiles can't be pinned, and
+      // that failure belongs to verify/reload, not to the install itself.
+      await approveExtension(existing.id, source).catch(() => undefined)
+    }
     const reloaded = input.reload !== false
     if (reloaded) refreshAppRuntime()
+    const updated = await repo.load(existing.id)
+    const runState = updated ? await readRunState(repo, workspaceId, updated) : undefined
+    const hint = runState ? runStateHint(runState, label ? `"${label}"` : existing.id) : undefined
     return {
       id: existing.id,
       inserted: false,
       label,
       reloaded,
+      ...(runState ?? {}),
+      ...(hint ? {hint} : {}),
       ...(verification ? {verification} : {}),
     }
   }
@@ -777,11 +903,21 @@ const installRuntimeExtension = async (
     : undefined
   const reloaded = input.reload !== false
   if (reloaded) refreshAppRuntime()
+  // A first install grants no trust and sets no intent, so it does NOT run
+  // yet. Saying so here is the point: the old result looked identical to a
+  // successful update, which is how an install could appear to work while
+  // nothing it declared was ever registered.
+  const installed = await repo.load(installedId)
+  const runState = installed ? await readRunState(repo, workspaceId, installed) : undefined
   return {
     id: installedId,
     inserted: true,
     label,
     reloaded,
+    ...(runState ?? {}),
+    ...(runState && runStateHint(runState, label ? `"${label}"` : installedId)
+      ? {hint: runStateHint(runState, label ? `"${label}"` : installedId)}
+      : {}),
     ...(verification ? {verification} : {}),
   }
 }
@@ -1381,6 +1517,7 @@ export const createAgentRuntimeContext = ({
     installExtension: input => installRuntimeExtension(repo, input, context),
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
+    auditExtension: input => auditRuntimeExtension(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1556,6 +1693,12 @@ export const executeCommand = async (
 
     case 'uninstall-extension':
       return context.uninstallExtension({
+        id: command.id === undefined ? undefined : requireString(command.id, 'id'),
+        label: command.label === undefined ? undefined : requireString(command.label, 'label'),
+      })
+
+    case 'audit-extension':
+      return context.auditExtension({
         id: command.id === undefined ? undefined : requireString(command.id, 'id'),
         label: command.label === undefined ? undefined : requireString(command.label, 'label'),
       })

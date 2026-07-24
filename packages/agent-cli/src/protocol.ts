@@ -252,6 +252,13 @@ export const uninstallExtensionCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const auditExtensionCommandSchema = z.looseObject({
+  type: z.literal('audit-extension'),
+  id: z.string().optional(),
+  label: z.string().optional(),
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -473,6 +480,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
   uninstallExtensionCommandSchema,
+  auditExtensionCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -514,6 +522,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   disableExtensionCommandSchema,
   setExtensionEnabledCommandSchema,
   uninstallExtensionCommandSchema,
+  auditExtensionCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -653,6 +662,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent uninstall-extension <id|label>',
     description: 'Uninstall an extension by id or label (deletes the block and revokes this device’s trust grant).',
     readOnly: false,
+  },
+  'audit-extension': {
+    usage: 'kmagent audit-extension <id|label>',
+    description: 'Audit the DATA an installed extension wrote, against the grain the app rewards: block ids parked in non-ref properties (invisible to backlinks), records buried in a JSON cell, properties written with no registered schema (the fingerprint of a write made while the extension was not running), and declared types no block carries. Complements the install-time source lint, which can only read declarations. Also reports whether the extension is approved / enabled / actually running here.',
+    readOnly: true,
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',

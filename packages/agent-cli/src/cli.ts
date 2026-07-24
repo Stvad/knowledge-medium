@@ -888,6 +888,12 @@ cli
   })
 
 cli
+  .command('audit-extension <handle>', wireDescription('audit-extension'))
+  .action(async (handle: string) => {
+    await runAndPrint({type: 'audit-extension', ...extensionHandle(handle)})
+  })
+
+cli
   .command('run-action <id> [depsJson]', wireDescription('run-action'))
   .action(async (id: string, depsJson: string | undefined) => {
     const dependencies = depsJson ? parseJson(depsJson, 'depsJson') : {}
