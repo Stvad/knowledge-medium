@@ -10,6 +10,9 @@
  *     even for the same id
  *   - setReadOnly toggles isReadOnly visibly to subsequent reads
  *   - activeWorkspaceId getter/setter round-trip; null is allowed
+ *   - activeLayoutSessionId getter/setter round-trip; falls back to the
+ *     per-device base id when unset (replaces the old module-global
+ *     `activeLayoutSessionId` store's own unit tests)
  *   - instanceId is unique across Repo constructions (memoize-key
  *     contract used by globalState.ts)
  *
@@ -20,6 +23,15 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Pin the per-device base id so the activeLayoutSessionId fallback
+// assertions are deterministic (the real getLayoutSessionId touches
+// window/sessionStorage, and is a random uuid in this @vitest-environment
+// node file's window-less default path).
+vi.mock('@/utils/layoutSessionId', () => ({
+  getLayoutSessionId: () => 'base-session-id',
+}))
+
 import {
   ChangeScope,
   defineProperty,
@@ -398,6 +410,34 @@ describe('repo.activeWorkspaceId', () => {
     expect(() => repo.setActiveWorkspaceId('ws-1')).not.toThrow()
     expect(repo.activeWorkspaceId).toBe('ws-1')
     repo.setActiveWorkspaceId(null)
+  })
+})
+
+describe('repo.activeLayoutSessionId', () => {
+  it('falls back to the per-device base id when unset, and round-trips through the setter', () => {
+    expect(env.repo.activeLayoutSessionId).toBe('base-session-id')
+
+    env.repo.setActiveLayoutSessionId('perspective-1')
+    expect(env.repo.activeLayoutSessionId).toBe('perspective-1')
+
+    env.repo.setActiveLayoutSessionId('perspective-2')
+    expect(env.repo.activeLayoutSessionId).toBe('perspective-2')
+
+    // null restores the base-id fallback.
+    env.repo.setActiveLayoutSessionId(null)
+    expect(env.repo.activeLayoutSessionId).toBe('base-session-id')
+  })
+
+  it('is independent per Repo instance', async () => {
+    const other = await setup()
+    try {
+      env.repo.setActiveLayoutSessionId('perspective-a')
+      other.repo.setActiveLayoutSessionId('perspective-b')
+      expect(env.repo.activeLayoutSessionId).toBe('perspective-a')
+      expect(other.repo.activeLayoutSessionId).toBe('perspective-b')
+    } finally {
+      await other.h.cleanup()
+    }
   })
 })
 

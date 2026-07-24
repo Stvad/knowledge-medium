@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
@@ -15,8 +15,18 @@ const repoRef = vi.hoisted(() => ({current: undefined as Repo | undefined}))
 const uiStateBlockRef = vi.hoisted(() => ({current: undefined as Block | undefined}))
 const registerSpy = vi.hoisted(() => vi.fn(() => () => {}))
 
+// Captures the latest props the content renderer passed to ReactPlayer so
+// tests can both inspect the controlled `playing` prop and fire the
+// onPlay/onPause handlers (the mock renders no real <video>, so native media
+// events can't be dispatched — invoking the handler props is the seam).
+const playerPropsRef = vi.hoisted(() => ({current: null as Record<string, unknown> | null}))
+
 vi.mock('react-player', () => {
-  const MockPlayer = () => <div data-testid="react-player"/>
+  const MockPlayer = (props: Record<string, unknown>) => {
+    // eslint-disable-next-line react-hooks/immutability -- test-only mock: exposing render props to assertions, not component state
+    playerPropsRef.current = props
+    return <div data-testid="react-player"/>
+  }
   MockPlayer.canPlay = (url: string) => url.endsWith('.mp4')
   return {default: MockPlayer}
 })
@@ -104,6 +114,7 @@ const setup = async ({videoChildren = [] as string[]} = {}) => {
 afterEach(() => {
   cleanup()
   registerSpy.mockClear()
+  playerPropsRef.current = null
   repoRef.current = undefined
   uiStateBlockRef.current = undefined
 })
@@ -322,5 +333,27 @@ describe('enter affordance gating', () => {
 
     renderContent()
     expect(screen.queryByLabelText('Open video notes view')).toBeNull()
+  })
+})
+
+describe('playing-state sync with native playback', () => {
+  const renderContent = () => render(
+    <BlockContextProvider initialValue={{renderScopeId: 'outline:video-1', scopeRootId: VIDEO}}>
+      <VideoPlayerContentRenderer block={repo.block(VIDEO)}/>
+    </BlockContextProvider>,
+  )
+
+  it('mirrors onPlay/onPause into the controlled playing prop', () => {
+    renderContent()
+    // Controlled prop starts false; a native-controls play must flip it so
+    // react-player's enforcement effect stays a no-op on later re-renders
+    // (previously playing stayed false and any re-render would pause).
+    expect(playerPropsRef.current?.playing).toBe(false)
+
+    act(() => { (playerPropsRef.current?.onPlay as () => void)() })
+    expect(playerPropsRef.current?.playing).toBe(true)
+
+    act(() => { (playerPropsRef.current?.onPause as () => void)() })
+    expect(playerPropsRef.current?.playing).toBe(false)
   })
 })

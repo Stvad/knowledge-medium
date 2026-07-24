@@ -13,10 +13,7 @@ import {
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   isPanelStackRow,
@@ -87,7 +84,7 @@ describe('dailyNotesActions', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     await insertPanelRow(env.repo, layoutSession, 'main-block')
 
     const action = dailyNotesActions({repo: env.repo})

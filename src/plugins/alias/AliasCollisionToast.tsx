@@ -22,7 +22,6 @@ import { dismissToast, showError } from '@/utils/toast.js'
 import { MergeIntoDescendantError } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from './collisionMerge.ts'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { retargetPanelBlockIds } from '@/utils/panelLayoutProjection.js'
 
 export interface AliasCollisionToastProps {
@@ -76,7 +75,7 @@ export const AliasCollisionToast = ({
         dropSourceAliases,
       })
       const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-      const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
+      const layoutSessionBlock = await getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
       try {
         await retargetPanelBlockIds(repo, layoutSessionBlock, attemptedOn, conflictingBlockId)
       } catch (error) {

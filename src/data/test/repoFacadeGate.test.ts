@@ -64,6 +64,7 @@ import { Repo } from '@/data/repo'
 const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   // ── reads (getters / pure lookups) ──
   activeWorkspaceId: 'getter read',
+  activeLayoutSessionId: 'getter read',
   facetRuntime: 'getter read',
   propertiesPageId: 'getter read',
   propertyEditorOverrides: 'getter read',
@@ -165,6 +166,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   _activeWorkspaceId: 'data field',
+  _activeLayoutSessionId: 'data field',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',

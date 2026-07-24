@@ -125,6 +125,13 @@ export const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           ref={player}
           src={content}
           playing={isPlaying}
+          // Keep the controlled `playing` prop truthful to native playback so
+          // react-player's enforcement effect is a no-op on re-run. Without
+          // this, a video started via the native controls kept playing===false
+          // and survived only because nothing re-rendered — any re-render
+          // would have paused it.
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
           controls
           tabIndex={0}
           aria-label="Video player"
