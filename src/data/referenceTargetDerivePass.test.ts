@@ -12,6 +12,7 @@ import { BLOCKS_TABLE_COLUMN_NAMES, blockToRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { aliasesProp } from '@/data/properties'
 import type { Repo } from './repo'
 
 const WS = 'ws-derive-pass'
@@ -237,5 +238,63 @@ describe('reference-target initial derive pass', () => {
     const afterPass = cache.getSnapshot('cached-ahead-ref')
     expect(afterPass?.content).toBe('newer local text')
     expect(afterPass?.updatedAt).toBe(current!.updatedAt + 5000)
+  })
+})
+
+describe('core.aliasClaimRederive — alias claims schedule the late-binding rederive (#402)', () => {
+  // The gap this hook closes: only the two seat-minting sites in
+  // references.parseReferences used to schedule the rederive, so an alias
+  // added via ANY other path (property panel, alias.sync, typeify, agent
+  // bridge) left existing NULL-stamped `[[alias]]` rows stale until the
+  // next workspace open's sweep.
+  // The hook fires in post-commit dispatch; the drain rides the deferred
+  // idle queue (setTimeout(0) under Node), so poll the outcome rather
+  // than sleeping (AGENTS.md) — `awaitReferenceTargetDerive` inside the
+  // poll awaits whatever drains have fired by then.
+  const expectStamped = async (repo: Repo, id: string, target: string): Promise<void> => {
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn(id)).toBe(target)
+    })
+  }
+
+  it('re-stamps an existing [[alias]] row when a property write claims the alias', async () => {
+    const repo = setup()
+    await runPass(repo)  // sweep done — pre-sweep the schedule no-ops by design
+
+    // Written before anything claims "Foo": derives to NULL.
+    await repo.tx(async tx => {
+      await tx.create({id: 'referrer', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[Foo]]'})
+      await tx.create({id: 'target', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Foo page'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('referrer')).toBeNull()
+
+    // The claim arrives via a plain property write — one of the paths that
+    // never scheduled the repair before this hook.
+    await repo.tx(tx => tx.setProperty('target', aliasesProp, ['Foo']),
+      {scope: ChangeScope.BlockDefault})
+
+    await expectStamped(repo, 'referrer', 'target')
+  })
+
+  it('re-stamps when a tombstoned claimant is restored (deleted → live counts as gaining every alias)', async () => {
+    const repo = setup()
+    await runPass(repo)
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'target', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'Foo page'})
+      await tx.setProperty('target', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.delete('target'), {scope: ChangeScope.BlockDefault})
+    // Written while the claimant is tombstoned: unresolvable, NULL stamp.
+    await repo.tx(async tx => {
+      await tx.create({id: 'referrer', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[Foo]]'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('referrer')).toBeNull()
+
+    await repo.tx(tx => tx.restore('target'), {scope: ChangeScope.BlockDefault})
+
+    await expectStamped(repo, 'referrer', 'target')
   })
 })

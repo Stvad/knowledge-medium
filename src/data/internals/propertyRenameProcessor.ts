@@ -186,6 +186,18 @@ const rekeyParent = (
 export const MIGRATE_PROPERTY_RENAME_PROCESSOR = defineSameTxProcessor({
   name: MIGRATE_PROPERTY_RENAME_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  // settledWrites (issue #402): the consuming-cell re-keys this
+  // processor writes must NOT mark rows dirty for the derivation
+  // re-run pass. The re-run's MATERIALIZE resolves names against the
+  // same stale tx-start registry described in fact 2 above — it would
+  // read the dropped OLD name as a user's key deletion and tombstone
+  // the field rows a rename must keep. The re-keys are already
+  // convergent with the children by construction (they project FROM
+  // the field rows), so suppressing re-derivation loses nothing.
+  // Deliberately NOT rerunOnDirtyRows: a plugin renaming a definition
+  // mid-pass has no reachable flow today, and a re-run against the
+  // stale registry would only widen fact 2's blast radius.
+  settledWrites: true,
   apply: async (event, ctx) => {
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
     const renames = collectRenames(ctx, event.workspaceId, event.changedRows)

@@ -48,6 +48,11 @@ export const NORMALIZE_REFERENCES_PROCESSOR_NAME = 'core.normalizeReferences'
 export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
   name: NORMALIZE_REFERENCES_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['references']},
+  // Issue #402: a plugin writing `references` after this ran commits
+  // canonical anyway (merge retarget calls normalizeReferences itself
+  // today, but the commit invariant shouldn't hinge on that per-caller
+  // discipline).
+  rerunOnDirtyRows: true,
   apply: async (event, ctx) => {
     for (const row of event.changedRows) {
       if (!row.after) continue  // hard-delete; nothing to normalize
@@ -67,7 +72,12 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
   },
 })
 
-// Single pass, registration order. Block-type typeify runs FIRST: its bag
+// Single pass, registration order — plus the bounded derivation re-run
+// (issue #402): every processor here except the rename migrator opts into
+// `rerunOnDirtyRows`, so a row a LATER writer (plugin stage, or a kernel
+// stamp behind a stale-column read) dirtied after a derivation ran gets
+// re-derived once at the end of the pass. Ordering below still governs
+// both passes. Block-type typeify runs FIRST: its bag
 // amendments (page type, label, aliases) are raw/setProperty cell writes,
 // and in a child-backed workspace those must still be ahead of materialize
 // or the value children go stale until an unrelated edit (PR #386 review).

@@ -236,6 +236,17 @@ export interface TxImplContext {
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
   /** UUID generator — injected for testability. */
   newId: () => string
+  /** Write observation hook for the commit pipeline's derivation re-run
+   *  pass (issue #402): called once per recorded row write, from the same
+   *  choke point as `recordWrite`, with THIS write's (before, after) pair
+   *  — per-write granularity, unlike the snapshots map's net (tx-start,
+   *  latest) pair. The pipeline uses it to maintain per-row write
+   *  generations and the per-field settled-write baseline (which needs to
+   *  know exactly which fields each individual write touched, so a
+   *  settled amendment and a later unsettled write to the SAME row stay
+   *  distinguishable). Absent in contexts that don't run the same-tx pass
+   *  (tests constructing TxImpl directly). */
+  onWrite?: (id: string, before: BlockData | null, after: BlockData | null) => void
 }
 
 // Live `blocks`-table column list: storage columns + local-only derived
@@ -451,6 +462,7 @@ export class TxImpl implements Tx {
       this.propertySubtreeCache.clear()
     }
     recordWrite(this.ctx.snapshots, id, before, after)
+    this.ctx.onWrite?.(id, before, after)
   }
 
   /** §9 ancestry rule: role is positional and inherits — everything beneath

@@ -309,18 +309,53 @@ const propertiesMatchSeed = (
   return true
 }
 
+/** Shape half of the seat predicates, shared with the reference-drop
+ *  orphan reaper (issue #402): the row's `(content, properties)` still
+ *  equals `aliasSeatSeed(content)` — a machine-minted seat nothing ever
+ *  drifted (a rename, a user-added property, or an extra alias all break
+ *  the match). Liveness/children checks are the caller's: the tombstone
+ *  predicate below wants no live children at all, while the reaper
+ *  additionally tolerates the seat's own GENERATED property children in
+ *  a child-backed workspace. */
+export const matchesAliasSeatSeed = (
+  row: Pick<AliasSeatRow, 'content' | 'properties'>,
+): boolean => {
+  if (row.content === '') return false
+  const seed = aliasSeatSeed(row.content)
+  return propertiesMatchSeed(row.properties, seed.properties)
+}
+
 /** Predicate: this tombstoned slot was created by `ensureAliasTarget`
  *  for `alias` and was never touched before cleanup tombstoned it — i.e.
  *  the row's `(content, properties)` still equals `aliasSeatSeed(alias)`
  *  and there are no live children. Anything else (drifted content,
  *  user-added props, leftover children) stays skipped so a user's
  *  explicit deletion of a real page is never undone by a [[…]] retype. */
-const isRestorableTransientTombstone = (row: AliasSeatRow, alias: string): boolean => {
-  if (!row.deleted) return false
-  if (row.hasLiveChildren) return false
-  const seed = aliasSeatSeed(alias)
-  if (row.content !== seed.content) return false
-  return propertiesMatchSeed(row.properties, seed.properties)
+const isRestorableTransientTombstone = (row: AliasSeatRow, alias: string): boolean =>
+  row.deleted
+  && !row.hasLiveChildren
+  // `aliasSeatSeed(alias).content === alias`, so content-equals-alias plus
+  // the shared shape predicate is the whole original comparison.
+  && row.content === alias
+  && matchesAliasSeatSeed(row)
+
+/** Is `id` one of the deterministic seat-slot ids for `(alias,
+ *  workspaceId)`? Pure compute over the same slot window the probe
+ *  walks. The reference-drop orphan reaper (issue #402) uses this as
+ *  its machine-mint discriminator: a user-created page can share the
+ *  seat SEED SHAPE exactly (quick-find's create-page writes content +
+ *  alias + PAGE_TYPE), but it gets a random uuid — only
+ *  `ensureAliasTarget` mints rows at these ids, so shape + slot-id
+ *  together mean "ours to reap". */
+export const isAliasSeatSlotId = (
+  id: string,
+  alias: string,
+  workspaceId: string,
+): boolean => {
+  for (let index = 0; index < MAX_PROBE_SLOTS; index++) {
+    if (computeAliasSeatId(alias, workspaceId, index) === id) return true
+  }
+  return false
 }
 
 /** Walk indexed-deterministic seat slots for `(alias, workspaceId)`

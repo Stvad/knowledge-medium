@@ -80,6 +80,11 @@ export const sameTxReferenceTargetLookups = (
 export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
   name: DERIVE_REFERENCE_TARGET_PROCESSOR_NAME,
   watches: {kind: 'field', table: 'blocks', fields: ['content']},
+  // Issue #402: a plugin content rewrite after this ran (merge retarget,
+  // deleted-ref inlining, alias reverse-sync) re-derives here instead of
+  // committing a stale column. The plugins' inline recomputes stay — they
+  // keep the column honest for processors BETWEEN them and this re-run.
+  rerunOnDirtyRows: true,
   apply: async (event, ctx) => {
     const lookups = sameTxReferenceTargetLookups(ctx.tx)
     for (const changed of event.changedRows) {
