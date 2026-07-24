@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildDraft, hasAcceptedSets, toWorkoutDraft} from '../src/ui/draft'
+import {buildDraft, finishPlan, hasAcceptedSets, overlayLive, toMaterializeDraft} from '../src/ui/draft'
+import type {LiveWorkout} from '../src/km/history'
 import type {Prescription} from '../src/engine/types'
 
 const prescription = (over: Partial<Prescription['exercises'][number]> = {}): Prescription => ({
@@ -32,29 +33,76 @@ describe('buildDraft', () => {
   })
 })
 
-describe('toWorkoutDraft', () => {
-  it('writes only accepted sets, dropping untouched exercises', () => {
+describe('toMaterializeDraft', () => {
+  it('materializes every prescribed set (done or not) — the block is the live state', () => {
     const draft = buildDraft(prescription(), 'lb')
     draft[0].sets[0].done = true
-    draft[0].sets[1].done = true
-    const workout = toWorkoutDraft('2026-07-23', 'A', draft)
+    const workout = toMaterializeDraft('2026-07-23', 'A', draft)
     expect(workout.exercises).toHaveLength(1)
-    expect(workout.exercises[0].sets).toHaveLength(2)
+    expect(workout.exercises[0].sets).toHaveLength(3)
+    expect(workout.exercises[0].sets[0].done).toBe(true)
     expect(workout.exercises[0].prescribedSets).toBe(3)
   })
 
-  it('drops an exercise with no accepted sets', () => {
-    const draft = buildDraft(prescription(), 'lb')
-    expect(toWorkoutDraft('2026-07-23', 'A', draft).exercises).toHaveLength(0)
+  it('carries rpe and side through', () => {
+    const draft = buildDraft(prescription({exercise: 'Waiter carry', sets: 1, perSide: true, freeform: true, repMax: undefined, weight: 40}), 'lb')
+    draft[0].sets[0].rpe = 8
+    // reps pre-fill falls back to repMin (6) when there's no rep ceiling.
+    expect(toMaterializeDraft('2026-07-23', 'A', draft).exercises[0].sets[0])
+      .toEqual({weight: 40, reps: 6, done: false, rpe: 8, side: 'L'})
+  })
+})
+
+describe('overlayLive', () => {
+  const live: LiveWorkout = {
+    id: 'w1', day: '2026-07-23', session: 'A',
+    exercises: [{
+      id: 'e1', exercise: 'Bench press', unit: 'lb', prescribedSets: 3,
+      sets: [
+        {id: 's1', weight: 140, reps: 9, done: true},
+        {id: 's2', weight: 140, reps: 8, done: false},
+      ],
+    }],
+  }
+
+  it('overlays the live block set values + ids by exercise name, keeping prescription metadata', () => {
+    const merged = overlayLive(buildDraft(prescription(), 'lb'), live)
+    expect(merged[0].blockId).toBe('e1')
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s1', 's2'])
+    expect(merged[0].sets[0]).toMatchObject({weight: 140, reps: 9, done: true})
+    expect(merged[0].rationale).toBe('hold 135') // metadata still from the prescription
   })
 
-  it('carries rpe and side onto stored sets', () => {
-    const draft = buildDraft(prescription({exercise: 'Waiter carry', sets: 1, perSide: true, freeform: true, repMax: undefined, weight: 40}), 'lb')
+  it('keeps pre-filled sets for an exercise the live workout lacks', () => {
+    const merged = overlayLive(buildDraft(prescription(), 'lb'), undefined)
+    expect(merged[0].blockId).toBeUndefined()
+    expect(merged[0].sets).toHaveLength(3)
+  })
+})
+
+describe('finishPlan', () => {
+  const materialized = () => {
+    const draft = buildDraft(prescription(), 'lb')
+    draft[0].blockId = 'e1'
+    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
+    return draft
+  }
+
+  it('keeps done sets with the working weight and prunes the un-accepted ones', () => {
+    const draft = materialized()
     draft[0].sets[0].done = true
-    draft[0].sets[0].rpe = 8
-    const stored = toWorkoutDraft('2026-07-23', 'A', draft).exercises[0].sets[0]
-    // reps pre-fill falls back to repMin (6) when there's no rep ceiling.
-    expect(stored).toEqual({weight: 40, reps: 6, rpe: 8, side: 'L'})
+    draft[0].sets[1].done = true
+    const plan = finishPlan('w1', draft)
+    expect(plan.workoutId).toBe('w1')
+    expect(plan.keep).toHaveLength(1)
+    expect(plan.keep[0]).toMatchObject({exerciseId: 'e1', workingWeight: 135, removeSetIds: ['s2']})
+    expect(plan.removeExerciseIds).toEqual([])
+  })
+
+  it('removes an exercise with no done set', () => {
+    const plan = finishPlan('w1', materialized())
+    expect(plan.removeExerciseIds).toEqual(['e1'])
+    expect(plan.keep).toEqual([])
   })
 })
 

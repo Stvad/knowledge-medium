@@ -1,17 +1,16 @@
 /** Tonight's prescription + fast logging.
  *
- *  Mobile-first, dark-mode-friendly, meant to be usable half-tired at 1am:
- *  every set is pre-filled from the prescription, so accepting one as-
- *  prescribed is a single tap on its checkbox; a deviation is editing the
- *  number first. Editing a number selects it so a stray leading 0 is
- *  replaced, not fought. In-progress state is mirrored to device-local
- *  storage on every edit, so a reload or tab switch never loses a set.
- *  "Finish" writes the accepted sets — and, if a gap was detected, records
- *  the layoff — as one transaction, then runs the shoulder self-check
- *  occasionally.
+ *  Mobile-first, dark-mode-friendly, usable half-tired at 1am. Every set is
+ *  pre-filled from the prescription; the workout is *materialized* into blocks
+ *  on the first settled edit and every set is a block edited in place — so a
+ *  reload, tab switch, or second device just re-reads the same synced blocks,
+ *  and switching A/B is non-destructive (each session is its own live block).
+ *  Numeric edits persist on blur; done-taps persist immediately; "Finish"
+ *  reconciles the whole draft to blocks, prunes the un-accepted sets, and
+ *  flips the workout to done (still the layoff-record + shoulder-check point).
  */
 
-import {useEffect, useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 
 import type {Repo} from '@/data/repo.js'
 import {openDialog} from '@/utils/dialogs.js'
@@ -20,22 +19,30 @@ import {detectPendingLayoff, layoffAlreadyRecorded, layoffFromPending} from '../
 import {detectLeftRightAsymmetry} from '../engine/shoulder'
 import type {ExerciseVideo, SessionType} from '../engine/types'
 import {SHOULDER_POLICY_BLOCK_ID} from '../km/config'
-import {writeLayoff, writeShoulderTodo, writeWorkout} from '../km/store'
+import type {LiveWorkout} from '../km/history'
+import {
+  discardWorkout,
+  finishWorkout,
+  materializeWorkout,
+  writeLayoff,
+  writeSet,
+  writeShoulderTodo,
+} from '../km/store'
 import {ShoulderChecklistDialog} from './ShoulderChecklistDialog'
 import type {ProgramState} from './useProgram'
 import {
   buildDraft,
+  draftBlockIds,
+  finishPlan,
   hasAcceptedSets,
-  toWorkoutDraft,
+  liveIdentity,
+  overlayLive,
+  toMaterializeDraft,
   type DraftExercise,
   type DraftSet,
 } from './draft'
-import {clearDraft, loadDraft, saveDraft} from './persist'
 
 const SESSION_LABELS: Record<SessionType, string> = {A: 'A · upper', B: 'B · lower', mini: 'mini'}
-
-/** After how many full sessions to run the shoulder check when nothing in
- *  the logs flags it. */
 const SHOULDER_CHECK_EVERY = 4
 
 interface Props {
@@ -46,60 +53,134 @@ interface Props {
 }
 
 export function TonightView({repo, workspaceId, pageId, program}: Props) {
-  const {prescription, session, setSession, config, history, layoffs, day} = program
+  const {prescription, session, setSession, config, history, layoffs, liveWorkouts, day} = program
   const readOnly = repo.isReadOnly
-  const [draft, setDraft] = useState<DraftExercise[]>(
-    () => loadDraft(workspaceId, pageId, day, session) ?? buildDraft(prescription, config.unit),
-  )
+  const unit = config.unit
+
+  const live = liveWorkouts.find(w => w.day === day && w.session === session)
+
+  const [draft, setDraft] = useState<DraftExercise[]>(() => overlayLive(buildDraft(prescription, unit), live))
+  const [workoutId, setWorkoutId] = useState<string | null>(live?.id ?? null)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
-  // Rebuild whenever the prescription identity changes — a session toggle, a
-  // config refine, or (post-log) the new history. Persisted edits win over a
-  // fresh build, so a spurious recompute mid-session restores in-progress work
-  // rather than clobbering it.
+  // Mirror the latest draft/workout id into refs so edit handlers can read
+  // and persist the freshly-computed next state without awaiting a re-render.
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const workoutIdRef = useRef(workoutId)
+  workoutIdRef.current = workoutId
+  const materializingRef = useRef(false)
+
+  // Reseed the editing state only when the underlying identity changes — a
+  // session/day switch, a config refine, or the live block structure changing
+  // (materialization, another device). Value edits keep the same ids, so they
+  // don't trigger a reseed and never clobber in-progress typing.
+  const seededKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    setDraft(loadDraft(workspaceId, pageId, day, session) ?? buildDraft(prescription, config.unit))
+    const key = `${session}|${unit}|${liveIdentity(live)}|${prescription.exercises.map(e => e.exercise).join(',')}`
+    if (key === seededKeyRef.current) return
+    seededKeyRef.current = key
+    setDraft(overlayLive(buildDraft(prescription, unit), live))
+    setWorkoutId(live?.id ?? null)
     setStatus(null)
-  }, [prescription, config.unit, day, session, workspaceId, pageId])
+  }, [session, unit, live, prescription])
 
-  // Mirror every draft change to device-local storage (survives reload / tab
-  // switch). Best-effort; see persist.ts.
-  useEffect(() => {
-    saveDraft(workspaceId, pageId, day, session, draft)
-  }, [draft, day, session, workspaceId, pageId])
-
-  const updateSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) =>
-    setDraft(prev =>
-      prev.map((ex, i) =>
-        i !== exIdx ? ex : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch}))},
-      ),
+  const applyPatch = (
+    prev: DraftExercise[],
+    exIdx: number,
+    setIdx: number,
+    patch: Partial<DraftSet>,
+  ): DraftExercise[] =>
+    prev.map((ex, i) =>
+      i !== exIdx ? ex : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch}))},
     )
 
-  const acceptAll = (exIdx: number) =>
-    setDraft(prev =>
-      prev.map((ex, i) =>
-        i !== exIdx
-          ? ex
-          : {
-              ...ex,
-              sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: Date.now()})),
-            },
-      ),
+  /** Ensure the workout is materialized, then persist a single set (or, on
+   *  first edit, the whole draft). Reads from `next` so it never races state. */
+  const persist = async (next: DraftExercise[], exIdx: number, setIdx: number) => {
+    if (readOnly) return
+    if (workoutIdRef.current) {
+      const set = next[exIdx].sets[setIdx]
+      if (set.blockId) await writeSet(repo, set.blockId, toDraftSet(set), next[exIdx].unit)
+      return
+    }
+    if (materializingRef.current) return
+    materializingRef.current = true
+    try {
+      const mat = await materializeWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, next))
+      // Thread the created block ids back into the local draft so later edits
+      // write straight to their blocks.
+      setDraft(cur =>
+        cur.map((ex, i) => ({
+          ...ex,
+          blockId: mat.exercises[i]?.id,
+          sets: ex.sets.map((s, j) => ({...s, blockId: mat.exercises[i]?.setIds[j]})),
+        })),
+      )
+      workoutIdRef.current = mat.workoutId
+      setWorkoutId(mat.workoutId)
+    } finally {
+      materializingRef.current = false
+    }
+  }
+
+  const editSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) =>
+    setDraft(prev => applyPatch(prev, exIdx, setIdx, patch))
+
+  const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
+    const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
+    setDraft(next)
+    void persist(next, exIdx, setIdx)
+  }
+
+  const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
+    commitSet(exIdx, setIdx, {done, completedAt: done ? Date.now() : undefined})
+
+  const acceptAll = (exIdx: number) => {
+    const now = Date.now()
+    const next = draftRef.current.map((ex, i) =>
+      i !== exIdx ? ex : {...ex, sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: now}))},
     )
+    setDraft(next)
+    // Persist every set of this exercise; materialize on the first if needed.
+    void (async () => {
+      for (let j = 0; j < next[exIdx].sets.length; j++) await persist(next, exIdx, j)
+    })()
+  }
 
   const finish = async () => {
-    const workout = toWorkoutDraft(day, session, draft)
-    if (workout.exercises.length === 0 || readOnly) return
+    if (readOnly || busy || !hasAcceptedSets(draft)) return
     setBusy(true)
     try {
+      // Make sure the workout exists and every set block matches local state
+      // before pruning — the finish checkpoint reconciles any un-flushed edit.
+      let wid = workoutIdRef.current
+      if (!wid) {
+        const mat = await materializeWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, draftRef.current))
+        wid = mat.workoutId
+        setDraft(cur =>
+          cur.map((ex, i) => ({
+            ...ex,
+            blockId: mat.exercises[i]?.id,
+            sets: ex.sets.map((s, j) => ({...s, blockId: mat.exercises[i]?.setIds[j]})),
+          })),
+        )
+        workoutIdRef.current = wid
+        setWorkoutId(wid)
+      } else {
+        for (const ex of draftRef.current) {
+          for (const s of ex.sets) if (s.blockId) await writeSet(repo, s.blockId, toDraftSet(s), ex.unit)
+        }
+      }
+
       const pending = detectPendingLayoff(history, day, config)
       if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
         await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
       }
-      await writeWorkout(repo, workspaceId, pageId, workout)
-      clearDraft(workspaceId, pageId)
-      setStatus(`Logged ${SESSION_LABELS[session]} — ${workout.exercises.length} lifts`)
+      await finishWorkout(repo, finishPlan(wid, draftRef.current))
+      const lifts = draftRef.current.filter(ex => ex.sets.some(s => s.done)).length
+      setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
 
       const fullBefore = history.filter(w => w.session !== 'mini').length
       const isFull = session !== 'mini'
@@ -116,7 +197,23 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     }
   }
 
+  const discard = async () => {
+    const wid = workoutIdRef.current
+    if (!wid || busy) return
+    setBusy(true)
+    try {
+      await discardWorkout(repo, draftBlockIds(wid, draftRef.current))
+      workoutIdRef.current = null
+      setWorkoutId(null)
+      setDraft(buildDraft(prescription, unit))
+      setStatus('Discarded')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const canFinish = !readOnly && !busy && hasAcceptedSets(draft)
+  const started = workoutId !== null
 
   return (
     <div className="flex flex-col gap-4">
@@ -161,9 +258,11 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           <ExerciseCard
             key={ex.exercise}
             ex={ex}
-            unit={config.unit}
+            unit={unit}
             readOnly={readOnly}
-            onSet={(setIdx, patch) => updateSet(exIdx, setIdx, patch)}
+            onEdit={(setIdx, patch) => editSet(exIdx, setIdx, patch)}
+            onCommit={(setIdx, patch) => commitSet(exIdx, setIdx, patch)}
+            onToggleDone={(setIdx, done) => toggleDone(exIdx, setIdx, done)}
             onAcceptAll={() => acceptAll(exIdx)}
           />
         ))}
@@ -192,37 +291,64 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       )}
 
       <div className="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border bg-background/90 py-3 backdrop-blur">
-        <span className="text-sm text-muted-foreground">{status}</span>
-        <button
-          type="button"
-          disabled={!canFinish}
-          onClick={() => void finish()}
-          className={
-            'rounded-md px-4 py-2 text-sm font-medium ' +
-            (canFinish
-              ? 'bg-primary text-primary-foreground hover:opacity-90'
-              : 'cursor-not-allowed bg-muted text-muted-foreground')
-          }
-        >
-          {busy ? 'Saving…' : 'Finish & log'}
-        </button>
+        <span className="text-sm text-muted-foreground">
+          {status ?? (started ? 'Saved as you go' : '')}
+        </span>
+        <div className="flex items-center gap-2">
+          {started && !readOnly && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void discard()}
+              className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50"
+            >
+              Discard
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={!canFinish}
+            onClick={() => void finish()}
+            className={
+              'rounded-md px-4 py-2 text-sm font-medium ' +
+              (canFinish
+                ? 'bg-primary text-primary-foreground hover:opacity-90'
+                : 'cursor-not-allowed bg-muted text-muted-foreground')
+            }
+          >
+            {busy ? 'Saving…' : 'Finish & log'}
+          </button>
+        </div>
       </div>
     </div>
   )
 }
 TonightView.displayName = 'TonightView'
 
+const toDraftSet = (s: DraftSet) => ({
+  weight: s.weight,
+  reps: s.reps,
+  done: s.done,
+  ...(s.rpe !== undefined ? {rpe: s.rpe} : {}),
+  ...(s.side !== undefined ? {side: s.side} : {}),
+  ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
+})
+
 function ExerciseCard({
   ex,
   unit,
   readOnly,
-  onSet,
+  onEdit,
+  onCommit,
+  onToggleDone,
   onAcceptAll,
 }: {
   ex: DraftExercise
   unit: string
   readOnly: boolean
-  onSet: (setIdx: number, patch: Partial<DraftSet>) => void
+  onEdit: (setIdx: number, patch: Partial<DraftSet>) => void
+  onCommit: (setIdx: number, patch: Partial<DraftSet>) => void
+  onToggleDone: (setIdx: number, done: boolean) => void
   onAcceptAll: () => void
 }) {
   const range =
@@ -260,7 +386,15 @@ function ExerciseCard({
       {ex.videos && ex.videos.length > 0 && <VideoLinks videos={ex.videos} />}
       <div className="mt-2 flex flex-col gap-1.5">
         {ex.sets.map((s, i) => (
-          <SetRow key={i} set={s} unit={unit} readOnly={readOnly} onChange={patch => onSet(i, patch)} />
+          <SetRow
+            key={i}
+            set={s}
+            unit={unit}
+            readOnly={readOnly}
+            onEdit={patch => onEdit(i, patch)}
+            onCommit={patch => onCommit(i, patch)}
+            onToggleDone={done => onToggleDone(i, done)}
+          />
         ))}
       </div>
     </li>
@@ -289,46 +423,48 @@ function SetRow({
   set,
   unit,
   readOnly,
-  onChange,
+  onEdit,
+  onCommit,
+  onToggleDone,
 }: {
   set: DraftSet
   unit: string
   readOnly: boolean
-  onChange: (patch: Partial<DraftSet>) => void
+  onEdit: (patch: Partial<DraftSet>) => void
+  onCommit: (patch: Partial<DraftSet>) => void
+  onToggleDone: (done: boolean) => void
 }) {
-  const numberField = (value: number, onValue: (n: number) => void, label: string) => (
+  const numberField = (value: number, key: 'weight' | 'reps', label: string) => (
     <input
       type="number"
       inputMode="numeric"
       aria-label={label}
       disabled={readOnly}
       value={Number.isFinite(value) ? value : ''}
-      // Select on focus so a tap-and-type replaces the pre-filled number
-      // instead of leaving a stray leading digit to delete.
+      // Select on focus so a tap-and-type replaces the pre-filled number.
       onFocus={e => e.currentTarget.select()}
-      onChange={e => onValue(e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value))}
+      onChange={e => onEdit({[key]: e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value)})}
+      // Persist the settled value on blur (cheap, and the block is the record).
+      onBlur={e => onCommit({[key]: e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value)})}
       className="h-9 w-16 rounded border border-border bg-background px-2 text-right text-sm tabular-nums"
     />
   )
-
-  const toggleDone = (done: boolean) =>
-    onChange({done, completedAt: done ? Date.now() : undefined})
 
   return (
     <div className={'flex items-center gap-2 rounded px-1 py-1 ' + (set.done ? 'bg-primary/10' : '')}>
       {set.side && (
         <span className="w-4 shrink-0 text-center text-xs font-medium text-muted-foreground">{set.side}</span>
       )}
-      {numberField(set.weight, n => onChange({weight: n}), 'weight')}
+      {numberField(set.weight, 'weight', 'weight')}
       <span className="shrink-0 text-xs text-muted-foreground">{unit} ×</span>
-      {numberField(set.reps, n => onChange({reps: n}), 'reps')}
+      {numberField(set.reps, 'reps', 'reps')}
       <label className="ml-auto flex cursor-pointer items-center gap-1.5 py-1 pl-2 text-xs text-muted-foreground">
         <span>done</span>
         <input
           type="checkbox"
           disabled={readOnly}
           checked={set.done}
-          onChange={e => toggleDone(e.currentTarget.checked)}
+          onChange={e => onToggleDone(e.currentTarget.checked)}
           className="h-6 w-6 rounded border-border accent-primary"
         />
       </label>

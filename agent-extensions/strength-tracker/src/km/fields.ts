@@ -11,36 +11,58 @@
 export const STRENGTH_LOG_TYPE = 'strength-log'
 export const WORKOUT_TYPE = 'strength-workout'
 export const EXERCISE_ENTRY_TYPE = 'strength-exercise'
+export const SET_TYPE = 'strength-set'
 export const LAYOFF_TYPE = 'strength-layoff'
 export const SETTINGS_TYPE = 'strength-settings'
 
 export const FIELD = {
+  // workout
   session: 'strength:session',
   date: 'strength:date',
+  /** in-progress | done — a workout is the live logging state, so it exists
+   *  (and syncs) while being logged and flips to done at "Finish". */
+  status: 'strength:status',
+  // exercise entry
   exercise: 'strength:exercise',
-  sets: 'strength:sets',
   workingWeight: 'strength:workingWeight',
   unit: 'strength:unit',
   prescribedWeight: 'strength:prescribedWeight',
   prescribedSets: 'strength:prescribedSets',
+  // set (one block per set, child of the exercise entry)
+  weight: 'strength:weight',
+  reps: 'strength:reps',
+  rpe: 'strength:rpe',
+  side: 'strength:side',
+  /** Accepted — only done sets count toward history / working weight. */
+  done: 'strength:done',
+  completedAt: 'strength:completedAt',
+  // layoff
   layoffFrom: 'strength:from',
   layoffTo: 'strength:to',
   layoffDays: 'strength:gapDays',
   layoffTier: 'strength:tier',
   layoffPct: 'strength:reentryPct',
+  // settings
   planRoot: 'strength:planRoot',
   rolloverHour: 'strength:rolloverHour',
   cadenceDays: 'strength:cadenceDays',
   roundTo: 'strength:roundTo',
+  /** JSON map {altGroupKey: chosenExerciseName} — which option of each plan
+   *  `or`-group the user is currently tracking. User state, not program
+   *  state, so the plan outline stays read-only. */
+  altChoices: 'strength:altChoices',
 } as const
 
+export type WorkoutStatus = 'in-progress' | 'done'
+
+/** In-memory shape of one logged set — reconstructed from a set block, and
+ *  the unit the engine reasons over. */
 export interface StoredSet {
   weight: number
   reps: number
   rpe?: number
   side?: 'L' | 'R'
-  /** Epoch ms when the set was marked complete during the session. Rides
-   *  inside the `sets` JSON (no dedicated column) — it's session-texture
-   *  data, not a query target. */
+  done: boolean
+  /** Epoch ms when the set was marked complete during the session. */
   completedAt?: number
 }

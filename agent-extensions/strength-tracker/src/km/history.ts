@@ -11,9 +11,9 @@
  *  ISO-string → Date for the two date fields.
  */
 
-import type {LayoffRecord, SessionType, WorkoutRecord} from '../engine/types'
+import type {LayoffRecord, SessionType, SetRecord, WorkoutRecord} from '../engine/types'
 import {dateToDay} from './day'
-import {FIELD, type StoredSet} from './fields'
+import {FIELD} from './fields'
 
 /** Minimal shape the readers need — a structural subset of the app's
  *  `BlockData`, so the real rows satisfy it without importing its type. */
@@ -46,31 +46,54 @@ const date = (row: RowLike, name: string): Date | undefined => {
   return Number.isNaN(d.getTime()) ? undefined : d
 }
 
-const sets = (row: RowLike, name: string): StoredSet[] => {
+const bool = (row: RowLike, name: string): boolean => row.properties[name] === true
+
+const side = (row: RowLike, name: string): 'L' | 'R' | undefined => {
   const raw = row.properties[name]
-  return Array.isArray(raw) ? (raw as StoredSet[]) : []
+  return raw === 'L' || raw === 'R' ? raw : undefined
 }
 
 const compareByOrderKey = (a: RowLike, b: RowLike): number =>
   a.orderKey < b.orderKey ? -1 : a.orderKey > b.orderKey ? 1 : a.id < b.id ? -1 : 1
 
+const groupByParent = (rows: readonly RowLike[]): Map<string, RowLike[]> => {
+  const byParent = new Map<string, RowLike[]>()
+  for (const row of rows) {
+    if (row.parentId === null) continue
+    const list = byParent.get(row.parentId) ?? []
+    list.push(row)
+    byParent.set(row.parentId, list)
+  }
+  return byParent
+}
+
+/** A done set block → the engine's `SetRecord`. */
+const toSetRecord = (row: RowLike): SetRecord => ({
+  weight: num(row, FIELD.weight, 0),
+  reps: num(row, FIELD.reps, 0),
+  ...(optNum(row, FIELD.rpe) !== undefined ? {rpe: optNum(row, FIELD.rpe)} : {}),
+  ...(side(row, FIELD.side) !== undefined ? {side: side(row, FIELD.side)} : {}),
+})
+
+/** Assemble workout records from the workout / exercise / set block trees.
+ *  Only DONE workouts count as history (an in-progress session is the live
+ *  logging state and must never feed its own prescription), and within a
+ *  workout only DONE sets are counted (a pre-filled, un-accepted set records
+ *  nothing). */
 export const buildHistory = (
   workoutRows: readonly RowLike[],
   exerciseRows: readonly RowLike[],
+  setRows: readonly RowLike[],
 ): WorkoutRecord[] => {
-  const byWorkout = new Map<string, RowLike[]>()
-  for (const entry of exerciseRows) {
-    if (entry.parentId === null) continue
-    const list = byWorkout.get(entry.parentId) ?? []
-    list.push(entry)
-    byWorkout.set(entry.parentId, list)
-  }
+  const exercisesByWorkout = groupByParent(exerciseRows)
+  const setsByExercise = groupByParent(setRows)
 
   const workouts: WorkoutRecord[] = []
   for (const row of workoutRows) {
     const d = date(row, FIELD.date)
     if (d === undefined) continue
-    const entries = (byWorkout.get(row.id) ?? []).slice().sort(compareByOrderKey)
+    if (str(row, FIELD.status) === 'in-progress') continue
+    const entries = (exercisesByWorkout.get(row.id) ?? []).slice().sort(compareByOrderKey)
     const session = str(row, FIELD.session, 'A') as SessionType
     workouts.push({
       id: row.id,
@@ -80,11 +103,86 @@ export const buildHistory = (
         exercise: str(entry, FIELD.exercise),
         prescribedWeight: optNum(entry, FIELD.prescribedWeight),
         prescribedSets: optNum(entry, FIELD.prescribedSets),
-        sets: sets(entry, FIELD.sets),
+        sets: (setsByExercise.get(entry.id) ?? [])
+          .slice()
+          .sort(compareByOrderKey)
+          .filter(s => bool(s, FIELD.done))
+          .map(toSetRecord),
       })),
     })
   }
   return workouts.sort((a, b) => a.date.localeCompare(b.date))
+}
+
+// ──── live in-progress workouts (for the logging UI) ────
+// Distinct from buildHistory: keeps EVERY set (done and not) with its block id
+// so the UI can edit sets in place, and only surfaces in-progress workouts.
+
+export interface LiveSet {
+  id: string
+  weight: number
+  reps: number
+  rpe?: number
+  side?: 'L' | 'R'
+  done: boolean
+  completedAt?: number
+}
+
+export interface LiveExercise {
+  id: string
+  exercise: string
+  unit: string
+  prescribedWeight?: number
+  prescribedSets?: number
+  sets: LiveSet[]
+}
+
+export interface LiveWorkout {
+  id: string
+  day: string
+  session: SessionType
+  exercises: LiveExercise[]
+}
+
+const toLiveSet = (row: RowLike): LiveSet => ({
+  id: row.id,
+  weight: num(row, FIELD.weight, 0),
+  reps: num(row, FIELD.reps, 0),
+  ...(optNum(row, FIELD.rpe) !== undefined ? {rpe: optNum(row, FIELD.rpe)} : {}),
+  ...(side(row, FIELD.side) !== undefined ? {side: side(row, FIELD.side)} : {}),
+  done: bool(row, FIELD.done),
+  ...(optNum(row, FIELD.completedAt) !== undefined ? {completedAt: optNum(row, FIELD.completedAt)} : {}),
+})
+
+export const buildLiveWorkouts = (
+  workoutRows: readonly RowLike[],
+  exerciseRows: readonly RowLike[],
+  setRows: readonly RowLike[],
+): LiveWorkout[] => {
+  const exercisesByWorkout = groupByParent(exerciseRows)
+  const setsByExercise = groupByParent(setRows)
+
+  const live: LiveWorkout[] = []
+  for (const row of workoutRows) {
+    if (str(row, FIELD.status) !== 'in-progress') continue
+    const d = date(row, FIELD.date)
+    if (d === undefined) continue
+    const entries = (exercisesByWorkout.get(row.id) ?? []).slice().sort(compareByOrderKey)
+    live.push({
+      id: row.id,
+      day: dateToDay(d),
+      session: str(row, FIELD.session, 'A') as SessionType,
+      exercises: entries.map(entry => ({
+        id: entry.id,
+        exercise: str(entry, FIELD.exercise),
+        unit: str(entry, FIELD.unit, 'lb'),
+        prescribedWeight: optNum(entry, FIELD.prescribedWeight),
+        prescribedSets: optNum(entry, FIELD.prescribedSets),
+        sets: (setsByExercise.get(entry.id) ?? []).slice().sort(compareByOrderKey).map(toLiveSet),
+      })),
+    })
+  }
+  return live
 }
 
 export const buildLayoffs = (layoffRows: readonly RowLike[]): LayoffRecord[] => {

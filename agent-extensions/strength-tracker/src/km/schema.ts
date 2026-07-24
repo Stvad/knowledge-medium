@@ -30,15 +30,17 @@ import {
   EXERCISE_ENTRY_TYPE,
   FIELD,
   LAYOFF_TYPE,
+  SET_TYPE,
   SETTINGS_TYPE,
   STRENGTH_LOG_TYPE,
   WORKOUT_TYPE,
-  type StoredSet,
+  type WorkoutStatus,
 } from './fields'
 
 export {
   EXERCISE_ENTRY_TYPE,
   LAYOFF_TYPE,
+  SET_TYPE,
   SETTINGS_TYPE,
   STRENGTH_LOG_TYPE,
   WORKOUT_TYPE,
@@ -72,6 +74,22 @@ export const dateProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** The workout IS the live logging state: it's created when logging starts
+ *  (in-progress) and flips to done at "Finish". History and prescription only
+ *  count done workouts, so an in-progress session never feeds itself. */
+export const statusProp = seedProperty<WorkoutStatus>({
+  seedKey: extensionPropertySeedKey('status'),
+  revision: 1,
+  name: FIELD.status,
+  preset: 'strict-enum',
+  config: {options: [
+    {value: 'in-progress', label: 'In progress'},
+    {value: 'done', label: 'Done'},
+  ]},
+  defaultValue: 'in-progress',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── Exercise entry ────
 
 /** Canonical exercise name — the join key against the program config and
@@ -86,19 +104,7 @@ export const exerciseProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** The sets, in order. One JSON property rather than a child block per set
- *  — a completed workout is ~20 rows this way instead of ~60, which matters
- *  for 1am logging and sync, and the set list is naturally atomic. */
-export const setsProp = seedProperty<readonly StoredSet[]>({
-  seedKey: extensionPropertySeedKey('sets'),
-  revision: 1,
-  name: FIELD.sets,
-  preset: 'json',
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
-})
-
-/** Derived modal working weight — kept in sync with `sets` on every write.
+/** Derived modal working weight — kept in sync with the set blocks on every write.
  *  Exists purely so the plan's SQL requirement is a flat column read; the
  *  engine always recomputes from `sets`, never trusts this. */
 export const workingWeightProp = seedProperty({
@@ -134,6 +140,68 @@ export const prescribedSetsProp = seedProperty({
   seedKey: extensionPropertySeedKey('prescribed-sets'),
   revision: 1,
   name: FIELD.prescribedSets,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+// ──── Set ────
+// One block per set, child of the exercise entry, ordered by block order.
+// Plain props (not a JSON blob) so "all bench sets since June" is a real query
+// and a set is hand-editable like any other block.
+
+export const weightProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-weight'),
+  revision: 1,
+  name: FIELD.weight,
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const repsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-reps'),
+  revision: 1,
+  name: FIELD.reps,
+  preset: 'number',
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const rpeProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-rpe'),
+  revision: 1,
+  name: FIELD.rpe,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** 'L' | 'R' for single-arm work, empty otherwise. */
+export const sideProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-side'),
+  revision: 1,
+  name: FIELD.side,
+  preset: 'optional-string',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Accepted — a pre-filled set starts false so an untouched set records
+ *  nothing; only done sets count toward history and working weight. */
+export const doneProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-done'),
+  revision: 1,
+  name: FIELD.done,
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+export const completedAtProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-completed-at'),
+  revision: 1,
+  name: FIELD.completedAt,
   preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
@@ -227,6 +295,18 @@ export const roundToProp = seedProperty({
   changeScope: ChangeScope.UserPrefs,
 })
 
+/** {altGroupKey: chosenExerciseName} — which option of each plan `or`-group
+ *  the user is currently tracking. Kept here (user state) so the plan outline
+ *  stays canonical and the extension never writes it. */
+export const altChoicesProp = seedProperty<Record<string, string>>({
+  seedKey: extensionPropertySeedKey('alt-choices'),
+  revision: 1,
+  name: FIELD.altChoices,
+  preset: 'json',
+  defaultValue: {},
+  changeScope: ChangeScope.UserPrefs,
+})
+
 // ──── Types ────
 
 export const strengthLogType = seedType({
@@ -244,7 +324,7 @@ export const workoutType = seedType({
   id: WORKOUT_TYPE,
   label: 'Workout',
   description: 'A logged strength session (A / B / mini).',
-  properties: [sessionProp, dateProp],
+  properties: [sessionProp, dateProp, statusProp],
 })
 
 export const exerciseEntryType = seedType({
@@ -252,16 +332,25 @@ export const exerciseEntryType = seedType({
   revision: 1,
   id: EXERCISE_ENTRY_TYPE,
   label: 'Exercise entry',
-  description: 'One lift within a workout, with its logged sets.',
+  description: 'One lift within a workout; its sets are child set blocks.',
   hideFromCompletion: true,
   properties: [
     exerciseProp,
-    setsProp,
     workingWeightProp,
     unitProp,
     prescribedWeightProp,
     prescribedSetsProp,
   ],
+})
+
+export const setType = seedType({
+  seedKey: extensionTypeSeedKey('set'),
+  revision: 1,
+  id: SET_TYPE,
+  label: 'Set',
+  description: 'One set within an exercise entry.',
+  hideFromCompletion: true,
+  properties: [weightProp, repsProp, rpeProp, sideProp, doneProp, completedAtProp],
 })
 
 export const layoffType = seedType({
@@ -280,20 +369,26 @@ export const settingsType = seedType({
   label: 'Strength settings',
   description: 'Engine knobs the plan prose does not state.',
   hideFromCompletion: true,
-  properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp],
+  properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp, altChoicesProp],
 })
 
-export const STRENGTH_TYPES = [strengthLogType, workoutType, exerciseEntryType, layoffType, settingsType]
+export const STRENGTH_TYPES = [strengthLogType, workoutType, exerciseEntryType, setType, layoffType, settingsType]
 
 export const STRENGTH_PROPS = [
   sessionProp,
   dateProp,
+  statusProp,
   exerciseProp,
-  setsProp,
   workingWeightProp,
   unitProp,
   prescribedWeightProp,
   prescribedSetsProp,
+  weightProp,
+  repsProp,
+  rpeProp,
+  sideProp,
+  doneProp,
+  completedAtProp,
   layoffFromProp,
   layoffToProp,
   layoffDaysProp,
@@ -303,4 +398,5 @@ export const STRENGTH_PROPS = [
   rolloverHourProp,
   cadenceDaysProp,
   roundToProp,
+  altChoicesProp,
 ]
