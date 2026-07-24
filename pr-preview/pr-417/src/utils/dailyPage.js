@@ -1,2 +1,0 @@
-var e=e=>{if(e>=11&&e<=13)return`th`;switch(e%10){case 1:return`st`;case 2:return`nd`;case 3:return`rd`;default:return`th`}},t=t=>{let n=t.toLocaleString(`en-US`,{month:`long`}),r=t.getDate();return`${n} ${r}${e(r)}, ${t.getFullYear()}`},n=e=>`${e.getFullYear()}-${String(e.getMonth()+1).padStart(2,`0`)}-${String(e.getDate()).padStart(2,`0`)}`,r=e=>[t(e),n(e)];export{r as dailyPageAliases,n as formatIsoDate,t as formatRoamDate};
-//# sourceMappingURL=dailyPage.js.map
