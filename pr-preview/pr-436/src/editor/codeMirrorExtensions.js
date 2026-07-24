@@ -1,0 +1,2 @@
+import{defineFacet as e,isFunction as t}from"../facets/facet.js";var n=e({id:`core.codemirror-extensions`,combine:e=>t=>e.flatMap(e=>e(t)),empty:()=>()=>[],validate:t});export{n as codeMirrorExtensionsFacet};
+//# sourceMappingURL=codeMirrorExtensions.js.map

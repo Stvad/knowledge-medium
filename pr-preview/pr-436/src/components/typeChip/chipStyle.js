@@ -1,0 +1,2 @@
+import{defaultTypeColor as e}from"../../data/typeColors.js";var t=e=>{let t=e.color?.trim();if(t&&!(typeof CSS<`u`&&CSS.supports&&!CSS.supports(`color`,t)))return t},n=n=>{if(!n)return;let r=t(n);if(r)return{color:r,backgroundColor:`color-mix(in srgb, ${r} 14%, transparent)`};let i=e(n.id);return{color:`color-mix(in oklch, ${i} 72%, hsl(var(--foreground)))`,backgroundColor:`color-mix(in srgb, ${i} 14%, transparent)`}};export{n as chipStyle};
+//# sourceMappingURL=chipStyle.js.map
