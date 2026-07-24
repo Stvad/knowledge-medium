@@ -33,7 +33,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { assertNotGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
@@ -236,12 +236,7 @@ export class UserSchemasService {
     // its own — but the name is written as `[[name]]` wherever a definition
     // is addressed by name, and one shaped like `((id))` or `::((id))` reads
     // as a different reference entirely to everything downstream.
-    if (isGrammarShapedLabel(name)) {
-      throw new Error(
-        `[addSchema] name ${JSON.stringify(name)} reads as a block reference, not a name; `
-        + 'choose a name that is not shaped like "((id))", "[[name]]" or a "::"-marked span',
-      )
-    }
+    assertNotGrammarShapedLabel(name, '[addSchema] name')
 
     // Capture the generation before the first await. Creation is a
     // definition-identity write: synthesis is available synchronously, but

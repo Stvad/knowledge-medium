@@ -172,3 +172,25 @@ export const isRoundTrippableReferenceLabel = (label: string): boolean => {
  */
 export const isGrammarShapedLabel = (label: string): boolean =>
   parseExactReferenceBlockContent(label) !== null
+
+/** A label that would read back as a reference span rather than a name.
+ *  Typed so a UI caller can tell a refused rename from a failed write and
+ *  revert the field, rather than reporting an opaque error. */
+export class GrammarShapedLabelError extends Error {
+  constructor(public readonly label: string, context: string) {
+    super(
+      `${context}: ${JSON.stringify(label)} reads as a block reference, not a name. `
+      + 'Names are written as block content or rendered as `[[name]]`, so one shaped '
+      + 'like "((id))", "[[name]]" or a "::"-marked span would read as a reference to '
+      + 'another block — and a marked one would turn its block into property machinery.',
+    )
+    this.name = 'GrammarShapedLabelError'
+  }
+}
+
+/** Throwing form of {@link isGrammarShapedLabel} — the one place the refusal
+ *  and its explanation live, so the mirrors that enforce it don't each carry
+ *  their own copy. `context` names the caller for the message. */
+export const assertNotGrammarShapedLabel = (label: string, context: string): void => {
+  if (isGrammarShapedLabel(label)) throw new GrammarShapedLabelError(label, context)
+}

@@ -600,9 +600,10 @@ export class TxImpl implements Tx {
   /** See the `Tx.stampReferenceTarget` contract for the why. Impl notes: the
    *  narrow `SET reference_target_id = ?, is_field_form = ?` is load-bearing —
    *  it names no upload column and no `updated_at`, so
-   *  `blocks_upload_update`'s diff predicate can't fire; `record` still
-   *  clears the §9 ancestry memo and records the changed snapshot. No write /
-   *  no snapshot when both columns already match. */
+   *  `blocks_upload_update`'s diff predicate can't fire; `record` captures
+   *  the changed snapshot (flat §9 recognition deleted the ancestry memo it
+   *  used to invalidate here). No write / no snapshot when both columns
+   *  already match. */
   async stampReferenceTarget(
     id: string,
     targetId: string | null,

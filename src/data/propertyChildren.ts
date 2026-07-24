@@ -75,8 +75,6 @@ export const isFieldValueChild = (
   data: Pick<BlockData, 'isFieldForm'>,
 ): boolean => data.isFieldForm !== true
 
-/** SQL fragment twin of {@link isFieldValueChild} for value-set filters. */
-export const FIELD_VALUE_CHILD_SQL_PREDICATE = 'is_field_form IS NOT 1'
 
 /** Field-row content: the §7 marked field form — the `::` marker + an exact
  *  block-ref to the definition BY ID (`::((fieldId))`). Canonical and
@@ -370,10 +368,12 @@ export const isPropertyFieldRow = async (
   tx: Tx,
   row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId' | 'isFieldForm'>,
 ): Promise<boolean> => {
-  // Cheap pre-filters first: the bit is stamped on every field row, so an
-  // unmarked row can't be one and needs no flip probe.
+  // One cheap pre-filter, and it earns its place: the bit is stamped on every
+  // field row, so an unmarked row is decided without the async flip probe.
+  // The remaining conditions (non-null parent, resolvable definition) are the
+  // composed predicate's own — restating them here would just be a second
+  // copy to keep in sync.
   if (row.isFieldForm !== true) return false
-  if (row.parentId === null) return false
   if (!(await tx.isPropertyChildBackedWorkspace(row.workspaceId))) return false
   return isPropertyFieldInstance(row, (fieldId) =>
     tx.isPropertyFieldDefinition(row.workspaceId, fieldId))

@@ -242,9 +242,12 @@ export interface Tx {
    *  this workspace's registry can resolve — shadow-tolerant (a shadowed
    *  loser COUNTS: its field rows keep classifying; only the name map and
    *  projection exclude it, §6). This is the classification predicate's
-   *  fieldId half, exposed so composed predicates (`isPropertyFieldRow`,
-   *  merge/rename selection) read the ONE checker instead of restating the
-   *  disjunction. Synchronous — bound to the tx-start registry snapshot. */
+   *  fieldId half, exposed so `isPropertyFieldRow` reads the ONE checker
+   *  instead of restating the disjunction. (The rename processor and the
+   *  deferred migration batch answer the same question from their own
+   *  captured resolvers rather than the tx-start one — deliberately, since
+   *  those passes must not re-resolve at write time.) Synchronous — bound to
+   *  the tx-start registry snapshot. */
   isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
 
   /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`

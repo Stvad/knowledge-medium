@@ -914,15 +914,16 @@ describe('merge integration (§9, slice B3)', () => {
     expect(siblings.map(v => v.content).sort()).toEqual(['from-status', 'into-status'])
   })
 
-  it('an ordinary `((definitionId))` child of a property-subtree-interior `into` is not mistaken for its field row (PR #386 review)', async () => {
-    // `into` here is itself a property VALUE row (interior) — `owner`'s
-    // Status value — which has its OWN ordinary child that happens to be a
-    // block-ref to the Status definition. Per the §9 positional rule that
-    // child is ordinary content (children of a value row are never field
-    // rows), but its `reference_target_id` column is indistinguishable from
-    // a real field row's without going through the visible-children
-    // exclusion (`hidePropertyChildren`) — which is exactly what
-    // `intoFieldByFieldId` must do.
+  it('an ordinary `((definitionId))` child of a value-row `into` is not mistaken for its field row (PR #386 review)', async () => {
+    // `into` here is itself a property VALUE row — `owner`'s Status value —
+    // which has its OWN ordinary child that happens to be a block-ref to the
+    // Status definition. That child is ordinary content because it is
+    // UNMARKED, not because of where it sits: under flat §9 recognition a
+    // value row hosts its own field rows like any other block, and only the
+    // `::` bit separates them. Its `reference_target_id` alone is
+    // indistinguishable from a real field row's, so the answer has to come
+    // from the visible-children exclusion (`hidePropertyChildren`) — which
+    // is exactly what `intoFieldByFieldId` must do.
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'owner')
@@ -1192,7 +1193,7 @@ describe('delete cascade (machinery traversal, §9)', () => {
   })
 })
 
-describe('§9 positional rule on the WRITE side (round-2 review fixes)', () => {
+describe('§9 recognition on the WRITE side (round-2 review fixes)', () => {
   const setupWithProperty = async (): Promise<{repo: Repo; fieldRowId: string; valueRowId: string}> => {
     await seedWorkspace('children')
     const repo = setup()

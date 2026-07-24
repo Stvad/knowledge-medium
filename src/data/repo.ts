@@ -2919,15 +2919,16 @@ export class Repo {
       // ones (§7 — the bit is already stamped by derive; this repairs the
       // target), and a prefilter without the twin would leave a pasted
       // `::[[future-field]]` bit=1/target-NULL forever once its name mints.
+      // Alias forms ONLY, unlike the sweep's all-forms prefilter: this drain
+      // discards anything that isn't `kind === 'alias'` two lines below, and
+      // an id form can't be one. Fetching `((%…%))` rows here would scan a
+      // whole workspace's exact refs to throw every one of them away.
       const candidates = await this.db.getAll<{id: string; content: string}>(
         `SELECT id, content FROM blocks
           WHERE workspace_id = ?
             AND reference_target_id IS NULL
-            AND (
-              (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
-              OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
-              OR (TRIM(content) LIKE '::[[%' AND TRIM(content) LIKE '%]]')
-            )`,
+            AND TRIM(content) LIKE '%]]'
+            AND (TRIM(content) LIKE '[[%' OR TRIM(content) LIKE '::[[%')`,
         [workspaceId],
       )
       const lookups = this.referenceTargetLookupsVia()

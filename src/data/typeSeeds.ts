@@ -1,4 +1,4 @@
-import {isGrammarShapedLabel} from './referenceBlock'
+import {assertNotGrammarShapedLabel, isGrammarShapedLabel} from './referenceBlock'
 import type {AnyPropertySchema} from './api/propertySchema'
 import type {TypeContribution} from './api/blockType'
 
@@ -62,7 +62,7 @@ export const isTypeSeedDeclaration = (value: unknown): value is TypeSeedDeclarat
   // Mirrors `seedType`'s name-hygiene throw: a dynamic contribution with a
   // reference-shaped label is dropped rather than allowed to mint a backing
   // block that reads as machinery (PR #288 §7).
-  !isGrammarShapedLabel(value.label.trim()) &&
+  !isGrammarShapedLabel(value.label) &&
   isTypeSeedKey(value.seedKey) &&
   Number.isInteger(value.revision) && (value.revision as number) > 0 &&
   (value.description === undefined || typeof value.description === 'string') &&
@@ -95,15 +95,9 @@ export const seedType = (args: SeedTypeArgs): TypeSeedDeclaration => {
   if (!args.id.trim()) throw new Error('[seedType] id is required')
   if (!args.label.trim()) throw new Error('[seedType] label is required')
   // Name hygiene (PR #288 §7): `materializeTypeSeeds` mirrors the label into
-  // its backing block's `content`, so a reference-shaped label would mint a
-  // type block that reads as a span — `::`-marked, a property field row of
-  // the Types page. Seeds are code-owned, so this fails at declaration.
-  if (isGrammarShapedLabel(args.label.trim())) {
-    throw new Error(
-      `[seedType] label ${JSON.stringify(args.label)} reads as a block reference; ` +
-      'seed labels are mirrored into block content and must not be reference-shaped',
-    )
-  }
+  // its backing block's `content`. Seeds are code-owned, so this fails at
+  // declaration rather than at materialization.
+  assertNotGrammarShapedLabel(args.label, '[seedType] label')
   if (!Number.isInteger(args.revision) || args.revision <= 0) {
     throw new Error('[seedType] revision must be a positive integer')
   }

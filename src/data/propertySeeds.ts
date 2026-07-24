@@ -1,4 +1,4 @@
-import {isGrammarShapedLabel} from './referenceBlock'
+import {assertNotGrammarShapedLabel, isGrammarShapedLabel} from './referenceBlock'
 import {ChangeScope, isChangeScope} from './api/changeScope'
 import type {EnumOption} from './api/codecs'
 import type {PropertyHandle} from './api/propertySchema'
@@ -112,7 +112,7 @@ export const isPropertySeedDeclaration = (
   // Mirrors `seedProperty`'s name-hygiene throw: a dynamic contribution with
   // a reference-shaped name is dropped rather than allowed to mint a backing
   // block that reads as machinery (PR #288 §7).
-  !isGrammarShapedLabel(value.name.trim()) &&
+  !isGrammarShapedLabel(value.name) &&
   typeof value.presetId === 'string' && value.presetId.trim().length > 0 &&
   own(value, 'config') &&
   own(value, 'encodedConfig') && isRecord(value.encodedConfig) && isJsonValue(value.encodedConfig) &&
@@ -166,16 +166,9 @@ export function seedProperty<T, TConfig = void>(
   }
   if (!args.name.trim()) throw new Error('[seedProperty] name is required')
   // Name hygiene (PR #288 §7): `materializePropertySeeds` mirrors the seed
-  // name into its backing block's `content`, so a grammar-shaped name mints
-  // a row that reads as a reference span instead of a definition titled with
-  // that name — and a `::`-marked one becomes a property field row of the
-  // Properties page. Seeds are code-owned, so this fails at declaration.
-  if (isGrammarShapedLabel(args.name.trim())) {
-    throw new Error(
-      `[seedProperty] name ${JSON.stringify(args.name)} reads as a block reference; ` +
-      'seed names are mirrored into block content and must not be reference-shaped',
-    )
-  }
+  // name into its backing block's `content`. Seeds are code-owned, so this
+  // fails at declaration rather than at materialization.
+  assertNotGrammarShapedLabel(args.name, '[seedProperty] name')
   if (!Number.isInteger(args.revision) || args.revision <= 0) {
     throw new Error('[seedProperty] revision must be a positive integer')
   }

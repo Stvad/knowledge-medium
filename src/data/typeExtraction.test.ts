@@ -195,6 +195,21 @@ describe('createTypeBlock', () => {
     expect(env.repo.types.has(b)).toBe(true)
   })
 
+  // Name hygiene (PR #288 §7): the label is written as the definition
+  // block's own content, so a reference-shaped one would mint a block that
+  // reads as a span — `::`-marked, a recognized property field row of the
+  // Types page, hidden from the outline and keyed onto its cell.
+  it.each([
+    ['a marked exact ref', '::((0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b))'],
+    ['a bare exact ref', '((0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b))'],
+    ['a wikilink', '[[Person]]'],
+  ])('refuses %s as a label', async (_case, label) => {
+    env = await setup()
+    await expect(createTypeBlock(env.repo, {
+      workspaceId: WS, label, propertySchemaIds: [],
+    })).rejects.toThrow(/reads as a block reference/)
+  })
+
   it('throws when label is blank', async () => {
     env = await setup()
     await expect(createTypeBlock(env.repo, {
