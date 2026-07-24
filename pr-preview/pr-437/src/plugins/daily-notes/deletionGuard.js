@@ -1,0 +1,2 @@
+import"./schema.js";import{journalBlockId as e}from"./dailyNotes.js";var t=t=>{let n=t.peek();return n?t.hasType(`daily-note`)?`Daily notes can’t be deleted — a note exists for every date, and revisiting it would bring the page back empty. Delete its contents instead.`:t.id===e(n.workspaceId)?`The Journal can’t be deleted — it’s recreated automatically as the home for daily notes.`:null:null};export{t as dailyNotesDeletionGuard};
+//# sourceMappingURL=deletionGuard.js.map
