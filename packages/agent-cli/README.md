@@ -57,8 +57,10 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
 | `kmagent delete-block <id>` | Soft-delete a block and its descendants. |
 | `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
-| `kmagent install-extension <file> [label]` | Install a JS extension; `--verify` reports what it contributed. |
+| `kmagent new-extension <name> [dir]` | Scaffold a standalone extension project (deps, gate, `@/` declarations included) in the shape the `record-grain` guide describes. |
+| `kmagent install-extension <file> [label]` | Install a JS extension; reports whether it is actually `running` here. `--verify` reports what it contributed, plus data-model lint warnings. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
+| `kmagent audit-extension <handle>` | Audit the data an extension wrote: block ids in non-ref properties, records buried in JSON cells, properties with no registered schema, declared types nothing carries. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
 | `kmagent eval [--raw] [--file <path>] [--data <path> \| --data-json <json>] <code>` | Run JS in the app (use `return …` to print a value). See [Eval execution scope](#eval-execution-scope) for the bindings available inside the code. |
 | `kmagent reload` | Hard-reload the app tab and wait for it to reconnect. |
