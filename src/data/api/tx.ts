@@ -129,21 +129,22 @@ export interface Tx {
    *  at the type level. */
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
 
-  /** Stamp the LOCAL derived `reference_target_id` column — and ONLY that
-   *  column — without advancing `updated_at`. This is the write mode for
-   *  `core.deriveReferenceTarget`'s same-tx amendment: the column is a
-   *  per-device reflection of `content` (never in `BLOCK_UPLOAD_COLUMNS`,
-   *  never uploaded), so re-deriving it is not a synced edit and must not mint
-   *  an upload PATCH. Because the UPDATE touches no upload column and leaves
-   *  `updated_at` untouched, `blocks_upload_update`'s diff predicate stays
-   *  false and nothing is enqueued — whereas `update(..., {skipMetadata})`
-   *  still bumps `updated_at` (an upload column) and ships a redundant PATCH
-   *  (PR #288 §5, Decision A). Same-tab reactivity still fires (the write
-   *  records a `referenceTargetId`-changed snapshot); cross-tab rides the
-   *  accompanying content edit's row_event. No-op when the column already
-   *  holds `targetId`. Not for content-bundled retargets — those change a
+  /** Stamp the LOCAL derived columns — `reference_target_id` and
+   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
+   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
+   *  both columns are per-device reflections of `content` (never in
+   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
+   *  synced edit and must not mint an upload PATCH. Because the UPDATE
+   *  touches no upload column and leaves `updated_at` untouched,
+   *  `blocks_upload_update`'s diff predicate stays false and nothing is
+   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
+   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
+   *  §5, Decision A). Same-tab reactivity still fires (the write records a
+   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
+   *  the accompanying content edit's row_event. No-op when both columns
+   *  already match. Not for content-bundled retargets — those change a
    *  synced column and go through `update`, which correctly uploads. */
-  stampReferenceTarget(id: string, targetId: string | null): Promise<void>
+  stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
 
   // ──── Tree moves (structural) ────
 

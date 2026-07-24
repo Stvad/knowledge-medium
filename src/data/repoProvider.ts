@@ -38,6 +38,7 @@ import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
+  CREATE_BLOCKS_FIELD_FORM_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -364,6 +365,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // index is created after so it exists on upgrading devices too.
   await ensureBlockLocalColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_FIELD_FORM_INDEX_SQL)
   // Idempotent local migration: add `group_id` to an existing
   // tx_context / row_events (undo grouping, issue #306). MUST run
   // before ANY re-creation of the row_events trigger bodies — that

@@ -16,6 +16,9 @@ const fixture: BlockData = {
   // `parseBlockRow`'s output below matches: parseBlockRow always normalizes
   // this LOCAL-only column to `null` (PR #288 slice A), never `undefined`.
   referenceTargetId: null,
+  // Same normalize-always contract for the field-form bit (false, never
+  // undefined).
+  isFieldForm: false,
   orderKey: 'a0',
   content: 'hello',
   properties: {alias: ['Inbox']},

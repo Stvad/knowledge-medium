@@ -222,3 +222,58 @@ describe('core.deriveReferenceTarget (same-tx processor)', () => {
     expect(await readColumn('a')).toBe(STATUS_FIELD_ID)
   })
 })
+
+// ──── §7 grammar box: the `::` marked field forms derive BOTH columns ────
+
+describe('core.deriveReferenceTarget — is_field_form bit', () => {
+  const readBit = async (id: string): Promise<number | null> => {
+    const row = await sharedDb.db.get<{is_field_form: number | null}>(
+      'SELECT is_field_form FROM blocks WHERE id = ?', [id],
+    )
+    return row.is_field_form
+  }
+
+  it('stamps bit + target for the canonical ::((fieldId)) form', async () => {
+    const repo = setup()
+    await createBlock(repo, 'b-marked', `::((${STATUS_FIELD_ID}))`)
+    expect(await readColumn('b-marked')).toBe(STATUS_FIELD_ID)
+    expect(await readBit('b-marked')).toBe(1)
+  })
+
+  it('stamps bit + target for the marked aliased blockref, textually', async () => {
+    const repo = setup()
+    const uuid = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+    await createBlock(repo, 'b-aliased', `::[status](((${uuid})))`)
+    expect(await readColumn('b-aliased')).toBe(uuid)
+    expect(await readBit('b-aliased')).toBe(1)
+  })
+
+  it('stamps the bit WITHOUT a target for an unresolvable ::[[name]] (pure syntax; only the target late-binds)', async () => {
+    const repo = setup()
+    await createBlock(repo, 'b-unbound', '::[[future-field]]')
+    expect(await readColumn('b-unbound')).toBeNull()
+    expect(await readBit('b-unbound')).toBe(1)
+  })
+
+  it('leaves the bit NULL (never 0) on ordinary rows — the IS NOT 1 value-set convention', async () => {
+    const repo = setup()
+    await createBlock(repo, 'b-prose', 'just prose')
+    await createBlock(repo, 'b-plain-ref', `((${STATUS_FIELD_ID}))`)
+    expect(await readBit('b-prose')).toBeNull()
+    expect(await readBit('b-plain-ref')).toBeNull()
+    // The unmarked ref still stamps its target — every form × marked/unmarked.
+    expect(await readColumn('b-plain-ref')).toBe(STATUS_FIELD_ID)
+  })
+
+  it('clears the bit when a content edit leaves the marked form', async () => {
+    const repo = setup()
+    await createBlock(repo, 'b-clears', `::((${STATUS_FIELD_ID}))`)
+    expect(await readBit('b-clears')).toBe(1)
+    await repo.tx(
+      tx => tx.update('b-clears', {content: 'now prose'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(await readBit('b-clears')).toBeNull()
+    expect(await readColumn('b-clears')).toBeNull()
+  })
+})
