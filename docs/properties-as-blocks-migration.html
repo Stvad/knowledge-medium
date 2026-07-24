@@ -1642,7 +1642,12 @@ surface.
     <code>::[label](((fieldId)))</code> is identity-pinned like the exact form
     (the label is author-owned display text) — and it is what the alias
     lifecycle rewrites name spans <em>into</em>, so a lifecycle rewrite can
-    never eject a row from machinery (§9).</dd>
+    never eject a row from machinery (§9). The rewrite's form choice itself
+    carries the §9 whole-span guard (PR #417 review): this form is UUID-only
+    while the exact form admits renderable non-UUID ids, so a target the
+    aliased form cannot express fails the parse-back and the rewrite falls
+    to canonical <code>::((A))</code> (marked) or stays unrewritten +
+    reported (prose) rather than emitting content that never stamps.</dd>
   <dt><strong>Columns</strong></dt>
   <dd><code>reference_target_id</code> (stamped for every form ×
     marked/unmarked combination, each through its usual branch: purely
@@ -2127,13 +2132,20 @@ supabase skill if it's kept.
     no-successor behavior — which for a marked row yields
     <code>::[α](((A)))</code>: still a field row, identity-pinned to the
     released claimant, tombstone-resolvable like any id row. The rewrite
-    carries the same label guard pinned for export (PR #417 review:
-    <code>renderAliasedBlockref</code> strips <code>]</code>/newline, so a
-    lossy α would silently change the displayed name): render, parse back,
-    compare — on a lossy label a <em>marked</em> row falls back to canonical
-    <code>::((A))</code> (its label is recovered from the definition at
-    render time via the name→content mirror), while prose keeps the
-    sanitized-label blockref, the lifecycle's existing documented trade-off.
+    carries the same guard pinned for export, widened to the <em>whole
+    span</em> (PR #417 review ×2: <code>renderAliasedBlockref</code> strips
+    <code>]</code>/newline, so a lossy α would silently change the displayed
+    name — and the aliased form's parser is UUID-only while exact refs admit
+    renderable non-UUID ids, so a non-UUID target A renders a span that
+    parses back as <em>nothing</em> and would never re-stamp): render, parse
+    back through the parser that owns the form, compare target <em>and</em>
+    label — on any mismatch a <em>marked</em> row falls back to canonical
+    <code>::((A))</code> (the exact form's kernel grammar is the broad one,
+    so it can express every renderable id; the label is recovered from the
+    definition at render time via the name→content mirror), while prose
+    keeps the sanitized-label blockref for label-only lossiness — the
+    lifecycle's existing documented trade-off — and is left unrewritten +
+    listed in the flow's report when the target itself can't round-trip.
     Release
     therefore never unbinds machinery and mints no seat (seats arise only
     from names that never resolved — §7's paste case). <em>Re-binding to a
@@ -2175,7 +2187,14 @@ supabase skill if it's kept.
     contract: the plan's source enumeration is <em>alias-keyed with a target
     disjunction</em> — the renaming claimant OR a provably-untouched machine
     α-keyed seat (the same §7 seat predicate) — so window-bound spans
-    rewrite with the rest. A user edit landing in the window keeps its
+    rewrite with the rest; and it runs behind the same
+    <em>references-parse fence</em> as the delete/merge/AC enumerations
+    (PR #417 review: <code>block_references</code> is written post-commit
+    and the processors launch asynchronously, so a <code>::[[old]]</code>
+    row edited or pasted just before the rename can have <em>no edge at
+    all</em> — the missing-edge case, distinct from the seat-swapped one —
+    and an unfenced scan never plans its rewrite; drain the parse queue
+    before the read phase, the same-tx bit/content scan as audit). A user edit landing in the window keeps its
     content (the rewrite's later-edit-wins skip) — the row then reads as an
     unbound marked row with the create/rebind affordance, the standard
     honest state, never silent reinterpretation.
@@ -2631,7 +2650,19 @@ supabase skill if it's kept.
     backlinks therefore answer <em>"which blocks use this property?"</em> — a
     deliberate feature, and also what lets definition merge/rename retargeting
     reach field rows at all (the maintenance passes walk the raw reference
-    table). Backlink <em>display</em> filtering is <strong>role-based, not
+    table). That dependency pins a hygiene invariant on <em>definition
+    ids</em> (PR #417 review): <code>block_references</code> records
+    UUID-shaped span targets only (the inline parser's deliberate
+    strictness against prose <code>((…))</code>), while §7's exact form
+    admits renderable non-UUID ids — a definition with a non-UUID id would
+    classify via the broad kernel grammar yet be invisible to every
+    table-walking pass (used-by counts, merge/delete retarget sweeps). All
+    mint paths produce UUIDs today (uuidv4 creates, uuidv5 seeds);
+    <code>addSchema</code> rejects a caller-supplied non-UUID definition id
+    as one more member of the §7 hygiene family, and the AC/flip preflight
+    reports any legacy offender. The kernel grammar itself stays broad —
+    the constraint is on definition ids, not on what a reference row may
+    target. Backlink <em>display</em> filtering is <strong>role-based, not
     depth-based</strong> (re-specified for the <code>::</code> grammar — the
     earlier "value rows and deeper" rule predated nested machinery, and
     PR #417 review caught that it would drop or misattribute a machinery row's
@@ -2955,11 +2986,14 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     tombstone leaves no properties diff — §9); the rename plan's source
     enumeration is alias-keyed with the claimant-or-provable-seat target
     disjunction, and its lossy-name fallback for marked rows is canonical
-    <code>::((A))</code>, never a pinned label (§9); the label round-trip guard
-    (render → parse back → compare) applies at <em>every</em> span-rendering
+    <code>::((A))</code>, never a pinned label (§9); the whole-span round-trip guard
+    (render → parse back through the owning parser → compare target
+    <em>and</em> label; the aliased form is UUID-only, so non-UUID targets
+    fail it too) applies at <em>every</em> span-rendering
     site — export (AC), release (§9), rename fallback (§9), property-wins
     prose pins (AC) — marked rows falling back to canonical id form, prose
-    to sanitized-label + report.</li>
+    to sanitized-label + report (unrewritten + reported when the target
+    itself can't round-trip).</li>
   <li><strong>Recognition &amp; predicates (standalone).</strong> The
     tombstone-resolved leg of condition 3 — a fieldId-keyed read consulting
     tombstoned definition rows (today <code>propertyDefinitionMetadata</code>
@@ -2974,14 +3008,19 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     <code>aliasSeatSeed(alias)</code>, no user-authored children, generated
     property children ignored (§7); the same predicate is AC's
     merge-recommended test, the pristine sentinel sufficient-never-necessary
-    (§7); delete/merge referrer enumeration — and AC property-wins span
-    enumeration — runs behind the references-parse fence, the same-tx bit
-    as its audit (B2, AC).</li>
+    (§7); delete/merge referrer enumeration — and the AC property-wins and
+    rename-plan span enumerations — run behind the references-parse fence,
+    the same-tx bit as its audit (B2, AC, §9); every repair/rederive
+    candidate scan carries the <code>'::%'</code> content-shape twin
+    (§11 A).</li>
   <li><strong>Hygiene &amp; seeds (standalone).</strong> Grammar-shaped
     names rejected via one shared predicate at every label→content
     mirror — <code>addSchema</code>/rename, property seed
     validation/harvest, type labels (<code>createTypeBlock</code> + type
-    seeds), and as hard flip blockers in orphan-key synthesis (§7, §11); AC's seeded half is an Automation-scoped repair
+    seeds), and as hard flip blockers in orphan-key synthesis (§7, §11);
+    definition ids are UUID-shaped — enforced at <code>addSchema</code>,
+    preflight-reported for legacy rows — so the reference table the
+    lifecycle machinery walks is complete over field rows (§9 References); AC's seeded half is an Automation-scoped repair
     pass over existing live seed rows — <code>materializeSeeds</code> skips
     them (AC); and a one-line comment fix someday: the
     <code>targets.ts</code> docblock's stale "system:&lt;userId&gt; author"
@@ -3040,7 +3079,15 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         aliases that arrived while the app was closed; the sweep runs at deep idle
         with CAS-per-row writes). The §9 additive re-derive — alias late-binding on
         arrival and on local alias-seat minting — shipped here with slice A rather
-        than waiting for C's sweep. The history/undo seam still applies
+        than waiting for C's sweep. Every one of these repair scans prefilters
+        candidates by content shape (cheap <code>TRIM(content) LIKE</code>
+        probes for <code>[[…]]</code>/<code>((…))</code>) before the real
+        parse — the marked grammar adds the <code>'::%'</code> twin to
+        <em>each</em> of them (PR #417 review: the paste path can mint a
+        <code>::[[future-field]]</code> seat <em>after</em> same-tx derive
+        ran, leaving target NULL; a rederive scan that only matches bare
+        bracket prefixes never revisits the row, so it would sit bit=1 /
+        target-NULL forever and never bind after AC). The history/undo seam still applies
         (PR-review P2, adapted): same-tx processors are skipped on undo replay
         (§12), so the snapshots and replay SQL carry <em>both</em> derived columns —
         pinned by test —
