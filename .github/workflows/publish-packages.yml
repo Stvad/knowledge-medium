@@ -6,11 +6,16 @@ name: Publish packages
 # no-op. See scripts/publish-packages.mjs for the per-package logic.
 #
 # Two jobs, on purpose (OIDC supply-chain isolation): `build` installs the whole
-# workspace and compiles the packages — i.e. runs third-party install/build code
-# — but holds NO id-token. `publish` holds `id-token: write` (the OIDC publish
-# capability) but runs NO third-party code: it only downloads the prebuilt dist
-# and `npm publish --ignore-scripts`. So a malicious transitive postinstall in
-# the build can't reach the token that mints npm releases.
+# workspace, compiles the packages, and `pnpm pack`s each into a tarball — i.e.
+# runs third-party install/build code, and is where workspace: dep ranges get
+# rewritten to concrete semver (pnpm pack's doing, at pack time — see
+# scripts/publish-packages.mjs) — but holds NO id-token. `publish` holds
+# `id-token: write` (the OIDC publish capability) but runs NO third-party code
+# and NO pnpm workspace operations at all: it only downloads the prebuilt
+# tarballs and `npm publish --ignore-scripts` each one directly (a tarball's
+# manifest is already-resolved static content, so publishing it needs no
+# workspace resolution). So a malicious transitive postinstall in the build
+# can't reach the token that mints npm releases.
 on:
   workflow_run:
     workflows: ["Run Tests"]
@@ -84,16 +89,21 @@ jobs:
           test -s packages/agent-cli/dist/cli.js
           test -s packages/agent-dispatch/dist/daemon.js
 
-      - name: Upload built package dists
+      # Full install + workspace links are live here, so this is where
+      # `pnpm pack` rewrites each package's workspace:^ deps to a concrete
+      # semver range in the tarball's manifest (see scripts/publish-packages.mjs
+      # and the comment in pnpm-workspace.yaml) — the publish job below never
+      # runs pnpm and so could never do this rewrite itself.
+      - name: Pack packages
+        run: node scripts/publish-packages.mjs --pack
+
+      - name: Upload packed tarballs
         uses: actions/upload-artifact@v4
         with:
-          name: package-dists
-          # Least-common-ancestor of these two paths is `packages/`, so the
-          # artifact holds agent-cli/dist + agent-dispatch/dist; the publish job
-          # downloads it back under `packages/`.
-          path: |
-            packages/agent-cli/dist
-            packages/agent-dispatch/dist
+          name: package-tarballs
+          # scripts/publish-packages.mjs --pack writes here; the publish job
+          # downloads it back to the same `packed/` path it reads from.
+          path: packed
           if-no-files-found: error
           retention-days: 1
 
@@ -115,31 +125,43 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
+      # No pnpm here at all, on purpose — this job's whole point is to run no
+      # workspace operations (module comment at the top of the file). Only
+      # Node + npm below, for the registry auth and the actual publish.
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '26.x'
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted Publishing (OIDC) needs npm >= 11.5.1; the npm bundled with node
-      # drifts per release. Pin to a specific 11.x rather than @latest: @latest currently
-      # resolves to npm 12.0.0, which crashes provenance generation with
-      # "Cannot find module 'sigstore'" (npm/cli#9722). Bump deliberately once
-      # that's fixed and released. --ignore-scripts keeps this token-bearing job
-      # script-free by construction (npm@11.18.0 ships none today, but a future
-      # pin bump shouldn't be able to silently run install code beside the OIDC
-      # token).
-      - name: Ensure npm supports trusted publishing
+      # LOAD-BEARING for Trusted Publishing: this job publishes directly with
+      # `npm publish` (no pnpm delegation anymore — the build job's `pnpm
+      # pack` already did the one thing that needed pnpm, rewriting
+      # workspace:^ ranges into the tarball's manifest), so THIS npm's version
+      # governs the OIDC exchange and provenance/sigstore attestation
+      # outright. Pinned because @latest currently resolves to npm 12.0.0,
+      # which crashes provenance generation ("Cannot find module 'sigstore'",
+      # npm/cli#9722). The pin also backs scripts/publish-packages.mjs's
+      # `npm view` idempotency pre-check. NOTE: re-evaluate this pin if the
+      # packageManager pnpm version ever changes — it no longer has anything
+      # to do with npm here (that delegation is gone); it would only affect
+      # `pnpm pack`'s rewrite behavior in the build job. --ignore-scripts
+      # keeps this token-bearing job script-free by construction
+      # (npm@11.18.0 ships none today, but a future pin bump shouldn't be
+      # able to silently run install code beside the OIDC token).
+      - name: Install npm for the publish + pre-check
         run: npm install -g npm@11.18.0 --ignore-scripts
 
-      # Bring in the dist built by the token-less build job. This job runs no
-      # pnpm install and publishes with --ignore-scripts, so no third-party code
-      # executes alongside the id-token.
-      - name: Download built package dists
+      # Bring in the tarballs packed by the token-less build job. This job
+      # runs no pnpm install and no pnpm workspace operations at all — it
+      # only reads each tarball's already-resolved manifest and publishes it
+      # with --ignore-scripts, so no third-party code executes alongside the
+      # id-token.
+      - name: Download packed tarballs
         uses: actions/download-artifact@v4
         with:
-          name: package-dists
-          path: packages
+          name: package-tarballs
+          path: packed
 
       - name: Publish changed packages
-        run: node scripts/publish-packages.mjs
+        run: node scripts/publish-packages.mjs --publish

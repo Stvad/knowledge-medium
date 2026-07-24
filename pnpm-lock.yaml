@@ -334,7 +334,7 @@ importers:
   packages/agent-dispatch:
     dependencies:
       '@knowledge-medium/agent-cli':
-        specifier: ^0.3.0
+        specifier: workspace:^
         version: link:../agent-cli
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
