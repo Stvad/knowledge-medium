@@ -64,9 +64,10 @@ export const FIELD = {
   rolloverHour: 'strength:rolloverHour',
   cadenceDays: 'strength:cadenceDays',
   roundTo: 'strength:roundTo',
-  /** JSON map {altGroupKey: chosenExerciseName} — which option of each plan
-   *  `or`-group the user is currently tracking. User state, not program
-   *  state, so the plan outline stays read-only. */
+  /** JSON map {altGroupKey: optionKey} — which option of each plan
+   *  `or`-group the user is currently tracking (option block id, or its name
+   *  for an untyped plan). User state, not program state, so the plan
+   *  outline stays read-only. */
   altChoices: 'strength:altChoices',
   // program (blocks in the plan outline) — the parser reads these; they
   // override whatever the prose on the same line would have implied.
@@ -81,8 +82,8 @@ export const FIELD = {
   kind: 'strength:kind',
   catchUpIncrement: 'strength:catchUpIncrement',
   catchUpRpe: 'strength:catchUpRpe',
-  /** On an `or`-group: which option name to track when the user hasn't
-   *  chosen one. */
+  /** On an `or`-group: a ref to the option block to track when the user
+   *  hasn't chosen one (a bare name is still accepted). */
   altDefault: 'strength:default',
   /** The app's own (un-namespaced) type-membership list — read to tell a
    *  declared exercise definition from a plain note. */

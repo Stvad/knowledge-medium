@@ -7,7 +7,7 @@
  *  turn a draft into what the store materializes and what "Finish" prunes.
  */
 
-import type {ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
+import type {AltOption, ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
 import {workingWeight} from '../engine/progression'
 import type {LiveWorkout} from '../km/history'
 import type {ExerciseDraft, FinishPlan, WorkoutDraft} from '../km/store'
@@ -43,7 +43,7 @@ export interface DraftExercise {
   /** Set when this exercise is the chosen option of a plan `or`-group, so the
    *  UI can offer a switch to the other options. */
   altGroupKey?: string
-  altOptions?: readonly string[]
+  altOptions?: readonly AltOption[]
   sets: DraftSet[]
   /** The exercise entry block once materialized. */
   blockId?: string

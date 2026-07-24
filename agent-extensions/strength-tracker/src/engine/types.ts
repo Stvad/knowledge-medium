@@ -55,12 +55,24 @@ export interface ExerciseConfig {
   /** Demo/technique links lifted from the plan line's markdown links. */
   videos?: readonly ExerciseVideo[]
   /** When this exercise is the resolved option of a plan `or`-group: the
-   *  group's stable key (the group block id) and every option's name. The
-   *  engine ignores these — they exist so the UI can offer a switch, and so
-   *  a switch reselects a different option of the same slot. */
+   *  group's stable key (the group block id) and every option in the slot.
+   *  The engine ignores these — they exist so the UI can offer a switch, and
+   *  so a switch reselects a different option of the same slot. */
   altGroupKey?: string
-  altOptions?: readonly string[]
+  altOptions?: readonly AltOption[]
 }
+
+/** One option of an `or`-group. Carries the block behind it when the plan is
+ *  a typed outline, so a choice survives renaming the option. */
+export interface AltOption {
+  name: string
+  defId?: string
+}
+
+/** How an option is addressed once chosen (stored in the plan's
+ *  `strength:default` and in the user's `altChoices`): the block id when
+ *  there is one, else the name — which is all a hand-written plan has. */
+export const altOptionKey = (option: AltOption): string => option.defId ?? option.name
 
 export interface ExerciseVideo {
   label: string
@@ -207,7 +219,7 @@ export interface PrescribedExercise {
   note?: string
   videos?: readonly ExerciseVideo[]
   altGroupKey?: string
-  altOptions?: readonly string[]
+  altOptions?: readonly AltOption[]
   /** One line explaining where `weight` came from. Always shown: the
    *  plan's whole point is that the number is never a mystery. */
   rationale: string

@@ -15,6 +15,7 @@
  */
 
 import type {
+  AltOption,
   ExerciseConfig,
   ExerciseVideo,
   Milestone,
@@ -22,6 +23,7 @@ import type {
   ReentryTier,
   SessionType,
 } from '../engine/types'
+import {altOptionKey} from '../engine/types'
 import {ALT_GROUP_TYPE, EXERCISE_DEF_TYPE, FIELD} from '../km/fields'
 import {DEFAULT_CONFIG} from './defaults'
 
@@ -53,9 +55,10 @@ export interface PlanOverlay {
   reentry?: readonly ReentryTier[]
   milestones?: readonly Milestone[]
   sessionNotes?: Partial<Record<SessionType, readonly string[]>>
-  /** or-group key → chosen-by-default option name, for every `or`-group the
-   *  plan declared. `configFromPlan` resolves each group down to one
-   *  exercise using this (overridable by an explicit runtime choice). */
+  /** or-group key → the default option's key (its block id, or its name for
+   *  an untyped plan), for every `or`-group the plan declared.
+   *  `configFromPlan` resolves each group down to one exercise using this
+   *  (overridable by an explicit runtime choice). */
   altDefaults?: Record<string, string>
   warnings: readonly string[]
 }
@@ -246,6 +249,17 @@ const altOptionNodes = (group: PlanNode): readonly PlanNode[] => {
   return declared.length > 0 ? declared : group.children
 }
 
+/** Resolve a stored choice or default (`strength:default`, `altChoices`) to
+ *  one option. A block id wins; a bare name still matches, so a hand-written
+ *  plan — and anything chosen before the outline was typed — keeps working. */
+const matchOption = <T extends AltOption>(
+  options: readonly T[],
+  wanted: string | undefined,
+): T | undefined =>
+  wanted === undefined || wanted === ''
+    ? undefined
+    : options.find(o => o.defId === wanted) ?? options.find(o => o.name === wanted)
+
 const parseSessions = (
   root: PlanNode,
   increments: {upper: number; lower: number},
@@ -295,12 +309,11 @@ const parseSessions = (
           }
           continue
         }
-        const names = options.map(o => o.name)
+        const optionRefs: AltOption[] = options.map(o => ({name: o.name, defId: o.defId}))
         const requestedDefault = strProp(child.properties, FIELD.altDefault)
-        const defaultName = requestedDefault && names.includes(requestedDefault) ? requestedDefault : names[0]
-        altDefaults[child.id] = defaultName
+        altDefaults[child.id] = altOptionKey(matchOption(optionRefs, requestedDefault) ?? optionRefs[0])
         for (const option of options) {
-          exercises.push({...option, altGroupKey: child.id, altOptions: names})
+          exercises.push({...option, altGroupKey: child.id, altOptions: optionRefs})
           parsed += 1
         }
         continue
@@ -483,10 +496,11 @@ export const mergePlan = (overlay: PlanOverlay, base: ProgramConfig = DEFAULT_CO
  *  engine and the workout UI both want one prescription per session slot,
  *  not a menu. Preference order: an explicit runtime choice (`altChoices`,
  *  keyed by the group id), else the plan's own `strength:default`/first-
- *  option default (`altDefaults`), else the first option. The chosen
- *  exercise keeps its `altGroupKey`/`altOptions` so the UI can still offer
- *  a switch; the rest of the group is dropped. Order is preserved by
- *  keeping the winner at the group's first-appearance position. */
+ *  option default (`altDefaults`), else the first option — each looked up by
+ *  block id, falling back to name. The chosen exercise keeps its
+ *  `altGroupKey`/`altOptions` so the UI can still offer a switch; the rest
+ *  of the group is dropped. Order is preserved by keeping the winner at the
+ *  group's first-appearance position. */
 const resolveAltGroups = (
   config: ProgramConfig,
   altDefaults: Record<string, string>,
@@ -509,11 +523,7 @@ const resolveAltGroups = (
     resolvedGroups.add(key)
 
     const options = groups.get(key)!
-    const names = options.map(o => o.name)
-    const choice = altChoices[key]
-    const defaultName = altDefaults[key]
-    const chosenName = choice && names.includes(choice) ? choice : defaultName && names.includes(defaultName) ? defaultName : names[0]
-    return [options.find(o => o.name === chosenName) ?? options[0]]
+    return [matchOption(options, altChoices[key]) ?? matchOption(options, altDefaults[key]) ?? options[0]]
   })
 
   return {...config, exercises}

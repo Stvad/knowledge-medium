@@ -18,6 +18,7 @@ import {openDialog} from '@/utils/dialogs.js'
 import {detectPendingLayoff, layoffAlreadyRecorded, layoffFromPending} from '../engine/reentry'
 import {detectLeftRightAsymmetry} from '../engine/shoulder'
 import type {ExerciseVideo, SessionType} from '../engine/types'
+import {altOptionKey} from '../engine/types'
 import {SHOULDER_POLICY_BLOCK_ID} from '../km/config'
 import type {LiveWorkout} from '../km/history'
 import {
@@ -356,7 +357,7 @@ function ExerciseCard({
   onCommit: (setIdx: number, patch: Partial<DraftSet>) => void
   onToggleDone: (setIdx: number, done: boolean) => void
   onAcceptAll: () => void
-  onSwitch?: (name: string) => void
+  onSwitch?: (optionKey: string) => void
 }) {
   const range =
     ex.repMin !== undefined && ex.repMax !== undefined
@@ -391,22 +392,30 @@ function ExerciseCard({
       </div>
       {onSwitch && ex.altOptions && ex.altOptions.length > 1 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
-          {ex.altOptions.map(name => (
-            <button
-              key={name}
-              type="button"
-              onClick={() => name !== ex.exercise && onSwitch(name)}
-              aria-pressed={name === ex.exercise}
-              className={
-                'rounded-full px-2.5 py-1 text-xs ' +
-                (name === ex.exercise
-                  ? 'bg-primary/15 font-medium text-primary'
-                  : 'border border-border text-muted-foreground hover:bg-muted')
-              }
-            >
-              {name}
-            </button>
-          ))}
+          {ex.altOptions.map(option => {
+            // Which chip is lit: by block when both sides know one (so a
+            // renamed option still reads as the tracked one), else by name.
+            const current =
+              option.defId !== undefined && ex.defId !== undefined
+                ? option.defId === ex.defId
+                : option.name === ex.exercise
+            return (
+              <button
+                key={altOptionKey(option)}
+                type="button"
+                onClick={() => !current && onSwitch(altOptionKey(option))}
+                aria-pressed={current}
+                className={
+                  'rounded-full px-2.5 py-1 text-xs ' +
+                  (current
+                    ? 'bg-primary/15 font-medium text-primary'
+                    : 'border border-border text-muted-foreground hover:bg-muted')
+                }
+              >
+                {option.name}
+              </button>
+            )
+          })}
         </div>
       )}
       {ex.note && <div className="mt-1 whitespace-pre-line text-xs text-muted-foreground/70">{ex.note}</div>}

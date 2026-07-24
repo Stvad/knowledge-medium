@@ -232,35 +232,52 @@ describe('or-groups', () => {
   const altGroupPlan = (groupExtra: {id?: string; properties?: Record<string, unknown>} = {id: 'g1'}) =>
     node('**Strength Plan**', [
       node('**Session A (Thu)**', [
-        node('or', [node('Overhead press — 3×6–10'), node('Landmine press — 3×6–10')], groupExtra),
+        node('or', [
+          node('Overhead press — 3×6–10', [], {id: 'ohp'}),
+          node('Landmine press — 3×6–10', [], {id: 'landmine'}),
+        ], groupExtra),
       ]),
     ])
+
+  const chosen = (plan: PlanNode, altChoices?: Record<string, string>) =>
+    configFromPlan(plan, altChoices).config.exercises.find(e => e.altGroupKey === 'g1')
 
   it('emits every option, tagged with the group key, and defaults to the first', () => {
     const {config} = configFromPlan(altGroupPlan())
     const inGroup = config.exercises.filter(e => e.altGroupKey === 'g1')
     expect(inGroup).toHaveLength(1)
     expect(inGroup[0].name).toBe('Overhead press')
-    expect(inGroup[0].altOptions).toEqual(['Overhead press', 'Landmine press'])
+    expect(inGroup[0].altOptions).toEqual([
+      {name: 'Overhead press', defId: 'ohp'},
+      {name: 'Landmine press', defId: 'landmine'},
+    ])
   })
 
   it('resolves to an explicit runtime choice over the default', () => {
-    const {config} = configFromPlan(altGroupPlan(), {g1: 'Landmine press'})
-    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.name).toBe('Landmine press')
+    expect(chosen(altGroupPlan(), {g1: 'landmine'})?.name).toBe('Landmine press')
   })
 
-  it('honors a strength:default property over the first option', () => {
-    const plan = altGroupPlan({
-      id: 'g1',
-      properties: {'strength:kind': 'alt-group', 'strength:default': 'Landmine press'},
-    })
-    const {config} = configFromPlan(plan)
-    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.name).toBe('Landmine press')
+  it('honors a strength:default ref over the first option', () => {
+    const plan = altGroupPlan({id: 'g1', properties: {'strength:default': 'landmine'}})
+    expect(chosen(plan)?.name).toBe('Landmine press')
+  })
+
+  it('still accepts a default or a choice written as a bare name', () => {
+    // A hand-written plan has no block to point at, and choices stored
+    // before the outline was typed name their option.
+    const plan = altGroupPlan({id: 'g1', properties: {'strength:default': 'Landmine press'}})
+    expect(chosen(plan)?.name).toBe('Landmine press')
+    expect(chosen(altGroupPlan(), {g1: 'Landmine press'})?.name).toBe('Landmine press')
+  })
+
+  it('falls back to the default when a choice matches no option', () => {
+    const plan = altGroupPlan({id: 'g1', properties: {'strength:default': 'landmine'}})
+    expect(chosen(plan, {g1: 'deleted-block-id'})?.name).toBe('Landmine press')
   })
 
   it('recognizes an "or" bullet by prose alone, without a strength:kind property', () => {
     const overlay = parsePlan(altGroupPlan({id: 'g1'}))
-    expect(overlay.altDefaults).toEqual({g1: 'Overhead press'})
+    expect(overlay.altDefaults).toEqual({g1: 'ohp'})
   })
 })
 
@@ -270,12 +287,13 @@ describe('typed program blocks', () => {
   it('reads a group off its type, whatever the bullet says', () => {
     const plan = node('**Strength Plan**', [
       node('**Session A (Thu)**', [
-        node('pick one', [node('Overhead press — 3×6–10'), node('Landmine press — 3×6–10')], {
-          id: 'g1', properties: typed(['strength-alt-group']),
-        }),
+        node('pick one', [
+          node('Overhead press — 3×6–10', [], {id: 'ohp'}),
+          node('Landmine press — 3×6–10', [], {id: 'landmine'}),
+        ], {id: 'g1', properties: typed(['strength-alt-group'])}),
       ]),
     ])
-    expect(parsePlan(plan).altDefaults).toEqual({g1: 'Overhead press'})
+    expect(parsePlan(plan).altDefaults).toEqual({g1: 'ohp'})
   })
 
   it('treats only the declared children of a group as options, so a group can carry a description', () => {
@@ -294,7 +312,7 @@ describe('typed program blocks', () => {
     ])
     const {config} = configFromPlan(plan)
     expect(config.exercises.find(e => e.altGroupKey === 'g1')?.altOptions)
-      .toEqual(['Overhead press', 'Landmine press'])
+      .toEqual([{name: 'Overhead press', defId: 'ohp'}, {name: 'Landmine press', defId: 'landmine'}])
   })
 
   it('carries the definition block id onto the parsed exercise', () => {

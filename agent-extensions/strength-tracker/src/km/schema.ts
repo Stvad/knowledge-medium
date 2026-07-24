@@ -314,9 +314,10 @@ export const roundToProp = seedProperty({
   changeScope: ChangeScope.UserPrefs,
 })
 
-/** {altGroupKey: chosenExerciseName} — which option of each plan `or`-group
- *  the user is currently tracking. Kept here (user state) so the plan outline
- *  stays canonical and the extension never writes it. */
+/** {altGroupKey: optionKey} — which option of each plan `or`-group the user
+ *  is currently tracking, keyed the same way `strength:default` is (option
+ *  block id, or its name for an untyped plan). Kept here (user state) so the
+ *  plan outline stays canonical and the extension never writes it. */
 export const altChoicesProp = seedProperty<Record<string, string>>({
   seedKey: extensionPropertySeedKey('alt-choices'),
   revision: 1,
@@ -409,14 +410,16 @@ export const catchUpRpeProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Which option an `or`-group tracks until the user picks another. A name,
- *  not a ref: it's written by hand in the outline next to option lines that
- *  read as names, and an unmatched name falls back to the first option. */
+/** Which option an `or`-group tracks until the user picks another. A ref to
+ *  the option block, so renaming the option doesn't silently reset the slot
+ *  to the first alternative (the parser still accepts a bare name for a
+ *  hand-written plan). */
 export const altDefaultProp = seedProperty({
   seedKey: extensionPropertySeedKey('alt-default'),
-  revision: 1,
+  revision: 2,
   name: FIELD.altDefault,
-  preset: 'optional-string',
+  preset: 'optional-ref',
+  config: {targetTypes: [EXERCISE_DEF_TYPE]},
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
