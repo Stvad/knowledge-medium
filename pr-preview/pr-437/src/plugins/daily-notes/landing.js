@@ -1,2 +1,2 @@
-import{dailyNoteBlockId as e,getOrCreateDailyNote as t,todayIso as n}from"./dailyNotes.js";var r=async({repo:r,workspaceId:i,excludeBlockId:a})=>{let o=n();return a&&e(i,o)===a?null:(await t(r,i,o)).id};export{r as todayDailyNoteLanding};
+import{dailyNoteBlockId as e,getOrCreateDailyNote as t,todayIso as n}from"./dailyNotes.js";var r=async({repo:r,workspaceId:i,excludeBlockId:a})=>{let o=n(),s=e(i,o);return a&&(s===a||(await r.db.getOptional(`SELECT deleted FROM blocks WHERE id = ?`,[s]))?.deleted===1)?null:(await t(r,i,o)).id};export{r as todayDailyNoteLanding};
 //# sourceMappingURL=landing.js.map
