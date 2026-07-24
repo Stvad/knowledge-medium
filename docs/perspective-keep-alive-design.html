@@ -31,7 +31,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review; round 8 (2026-07-22) adds the codebase-wide seam audit (§"The broader sweep"), App/main sentinel-comment policy, and the two-PR rollout split — implementation of PR 1 (core seam + globals) starting. <strong>Last verified against code:</strong> 2026-07-22 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review; round 8 (2026-07-22) adds the codebase-wide seam audit (§"The broader sweep"), App/main sentinel-comment policy, and the two-PR rollout split — implementation of PR 1 (core seam + globals) starting. PR #425 review correction (2026-07-24): the active session id is <code>Repo</code> instance state (<code>repo.activeLayoutSessionId</code>, mirroring <code>activeWorkspaceId</code>), not a module store — three dispositions updated accordingly. <strong>Last verified against code:</strong> 2026-07-24 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -183,9 +183,12 @@ sequenced into the rollout (steps 1–2 are exactly this work):</p>
   <code>utils/navigation.ts:144</code>, <code>daily-notes/actions.ts:215</code>,
   <code>quick-find/QuickFind.tsx:371</code>, <code>alias/AliasCollisionToast.tsx:79</code>,
   <code>app-intents/index.ts:38</code> — these don't sit in a session subtree; they want "the
-  session to act on <em>right now</em>". They switch to a new
-  <code>getActiveLayoutSessionId()</code> backed by the active-session store (which defaults to the
-  base id when nothing drives it — behavior identical today, correct under perspectives).</li>
+  session to act on <em>right now</em>". They switch to <code>repo.activeLayoutSessionId</code> — an instance field on <code>Repo</code>
+  mirroring the <code>activeWorkspaceId</code> precedent (getter falls back to the base-id seed
+  when unset; the perspectives host is the setter's first caller). Injection by construction:
+  every imperative call site already holds a <code>repo</code>. <em>(Corrected in review — an
+  earlier revision prescribed a module store here, which was still an ambient read; PR #425
+  implements the Repo-field shape.)</em></li>
 </ul>
 After the sweep, the raw global has exactly <strong>one</strong> caller: the seed inside
 bootstrap/the default layout-root renderer that mints the per-device base id. It stops being an
@@ -410,9 +413,10 @@ strictly.</p>
   <span class="filepath">(src/utils/layoutSessionId.ts:60)</span> today yields the one live
   per-device id (sessionStorage in a tab, localStorage installed). That id becomes the stable
   per-device <strong>base id</strong> — it never changes, and its storage key stays where it is.
-  Alongside it, add a runtime-switchable <strong>active session id</strong> (module store à la
-  <code>createToggleStore</code>, persisted per-device separately), defaulting to the base id —
-  zero behavior change when nothing drives it. Per-perspective session ids are always derived from
+  Alongside it, the runtime-switchable <strong>active session id</strong> lives on
+  <code>Repo</code> (<code>repo.activeLayoutSessionId</code> getter +
+  <code>setActiveLayoutSessionId</code>, mirroring <code>activeWorkspaceId</code>), defaulting to
+  the base id — zero behavior change when nothing drives it. Per-perspective session ids are always derived from
   the <em>base</em> id (<code>uuidv5(baseId + ':' + perspectiveId)</code>), never from the
   currently active id — deriving from the active id would make session identity drift as you
   switch.</li>
@@ -681,8 +685,9 @@ two perspectives, once mounted in the visible one, immediately hydrates its hidd
   version-bump feedback to <code>getInitialLayout</code>); App shrinks to resolving + mounting the
   root and the always-on no-layout hashchange listener.</li>
   <li><strong>Retire the globals</strong> per §"Retiring the globals" — render-tree callers read
-  <code>layoutSessionBlockId</code> from context, imperative callers switch to the store-backed
-  <code>getActiveLayoutSessionId()</code> (defaults to the base id — no behavior change), the raw
+  <code>layoutSessionBlockId</code> from context, imperative callers read
+  <code>repo.activeLayoutSessionId</code> (Repo instance field, base-id fallback — no behavior
+  change), the raw
   global shrinks to the base-id seed; plus whatever the broader audit (§below) marks as
   cheap-to-fix-in-passing.</li>
   <li><strong>Sentinel comments in <code>App.tsx</code>/<code>main.tsx</code></strong>: boot shims,
