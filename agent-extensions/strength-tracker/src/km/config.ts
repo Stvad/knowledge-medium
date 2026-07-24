@@ -16,8 +16,8 @@ import type {Repo} from '@/data/repo.js'
 import type {ProgramConfig} from '../engine/types'
 import {DEFAULT_CONFIG} from '../program/defaults'
 import {configFromPlan, type PlanNode} from '../program/planParser'
+import {readAltChoices} from './store'
 import {
-  altChoicesProp,
   cadenceDaysProp,
   planRootProp,
   rolloverHourProp,
@@ -103,10 +103,10 @@ export const loadConfig = async (
     return {config: base, warnings: ['Plan outline could not be read — using the built-in program.'], planRootId}
   }
 
-  // Which option of each `or`-group the user is currently tracking (user
-  // state on the settings block) resolves the plan's alt-groups to one
+  // Which option of each `or`-group the user is currently tracking (choice
+  // blocks under the settings block) resolves the plan's alt-groups to one
   // exercise per slot.
-  const altChoices = read(settings, altChoicesProp)
+  const altChoices = settingsBlockId ? await readAltChoices(repo, settingsBlockId) : {}
   const {config, warnings} = configFromPlan(tree, altChoices)
   // The plan supplies program content; the settings block supplies engine
   // knobs. Re-apply the knobs so a settings override wins over the default.

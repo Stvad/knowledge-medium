@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildHistory, buildLayoffs, buildLiveWorkouts} from '../src/km/history'
+import {buildAltChoices, buildHistory, buildLayoffs, buildLiveWorkouts} from '../src/km/history'
 import {dateToDay, dayToDate} from '../src/km/day'
 import {FIELD} from '../src/km/fields'
 import {detectLeftRightAsymmetry, shoulderChecklist} from '../src/engine/shoulder'
@@ -97,6 +97,20 @@ describe('buildLiveWorkouts', () => {
     expect(live[0]).toMatchObject({id: 'w9', day: '2026-07-19', session: 'B'})
     expect(live[0].exercises[0].id).toBe('e9')
     expect(live[0].exercises[0].sets.map(s => [s.id, s.done])).toEqual([['s1', true], ['s2', false]])
+  })
+})
+
+describe('buildAltChoices', () => {
+  it('maps each answered or-group to its tracked option', () => {
+    const choice = (id: string, group: string, option: string) =>
+      block(id, 'settings', id, encode([[FIELD.choiceGroup, group], [FIELD.choiceOption, option]]))
+    expect(buildAltChoices([choice('c1', 'g1', 'opt-rdl'), choice('c2', 'g2', 'opt-ohp')]))
+      .toEqual({g1: 'opt-rdl', g2: 'opt-ohp'})
+  })
+
+  it('ignores a half-written choice rather than guessing', () => {
+    const orphan = block('c1', 'settings', 'a0', encode([[FIELD.choiceGroup, 'g1']]))
+    expect(buildAltChoices([orphan])).toEqual({})
   })
 })
 

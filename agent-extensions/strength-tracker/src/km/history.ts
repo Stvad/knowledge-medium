@@ -196,6 +196,22 @@ export const buildLiveWorkouts = (
   return live
 }
 
+/** `{groupId: optionId}` from the `or`-group choice blocks (children of the
+ *  settings block). One block per answered group; a group with no block is
+ *  absent, and falls back to the plan's own default. Pure, so the mapping is
+ *  testable without a repo. */
+export const buildAltChoices = (rows: readonly RowLike[]): Record<string, string> => {
+  const choices: Record<string, string> = {}
+  for (const row of rows) {
+    const group = row.properties[FIELD.choiceGroup]
+    const option = row.properties[FIELD.choiceOption]
+    if (typeof group === 'string' && group && typeof option === 'string' && option) {
+      choices[group] = option
+    }
+  }
+  return choices
+}
+
 export const buildLayoffs = (layoffRows: readonly RowLike[]): LayoffRecord[] => {
   const layoffs: LayoffRecord[] = []
   for (const row of layoffRows) {

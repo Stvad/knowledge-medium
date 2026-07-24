@@ -21,6 +21,11 @@ export const SETTINGS_TYPE = 'strength-settings'
 // the parser reads it as intent rather than guessing from wording.
 export const EXERCISE_DEF_TYPE = 'strength-exercise-def'
 export const ALT_GROUP_TYPE = 'strength-alt-group'
+/** One block per tracked or-group choice — user state, under the settings
+ *  block. A block (not a map in a property) so both ends are real refs: the
+ *  group and the option each see it in their backlinks, and a deleted option
+ *  leaves a visible dangling link instead of a silently ignored map entry. */
+export const ALT_CHOICE_TYPE = 'strength-alt-choice'
 
 export const FIELD = {
   // workout
@@ -64,11 +69,11 @@ export const FIELD = {
   rolloverHour: 'strength:rolloverHour',
   cadenceDays: 'strength:cadenceDays',
   roundTo: 'strength:roundTo',
-  /** JSON map {altGroupKey: optionKey} — which option of each plan
-   *  `or`-group the user is currently tracking (option block id, or its name
-   *  for an untyped plan). User state, not program state, so the plan
-   *  outline stays read-only. */
-  altChoices: 'strength:altChoices',
+  // or-group choice (one block per group the user has picked in)
+  /** Ref to the `or`-group being answered. */
+  choiceGroup: 'strength:group',
+  /** Ref to the option being tracked. */
+  choiceOption: 'strength:option',
   // program (blocks in the plan outline) — the parser reads these; they
   // override whatever the prose on the same line would have implied.
   targetSets: 'strength:targetSets',

@@ -10,19 +10,23 @@
  *  The read side lives in the pure `history.ts` module (re-exported below).
  */
 
-import {ChangeScope} from '@/data/api/index.js'
+import {ChangeScope, propertyValue} from '@/data/api/index.js'
 import {createChild} from '@/data/mutators.js'
 import type {Repo} from '@/data/repo.js'
+import {createTypedChild} from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: it carries the todo type + its
 // `status` prop, so done-ness is the native checkbox and reuses todo tooling.
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import type {LayoffRecord, SessionType} from '../engine/types'
+import {FIELD} from './fields'
 import {
+  ALT_CHOICE_TYPE,
   EXERCISE_ENTRY_TYPE,
   SET_TYPE,
   WORKOUT_TYPE,
-  altChoicesProp,
+  choiceGroupProp,
+  choiceOptionProp,
   completedAtProp,
   dateProp,
   definitionProp,
@@ -46,6 +50,7 @@ import {
 import {dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
+import {buildAltChoices} from './history'
 
 // ──── draft shapes the writer consumes ────
 
@@ -200,21 +205,58 @@ export const discardWorkout = async (repo: Repo, ids: readonly string[]): Promis
   }, {scope: ChangeScope.BlockDefault, description: 'Discard workout'})
 }
 
-/** Record which option of an `or`-group the user is now tracking, by its
- *  option key (block id, or name for an untyped plan). User state on the
- *  settings block (read-modify-write the choices map), so the plan outline
- *  stays untouched. */
+const choiceContent = (label: string): string => `Tracking: ${label}`
+
+/** Record which option of an `or`-group the user is now tracking.
+ *
+ *  One block per answered group, under the settings block, upserted — so
+ *  switching back and forth edits the same block instead of growing a log.
+ *  Both ends are refs, which is the point: the group and the chosen option
+ *  each show this in their backlinks, so "what am I tracking in this slot?"
+ *  is answerable from the plan outline itself, and an option that gets
+ *  deleted leaves a visible dangling link rather than a map entry that
+ *  silently stops matching. */
 export const writeAltChoice = async (
   repo: Repo,
   settingsBlockId: string,
   groupKey: string,
   optionKey: string,
+  label: string,
 ): Promise<void> => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
-    const block = await tx.get(settingsBlockId)
-    const current = (block?.properties[altChoicesProp.name] as Record<string, string> | undefined) ?? {}
-    await tx.setProperty(settingsBlockId, altChoicesProp, {...current, [groupKey]: optionKey})
+    const children = await tx.childrenOf(settingsBlockId)
+    const existing = children.find(child =>
+      !child.deleted && child.properties[FIELD.choiceGroup] === groupKey)
+
+    if (existing) {
+      await tx.update(existing.id, {content: choiceContent(label)})
+      await tx.setProperty(existing.id, choiceOptionProp, optionKey)
+      return
+    }
+
+    await createTypedChild(repo, tx, {
+      parentId: settingsBlockId,
+      content: choiceContent(label),
+      types: [ALT_CHOICE_TYPE],
+      properties: [
+        propertyValue(choiceGroupProp, groupKey),
+        propertyValue(choiceOptionProp, optionKey),
+      ],
+      typeSnapshot,
+    })
   }, {scope: ChangeScope.UserPrefs, description: 'Choose exercise variant'})
+}
+
+/** `{groupId: optionId}` for every answered group — the shape the plan
+ *  parser resolves `or`-groups against. An unanswered group is simply
+ *  absent and falls back to the plan's own default. */
+export const readAltChoices = async (
+  repo: Repo,
+  settingsBlockId: string,
+): Promise<Record<string, string>> => {
+  const children = await repo.block(settingsBlockId).children.load()
+  return buildAltChoices((children ?? []).filter(child => !child.deleted))
 }
 
 // ──── layoff + shoulder writes (unchanged) ────

@@ -267,7 +267,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             onAcceptAll={() => acceptAll(exIdx)}
             onSwitch={
               ex.altGroupKey && !readOnly
-                ? name => program.setAltChoice(ex.altGroupKey as string, name)
+                ? (optionKey, label) => program.setAltChoice(ex.altGroupKey as string, optionKey, label)
                 : undefined
             }
           />
@@ -357,7 +357,7 @@ function ExerciseCard({
   onCommit: (setIdx: number, patch: Partial<DraftSet>) => void
   onToggleDone: (setIdx: number, done: boolean) => void
   onAcceptAll: () => void
-  onSwitch?: (optionKey: string) => void
+  onSwitch?: (optionKey: string, label: string) => void
 }) {
   const range =
     ex.repMin !== undefined && ex.repMax !== undefined
@@ -403,7 +403,7 @@ function ExerciseCard({
               <button
                 key={altOptionKey(option)}
                 type="button"
-                onClick={() => !current && onSwitch(altOptionKey(option))}
+                onClick={() => !current && onSwitch(altOptionKey(option), option.name)}
                 aria-pressed={current}
                 className={
                   'rounded-full px-2.5 py-1 text-xs ' +

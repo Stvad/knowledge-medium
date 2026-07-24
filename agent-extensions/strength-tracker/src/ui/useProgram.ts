@@ -37,8 +37,9 @@ export interface ProgramState {
   setSession: (session: SessionType | null) => void
   prescription: Prescription
   /** Track a different option of a plan `or`-group, by its option key
-   *  (`altOptionKey`). */
-  setAltChoice: (groupKey: string, optionKey: string) => void
+   *  (`altOptionKey`). `label` is the option's name — it becomes the choice
+   *  block's readable content. */
+  setAltChoice: (groupKey: string, optionKey: string, label: string) => void
   reload: () => void
 }
 
@@ -103,9 +104,10 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     session: prescription.session,
     setSession: setSessionOverride,
     prescription,
-    setAltChoice: (groupKey, optionKey) => {
+    setAltChoice: (groupKey, optionKey, label) => {
       if (!settingsBlockId) return
-      void writeAltChoice(repo, settingsBlockId, groupKey, optionKey).then(() => setReloadKey(k => k + 1))
+      void writeAltChoice(repo, settingsBlockId, groupKey, optionKey, label)
+        .then(() => setReloadKey(k => k + 1))
     },
     reload: () => setReloadKey(k => k + 1),
   }

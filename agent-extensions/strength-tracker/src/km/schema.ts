@@ -33,6 +33,7 @@ import {
 
 import type {SessionType} from '../engine/types'
 import {
+  ALT_CHOICE_TYPE,
   ALT_GROUP_TYPE,
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
@@ -46,6 +47,7 @@ import {
 } from './fields'
 
 export {
+  ALT_CHOICE_TYPE,
   ALT_GROUP_TYPE,
   EXERCISE_DEF_TYPE,
   EXERCISE_ENTRY_TYPE,
@@ -314,16 +316,31 @@ export const roundToProp = seedProperty({
   changeScope: ChangeScope.UserPrefs,
 })
 
-/** {altGroupKey: optionKey} — which option of each plan `or`-group the user
- *  is currently tracking, keyed the same way `strength:default` is (option
- *  block id, or its name for an untyped plan). Kept here (user state) so the
- *  plan outline stays canonical and the extension never writes it. */
-export const altChoicesProp = seedProperty<Record<string, string>>({
-  seedKey: extensionPropertySeedKey('alt-choices'),
+// ──── or-group choice ────
+// Which option of a plan `or`-group the user is tracking. One block per
+// answered group, under the settings block — user state, so the plan outline
+// stays canonical and the extension never writes it. Both ends are refs: the
+// group and the option each list the choice in their backlinks, and deleting
+// an option leaves a dangling link you can see rather than a map entry that
+// silently stops matching.
+
+export const choiceGroupProp = seedProperty({
+  seedKey: extensionPropertySeedKey('choice-group'),
   revision: 1,
-  name: FIELD.altChoices,
-  preset: 'json',
-  defaultValue: {},
+  name: FIELD.choiceGroup,
+  preset: 'optional-ref',
+  config: {targetTypes: [ALT_GROUP_TYPE]},
+  defaultValue: undefined,
+  changeScope: ChangeScope.UserPrefs,
+})
+
+export const choiceOptionProp = seedProperty({
+  seedKey: extensionPropertySeedKey('choice-option'),
+  revision: 1,
+  name: FIELD.choiceOption,
+  preset: 'optional-ref',
+  config: {targetTypes: [EXERCISE_DEF_TYPE]},
+  defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
 
@@ -520,7 +537,17 @@ export const settingsType = seedType({
   label: 'Strength settings',
   description: 'Engine knobs the plan prose does not state.',
   hideFromCompletion: true,
-  properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp, altChoicesProp],
+  properties: [planRootProp, rolloverHourProp, cadenceDaysProp, roundToProp],
+})
+
+export const altChoiceType = seedType({
+  seedKey: extensionTypeSeedKey('alt-choice'),
+  revision: 1,
+  id: ALT_CHOICE_TYPE,
+  label: 'Exercise choice',
+  description: 'Which option of an or-group is currently tracked.',
+  hideFromCompletion: true,
+  properties: [choiceGroupProp, choiceOptionProp],
 })
 
 export const STRENGTH_TYPES = [
@@ -532,6 +559,7 @@ export const STRENGTH_TYPES = [
   settingsType,
   exerciseDefType,
   altGroupType,
+  altChoiceType,
 ]
 
 export const STRENGTH_PROPS = [
@@ -558,7 +586,8 @@ export const STRENGTH_PROPS = [
   rolloverHourProp,
   cadenceDaysProp,
   roundToProp,
-  altChoicesProp,
+  choiceGroupProp,
+  choiceOptionProp,
   targetSetsProp,
   repMinProp,
   repMaxProp,
