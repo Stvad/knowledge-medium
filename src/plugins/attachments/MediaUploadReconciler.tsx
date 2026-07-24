@@ -20,14 +20,13 @@
 
 import { useEffect } from 'react'
 import { useRepo } from '@/context/repo.js'
-import { getActiveUserId } from '@/data/repoProvider.js'
 import { armUploadDrain, runUploadReconcile } from './assetUpload.js'
 import { armSharedLaneTriggers } from './laneArming.js'
 
 export const MediaUploadReconciler = (): null => {
   const repo = useRepo()
   useEffect(() => {
-    const userId = getActiveUserId()
+    const userId = repo.user.id
     if (!userId) return
 
     const reconcile = () =>
@@ -41,11 +40,14 @@ export const MediaUploadReconciler = (): null => {
     reconcile()
 
     // In-session retry sweep — single-owner drain on reconnect / refocus. Reads
-    // the CURRENT active user at fire time (not the effect-time `userId`), so a
-    // sweep always targets whoever is signed in now, independent of whether an
-    // account switch happens to remount this component.
+    // `repo.user.id` at fire time rather than reusing the closed-over `userId`
+    // constant above, so the intent (whoever this effect's `repo` is bound to)
+    // stays explicit even though — since `repo` is this effect's own dependency —
+    // the two currently always agree; an account switch tears down and re-runs
+    // this effect (see repoProvider.ts / RepoProvider), it never swaps `repo` out
+    // from under a live closure.
     const sweep = () => {
-      const active = getActiveUserId()
+      const active = repo.user.id
       if (active) armUploadDrain(active)
     }
     const onVisible = () => {

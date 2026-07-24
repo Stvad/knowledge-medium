@@ -123,7 +123,11 @@ const resolverForUser = (userId: string): SyncResolver => {
 
 /** The active user id (whose per-user PowerSync DB is mounted), or null when
  *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
- *  this — re-read at call time so an account switch is reflected. */
+ *  this — re-read at call time so an account switch is reflected.
+ *
+ *  @ambient allowIn: src/data/repoProvider.ts, src/plugins/attachments/assetUpload.ts, src/plugins/attachments/assetResolver.ts
+ *  @ambientMessage getActiveUserId() reads the ambient active-user global. Use the injected channel instead: repo.user.id (a Repo/Block is already in scope at every call site) or useUser() in a component.
+ */
 export const getActiveUserId = (): string | null => activeUserId
 
 /** Whether the active session has remote sync ENABLED (vs local-only). The attachment

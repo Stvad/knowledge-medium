@@ -1,7 +1,8 @@
 import { useMedia } from 'react-use'
+import { MOBILE_BREAKPOINT_QUERY } from './viewport.js'
 
 export const useIsMobile = () => {
-  return useMedia('(max-width: 767px)', false);
+  return useMedia(MOBILE_BREAKPOINT_QUERY, false);
 }
 
 /** Whether the PRIMARY pointing device is coarse (touch/stylus) — i.e. a

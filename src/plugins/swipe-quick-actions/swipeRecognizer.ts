@@ -28,6 +28,7 @@ import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import type { BlockPointerDependencies } from '@/shortcuts/types.js'
 import { swipeProgressTickEvent } from './events.ts'
+import { isMobileViewport } from '@/utils/viewport.js'
 
 /** Arbitration key (also the recognizer id). */
 export const SWIPE_QUICK_ACTIONS_GESTURE_ID = 'swipe-quick-actions'
@@ -36,15 +37,10 @@ export const SWIPE_QUICK_ACTIONS_GESTURE_ID = 'swipe-quick-actions'
 export const SWIPE_TRIGGER_PX = 50
 /** Once travel exceeds this AND |dx| > |dy|, lock to horizontal. */
 const DIRECTION_LOCK_PX = 8
-/** The menu is mobile-only (SwipeActionMenu early-returns otherwise), so the
- *  recognizer applies the same gate at gesture time — read live so a resize
- *  doesn't leave a stale decision (the factory isn't re-run on resize). */
-const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
-
-const isMobileViewport = (): boolean =>
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
+// The menu is mobile-only (SwipeActionMenu early-returns otherwise), so the
+// recognizer applies the same gate at gesture time via `isMobileViewport` —
+// read live so a resize doesn't leave a stale decision (the factory isn't
+// re-run on resize).
 
 const isBlockEditing = (blockId: string, uiStateBlock: Block, renderScopeId?: string): boolean =>
   isFocusedBlock(uiStateBlock, blockId, renderScopeId) &&

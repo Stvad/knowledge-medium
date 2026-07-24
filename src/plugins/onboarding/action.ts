@@ -9,8 +9,7 @@
  */
 import type { Repo } from '@/data/repo'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { parseAppHash } from '@/utils/routing.js'
-import { navigateFromGlobalCommand } from '@/utils/navigation.js'
+import { activeWorkspaceIdPreferringHash, navigateFromGlobalCommand } from '@/utils/navigation.js'
 import { showProgress } from '@/utils/toast.js'
 import { GraduationCap } from 'lucide-react'
 import { seedTutorial } from './seed.ts'
@@ -50,10 +49,7 @@ export const insertTutorialAction = ({
   context: ActionContextTypes.GLOBAL,
   icon: GraduationCap,
   handler: async () => {
-    // The URL hash is the source of truth for the viewed workspace;
-    // `repo.activeWorkspaceId` can lag a recent switch (see roam-import).
-    const workspaceId =
-      parseAppHash(window.location.hash).workspaceId ?? repo.activeWorkspaceId
+    const workspaceId = activeWorkspaceIdPreferringHash(repo)
     if (!workspaceId) {
       showProgress('Insert tutorial').fail('Insert tutorial failed: no active workspace')
       return

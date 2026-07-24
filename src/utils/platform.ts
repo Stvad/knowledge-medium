@@ -15,3 +15,25 @@ export const isIOS = (): boolean => {
   return /apple/i.test(navigator.vendor ?? '')
     || /\b(CriOS|FxiOS|EdgiOS)\//.test(navigator.userAgent ?? '')
 }
+
+/** True on macOS/iOS — the single platform-Mac check shared by the
+ *  $mod-vs-Ctrl primary-modifier resolution (`canonicalizeChord.ts`,
+ *  `keyCapture.ts`) and the Mac-glyph header hints (quick-find /
+ *  find-replace / command-palette). `navigator.platform` is deprecated and
+ *  can be EMPTY on some browsers, so this also falls back to
+ *  `navigator.userAgent` — a strict widening vs. the plain
+ *  `navigator.platform`-only regex some call sites used to run on their
+ *  own: it can only newly report Mac on inputs the platform-only check used
+ *  to miss (empty `navigator.platform`), never flip a real non-Mac platform
+ *  to Mac. That "only newly report Mac on empty inputs" framing holds for
+ *  `keyCapture.ts`'s prior `Mac|iPod|iPhone|iPad` regex, but NOT for the
+ *  three HeaderItems: they previously ran a narrower
+ *  `navigator.platform.toLowerCase().includes('mac')` check with no
+ *  iPhone/iPad handling at all, so consolidating onto this shared helper is
+ *  a real, consumer-visible behavior change for them — their ⌘-vs-Ctrl+
+ *  hint now shows ⌘ on iPhone/iPad, which agrees with
+ *  `canonicalizeChord.ts`'s `$mod` resolution instead of disagreeing with
+ *  it. */
+export const isMacPlatform = (): boolean =>
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '')

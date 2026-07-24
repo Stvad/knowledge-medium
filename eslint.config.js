@@ -3,10 +3,33 @@ import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
+import ambientAccessors from './eslint-rules/ambient-accessors.js'
+import { generatedEntries, manualEntries } from './eslint-rules/ambientAccessors.data.js'
 import blockSubscriptions from './eslint-rules/block-subscriptions.js'
 import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
 import childView from './eslint-rules/child-view.js'
 import noRawSyncedTableWrites from './eslint-rules/no-raw-synced-table-writes.js'
+
+// DI-lens audit (PR #357) / follow-up (PR #424): every ambient-global
+// restriction the audit produced now lives in ambientAccessors.data.js and
+// runs through the one generic `ambient/ambient-accessors` rule below —
+// adding a restriction is a table edit (or, for a tagged export, just an
+// `@ambient` JSDoc tag — see scripts/gen-ambient-accessors.ts), never a new
+// rule instance or eslint.config.js override block. It applies EVERYWHERE,
+// including test files, same as before.
+const ambientAccessorEntries = [...generatedEntries, ...manualEntries]
+
+// Audit B3: the untyped window.CustomEvent UI bus was replaced by typed
+// channels. This one stays a plain no-restricted-syntax selector (not a
+// table entry) because tests are legitimately EXEMPT from it — see the
+// test-file override below — unlike every ambient-accessors entry, which
+// applies to tests too.
+const b3CustomEventRestriction = {
+  selector:
+    "CallExpression[callee.object.name=/^(window|globalThis)$/][callee.property.name='dispatchEvent'] > NewExpression[callee.name='CustomEvent']",
+  message:
+    'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
+}
 
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
@@ -34,6 +57,7 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
       block: blockSubscriptions,
       'callback-set': preferCallbackSet,
+      ambient: ambientAccessors,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
@@ -70,12 +94,12 @@ export default tseslint.config(
       // `runActionById`). A genuine broadcast keeps a CustomEvent but
       // must opt in explicitly with an inline disable + justification
       // (see runtimeEvents.ts / propertyNavigation.ts / agent-runtime).
-      'no-restricted-syntax': ['error', {
-        selector:
-          "CallExpression[callee.object.name=/^(window|globalThis)$/][callee.property.name='dispatchEvent'] > NewExpression[callee.name='CustomEvent']",
-        message:
-          'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
-      }],
+      'no-restricted-syntax': ['error', b3CustomEventRestriction],
+      // DI-lens audit (PR #357) / table-driven follow-up (PR #424): see
+      // ambientAccessors.data.js for the restrictions themselves
+      // (getActiveUserId, navigator.platform, the mobile breakpoint
+      // literal) and their allowlists.
+      'ambient/ambient-accessors': ['error', { entries: ambientAccessorEntries }],
       // Warn (not error) when a Set of function callbacks reinvents the
       // listener add/notify/unsubscribe loop CallbackSet provides. Soft nudge:
       // new code keeps re-rolling `new Set<() => void>()` because nothing points
@@ -180,11 +204,13 @@ export default tseslint.config(
   },
   {
     // Tests legitimately dispatch synthetic CustomEvents to drive
-    // components, so the B3 guard above doesn't apply to them. Tests also
-    // build throwaway function-Sets for mocks/fakes, so the CallbackSet
-    // nudge is off there too. Test fixtures/harnesses also legitimately
-    // poke synced tables directly (seeding rows, asserting on raw SQL
-    // shapes) without going through repo.tx.
+    // components, so the B3 selector above doesn't apply to them. (The
+    // ambient-accessors table rule, unlike B3, applies to tests too — see
+    // the comment on that rule above — so it's deliberately NOT turned off
+    // here.) Tests also build throwaway function-Sets for mocks/fakes, so
+    // the CallbackSet nudge is off there too. Test fixtures/harnesses also
+    // legitimately poke synced tables directly (seeding rows, asserting on
+    // raw SQL shapes) without going through repo.tx.
     files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': 'off',

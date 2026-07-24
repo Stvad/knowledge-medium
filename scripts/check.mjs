@@ -14,6 +14,7 @@ const parallelTasks = [
   {name: 'lint', args: ['run', 'lint']},
   {name: 'test', args: ['run', 'test']},
   {name: 'check:sync-config', args: ['run', 'check:sync-config']},
+  {name: 'check:ambient-accessors', args: ['run', 'check:ambient-accessors']},
   {name: 'check:rpc-projections', args: ['run', 'check:rpc-projections']},
   {name: 'check:no-service-role', args: ['run', 'check:no-service-role']},
 ]

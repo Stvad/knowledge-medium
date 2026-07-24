@@ -23,6 +23,8 @@
     "test:coverage": "vitest run --coverage",
     "gen:sync-config": "vite-node scripts/gen-sync-config.ts",
     "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
+    "gen:ambient-accessors": "vite-node scripts/gen-ambient-accessors.ts",
+    "check:ambient-accessors": "vite-node scripts/gen-ambient-accessors.ts -- --check",
     "check:rpc-projections": "vite-node scripts/check-rpc-projections.ts",
     "check:no-service-role": "bash scripts/check-no-service-role.sh",
     "audit:attachments-ciphertext": "vite-node scripts/attachments-ciphertext-audit.ts",

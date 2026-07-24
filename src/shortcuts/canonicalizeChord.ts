@@ -16,6 +16,7 @@
  *    is the real gap this module closes. Split on space FIRST, then
  *    canonicalise each press.
  */
+import { isMacPlatform } from '@/utils/platform.js'
 
 /**
  * Canonical modifier names a descriptor can carry. `$mod` is the
@@ -77,12 +78,6 @@ export interface TouchChordDescriptor {
   readonly phase: TouchPhase
 }
 
-/** Platform-primary detection for `$mod` (Cmd on Apple, Ctrl elsewhere),
- *  mirroring tinykeys so keyboard and pointer agree on what `$mod` means. */
-const platformPrimaryIsMeta = (): boolean =>
-  typeof navigator !== 'undefined' &&
-  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '')
-
 /** Stable modifier order, so the same physical chord always serialises
  *  identically. `$mod` first, then the literal modifiers (`Meta` in the
  *  secondary slot, mirroring how chordFromEvent orders the captured chord). */
@@ -100,7 +95,7 @@ const resolveModifier = (token: string): Modifier | null => {
       return '$mod'
     case 'meta':
     case 'os':
-      return platformPrimaryIsMeta() ? '$mod' : 'Meta'
+      return isMacPlatform() ? '$mod' : 'Meta'
     case 'ctrl':
     case 'control':
       return 'Control'
@@ -232,7 +227,7 @@ export interface PointerModifierState {
  *  resolving `$mod` to the platform-primary key. Exact-match semantics: a flag
  *  not listed must be absent on the event. */
 const requiredModifierFlags = (mods: readonly Modifier[]): PointerModifierState => {
-  const primaryIsMeta = platformPrimaryIsMeta()
+  const primaryIsMeta = isMacPlatform()
   let shiftKey = false, altKey = false, ctrlKey = false, metaKey = false
   for (const mod of mods) {
     if (mod === 'Shift') shiftKey = true

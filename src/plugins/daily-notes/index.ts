@@ -56,7 +56,7 @@ import {
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { parseAppHash } from '@/utils/routing.js'
+import { activeWorkspaceIdPreferringHash } from '@/utils/navigation.js'
 import { CalendarDays } from 'lucide-react'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
@@ -132,8 +132,7 @@ export const openDailyNotePickerAction = (
   context: ActionContextTypes.GLOBAL,
   icon: CalendarDays,
   handler: async () => {
-    const route = parseAppHash(window.location.hash)
-    const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
+    const workspaceId = activeWorkspaceIdPreferringHash(repo)
     const initialIso = workspaceId
       ? (await resolveCurrentDailyNoteIso(repo, workspaceId)) ?? undefined
       : undefined

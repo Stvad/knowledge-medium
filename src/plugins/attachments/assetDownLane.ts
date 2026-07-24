@@ -5,11 +5,15 @@
  *
  * One pass walks the ACTIVE workspace's `media` blocks (the §8 "scoped to active /
  * opened workspaces" rule — never cold workspaces, the sync-flood lesson) and hands
- * the absent ones to the resolver's backlog lane. The resolver is the active user's
- * singleton, so materializability / keys / the byte-store scope all resolve against
- * whoever is signed in — the down-lane only READS + caches locally, so unlike the
- * up-lane it needs no per-user session binding (a mid-switch pass just fails closed
- * for the wrong user and the re-arm picks up the new workspace).
+ * the absent ones to the resolver's backlog lane. The WHOLE pass — the lock name,
+ * the one-shot OPFS presence enumeration, AND the resolver's own materializability /
+ * keys / byte-store reads — is bound to the ONE user read at the boundary
+ * (`repo.user.id`) via {@link getAssetResolverForUser}, like the up-lane's
+ * per-user session binding (assetUpload.ts's `laneKeyDeps`/`captureDepsFor`): a
+ * pass that's still in flight when the active account switches must keep resolving
+ * against the user it started for, not silently start mixing scope with whoever
+ * is active NOW (review #424 P2 — a stale `present` entry could otherwise read as
+ * "already there" for the new user's absent asset and skip storing it).
  *
  * Durable storage (§8 "so the byte store isn't best-effort evicted") is NOT requested
  * here: `navigator.storage.persist()` is origin-wide and already requested once at boot
@@ -17,9 +21,9 @@
  * cooldown + permission-denied guards), so the OPFS byte store is already covered.
  */
 
-import { getActiveUserId, isRemoteSyncActive } from '@/data/repoProvider.js'
+import { isRemoteSyncActive } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
-import { getAssetResolver } from './assetResolver.js'
+import { getAssetResolverForUser } from './assetResolver.js'
 import { getByteStore } from './byteStore.js'
 import { reconcileDownLane } from './downLane.js'
 import { runSingleOwner } from './laneLock.js'
@@ -80,7 +84,10 @@ export const collectReplicationRequests = async (
  *  walk runs INSIDE the lock, so a non-owner tab does zero work. */
 export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Promise<void> => {
   if (!isRemoteSyncActive()) return // local-only: no remote object store to replicate from
-  const userId = getActiveUserId()
+  // A single read, not a live re-read across the pass below — `repo.user.id` binds
+  // the WHOLE pass (lock, presence enumeration, and the resolver below) to ONE
+  // user, sourced from the injected Repo instead of the ambient module global.
+  const userId = repo.user.id
   if (!userId) return
   await runSingleOwner(downLaneLockName(userId, workspaceId), async () => {
     const requests = await collectReplicationRequests(repo, workspaceId)
@@ -94,6 +101,8 @@ export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Pro
     } catch (err) {
       console.warn(`[media] down-lane presence scan failed for ${workspaceId}; probing per-block`, err)
     }
-    await reconcileDownLane(requests, { resolver: getAssetResolver(), present })
+    // Bound to `userId`, NOT `getAssetResolver()`'s ambient singleton — see the
+    // file header + assetResolver.ts's `getAssetResolverForUser` doc (review #424 P2).
+    await reconcileDownLane(requests, { resolver: getAssetResolverForUser(userId), present })
   })
 }

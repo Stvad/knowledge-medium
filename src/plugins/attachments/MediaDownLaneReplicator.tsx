@@ -24,7 +24,6 @@
 
 import { useEffect } from 'react'
 import { useRepo } from '@/context/repo.js'
-import { getActiveUserId } from '@/data/repoProvider.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { DOWN_LANE_SWEEP_INTERVAL_MS, runDownLaneReconcile } from './assetDownLane.js'
@@ -61,7 +60,7 @@ export const MediaDownLaneReplicator = (): null => {
     schedulePass() // initial catch-up
     // Shared lane triggers: re-run once initial sync settles (just-arrived blocks get
     // walked) and on reconnect (retry offline misses) — both idle-deferred via schedulePass.
-    const disposeShared = armSharedLaneTriggers(getActiveUserId(), schedulePass, schedulePass)
+    const disposeShared = armSharedLaneTriggers(repo.user.id, schedulePass, schedulePass)
     // The slow sweep heals the §9 backstop (a late origin upload) + advances the budget tail.
     const sweep = setInterval(schedulePass, DOWN_LANE_SWEEP_INTERVAL_MS)
 

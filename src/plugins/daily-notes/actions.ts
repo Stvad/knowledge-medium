@@ -46,8 +46,8 @@ import {
 } from '@/shortcuts/types.js'
 import { CalendarDays, CalendarPlus } from 'lucide-react'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
-import { parseAppHash } from '@/utils/routing.js'
 import {
+  activeWorkspaceIdPreferringHash,
   navigate,
   navigateFromGlobalCommand,
   resolveGlobalCommandTarget,
@@ -109,8 +109,7 @@ export const resolveCurrentDailyNoteIso = async (
 ): Promise<string | null> => (await resolveDailyNoteAnchor(repo, workspaceId))?.iso ?? null
 
 const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
-  const route = parseAppHash(window.location.hash)
-  const fallbackWorkspaceId = route.workspaceId ?? repo.activeWorkspaceId
+  const fallbackWorkspaceId = activeWorkspaceIdPreferringHash(repo)
   if (!fallbackWorkspaceId) return
 
   // Anchor on the targeted panel's workspace uniformly — so under a
