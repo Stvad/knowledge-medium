@@ -187,16 +187,9 @@ export const sideProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Accepted — a pre-filled set starts false so an untouched set records
- *  nothing; only done sets count toward history and working weight. */
-export const doneProp = seedProperty({
-  seedKey: extensionPropertySeedKey('set-done'),
-  revision: 1,
-  name: FIELD.done,
-  preset: 'boolean',
-  defaultValue: false,
-  changeScope: ChangeScope.BlockDefault,
-})
+// Done-ness is NOT a strength prop: a set block is also a `todo`, so the
+// accepted state is the todo plugin's `status` (open|done) — see store.ts,
+// where each set gets the todo type + status, and history.ts, which reads it.
 
 export const completedAtProp = seedProperty({
   seedKey: extensionPropertySeedKey('set-completed-at'),
@@ -350,7 +343,7 @@ export const setType = seedType({
   label: 'Set',
   description: 'One set within an exercise entry.',
   hideFromCompletion: true,
-  properties: [weightProp, repsProp, rpeProp, sideProp, doneProp, completedAtProp],
+  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp],
 })
 
 export const layoffType = seedType({
@@ -387,7 +380,6 @@ export const STRENGTH_PROPS = [
   repsProp,
   rpeProp,
   sideProp,
-  doneProp,
   completedAtProp,
   layoffFromProp,
   layoffToProp,

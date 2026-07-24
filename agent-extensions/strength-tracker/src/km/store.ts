@@ -13,6 +13,9 @@
 import {ChangeScope} from '@/data/api/index.js'
 import {createChild} from '@/data/mutators.js'
 import type {Repo} from '@/data/repo.js'
+// A logged set composes with the built-in todo: it carries the todo type + its
+// `status` prop, so done-ness is the native checkbox and reuses todo tooling.
+import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import type {LayoffRecord, SessionType} from '../engine/types'
 import {
@@ -22,7 +25,6 @@ import {
   altChoicesProp,
   completedAtProp,
   dateProp,
-  doneProp,
   exerciseProp,
   layoffDaysProp,
   layoffFromProp,
@@ -79,11 +81,13 @@ export interface MaterializedWorkout {
 const sessionLabel = (session: SessionType): string =>
   session === 'mini' ? 'Mini day' : `Session ${session}`
 
+// No ✓ prefix — the composed todo checkbox conveys done-ness.
 const setContent = (set: SetDraft, unit: string): string => {
   const side = set.side ? `${set.side} ` : ''
-  const check = set.done ? '✓ ' : ''
-  return `${check}${side}${set.weight}${unit} × ${set.reps}`
+  return `${side}${set.weight}${unit} × ${set.reps}`
 }
+
+const todoStatus = (done: boolean): 'open' | 'done' => (done ? 'done' : 'open')
 
 // ──── live logging writes ────
 
@@ -126,9 +130,10 @@ export const materializeWorkout = async (
         await tx.setProperty(setId, repsProp, s.reps)
         await tx.setProperty(setId, rpeProp, s.rpe)
         await tx.setProperty(setId, sideProp, s.side)
-        await tx.setProperty(setId, doneProp, s.done)
         await tx.setProperty(setId, completedAtProp, s.completedAt)
         await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
+        await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
+        await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
         setIds.push(setId)
       }
       exercises.push({id: exId, setIds})
@@ -152,8 +157,8 @@ export const writeSet = async (
     await tx.setProperty(setId, repsProp, set.reps)
     await tx.setProperty(setId, rpeProp, set.rpe)
     await tx.setProperty(setId, sideProp, set.side)
-    await tx.setProperty(setId, doneProp, set.done)
     await tx.setProperty(setId, completedAtProp, set.completedAt)
+    await tx.setProperty(setId, todoStatusProp, todoStatus(set.done))
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
 }
 

@@ -27,7 +27,7 @@ describe('day round-trip', () => {
 })
 
 const setBlock = (id: string, parentId: string, orderKey: string, weight: number, reps: number, extra: Array<[string, unknown]> = []) =>
-  block(id, parentId, orderKey, encode([[FIELD.weight, weight], [FIELD.reps, reps], [FIELD.done, true], ...extra]))
+  block(id, parentId, orderKey, encode([[FIELD.weight, weight], [FIELD.reps, reps], [FIELD.todoStatus, 'done'], ...extra]))
 
 describe('buildHistory', () => {
   it('assembles workouts, exercise entries, and their done set blocks', () => {
@@ -43,7 +43,7 @@ describe('buildHistory', () => {
       setBlock('s2', 'e1', 'a1', 135, 10),
       setBlock('s3', 'e2', 'a0', 95, 8),
       // an un-accepted set is ignored
-      block('s4', 'e1', 'a2', encode([[FIELD.weight, 135], [FIELD.reps, 4], [FIELD.done, false]])),
+      block('s4', 'e1', 'a2', encode([[FIELD.weight, 135], [FIELD.reps, 4], [FIELD.todoStatus, 'open']])),
     ]
 
     const history = buildHistory([workout], [bench, row], sets)
@@ -79,7 +79,7 @@ describe('buildLiveWorkouts', () => {
     const squat = block('e9', 'w9', 'a0', encode([[FIELD.exercise, 'Squat'], [FIELD.unit, 'lb']]))
     const sets = [
       setBlock('s1', 'e9', 'a0', 185, 8),
-      block('s2', 'e9', 'a1', encode([[FIELD.weight, 185], [FIELD.reps, 8], [FIELD.done, false]])),
+      block('s2', 'e9', 'a1', encode([[FIELD.weight, 185], [FIELD.reps, 8], [FIELD.todoStatus, 'open']])),
     ]
     const live = buildLiveWorkouts([wip], [squat], sets)
     expect(live).toHaveLength(1)

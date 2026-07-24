@@ -46,7 +46,8 @@ const date = (row: RowLike, name: string): Date | undefined => {
   return Number.isNaN(d.getTime()) ? undefined : d
 }
 
-const bool = (row: RowLike, name: string): boolean => row.properties[name] === true
+/** A set is accepted when its composed todo `status` is done. */
+const isDone = (row: RowLike): boolean => row.properties[FIELD.todoStatus] === 'done'
 
 const side = (row: RowLike, name: string): 'L' | 'R' | undefined => {
   const raw = row.properties[name]
@@ -106,7 +107,7 @@ export const buildHistory = (
         sets: (setsByExercise.get(entry.id) ?? [])
           .slice()
           .sort(compareByOrderKey)
-          .filter(s => bool(s, FIELD.done))
+          .filter(isDone)
           .map(toSetRecord),
       })),
     })
@@ -150,7 +151,7 @@ const toLiveSet = (row: RowLike): LiveSet => ({
   reps: num(row, FIELD.reps, 0),
   ...(optNum(row, FIELD.rpe) !== undefined ? {rpe: optNum(row, FIELD.rpe)} : {}),
   ...(side(row, FIELD.side) !== undefined ? {side: side(row, FIELD.side)} : {}),
-  done: bool(row, FIELD.done),
+  done: isDone(row),
   ...(optNum(row, FIELD.completedAt) !== undefined ? {completedAt: optNum(row, FIELD.completedAt)} : {}),
 })
 

@@ -33,8 +33,13 @@ export const FIELD = {
   reps: 'strength:reps',
   rpe: 'strength:rpe',
   side: 'strength:side',
-  /** Accepted — only done sets count toward history / working weight. */
-  done: 'strength:done',
+  /** Done-ness composes with the built-in todo: a set block is also a `todo`,
+   *  so "accepted" is the todo `status` (open|done) and every set renders as a
+   *  native checkbox you can tick anywhere. This is the todo plugin's own
+   *  (un-namespaced) prop name — the integration point. */
+  todoStatus: 'status',
+  /** Explicit completion time — kept separate rather than inferred from the
+   *  row's update time (which is noisy). */
   completedAt: 'strength:completedAt',
   // layoff
   layoffFrom: 'strength:from',
