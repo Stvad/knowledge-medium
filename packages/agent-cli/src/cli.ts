@@ -41,6 +41,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
+import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const kernelTypesDir = path.join(here, 'kernel-types')
@@ -885,6 +886,34 @@ cli
   .command('uninstall-extension <handle>', wireDescription('uninstall-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'uninstall-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('new-extension <name> [dir]', 'Scaffold a new extension (default dir: agent-extensions/<slug>). Emits a small WORKING extension in the shape the record-grain guide asks for — namespaced types, a ref property instead of an id string, one block per record via createTypedChild, done-ness composed from the built-in todo, a pure read path with a test. Refuses to overwrite an existing directory.')
+  .action(async (name: string, dir: string | undefined) => {
+    const slug = slugify(name)
+    const target = dir ?? path.join('agent-extensions', slug)
+    // Never clobber: a scaffold that silently overwrote a real extension
+    // would be the worst possible first impression.
+    const existing = await fs.stat(target).catch(() => null)
+    if (existing) throw new Error(`${target} already exists — pass a different directory`)
+
+    const files = extensionScaffold(name)
+    for (const file of files) {
+      const full = path.join(target, file.path)
+      await fs.mkdir(path.dirname(full), {recursive: true})
+      await fs.writeFile(full, file.contents, 'utf8')
+    }
+    process.stdout.write(`${JSON.stringify({
+      directory: target,
+      name: titleize(slug),
+      files: files.map(file => file.path),
+      next: [
+        `cd ${target} && pnpm run check`,
+        `pnpm agent install-extension "${target}/dist/${titleize(slug)}.js"`,
+        `pnpm agent enable-extension "${titleize(slug)}"`,
+      ],
+    }, null, 2)}\n`)
   })
 
 cli

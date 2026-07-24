@@ -8,6 +8,13 @@ inner loop (this repo is built primarily by agents — keep the edit→verify cy
 - the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
 - `pnpm run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`pnpm agent types`).
 
+data-model grain (read BEFORE designing what an extension or plugin stores):
+- `pnpm agent describe-runtime --guide record-grain` is the doctrine, with a worked example. Short version: a block is the unit of everything the app gives you free (SQL, references/backlinks, undo, sync, hand-editing) — anything you'd want to see, link, undo or edit on its own is its own block, never a row inside a JSON property. Pointers are `ref`/`optional-ref`/`refList` properties with `targetTypes`, never id strings and never names. Compose an existing type (`todo`, `page`, daily note) before declaring its fields again. Namespace every type id and property name. Type the blocks you READ too, not just the ones you write.
+- `createTypedChild(repo, tx, {...})` (`@/data/typedRecords.js`) writes one record block — create + type-tag + typed properties in one call — so the granular shape stays as cheap as the shortcut.
+- new extension: `pnpm agent new-extension "<Name>"` scaffolds that shape (namespaced types, a ref property, todo composition, a pure read path with a test) into `agent-extensions/<slug>`.
+- after installing: `pnpm agent install-extension` reports `running` — an install that stores source nothing executes registers no schemas, and every write that depends on them lands raw. `pnpm agent audit-extension <label>` then checks the DATA: block ids parked in non-ref properties, records buried in JSON cells, properties with no registered schema.
+- `install-extension --verify` also lints the source for those same mistakes at declaration level; each warning names the catalog pattern that fixes it.
+
 delegate code to cheaper models:
 - top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a cheaper subagent when the work is bounded and easy to audit, and keep the deciding / auditing / data-synthesis in the main loop.
 - Claude Code: use the Agent tool with `model:` set, or `agent(prompt, {model})` in a Workflow. Rough default (your call per task): `sonnet` for substantive implementation, `haiku` for trivial / mechanical edits.
