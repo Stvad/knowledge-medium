@@ -104,6 +104,7 @@ describe('authoring catalog example drift guard', () => {
     const examples = collectExamples()
     const expectedPaths = [
       'guides.block-backed-config.examples[0] (Define a prefs type and read/write a setting)',
+      'guides.record-grain.examples[0] (A record per block: typed, composed with todo, linked back to its definition)',
       'storage.patterns.settings-via-property-editor-override',
       'storage.patterns.user-prefs-config',
     ].sort()

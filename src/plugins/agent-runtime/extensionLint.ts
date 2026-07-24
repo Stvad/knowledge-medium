@@ -11,11 +11,21 @@
  * advisory (not errors) lets a one-off / experimental extension still
  * land; the agent's choice to ignore is visible and reversible.
  *
- * Each rule has two parts:
- *   - `match(source)` — quick regex/text check. Cheap.
- *   - `applies(source, hits)` — optional second-pass refinement. Skips
- *     the warning if the hits are actually OK (e.g. localStorage key
- *     contains a credential-looking substring).
+ * Each rule tests either a line at a time (`testLine` — keeps the
+ * `example` field meaningful and bails cheaply) or the whole source
+ * (`testSource`), which the data-model rules need: a `seedProperty({…})`
+ * declaration spans lines, and the smell is in the *combination* of its
+ * `name` and `preset`, never in one line alone.
+ *
+ * Two kinds of rule live here:
+ *   - runtime plumbing (localStorage, stored ids, window events)
+ *   - data-model grain (records in a JSON cell, block ids as plain
+ *     strings, un-namespaced type ids, re-inventing a core concept)
+ *
+ * The grain rules are deliberately conservative, because they can only
+ * see the *declaration*. Their live-data counterpart is
+ * `audit-extension`, which reads the blocks an extension actually wrote
+ * and can tell a block id from an external id by looking it up.
  */
 
 export interface ExtensionLintWarning {
@@ -41,12 +51,78 @@ interface LintRule {
   // triggers the rule, null otherwise. Line-at-a-time keeps the
   // `example` field meaningful and lets us bail before assembling a
   // full body match.
-  testLine(line: string): string | null
-  // Optional whole-source escape hatch — if the source has a marker
-  // like `// lint-ok: <rule-id> (reason)`, suppress the warning.
-  // Keeps the lint advisory without poisoning the agent into never
-  // using a pattern in a justified case.
+  testLine?(line: string): string | null
+  // Test the whole source instead, for rules whose signal spans lines
+  // (a multi-line `seedProperty({…})` declaration). Return the excerpt
+  // to show as `example`, or null.
+  testSource?(source: string): string | null
+  // Escape hatch for both kinds: a `// lint-ok: <rule-id> (reason)`
+  // marker anywhere in the source suppresses the rule. Keeps the lint
+  // advisory without poisoning the agent into never using a pattern in
+  // a justified case.
 }
+
+// ──── declaration reading (data-model rules) ────
+
+/** Pull out each `fn(` … `)` call body in the source, paren-balanced, so a
+ *  rule can reason about a whole `seedProperty({…})` declaration rather than
+ *  one line of it. Depth counting is naive about parens inside string
+ *  literals; the length cap keeps a mis-parse bounded to one declaration. */
+const declarationChunks = (source: string, fn: string): string[] => {
+  const chunks: string[] = []
+  const opener = `${fn}(`
+  let from = 0
+  for (;;) {
+    const start = source.indexOf(opener, from)
+    if (start === -1) break
+    let depth = 0
+    let end = start + opener.length - 1
+    const limit = Math.min(source.length, start + 4000)
+    for (let i = start + opener.length - 1; i < limit; i += 1) {
+      const ch = source[i]
+      if (ch === '(') depth += 1
+      else if (ch === ')') {
+        depth -= 1
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    chunks.push(source.slice(start, end + 1))
+    from = start + opener.length
+  }
+  return chunks
+}
+
+/** Read a `key: 'value'` string field out of a declaration chunk. */
+const stringField = (chunk: string, key: string): string | undefined =>
+  new RegExp(String.raw`\b${key}\s*:\s*['"]([^'"]*)['"]`).exec(chunk)?.[1]
+
+/** True when the declaration sets `defaultValue` to an array literal — the
+ *  clearest "this cell holds a list" signal, independent of naming. */
+const hasArrayDefault = (chunk: string): boolean =>
+  /\bdefaultValue\s*:\s*\[/.test(chunk)
+
+/** The part of a property name after its `namespace:` prefix. */
+const localName = (name: string): string => name.split(':').at(-1) ?? name
+
+/** Short excerpt naming the offending declaration, for the `example` field. */
+const declarationExample = (fn: string, name: string | undefined): string =>
+  `${fn}({… name: '${name ?? '?'}' …})`
+
+const JSON_PRESETS = new Set(['json', 'optional-json', 'raw-json'])
+const STRING_PRESETS = new Set(['string', 'optional-string'])
+/** Names that read as "a list of things lives in here". */
+const COLLECTION_NAME_RE = /(list|items?|entries|records|rows|sets|history|log|choices|map)$/i
+/** Names that read as "this points at another block". `foo_id` (snake) is
+ *  deliberately excluded: that's the shape the catalog recommends for
+ *  *external* ids (`readwise:highlight_id`), which are not block refs. */
+const POINTER_NAME_RE = /(^|[A-Za-z])(BlockId|blockId|Id|Ref|Refs)$|^(ref|refs|target|parent|owner)$/
+/** Concepts the built-in `todo` type already owns. Bare `status` is NOT
+ *  here — a domain status ("in-progress" → "done" for a whole session) is a
+ *  real thing an extension may own, unlike done-ness itself. */
+const TODO_CONCEPT_RE = /^(done|is-?done|completed?|complete|checked|due|due-?date|due-?at)$/i
 
 const isLikelyCredentialKey = (key: string): boolean =>
   /token|secret|password|api[_-]?key|credentials?|auth/i.test(key)
@@ -138,6 +214,70 @@ const rules: LintRule[] = [
       return match[0]
     },
   },
+  {
+    rule: 'records-in-json-prop',
+    catalogPattern: 'record-grain',
+    message:
+      'A list of records stored in one JSON property is a cell the rest of the app can\'t see into: you can\'t query an individual record in SQL, reference one, undo one edit, or hand-edit it in the outline — and a concurrent write clobbers the whole list. Make each record a child block with typed properties (see the `record-grain` guide). If the value is genuinely a list of scalars rather than records, use the `string-list` preset, or `refList` when the entries are block ids.',
+    testSource(source) {
+      for (const chunk of declarationChunks(source, 'seedProperty')) {
+        const preset = stringField(chunk, 'preset')
+        if (!preset || !JSON_PRESETS.has(preset)) continue
+        const name = stringField(chunk, 'name') ?? ''
+        if (!hasArrayDefault(chunk) && !COLLECTION_NAME_RE.test(localName(name))) continue
+        return declarationExample('seedProperty', name)
+      }
+      return null
+    },
+  },
+  {
+    rule: 'block-id-as-string',
+    catalogPattern: 'record-grain',
+    message:
+      'A property that points at another block should use the `ref` / `optional-ref` / `refList` preset with `config: {targetTypes: [...]}`, not a plain string. A ref projects into real references, so the target\'s backlinks show what points at it, retargeting follows moves, and the link survives renaming the target. A bare id string is invisible to all of that. (External ids — `readwise:highlight_id` and friends — are correctly plain strings; this rule only flags names that read like block pointers.)',
+    testSource(source) {
+      for (const chunk of declarationChunks(source, 'seedProperty')) {
+        const preset = stringField(chunk, 'preset')
+        if (!preset || !STRING_PRESETS.has(preset)) continue
+        const name = stringField(chunk, 'name') ?? ''
+        if (!POINTER_NAME_RE.test(localName(name))) continue
+        return declarationExample('seedProperty', name)
+      }
+      return null
+    },
+  },
+  {
+    rule: 'unnamespaced-declaration',
+    catalogPattern: 'record-grain',
+    message:
+      'Type ids and property names share one global namespace across every plugin and extension in the workspace. A bare noun (`set`, `entry`, `status`) collides with whatever else claims it, and the loser silently gets the other schema\'s codec. Prefix both with your extension: type `myext-set`, property `myext:weight`. If you meant to reuse an existing concept, import its schema instead of re-declaring the name.',
+    testSource(source) {
+      for (const chunk of declarationChunks(source, 'seedType')) {
+        const id = stringField(chunk, 'id')
+        if (id && !/[-:.]/.test(id)) return declarationExample('seedType', id)
+      }
+      for (const chunk of declarationChunks(source, 'seedProperty')) {
+        const name = stringField(chunk, 'name')
+        if (name && !name.includes(':')) return declarationExample('seedProperty', name)
+      }
+      return null
+    },
+  },
+  {
+    rule: 'reinvented-core-concept',
+    catalogPattern: 'record-grain',
+    message:
+      'Done-ness and due dates already belong to the built-in `todo` type. Declaring your own means your records don\'t render as checkboxes, don\'t appear in todo queries or the agenda, and don\'t benefit from anything built on todos later. Compose instead: give the block BOTH types (`repo.addTypeInTx(tx, id, TODO_TYPE, {}, snapshot)`) and write the todo\'s own `status` prop, importing `{statusProp, TODO_TYPE}` from `@/plugins/todo/schema.js`. Keep your own property only for what todo does not model.',
+    testSource(source) {
+      for (const chunk of declarationChunks(source, 'seedProperty')) {
+        const name = stringField(chunk, 'name')
+        if (name && TODO_CONCEPT_RE.test(localName(name))) {
+          return declarationExample('seedProperty', name)
+        }
+      }
+      return null
+    },
+  },
 ]
 
 const SUPPRESS_RE = /\/\/\s*lint-ok\s*:\s*([\w-]+)/
@@ -161,20 +301,30 @@ export const lintExtensionSource = (
   const warnings: ExtensionLintWarning[] = []
   const lines = source.split('\n')
 
+  const record = (rule: LintRule, example: string): void => {
+    warnings.push({
+      rule: rule.rule,
+      message: rule.message,
+      catalogPattern: rule.catalogPattern,
+      example: example.length > 120 ? `${example.slice(0, 117)}...` : example,
+    })
+  }
+
   for (const rule of rules) {
     if (suppressed.has(rule.rule)) continue
     // Take only the first hit per rule — agents don't need 12 copies
     // of the same warning; one is enough to act on, the others get
     // fixed alongside.
+    if (rule.testSource) {
+      const example = rule.testSource(source)
+      if (example) record(rule, example)
+      continue
+    }
+    if (!rule.testLine) continue
     for (const line of lines) {
       const example = rule.testLine(line)
       if (example) {
-        warnings.push({
-          rule: rule.rule,
-          message: rule.message,
-          catalogPattern: rule.catalogPattern,
-          example: example.length > 120 ? `${example.slice(0, 117)}...` : example,
-        })
+        record(rule, example)
         break
       }
     }
