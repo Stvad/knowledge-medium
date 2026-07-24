@@ -298,3 +298,80 @@ describe('core.aliasClaimRederive — alias claims schedule the late-binding red
     await expectStamped(repo, 'referrer', 'target')
   })
 })
+
+describe('late-binding stamp → owner-cell re-projection (§9 recognition, issue #402 group 1)', () => {
+  // A marked `::[[Foo]]` row written before anything claims "Foo" derives
+  // to a NULL target, so §9's third condition (the target resolves to a
+  // definition) fails and the row is NOT yet a field row. The alias claim
+  // is what makes it one — and the stamp that records it is a raw UPDATE
+  // outside `repo.tx` (it must not advance `updated_at`), so NO processor
+  // observes the transition. Without an explicit re-projection the owner's
+  // cell would stay unkeyed until some unrelated edit to the subtree.
+  const flipWorkspace = (): Promise<unknown> => sharedDb.db.execute(
+    `INSERT INTO workspaces
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+     VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+    [WS, 'test ws', 'user-1'],
+  )
+
+  const cellOf = async (id: string, name: string): Promise<unknown> => {
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id],
+    )
+    return (JSON.parse(row.properties_json) as Record<string, unknown>)[name]
+  }
+
+  /** owner → marked-or-plain `[[Foo]]` child → value child, with nothing
+   *  claiming "Foo" yet. */
+  const seedUnresolvedRow = async (repo: Repo, content: string): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({
+        id: STATUS_FIELD_ID, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'status',
+      })
+      await tx.create({id: 'row', workspaceId: WS, parentId: 'owner', orderKey: 'a0', content})
+      await tx.create({id: 'value', workspaceId: WS, parentId: 'row', orderKey: 'a0', content: 'done'})
+    }, {scope: ChangeScope.BlockDefault})
+    expect(await readColumn('row')).toBeNull()
+    expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
+  }
+
+  const claimAlias = async (repo: Repo): Promise<void> => {
+    await repo.tx(tx => tx.setProperty(STATUS_FIELD_ID, aliasesProp, ['Foo']),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
+    })
+  }
+
+  it('projects the owner cell when the claim turns a marked row into a field row', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await runPass(repo)
+    await seedUnresolvedRow(repo, '::[[Foo]]')
+
+    await claimAlias(repo)
+
+    // The stamp made `row` a recognized field row for the status property,
+    // and its value child projected onto the owner in the same repair.
+    await vi.waitFor(async () => {
+      expect(await cellOf('owner', statusSchema.name)).toBe('done')
+    })
+  })
+
+  it('leaves the owner cell alone when the late-bound row is UNMARKED', async () => {
+    await flipWorkspace()
+    const repo = setup()
+    await runPass(repo)
+    await seedUnresolvedRow(repo, '[[Foo]]')
+
+    await claimAlias(repo)
+
+    // Same stamp, same resolution — but no `::`, so the row is an ordinary
+    // reference and `value` is an ordinary child, not a property value.
+    await repo.awaitProcessors()
+    expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
+  })
+})

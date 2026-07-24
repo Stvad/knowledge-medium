@@ -121,6 +121,10 @@ import {
   rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from './propertyChildren'
+import {
+  reprojectOwnersForRowStates,
+  type ProjectionLookups,
+} from './internals/propertyChildrenProcessor'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
@@ -2693,6 +2697,12 @@ export class Repo {
     updates: readonly ReferenceTargetStamp[],
   ): Promise<void> {
     const CHUNK = 200
+    // Rows this pass turned INTO recognized field rows, for the owner-cell
+    // re-projection below. Only the "turns on" direction is reachable here:
+    // the CAS above only writes rows still at a NULL target, and §9
+    // recognition needs a resolved target — so no row this method touches
+    // was recognized beforehand.
+    const newlyRecognized: BlockData[] = []
     for (let i = 0; i < updates.length; i += CHUNK) {
       const chunk = updates.slice(i, i + CHUNK)
       const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
@@ -2716,7 +2726,11 @@ export class Repo {
             [targetId, isFieldForm ? 1 : null, id],
           )
           const before = parseBlockRow(freshRow)
-          snapshots.set(id, {before, after: {...before, referenceTargetId: targetId, isFieldForm}})
+          const after = {...before, referenceTargetId: targetId, isFieldForm}
+          snapshots.set(id, {before, after})
+          if (targetId !== null && isFieldForm && after.parentId !== null) {
+            newlyRecognized.push(after)
+          }
         }
       })
       if (snapshots.size === 0) continue
@@ -2737,6 +2751,63 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+    }
+    await this.reprojectOwnersOfStampedFieldRows(newlyRecognized)
+  }
+
+  /** Owner-cell re-projection for rows a raw stamp just turned into
+   *  recognized field rows (PR #288 §9 / issue #402's derivation-liveness
+   *  group). The stamp itself deliberately bypasses `repo.tx` to preserve
+   *  `updated_at`, so no processor sees it — but resolving a `::[[Foo]]`
+   *  row's target IS the transition that makes it a field row, and the
+   *  owner's cell must gain the key at that moment rather than waiting for
+   *  an unrelated edit to the subtree.
+   *
+   *  Reachable post-flip only, hence the gate: a hand-typed or imported
+   *  `::[[status]]` written before anything claimed "status" derives to a
+   *  NULL target, and the alias-claim drain (or the next open's sweep)
+   *  resolves it later. Unlike the stamp, this write goes through `repo.tx`
+   *  — it's a cell write on the PARENT, which is ordinary derived state,
+   *  and the projection's `skipMetadata` keeps it off "last edited".
+   *
+   *  Running outside the PROJECT processor means the cell write is NOT
+   *  settled, so `core.materializePropertyChildren` sees it as a key
+   *  change. That is safe HERE specifically because this path can only ADD
+   *  a key: recognition just turned on, so the name was absent, and a field
+   *  row with no parseable value leaves it absent (the projection's
+   *  `propertiesEqual` short-circuit — no write at all). The hazard
+   *  `settledWrites` guards against is the opposite direction, a projected
+   *  UNSET read back as a user's key deletion, which cannot occur from
+   *  here. The follow-on materialize then converges on the very children
+   *  the key was projected from: field-row selection is bit+fieldId, so it
+   *  finds the `::[[Foo]]` row rather than minting a canonical twin. */
+  private async reprojectOwnersOfStampedFieldRows(
+    rows: readonly BlockData[],
+  ): Promise<void> {
+    if (rows.length === 0) return
+    const byWorkspace = new Map<string, BlockData[]>()
+    for (const row of rows) {
+      const bucket = byWorkspace.get(row.workspaceId)
+      if (bucket) bucket.push(row)
+      else byWorkspace.set(row.workspaceId, [row])
+    }
+    for (const [workspaceId, workspaceRows] of byWorkspace) {
+      if (!(await readIsChildBackedWorkspace(this.db, workspaceId))) continue
+      const resolver = this.propertySchemaResolverFor(workspaceId)
+      const lookups: ProjectionLookups = {
+        resolveFieldSchema: (fieldId) => {
+          const resolution = resolver.resolveField(fieldId)
+          return resolution.status === 'resolved' ? resolution.schema : undefined
+        },
+      }
+      const CHUNK = 100
+      for (let i = 0; i < workspaceRows.length; i += CHUNK) {
+        const chunk = workspaceRows.slice(i, i + CHUNK)
+        await this.tx(
+          tx => reprojectOwnersForRowStates(tx, chunk, lookups),
+          {scope: ChangeScope.BlockDefault},
+        )
+      }
     }
   }
 

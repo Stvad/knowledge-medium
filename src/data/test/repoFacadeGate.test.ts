@@ -138,6 +138,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   schedulePropertyDefinitionMigrations: 'invoked by constructor-bound facetBridge',
   scheduleReferenceTargetNameRederive: 'invoked by constructor-bound facetBridge',
   stampReferenceTargets: 'private; raw source-NULL writes via schedule-driven jobs',
+  reprojectOwnersOfStampedFieldRows: 'private; reached only from stampReferenceTargets (schedule-driven jobs)',
   referenceTargetLookupsVia: 'private read — builds resolver closures, assigns no fields',
   runPropertyDefinitionMigrations: 'private; jobs are enqueued via the facetBridge-bound schedule',
   runPropertyDefinitionMigrationBatch: 'private; jobs are enqueued via the facetBridge-bound schedule',

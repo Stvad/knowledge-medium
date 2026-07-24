@@ -77,6 +77,11 @@ interface PropertyChildrenLookups {
   resolveNameSchema: ResolveNameSchema
 }
 
+/** The projection direction's lookup half, on its own: raw repair paths
+ *  (`Repo.stampReferenceTargets`) re-project owner cells without a
+ *  materialize direction to feed. */
+export type ProjectionLookups = Pick<PropertyChildrenLookups, 'resolveFieldSchema'>
+
 // §9 flat recognition deleted the write-side positional machinery this
 // factory used to build (the interior-ancestry walk and the prospective-
 // field-row content probe): classification is content-intrinsic via the
@@ -109,7 +114,7 @@ const addAffectedProjection = (
   out: Map<string, AffectedProjection>,
   parentId: string | null,
   fieldId: string | undefined,
-  lookups: PropertyChildrenLookups,
+  lookups: ProjectionLookups,
 ): void => {
   if (parentId === null) return
   if (fieldId === undefined) return
@@ -126,7 +131,7 @@ const collectAffectedProjection = async (
   tx: Tx,
   out: Map<string, AffectedProjection>,
   row: BlockData | null,
-  lookups: PropertyChildrenLookups,
+  lookups: ProjectionLookups,
 ): Promise<void> => {
   if (row === null) return
   // The row as a FIELD ROW (parent = owning block): §9 selection keys on
@@ -191,7 +196,7 @@ const fieldRowsForSchema = (
 const reprojectParentField = async (
   tx: Tx,
   affected: AffectedProjection,
-  lookups: PropertyChildrenLookups,
+  lookups: ProjectionLookups,
 ): Promise<void> => {
   const schema = lookups.resolveFieldSchema(affected.fieldId)
   if (!schema) return
@@ -218,6 +223,36 @@ const reprojectParentField = async (
   // Idempotence short-circuit (§5 invariant 1).
   if (propertiesEqual(parent.properties, nextProperties)) return
   await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
+}
+
+/**
+ * Re-project every owner cell the given row STATES can affect — the
+ * projection direction as a reusable unit, so the one place that knows how
+ * a changed row maps to (owner, field) pairs stays the one place.
+ *
+ * `core.projectPropertyChildren` feeds it both sides of each change; the
+ * raw column-repair paths (`Repo.stampReferenceTargets`, reached from the
+ * per-open sweep and the alias-claim late-binding drain) feed it the rows
+ * they stamped. Those write `reference_target_id` / `is_field_form` with a
+ * bare UPDATE to preserve `updated_at`, which means NO processor observes
+ * them — and a stamp that resolves a `::[[Foo]]` row's target is exactly
+ * the moment that row starts being a recognized field row (§9 condition 3),
+ * so without this call the owner's cell would never gain the key.
+ *
+ * Caller owns the flip gate: pre-flip there are no cells to project.
+ */
+export const reprojectOwnersForRowStates = async (
+  tx: Tx,
+  rowStates: Iterable<BlockData | null>,
+  lookups: ProjectionLookups,
+): Promise<void> => {
+  const affected = new Map<string, AffectedProjection>()
+  for (const row of rowStates) {
+    await collectAffectedProjection(tx, affected, row, lookups)
+  }
+  for (const projection of affected.values()) {
+    await reprojectParentField(tx, projection, lookups)
+  }
 }
 
 // ─── cell → children (materialize) ───────────────────────────────────────
@@ -509,16 +544,12 @@ export const PROJECT_PROPERTY_CHILDREN_PROCESSOR = defineSameTxProcessor({
   settledWrites: true,
   apply: async (event, ctx) => {
     if (!(await ctx.tx.isPropertyChildBackedWorkspace(event.workspaceId))) return
-    const lookups = lookupsFor(ctx, event.workspaceId)
-    const affected = new Map<string, AffectedProjection>()
-    for (const row of event.changedRows) {
-      // Both sides of a move: the old parent loses the key, the new parent
-      // gains it (§9 reparent semantics).
-      await collectAffectedProjection(ctx.tx, affected, row.before, lookups)
-      await collectAffectedProjection(ctx.tx, affected, row.after, lookups)
-    }
-    for (const projection of affected.values()) {
-      await reprojectParentField(ctx.tx, projection, lookups)
-    }
+    // Both sides of a move: the old parent loses the key, the new parent
+    // gains it (§9 reparent semantics).
+    await reprojectOwnersForRowStates(
+      ctx.tx,
+      event.changedRows.flatMap(row => [row.before, row.after]),
+      lookupsFor(ctx, event.workspaceId),
+    )
   },
 })
