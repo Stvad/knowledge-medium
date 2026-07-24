@@ -33,6 +33,9 @@ import {
   panelBlockId,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
+import { panelHistory } from '@/utils/panelHistory'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { seedKeyProp } from '@/data/properties'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   ActionContextTypes,
@@ -1151,5 +1154,178 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(env.repo.block('victim').peek()).toBeNull()
     expect(env.repo.block('victim').peekRaw()?.deleted).toBe(true)
+  })
+
+  it('deletes the focal page and steps the panel back in history (Delete on the top-level block)', async () => {
+    // Page deletion: Delete on the panel's own focal page. The block is the
+    // scope root, so an in-place delete would tombstone the surface — the
+    // handler moves the panel off the page (history back) first, then deletes.
+    // Pages are workspace-root blocks (parentId: null), so this must work
+    // WITHOUT a parent to fall back on.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'home', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'home'})
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, 'page')
+    // The user navigated page ← home, so Back returns to 'home'.
+    panelHistory.clear('ui')
+    panelHistory.push('ui', {blockId: 'home'})
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    // The page (and its subtree) is gone…
+    expect(env.repo.block('page').peekRaw()?.deleted).toBe(true)
+    expect(env.repo.block('child').peekRaw()?.deleted).toBe(true)
+    // …and the panel stepped back to the previous page, not a tombstone.
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('home')
+    // The deleted page is purged from history — goBack parked it on the
+    // forward stack, so without the purge Forward would return to its tombstone.
+    const hist = panelHistory.getSnapshot('ui')
+    expect(hist.forward.some(e => e.blockId === 'page')).toBe(false)
+    expect(hist.back.some(e => e.blockId === 'page')).toBe(false)
+  })
+
+  it('deletes the focal page and closes the pane when there is no back-history', async () => {
+    // A top-level (parentId: null) page with no back-history: nowhere to step
+    // back to, so the pane (a real PANEL_TYPE row) closes — an empty layout
+    // re-lands on the daily note.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'child', content: 'child'})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const panelId = await insertPanelRow(env.repo, layoutSession, 'page')
+    const uiStateBlock = env.repo.block(panelId)
+    panelHistory.clear(panelId)
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    // The page is deleted and the pane (its panel row) is closed.
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+    expect(await isBlockDeleted(env.repo, panelId)).toBe(true)
+  })
+
+  it('refuses to delete the focal page in a read-only workspace (no partial navigate)', async () => {
+    // Moving the panel is a UiState write (allowed read-only) but the delete is
+    // rejected — bail before touching anything so the panel isn't stranded off
+    // a page it never deleted.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    panelHistory.clear('ui')
+    panelHistory.push('ui', {blockId: 'home'})
+    env.repo.setReadOnly(true)
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+    env.repo.setReadOnly(false)
+
+    expect(env.repo.block('page').peekRaw()?.deleted).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('page')
+  })
+
+  it('refuses to delete the focal page when it is an undeletable seed-definition block', async () => {
+    // A materialized seed-definition block (a code-owned system page) rejects
+    // its own BlockDefault delete (SeededDefinitionWriteError), even in a
+    // writable workspace. Preflight it so we don't move the panel off a page
+    // the delete then leaves alive. (Created under Automation scope — a
+    // BlockDefault create of a provenance-valid seed would itself be rejected.)
+    const seedKey = 'system:test/property/title'
+    const defId = propertyDefinitionBlockId(WS, seedKey)
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: defId,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[seedKeyProp.name]: seedKeyProp.codec.encode(seedKey)},
+      })
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.Automation})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, defId)
+    // Give it back-history so navigability is not what blocks the delete.
+    panelHistory.clear('ui')
+    panelHistory.push('ui', {blockId: 'home'})
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block(defId), uiStateBlock, scopeRootId: defId},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    // Undeletable → refused; the panel did not move off it.
+    expect(await isBlockDeleted(env.repo, defId)).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe(defId)
+  })
+
+  it('refuses to delete a self-embed of the focal page (nested surface, same id)', async () => {
+    // The focal page embedded within its own outline is a scope root with the
+    // SAME id as topLevelBlockId, but it is a nested surface
+    // (scopeRootForcesOpen === false) — deleting there must not nuke the page.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page', scopeRootForcesOpen: false},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(env.repo.block('page').peekRaw()?.deleted).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('page')
+  })
+
+  it('refuses to delete a nested scope root that is not the panel page (backlink/embed root)', async () => {
+    // A different block rendered as the scope root of a nested surface (an
+    // embed / backlink entry) — not the panel's focal page. Deleting it must
+    // not run the page-deletion path.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'embedded', content: 'embedded'})
+
+    const uiStateBlock = env.repo.block('ui')
+    // Panel shows 'page'; 'embedded' is the scope root of a nested embed
+    // surface, not the panel's focal block.
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('embedded'), uiStateBlock, scopeRootId: 'embedded'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(env.repo.block('embedded').peekRaw()?.deleted).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('page')
   })
 })
