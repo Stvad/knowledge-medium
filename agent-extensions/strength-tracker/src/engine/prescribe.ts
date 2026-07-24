@@ -82,6 +82,7 @@ const prescribeExercise = (
     perSide: exercise.perSide,
     freeform: exercise.freeform,
     note: exercise.note,
+    videos: exercise.videos,
     lastTime,
   }
 
@@ -133,10 +134,12 @@ const prescribeExercise = (
   }
   if (step.progressed) {
     const target = last.entry.prescribedSets ?? exercise.sets
+    const jump = step.weight - lastWeight
+    const catchUp = exercise.catchUpIncrement !== undefined && jump === exercise.catchUpIncrement && jump !== exercise.increment
     return {
       ...base,
       weight: step.weight,
-      rationale: `${target}×${repMax} at ${lastWeight} cleared → +${exercise.increment}`,
+      rationale: `${target}×${repMax} at ${lastWeight} cleared → +${jump}${catchUp ? ' (catch-up, RPE ≤ ' + exercise.catchUpRpe + ')' : ''}`,
     }
   }
   const reps = lastTime!.reps.join(', ')

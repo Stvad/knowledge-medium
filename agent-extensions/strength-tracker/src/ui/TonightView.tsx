@@ -3,9 +3,12 @@
  *  Mobile-first, dark-mode-friendly, meant to be usable half-tired at 1am:
  *  every set is pre-filled from the prescription, so accepting one as-
  *  prescribed is a single tap on its checkbox; a deviation is editing the
- *  number first. "Finish" writes the accepted sets — and, if a gap was
- *  detected, records the layoff — as one transaction, then runs the
- *  shoulder self-check occasionally.
+ *  number first. Editing a number selects it so a stray leading 0 is
+ *  replaced, not fought. In-progress state is mirrored to device-local
+ *  storage on every edit, so a reload or tab switch never loses a set.
+ *  "Finish" writes the accepted sets — and, if a gap was detected, records
+ *  the layoff — as one transaction, then runs the shoulder self-check
+ *  occasionally.
  */
 
 import {useEffect, useState} from 'react'
@@ -15,7 +18,7 @@ import {openDialog} from '@/utils/dialogs.js'
 
 import {detectPendingLayoff, layoffAlreadyRecorded, layoffFromPending} from '../engine/reentry'
 import {detectLeftRightAsymmetry} from '../engine/shoulder'
-import type {SessionType} from '../engine/types'
+import type {ExerciseVideo, SessionType} from '../engine/types'
 import {SHOULDER_POLICY_BLOCK_ID} from '../km/config'
 import {writeLayoff, writeShoulderTodo, writeWorkout} from '../km/store'
 import {ShoulderChecklistDialog} from './ShoulderChecklistDialog'
@@ -27,6 +30,7 @@ import {
   type DraftExercise,
   type DraftSet,
 } from './draft'
+import {clearDraft, loadDraft, saveDraft} from './persist'
 
 const SESSION_LABELS: Record<SessionType, string> = {A: 'A · upper', B: 'B · lower', mini: 'mini'}
 
@@ -44,17 +48,26 @@ interface Props {
 export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const {prescription, session, setSession, config, history, layoffs, day} = program
   const readOnly = repo.isReadOnly
-  const [draft, setDraft] = useState<DraftExercise[]>(() => buildDraft(prescription, config.unit))
+  const [draft, setDraft] = useState<DraftExercise[]>(
+    () => loadDraft(workspaceId, pageId, day, session) ?? buildDraft(prescription, config.unit),
+  )
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
 
-  // Rebuild whenever the prescription identity changes — a session toggle,
-  // a config refine, or (post-log) the new history. That last case doubles
-  // as the reset after a successful save.
+  // Rebuild whenever the prescription identity changes — a session toggle, a
+  // config refine, or (post-log) the new history. Persisted edits win over a
+  // fresh build, so a spurious recompute mid-session restores in-progress work
+  // rather than clobbering it.
   useEffect(() => {
-    setDraft(buildDraft(prescription, config.unit))
+    setDraft(loadDraft(workspaceId, pageId, day, session) ?? buildDraft(prescription, config.unit))
     setStatus(null)
-  }, [prescription, config.unit])
+  }, [prescription, config.unit, day, session, workspaceId, pageId])
+
+  // Mirror every draft change to device-local storage (survives reload / tab
+  // switch). Best-effort; see persist.ts.
+  useEffect(() => {
+    saveDraft(workspaceId, pageId, day, session, draft)
+  }, [draft, day, session, workspaceId, pageId])
 
   const updateSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) =>
     setDraft(prev =>
@@ -64,7 +77,16 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     )
 
   const acceptAll = (exIdx: number) =>
-    setDraft(prev => prev.map((ex, i) => (i !== exIdx ? ex : {...ex, sets: ex.sets.map(s => ({...s, done: true}))})))
+    setDraft(prev =>
+      prev.map((ex, i) =>
+        i !== exIdx
+          ? ex
+          : {
+              ...ex,
+              sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: Date.now()})),
+            },
+      ),
+    )
 
   const finish = async () => {
     const workout = toWorkoutDraft(day, session, draft)
@@ -76,6 +98,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
       }
       await writeWorkout(repo, workspaceId, pageId, workout)
+      clearDraft(workspaceId, pageId)
       setStatus(`Logged ${SESSION_LABELS[session]} — ${workout.exercises.length} lifts`)
 
       const fullBefore = history.filter(w => w.session !== 'mini').length
@@ -97,21 +120,22 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
 
   return (
     <div className="flex flex-col gap-4">
-      <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
+      <header className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="text-lg font-semibold">Tonight · {day}</div>
           {prescription.offSchedule && (
-            <div className="text-xs text-muted-foreground">off the weekly template — inferred session</div>
+            <div className="text-xs text-muted-foreground">off template — inferred session</div>
           )}
         </div>
-        <div className="flex gap-1" role="group" aria-label="Session">
+        <div className="grid grid-cols-3 gap-1" role="group" aria-label="Session">
           {(['A', 'B', 'mini'] as const).map(s => (
             <button
               key={s}
               type="button"
               onClick={() => setSession(s)}
+              aria-pressed={session === s}
               className={
-                'rounded px-3 py-1.5 text-sm ' +
+                'rounded-md px-3 py-2 text-sm font-medium ' +
                 (session === s
                   ? 'bg-primary text-primary-foreground'
                   : 'border border-border text-muted-foreground hover:bg-muted')
@@ -201,12 +225,18 @@ function ExerciseCard({
   onSet: (setIdx: number, patch: Partial<DraftSet>) => void
   onAcceptAll: () => void
 }) {
-  const range = ex.repMin !== undefined && ex.repMax !== undefined
-    ? `${ex.repMin}–${ex.repMax}`
-    : ex.repMax !== undefined
-      ? `${ex.repMax}`
-      : ''
-  const target = `${ex.sets.length}${ex.perSide ? '' : ''} × ${range || '—'}${ex.prescribedWeight ? ` @ ${ex.prescribedWeight}${unit}` : ''}`
+  const range =
+    ex.repMin !== undefined && ex.repMax !== undefined
+      ? `${ex.repMin}–${ex.repMax}`
+      : ex.repMax !== undefined
+        ? `${ex.repMax}`
+        : ''
+  // Per-side lifts double the draft rows (L+R); show the per-leg set count the
+  // plan states, not the doubled row count.
+  const setCount = ex.prescribedSets ?? (ex.perSide ? ex.sets.length / 2 : ex.sets.length)
+  const target =
+    `${setCount} × ${range || '—'}${ex.perSide ? ' / side' : ''}` +
+    (ex.prescribedWeight ? ` @ ${ex.prescribedWeight}${unit}` : '')
 
   return (
     <li className="rounded-md border border-border p-3">
@@ -227,12 +257,31 @@ function ExerciseCard({
         )}
       </div>
       {ex.note && <div className="mt-1 text-xs text-muted-foreground/70">{ex.note}</div>}
+      {ex.videos && ex.videos.length > 0 && <VideoLinks videos={ex.videos} />}
       <div className="mt-2 flex flex-col gap-1.5">
         {ex.sets.map((s, i) => (
           <SetRow key={i} set={s} unit={unit} readOnly={readOnly} onChange={patch => onSet(i, patch)} />
         ))}
       </div>
     </li>
+  )
+}
+
+function VideoLinks({videos}: {videos: readonly ExerciseVideo[]}) {
+  return (
+    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+      {videos.map((v, i) => (
+        <a
+          key={i}
+          href={v.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs font-medium text-primary underline underline-offset-2 hover:opacity-80"
+        >
+          ▶ {v.label}
+        </a>
+      ))}
+    </div>
   )
 }
 
@@ -247,42 +296,40 @@ function SetRow({
   readOnly: boolean
   onChange: (patch: Partial<DraftSet>) => void
 }) {
-  const numberField = (
-    value: number,
-    onValue: (n: number) => void,
-    label: string,
-  ) => (
+  const numberField = (value: number, onValue: (n: number) => void, label: string) => (
     <input
       type="number"
       inputMode="numeric"
       aria-label={label}
       disabled={readOnly}
       value={Number.isFinite(value) ? value : ''}
+      // Select on focus so a tap-and-type replaces the pre-filled number
+      // instead of leaving a stray leading digit to delete.
+      onFocus={e => e.currentTarget.select()}
       onChange={e => onValue(e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value))}
-      className="w-16 rounded border border-border bg-background px-2 py-1 text-right text-sm tabular-nums"
+      className="h-9 w-16 rounded border border-border bg-background px-2 text-right text-sm tabular-nums"
     />
   )
 
+  const toggleDone = (done: boolean) =>
+    onChange({done, completedAt: done ? Date.now() : undefined})
+
   return (
-    <div
-      className={
-        'flex items-center gap-2 rounded px-1 py-0.5 ' + (set.done ? 'bg-primary/10' : '')
-      }
-    >
+    <div className={'flex items-center gap-2 rounded px-1 py-1 ' + (set.done ? 'bg-primary/10' : '')}>
       {set.side && (
-        <span className="w-4 text-center text-xs font-medium text-muted-foreground">{set.side}</span>
+        <span className="w-4 shrink-0 text-center text-xs font-medium text-muted-foreground">{set.side}</span>
       )}
       {numberField(set.weight, n => onChange({weight: n}), 'weight')}
-      <span className="text-xs text-muted-foreground">{unit} ×</span>
+      <span className="shrink-0 text-xs text-muted-foreground">{unit} ×</span>
       {numberField(set.reps, n => onChange({reps: n}), 'reps')}
-      <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
+      <label className="ml-auto flex cursor-pointer items-center gap-1.5 py-1 pl-2 text-xs text-muted-foreground">
         <span>done</span>
         <input
           type="checkbox"
           disabled={readOnly}
           checked={set.done}
-          onChange={e => onChange({done: e.currentTarget.checked})}
-          className="h-5 w-5 rounded border-border accent-primary"
+          onChange={e => toggleDone(e.currentTarget.checked)}
+          className="h-6 w-6 rounded border-border accent-primary"
         />
       </label>
     </div>

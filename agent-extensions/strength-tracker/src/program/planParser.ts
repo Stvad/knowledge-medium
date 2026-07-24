@@ -16,12 +16,26 @@
 
 import type {
   ExerciseConfig,
+  ExerciseVideo,
   Milestone,
   ProgramConfig,
   ReentryTier,
   SessionType,
 } from '../engine/types'
 import {DEFAULT_CONFIG} from './defaults'
+
+const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
+
+/** Pull markdown links (`[label](https://…)`) out of a plan line as videos.
+ *  The plan appends demo/technique links to exercise lines; we surface them
+ *  as tappable links rather than raw URL text. */
+export const extractVideos = (content: string): ExerciseVideo[] => {
+  const videos: ExerciseVideo[] = []
+  for (const m of content.matchAll(MD_LINK)) {
+    videos.push({label: m[1].trim(), url: m[2]})
+  }
+  return videos
+}
 
 export interface PlanNode {
   id: string
@@ -47,9 +61,12 @@ const PER_SIDE = /\/\s*leg|per\s+side|one\s+arm|each\s+side/i
 const FREEFORM = /\brounds?\b|\blengths?\b|carry|carries/i
 const LOWER_BODY = /squat|deadlift|rdl|hinge|lunge|leg press/i
 
-/** Strip the outline's presentation syntax so matching sees plain prose. */
+/** Strip the outline's presentation syntax so matching sees plain prose.
+ *  Markdown links collapse to their label (the URL is extracted separately as
+ *  a video), wikilinks to their text, block refs drop out. */
 export const plainText = (content: string): string =>
   content
+    .replace(/\[([^\]]+)\]\((?:https?:\/\/[^)\s]+)\)/g, '$1')
     .replace(/\[\[([^\]]+)\]\]/g, '$1')
     .replace(/\(\([^)]+\)\)/g, '')
     .replace(/\*\*/g, '')
@@ -101,6 +118,10 @@ export const parseExerciseLine = (
   const repMin = range ? Number(range[2]) : single ? Number(single[2]) : undefined
   const repMax = range ? Number(range[3]) : single ? Number(single[2]) : undefined
 
+  // Videos come from the raw content (plainText has already collapsed the
+  // markdown links to their labels in `rest`).
+  const videos = extractVideos(content)
+
   return {
     name,
     session,
@@ -111,6 +132,7 @@ export const parseExerciseLine = (
     perSide: PER_SIDE.test(rest),
     freeform: repMax === undefined || FREEFORM.test(rest),
     note: rest || undefined,
+    videos: videos.length > 0 ? videos : undefined,
   }
 }
 

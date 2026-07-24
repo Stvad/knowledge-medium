@@ -83,6 +83,22 @@ describe('nextWeight', () => {
     expect(nextWeight(bench(at(135, 8, 9, 10)), CONFIG)).toEqual({weight: 135, progressed: false})
   })
 
+  const CATCHUP = {sets: 2, repMax: 8, freeform: false, increment: 10, catchUpIncrement: 20, catchUpRpe: 7}
+  const dl = (sets: SetRecord[]): ExerciseRecord => ({exercise: 'Deadlift', sets})
+  const rep = (weight: number, reps: number, rpe: number): SetRecord => ({weight, reps, rpe})
+
+  it('takes the bigger catch-up jump when topped and every set is RPE ≤ threshold', () => {
+    expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 6)]), CATCHUP)).toEqual({weight: 245, progressed: true})
+  })
+
+  it('takes only the normal jump when a set is above the RPE threshold', () => {
+    expect(nextWeight(dl([rep(225, 8, 7), rep(225, 8, 8)]), CATCHUP)).toEqual({weight: 235, progressed: true})
+  })
+
+  it('takes only the normal jump when RPE is not logged (no evidence it was easy)', () => {
+    expect(nextWeight(dl(at(225, 8, 8)), CATCHUP)).toEqual({weight: 235, progressed: true})
+  })
+
   it('holds when the caller says to', () => {
     expect(nextWeight(bench(at(135, 10, 10, 10)), CONFIG, {hold: true}))
       .toEqual({weight: 135, progressed: false})

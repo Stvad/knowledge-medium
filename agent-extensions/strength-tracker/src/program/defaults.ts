@@ -120,7 +120,9 @@ export const DEFAULT_CONFIG: ProgramConfig = {
 
     {name: 'Squat', session: 'B', sets: 3, repMin: 6, repMax: 10, increment: 10, perSide: false, freeform: false, note: 'double progression'},
     {name: 'Overhead press', session: 'B', sets: 3, repMin: 6, repMax: 10, increment: 5, perSide: false, freeform: false, note: 'progressive overhead load = shoulder insurance + dance-lift base'},
-    {name: 'Deadlift', session: 'B', sets: 2, repMin: 5, repMax: 8, increment: 10, perSide: false, freeform: false},
+    // Under-trained lift catching up: the plan says jump +20 (not +10) while
+    // every set is still coming in at RPE ≤ 7. Needs RPE logged to trigger.
+    {name: 'Deadlift', session: 'B', sets: 2, repMin: 5, repMax: 8, increment: 10, catchUpIncrement: 20, catchUpRpe: 7, perSide: false, freeform: false},
     {name: 'Pull-ups', session: 'B', sets: 3, repMin: 5, repMax: 8, increment: 5, perSide: false, freeform: false, note: 'bodyweight until 3×8, then add weight'},
     {name: 'Waiter carry', session: 'B', sets: 2, increment: 5, perSide: true, freeform: true, note: 'one arm overhead, 2 lengths per side — start left, right matches'},
 
@@ -130,7 +132,7 @@ export const DEFAULT_CONFIG: ProgramConfig = {
   ],
   milestones: [
     {id: 'ohp-strict', exercise: 'Overhead press', weight: 115, reps: 3, label: 'Strict OHP 115–120×3 (dance-lift phase 1)'},
-    {id: 'waiter-carry', exercise: 'Waiter carry', weight: 40, reps: 1, label: 'Heavy waiter carry 40–50 lb one arm'},
+    {id: 'waiter-carry', exercise: 'Waiter carry', weight: 53, reps: 1, label: 'Waiter carry with the 53 lb KB (one arm, overhead)'},
     {id: 'push-press', exercise: 'Push press', weight: 135, reps: 2, label: 'Push press 135–150×2 (dance-lift phase 2)'},
   ],
 }

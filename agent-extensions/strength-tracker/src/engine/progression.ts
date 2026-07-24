@@ -89,18 +89,43 @@ export interface ProgressionStep {
   progressed: boolean
 }
 
+/** True when every progression set carries an RPE at or below `threshold`.
+ *  False if any set lacks an RPE — the catch-up jump is deliberate and needs
+ *  evidence the set was genuinely easy, not just unlogged. */
+const allSetsAtOrBelowRpe = (entry: ExerciseRecord, threshold: number): boolean => {
+  const sets = progressionSets(entry.sets)
+  return sets.length > 0 && sets.every(s => s.rpe !== undefined && s.rpe <= threshold)
+}
+
+/** The increment to apply on a topped-out session: the bigger catch-up jump
+ *  when the lift is configured for it and every set came in easy (RPE ≤
+ *  `catchUpRpe`), otherwise the normal increment. */
+const incrementFor = (
+  entry: ExerciseRecord,
+  config: Pick<ExerciseConfig, 'increment' | 'catchUpIncrement' | 'catchUpRpe'>,
+): number => {
+  if (
+    config.catchUpIncrement !== undefined &&
+    config.catchUpRpe !== undefined &&
+    allSetsAtOrBelowRpe(entry, config.catchUpRpe)
+  ) {
+    return config.catchUpIncrement
+  }
+  return config.increment
+}
+
 /** Next weight for an exercise given its last logged entry. `hold`
  *  suppresses the jump — the "missed 1 session → repeat last weights" row. */
 export const nextWeight = (
   entry: ExerciseRecord,
-  config: Pick<ExerciseConfig, 'sets' | 'repMax' | 'freeform' | 'increment'>,
+  config: Pick<ExerciseConfig, 'sets' | 'repMax' | 'freeform' | 'increment' | 'catchUpIncrement' | 'catchUpRpe'>,
   opts: {hold?: boolean} = {},
 ): ProgressionStep | undefined => {
   const weight = workingWeight(entry)
   if (weight === undefined) return undefined
   if (opts.hold) return {weight, progressed: false}
   if (!toppedOut(entry, config)) return {weight, progressed: false}
-  return {weight: weight + config.increment, progressed: true}
+  return {weight: weight + incrementFor(entry, config), progressed: true}
 }
 
 /** Round a percentage-derived load onto loadable plates. Rounds down: at

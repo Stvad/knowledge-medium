@@ -39,4 +39,8 @@ export interface StoredSet {
   reps: number
   rpe?: number
   side?: 'L' | 'R'
+  /** Epoch ms when the set was marked complete during the session. Rides
+   *  inside the `sets` JSON (no dedicated column) — it's session-texture
+   *  data, not a query target. */
+  completedAt?: number
 }

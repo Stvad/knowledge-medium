@@ -41,6 +41,19 @@ export interface ExerciseConfig {
   /** Verbatim tail of the plan line ("light (knee-friendly…)"). Shown
    *  under the exercise so the reasoning survives into the gym. */
   note?: string
+  /** Bigger jump for a lift that's catching up after being under-trained
+   *  (the plan's deadlift rule: "+20 instead of +10 while RPE ≤ 7"). Only
+   *  applies when every progression set is logged at or below `catchUpRpe`,
+   *  so it needs RPE data; without it the normal `increment` is used. */
+  catchUpIncrement?: number
+  catchUpRpe?: number
+  /** Demo/technique links lifted from the plan line's markdown links. */
+  videos?: readonly ExerciseVideo[]
+}
+
+export interface ExerciseVideo {
+  label: string
+  url: string
 }
 
 /** One row of the plan's re-entry table, keyed by the gap since the last
@@ -176,6 +189,7 @@ export interface PrescribedExercise {
   perSide: boolean
   freeform: boolean
   note?: string
+  videos?: readonly ExerciseVideo[]
   /** One line explaining where `weight` came from. Always shown: the
    *  plan's whole point is that the number is never a mystery. */
   rationale: string

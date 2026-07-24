@@ -5,7 +5,7 @@
  *  fold the accepted sets back into the `WorkoutDraft` the store writes.
  */
 
-import type {Prescription, PrescribedExercise} from '../engine/types'
+import type {ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
 import type {StoredSet} from '../km/fields'
 import type {WorkoutDraft} from '../km/store'
 
@@ -15,6 +15,9 @@ export interface DraftSet {
   /** Accepted — only accepted sets are written. Pre-filled sets start
    *  un-accepted so an untouched exercise records nothing. */
   done: boolean
+  /** Epoch ms the set was marked done (cleared when un-done). Persisted so
+   *  the real time-of-set survives a reload mid-session. */
+  completedAt?: number
   rpe?: number
   side?: 'L' | 'R'
 }
@@ -30,6 +33,7 @@ export interface DraftExercise {
   prescribedSets?: number
   rationale: string
   note?: string
+  videos?: readonly ExerciseVideo[]
   sets: DraftSet[]
 }
 
@@ -68,6 +72,7 @@ export const buildDraft = (prescription: Prescription, unit: string): DraftExerc
     prescribedSets: ex.sets,
     rationale: ex.rationale,
     note: ex.note,
+    videos: ex.videos,
     sets: initialSets(ex),
   }))
 
@@ -76,6 +81,7 @@ const toStoredSet = (set: DraftSet): StoredSet => ({
   reps: set.reps,
   ...(set.rpe !== undefined ? {rpe: set.rpe} : {}),
   ...(set.side !== undefined ? {side: set.side} : {}),
+  ...(set.completedAt !== undefined ? {completedAt: set.completedAt} : {}),
 })
 
 /** True when at least one set anywhere has been accepted — gates the

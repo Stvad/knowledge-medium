@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest'
 
 import {
   configFromPlan,
+  extractVideos,
   mergePlan,
   parseExerciseLine,
   parsePlan,
@@ -81,6 +82,38 @@ describe('parseExerciseLine', () => {
 
   it('skips warm-up lines', () => {
     expect(parseExerciseLine('Warm-up: shoulder prep', 'A', {upper: 5, lower: 10})).toBeNull()
+  })
+
+  it('lifts video links off the line and keeps prose clean', () => {
+    const ex = parseExerciseLine(
+      'Split squat / RFESS — 2×8–12/leg, light (knee-friendly) — [video](https://www.youtube.com/watch?v=lG3MsPmEQQk)',
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.videos).toEqual([{label: 'video', url: 'https://www.youtube.com/watch?v=lG3MsPmEQQk'}])
+    // the raw URL must not leak into the shown note
+    expect(ex?.note).not.toContain('http')
+    expect(ex?.note).toContain('video')
+  })
+
+  it('has no videos when the line has none', () => {
+    expect(parseExerciseLine('Bench press — 3×6–10', 'A', {upper: 5, lower: 10})?.videos).toBeUndefined()
+  })
+})
+
+describe('extractVideos', () => {
+  it('pulls every markdown link as a label + url', () => {
+    const videos = extractVideos(
+      'Warm-up: [band ER](https://youtu.be/8UZT_SElGlc), [pull-aparts](https://www.youtube.com/watch?v=mHWlgqPvyxI)',
+    )
+    expect(videos).toEqual([
+      {label: 'band ER', url: 'https://youtu.be/8UZT_SElGlc'},
+      {label: 'pull-aparts', url: 'https://www.youtube.com/watch?v=mHWlgqPvyxI'},
+    ])
+  })
+
+  it('ignores wikilinks and non-http bracket text', () => {
+    expect(extractVideos('Squat [[health]] — heavy [see notes](notes)')).toEqual([])
   })
 })
 
