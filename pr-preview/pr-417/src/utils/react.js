@@ -1,2 +1,2 @@
-import e from"../../node_modules/.pnpm/react-use@17.6.0_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/react-use/esm/useMedia.js";var t=()=>e(`(max-width: 767px)`,!1),n=()=>e(`(pointer: coarse)`,!1);export{t as useIsMobile,n as usePointerCoarse};
+import e from"../../node_modules/.pnpm/react-use@17.6.0_react-dom@19.2.6_react@19.2.6__react@19.2.6/node_modules/react-use/esm/useMedia.js";import{MOBILE_BREAKPOINT_QUERY as t}from"./viewport.js";var n=()=>e(t,!1),r=()=>e(`(pointer: coarse)`,!1);export{n as useIsMobile,r as usePointerCoarse};
 //# sourceMappingURL=react.js.map
