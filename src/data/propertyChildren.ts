@@ -1,22 +1,30 @@
 /**
  * Pure helpers for properties-as-blocks field/value children (PR #288 §5/§9,
  * extracted from the PR #285 spike). A property on a block is a FIELD ROW —
- * a child whose content is `((fieldId))`, an id block-ref to the definition
- * block, mirrored into the local `reference_target_id` column — whose own
+ * a child whose content is the MARKED field form `::((fieldId))` (§7 grammar
+ * box: `::` + one whole-block reference span), mirrored into the local
+ * `reference_target_id` + `is_field_form` columns — whose own
  * child holds the value (scalar-first: one primary value child). Addressing
- * is BY ID: `reference_target_id` derives textually from the `((fieldId))`
- * content (no name→schema tier, no deferred resolution), and the name is
+ * is BY ID for the canonical form: `reference_target_id` derives textually
+ * from the content (no name→schema tier), and the name is
  * recovered by resolving the id → definition wherever it's needed.
  *
- * Recognition (§9) is a column read plus two context bits, never a content
- * parse: `reference_target_id` resolves a definition (fieldId-keyed lookup),
- * the WORKSPACE is flipped (`properties_migration` at or past 'children'),
- * and the row's ancestry doesn't pass through a field row (children of field
- * rows are values/comments, never field rows — whatever their target: a
- * ref-typed VALUE pointing at a definition block carries that definition's
- * id in the column too, and without the positional rule it would be
- * reinterpreted as a nested field). Callers own the flip + ancestry
- * context; these helpers own the column/definition half.
+ * Recognition (§9) is FLAT — a column read plus context, never a content
+ * parse and never an ancestry walk: `is_field_form = 1` (the marker matched)
+ * ∧ non-null parent ∧ `reference_target_id` resolves a definition
+ * (fieldId-keyed, shadow-tolerant) ∧ the WORKSPACE is flipped
+ * (`properties_migration` at or past 'children'). Content-intrinsic and
+ * identical at every depth: a `::` child of ANY block — value rows included —
+ * is that block's field row, and an unmarked ref targeting a definition is a
+ * plain reference block, full stop (the bit is what makes ref-typed values
+ * pointing at definitions unambiguous — no positional rule needed). Callers
+ * own the flip gate; these helpers own the bit/column/definition half.
+ *
+ * A field row's VALUE SET is exactly its `is_field_form IS NOT 1` children
+ * (`isFieldValueChild` / the SQL twin) — a binding selection discipline
+ * (§9): every site that enumerates values or selects "the field row for
+ * this fieldId" filters by the bit, or a nested `::` row materialized under
+ * a field row could be selected as its value and overwritten.
  */
 
 import {
@@ -26,7 +34,7 @@ import {
   type PropertySchema,
   type Tx,
 } from '@/data/api'
-import { referenceBlockContentForId } from '@/data/referenceBlock'
+import { FIELD_FORM_MARKER, referenceBlockContentForId } from '@/data/referenceBlock'
 import { jsonValuesEqual } from '@/data/internals/jsonCanonical'
 
 export const getPropertyFieldTargetId = (
@@ -39,32 +47,45 @@ export const getPropertyFieldTargetId = (
  *  stay fieldId-resolvable so their field rows keep classifying (§6). */
 export type IsPropertyFieldDefinition = (fieldId: string) => boolean
 
-/** Column + definition half of §9 recognition. The caller supplies the flip
- *  gate and the ancestry rule (positional; traversals know it from
- *  context). */
+/** The flat §9 predicate, bit/column/definition half — the caller supplies
+ *  only the flip gate. All three conditions here are content-intrinsic
+ *  (recognition is move-proof at any non-root position): the marker bit,
+ *  the non-null parent (root half: a workspace-root row has no owner to be
+ *  a field OF — its marker is just content; the SQL twins carry the same
+ *  `parent_id IS NOT NULL` clause), and the shadow-tolerant definition
+ *  resolution of the target. Defined ONCE and composed by every selection
+ *  site (§9's named-predicate discipline — hand-rolled restatements are the
+ *  recorded failure mode). */
 export const isPropertyFieldInstance = (
-  data: Pick<BlockData, 'referenceTargetId' | 'parentId'> | null | undefined,
+  data: Pick<BlockData, 'referenceTargetId' | 'parentId' | 'isFieldForm'> | null | undefined,
   isFieldDefinition: IsPropertyFieldDefinition,
 ): boolean => {
-  // §9 positional rule, root half: a field row is a CHILD of the block
-  // that owns the property — a workspace-root row is user content no
-  // matter what its column resolves to (its stamp is just content
-  // recognition). Without this, a stamped root `[[status]]` row classifies
-  // as machinery, the write-side walks call it "inside a property
-  // subtree", and its own bag can never materialize children (PR #386
-  // review follow-up). The SQL twins carry the same `parent_id IS NOT
-  // NULL` clause.
-  if (data?.parentId === null) return false
+  if (data?.isFieldForm !== true) return false
+  if (data.parentId === null) return false
   const fieldId = getPropertyFieldTargetId(data)
   return fieldId !== undefined && isFieldDefinition(fieldId)
 }
 
-/** Field-row content: a block-ref to the definition BY ID (`((fieldId))`, PR
- *  #288 §7). Rename-stable — the name lives only on the definition and is
- *  resolved via the id wherever it's actually needed (materialize's cell key,
- *  rendering). No name→schema resolution tier, no deferred/rename re-derive. */
+/** The value-set half of §9's binding selection discipline: a field row's
+ *  values are exactly its children where the bit is NOT set. The bit is
+ *  NULL for every underived/unmarked row (never stamped `0`), so the JS
+ *  test treats undefined/false as "value candidate" — matching the SQL
+ *  twin `is_field_form IS NOT 1`, never `= 0`. */
+export const isFieldValueChild = (
+  data: Pick<BlockData, 'isFieldForm'>,
+): boolean => data.isFieldForm !== true
+
+/** SQL fragment twin of {@link isFieldValueChild} for value-set filters. */
+export const FIELD_VALUE_CHILD_SQL_PREDICATE = 'is_field_form IS NOT 1'
+
+/** Field-row content: the §7 marked field form — the `::` marker + an exact
+ *  block-ref to the definition BY ID (`::((fieldId))`). Canonical and
+ *  rename-stable — the name lives only on the definition and is resolved via
+ *  the id wherever it's actually needed (materialize's cell key, rendering).
+ *  `referenceBlockContentForId` guards the span round-trip; the marker
+ *  composes safely (a span never starts with whitespace or `:`). */
 export const propertyFieldContent = (fieldId: string): string =>
-  referenceBlockContentForId(fieldId)
+  FIELD_FORM_MARKER + referenceBlockContentForId(fieldId)
 
 const finiteNumberFromContent = (content: string): number => {
   const trimmed = content.trim()
@@ -271,51 +292,6 @@ export const propertiesEqual = (
   b: Record<string, unknown>,
 ): boolean => jsonValuesEqual(a, b)
 
-/** §9 ancestry rule, shared walk: does `startId`'s parent chain pass through
- *  a field row? Role is positional and inherits — everything beneath a
- *  field row is property-subtree interior (values, comments, ordinary
- *  content), so listings there never filter "field rows" out (a ref-typed
- *  VALUE pointing at a definition block would otherwise vanish).
- *
- *  `getRow` and `memo` are caller-owned: the tx engine walks live SQL rows
- *  through its per-tx cache; the migration pass walks via `tx.get` through a
- *  per-tx Map built fresh per chunk. Either way the memo is filled for every
- *  id visited on the walk (not just the terminal one), backfilling shared
- *  prefixes across repeated calls within the same tx. */
-export const isInsidePropertySubtreeWalk = async (
-  startId: string | null,
-  getRow: (id: string) => Promise<Pick<BlockData, 'referenceTargetId' | 'parentId'> | null>,
-  isFieldDefinition: IsPropertyFieldDefinition,
-  memo: Map<string, boolean>,
-): Promise<boolean> => {
-  const walked: string[] = []
-  const onPath = new Set<string>()
-  let currentId: string | null = startId
-  let result: boolean | undefined
-  while (currentId !== null) {
-    // Sync-introduced parent_id cycles are an accepted-reachable DB state
-    // (detection-only telemetry, issue #183); every sibling walker guards
-    // (SUBTREE_SQL's INSTR check, replayApplicationOrder's onPath set, the
-    // SQL twin's depth cap). Treat a revisit — or pathological depth — as
-    // "not inside" and stop, mirroring the SQL predicate's depth < 100.
-    if (onPath.has(currentId) || walked.length >= 100) { result = false; break }
-    const cached = memo.get(currentId)
-    if (cached !== undefined) { result = cached; break }
-    const row = await getRow(currentId)
-    if (row === null) { result = false; break }
-    walked.push(currentId)
-    onPath.add(currentId)
-    if (isPropertyFieldInstance(row, isFieldDefinition)) {
-      result = true
-      break
-    }
-    currentId = row.parentId
-  }
-  const resolved = result ?? false
-  for (const walkedId of walked) memo.set(walkedId, resolved)
-  return resolved
-}
-
 /** The names to drop and the assignments to set on ONE parent's cell — the
  *  divergent value-handling half of a definition re-key, computed by the
  *  caller from the parent's live children. */
@@ -329,12 +305,12 @@ export interface CellRekeyPlan {
  *  batch (`Repo.runPropertyDefinitionMigrationBatch`). Owns the parts that must
  *  stay IDENTICAL across both, so the load-bearing invariant lives in one place:
  *   - the parent guard (skip a missing/deleted parent);
- *   - the §9 ancestry gate — a parent whose chain passes through a field row is
- *     property-subtree interior (its children are values/comments, never field
- *     rows), so it is never re-keyed;
  *   - the SWAP-SAFE apply — drop EVERY old name before assigning ANY new one, so
  *     a name swap (`a<->b` in one tx) never leaves an intermediate `{b:<a>}` that
  *     clobbers b (and `propertiesEqual` skips the write when nothing changed).
+ *  No ancestry gate exists anymore (§9 flat recognition): ANY block owning
+ *  recognized field rows — value rows and field rows included — re-keys like
+ *  every other owner; its `::` children are its field rows at any depth.
  *  `computePlan` receives the parent's live children and returns the drops +
  *  assignments — the ONLY part the two callers differ in (rename projects the
  *  first parseable value under the tx-start codec; the batch iterates all
@@ -344,15 +320,10 @@ export interface CellRekeyPlan {
 export const rekeyParentPropertyCell = async (
   tx: Tx,
   parentId: string,
-  isFieldDefinition: IsPropertyFieldDefinition,
-  memo: Map<string, boolean>,
   computePlan: (children: readonly BlockData[]) => Promise<CellRekeyPlan>,
 ): Promise<void> => {
   const parent = await tx.get(parentId)
   if (parent === null || parent.deleted) return
-  if (await isInsidePropertySubtreeWalk(
-    parentId, (id) => tx.get(id), isFieldDefinition, memo,
-  )) return
   const {oldNames, assignments} = await computePlan(
     await tx.childrenOf(parentId, undefined),
   )
@@ -368,30 +339,26 @@ export const rekeyParentPropertyCell = async (
 
 /** Shared by `isPropertyValueRow` / `resolvePropertyValueFieldSchema`: the
  *  field row `source` is a value child of, or null when `source` isn't a
- *  property value child at all. Recognition reuses the canonical
- *  visible-children exclusion (`hidePropertyChildren`) rather than
- *  re-deriving `isPropertyFieldInstance` + the ancestry walk by hand — a
- *  parent qualifies as "the field row a value hangs off of" exactly when the
- *  visible view (which already encodes the flip gate, definition-ness, and
- *  the §9 ancestry rule) excludes it from its own parent's children. */
+ *  property value child at all — its parent, when that parent is a
+ *  recognized field row AND `source` itself is not a `::` row (a marked
+ *  child of a field row is that field row's own nested field row, never its
+ *  value — §9's binding selection discipline). */
 const propertyValueFieldRow = async (
   tx: Tx,
-  source: Pick<BlockData, 'parentId' | 'workspaceId'>,
+  source: Pick<BlockData, 'parentId' | 'workspaceId' | 'isFieldForm'>,
 ): Promise<BlockData | null> => {
   if (source.parentId === null) return null
+  if (!isFieldValueChild(source)) return null
   const parent = await tx.get(source.parentId)
   if (parent === null) return null
   return (await isPropertyFieldRow(tx, parent)) ? parent : null
 }
 
 /**
- * Is `row` ITSELF a recognized property field row — the `((fieldId))` child
- * that carries a property's identity on its owner (PR #288 §9)?
- *
- * Same canonical recognition as `isPropertyValueRow` (which is defined in
- * terms of this): a field row is exactly a child the visible view filters out
- * of its own parent's children, so the flip gate, definition-ness, and the §9
- * ancestry rule all come along.
+ * Is `row` ITSELF a recognized property field row — the `::((fieldId))`
+ * child that carries a property's identity on its owner (PR #288 §9)?
+ * The flat predicate directly: bit ∧ non-null parent ∧ shadow-tolerant
+ * definition resolution (`tx.isPropertyFieldDefinition`) ∧ flip gate.
  *
  * Write paths need this for the same reason they need the value-row check, one
  * level up: a field row's content IS the property's identity, so rewriting it
@@ -401,38 +368,31 @@ const propertyValueFieldRow = async (
  */
 export const isPropertyFieldRow = async (
   tx: Tx,
-  row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId'>,
+  row: Pick<BlockData, 'id' | 'parentId' | 'workspaceId' | 'referenceTargetId' | 'isFieldForm'>,
 ): Promise<boolean> => {
+  // Cheap pre-filters first: the bit is stamped on every field row, so an
+  // unmarked row can't be one and needs no flip probe.
+  if (row.isFieldForm !== true) return false
   if (row.parentId === null) return false
-  // Cheap pre-filter: the recognition column is stamped on every field row, so
-  // an unstamped row can't be one and needs no sibling query.
-  if (row.referenceTargetId === null) return false
   if (!(await tx.isPropertyChildBackedWorkspace(row.workspaceId))) return false
-  const siblings = await tx.childrenOf(
-    row.parentId, row.workspaceId, {hidePropertyChildren: true},
-  )
-  return !siblings.some(sibling => sibling.id === row.id)
+  return isPropertyFieldInstance(row, (fieldId) =>
+    tx.isPropertyFieldDefinition(row.workspaceId, fieldId))
 }
 
 /**
- * Is `source` a property VALUE row — the direct child of a recognized field
- * row (PR #288 §9)? Shared write-side primitive: a value child's content IS
+ * Is `source` a property VALUE row — the direct non-`::` child of a
+ * recognized field row (PR #288 §9)? Shared write-side primitive: a value
+ * child's content IS
  * the property's value (ref-typed as `((targetId))`, scalar-typed as its
  * codec's canonical text), so any write path that rewrites `content` without
  * knowing this can corrupt a typed value or silently detach it from its
  * owner's projected cell (see `inlineDeletedBlockReferences` — #404 item 4 —
  * and the find-replace codec guard — #404 item 5 — for two call sites that
  * need exactly this question answered before they write).
- *
- * Recognition is the canonical one: a field row is exactly a child the
- * visible view filters out, so this asks that view rather than re-deriving
- * the rule (flip gate, definition-ness, and the §9 ancestry rule all come
- * with it — including "nothing inside a property subtree is a field row",
- * which is why a comment BENEATH a value keeps ordinary content semantics).
  */
 export const isPropertyValueRow = async (
   tx: Tx,
-  source: Pick<BlockData, 'parentId' | 'workspaceId'>,
+  source: Pick<BlockData, 'parentId' | 'workspaceId' | 'isFieldForm'>,
 ): Promise<boolean> => (await propertyValueFieldRow(tx, source)) !== null
 
 /** If `source` is a property VALUE row, resolve the schema its field row is
@@ -445,7 +405,7 @@ export const isPropertyValueRow = async (
  *  item 5 — `applyContentReplaceMutator` is the first caller). */
 export const resolvePropertyValueFieldSchema = async (
   tx: Tx,
-  source: Pick<BlockData, 'parentId' | 'workspaceId'>,
+  source: Pick<BlockData, 'parentId' | 'workspaceId' | 'isFieldForm'>,
 ): Promise<AnyPropertySchema | null> => {
   const fieldRow = await propertyValueFieldRow(tx, source)
   const fieldId = fieldRow?.referenceTargetId ?? null

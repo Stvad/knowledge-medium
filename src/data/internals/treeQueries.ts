@@ -233,27 +233,25 @@ export const CHILDREN_IDS_SQL = `
  * everything-by-default: the plain listings above return every child and
  * THIS view is the opt-in (`hidePropertyChildren`), not the reverse.
  *
- * As shipped it excludes every recognized property field row — a child
- * whose local `reference_target_id` names a definition block, when the
- * workspace's `properties_migration` is at or past 'children' (never an
- * equality test) and the PARENT itself is ordinary content (role is
- * positional: everything beneath a field row is property-subtree interior
- * — values, comments — so listings there never filter; a ref-typed VALUE
- * pointing at a definition block would otherwise be misread as a nested
- * field).
+ * FLAT recognition (§9, the `::` grammar): a child is excluded iff it is a
+ * recognized field row — `is_field_form = 1` (the marker matched at derive
+ * time) ∧ `parent_id IS NOT NULL` (root half) ∧ the workspace is flipped
+ * (`properties_migration` at or past 'children', never an equality test) ∧
+ * its `reference_target_id` names a definition block. No ancestry walk
+ * exists anymore: only marked rows can classify, so a ref-typed VALUE
+ * pointing at a definition is never misread — and a marked row inside a
+ * property subtree IS machinery (its parent's own field row) and filters at
+ * any depth. This deleted the recursive `up` interior-exemption CTE and the
+ * `root_exempt` seed the positional model needed.
  *
- * INTERIM, and deliberately so. The settled display model (§10, doc rev
- * 2026-07-19) is two tiers rendered IN PLACE: a NON-hidden property is an
- * ordinary outline child at its true position and must NOT be filtered
- * here; only HIDDEN-tier rows are. Filtering all of them is correct only
- * while every workspace reads 'cell' (nothing is child-backed, so this
- * predicate filters zero rows in practice). The tier-aware predicate lands
- * with slice D and asks a different question — "is this a HIDDEN-tier
+ * INTERIM, and deliberately so. The settled display model (§10) is two
+ * tiers rendered IN PLACE: a NON-hidden property is an ordinary outline
+ * child at its true position and must NOT be filtered here; only
+ * HIDDEN-tier rows are. Filtering all of them is correct only while every
+ * workspace reads 'cell' (nothing is child-backed, so this predicate
+ * filters zero rows in practice). The tier-aware predicate lands with
+ * slice D and asks a different question — "is this a HIDDEN-tier
  * definition?" rather than "is this a definition?".
- *
- * The row template binds nothing; the recursion template consumes ONE `?`
- * (the parent id) for the §9 ancestry rule. Callers therefore bind
- * `[parentId, parentId]` for the visible variants below.
  *
  * Definition-ness binds to the `block_types` side index (`type =
  * 'property-schema'`, SAME workspace — a foreign workspace's definition id
@@ -265,87 +263,49 @@ export const CHILDREN_IDS_SQL = `
  * asks the REGISTRY, so it recognizes a code-declared seed definition with
  * zero rows; this SQL sees only what `materializePropertySeeds` has
  * written and the `block_types` triggers have indexed. In the gap the same
- * row is hidden by an in-tx read and shown by the reactive query. Two
- * windows, not one: boot before seeds materialize (the slice-C runbook
- * materializes before any flip, and un-flipped workspaces never reach this
- * predicate), AND a field row arriving over sync ahead of its definition
- * block, which no boot-time ordering rule covers.
- *
- * Only the SEED half is a divergence: for a USER-authored definition
- * neither side knows it until the block arrives, so both answer "not a
- * definition" — consistent and self-healing, not a split.
- *
- * The fix belongs with slice C's invisibility half, not slice D: this is a
- * hole in exactly the blanket hide that gates the C flip. Seed definition
- * ids are deterministic (`propertyDefinitionBlockId`), so the set is
- * computable from the registry and can be bound into this predicate. Slice
- * D retargets the predicate at the hidden-tier set — also registry-derived
- * — so D REUSES that mechanism rather than replacing it; don't defer to D
- * on the assumption it dissolves on its own.
- *
- * Converging the other direction is not an option: the tx-layer checker is
- * ALSO the write-side positional gate (`txEngine.isInsidePropertySubtree` /
- * `isProspectiveFieldRow`), where under-recognizing would nest machinery
- * that recognition can never reclaim.
+ * row is hidden by an in-tx read and shown by the reactive query. Only the
+ * SEED half is a divergence: for a USER-authored definition neither side
+ * knows it until the block arrives — consistent and self-healing, not a
+ * split. The fix belongs with slice C's invisibility half (deterministic
+ * seed ids are computable from the registry and can be bound into this
+ * predicate; slice D reuses that mechanism for the hidden-tier set).
  *
  * An un-flipped workspace short-circuits on the `workspaces` probe
- * (dormant: today's behavior, zero rows filtered).
+ * (dormant: today's behavior, zero rows filtered). No extra parameters —
+ * the flat predicate is fully expressed over the candidate row's own
+ * columns, which is what deleting the positional walk buys.
  *
- * The inner `up` walk carries the same `path` visited-guard as the
- * descendant CTEs above (issue #404 item 8b) — without it a cyclic
- * `parent_id` chain (see issue #183; classification still converges
- * because the walk terminates on the `depth < 100` cap either way, but
- * a cyclic DB would otherwise spin every one of those 100 steps instead
- * of stopping the moment it revisits a row).
+ * NULL-SAFETY is load-bearing (§9's recorded failure mode, caught by this
+ * file's own tests): the bit is NULL on every unmarked row, and this
+ * fragment is consumed under `NOT (...)` — a bare `is_field_form = 1`
+ * yields NULL there, and `NOT NULL` is NULL, which WHERE treats as false,
+ * silently HIDING every ordinary child. COALESCE pins the three-valued
+ * logic down.
  */
-const VISIBLE_CHILD_PREDICATE_SQL = `
-   AND (
-     blocks.reference_target_id IS NULL
-     OR NOT EXISTS (
+const recognizedFieldRowSql = (rowRef: string): string => `
+     COALESCE(${rowRef}.is_field_form, 0) = 1
+     AND ${rowRef}.parent_id IS NOT NULL
+     AND EXISTS (
        SELECT 1 FROM workspaces w
-        WHERE w.id = blocks.workspace_id
+        WHERE w.id = ${rowRef}.workspace_id
           AND w.properties_migration IN ('children', 'cell-off')
      )
-     OR NOT EXISTS (
+     AND EXISTS (
        SELECT 1 FROM block_types bt
-        WHERE bt.block_id = blocks.reference_target_id
+        WHERE bt.block_id = ${rowRef}.reference_target_id
           AND bt.type = 'property-schema'
-          AND bt.workspace_id = blocks.workspace_id
+          AND bt.workspace_id = ${rowRef}.workspace_id
      )
-     OR EXISTS (
-       WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, path, depth) AS (
-         SELECT id, reference_target_id, parent_id, workspace_id,
-                '!' || hex(id) || '/',
-                0
-           FROM blocks WHERE id = ?
-         UNION ALL
-         SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id,
-                up.path || '!' || hex(b.id) || '/',
-                up.depth + 1
-           FROM blocks AS b
-           JOIN up ON b.id = up.parent_id
-          WHERE up.depth < 100
-            AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
-       )
-       SELECT 1 FROM up
-        WHERE up.reference_target_id IS NOT NULL
-          -- §9 root half: a workspace-root row is never a field row, so it
-          -- never makes its descendants "interior" (twin of the parentId
-          -- check in isPropertyFieldInstance).
-          AND up.parent_id IS NOT NULL
-          AND EXISTS (
-            SELECT 1 FROM block_types bt2
-             WHERE bt2.block_id = up.reference_target_id
-               AND bt2.type = 'property-schema'
-               AND bt2.workspace_id = up.workspace_id
-          )
-        LIMIT 1
-     )
+`
+
+const VISIBLE_CHILD_PREDICATE_SQL = `
+   AND NOT (
+${recognizedFieldRowSql('blocks')}
    )
 `
 
 /** Outline form of {@link CHILDREN_SQL}: excludes recognized field rows in
- *  a flipped workspace. Bind `[parentId, parentId]`. */
+ *  a flipped workspace. Bind `[parentId]`. */
 export const VISIBLE_CHILDREN_SQL = `
   SELECT * FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -353,7 +313,7 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
    ORDER BY order_key, id
 `
 
-/** Outline form of {@link CHILDREN_IDS_SQL}. Bind `[parentId, parentId]`. */
+/** Outline form of {@link CHILDREN_IDS_SQL}. Bind `[parentId]`. */
 export const VISIBLE_CHILDREN_IDS_SQL = `
   SELECT id FROM blocks
    WHERE parent_id = ? AND deleted = 0
@@ -362,80 +322,31 @@ ${VISIBLE_CHILD_PREDICATE_SQL}
 `
 
 /**
- * VISIBLE-subtree form of {@link SUBTREE_SQL} (PR #288 §9, slice C gap fix):
- * subtree consumers (panels, copy, navigation, shortcuts) get the same view
- * as the outline rather than a second, more permissive one. Carries the
- * same INTERIM scope as {@link VISIBLE_CHILD_PREDICATE_SQL} — it prunes at
- * EVERY recognized field row today, where §10 wants only hidden-tier rows
- * pruned; slice D's tier-aware predicate is what makes copy WYSIWYG (a
- * non-hidden property row travels with its subtree, a hidden-tier one
- * prunes whole) and closes #404's copy gap by construction, since user
- * content nested under a visible property's value stops being pruned along
- * with it. The recursive descent refuses to step INTO a
- * recognized field-row child — same recognition predicate as
- * {@link VISIBLE_CHILD_PREDICATE_SQL} (flip probe on the child's workspace +
- * a workspace-scoped `block_types = 'property-schema'` probe on the child's
- * `reference_target_id`). Pruning happens AT the field row, so its entire
- * subtree (value child, comments, everything) is excluded in one step —
- * no per-descendant interior re-check is needed once a branch is pruned.
+ * VISIBLE-subtree form of {@link SUBTREE_SQL} (PR #288 §9): subtree
+ * consumers (panels, copy, navigation, shortcuts) get the same view as the
+ * outline rather than a second, more permissive one. Carries the same
+ * INTERIM scope as {@link VISIBLE_CHILD_PREDICATE_SQL} — it prunes at EVERY
+ * recognized field row today, where §10 wants only hidden-tier rows pruned;
+ * slice D's tier-aware predicate is what makes copy WYSIWYG and closes
+ * #404's copy gap by construction.
  *
- * Root exemptions, evaluated ONCE for the root id via `root_exempt` (a
- * scalar CTE wrapping the same `up`-ancestry-walk pattern
- * VISIBLE_CHILD_PREDICATE_SQL uses, just seeded at the root instead of a
- * parent): if the ROOT itself is a recognized field row, or the root is
- * interior (some strict ancestor of the root is a recognized field row),
- * the raw subtree is returned unfiltered. Both cases are "the caller
- * explicitly asked for property-subtree content" — §9 guarantees nothing
- * below a field row is ever itself another field row, so a stamped
- * ref-typed VALUE row further down a property subtree must never be
- * pruned. `root_exempt` is OR'd into the recursive descend condition so it
- * short-circuits the rest of the predicate once true.
+ * The recursive descent refuses to step INTO a recognized field-row child —
+ * the same flat predicate as the children view — and pruning happens AT the
+ * field row, so its entire subtree (value child, comments, everything) is
+ * excluded in one step. The ROOT itself is never pruned: it is the seed the
+ * caller explicitly asked for, so opening a field row shows its subtree —
+ * minus that subtree's OWN nested machinery, which prunes uniformly (the
+ * flat model deleted the positional `root_exempt` escape: a stamped
+ * ref-typed VALUE deeper in a property subtree is unmarked and never
+ * pruned, which is all the exemption existed to protect).
  *
- * Bind `[rootId, rootId]` — one for the `root_exempt` ancestry seed, one
- * for the `subtree` seed (same convention as `[parentId, parentId]` on the
- * VISIBLE_CHILDREN_* pair above). Same selected columns + depth semantics
- * as SUBTREE_SQL; the `INDEXED BY` planner-pin note there applies here too.
- *
- * An un-flipped workspace short-circuits on the `workspaces` probe exactly
- * like VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).
+ * Bind `[rootId]`. Same selected columns + depth semantics as SUBTREE_SQL;
+ * the `INDEXED BY` planner-pin note there applies here too. An un-flipped
+ * workspace short-circuits on the `workspaces` probe exactly like
+ * VISIBLE_CHILD_PREDICATE_SQL (dormant: zero rows pruned).
  */
 export const VISIBLE_SUBTREE_SQL = `
   WITH RECURSIVE
-  root_exempt(v) AS (
-    SELECT CASE WHEN EXISTS (
-      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, path, depth) AS (
-        SELECT id, reference_target_id, parent_id, workspace_id,
-               '!' || hex(id) || '/',
-               0
-          FROM blocks WHERE id = ?
-        UNION ALL
-        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id,
-               up.path || '!' || hex(b.id) || '/',
-               up.depth + 1
-          FROM blocks AS b
-          JOIN up ON b.id = up.parent_id
-         WHERE up.depth < 100
-           AND INSTR(up.path, '!' || hex(b.id) || '/') = 0
-      )
-      SELECT 1 FROM up
-       WHERE up.reference_target_id IS NOT NULL
-         -- §9 root half: a workspace-root row is never a field row (twin
-         -- of the parentId check in isPropertyFieldInstance).
-         AND up.parent_id IS NOT NULL
-         AND EXISTS (
-           SELECT 1 FROM workspaces w
-            WHERE w.id = up.workspace_id
-              AND w.properties_migration IN ('children', 'cell-off')
-         )
-         AND EXISTS (
-           SELECT 1 FROM block_types bt
-            WHERE bt.block_id = up.reference_target_id
-              AND bt.type = 'property-schema'
-              AND bt.workspace_id = up.workspace_id
-         )
-       LIMIT 1
-    ) THEN 1 ELSE 0 END
-  ),
   subtree AS (
     SELECT *,
            '!' || hex(id) || '/' AS path,
@@ -452,20 +363,8 @@ export const VISIBLE_SUBTREE_SQL = `
      WHERE child.deleted = 0
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
-       AND (
-         (SELECT v FROM root_exempt) = 1
-         OR child.reference_target_id IS NULL
-         OR NOT EXISTS (
-           SELECT 1 FROM workspaces w
-            WHERE w.id = child.workspace_id
-              AND w.properties_migration IN ('children', 'cell-off')
-         )
-         OR NOT EXISTS (
-           SELECT 1 FROM block_types bt
-            WHERE bt.block_id = child.reference_target_id
-              AND bt.type = 'property-schema'
-              AND bt.workspace_id = child.workspace_id
-         )
+       AND NOT (
+${recognizedFieldRowSql('child')}
        )
   )
   SELECT * FROM subtree ORDER BY path

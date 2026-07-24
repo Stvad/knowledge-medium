@@ -148,8 +148,9 @@ describe('flipped workspace (properties_migration = children)', () => {
     expect(await cellValue('p')).toBe('done')
     const fields = await liveFieldRows('p')
     expect(fields).toHaveLength(1)
-    // Field rows address their definition BY ID (`((fieldId))`, §7).
-    expect(fields[0]!.content).toBe(`((${STATUS_FIELD_ID}))`)
+    // Field rows are the MARKED canonical form (`::((fieldId))`, §7 grammar
+    // box) — id-addressed and rename-stable.
+    expect(fields[0]!.content).toBe(`::((${STATUS_FIELD_ID}))`)
     const values = await childrenRows(fields[0]!.id)
     expect(values.filter(v => v.deleted === 0)).toHaveLength(1)
     expect(values[0]!.content).toBe('done')
@@ -727,14 +728,13 @@ describe('childrenOf visible-children exclusion (§9)', () => {
     }, {scope: ChangeScope.BlockDefault})
   })
 
-  // The §9 ancestry answer is memoized per tx, and the walk memoizes EVERY id
-  // on the chain it walked — so a mid-tx re-parent (or re-stamp) can flip the
-  // answer for a whole subtree while the memo still describes the OLD tree.
-  // Here `x` starts as ordinary content (its `((fieldId))` child classifies as
-  // x's OWN field row and is filtered), then moves under a real field row,
-  // which makes it property-subtree interior — where §9 filters nothing,
-  // because the child is now a VALUE. A stale memo keeps hiding it.
-  it('re-walks ancestry after a same-tx move instead of trusting the memo', async () => {
+  // Flat §9 recognition is content-intrinsic and MOVE-PROOF: classification
+  // never reads ancestors, so no per-tx ancestry memo exists to go stale.
+  // An UNMARKED `((fieldId))` child is never machinery — before or after a
+  // move into a property subtree — while a MARKED child filters at any
+  // depth, including under a field row (it is that row's own nested field
+  // row).
+  it('recognition is move-proof: unmarked stays visible and marked stays filtered across a same-tx move', async () => {
     const repo = await setupFlipped()
     const [field] = await liveFieldRows('p')
     await repo.tx(async tx => {
@@ -743,18 +743,20 @@ describe('childrenOf visible-children exclusion (§9)', () => {
         id: 'x-kid', workspaceId: WS, parentId: 'x', orderKey: 'a',
         content: `((${STATUS_FIELD_ID}))`,
       })
+      await tx.create({
+        id: 'x-field', workspaceId: WS, parentId: 'x', orderKey: 'b',
+        content: `::((${STATUS_FIELD_ID}))`,
+      })
     }, {scope: ChangeScope.BlockDefault})
 
     await repo.tx(async tx => {
-      // Populates the memo for x's chain: x is ordinary, so its
-      // definition-resolving child reads as machinery and is filtered.
-      expect(await tx.childrenOf('x', undefined, {hidePropertyChildren: true})).toEqual([])
+      const before = await tx.childrenOf('x', undefined, {hidePropertyChildren: true})
+      expect(before.map(c => c.id)).toEqual(['x-kid'])
 
-      // x is now INSIDE a property subtree — the same child is a value.
       await tx.move('x', {parentId: field!.id, orderKey: 'zz'})
 
-      const visible = await tx.childrenOf('x', undefined, {hidePropertyChildren: true})
-      expect(visible.map(c => c.id)).toEqual(['x-kid'])
+      const after = await tx.childrenOf('x', undefined, {hidePropertyChildren: true})
+      expect(after.map(c => c.id)).toEqual(['x-kid'])
     }, {scope: ChangeScope.BlockDefault})
   })
 
@@ -987,7 +989,7 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
     await repo.tx(async tx => {
       await tx.create({
         id: 'field-a', workspaceId: WS, parentId: 'p', orderKey: 'a',
-        content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
+        content: `::((${STATUS_FIELD_ID}))`,
       })
       // Real fractional keys — a divergent value now moves to a SIBLING slot
       // computed against the survivor's last value key, so that key must be a
@@ -997,7 +999,7 @@ describe('duplicate collapse preservation (§9, slice B3)', () => {
       })
       await tx.create({
         id: 'field-b', workspaceId: WS, parentId: 'p', orderKey: 'b',
-        content: '[[status]]', referenceTargetId: STATUS_FIELD_ID,
+        content: `::((${STATUS_FIELD_ID}))`,
       })
       await tx.create({
         id: 'value-b', workspaceId: WS, parentId: 'field-b', orderKey: keyAtStart(), content: 'beta',
@@ -1229,23 +1231,32 @@ describe('§9 positional rule on the WRITE side (round-2 review fixes)', () => {
     expect(JSON.parse(fieldRowCell.properties_json)).toEqual({})
   })
 
-  it('a bag write on a field row stays cell-only (no nested field rows)', async () => {
+  it('a bag write on a field row materializes its OWN nested field row (materialize-everything, §9)', async () => {
     const {repo, fieldRowId} = await setupWithProperty()
     await repo.tx(tx => tx.update(fieldRowId, {properties: {[statusSchema.name]: 'nested'}}),
       {scope: ChangeScope.BlockDefault})
-    // No nested [[status]] row under the field row: its only live child is
-    // the value child.
+    // Under the `::` grammar, field rows' bags materialize like everyone
+    // else's: a MARKED nested field row lands beside the value child, and
+    // recognition reclaims it at any depth (no cell-only carve-out).
     const children = (await childrenRows(fieldRowId)).filter(c => c.deleted === 0)
-    expect(children.filter(c => c.reference_target_id === STATUS_FIELD_ID)).toEqual([])
+    const nested = children.filter(c => c.content === `::((${STATUS_FIELD_ID}))`)
+    expect(nested).toHaveLength(1)
+    const nestedValues = (await childrenRows(nested[0]!.id)).filter(c => c.deleted === 0)
+    expect(nestedValues.map(v => v.content)).toEqual(['nested'])
   })
 
-  it('setProperty on a property-subtree interior row skips the dual-write', async () => {
+  it('setProperty on a value row dual-writes machinery under it (any-depth rule, §9)', async () => {
     const {repo, valueRowId} = await setupWithProperty()
     await repo.tx(tx => tx.setProperty(valueRowId, statusSchema, 'meta'),
       {scope: ChangeScope.BlockDefault})
-    // The cell write lands; no field row is minted under the value child.
+    // A `::` child of a value row is that value's own field row — the cell
+    // write lands AND the marked machinery nests under the value row.
+    expect(await cellValue(valueRowId)).toBe('meta')
     const children = (await childrenRows(valueRowId)).filter(c => c.deleted === 0)
-    expect(children.filter(c => c.reference_target_id === STATUS_FIELD_ID)).toEqual([])
+    const nested = children.filter(c => c.content === `::((${STATUS_FIELD_ID}))`)
+    expect(nested).toHaveLength(1)
+    const nestedValues = (await childrenRows(nested[0]!.id)).filter(c => c.deleted === 0)
+    expect(nestedValues.map(v => v.content)).toEqual(['meta'])
   })
 })
 
@@ -1656,8 +1667,8 @@ describe('root rows are never filtered (§9 root exemption, WRITE-side)', () => 
   })
 })
 
-describe('same-tx content flip to ((fieldId)) stays cell-only (prospective-field-row gate, PR #386 review)', () => {
-  it('update(content → ((fieldId))) then setProperty in ONE tx nests no machinery under the flipping block', async () => {
+describe('materialize-everything: no cell-only carve-outs remain (§9 flat grammar)', () => {
+  it('an unmarked ((fieldId)) row is not a field row — its bag dual-writes normally', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'host')
@@ -1667,44 +1678,72 @@ describe('same-tx content flip to ((fieldId)) stays cell-only (prospective-field
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    // Both writes in the SAME tx: the content flip makes `p` a prospective
-    // field row (its stored reference_target_id is still stale — derive
-    // runs after the user fn AND after materialize), so both the
-    // setProperty dual-write and the materialize processor must recognize
-    // it from CONTENT and keep the property write cell-only. Pre-fix,
-    // machinery nested a field row under a row about to become a field row
-    // itself — unreclaimable.
+    // Both writes in the SAME tx. Under the marked grammar an UNMARKED
+    // `((fieldId))` is a plain reference block, full stop — the old
+    // prospective-field-row gate (which kept this write cell-only) is
+    // deleted, and machinery dual-writes under `p` like any block.
     await repo.tx(async tx => {
       await tx.update('p', {content: `((${STATUS_FIELD_ID}))`})
       await tx.setProperty('p', statusSchema, 'v')
     }, {scope: ChangeScope.BlockDefault})
 
-    // The flip landed (derive stamped the column from the new content)…
-    const row = await sharedDb.db.get<{reference_target_id: string | null}>(
-      'SELECT reference_target_id FROM blocks WHERE id = ?', ['p'],
+    // The target stamped (every form × marked/unmarked derives)…
+    const row = await sharedDb.db.get<{reference_target_id: string | null; is_field_form: number | null}>(
+      'SELECT reference_target_id, is_field_form FROM blocks WHERE id = ?', ['p'],
     )
     expect(row.reference_target_id).toBe(STATUS_FIELD_ID)
-    // …the cell carries the property…
+    // …but the BIT did not — unmarked never classifies…
+    expect(row.is_field_form).toBeNull()
+    // …the cell carries the property, and the backing machinery nests
+    // under `p` (marked field row + value child).
     expect(await cellValue('p')).toBe('v')
-    // …and NO field/value machinery was nested under the block.
-    expect(await childrenRows('p')).toEqual([])
+    const fields = await liveFieldRows('p')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.content).toBe(`::((${STATUS_FIELD_ID}))`)
   })
 
-  it('root exemption: a ROOT block with content ((fieldId)) still materializes its bag (root rows are never field rows)', async () => {
+  it('a MARKED field row still dual-writes its own bag (no prospective suppression either)', async () => {
+    await seedWorkspace('children')
+    const repo = setup()
+    await createBlock(repo, 'host2')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'p2', workspaceId: WS, parentId: 'host2', orderKey: 'a', content: 'ordinary',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Content flips to the MARKED form and a property write lands in the
+    // same tx: `p2` IS (about to be) a field row, and materialize-everything
+    // still dual-writes its bag — nested machinery is reclaimable at any
+    // depth, so no suppression exists.
+    await repo.tx(async tx => {
+      await tx.update('p2', {content: `::((${STATUS_FIELD_ID}))`})
+      await tx.setProperty('p2', statusSchema, 'v')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await sharedDb.db.get<{reference_target_id: string | null; is_field_form: number | null}>(
+      'SELECT reference_target_id, is_field_form FROM blocks WHERE id = ?', ['p2'],
+    )
+    expect(row.reference_target_id).toBe(STATUS_FIELD_ID)
+    expect(row.is_field_form).toBe(1)
+    expect(await cellValue('p2')).toBe('v')
+    const fields = await liveFieldRows('p2')
+    expect(fields).toHaveLength(1)
+    expect(fields[0]!.content).toBe(`::((${STATUS_FIELD_ID}))`)
+  })
+
+  it('a ROOT block materializes its bag (root rows are never field rows)', async () => {
     await seedWorkspace('children')
     const repo = setup()
     await createBlock(repo, 'root-p', `((${STATUS_FIELD_ID}))`)
 
-    // A root row is positionally user content — the prospective-field-row
-    // gate must NOT suppress its materialization: the setProperty
-    // dual-write still creates the backing field row + value child.
     await repo.tx(tx => tx.setProperty('root-p', statusSchema, 'v'),
       {scope: ChangeScope.BlockDefault})
 
     expect(await cellValue('root-p')).toBe('v')
     const fields = await liveFieldRows('root-p')
     expect(fields).toHaveLength(1)
-    expect(fields[0]!.content).toBe(`((${STATUS_FIELD_ID}))`)
+    expect(fields[0]!.content).toBe(`::((${STATUS_FIELD_ID}))`)
     const values = (await childrenRows(fields[0]!.id)).filter(v => v.deleted === 0)
     expect(values.map(v => v.content)).toEqual(['v'])
   })

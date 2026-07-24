@@ -238,6 +238,15 @@ export interface Tx {
     fieldId: string,
   ): AnyPropertySchema | null
 
+  /** §9 recognition, condition-3 checker: does `fieldId` name a definition
+   *  this workspace's registry can resolve — shadow-tolerant (a shadowed
+   *  loser COUNTS: its field rows keep classifying; only the name map and
+   *  projection exclude it, §6). This is the classification predicate's
+   *  fieldId half, exposed so composed predicates (`isPropertyFieldRow`,
+   *  merge/rename selection) read the ONE checker instead of restating the
+   *  disjunction. Synchronous — bound to the tx-start registry snapshot. */
+  isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
+
   /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
    *  at or past 'children' — never an equality test)? Shared by

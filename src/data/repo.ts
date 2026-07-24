@@ -115,6 +115,7 @@ import type {
 } from './internals/propertyDefinitionMigrations'
 import {
   encodedPropertyValueToChildContent,
+  isFieldValueChild,
   isPropertyFieldInstance,
   propertyChildContentToEncodedValue,
   rekeyParentPropertyCell,
@@ -2961,6 +2962,7 @@ export class Repo {
       const candidates = await this.db.getAll<{parent_id: string | null}>(
         `SELECT DISTINCT parent_id FROM blocks
           WHERE workspace_id = ? AND reference_target_id IN (${fieldChunk.map(() => '?').join(', ')})
+            AND is_field_form = 1
             AND deleted = 0 AND parent_id IS NOT NULL`,
         [workspaceId, ...fieldChunk],
       )
@@ -2977,12 +2979,11 @@ export class Repo {
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
       await this.tx(async tx => {
-        // §9 ancestry rule, memoized per tx (fresh per chunk — a fresh `tx()`
-        // per chunk sees the previous chunk's own committed writes, and the
-        // memo shouldn't outlive the tx it was walked against): a row whose
-        // parent chain passes through a field row is a VALUE/comment (e.g. a
-        // ref-typed value pointing at this very definition), not a field row
-        // — never retitle or re-key those.
+        // Flat §9 recognition: field-row selection below keys on the BIT +
+        // fieldId (the bit is what keeps a ref-typed value pointing at this
+        // very definition from being misread as a field row — no ancestry
+        // walk exists anymore, and every owner re-keys uniformly at any
+        // depth).
         //
         // `isFieldDefinition` closes over the batch's captured `resolver`
         // (schedule-time snapshot, captured in
@@ -3016,7 +3017,6 @@ export class Repo {
         // `change.fieldId` resolves when `plans` was built) — the guard below
         // stays for the root-half/shared-recognizer symmetry with the
         // ancestor walk, not as a live re-check.
-        const subtreeMemo = new Map<string, boolean>()
         const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
           const rowResolution = resolver.resolveField(fieldId)
           return rowResolution.status === 'resolved'
@@ -3024,13 +3024,13 @@ export class Repo {
         }
 
         for (const parentId of chunk) {
-          // Shared swap-safe re-key: the helper owns the parent guard, the §9
-          // ancestry gate, and the drop-all-then-set-all apply (symmetric with
-          // the same-tx rename processor). This computePlan is the codec half —
-          // it re-encodes value children under the (possibly new) codec and
+          // Shared swap-safe re-key: the helper owns the parent guard and
+          // the drop-all-then-set-all apply (symmetric with the same-tx
+          // rename processor). This computePlan is the codec half — it
+          // re-encodes value children under the (possibly new) codec and
           // reports unconvertibles.
           await rekeyParentPropertyCell(
-            tx, parentId, isFieldDefinition, subtreeMemo,
+            tx, parentId,
             async (siblings) => {
               const oldNames: string[] = []
               const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
@@ -3039,22 +3039,23 @@ export class Repo {
                 let hasProjection = false
                 let parentUnconvertible = 0
                 let sawFieldRow = false
-                // Field-row content is `((fieldId))` — id-addressed and
-                // rename-stable (§7), nothing to retitle. Two conditions select
-                // THIS definition's field rows: the fieldId equality picks them
-                // out (isPropertyFieldInstance has no notion of "which"
-                // definition); isPropertyFieldInstance reuses the shared §9
-                // recognizer (a no-op here for the root half — siblings are all
-                // actual children — and the resolvability half —
-                // `isFieldDefinition(change.fieldId)` is always true here — kept
-                // for symmetry with the ancestor walk).
+                // Field-row content is `::((fieldId))` — id-addressed and
+                // rename-stable (§7), nothing to retitle. The fieldId
+                // equality picks THIS definition's field rows; the shared §9
+                // recognizer supplies the bit + root + resolvability
+                // conditions (`isFieldDefinition(change.fieldId)` is always
+                // true here — kept as the one composed predicate rather than
+                // a hand-rolled restatement).
                 for (const sibling of siblings) {
                   if (
                     (sibling.referenceTargetId ?? null) !== change.fieldId
                     || !isPropertyFieldInstance(sibling, isFieldDefinition)
                   ) continue
                   sawFieldRow = true
-                  const values = await tx.childrenOf(sibling.id, undefined)
+                  // §9 value set: bit-filtered — nested marked rows are
+                  // machinery, never value candidates.
+                  const values = (await tx.childrenOf(sibling.id, undefined))
+                    .filter(isFieldValueChild)
                   for (const value of values) {
                     try {
                       const encoded = propertyChildContentToEncodedValue(
