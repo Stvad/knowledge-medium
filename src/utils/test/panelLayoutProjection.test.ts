@@ -581,6 +581,25 @@ describe('view-mode navigation semantics', () => {
       scrollTop: 7,
     }))
 
+  it('REPLACES rather than pushes when leaving an entry that shows a deleted block', async () => {
+    // Delete-recovery retargets the pane. Pushing would trap the user: browser
+    // Back lands on the dead page, the watcher retargets and pushes again, and
+    // the dead entry can never be stepped past.
+    await seedBlocks(['a', 'b'])
+    await applyUrl('#ws-1/a')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a')
+    await projection.start()
+
+    await env.repo.block('a').delete()
+    await navigateInPanel(panelBlock(rowA), 'b')
+
+    await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/b']))
+    expect(pushes).toEqual([])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
   it('navigateInPanel with viewMode: one viewModeEnter-stamped entry, ONE push carrying both changes', async () => {
     await applyUrl('#ws-1/a')
     const rowA = await rowFor('a')

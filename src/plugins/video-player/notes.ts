@@ -6,7 +6,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties.js'
 import { panelRenderScopeId } from '@/utils/renderScope'
-import { goBackInPanel, navigateInPanel, panelHistory } from '@/utils/panelHistory'
+import { goBackInPanel, isBlockLive, navigateInPanel, panelHistory } from '@/utils/panelHistory'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 const focusVideoNoteChild = async (
@@ -111,12 +111,16 @@ export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
   closingPanels.add(panelBlock.id)
   try {
     const backTop = panelHistory.getSnapshot(panelBlock.id).back.at(-1)
-    if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE) {
-      // `goBackInPanel` declines when the marked pre-enter page has since been
-      // deleted (it prunes dead entries rather than landing on a tombstone).
-      // Fall through to clearing the mode in place — otherwise close does
-      // nothing and leaves the pane stuck in video-notes with no way out.
-      if (await goBackInPanel(panelBlock)) return
+    // Only go back if the MARKED pre-enter page is still live. `goBackInPanel`
+    // prunes dead entries rather than landing on a tombstone, so a deleted
+    // pre-enter page would otherwise make close either do nothing (no live
+    // entry left — pane stuck in video-notes mode) or silently jump to some
+    // older, unrelated page. Neither is "close the notes view"; clearing the
+    // mode in place is.
+    if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE
+      && await isBlockLive(panelBlock.repo.block(backTop.blockId))
+      && await goBackInPanel(panelBlock)) {
+      return
     }
     const current = panelBlock.peekProperty(topLevelBlockIdProp)
     if (!current) return

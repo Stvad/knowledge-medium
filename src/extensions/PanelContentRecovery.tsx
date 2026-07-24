@@ -5,6 +5,7 @@ import { usePropertyValue } from '@/hooks/block.js'
 import { useBlockExists } from '@/hooks/block.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import { recoverPanelOffDeadContent } from '@/utils/panelHistory.js'
+import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import {
   panelMountsFacet,
   workspaceLandingFacet,
@@ -22,16 +23,6 @@ import { systemToggle } from '@/facets/togglable.js'
  * user registers the content changed, we're past it.
  */
 const RECOVERY_DEBOUNCE_MS = 120
-
-/**
- * Debounce for a block that was ALREADY gone when this pane first pointed at it
- * — a stale bookmark, a shared link, a browser-history entry for a page deleted
- * since. Locally, "deleted" and "hasn't synced yet" are the same observation
- * (no row), so this waits long enough for an initial sync drain to deliver a
- * page that does exist before concluding it never will. The vanished-under-us
- * case doesn't need the wait: we watched that block be live.
- */
-const UNSEEN_RECOVERY_DEBOUNCE_MS = 3_000
 
 /** Resolve the workspace's landing block (today's daily note, by default) off
  *  the live app runtime — the terminal fallback when a recovering pane has no
@@ -105,8 +96,10 @@ export function PanelContentRecovery({block}: {block: Block}) {
     // bookmark, a shared link, a browser-history entry for a since-deleted
     // page).
     let cancelled = false
-    void shown.load().then(data => {
-      if (cancelled || data) return
+    let disposeSyncWait: (() => void) | undefined
+
+    const armRecovery = () => {
+      if (cancelled) return
       timerRef.current = setTimeout(() => {
         timerRef.current = null
         // Re-verify at fire time: same shown block, and still gone (not
@@ -122,13 +115,36 @@ export function PanelContentRecovery({block}: {block: Block}) {
         void recoverPanelOffDeadContent(block, topLevelBlockId, () =>
           resolveLandingId(block.repo, topLevelBlockId),
         )
-      }, seenLiveRef.current.has(topLevelBlockId)
-        ? RECOVERY_DEBOUNCE_MS
-        : UNSEEN_RECOVERY_DEBOUNCE_MS)
+      }, RECOVERY_DEBOUNCE_MS)
+    }
+
+    void shown.load().then(data => {
+      if (cancelled || data) return
+      // Watched this block be live, so its absence now is a delete — recover.
+      if (seenLiveRef.current.has(topLevelBlockId)) {
+        armRecovery()
+        return
+      }
+      // Never live in this pane. A missing local row means "deleted" OR "hasn't
+      // replicated yet", and those are indistinguishable here — so wait for the
+      // initial sync to settle and re-ask before concluding it's gone. Without
+      // this, opening a valid shared link in a not-yet-synced workspace would
+      // bounce the pane to the landing page and canonicalize the URL, losing
+      // the deep link. In a local-only/offline session `onFirstSync` never
+      // fires, which is the safe outcome: leave the pane where it is.
+      // Cast per the established idiom (see startup-metrics/record.ts): the
+      // Repo's wrapped db type doesn't declare the optional sync-status fields,
+      // and onFirstSync treats an object without them as already-synced.
+      disposeSyncWait = onFirstSync(block.repo.db as unknown as SyncStatusDb, () => {
+        void shown.load().then(afterSync => {
+          if (!cancelled && !afterSync) armRecovery()
+        })
+      })
     })
 
     return () => {
       cancelled = true
+      disposeSyncWait?.()
       if (timerRef.current != null) {
         clearTimeout(timerRef.current)
         timerRef.current = null

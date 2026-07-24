@@ -397,7 +397,7 @@ export const navigateInPanel = async (
 }
 
 /** True once `block`'s row is loaded and live (not tombstoned/missing). */
-const isBlockLive = async (block: Block): Promise<boolean> => {
+export const isBlockLive = async (block: Block): Promise<boolean> => {
   if (block.peek()) return true
   await block.load()
   return block.peek() !== null

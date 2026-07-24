@@ -1084,6 +1084,16 @@ export class PanelLayoutProjection {
     return this.inboundQueue
   }
 
+  /** Does any pane in `slots` render a block we KNOW is a tombstone? Uses the
+   *  tombstone-aware cache read, which is sync and — on the path that matters,
+   *  a delete this session just committed — always populated. An unloaded or
+   *  live block answers false, so this only ever downgrades a push to a
+   *  replace when we're certain the entry is unreturnable. */
+  private showsDeletedBlock(slots: readonly LayoutSlot[]): boolean {
+    return collectLeafSlots(slots)
+      .some(slot => this.repo.block(slot.blockId).peekRaw()?.deleted === true)
+  }
+
   private handleRowsChanged(rows: readonly BlockData[]): void {
     // While an inbound apply is in flight, a rows event necessarily compares
     // OLD rows against the NEW hash — writing that back would clobber the
@@ -1116,6 +1126,13 @@ export class PanelLayoutProjection {
     if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'ignore-active')) {
       // Active-only diff: which pane is focused is not a history entry —
       // rewrite the current one instead of pushing.
+      this.replaceHash(nextHash)
+    } else if (sameWorkspace && this.showsDeletedBlock(current.slots)) {
+      // The entry we'd be leaving renders a DELETED block, so it is not
+      // somewhere the user can meaningfully return to. Pushing would trap
+      // them: browser Back lands on the dead page, `PanelContentRecovery`
+      // retargets the pane and pushes the replacement again, and the dead
+      // entry can never be stepped past. Rewrite it instead.
       this.replaceHash(nextHash)
     } else {
       this.pushHash(nextHash)
