@@ -19,9 +19,10 @@ import {
   topLevelBlockIdProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
-import { goBackInPanel } from '@/utils/panelHistory.js'
+import { goBackInPanel, panelHistory } from '@/utils/panelHistory.js'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { PANEL_TYPE } from '@/data/blockTypes.js'
+import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import {
   ActionConfig,
@@ -329,11 +330,16 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
           deps.scopeRootForcesOpen !== false
         if (!isFocalPage) return
 
-        // No structural writes in a read-only workspace: moving the panel is a
-        // UiState write (allowed) while block.delete() is BlockDefault
-        // (rejected), so proceeding would strand the panel off a page it never
-        // deleted. Bail before touching anything.
+        // Refuse deletes the data layer would reject anyway — otherwise we move
+        // the panel off a page that then survives the (failed) delete. Two
+        // sources, both checked BEFORE any panel write:
+        //  - read-only workspace: block.delete() is a BlockDefault write, rejected;
+        //  - a materialized seed-definition block (a code-owned system page): its
+        //    row is undeletable (SeededDefinitionWriteError), even when writable.
         if (block.repo.isReadOnly) return
+        await block.load()
+        const data = block.peek()
+        if (data && isValidSeededDefinition(data)) return
 
         // Only delete once the panel is safely off the page. If it couldn't be
         // moved (no history AND not a real panel surface — e.g. the headless
@@ -345,6 +351,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
         await withMoveTransition(async () => {
           await block.delete()
         })
+        // The page is gone: drop it from this pane's history so neither Back nor
+        // Forward lands on its tombstone. `goBackInPanel` parks the current page
+        // on the FORWARD stack as it steps back, so without this the Forward
+        // button would navigate straight to the just-deleted block.
+        panelHistory.forget(uiStateBlock.id, block.id)
         return
       }
 

@@ -189,6 +189,21 @@ export class PanelHistoryStore {
     if (had) this.notify(panelId)
   }
 
+  /** Drop every entry (back OR forward) that points at `blockId`. Called when
+   *  a block is deleted so neither Back nor Forward can land the pane on its
+   *  tombstone — in particular the delete-page flow steps back via `back()`,
+   *  which parks the just-deleted page on the forward stack. Keeps the rest of
+   *  the stacks intact (legitimate other entries survive). */
+  forget(panelId: string, blockId: string): void {
+    const current = this.state.get(panelId)
+    if (!current) return
+    const back = current.back.filter(entry => entry.blockId !== blockId)
+    const forward = current.forward.filter(entry => entry.blockId !== blockId)
+    if (back.length === current.back.length && forward.length === current.forward.length) return
+    this.state.set(panelId, {back, forward})
+    this.notify(panelId)
+  }
+
   /** Register a snapshotter for a panel — a function that reads the
    *  panel's current ephemeral state (focused block, scroll, …) so the
    *  store can capture it before the panel navigates. Returns an

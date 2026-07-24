@@ -34,6 +34,8 @@ import {
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { panelHistory } from '@/utils/panelHistory'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { seedKeyProp } from '@/data/properties'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   ActionContextTypes,
@@ -1185,6 +1187,11 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('child').peekRaw()?.deleted).toBe(true)
     // …and the panel stepped back to the previous page, not a tombstone.
     expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('home')
+    // The deleted page is purged from history — goBack parked it on the
+    // forward stack, so without the purge Forward would return to its tombstone.
+    const hist = panelHistory.getSnapshot('ui')
+    expect(hist.forward.some(e => e.blockId === 'page')).toBe(false)
+    expect(hist.back.some(e => e.blockId === 'page')).toBe(false)
   })
 
   it('deletes the focal page and closes the pane when there is no back-history', async () => {
@@ -1237,6 +1244,42 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(env.repo.block('page').peekRaw()?.deleted).toBe(false)
     expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe('page')
+  })
+
+  it('refuses to delete the focal page when it is an undeletable seed-definition block', async () => {
+    // A materialized seed-definition block (a code-owned system page) rejects
+    // its own BlockDefault delete (SeededDefinitionWriteError), even in a
+    // writable workspace. Preflight it so we don't move the panel off a page
+    // the delete then leaves alive. (Created under Automation scope — a
+    // BlockDefault create of a provenance-valid seed would itself be rejected.)
+    const seedKey = 'system:test/property/title'
+    const defId = propertyDefinitionBlockId(WS, seedKey)
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: defId,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[seedKeyProp.name]: seedKeyProp.codec.encode(seedKey)},
+      })
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.Automation})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, defId)
+    // Give it back-history so navigability is not what blocks the delete.
+    panelHistory.clear('ui')
+    panelHistory.push('ui', {blockId: 'home'})
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block(defId), uiStateBlock, scopeRootId: defId},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    // Undeletable → refused; the panel did not move off it.
+    expect(await isBlockDeleted(env.repo, defId)).toBe(false)
+    expect(uiStateBlock.peekProperty(topLevelBlockIdProp)).toBe(defId)
   })
 
   it('refuses to delete a self-embed of the focal page (nested surface, same id)', async () => {
