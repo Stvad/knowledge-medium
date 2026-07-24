@@ -1,2 +1,0 @@
-import{parseReferences as e}from"../references/referenceParser.js";var t=e=>{let t=[],n=0;for(;n<e.length;){if(e.startsWith("```",n)){let r=e.indexOf("```",n+3),i=r<0?e.length:r+3;t.push({start:n,end:i}),n=i;continue}if(e[n]==="`"){let r=e.indexOf("`",n+1);if(r<0)break;t.push({start:n,end:r+1}),n=r+1;continue}n+=1}return t},n=(e,t)=>e.some(e=>t>=e.start&&t<e.end),r=r=>{let i=t(r);return i.length===0?e(r):e(r).filter(e=>!n(i,e.startIndex))};export{r as parseRoamImportReferences};
-//# sourceMappingURL=references.js.map

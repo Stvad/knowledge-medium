@@ -1,2 +1,0 @@
-import{definitionSeedsFacet as e,typeSeedsFacet as t}from"../../data/facets.js";import{reviewDeckStartedProp as n,reviewDeckTagProp as r,reviewProgressProp as i,srsReviewDeckType as a,srsReviewProgressType as o}from"./schema.js";var s=[e.of(r,{source:`srs-review`}),e.of(n,{source:`srs-review`}),e.of(i,{source:`srs-review`}),t.of(a,{source:`srs-review`}),t.of(o,{source:`srs-review`})];export{s as srsReviewDataExtension};
-//# sourceMappingURL=dataExtension.js.map

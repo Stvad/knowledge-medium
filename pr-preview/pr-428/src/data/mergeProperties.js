@@ -1,2 +1,0 @@
-import{stableJsonValue as e}from"./internals/jsonCanonical.js";var t=(e,t)=>{let r={...e};for(let e of Object.keys(t)){let i=t[e];if(!Object.hasOwn(r,e)){Object.defineProperty(r,e,{value:i,enumerable:!0,writable:!0,configurable:!0});continue}let a=r[e];if(Array.isArray(a)&&Array.isArray(i)){r[e]=n(a,i);continue}}return r},n=(e,t)=>{let n=new Set,i=[];for(let a of[...e,...t]){let e=r(a);n.has(e)||(n.add(e),i.push(a))}return i},r=t=>JSON.stringify(e([t]));export{t as mergeProperties};
-//# sourceMappingURL=mergeProperties.js.map

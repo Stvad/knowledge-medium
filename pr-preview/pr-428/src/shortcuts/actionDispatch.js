@@ -1,2 +1,0 @@
-import{defineVerbFacet as e}from"../facets/verbFacet.js";import{matchesAction as t}from"./effectiveActions.js";var n=e({id:`core.action-dispatch`,defaultImpl:({action:e,deps:t,trigger:n,dispatch:r})=>e.handler(t,n,r),onError:`rethrow`,syncResultMayBePromise:!0}),r=(e,t)=>n.runSync(e,t),i=e=>n=>r=>t(e,r.action)?e.wrap(r.deps,r.trigger,(e,t,i)=>n({action:r.action,deps:e,trigger:t,dispatch:i}),r.dispatch):n(r),a=(e,t)=>n.decorator(i(e),t);export{n as actionDispatchVerb,a as actionDispatchWrap,r as invokeAction};
-//# sourceMappingURL=actionDispatch.js.map
