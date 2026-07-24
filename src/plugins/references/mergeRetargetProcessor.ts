@@ -12,7 +12,7 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import {
@@ -199,7 +199,7 @@ const retargetSource = async (
     aliasRewrites,
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId'>> = {}
+  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId' | 'isFieldForm'>> = {}
   if (nextContent !== current.content) {
     patch.content = nextContent
     // `core.deriveReferenceTarget` already ran earlier in this same tx pass
@@ -209,14 +209,17 @@ const retargetSource = async (
     // `((new))` — recompute from the rewritten content so the column and
     // content never disagree.
     const lookups = sameTxReferenceTargetLookups(tx)
-    const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
+    const derived = await deriveReferenceColumns(nextContent, current.workspaceId, lookups)
     // This is always an update of an existing row (never a create), so an
     // unresolvable alias (`undefined`) clears the column rather than
     // preserving a caller-provided id the way the derive processor's
     // create path does.
-    const nextTargetId = derived ?? null
+    const nextTargetId = derived.targetId ?? null
     if ((current.referenceTargetId ?? null) !== nextTargetId) {
       patch.referenceTargetId = nextTargetId
+    }
+    if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
+      patch.isFieldForm = derived.isFieldForm
     }
   }
   // This write (including the properties bag) runs under the merge tx's

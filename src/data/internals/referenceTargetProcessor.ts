@@ -4,13 +4,15 @@
  * PR #288 §5/§7).
  *
  * Watches `content`. When a row's whole content trims to exactly one
- * reference token (`((uuid))` or `[[alias]]`), resolves it — a `((uuid))`
- * block-ref textually (no lookup), an `[[alias]]` through the tx-aware generic
- * alias lookup — and writes the target id into `reference_target_id` in the
- * same transaction via `tx.stampReferenceTarget` (a LOCAL-column write: no
- * `updated_at` bump, no upload PATCH — the column is a per-device reflection
- * of content, never synced). Detection everywhere downstream is a column read,
- * never a content parse.
+ * reference span — `((id))`, `[[alias]]`, or `[label](((uuid)))`, each
+ * optionally preceded by the `::` field marker (§7 grammar box) — resolves
+ * it: the id-carrying forms textually (no lookup), `[[alias]]` through the
+ * tx-aware generic alias lookup — and writes BOTH local derived columns in
+ * the same transaction via `tx.stampReferenceTarget`: `reference_target_id`
+ * (the resolved target) and `is_field_form` (pure syntax — the marker
+ * matched, resolution-independent). LOCAL-column writes: no `updated_at`
+ * bump, no upload PATCH — per-device reflections of content, never synced.
+ * Detection everywhere downstream is a column read, never a content parse.
  *
  * Property field rows currently address their definition BY ID (`((fieldId))`,
  * §7), resolving on the textual `blockRef` branch — no property-name tier, no
@@ -46,23 +48,35 @@ export interface ReferenceTargetLookups {
   aliasTargetId(alias: string, workspaceId: string): Promise<string | null>
 }
 
-/** Derive the target for `content`, or:
- *  - `null` — content is not an exact reference (the column must clear);
- *  - `undefined` — content IS an exact `[[alias]]` reference but nothing
+/** Both LOCAL derived columns for `content`, computed in one textual pass
+ *  (§7 grammar box):
+ *  - `targetId`: `null` — content is not a whole-block reference (the column
+ *    must clear); `undefined` — content IS a `[[alias]]` span but nothing
  *    resolves it (callers decide: keep a caller-provided id on create, else
- *    clear). A `((id))` block-ref resolves textually — no lookup, so property
- *    field rows (id-addressed, §7) never touch the alias path. */
-export const deriveReferenceTargetId = async (
+ *    clear). The id-carrying spans — `((id))` AND `[label](((id)))` — resolve
+ *    textually with no lookup, so canonical property field rows (§7) never
+ *    touch the alias path.
+ *  - `isFieldForm`: pure syntax — the `::` marker matched with any span form,
+ *    stamped whether or not the span resolves (§9 condition 1; only the
+ *    target column late-binds). */
+export interface DerivedReferenceColumns {
+  targetId: string | null | undefined
+  isFieldForm: boolean
+}
+
+export const deriveReferenceColumns = async (
   content: string,
   workspaceId: string,
   lookups: ReferenceTargetLookups,
-): Promise<string | null | undefined> => {
+): Promise<DerivedReferenceColumns> => {
   const exact = parseExactReferenceBlockContent(content)
-  if (!exact) return null
-  if (exact.kind === 'blockRef') return exact.id
+  if (!exact) return {targetId: null, isFieldForm: false}
+  if (exact.kind === 'blockRef' || exact.kind === 'aliasedBlockRef') {
+    return {targetId: exact.id, isFieldForm: exact.fieldForm}
+  }
 
   const aliasTarget = await lookups.aliasTargetId(exact.alias, workspaceId)
-  return aliasTarget ?? undefined
+  return {targetId: aliasTarget ?? undefined, isFieldForm: exact.fieldForm}
 }
 
 /** Build the `ReferenceTargetLookups` for a same-tx processor: generic alias
@@ -88,7 +102,7 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
       // edit while deleted would otherwise leave a stale column that a
       // later content-unchanged restore never repairs.
       if (row === null) continue
-      const derivedTargetId = await deriveReferenceTargetId(
+      const derived = await deriveReferenceColumns(
         row.content,
         row.workspaceId,
         lookups,
@@ -96,16 +110,17 @@ export const DERIVE_REFERENCE_TARGET_PROCESSOR = defineSameTxProcessor({
       // Unresolvable-alias CREATE keeps a caller-provided id (a create that
       // seeds `reference_target_id` alongside an as-yet-unresolvable
       // `[[alias]]`); everywhere else unresolvable clears — content is the
-      // source, the column never outlives it.
-      const targetId = derivedTargetId === undefined && changed.before === null
+      // source, the column never outlives it. The bit has no such case: it
+      // is pure syntax, always exactly what the content says.
+      const targetId = derived.targetId === undefined && changed.before === null
         ? row.referenceTargetId ?? null
-        : derivedTargetId ?? null
-      // `reference_target_id` is a LOCAL derived column — writing it is not a
-      // synced edit, so use the dedicated stamp primitive (no `updated_at`
-      // bump, no upload PATCH) rather than a `{skipMetadata}` update, which
-      // would still bump `updated_at` and ship a redundant envelope. The
-      // primitive no-ops when the column is already `targetId`.
-      await ctx.tx.stampReferenceTarget(row.id, targetId)
+        : derived.targetId ?? null
+      // Both are LOCAL derived columns — writing them is not a synced edit,
+      // so use the dedicated stamp primitive (no `updated_at` bump, no
+      // upload PATCH) rather than a `{skipMetadata}` update, which would
+      // still bump `updated_at` and ship a redundant envelope. The
+      // primitive no-ops when both columns already match.
+      await ctx.tx.stampReferenceTarget(row.id, targetId, derived.isFieldForm)
     }
   },
 })

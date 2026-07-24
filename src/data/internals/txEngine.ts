@@ -113,6 +113,12 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
     return true
   }
   if (
+    patch.isFieldForm !== undefined &&
+    patch.isFieldForm !== (before.isFieldForm ?? false)
+  ) {
+    return true
+  }
+  if (
     patch.references !== undefined &&
     !jsonValuesEqual(before.references, normalizeReferences(patch.references))
   ) {
@@ -411,17 +417,13 @@ export class TxImpl implements Tx {
    *  check only — it deliberately doesn't re-walk ancestors' content. */
   private isProspectiveFieldRow(row: BlockData): boolean {
     if (row.parentId === null) return false
-    // A field row is any WHOLE-BLOCK reference that resolves to a definition
-    // — form-agnostic (§7). `((fieldId))` resolves textually here (machinery
-    // mints that form); a `[[name]]` whole-block ref ALSO becomes a field row
-    // once a definition is name-resolvable (auto-claim, a later change), but
-    // resolving `[[name]]` needs an async alias lookup this sync same-tx probe
-    // can't do — the one spot that slots in with auto-claim. Today nothing
-    // `[[name]]`-resolves to a definition, so `((id))`-only is complete;
-    // post-derive recognition (`isPropertyFieldInstance`) is already
-    // form-agnostic via the column.
+    // The id-carrying whole-block forms (`((id))`, `[label](((id)))`, marked
+    // or not — §7) resolve textually, so this sync probe covers them
+    // completely. A `[[name]]` whole-block ref needs the async alias lookup
+    // this same-tx probe can't do — post-derive recognition
+    // (`isPropertyFieldInstance`) covers those via the column.
     const exact = parseExactReferenceBlockContent(row.content)
-    if (exact?.kind !== 'blockRef') return false
+    if (exact === null || exact.kind === 'alias') return false
     return this.isFieldDefinitionCheckerFor(row.workspaceId)(exact.id)
   }
 
@@ -578,6 +580,7 @@ export class TxImpl implements Tx {
       ...(patch?.referenceTargetId !== undefined
         ? {referenceTargetId: patch.referenceTargetId}
         : {}),
+      ...(patch?.isFieldForm !== undefined ? {isFieldForm: patch.isFieldForm} : {}),
       // Reference-array canonicalization runs as a same-tx processor
       // (`core.normalizeReferences`) after the user fn returns —
       // see src/data/internals/normalizeReferencesProcessor.ts.
@@ -586,10 +589,11 @@ export class TxImpl implements Tx {
       ...this.metadataPatch(id, beforeData, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, is_field_form = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
         after.referenceTargetId ?? null,
+        after.isFieldForm ? 1 : null,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -614,16 +618,18 @@ export class TxImpl implements Tx {
       ...(patch.referenceTargetId !== undefined
         ? {referenceTargetId: patch.referenceTargetId}
         : {}),
+      ...(patch.isFieldForm !== undefined ? {isFieldForm: patch.isFieldForm} : {}),
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET content = ?, reference_target_id = ?, is_field_form = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
         after.referenceTargetId ?? null,
+        after.isFieldForm ? 1 : null,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -637,19 +643,26 @@ export class TxImpl implements Tx {
   }
 
   /** See the `Tx.stampReferenceTarget` contract for the why. Impl notes: the
-   *  narrow `SET reference_target_id = ?` is load-bearing — it names no upload
-   *  column and no `updated_at`, so `blocks_upload_update`'s diff predicate
-   *  can't fire; `record` still clears the §9 ancestry memo and records the
-   *  `referenceTargetId`-changed snapshot. No write / no snapshot when
-   *  unchanged. */
-  async stampReferenceTarget(id: string, targetId: string | null): Promise<void> {
+   *  narrow `SET reference_target_id = ?, is_field_form = ?` is load-bearing —
+   *  it names no upload column and no `updated_at`, so
+   *  `blocks_upload_update`'s diff predicate can't fire; `record` still
+   *  clears the §9 ancestry memo and records the changed snapshot. No write /
+   *  no snapshot when both columns already match. */
+  async stampReferenceTarget(
+    id: string,
+    targetId: string | null,
+    isFieldForm: boolean,
+  ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    if ((before.referenceTargetId ?? null) === targetId) return
-    const after: BlockData = {...before, referenceTargetId: targetId}
+    if (
+      (before.referenceTargetId ?? null) === targetId
+      && (before.isFieldForm ?? false) === isFieldForm
+    ) return
+    const after: BlockData = {...before, referenceTargetId: targetId, isFieldForm}
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET reference_target_id = ? WHERE id = ?`,
-      [targetId, id],
+      `UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?`,
+      [targetId, isFieldForm ? 1 : null, id],
     )
     this.pinWorkspace(before.workspaceId)
     this.record(id, before, after)
@@ -1294,6 +1307,7 @@ export class TxImpl implements Tx {
       workspaceId: data.workspaceId,
       parentId: data.parentId,
       referenceTargetId: data.referenceTargetId ?? null,
+      isFieldForm: data.isFieldForm ?? false,
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},

@@ -188,11 +188,12 @@ describe('parseBlockRow / blockToRowParams (blockSchema.ts)', () => {
     updatedBy: fc.string({maxLength: 20}),
     deleted: fc.boolean(),
     referenceTargetId: fc.option(fc.string({minLength: 1, maxLength: 20}), {nil: null}),
+    isFieldForm: fc.boolean(),
   })
 
   // PR #288 slice A: `blockToRowParams` returns storage columns followed by
-  // the local-only columns (`reference_target_id`) — mirror that order here
-  // so the round-trip covers the new column too.
+  // the local-only columns (`reference_target_id`, `is_field_form`) — mirror
+  // that order here so the round-trip covers the local columns too.
   const ROW_COLUMNS = [...BLOCK_STORAGE_COLUMNS, ...BLOCK_LOCAL_COLUMNS]
 
   const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => {

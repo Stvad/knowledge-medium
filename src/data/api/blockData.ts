@@ -31,6 +31,16 @@ export interface BlockData {
    *  from storage always carry `string | null` (`parseBlockRow` normalizes
    *  absence to `null`), so treat `undefined` as `null`. */
   referenceTargetId?: string | null
+  /** LOCAL derived bit (§7 grammar box): true when the row's whole trimmed
+   *  content is the `::`-marked field form — `::` + one reference span, any
+   *  span form. Pure syntax, stamped by the same derive pass as
+   *  `referenceTargetId` whether or not the span resolves (only the target
+   *  column late-binds). Never synced; rebuilt from content by the same
+   *  repair paths. Optional-in like `referenceTargetId`: hand-built literals
+   *  may omit it; rows parsed from storage always carry a boolean
+   *  (`parseBlockRow` normalizes NULL/absence to `false` — ordinary rows are
+   *  never stamped `0`, the bit is 1 or NULL on disk). */
+  isFieldForm?: boolean
   orderKey: string
   content: string
   /** Codec-encoded property values keyed by `PropertySchema.name`.
@@ -74,7 +84,7 @@ export interface SubtreeRow extends BlockData {
  *  its own raw-row applier driven by snapshots. See spec §4.1.1. */
 export type BlockDataPatch = Partial<Pick<
   BlockData,
-  'content' | 'referenceTargetId' | 'properties' | 'references'
+  'content' | 'referenceTargetId' | 'isFieldForm' | 'properties' | 'references'
 >>
 
 /** Canonical form for a `BlockReference[]`. Sorted by
@@ -133,6 +143,11 @@ export interface NewBlockData {
    *  same tx even when name resolution would miss; the derive processor
    *  keeps it consistent with content afterwards. */
   referenceTargetId?: string | null
+  /** Pre-stamped local derived bit (see `BlockData.isFieldForm`) — the
+   *  born-classified half of field-row minting (§9): machinery that creates
+   *  `::((fieldId))` rows passes `true` so the row classifies in the same
+   *  single pass, no reliance on the derive processor running afterwards. */
+  isFieldForm?: boolean
   orderKey: string
   content?: string
   properties?: Record<string, unknown>
