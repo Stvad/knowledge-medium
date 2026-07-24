@@ -1,0 +1,2 @@
+import{CallbackSet as e}from"../utils/callbackSet.js";var t=new e(`block-edit-settled`),n=e=>t.notify(e),r=new e(`block-edit-resumed`),i=e=>r.notify(e);export{r as blockEditResumed,t as blockEditSettled,i as notifyBlockEditResumed,n as notifyBlockEditSettled};
+//# sourceMappingURL=editSettleSignal.js.map
