@@ -33,7 +33,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
@@ -228,6 +228,18 @@ export class UserSchemasService {
       throw new Error(
         `[addSchema] name ${JSON.stringify(name)} cannot round-trip as a [[wikilink]]; `
         + 'rename without "]]"',
+      )
+    }
+    // The other half of the same hygiene (PR #288 §7): a name that IS a
+    // reference span. The property-schema block keeps its name in a property
+    // rather than its content, so unlike a type label this mints nothing on
+    // its own — but the name is written as `[[name]]` wherever a definition
+    // is addressed by name, and one shaped like `((id))` or `::((id))` reads
+    // as a different reference entirely to everything downstream.
+    if (isGrammarShapedLabel(name)) {
+      throw new Error(
+        `[addSchema] name ${JSON.stringify(name)} reads as a block reference, not a name; `
+        + 'choose a name that is not shaped like "((id))", "[[name]]" or a "::"-marked span',
       )
     }
 

@@ -19,6 +19,7 @@ import {
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { isGrammarShapedLabel } from '@/data/referenceBlock'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
@@ -34,6 +35,20 @@ import {
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
+/** A type label that would read back as a reference span rather than a
+ *  title. Distinct from a generic Error so callers can revert the draft and
+ *  explain, instead of logging an opaque write failure. */
+export class GrammarShapedLabelError extends Error {
+  constructor(public readonly label: string) {
+    super(
+      `Type label ${JSON.stringify(label)} reads as a block reference, not a title. ` +
+      `The label is written as this block's content, so a name shaped like "((id))", ` +
+      `"[[name]]" or a "::"-marked span would turn the type into property machinery.`,
+    )
+    this.name = 'GrammarShapedLabelError'
+  }
+}
+
 export const writeBlockTypeLabel = async (
   block: Block,
   currentLabel: string,
@@ -41,6 +56,14 @@ export const writeBlockTypeLabel = async (
   next: string,
 ): Promise<void> => {
   if (next === currentLabel && next === currentContent) return
+  // Name hygiene (PR #288 §7): the label is mirrored into `content` below,
+  // so a grammar-shaped label would silently turn this type's own block
+  // into a reference span — `::((someFieldId))` makes it a property field
+  // row of its parent, hidden from the outline. Refuse rather than mirror;
+  // the caller reverts the draft.
+  if (next !== '' && isGrammarShapedLabel(next)) {
+    throw new GrammarShapedLabelError(next)
+  }
   await block.repo.tx(async tx => {
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
@@ -151,7 +174,15 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
 
   const writeLabel = useCallback(async (next: string) => {
     const currentContent = data?.content ?? ''
-    await writeBlockTypeLabel(block, label, currentContent, next)
+    try {
+      await writeBlockTypeLabel(block, label, currentContent, next)
+    } catch (err) {
+      if (!(err instanceof GrammarShapedLabelError)) throw err
+      // Refused: snap the field back to the committed label so it never
+      // shows a name that wasn't saved.
+      console.error(`[BlockTypeBlockRenderer] ${err.message}`)
+      setDraftLabel(label)
+    }
   }, [block, data?.content, label])
 
   const writeDescription = useCallback(async (next: string) => {

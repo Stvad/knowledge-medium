@@ -45,6 +45,7 @@ import {
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createChild } from '@/data/mutators'
+import { isGrammarShapedLabel } from '@/data/referenceBlock'
 import { pickLeastUsedTypeColor } from '@/data/typeColors'
 import { typesPageBlockId } from '@/data/typesPage'
 
@@ -131,6 +132,19 @@ export async function createTypeBlock(
     throw new Error(
       `createTypeBlock: label must be a non-empty string (got ${JSON.stringify(args.label)}). ` +
       `UserTypesService.tryBuildType silently drops a block-type block with an empty label.`,
+    )
+  }
+  // Name hygiene (PR #288 §7): the label is mirrored into the definition
+  // block's `content` below, so a grammar-shaped label would mint a block
+  // that reads as a reference span rather than a type titled with that text
+  // — `::((someFieldId))` would make the new type a property field row OF
+  // the Types page, hidden from the outline and keyed onto its cell.
+  if (isGrammarShapedLabel(trimmedLabel)) {
+    throw new Error(
+      `createTypeBlock: label ${JSON.stringify(trimmedLabel)} reads as a block reference, ` +
+      `not a title. Type labels are written as the definition block's content, so a name ` +
+      `shaped like "((id))", "[[name]]" or a "::"-marked span would turn the type block ` +
+      `into property machinery. Choose a label that isn't a reference.`,
     )
   }
 

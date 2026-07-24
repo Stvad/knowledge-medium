@@ -149,3 +149,26 @@ export const isRoundTrippableReferenceLabel = (label: string): boolean => {
   const parsed = parseExactReferenceBlockContent(referenceBlockContentForLabel(label))
   return parsed !== null && parsed.kind === 'alias' && parsed.alias === label
 }
+
+/**
+ * Would `label`, written as a block's WHOLE content, read back as a
+ * reference span instead of prose (PR #288 §7 name hygiene)?
+ *
+ * Several flows mirror a human-supplied label into block content — a type
+ * definition's block is titled with its label, a property-schema block with
+ * its name, a seed with its seed name, an alias seat with the alias text.
+ * A label that is itself grammar-shaped turns that mirror into an accident:
+ * `::((<some definition id>))` as a type label mints a block that IS a
+ * recognized property field row of the Types page, silently attaching a
+ * property to it and hiding the type from the outline; `[[Foo]]` as a
+ * property name mints a row that resolves to whatever claims "Foo".
+ *
+ * Rejecting at the mirror is the cheap fix: these labels are all
+ * user-authored at a point where an error message is actionable, and no
+ * legitimate name needs to look like a reference. The check is the PARSER
+ * itself rather than a second copy of the grammar, so it can't drift — and
+ * it covers marked and unmarked forms alike, since an unmarked
+ * `((definitionId))` title is equally a lie about what the block is.
+ */
+export const isGrammarShapedLabel = (label: string): boolean =>
+  parseExactReferenceBlockContent(label) !== null

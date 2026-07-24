@@ -21,7 +21,7 @@ import { ChangeScope, codecs, defineProperty, ProcessorRejection } from '@/data/
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
-import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { propertyChangeScopeProp, propertyNameProp } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { changedPropertyDefinitions } from './internals/propertyDefinitionMigrations'
@@ -533,5 +533,18 @@ describe('name round-trip guard (§7)', () => {
     expect(isRoundTrippableReferenceLabel('bad]]name')).toBe(false)
     expect(isRoundTrippableReferenceLabel('[[already-linked]]')).toBe(false)
     expect(isRoundTrippableReferenceLabel('')).toBe(false)
+  })
+
+  // The round-trip guard alone leaves a gap `addSchema` closes with the
+  // second check: `((id))` and `::((id))` round-trip through
+  // `referenceBlockContentForLabel` perfectly well (nothing about them is
+  // `]]`-lossy), yet they read as a reference to a different block wherever
+  // the name is rendered. `isGrammarShapedLabel` is what rejects them.
+  it('leaves reference-shaped names to the grammar guard, which the round-trip one admits', () => {
+    const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+    for (const name of [`((${UUID}))`, `::((${UUID}))`, '((field-status))']) {
+      expect(isRoundTrippableReferenceLabel(name)).toBe(true)
+      expect(isGrammarShapedLabel(name)).toBe(true)
+    }
   })
 })

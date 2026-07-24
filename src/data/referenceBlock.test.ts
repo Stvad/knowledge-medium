@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  isGrammarShapedLabel,
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
   referenceBlockContentForLabel,
@@ -72,6 +73,42 @@ describe('referenceBlockContentForLabel', () => {
   // rendering them here.
   it('escapes `]]` rather than emitting an unparseable wikilink', () => {
     expect(referenceBlockContentForLabel('foo]]bar')).toBe('[[foo] ]bar]]')
+  })
+})
+
+describe('isGrammarShapedLabel', () => {
+  const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+
+  // The label→content mirror hazard: these titles would make the block they
+  // name into machinery (or a reference to something else) rather than a
+  // block titled with that text.
+  it.each([
+    ['a marked exact ref', `::((${UUID}))`],
+    ['a marked wikilink', '::[[status]]'],
+    ['a marked aliased blockref', `::[label](((${UUID})))`],
+    ['a bare exact ref', `((${UUID}))`],
+    ['a bare wikilink', '[[status]]'],
+    ['a non-uuid exact ref (the broad whole-block grammar)', '((field-status))'],
+  ])('rejects %s', (_label, text) => {
+    expect(isGrammarShapedLabel(text)).toBe(true)
+  })
+
+  // Ordinary names — including ones that merely CONTAIN grammar characters
+  // without being a whole span — stay usable. Over-rejecting here would ban
+  // legitimate names for no safety gain.
+  it.each([
+    ['a plain name', 'Status'],
+    ['a name with colons', 'Status:: notes'],
+    ['prose starting with the marker', '::not a span'],
+    ['a name embedding a ref', 'see ((x)) here'],
+    ['a bracketed but unclosed name', '[[status'],
+    ['an embed (a transclusion directive, never a span)', `!((${UUID}))`],
+  ])('accepts %s', (_label, text) => {
+    expect(isGrammarShapedLabel(text)).toBe(false)
+  })
+
+  it('is insensitive to surrounding whitespace, matching how content parses', () => {
+    expect(isGrammarShapedLabel(`  ::((${UUID}))  `)).toBe(true)
   })
 })
 
