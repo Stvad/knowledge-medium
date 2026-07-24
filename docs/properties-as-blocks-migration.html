@@ -395,7 +395,8 @@
   <code>row_events</code> holds discarded bags (§5); the flip-column trigger blocks
   clients only — rollback stays executable (§6); orphan synthesis validates names,
   mints deterministic ids, and re-encodes on retarget (§9); the flip runbook triages
-  pre-existing prose <code>[[name]]</code> rows (§11 C); scope routing for structural
+  pre-existing prose <code>[[name]]</code> rows (§11 C — superseded 07-22:
+  unmarked rows never classify, no such triage exists); scope routing for structural
   edits of non-BlockDefault property subtrees (§6, B3); copy/export applies
   visibility policy (§9); search/recents filtering joins the invisibility half (B1);
   the <code>workspaces</code> column ships with the local-ALTER + NULL-fallback
@@ -473,6 +474,91 @@
   workspace-before-block delivery guarantee (one stream, staged blocks
   materialize after the checkpoint the workspace row hydrates at), recorded as
   a sync-config invariant (C).<br>
+  <strong>Revised 2026-07-21, follow-up PR (PR-review round 29, arrived at
+  merge):</strong> classification runs through the <em>shadow-tolerant
+  checker</em> — resolved OR shadowed classifies (widened 07-23:
+  + tombstone-resolved, the B2 deletion leg — §9) — not bare
+  <code>resolveField</code>, whose winner-enforcing semantics would unclassify
+  every shadowed loser's rows (§9; the as-built
+  <code>isFieldDefinitionCheckerFor</code>, on the PR #386 branch, already
+  implements this, now pinned
+  as the contract); the types auto-claim precedent is narrowed to
+  user-authored type blocks — seeded backing blocks deliberately claim no
+  alias, so AC's bulk claim covers seeded and user definitions explicitly
+  (§7, AC); and the empty-string orphan key is a <em>hard flip blocker</em> —
+  no definition can ever back it, so the runbook deletes or remaps it before
+  the flip (§9).<br>
+  <strong>Revised 2026-07-23 (owner design round: generalized marker grammar +
+  successor-keyed alias lifecycle):</strong> the review-findings cluster around
+  name→target transitions traced to three structural causes; each closes with
+  <em>more</em> uniformity, not special-casing. <em>(1)</em> The field marker
+  admits <em>any</em> single whole-block reference span the parser recognizes —
+  <code>::((fieldId))</code>, <code>::[[name]]</code>, and the aliased blockref
+  <code>::[label](((fieldId)))</code> (embeds excluded) — so the reference
+  layer's own meaning-preserving rewrites can never eject a row from machinery
+  (§7 grammar box, §5, §9). <em>(2)</em> The alias lifecycle restates as one
+  successor-keyed rule (§9): rename → span rewrite follows the definition;
+  handoff (merge, property-wins — the name lives on elsewhere) → no rewrite,
+  spans follow the name (requires re-keying <code>replacementFor</code>, which
+  today pins spans to the losing target); release (no successor, incl.
+  deletion of the claimant) → spans rewrite to the pinned aliased form —
+  a released <code>::[[status]]</code> becomes <code>::[status](((A)))</code>,
+  still machinery, tombstone-resolvable — so the B2 deletion matrix collapses
+  to the id-form column (no seat rebind, no prompted revive; seats arise only
+  from never-resolved names). One <strong>ordering invariant</strong> replaces
+  the per-flow pinned orders: content rewrites before alias-index surgery.
+  <em>(3)</em> The field-row and value-child selection predicates are named,
+  defined once, composed everywhere (§7); the inline-on-delete exemption's
+  value half gains its codec gate via the shadow-tolerant metadata lookup, and
+  seat provability cites the code's <code>aliasSeatSeed</code> shape (not "no
+  content"). Readable in-workspace export falls out free
+  (<code>::[label](((fieldId)))</code>), shrinking AC's export obligations to
+  cross-workspace interop (§11 AC).<br>
+  <strong>Revised 2026-07-22 (owner design round: the <code>::</code> field
+  grammar):</strong> field-row recognition is <em>intrinsic, not positional</em> —
+  a field row's persisted content is <code>::((fieldId))</code> (the <code>::</code>
+  field marker + the existing exact-ref grammar, typed and stored identically), so
+  field-ness travels in content at any depth and every positional rule dies with it
+  <em>as a recognition input</em> (full list and code symbols: §9; a simpler
+  ownership walk — "which field owns this descendant" — survives for B3 scope
+  routing and hidden-subtree pruning), and the
+  field-row-own-bag carve-out is deleted (§9, §7, §5). Recognition =
+  derived form bit + parent-not-null + shadow-tolerant resolution + flip;
+  classification is <em>move-proof</em> (a merge hoist can't reclassify a row).
+  Unmarked <code>((id))</code>/<code>[[name]]</code> forms are <em>never</em>
+  machinery — ref values targeting definition blocks are unambiguous with no
+  escape rule (the refList "N sibling <code>((id))</code> values" direction is
+  clean), hand-typing a field un-defers from auto-claim to the <code>::</code>
+  input flow (registry-backed name autocomplete, canonicalized to id), and AC's
+  retroactive-reinterpretation trap list collapses (§7, §9, AC, C). The derive
+  stamps <code>reference_target_id</code> for marked and unmarked forms alike
+  plus a new local <code>is_field_form</code> bit in the same textual pass
+  (slice A); discovery is an indexed flat predicate, never a content parse at
+  read time. The §6 all-scopes decision was re-raised (display-tier complexity)
+  and re-affirmed — UI state materializes; merge gains the one view-state rule
+  (view-state-flagged divergence resolves silently — a per-definition
+  merge-policy flag, not bare scope keying, §9). The A/B branch's minted
+  form and positional recognition now <em>trail</em> this doc — the 07-17
+  "code is authoritative" note is qualified until the branch lands the delta
+  checklist.<br>
+  <strong>Revised 2026-07-22, second round (owner: uniform marked-alias
+  resolution):</strong> the <code>::[[name]]</code> special-casing is
+  deleted — the marker carries field-intent, and the embedded ref resolves
+  exactly as refs resolve everywhere (either bracket form sets the bit; the
+  alias form binds via the existing alias lookup/late-binding — no import
+  canonicalization step, no marked-alias derive exclusion, no reclaim-skip).
+  The retroactivity ban is re-scoped to its true target: <em>unmarked</em>
+  content never becomes machinery; a <em>marked</em> row binding late is
+  declared intent catching up (§7, §9, AC). Id form stays canonical
+  (minted by machinery + autocomplete, rename-stable, identity-pinned);
+  name-form rows are the pasted minority with follow-the-name semantics.
+  Create-on-write lives only in the input flow — paste never auto-creates,
+  unbound rows carry a create affordance (§7). The deletion matrix lands in
+  B2 (superseded 07-23: the matrix collapses to the id-form column under the
+  release rewrite — the name-goes-dormant half described here no longer
+  applies), and the inline-on-delete exemption
+  keys on the form bit for order-independence, its value-child half
+  codec-gated since 07-23 (§9, B2).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -494,7 +580,8 @@
   every block type, kernel included, is now a seeded definition block with a
   materialized, read-only backing block. Nothing in this plan changes; three
   things strengthen: the auto-claim "types precedent" (§7, AC) is now the
-  <em>universal live mechanism</em>, not an analogy; the §9 parent-guard's
+  <em>live mechanism</em> for user-authored type blocks (see the round-29
+  correction: seeded backing blocks deliberately claim no alias); the §9 parent-guard's
   standing example (<code>block-type:properties</code> ref values targeting
   property-schema blocks) is materialized reality on every type block, so the
   guard is ubiquitous, not edge-case; and a type's inline <code>properties</code>
@@ -509,7 +596,10 @@
   re-ground 07-15 against post-#364 master; implementation re-ground 07-17 against
   PR #386 at <code>7e878b6e</code>; UX round + divergence-note refresh 07-19 at
   <code>12609823</code>; master rebase + types-cutover re-check 07-21 at
-  <code>7d5bb21b</code>).
+  <code>7d5bb21b</code>; the 07-22 grammar round verified the branch's as-built
+  positional walk and interior gates — <code>isInsidePropertySubtreeWalk</code>,
+  the materialize/project gates, <code>ChangeScope</code>-as-write-policy —
+  before superseding the positional model).
 </aside>
 
 <aside class="reading-guide">
@@ -549,14 +639,19 @@
     <li><strong>Materialize everything — all schemas, all scopes</strong> — kernel,
       plugin, and user alike, with system/machine field rows hidden by default and
       orphan keys promoted to synthesized definitions. No permanent cell-backed
-      category: partial migration would keep the column (and its sync/RPC/e2ee
-      surface) alive forever. The flip lever is a per-workspace column, not a
+      category — and no depth carve-out either: field rows' and value rows' own
+      bags materialize too, since the <code>::</code> grammar makes machinery
+      recognizable at any depth (<a href="#s9">§9</a>). The flip lever is a
+      per-workspace column, not a
       per-schema flag (<a href="#s6">§6</a>).</li>
-    <li>Field-row shape: <code>((fieldId))</code> content + derived <em>local</em>
-      <code>reference_target_id</code> — never synced, derived <em>purely
+    <li>Field-row shape: <code>::((fieldId))</code> — the <code>::</code> field
+      marker + exact-ref content — with derived <em>local</em>
+      <code>reference_target_id</code> + <code>is_field_form</code> — never synced,
+      derived <em>purely
       textually</em> on every device (no name-resolution tier), which also erases
-      the column's e2ee fork; <code>[[name]]</code> becomes a deferred affordance
-      via auto-claim (<a href="#s7">§7</a>, <a href="#s8">§8</a>).</li>
+      the column's e2ee fork; unmarked <code>[[name]]</code>/<code>((id))</code>
+      rows are never machinery — hand-authoring is the <code>::</code> input flow
+      (<a href="#s7">§7</a>, <a href="#s8">§8</a>).</li>
     <li><code>setProperty</code> dual-writes children and cell in one tx; the
       materialize/project processor pair is permanent convergence machinery
       (<a href="#s5">§5</a>).</li>
@@ -626,7 +721,8 @@ does. We've been emulating it with a sidecar panel because the data model said n
 
 <p>
 A property on a block becomes a <strong>field row</strong> (rev 1 called this a
-"carrier"): a regular block whose content is a reference to the property schema, with a
+"carrier"): a regular block whose content is the <code>::</code> field marker followed
+by a reference to the property schema (<code>::((fieldId))</code>), with a
 denormalized <code>reference_target_id</code> column carrying the schema's stable
 <code>fieldId</code>. The field row's children are the property's
 <strong>values</strong> — one for scalars today, many for lists later; ref-typed values
@@ -649,11 +745,11 @@ are themselves block references. Same primitive everywhere.
       <div class="tree">
         <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span></div>
         <div class="row indent-1"><span class="props">properties_json kept as derived projection</span></div>
-        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">[[priority]]</span><span class="label-real">field row · reference_target_id = schema block id</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">::priority</span><span class="label-real">field row · content ::((id)) · reference_target_id = schema block id</span></div>
         <div class="row indent-2"><span class="bullet">●</span><span class="value">3</span></div>
-        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">[[assignee]]</span><span class="label-real">field row</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">::assignee</span><span class="label-real">field row</span></div>
         <div class="row indent-2"><span class="bullet">●</span><span class="ref">((mary))</span></div>
-        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">[[status]]</span><span class="label-real">field row</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">::status</span><span class="label-real">field row</span></div>
         <div class="row indent-2"><span class="bullet">●</span><span class="value">in progress</span></div>
         <div class="row indent-1"><span class="bullet">●</span><span>investigate vendor X</span></div>
         <div class="row indent-1"><span class="bullet">●</span><span>draft proposal</span></div>
@@ -667,13 +763,17 @@ are themselves block references. Same primitive everywhere.
 
 <ul>
   <li>
-    <strong>Field-row content is <code>((fieldId))</code> — the definition addressed
+    <strong>Field-row content is <code>::((fieldId))</code> — the <code>::</code>
+    field marker + the definition addressed
     by id.</strong> (The spike used <code>[[Schema Name]]</code>; the implementation
-    reversed that — §7 has the argument. Fig. 1's <code>[[priority]]</code> labels show
-    the <em>rendered</em> tree: a block-ref renders its target's label, so the display
-    is the name even though the stored content is the id.) Detection never parses
+    went to bare id-content; the 2026-07-22 grammar decision added the marker so
+    field-ness is carried by content itself — §7 has both arguments. Fig. 1's
+    <code>::priority</code> labels show
+    the <em>rendered</em> tree: the marker renders with the target's label, so the
+    display is the name even though the stored ref is the id.) Detection never parses
     content at read sites; it reads the
-    <code>reference_target_id</code> column, derived in the same transaction by a
+    <code>reference_target_id</code> + <code>is_field_form</code> columns, derived in
+    the same transaction by a
     processor.
   </li>
   <li>
@@ -894,9 +994,20 @@ there are authoritative.
 <dl>
   <dt><strong><code>core.deriveReferenceTarget</code></strong> (permanent)</dt>
   <dd>
-    Watches <code>content</code>. When a row's content trims to exactly one reference
-    token, resolves it and writes the target id into
-    <code>reference_target_id</code> in the same transaction. As shipped (PR #386):
+    Watches <code>content</code>. When a row's trimmed content is exactly one
+    reference
+    span — <em>or the <code>::</code> marker + one reference span, the §7 field
+    form; a span is any of the parser's three link forms, aliased blockref
+    <code>[label](((id)))</code> included (07-23)</em> — resolves it and writes the target id into
+    <code>reference_target_id</code> in the same transaction, and stamps
+    <code>is_field_form</code> for <em>every</em> marked form — the
+    marked forms derive exactly like their unmarked twins (owner decision,
+    07-22 second round: no marked-alias exclusion branch; a
+    <code>::[[name]]</code> row's target binds via the same alias
+    lookup/late-binding as any link, and classification follows resolution —
+    §9 recognition).
+    As shipped (PR #386, pre-grammar — the two-column condition is on the branch
+    delta):
     <code>((id))</code> resolves <em>purely textually</em> — the id is the content —
     and <code>[[alias]]</code> resolves through the one tx-aware generic alias
     lookup; there is no schema-name tier (§7). Write metadata splits by path
@@ -911,11 +1022,19 @@ there are authoritative.
 
   <dt><strong><code>core.projectPropertyChildren</code></strong> (permanent)</dt>
   <dd>
-    Watches <code>content / referenceTargetId / parentId / orderKey / deleted</code>.
+    Watches <code>content / referenceTargetId / isFieldForm / parentId /
+    orderKey / deleted</code> — the bit is a watched field (PR #417 review:
+    projection's classification and value-set both read it, so a bit-only
+    change — an arrival repair, the catch-up sweep stamping existing marked
+    rows after the column ships — must re-project; bulk repair paths that
+    write the bit raw enqueue projection for the affected parents
+    explicitly).
     For each changed row, walks up at most two levels to find affected
     (parent, fieldId) pairs — both <em>before</em> and <em>after</em> sides of a move —
     and rebuilds that parent's <code>properties_json</code> key from the field row's
-    value children. This is what keeps <em>manual tree edits</em> of field/value rows
+    value children — its <code>is_field_form IS NOT 1</code> children only, per §9's
+    binding selection discipline (a nested marked row materialized under the
+    field row is that row's own machinery, never a value candidate). This is what keeps <em>manual tree edits</em> of field/value rows
     convergent with the cell. Registration order is load-bearing (PR-review P2): the
     same-tx pass is single-pass in registration order, no fixpoint
     (<code>commitPipeline.ts</code>) — a later processor sees an earlier one's
@@ -929,13 +1048,25 @@ there are authoritative.
   <dd>
     Watches <code>properties</code>. For changed keys with a registered schema:
     find-or-create the field row + primary value child, update stale content, delete
-    children for removed keys, collapse duplicates. Rows it creates are <em>born
+    children for removed keys, collapse duplicates — every find/primary/duplicate
+    step selecting by the bit per §9's discipline (field row =
+    <code>is_field_form = 1</code> child targeting the fieldId; values = the
+    <code>is_field_form IS NOT 1</code> children; a duplicate field row's own marked
+    children fold as field rows, never as values). Minted field-row content is the
+    marked form, <code>::((fieldId))</code> (§7 — the branch's bare-ref mint
+    predates the 07-22 grammar and is on the delta checklist). Rows it creates are <em>born
     classified</em>: both creation paths (<code>setProperty</code>'s
     <code>writePropertyValueChild</code> and this processor) stamp
-    <code>reference_target_id</code> directly in the <code>create</code> — no
+    <code>reference_target_id</code> — and now <code>is_field_form</code> —
+    directly in the <code>create</code> — no
     reliance on the derive processor running afterwards, so materializer-minted
     rows classify and project within the same single pass (PR-review P2 asked;
-    verified in the PR #386 code). This keeps raw <em>local</em> cell
+    verified in the PR #386 code). It runs for <em>every</em> block, machinery
+    rows included — the branch's interior-ancestry gate (bag writes on field/value
+    rows stayed cell-only, "recognition could never reclaim the nested rows") is
+    deleted with the positional model: under the <code>::</code> grammar,
+    recognition reclaims nested machinery at any depth, so field rows' and value
+    rows' own bags materialize like everyone else's (§9). This keeps raw <em>local</em> cell
     writes (importers, plugins — any bag-shaped write through <code>repo.tx</code>)
     convergent with the children; sync arrivals never enter this direction (the
     one-direction rule below — an earlier revision also fed it old clients' synced
@@ -1130,16 +1261,23 @@ arrived row:
       remedy if the fleet ever outgrows coordination.</p></li>
     <li><strong>Duplicate field rows from concurrent dual-writes persist.</strong> Two
       devices offline-editing the same not-yet-materialized property each create their
-      own <code>((fieldId))</code> row (the backfill itself no longer races — it is
+      own <code>::((fieldId))</code> row (the backfill itself no longer races — it is
       operator-run-once per workspace, §11); after sync, the arrived rows are
       field/value rows whose <em>own</em> cells are
       empty, so the spike's row-targeted catch-up no-ops on them and never visits the
       shared parent — where the dedup lives. The reconcile pass walks arrived field
-      rows (recognizable by <code>reference_target_id</code>) up to their parent and
+      rows (recognizable by <code>is_field_form</code> + <code>reference_target_id</code>) up to their parent and
       dedups there — <em>union-with-dedupe</em> (§9): the duplicate field rows fold
       into one, content-equal values fold with them, and <em>divergent</em> values
       persist as peer siblings, so a genuine concurrent conflict is surfaced in the
-      tree rather than silently resolved. Until the reconcile visits the parent,
+      tree rather than silently resolved — except view-state-flagged keys
+      (§9's merge entry): there the reconcile keeps the <em>newest</em> value —
+      <code>updated_at</code> LWW, matching the cell era's same-key semantics
+      (PR #417 review: an order-key survivor would let an older collapse toggle
+      win arbitrarily), with <code>order_key, id</code> only as the
+      deterministic tiebreak for equal clocks (no target exists at this site;
+      the merge <em>gesture</em> stays target-wins — an explicit user act, not
+      a clock race) — and drops the rest silently. Until the reconcile visits the parent,
       duplicate rows persist until some unrelated local edit
       happens to touch it.</li>
   </ul>
@@ -1258,6 +1396,29 @@ the debug/hidden surfaces.
 </p>
 
 <p>
+<strong>Re-raised and re-affirmed (owner design round, 2026-07-22).</strong> The
+display-tier complexity (§10's hidden-row gesture rules) prompted a fresh look at
+two alternatives: re-tiering storage by hidden-ness, and a narrower domain split
+(view-state scopes never materialize). Both rejected. Re-tiering makes
+<code>hidden</code> a <em>storage</em> bit — marking a property hidden/unhidden
+becomes a data migration instead of a reversible display toggle — and resurrects
+the dual write/merge paths §5 killed. The scope split fails more quietly: a
+schema's <code>changeScope</code> would become a storage decision (scope changes =
+data migrations), every consumer keeps a bag path alive forever, and "children are
+the only truth" gains an asterisk. What legitimized both was the belief that full
+uniformity was unreachable anyway (the field-row-own-bag carve-out); the
+<code>::</code> grammar (§7/§9) deletes that carve-out, so uniformity wins
+outright. The sync analysis backs it: per-row LWW is strictly finer than the
+bag's column-LWW — the high-frequency UI writes are precisely the ones most
+exposed to cross-key clobber (this section's <code>collapsed</code> argument) — a
+toggle rewrites one value row in place (no new rows, no tombstone churn), and
+same-key concurrent writes converge on the same row under content-LWW, matching
+bag behavior where it was fine and beating it where it wasn't. View state needs
+exactly one special case, and it lives in merge policy, not storage: the
+view-state divergence rule (per-definition merge-policy flag, §9).
+</p>
+
+<p>
 What flipped the call: <em>whatever stays cell-synced stays clobberable.</em> Under §5,
 per-key merge exists only for keys that are rows; a key that lives solely in the cell
 still rides whole-bag column-LWW, and every dual-write of <em>any</em> property
@@ -1330,8 +1491,11 @@ read-only policy — <code>tx.setProperty</code> enforces
 <code>scopePoliciesEquivalent</code> today, and an outline edit of a
 <code>UserPrefs</code> field row would route the equivalent write around it, landing
 in the wrong undo bucket. Block-level ops on a recognized property-subtree row must
-resolve their scope from the owning definition (the same <code>resolveField</code>
-lookup recognition uses) — the routing shim ships in slice B3.
+resolve their scope from the owning definition — via the shadow-tolerant
+<em>schema-returning</em> metadata lookup (§9 recognition, condition 3's
+extension), never bare <code>resolveField</code>, whose winner-enforcing miss on
+a shadowed loser would land the write in the wrong policy bucket — the routing
+shim ships in slice B3.
 </p>
 
 <div class="callout">
@@ -1459,16 +1623,199 @@ child rows are its synced source like any other prop, the index stays the query
 surface.
 </p>
 
-<h2 id="s7">7. Field-row content: <code>((fieldId))</code> + derived column</h2>
+<h2 id="s7">7. Field-row content: <code>::((fieldId))</code> + derived columns</h2>
+
+<dl id="grammar-box">
+  <dt><strong>Marker</strong></dt>
+  <dd><code>::</code> + one whole-block <em>reference span</em> — any form the
+    reference parser recognizes (owner decision, 07-23, widening the earlier
+    two-bracket-forms rule): exact ref <code>::((fieldId))</code>, wikilink
+    <code>::[[name]]</code>, aliased blockref
+    <code>::[label](((fieldId)))</code>; embeds (<code>!((id))</code>) are
+    excluded — a transclusion directive, not a marker. Matched on
+    <em>trimmed</em> content, no space between marker and span; the embedded
+    ref inherits its form's usual grammar (id canonicalization for the id
+    forms). <code>::((fieldId))</code> is <em>canonical</em> (machinery +
+    autocomplete mint it; rename-stable). <code>::[[name]]</code> resolves live
+    through the alias index like any link — follow-the-name semantics, dormant
+    until names resolve to definitions (§9 condition 1, §11 AC).
+    <code>::[label](((fieldId)))</code> is identity-pinned like the exact form
+    (the label is author-owned display text) — and it is what the alias
+    lifecycle rewrites name spans <em>into</em>, so a lifecycle rewrite can
+    never eject a row from machinery (§9). The rewrite's form choice itself
+    carries the §9 whole-span guard (PR #417 review): this form is UUID-only
+    while the exact form admits renderable non-UUID ids, so a target the
+    aliased form cannot express fails the parse-back and the rewrite falls
+    to canonical <code>::((A))</code> (marked) or stays unrewritten +
+    reported (prose) rather than emitting content that never stamps.</dd>
+  <dt><strong>Columns</strong></dt>
+  <dd><code>reference_target_id</code> (stamped for every form ×
+    marked/unmarked combination, each through its usual branch: purely
+    textual for <code>((id))</code> <em>and</em> <code>[label](((id)))</code>
+    — the aliased form's id is in the content, local and tombstone-resolvable
+    exactly like the exact form; the generic alias
+    lookup + late-binding for <code>[[name]]</code>) ·
+    <code>is_field_form</code> (every <em>marked</em> form —
+    <strong>pure syntax</strong>, stamped whether or not the name resolves
+    (PR #417 review ×2): only the <em>target</em> column late-binds. Unbound
+    field intent — what the flip/AC runbooks enumerate and the claim
+    approve-list covers — is bit=1 with a target that resolves to <em>no
+    definition</em>: NULL, a page/minted alias seat (since
+    <code>parseReferences</code> seats every wikilink miss, a pasted
+    <code>::[[future-field]]</code> carries the seat's id, not NULL — PR #417
+    review ×2), or any other non-definition target (e.g. a pasted
+    foreign-workspace id form)). Both columns local, derived, never synced,
+    rebuilt from content by the
+    same repair paths.</dd>
+  <dt><strong>Predicate</strong></dt>
+  <dd><code>is_field_form = 1</code> ∧ <code>parent_id IS NOT NULL</code> ∧
+    shadow-tolerant-resolves ∧ workspace flipped (§9 has each condition's
+    rationale and contract).</dd>
+  <dt><strong>Roles</strong></dt>
+  <dd><code>::</code> children of any block = its field rows · a field row's
+    value set = its <code>is_field_form IS NOT 1</code> children (a binding
+    selection discipline, §9) · <em>non-</em><code>::</code> children of value
+    rows = ordinary content (a <code>::</code> child of a value row is that
+    value's own field row — the first rule wins at every depth).</dd>
+</dl>
 
 <p>
 Rev 1 specified field-row content as <code>((schema-id))</code>; the spike switched to
 <code>[[Schema Name]]</code> with a two-tier resolution (schema-name winner map first,
-generic alias lookup second), and earlier revisions of this doc endorsed that. <strong>The
-A/B implementation (PR #386) went back to id-content, and that is the shipped
-shape</strong>: field-row content is <code>((fieldId))</code>
-(<code>referenceBlockContentForId</code>), the local <code>reference_target_id</code>
-derives <em>purely textually</em> (block-ref → id — no name lookup of any kind), and the
+generic alias lookup second), and earlier revisions of this doc endorsed that. The
+A/B implementation (PR #386) went back to bare id-content; <strong>the 2026-07-22
+owner decision keeps id-addressing and adds the <code>::</code> field marker — the
+canonical shape is <code>::((fieldId))</code></strong>: the marker carries
+field-ness <em>in the content itself</em>, the embedded exact ref carries identity,
+and for the id-carrying forms (<code>((id))</code>, <code>[label](((id)))</code>)
+the local <code>reference_target_id</code> still
+derives <em>purely textually</em> (ref → id, no name lookup — PR #417 review:
+this sentence predated the marked wikilink form and must not be read as a
+blanket rule; <code>::[[name]]</code> derives through the generic alias
+lookup + late-binding exactly as the grammar box states, or a resolved name
+row would never receive the target condition 3 requires), now
+alongside a second local <code>is_field_form</code> bit recording that the marked
+grammar matched (§9 — recognition and SQL discovery read the bits, never the text).
+The marker is <em>typed and stored identically</em> (owner ruling — no
+trigger/storage decoupling): typing <code>::</code> at block start opens field-name
+autocomplete over the schema registry, and the committed row is
+<code>::((fieldId))</code>, with an unresolvable name creating the
+definition inline — <em>create-on-write lives only here</em>, in the watched
+input flow (owner ruling: paste never auto-creates — importing fifty
+<code>::[[whatever]]</code> lines must not silently mint fifty definitions;
+a pasted row whose name resolves to no <em>definition</em> is inert but
+behaves exactly like a link, seat-mint included — PR #417 review corrected an
+earlier "sits unbound" description, and an interim parse-time seat-mint
+suppression for marked rows was <em>reverted</em> (owner ruling: it was
+form-keyed special-casing in the hot references path, and it re-opened a
+rebind gap since the ensure call is the binding mechanism for misses). The
+embedded wikilink mints/binds an alias seat on lookup miss like any wikilink
+(<code>ensureAliasTarget</code> — a page seat is not the definition
+auto-creation the ruling forbids; it is existing universal link behavior.
+PR #417 review pinned the <em>single mint owner</em>: the ensure lives only
+in the references pass (<code>buildSourcePlan</code>/<code>applySourcePlan</code>),
+which pairs every insertion <em>it</em> performs with the 4s orphan-cleanup
+enqueue (<code>newlyInsertedAliasTargetIds</code>) — the §5 derive only
+<em>looks up</em>, never ensures, so no second minter exists to bypass that
+bookkeeping; when tx ordering puts the mint after the derive, the seat id
+lands on the row via the standard alias late-binding),
+the row binds to whatever owns the name, fails recognition's condition 3,
+and renders as an inert field-looking row carrying the "create property?"
+affordance — which, when invoked, creates the definition <em>and rewrites
+that row to <code>::((newFieldId))</code></em> (PR #417 review:
+<code>addSchema</code> claims no alias pre-AC, so creating alone would leave
+the row seat-bound and still unclassified; the rewrite is a visible content
+edit on the very row the user acted on — canonicalization as a user action,
+not a background pass — optionally offered in bulk for same-named marked
+rows). The seat-squatting consequence — a minted seat owns the name,
+so the later definition claim collides — needs <strong>no new rule</strong>:
+the AC claimant preflight already surfaces every collision for prompted
+resolution, and since "untouched machine-minted seat" is provable
+(deterministic <code>ALIAS_NS</code> id + <code>(content, properties)</code>
+still equal to the code's <code>aliasSeatSeed(alias)</code> shape — the single
+source of truth the restorable-tombstone predicate already compares against;
+PR #417 review corrected "no user content" here, a seat is minted with
+<code>content = alias</code> plus page/alias properties — + no children
+<em>beyond backfill-generated machinery</em> (review ×2: post-C every bag
+materializes, §6 — the seat's own seed-written alias/type properties project
+as field/value children, so a literal childless test fails exactly the
+machine seats it exists to catch; the test is "no user-authored children,
+and property children re-project to nothing beyond
+<code>aliasSeatSeed(alias)</code>'s bag", classified via the §7 named
+predicates), with
+the <code>systemMint</code> <em>pristine sentinel</em> as corroboration
+(unaffected by the backfill — materialization writes child rows, never the
+seat row, so <code>updated_at</code> stays 0):
+<code>updated_at = 0</code>, held until a real edit ratchets it off zero —
+<em>not</em> authorship, which review ×2 corrected against
+<code>txEngine.buildNewBlockRow</code>: <code>created_by</code>/<code>updated_by</code>
+stay the real user and the reconcile gate reads the sentinel, no
+<code>system:</code> prefix exists (pinned by <code>systemMint.test</code>;
+the <code>targets.ts</code> docblock still saying "system:&lt;userId&gt;
+author" is stale). The sentinel is <em>sufficient, never necessary</em>
+(review ×3: a tombstone <em>restore</em> is an update —
+<code>createOrRestoreTargetBlock</code> revives a paste→delete→re-paste seat
+via <code>tx.restore</code>, pinned to <code>updatedAt &gt; 0</code> by the
+same test — so an untouched restored seat carries a nonzero stamp; the
+<em>deciding</em> test is always the seed-shape comparison, which the
+restore path itself re-establishes: content refreshed to the alias, stale
+claims stripped, seed properties rewritten)), the
+conflict surface marks those merge-recommended and the bulk claim batches
+them into one reviewable approve-list — prompted, never silent (an
+auto-yield rule was considered and rejected: it was itself a silent
+mutation). One materialize-everything ripple is pinned with the seat
+lifecycle (PR #417 review, confirmed against the processor's own leaf-only
+comment): <code>cleanupOrphanAliasesProcessor</code> raw-<code>tx.delete</code>s
+its orphans on the recorded assumption that seats are childless ("created
+empty so it has no children to cascade") — post-C a seat carries
+backfill-generated machinery children, so the 4s orphan cleanup graduates to
+the canonical subtree delete (<code>deleteSubtreeInTx</code> /
+<code>repo.mutate.delete</code>, the escape hatch the comment already names)
+or it strands live machinery rows under a tombstoned parent — and the
+cascade is <em>gated on the seat-shape predicate</em>, not just
+no-live-references (review ×2: a user can open a freshly minted seat, add
+content or children, then remove the original <code>[[name]]</code> before
+the delayed job runs — reference-free, yet user-authored; the cleanup
+deletes only rows still matching <code>aliasSeatSeed(alias)</code> with no
+user-authored children — generated property children ignored — and skips
+anything else as the ordinary page it has become). Beyond that there is <strong>no seam at all</strong>
+(owner decision, 07-22 second round, superseding this revision's earlier
+import-canonicalization step): a pasted or hand-written
+<code>::[[name]]</code> is <em>not rewritten</em> — the embedded ref resolves
+live exactly as unmarked <code>[[name]]</code> links resolve (the alias
+lookup + late-binding the derive already has), and the row binds when the
+name resolves to a definition, sits visibly unbound otherwise. The id form
+stays <em>canonical</em> — machinery and autocomplete always mint
+<code>::((fieldId))</code>, which is rename-stable; a name-form row is the
+pasted/hand-edited minority and carries <em>follow-the-name</em> semantics
+by construction (§9). The match is strict whole-block on
+<em>trimmed</em> content — <code>trim(content) = '::' + refSpan</code> for
+exactly one whole reference span (implementation: whole-block-anchored
+matchers for the three forms — exact ref and wikilink via the KERNEL's
+whole-block grammar (<code>parseExactReferenceBlockContent</code>), which
+deliberately accepts renderable <em>non-UUID</em> ids for the exact form
+(PR #417 review: caller-supplied ids exist — <code>tx.create</code> and the
+agent bridge accept them, and <code>referenceBlockContentForId</code>
+round-trips them — so pinning the marked form to the references plugin's
+UUID-only <code>parseBlockRefTarget</code> anchor would leave such a
+definition's <code>::((fieldId))</code> rows unstamped and their properties
+stranded; the aliased blockref alone stays UUID-only, mirroring the plugin
+regex that owns that form)), no
+space between marker and span, and the embedded ref inherits its form's
+id canonicalization (PR #417 review: outer-whitespace and id-case
+policy must be pinned or classification flickers per path — a pasted
+trailing newline is the common artifact) — so prose beginning with
+<code>::</code> never
+classifies. <code>::</code> won over the Tana-style <code>&gt;</code> because
+<code>&gt;</code> is a markdown blockquote at line start — a standing escape tax on
+every serializer and paste path — while <code>::</code> has no line-start meaning
+in markdown (no escape rule anywhere) and is the property glyph of the
+Roam/Logseq lineage; single <code>:</code> lost on trigger false-positives
+(emoticons, prose colons).
+</p>
+
+<p>
+The
 human-readable name is recovered from the definition wherever it's needed: the cell key
 at projection time, the rendered label. One as-built caveat sharpens this
 (PR-review round 28): today the recovery runs through the <em>registry</em>
@@ -1478,20 +1825,44 @@ own <code>content</code> is its name only for <em>seeded</em> definitions
 (<code>addSchema</code> → <code>userSchemasService</code>) leaves content empty
 and stores the label solely in the name field. Registry-reading surfaces
 (projection, slice D's <code>FieldBlockRenderer</code>) are unaffected, but a
-<em>generic</em> block-ref render of <code>((fieldId))</code> — backlink
+<em>generic</em> render of <code>::((fieldId))</code> — backlink
 previews, pre-D surfaces, readable markdown export — would show a blank label.
 B2 therefore carries a <strong>name→content mirror</strong> for user
 definitions: <code>addSchema</code> writes <code>content = name</code>, renames
 write the mirror through (the same B2 registry-diff funnel that re-keys the
-cell), and a one-shot backfill aligns existing user definitions. Why the reversal stuck: the
+cell), and a one-shot backfill aligns existing user definitions.
+</p>
+
+<p>
+Why the reversal stuck: the
 name-resolution tier only existed because properties weren't blocks. Post-unification,
 definitions <em>are</em> blocks, and blocks already have exactly one name mechanism —
 the alias index. Types are the standing precedent: a type block claims its label as an
 alias and <code>[[Person]]</code> resolves through the generic index with no
-"type-name tier" — and since the master types cutover (2026-07-21 note), that
-precedent is universal: every type, kernel included, is a seeded definition
-block whose materialized backing block claims its label. <code>[[name]]</code> therefore stops being the identity carrier and
-becomes a deferred <em>affordance</em> — the auto-claim step (§11).
+"type-name tier". The precedent is narrower than "universal", though
+(PR-review round 29, correcting this doc's first rebase note): it holds for
+<em>user-authored</em> type blocks — <em>seeded</em> backing blocks are
+deliberately bare, no PAGE_TYPE and <strong>no alias</strong>
+(<code>definitionSeeds.ts</code>, pinned by test: the C4 cutover kept them
+invisible to avoid a behavior change and <code>alias.collision</code> on real
+type labels — and there is <em>no</em> transition out of bare for them:
+seed-backed rows are read-only and typeify skips seed rows, so the
+label-claim path exists only for user-authored type blocks; PR #417 review
+caught an earlier draft implying seeds could later claim via a label
+write). So auto-claim cannot assume seeded definitions "already
+work like types" — its bulk claim must cover seeded <em>and</em> user property
+definitions explicitly (§11 AC). <code>[[name]]</code> therefore stops being the identity carrier —
+and under the <code>::</code> grammar it stops being a <em>recognition</em> input
+entirely: an unmarked <code>[[name]]</code> or <code>((id))</code> row is never
+machinery, at any depth. What auto-claim still buys is navigation and readable
+markdown (<code>[[name]]</code> links resolving to definition pages;
+<code>::[[name]]</code> as the readable <em>cross-workspace</em> export form —
+in-workspace readable export needs no claim at all since 07-23:
+<code>::[label](((fieldId)))</code> carries the name as display text and
+round-trips <em>identity</em> losslessly regardless of claim state; the label
+itself is guarded by §11 AC's render→parse-back check, since the label grammar
+excludes <code>]</code>/newline) — an
+affordance, not a classification prerequisite (§11 AC).
 </p>
 
 <ul>
@@ -1503,11 +1874,23 @@ becomes a deferred <em>affordance</em> — the auto-claim step (§11).
     minted; the reclaim of already-bound rows was dead code until auto-claim and is
     rebuilt <em>with</em> auto-claim, together with cell reprojection); the
     rename-retitle pass and its content/name lock-step reasoning; and
-    name-validity-as-identity. <strong>Renames are content-stable</strong>: children
-    and field-row content survive a rename untouched, and only the name-keyed
+    name-validity-as-identity. <strong>Renames are content-stable for the
+    canonical id forms</strong>: <code>::((fieldId))</code> and
+    <code>::[label](((fieldId)))</code> rows survive a rename untouched (the
+    aliased label is author-owned display text and may drift, like any
+    aliased link), and only the name-keyed
     <em>cell</em> re-keys — B2's migration pass, detected by a per-fieldId
     registry-snapshot diff so every rename source (panel edit, outline edit of the
-    definition block, a synced-in rename) funnels through one seam.
+    definition block, a synced-in rename) funnels through one seam. Post-AC,
+    bound <em>name-form</em> rows are the deliberate exception (PR #417
+    review — this bullet predated the live <code>::[[name]]</code> form):
+    they follow the rename by <em>content rewrite</em>, the §9 rename case
+    (<code>renameBacklinks</code> rewriting <code>::[[status]]</code> →
+    <code>::[[state]]</code> in its post-commit References tx). No B2 step
+    and no race: the cell re-key is fieldId-keyed and a name row's target
+    column is rename-invariant, so projection converges whichever seam lands
+    first — B2's rename contract lists the span rewrite as a companion
+    effect, not a step it owns.
     <code>references_json</code> re-keys with it: <code>sourceField =
     schema.name</code>, so the cell re-key runs through the processor pipeline (the
     references reprojection recomputes <code>sourceField</code>), never
@@ -1515,7 +1898,7 @@ becomes a deferred <em>affordance</em> — the auto-claim step (§11).
     old key before the rename arrived — is still slice C's fieldId-side reconcile;
     the one-shot B2 pass can't reach it (verified in the B2 header comment).</li>
   <li><strong>Markdown round-trip: same-workspace works today, readable/cross-workspace
-    is a named follow-up.</strong> Within a workspace, <code>((fieldId))</code> pastes
+    is a named follow-up.</strong> Within a workspace, <code>::((fieldId))</code> pastes
     back and resolves — ids are workspace-valid, so the round-trip promise holds where
     it's most used (property rows enter the copied markdown at all via §9's WYSIWYG
     copy rule — visible property subtrees serialize once slice D's tier-aware
@@ -1523,24 +1906,67 @@ becomes a deferred <em>affordance</em> — the auto-claim step (§11).
     while every workspace reads <code>'cell'</code>). What id-content defers is <em>readable</em> markdown and
     cross-workspace transfer: the designed home is <strong>"copy resolves
     references"</strong> — a generic copy-boundary mechanism (not property-specific)
-    that renders id refs as <code>[[name]]</code> on the way out, paired with
-    auto-claim on the import side so <code>[[name]]</code> resolves back to the
-    definition. Until both exist, a cross-workspace paste of property rows carries
-    uuid refs that degrade to honest unresolvable reference rows (§9's existing
+    that renders id ref <em>spans</em> as name form on the way out, paired with
+    auto-claim on the import side so the name resolves back to the
+    definition. Span-level is the load-bearing qualifier (PR #417 review): the
+    <code>::</code> marker is literal content around the span, so a field row
+    exports as <code>::((fieldId))</code> → <code>::[[name]]</code> with the
+    marker preserved by construction — never bare <code>[[name]]</code>, which
+    under the marked grammar would paste back as ordinary prose, not
+    machinery (a lossy-label name keeps the marked aliased form instead, §11
+    AC's export guard). Until both exist, a cross-workspace paste of property rows carries
+    uuid refs that degrade to honest unknown-field rows (§9's existing
     rule). Follow-up, not a blocker (owner call).</li>
-  <li><strong>Typing a field by hand — deferred to auto-claim, free when it lands.</strong>
-    Recognition is form-agnostic (§9): any whole-block exact reference that resolves
-    to a definition is a field row, whatever the bracket form. So the moment
-    definitions claim their names as aliases (auto-claim — exactly what type blocks
-    do today), a hand-typed <code>[[status]]</code> row lights up as a field row with
-    <em>no recognition change</em>; one marked spot (the sync same-tx prospective
-    probe) gains its async <code>[[alias]]</code> branch then. Until auto-claim,
-    <code>[[status]]</code> resolves to a page or nothing — the "it's just blocks"
-    hand-authoring promise is sequenced, not dropped.</li>
+  <li><strong>Typing a field by hand — un-deferred: the <code>::</code> input flow
+    works without auto-claim.</strong> An earlier revision sequenced hand-authoring
+    behind auto-claim (recognition was form-agnostic, so a <code>[[status]]</code>
+    row would "light up" once definitions claimed aliases). The <code>::</code>
+    grammar inverts this: name resolution happens at <em>input</em> time —
+    <code>::status</code> autocompletes against the client-side schema registry
+    (no alias index involved) and commits as <code>::((fieldId))</code>; an
+    unresolvable name offers to create the definition inline. Nothing waits for
+    auto-claim, and — the other half — a plain <code>[[status]]</code> link can
+    never light up as machinery later, so claiming a name is retroactively
+    <em>safe</em> (the AC trap list collapses, §11 AC). The sync same-tx
+    prospective probe checks the marked form only; its deferred async
+    <code>[[alias]]</code> branch is deleted rather than pending.</li>
   <li><strong>Names are hygiene now, not identity.</strong> <code>addSchema</code> and
     the rename flow reject <code>]]</code>-lossy names
     (<code>isRoundTrippableReferenceLabel</code>, shipped) so names stay clean for
-    the future <code>[[name]]</code> affordance and for export — but an invalid name
+    the future <code>[[name]]</code> affordance and for export — and, with the
+    <code>::</code> grammar, they also reject names whose trimmed form matches
+    the <em>marked field grammar</em> (any name starting <code>::</code> is the
+    trigger syntax; PR #417 review found the sharp case: the B2 name→content
+    mirror writes <code>content = name</code>, so a property named
+    <code>::((someFieldId))</code> would turn its own definition block into a
+    row that classifies as a field row post-flip — machinery minted by a
+    <em>system</em> write, exactly the silent path the grammar forbids;
+    rejecting at the two name flows keeps the mirror unconditional, and
+    existing offenders surface in the mirror backfill's report rather than
+    silently classifying — and the <em>seed</em> path carries the same check
+    (review ×2: seeds bypass both flows —
+    <code>isPropertySeedDeclaration</code> requires only a non-empty name and
+    <code>definitionSeeds</code> writes <code>content = seed.name</code> — so
+    seed validation rejects grammar-shaped names too, the same loud-drop
+    treatment as duplicate seed names, covering kernel/plugin declarations
+    and the dynamic-extension harvest alike)). The check is a rule over
+    <em>every label→whole-block-content mirror</em>, not a property-name
+    special (PR #417 review found the next site by class): <em>type</em>
+    definition blocks mirror the same way — <code>createTypeBlock</code>
+    writes <code>content = trimmedLabel</code> onto the Types page and
+    <code>materializeTypeSeeds</code> writes <code>contentFor: seed =&gt;
+    seed.label</code>, while <code>seedType</code> /
+    <code>isTypeSeedDeclaration</code> require only non-emptiness — so a type
+    labeled <code>::((somePropertyFieldId))</code> would satisfy the flat
+    predicate post-flip and vanish into machinery; the type-label entry
+    paths (user flow + seed validation) compose the same shared
+    grammar-shaped-name predicate. Orphan-key <em>synthesis</em> (§11 flip
+    tooling) is the third entry path: a cell key shaped like the marked
+    grammar must not ride the raw <code>name = key</code> route into a
+    definition whose B2 name→content mirror would then classify — such
+    keys join the empty string as <em>hard flip blockers</em> (resolve by
+    remap/rename before the flip proceeds), keeping the mirror
+    unconditional. An invalid name still
     can no longer corrupt field-row identity, so the same-tx definition-name
     validator an earlier revision required (PR-review P2, rounds 22) is deleted;
     hygiene at the two flows plus a preflight report over existing names suffices.
@@ -1548,8 +1974,9 @@ becomes a deferred <em>affordance</em> — the auto-claim step (§11).
     unification winner gate survives as the name→cell-key authority (projection and
     <code>addSchema</code>'s structured <code>shadowed</code> rejection), not as an
     identity-resolution tier. The exact-reference grammar stays scoped to whole-block
-    content so prose containing <code>((…))</code> never becomes a field
-    (<code>referenceBlock.ts</code>).</li>
+    content, and only the <code>::</code>-marked form is ever a field — prose
+    containing <code>((…))</code>, plain whole-block refs, and <code>[[name]]</code>
+    links never classify (<code>referenceBlock.ts</code> + the §9 form bit).</li>
 </ul>
 
 <h2 id="s8">8. E2EE workspaces — new constraint</h2>
@@ -1651,56 +2078,275 @@ supabase skill if it's kept.
 
 <dl>
   <dt><strong>Field-row recognition.</strong></dt>
-  <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
-    definition block's id — a fieldId-keyed lookup the unified registry ships
-    (<code>resolveField</code>) — <em>the workspace is flipped</em>
+  <dd>A row is a field row iff <strong>all four</strong> hold. <em>(1)</em> Its
+    content is the marked field form — <code>::</code> + one whole-block
+    <em>reference span</em>
+    (<code>::((fieldId))</code>; §7 grammar box), recorded at derive time in the local
+    <code>is_field_form</code> bit — <strong>any of the parser's three link
+    forms</strong>, aliased blockref included (owner decision, 07-23, widening
+    the 07-22 either-bracket-form rule, which itself superseded the earlier
+    block-ref-only rule and its seam apparatus): the embedded ref resolves
+    exactly as refs resolve everywhere, so a marked alias
+    <code>::[[name]]</code> binds through the alias index and late-binding
+    like any link. The retroactivity concern that motivated the old exclusion
+    was mis-transferred from <em>unmarked</em> prose: a plain
+    <code>[[status]]</code> comment becoming machinery at claim time is
+    reinterpretation of link-intent — still structurally impossible, unmarked
+    rows never classify — but a <code>::</code>-marked row lighting up when
+    its name resolves is the system <em>catching up to declared field
+    intent</em>; nobody types <code>::[[status]]</code> as prose. Pre-AC no
+    name resolves to a definition, so the alias half is naturally dormant
+    (id-only-at-first falls out as sequencing, no flag). Two semantics follow
+    and are deliberate: id-carrying rows (<code>::((id))</code>,
+    <code>::[label](((id)))</code>) are <em>identity-pinned</em> (the round-29
+    shadow tolerance applies to them — losers stay resolvable); name rows
+    <em>follow the name</em>, with the lifecycle the wikilink machinery
+    already implements (PR #417 review, confirmed against
+    <code>renameProcessor.ts</code>), restated as <strong>one successor-keyed
+    rule</strong> (owner decision, 07-23 — replacing the per-flow case
+    analysis that kept accreting findings): when a live claim on α changes,
+    what happens to a backlink span depends only on <em>where α lives
+    afterwards</em>. <em>Rename</em> (same claimant, α→β):
+    <code>references.renameBacklinks</code> rewrites the span
+    (<code>::[[status]]</code> → <code>::[[state]]</code>; on a lossy β
+    a <em>marked</em> row goes straight to canonical <code>::((A))</code> —
+    never the aliased-blockref fallback (PR #417 review ×2: the generic
+    <code>replacementFor</code> fallback renders the <em>old</em> alias α
+    as a pinned label, which for machinery is the stale property name
+    displayed forever even when α sanitizes cleanly — and a lossy α would
+    additionally silently sanitize; the canonical form recovers the
+    <em>live</em> name from the definition at render time, which is what
+    rename-stability means). Prose keeps the aliased fallback — preserving
+    the author's display text is the point there, and its label guard is
+    pinned below) — rows follow their definition. <em>Handoff</em> (another live
+    block claims α in the same flow — definition merge, property-wins):
+    <strong>no rewrite</strong> — spans keep following the name to the new
+    claimant via ordinary late-binding. This requires re-keying the lifecycle
+    (PR #417 review, confirmed against <code>replacementFor</code>): today it
+    plans per <em>losing</em> target and would pin spans to a
+    tombstoned/merged-away loser; the processor must consult α's post-tx
+    claimant before planning. <em>Release</em> (no successor — the claim
+    removed, or its claimant deleted: a bare tombstone leaves no properties
+    diff, so the delete flow triggers this explicitly): spans rewrite to the
+    meaning-preserving pinned form <code>[α](((A)))</code> — today's
+    no-successor behavior — which for a marked row yields
+    <code>::[α](((A)))</code>: still a field row, identity-pinned to the
+    released claimant, tombstone-resolvable like any id row. The rewrite
+    carries the same guard pinned for export, widened to the <em>whole
+    span</em> (PR #417 review ×2: <code>renderAliasedBlockref</code> strips
+    <code>]</code>/newline, so a lossy α would silently change the displayed
+    name — and the aliased form's parser is UUID-only while exact refs admit
+    renderable non-UUID ids, so a non-UUID target A renders a span that
+    parses back as <em>nothing</em> and would never re-stamp): render, parse
+    back through the parser that owns the form, compare target <em>and</em>
+    label — on any mismatch a <em>marked</em> row falls back to canonical
+    <code>::((A))</code> (the exact form's kernel grammar is the broad one,
+    so it can express every renderable id; the label is recovered from the
+    definition at render time via the name→content mirror), while prose
+    keeps the sanitized-label blockref for label-only lossiness — the
+    lifecycle's existing documented trade-off — and is left unrewritten +
+    listed in the flow's report when the target itself can't round-trip.
+    Release
+    therefore never unbinds machinery and mints no seat (seats arise only
+    from names that never resolved — §7's paste case). <em>Re-binding to a
+    new claimant</em> applies to rows still in name form when α changes hands
+    (values re-decode under the new codec, failures landing in the
+    invalid-values story). One <strong>ordering invariant</strong> binds
+    every flow composing these (owner decision, 07-23, generalizing the
+    property-wins pinned order): <em>content rewrites run before alias-index
+    surgery</em> — a flow that wants spans pinned or canonicalized rewrites
+    first; whatever still carries α afterwards follows the successor-keyed
+    rule. The invariant's scope is <em>flows that own both sides</em> (merge,
+    property-wins, delete/release) — the rename case is necessarily outside
+    it (PR #417 review): the rename rewrite <em>consumes</em> the alias diff,
+    and a synced-in rename arrives with the alias already moved, so no flow
+    exists that could rewrite first. The resulting window — a client or
+    repair pass re-deriving <code>::[[old]]</code> from content after the
+    alias moved but before the rewrite arrives — has specified, benign
+    semantics rather than a fix: the re-derive follows the name uniformly
+    (miss → seat, exactly as prose wikilinks behave in the same window
+    today), the arriving rewrite's content change re-derives the row back to
+    the definition, and a stray window-minted seat is collected by a pinned
+    <em>rewrite-side</em> cleanup enqueue (PR #417 review corrected "ordinary
+    cleanup" here: the mint's own 4s orphan check runs while the
+    <code>::[[old]]</code> row still <em>references</em> the seat — alive,
+    skipped, never re-checked — so the seat would survive the later rewrite
+    and squat the released name): when the rename rewrite's surgical
+    reference swap drops the last reference to a target, it re-enqueues the
+    same orphan job for that target, restricted to provably-untouched
+    machine seats (the §7 <code>aliasSeatSeed</code> predicate — never a real
+    page whose last backlink happened to be rewritten). The rewrite must
+    also still <em>find</em> a window-bound span (PR #417 review): the
+    as-built plan enumerates sources by
+    <code>(target_id, alias)</code> (<code>SELECT_BACKLINK_SOURCES_SQL</code>),
+    so a span whose reference edge already swapped to the window seat — a
+    concurrent references pass on another edit of the same block, or the
+    swap arriving over sync before the plan's read phase — matches the alias
+    but not the target and would be silently skipped, leaving a permanently
+    seat-bound <code>::[[old]]</code> that no later pass owns. The pinned
+    contract: the plan's source enumeration is <em>alias-keyed with a target
+    disjunction</em> — the renaming claimant OR a provably-untouched machine
+    α-keyed seat (the same §7 seat predicate) — so window-bound spans
+    rewrite with the rest; and it runs behind the same
+    <em>references-parse fence</em> as the delete/merge/AC enumerations
+    (PR #417 review: <code>block_references</code> is written post-commit
+    and the processors launch asynchronously, so a <code>::[[old]]</code>
+    row edited or pasted just before the rename can have <em>no edge at
+    all</em> — the missing-edge case, distinct from the seat-swapped one —
+    and an unfenced scan never plans its rewrite; drain the parse queue
+    before the read phase, the same-tx bit/content scan as audit). A user edit landing in the window keeps its
+    content (the rewrite's later-edit-wins skip) — the row then reads as an
+    unbound marked row with the create/rebind affordance, the standard
+    honest state, never silent reinterpretation.
+    <em>(2)</em> Its parent is non-null (root half:
+    a workspace-root row has no owner to be a field <em>of</em> — its marker is just
+    content; the SQL twins carry the same <code>parent_id IS NOT NULL</code>
+    clause). <em>(3)</em> <code>reference_target_id</code> resolves via the
+    <em>shadow-tolerant classification
+    checker</em>, not bare <code>resolveField</code> (PR-review round 29:
+    <code>resolveField</code> alone is winner-enforcing — a shadowed fieldId
+    returns <code>identity-unavailable/shadowed</code> — so classifying through
+    it would unclassify every shadowed loser's rows, contradicting §6; the
+    as-built checker, <code>isFieldDefinitionCheckerFor</code>, wraps it and
+    classifies on <em>resolved OR shadowed</em>, every other reason
+    unclassifies; the checker lives on PR #386
+    (<code>txEngine.ts</code>), this doc's authoritative implementation branch —
+    it is not on master until A/B merges). The pinned contract is one leg
+    <em>wider</em> than the as-built disjunction (PR #417 review caught the
+    contradiction with B2's deletion rule): <strong>resolved OR shadowed OR
+    tombstone-resolved</strong>. Today a soft-deleted definition never reaches
+    the registry at all (<code>propertyDefinitionMetadata</code> returns
+    <code>null</code> on <code>row.deleted</code>, so <code>resolveField</code>
+    reports it unavailable) — classifying through that would un-classify every
+    row of a deleted property and strand its cell keys, the exact outcome
+    B2's identity-preserving deletion rule forbids. The tombstone leg is a
+    B2-required checker extension — a fieldId-keyed read that consults
+    tombstoned definition rows directly (soft-delete keeps the bag, so the
+    metadata is readable) — and the widened disjunction is the contract to
+    pin so a resolver refactor can't silently narrow it. One extension pinned with it
+    (PR #417 review): consumers that need the definition's <em>metadata</em>, not
+    a boolean — B3 scope routing needs the owning schema's
+    <code>changeScope</code>, merge needs its merge policy, value decode needs
+    the codec — use a shadow-tolerant <em>schema-returning</em> lookup: a
+    fieldId-keyed read of the definition row and its parsed metadata,
+    winner-independent <em>and tombstone-tolerant</em> (shadowing is
+    <em>name</em> authority, not row readability — and deletion, likewise, is
+    not unreadability: the inline-exemption and merge-policy consumers read
+    it mid-delete-tx). Routing a shadowed loser's rows through bare
+    <code>resolveField</code> would classify them as machinery while losing the
+    very scope that decides their write-policy bucket. <em>(4)</em> <em>The
+    workspace is flipped</em>
     (<code>properties_migration</code> at or past <code>'children'</code>, §6;
     PR-review P2: recognition off
-    the raw column alone activates the moment slice A starts stamping — a whole-block
-    exact ref that happens to target a definition (a hand-typed <code>((id))</code>,
-    a same-workspace pasted field-row line, a ref-typed value) would be
-    reinterpreted as machinery — and hidden outright for hidden-tier
-    definitions — even while the workspace is still cell-only, breaking the
+    the raw bits alone activates the moment slice A starts stamping — a marked row
+    typed or pasted while the workspace is still cell-only would be reinterpreted
+    as machinery — and hidden outright for hidden-tier
+    definitions — breaking the
     "machinery lands dormant" claim; the workspace column is synced and
-    server-visible, so the gate is fleet-consistent) — <em>and P
-    is a content-role block</em>: not itself a field row and not a value row. Role is
-    positional and <em>alternates</em> (PR-review P2 ×2 — first for the direct-parent
-    guard, then against an over-strong "reject any row whose ancestry passes through
-    a field row" that briefly replaced it): children of field rows are values, never
-    field rows, whatever their target; children of value rows are ordinary
-    <em>content</em> — a <code>[[status]]</code> link written as a comment directly
-    below a value child is user content, not a field of the value block; and content
-    role means full standing, so a content block <em>inside</em> a property subtree
-    can carry field rows of its own — tag a comment that elaborates a value and that
-    tag is child-backed like any other (the blanket ancestry rejection would have
-    stranded such keys in the cell forever, contradicting the §6/§11 promise that
-    every key leaves it). The recursion is cheap and terminates fast: only
-    column-stamped rows can be field rows, so classifying a row consults at most its
-    nearest stamped ancestors and short-circuits at the first unstamped pair.
-    Renderers and traversals get the walk
-    free from context (they arrive from above and already know the enclosing role);
-    SQL callers bind the same recursive rule. The parent
-    guard is load-bearing (PR-review P2): a ref-typed <em>value</em> pointing at a
-    definition block gets stamped with that definition's id by the derive processor
-    exactly as a field row would (<code>block-type:properties</code> values are the
-    standing example — a refList whose targets are all property-schema blocks; since
-    the master types cutover these refs are materialized on <em>every</em> type
-    block, so the case is ubiquitous, not an edge);
-    without the guard, render/filter/projection would hide or reinterpret those
-    values as nested fields. Recognition is <em>form-agnostic</em> (PR #386, §7): the
-    column encodes "this whole block is exactly this reference" for either bracket
-    form, and <code>[[name]]</code> is never property-special-cased — it resolves
-    through the one generic alias policy, which today yields a page or nothing, and a
-    definition once auto-claim makes definitions name-resolvable; hand-typed
-    <code>[[name]]</code> field rows then classify with no recognition change.
-    Column read plus flag read, no content
-    parse. Classification
+    server-visible, so the gate is fleet-consistent). <strong>No positional
+    condition exists</strong> (owner decision, 2026-07-22): recognition is
+    <em>content-intrinsic</em>, identical at every depth, and
+    <em>move-proof at any non-root position</em> — a row's classification cannot
+    change because merge,
+    indent, or a hoist relocated it; the root half is the one positional
+    residue, by design (moving a marked row to or from the workspace root is an
+    ordinary embraced role change, not an exception to guard). This supersedes
+    the whole positional lineage
+    (PR-review P2 ×2's direct-parent guard, the alternating role grammar that
+    followed it, and the blanket interior-ancestry walk the A/B branch actually
+    shipped): <code>isInsidePropertySubtreeWalk</code>, its per-tx memos and SQL
+    recursive twins, and the materialize/project/re-key interior gates are all
+    deleted <em>as recognition inputs</em>. What survives is the narrower
+    <em>ownership</em> question — "which field row owns this descendant" — which
+    is containment, not identity, and is inherently positional. Both walks
+    <strong>start at the row itself</strong> (PR #417 review: a field row is
+    its own owner — a structural op on the field row takes its scope from its
+    <em>own</em> definition, and a hidden field row suppresses <em>itself</em>;
+    ancestor-only walks would fall back to BlockDefault for a top-level
+    UserPrefs field row and fail to suppress a hidden field row hit by
+    search): B3's scope
+    routing (a structural edit deep in a property subtree routes under the
+    owning schema's scope) then walks to the <em>nearest</em> <code>::</code>
+    row — self or ancestor, the directly-owning field; hidden-subtree
+    pruning's upward form
+    (search/recents filtering classifying an arbitrary hit) checks self and
+    <em>every</em> field ancestor — any hidden one suppresses, since a visible
+    field materialized inside a hidden field's subtree must not leak its rows
+    into default surfaces (PR #417 review; top-down render pruning gets this
+    free by never descending into a hidden field row). Backlink presentation
+    splits by edge kind (the References entry's rule): a field row's own
+    used-by edge is a single parent hop, while a content <em>mention</em> kept
+    from inside a value row walks to the nearest non-machinery ancestor — one
+    hop from a value row lands on the field row and would leak machinery into
+    backlinks (PR #417 review ×2). (PR #417 review: deleting the walk
+    <em>outright</em> would silently
+    re-route value-descendant edits under the caller's BlockDefault scope.) The
+    surviving walk is much simpler than the deleted one: each hop is
+    independently classified by the flat predicate, so it carries none of the
+    memo-invalidation coupling to the tx engine that made the recognition walk
+    expensive to keep honest. Roles fall out of content alone:
+    <code>::</code> children of
+    <em>any</em> block are that block's field rows — so field rows and value rows
+    materialize their own bags like every other block, and no cell-only depth
+    carve-out exists anywhere (the §6/§11 "every key leaves the cell" promise
+    finally holds without exception). <strong>A field row's value set is exactly
+    its children with <code>is_field_form IS NOT 1</code></strong> (the bit is
+    NULL for every underived/unmarked row — ordinary value children are never
+    stamped <code>0</code>, so an equality test against <code>0</code> silently
+    excludes every real value; PR #417 review caught an earlier draft's
+    <code>= 0</code> phrasing, and the JS predicate treats
+    <code>null/undefined</code> as false the same way) — <em>including</em>
+    plain <code>((id))</code> refs to
+    definition blocks, which are unambiguous now that field-ness is marked
+    (<code>block-type:properties</code> values — a refList whose targets are all
+    property-schema blocks, materialized on every type block since the types
+    cutover — render as values by construction; the parent guard that existed to
+    protect them, and the escape-rule alternative briefly considered for them,
+    are both unnecessary). Non-<code>::</code> children of value rows are
+    ordinary content — a <code>::</code> child of a value row is the value's
+    own field row, the any-depth rule again — and a
+    content block anywhere in a property subtree carries field rows of its own
+    with full standing. The value-set definition is a <strong>binding selection
+    discipline</strong>, not display guidance (PR #417 areview — the
+    highest-leverage item on the branch delta): every site that enumerates a
+    field row's values or selects "the field row for this fieldId" filters by
+    the bit — the projection's first-parseable-value scan, <code>setProperty</code>'s
+    primary-value pick and <code>SELECT_PROPERTY_FIELD_CHILD_SQL</code> (which
+    must also require <code>is_field_form = 1</code>, or an unmarked
+    <code>((fieldId))</code> link row can be <em>selected</em> as the field row
+    and its first child overwritten with the encoded value), the materializer's
+    primary/duplicate logic, both dedup helpers, merge's destination field map,
+    and rename's <code>computePlan</code>. The discipline ships as
+    <strong>named predicates, defined once</strong> (owner decision, 07-23):
+    one canonical "recognized field row" SQL fragment/helper and one "field
+    value child" twin, composed by every site above rather than restated —
+    hand-rolled restatements are the recorded failure mode (two review rounds
+    each caught a site dropping a conjunct: the NULL-safe bit test, then the
+    §11 measurement scan filtering on fieldIds without the bit). The failure without it is concrete
+    and non-deterministic: a nested <code>::</code> row materialized under a
+    field row shares <code>keyAtStart(null)</code> with the primary value and
+    sorts by id tiebreak, so it randomly projects as the property's value into
+    the <em>synced</em> cell — and the next <code>setProperty</code> overwrites
+    the machinery row's content with the encoded value. Duplicate-field-row
+    folding routes a duplicate's own marked children through <em>field-row</em>
+    folding recursively, never through value folding.
+    Discovery never parses content at read time: the same
+    textual derive pass stamps <code>reference_target_id</code> (for marked and
+    unmarked ref forms alike — backlinks, the B2 used-by count, and
+    merge-retarget stay uniform over machinery and plain refs) plus
+    <code>is_field_form</code>, both local, never synced, rebuilt by the same
+    arrival-repair that already recomputes the target column — content remains
+    the only truth crossing the wire, so the bits are rebuildable forever.
+    "All field rows under X" is an indexed scan (partial index
+    <code>WHERE is_field_form = 1</code>); the classification predicate is flat —
+    bit + <code>parent_id IS NOT NULL</code> + checker + flip. Classification
     needs
     the definition, not the owning plugin (an uninstalled plugin's definitions sync
     like any block), and works for shadowed definitions too (§6 — losers stay
-    fieldId-resolvable). Unresolvable
-    targets render as plain reference blocks — a pasted field from another workspace
-    degrades to a visible, honest "unknown field" row.</dd>
+    fieldId-resolvable). An unresolvable <em>marked</em> row
+    degrades to a visible, honest "unknown field" row (a pasted field from another
+    workspace, a foreign fieldId); an unmarked ref targeting a definition is a
+    plain reference block, full stop.</dd>
 
   <dt><strong>Cross-workspace copies — satisfied by construction today; the rules wake
     with structural moves.</strong></dt>
@@ -1710,8 +2356,8 @@ supabase skill if it's kept.
     (PR-review P2). Implementation finding (PR #386): on current master this entire
     family has <em>no code path</em> — cross-workspace copy/paste is
     markdown-mediated (parse → fresh creates), so nothing carries a column to clear
-    or strip; a pasted <code>((fieldId))</code> row simply fails to resolve at the
-    destination and degrades to an honest unresolvable reference block (§7's
+    or strip; a pasted <code>::((fieldId))</code> row simply fails to resolve at the
+    destination and degrades to an honest unknown-field row (§7's
     markdown follow-up — "copy resolves references" + auto-claim — is what will make
     these pastes meaningful). The clear-and-re-derive rule, the
     <code>seed:*</code>-strip seam, and §8's de-structure rule all activate together
@@ -1739,13 +2385,25 @@ supabase skill if it's kept.
     <code>hidden</code> by default until triaged. Two rules the synthesis must apply,
     the first now much weaker under §7's id-content shape (PR-review P2 ×2, revised):
     <em>names are hygiene-checked, not rewritten</em> — field rows are
-    <code>((fieldId))</code>, so a historical key that fails the wikilink round-trip
+    <code>::((fieldId))</code>, so a historical key that fails the wikilink round-trip
     (trim-changing, containing <code>]]</code>) can still be a definition name and
     cell key verbatim; it merely can't gain the future <code>[[name]]</code>
-    affordance, so synthesis keeps <code>name = key</code> and <em>flags</em> such
+    affordance, so synthesis keeps <code>name = key</code> — through a
+    <strong>raw operator path, not <code>addSchema</code></strong> (PR #417
+    review: <code>addSchema</code> trims the name, so the user path would mint
+    <code>"foo"</code> for the cell key <code>" foo "</code> and leave the
+    original key definition-less, unsatisfiable against the flip gate) —
+    and <em>flags</em> such
     keys in the flip report for optional cleanup (the earlier
     deterministic-rename requirement is deleted; only a genuinely unusable key — the
-    empty string — is reported instead of synthesized); and <em>ids are
+    empty string — cannot be synthesized at all, and its report is a <em>hard
+    flip blocker</em>, not an FYI (PR-review round 29): the definition parser
+    and <code>addSchema</code> both reject empty names, so an empty-string cell
+    key can never be definition-backed — left in place it makes the
+    "no definition-less keys" gate unsatisfiable forever, and at
+    <code>cell-off</code> the column drop would orphan the value's only
+    carrier; the runbook resolves it before the flip proceeds — delete the key
+    or remap its value under a named key); and <em>ids are
     deterministic</em> — <code>uuidv5(workspaceId, key)</code>, the seeded-definition
     pattern — so a re-run converges on the same blocks, and two devices independently
     running an e2ee option-2 flip mint the <em>same</em> definition instead of
@@ -1785,7 +2443,8 @@ supabase skill if it's kept.
     server can never enumerate their keys.</dd>
 
   <dt><strong>Value decoding.</strong></dt>
-  <dd>Spike: first parseable value child wins (order-key order); unparseable children are
+  <dd>Spike: first parseable value child wins (order-key order over the
+    <code>is_field_form IS NOT 1</code> children — §9's selection discipline); unparseable children are
     skipped. If <em>no</em> child parses, the projection <em>removes</em> the key from
     the cell. (This rule — and default-vs-unset below — presupposes a <em>live field
     row</em>; a cell key with no child rows at all is pending materialization and is
@@ -1799,12 +2458,24 @@ supabase skill if it's kept.
     otherwise read as unset forever. <strong>Ref-typed values are
     reference-shaped</strong> (PR #386, divergence item 6): a ref-typed value child
     holds <code>((id))</code> — the same editable block-reference affordance as
-    anywhere else, and the same grammar as the field row's own
-    <code>((fieldId))</code> — while the <em>cell</em> keeps a bare id
-    (<code>codecs.ref</code> unchanged). The read path returns the row's derived
-    <code>reference_target_id</code>, which stays NULL unless the content is a
-    resolvable exact ref — so prose typed into a ref property ("people type text
-    into a ref property, like a log") is unparseable, the projection skips it, and
+    anywhere else, <em>unmarked</em> (the field row's own content embeds the same
+    exact-ref grammar behind its <code>::</code> marker, so a ref value targeting a
+    definition block is unambiguous, §9 recognition) — while the <em>cell</em> keeps a bare id
+    (<code>codecs.ref</code> unchanged). The gate is the decode step's
+    <em>form check</em>, not column nullness (PR #417 review — this entry's
+    earlier "stays NULL unless exact ref" phrasing was wrong about the
+    mechanism, and dangerously so once the uniform derive was spelled out:
+    <code>reference_target_id</code> stamps for whole-block <em>wikilinks</em>
+    too, seat-minting included, so trusting any non-null target would
+    silently coerce a typed <code>[[Mary]]</code> — or a typo'd
+    <code>[[Marry]]</code> binding a fresh empty seat — into a valid ref
+    value): the projection's decode, a derive-time pass that may parse
+    content, accepts the <em>id-carrying</em> forms only (today
+    <code>parseBlockRefTarget</code>'s exact anchor; the aliased blockref is
+    the natural widening when the ref-codec pass takes it up). Prose typed
+    into a ref property ("people type text
+    into a ref property, like a log") — whole-block wikilinks included —
+    fails that check, the projection skips it, and
     the key reads unset while the row keeps its text, instead of a log silently
     coercing into a fake block id as bare-id storage did. It also puts property
     refs on the reference-maintenance rails: merge-retarget rewrites
@@ -1817,12 +2488,35 @@ supabase skill if it's kept.
     it.</strong></dt>
   <dd>Decided in #404 (item 4), widened by PR-review round 28:
     <code>inlineDeletedBlockReferences</code> must <em>skip recognized property
-    machinery</em> — ref-typed value children <strong>and field rows</strong>.
+    machinery</em> — ref-typed value children <strong>and field rows</strong> —
+    never on live classification (owner round, 07-22: a bound
+    <code>::[[name]]</code> row whose definition dies in the same delete tx
+    has already lost resolution when the processor asks). The field-row half
+    keys on <em>recognition through the tombstone-tolerant checker</em> — the
+    full four-condition predicate, with condition 3 answered by the tombstone
+    leg above rather than the live registry (PR #417 review corrected a
+    bit-only phrasing: the bare bit over-exempts rows that are explicitly
+    <em>not</em> machinery — pre-flip marked content, root marked rows,
+    marked rows targeting an ordinary page or foreign id — and those should
+    keep degrading like the prose-shaped rows they are when their target
+    dies, or they carry dangling refs forever). Order-independence survives
+    without a bit shortcut: the checker reads definition rows, not the live
+    alias index or registry, and the one same-tx alias case — a marked-alias
+    row whose definition dies in that very delete tx — has already been
+    rewritten to id-carrying form by the release rewrite, which the ordering
+    invariant runs first. The value-child half keys on value position <em>plus the
+    owning field's codec</em> being ref/refList, read through the
+    shadow-tolerant schema-returning lookup (condition-3 extension above) —
+    tombstone-tolerant, so it answers even mid-delete-tx and
+    order-independence is preserved (PR #417 review: value position alone
+    would also exempt a <em>text</em>-codec value whose content happens to be
+    exactly <code>((D))</code> — prose-like content that should inline like
+    any content; the codec is what says these children hold identity).
     The field-row half is what makes the B2 definition-deletion rule (below,
     §11) coherent at all: field rows parse into <code>block_references</code>
     (the "used by" edge above), so deleting a <em>definition</em> would inline
-    the definition's text into every <code>((fieldId))</code> field row in the
-    same delete tx — destroying the exact-ref shape before tombstone-resolvable
+    the definition's text into every <code>::((fieldId))</code> field row in the
+    same delete tx — destroying the marked exact-ref shape before tombstone-resolvable
     recognition ever gets a say. Inlining a deleted target rewrites
     the row's <code>((deletedId))</code> into prose — which clears its derived
     column, silently drops the key at the next projection, and is irreversible
@@ -1839,12 +2533,14 @@ supabase skill if it's kept.
   <dt><strong>Duplicates and divergence — union-with-dedupe (as shipped).</strong></dt>
   <dd>PR #386 (divergence item 7) replaced both rev 1's "keep extras, pick lowest
     orderKey" and the spike's delete-all-duplicates: <strong>a field row holds a
-    <em>set</em> of value children, deduped by content.</strong> Content-equal
+    <em>set</em> of value children — its <code>is_field_form IS NOT 1</code> children
+    (§9's selection discipline) — deduped by content.</strong> Content-equal
     duplicates fold (soft-delete; the relocate rule survives for their
     user-authored sub-children — a comment thread under a folding duplicate moves
     to the survivor, and both dedup call sites must fold identically);
     <em>divergent</em> values are <strong>never deleted</strong> — they persist as
-    peer siblings under the field row. Projection reads the first parseable value,
+    peer siblings under the field row (view-state-flagged keys excepted: the
+    merge entry's silent-resolve rule, below). Projection reads the first parseable value,
     so the visibly-first value owns the cell while the others stay in the tree as
     a surfaced conflict; concurrent dual-writes from two devices converge to
     sibling values rather than one silently winning. This dissolves the earlier
@@ -1947,19 +2643,49 @@ supabase skill if it's kept.
   <dt><strong>References: field rows carry a "used by" edge (as shipped).</strong></dt>
   <dd>Parse-level property-machinery suppression has been <em>removed</em>
     (PR #386 at <code>12609823</code>): field and value rows parse into
-    <code>block_references</code> like any other row. A property definition's
+    <code>block_references</code> like any other row — and this is a pinned
+    requirement on the <code>::</code> grammar: the reference parser treats the
+    marked form's embedded exact ref identically to a bare one, or definitions
+    lose their used-by edges. A property definition's
     backlinks therefore answer <em>"which blocks use this property?"</em> — a
     deliberate feature, and also what lets definition merge/rename retargeting
     reach field rows at all (the maintenance passes walk the raw reference
-    table). Backlink <em>display</em> filters only <strong>strictly
-    interior</strong> rows — value rows and deeper — because only those duplicate
-    the owner's reprojected edge; the field row's own edge is unique and is kept,
-    and the inline backlink count applies the same exclusion. Kept, but
-    <em>presented as the owner</em> (PR-review P2, round 27): the raw source is
-    the <code>((fieldId))</code> field row itself, and a backlink surface or
+    table). That dependency pins a hygiene invariant on <em>definition
+    ids</em> (PR #417 review): <code>block_references</code> records
+    UUID-shaped span targets only (the inline parser's deliberate
+    strictness against prose <code>((…))</code>), while §7's exact form
+    admits renderable non-UUID ids — a definition with a non-UUID id would
+    classify via the broad kernel grammar yet be invisible to every
+    table-walking pass (used-by counts, merge/delete retarget sweeps). All
+    mint paths produce UUIDs today (uuidv4 creates, uuidv5 seeds);
+    <code>addSchema</code> rejects a caller-supplied non-UUID definition id
+    as one more member of the §7 hygiene family, and the AC/flip preflight
+    reports any legacy offender. The kernel grammar itself stays broad —
+    the constraint is on definition ids, not on what a reference row may
+    target. Backlink <em>display</em> filtering is <strong>role-based, not
+    depth-based</strong> (re-specified for the <code>::</code> grammar — the
+    earlier "value rows and deeper" rule predated nested machinery, and
+    PR #417 review caught that it would drop or misattribute a machinery row's
+    own property uses): what's filtered is only the <em>duplicate</em> class —
+    a whole-block ref <em>value</em> under a ref-typed field, whose edge
+    duplicates the owner's projected fieldId-keyed edge
+    (<code>projectPropertyReferences</code> emits parent edges for ref/refList
+    codecs only, PR #417 review ×2) — while an inline <code>[[Foo]]</code>
+    mention <em>inside</em> a scalar/text value is a unique edge with no owner
+    duplicate and is <em>kept</em>, presented as the owner like everything
+    machinery-interior; and <em>every</em> field
+    row's edge, at any depth, is unique and is kept;
+    the inline backlink count applies the same role rule. Kept, but
+    <em>presented as the parent</em> (PR-review P2, round 27, generalized): the
+    raw source is
+    the <code>::((fieldId))</code> field row itself, and a backlink surface or
     watcher that returned it verbatim would be listing machinery — display maps a
     field-row source to its parent block, which is the thing that "uses" the
-    property; the raw table keeps the true source row for the maintenance
+    property. That mapping is uniform under nesting: a <em>nested</em> field
+    row's edge presents as its machinery parent (accurate — the property is
+    used <em>by</em> that field/value row; the surface renders the parent with
+    its property-row presentation rather than walking further up). The raw
+    table keeps the true source row for the maintenance
     passes. The cell-side
     projection (<code>projectPropertyReferences</code>,
     <code>sourceField = schema.name</code>) still runs off the bag unchanged, so
@@ -1982,8 +2708,46 @@ supabase skill if it's kept.
     and had to null its definition-shaped <code>reference_target_id</code> to
     stop it classifying as a field row — unsound, because the column is
     content-derived and device-local (the clear evaporates on the next edit and
-    never synced). Keeping the loser as an <em>interior</em> sibling means the §9
-    role grammar exempts it regardless of stamp; no clear is needed.
+    never synced). Under intrinsic recognition (§9, 07-22) the reasoning is
+    stronger than the old positional exemption: a relocated value is simply not
+    <code>::</code>-marked, so it can never classify as a field row anywhere — no
+    clear, no position to reason about. The same move-proof-ness kills the
+    positional-reclassification family outright (a hoisted <code>::</code> row
+    stays a field row through any merge or move and folds via the normal
+    property-aware routing — the A/B branch's merge-hoist finding dissolves
+    structurally, and any interim refuse-guard on the branch becomes unnecessary
+    once the grammar lands). <strong>One view-state merge exception</strong>
+    (owner decision, 07-22, with the §6 re-affirmation; re-specified after
+    PR #417 areview caught the first keying missing its own motivating case):
+    divergence preservation
+    is for <em>document</em> content — for <em>view-state</em> keys merge
+    resolves silently instead of
+    keeping conflict siblings; collapse state must never demand adjudication.
+    The predicate is <strong>not</strong> bare
+    <code>changeScope = UiState</code>: <code>system:collapsed</code> is declared
+    <code>BlockDefault</code> today (<code>properties.ts</code> — it is shared
+    document-adjacent state, deliberately), and the genuinely UiState-scoped
+    keys live on per-user state blocks no merge gesture reaches — keyed on scope
+    alone the rule would cover approximately nothing. View-state-ness is a
+    per-definition <em>merge-policy</em> flag (seeded true for
+    <code>system:collapsed</code> and friends; UiState-scoped schemas get it by
+    default), read through the shadow-tolerant metadata lookup (§9 recognition,
+    condition 3's extension). Semantics, fully: both sides hold a value →
+    target's wins, the source's is dropped (no sibling); only the source holds
+    one → it is <em>adopted</em> (absence is not a conflict — consistent with
+    the source-only adoption rule below); a dropped loser's user-authored
+    sub-children relocate exactly as the content-equal fold relocates them,
+    never silently deleted. And the <em>exception</em> binds <em>every</em>
+    dedup site — silent resolution, no conflict siblings, for view-state keys
+    everywhere — while the <em>winner rule</em> is per-site (PR #417 review:
+    "same policy" overclaimed): target-wins at the merge <em>gesture</em> (an
+    explicit user act), newest-<code>updated_at</code> at the §5 sync-arrival
+    reconcile, where no target exists and a clock-blind rule would let an
+    older collapse toggle win (two devices' concurrent toggles are the
+    motivating case, and they meet in the reconcile, not in
+    <code>mergeBlocksInTx</code>; §5 states the clocked rule).
+    It lives in merge/dedup policy —
+    not in storage, recognition, or traversal.
     Orphan-alias cleanup deletes generated field rows under alias seats;
     panel-layout projection ignores field rows. <strong>Traversal polarity is
     inverted from earlier revisions</strong> (PR #386, deliberate divergence): every
@@ -2013,8 +2777,9 @@ supabase skill if it's kept.
     full-copy command carries it). Under the §6 scoping these rules apply
     <em>everywhere</em> — kernel props materialize too, so hidden-tier field rows
     exist on most blocks and the copy/display predicates get more load-bearing,
-    not less. Reparenting a field row as "content" is not a case to guard: by the
-    role grammar it simply <em>is</em> a field row of its new parent — transfer,
+    not less. Reparenting a field row as "content" is not a case to guard: by
+    intrinsic recognition it simply <em>is</em> a field row of its new parent —
+    the marker travels with the content; transfer,
     embraced above.</dd>
 
   <dt><strong>Type-add field slots vs ghosts (decided: render-only ghosts).</strong></dt>
@@ -2136,12 +2901,29 @@ implementation</strong> and keep it open until its content is fully accounted fo
 </p>
 
 <p>
-<strong>Status (2026-07-17, refreshed 07-19 at <code>12609823</code>): slices A and
-B are implemented — PR #386</strong>, extracted
+<strong>Status (2026-07-17, refreshed 07-23: slices A and
+B are implemented and merged to master — PR #386, merge <code>b51975798</code></strong>), extracted
 from the spike against post-unification master, hardened through three adversarial
 review rounds plus two Codex waves, and carrying the deliberate divergences this doc
-now reflects (§7 id-content, §9 form-agnostic recognition and traversal polarity, §6's
-as-shipped trigger). It lands dormant: every workspace reads
+now reflects (§7 id-content, §9 traversal polarity, §6's
+as-shipped trigger). <strong>One divergence now runs the other way</strong> (07-22):
+the merged code mints bare <code>((fieldId))</code> content and classifies via a
+positional interior-ancestry walk — both superseded by the <code>::</code>
+grammar (§7/§9); master now owes the delta (mint form + the registry-backed
+<code>::</code> input flow (§7 — no import seam exists, per the
+uniform-resolution ruling),
+derive parsing the marked form and stamping <code>is_field_form</code>, the flat
+recognition predicate, <strong>the §9 selection discipline</strong> — re-keying
+every value-enumeration and field-row-selection site
+(<code>SELECT_PROPERTY_FIELD_CHILD_SQL</code>, <code>setProperty</code>'s
+primary pick, the projection scan, the materializer's primary/duplicate logic,
+both dedup helpers, merge's field map, rename's <code>computePlan</code>) on
+the bit — replacing <code>isInsidePropertySubtreeWalk</code>/its SQL
+twins and the materialize/project/re-key interior gates <em>as recognition
+inputs</em> with the simpler §9 ownership walk that B3 scope routing and
+hidden-subtree pruning still need, the merge
+view-state rule with its per-definition policy flag, and the B2
+definition-merge re-key). It lands dormant: every workspace reads
 <code>properties_migration = 'cell'</code>, and master's suite passes unmodified.
 <strong>Residual flip-gated gaps live in issue #389</strong> (post-flip
 <em>healing</em>; the issue is authoritative over this snapshot) — as of
@@ -2152,7 +2934,11 @@ background-workspace recognition failing closed, the CAS-repair→field-row ref
 reconcile, <code>core.restore</code> re-materialization, and materializing
 pre-existing cells when a definition arrives late or on flip — all dormant at
 <code>'cell'</code>, all landing with the flip enablement (slice C's checklist
-inherits that issue). Two items left the bucket as <em>resolved on the branch</em>
+inherits that issue; note the 07-22 grammar retires the set's
+<em>ancestor</em>-flip members for <em>recognition</em> — classification no
+longer reads ancestors — while the §9 ownership-walk consumers (scope routing,
+hidden-subtree pruning) keep a narrower ancestor-change invalidation need; the
+issue list should be re-trimmed with the branch delta, not emptied). Two items left the bucket as <em>resolved on the branch</em>
 rather than deferred: the merge relocate-stamp-clear is gone (union-with-dedupe,
 §9) and value-row backlink de-dup is handled at the display layer (§9). Two
 companion issues carry what #389 doesn't: <strong>#404</strong> — <em>pre-flip</em>
@@ -2162,6 +2948,84 @@ seed-window recognition divergence; its ref-target-deletion item is decided as
 keep-dangling, §9, and its movement item was withdrawn in favor of the §9/§10
 movement design) — and <strong>#402</strong>, same-tx derivation liveness.
 </p>
+
+<h3 id="lifecycle-work-items">Lifecycle work items — consolidated from the PR #417 review rounds</h3>
+
+<p>
+The review rounds after the 07-23 grammar fold produced no semantic changes
+but a stack of <em>implementation contracts</em>, pinned until now only in
+inline parentheticals across §7/§9/B2/AC. Consolidated here by mechanism so
+the implementer doesn't mine prose (each item cites the section holding its
+rationale). The first group is deliberately <em>not</em> a list of bespoke
+fixes: those items are <strong>acceptance cases for issue #402</strong>'s
+structural fix — the write-generation second kernel pass plus the
+alias-list-change kernel hook — which this doc treats as their home; building
+them as one-off flow patches would reproduce the per-caller forget-me failure
+#402 exists to end.
+</p>
+
+<ol>
+  <li><strong>Derivation liveness — #402 acceptance cases.</strong>
+    <em>(a)</em> Definition-merge owner-cell re-projection (B2; already
+    #402's third GAP row — the same defect described from both directions):
+    the write-generation pass re-projects owner cells the retarget touched.
+    <em>(b)</em> Handoff restamp (§9, B2 merge): the alias-list hook
+    schedules the name-span rederive on any claim change — no per-flow
+    restamp calls — with one extension #402 doesn't yet name: the rederive
+    needs a <em>bound-row</em> re-resolution mode (today it is strictly
+    additive, NULL→target; re-pointing bound rows is the reclaim AC
+    rebuilds). <em>(c)</em> Rewrite-side orphan-cleanup re-enqueue (§9
+    rename window): a reference-dropping rewrite schedules the orphan check
+    for targets whose last reference it removed — the same
+    derived-transition→schedule shape, gated on the seat predicate
+    (item 4).</li>
+  <li><strong>Alias-lifecycle re-keying (standalone).</strong>
+    <code>replacementFor</code> consults α's post-tx claimant (handoff → no
+    rewrite; release → pin) — a hard precondition of definition merge (§9,
+    B2); the delete flow triggers the release rewrite explicitly (a bare
+    tombstone leaves no properties diff — §9); the rename plan's source
+    enumeration is alias-keyed with the claimant-or-provable-seat target
+    disjunction, and its lossy-name fallback for marked rows is canonical
+    <code>::((A))</code>, never a pinned label (§9); the whole-span round-trip guard
+    (render → parse back through the owning parser → compare target
+    <em>and</em> label; the aliased form is UUID-only, so non-UUID targets
+    fail it too) applies at <em>every</em> span-rendering
+    site — export (AC), release (§9), rename fallback (§9), property-wins
+    prose pins (AC) — marked rows falling back to canonical id form, prose
+    to sanitized-label + report (unrewritten + reported when the target
+    itself can't round-trip).</li>
+  <li><strong>Recognition &amp; predicates (standalone).</strong> The
+    tombstone-resolved leg of condition 3 — a fieldId-keyed read consulting
+    tombstoned definition rows (today <code>propertyDefinitionMetadata</code>
+    drops them) — plus the same tolerance in the schema-returning lookup
+    (§9); the two named selection predicates as defined-once fragments every
+    site composes (§7); the ref-codec decode's id-carrying form check, never
+    column nullness (§9); sync-off/readiness scans on the tombstone-tolerant
+    fieldId set (§11 cell end-state).</li>
+  <li><strong>Seats &amp; cleanup (standalone).</strong>
+    <code>cleanupOrphanAliasesProcessor</code> graduates to the canonical
+    subtree delete, gated on the seat-shape predicate — still matches
+    <code>aliasSeatSeed(alias)</code>, no user-authored children, generated
+    property children ignored (§7); the same predicate is AC's
+    merge-recommended test, the pristine sentinel sufficient-never-necessary
+    (§7); delete/merge referrer enumeration — and the AC property-wins and
+    rename-plan span enumerations — run behind the references-parse fence,
+    the same-tx bit as its audit (B2, AC, §9); every repair/rederive
+    candidate scan carries the <code>'::%'</code> content-shape twin
+    (§11 A).</li>
+  <li><strong>Hygiene &amp; seeds (standalone).</strong> Grammar-shaped
+    names rejected via one shared predicate at every label→content
+    mirror — <code>addSchema</code>/rename, property seed
+    validation/harvest, type labels (<code>createTypeBlock</code> + type
+    seeds), and as hard flip blockers in orphan-key synthesis (§7, §11);
+    definition ids are UUID-shaped — enforced at <code>addSchema</code>,
+    preflight-reported for legacy rows — so the reference table the
+    lifecycle machinery walks is complete over field rows (§9 References); AC's seeded half is an Automation-scoped repair
+    pass over existing live seed rows — <code>materializeSeeds</code> skips
+    them (AC); and a one-line comment fix someday: the
+    <code>targets.ts</code> docblock's stale "system:&lt;userId&gt; author"
+    claim (§7).</li>
+</ol>
 
 <div class="phases">
 
@@ -2191,7 +3055,17 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         snapshots — §5's projection watches <code>referenceTargetId</code> — and
         undo, queries, and invalidation ride the same snapshot; a side table would
         need parallel event/invalidation plumbing for no gain, so the column lives on
-        <code>blocks</code>. Write metadata splits by path (§5): the same-tx
+        <code>blocks</code>. <strong>The 07-22 grammar adds a sibling bit,
+        <code>is_field_form</code></strong> — same local-column treatment
+        (<code>BLOCK_LOCAL_COLUMNS</code>, boot ALTER, partial index
+        <code>WHERE is_field_form = 1</code>), stamped in the same textual derive
+        pass under the §7 grammar box's derivation rule (each form derives through
+        its usual branch; the bit stamps for <em>every</em> marked form —
+        all three link forms of the §7 grammar box, aliased blockref
+        included, since release rewrites marked name rows into exactly that
+        form and they must stay recognized); every
+        repair/derive-at-arrival/undo-seam
+        rule below covers both columns identically. Write metadata splits by path (§5): the same-tx
         processor rides the triggering edit's upload; the bulk paths write raw CAS,
         no metadata, no uploads. The rest of the ship list: the
         <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>
@@ -2205,11 +3079,21 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         aliases that arrived while the app was closed; the sweep runs at deep idle
         with CAS-per-row writes). The §9 additive re-derive — alias late-binding on
         arrival and on local alias-seat minting — shipped here with slice A rather
-        than waiting for C's sweep. The history/undo seam still applies
+        than waiting for C's sweep. Every one of these repair scans prefilters
+        candidates by content shape (cheap <code>TRIM(content) LIKE</code>
+        probes for <code>[[…]]</code>/<code>((…))</code>) before the real
+        parse — the marked grammar adds the <code>'::%'</code> twin to
+        <em>each</em> of them (PR #417 review: the paste path can mint a
+        <code>::[[future-field]]</code> seat <em>after</em> same-tx derive
+        ran, leaving target NULL; a rederive scan that only matches bare
+        bracket prefixes never revisits the row, so it would sit bit=1 /
+        target-NULL forever and never bind after AC). The history/undo seam still applies
         (PR-review P2, adapted): same-tx processors are skipped on undo replay
-        (§12), so the snapshots and replay SQL carry the column — pinned by test —
+        (§12), so the snapshots and replay SQL carry <em>both</em> derived columns —
+        pinned by test —
         otherwise undoing a field-row edit
-        back to plain text leaves a stale column and the row keeps classifying as a
+        back to plain text leaves a stale column or bit and the row keeps
+        classifying as a
         field row. (<code>BlockData.referenceTargetId</code> landed optional-in,
         normalized in <code>parseBlockRow</code>.) One future consequence,
         accepted: a server-side "derive properties from children" SQL view can no
@@ -2229,8 +3113,13 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         defeats auto-merging outright — PR #285's merges had to be repaired by hand
         around it).
       </p>
-      <p class="deliv">No behavior change for existing data — the column stays NULL
-        except on exact-reference rows. Behavior is reversible by dropping the
+      <p class="deliv">No behavior change for existing data — the form bit
+        stays NULL/unset except on marked rows, and the target column stamps
+        exactly the §5/§7 uniform scope: whole-block exact refs, aliased
+        blockrefs, and <em>unmarked whole-block wikilinks</em> too (PR #417
+        review — an earlier phrasing here omitted the wikilink half, which
+        the alias late-binding and the ref-value form-check story both
+        assume). Behavior is reversible by dropping the
         processor; the local ALTER is one-way in practice (SQLite column drops are
         table rebuilds) — acceptable for an additive nullable local column, but say
         it out loud.</p>
@@ -2313,7 +3202,7 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         per-fieldId registry-snapshot diff (every rename source — panel edit,
         outline edit of the definition block, a synced-in rename — funnels through
         the rebuild); a rename re-keys the <em>cell only</em>, since
-        <code>((fieldId))</code> content is rename-stable (§7 — no retitle pass);
+        <code>::((fieldId))</code> content is rename-stable (§7 — no retitle pass);
         the migrations run under the References maintenance bucket (never on
         cmd-Z); unconvertible values are reported via the user-error channel, never
         silently unset; <code>addSchema</code> rejects <code>]]</code>-lossy names.
@@ -2322,16 +3211,16 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <code>addSchema</code> starts writing <code>content = name</code>, renames
         write the mirror through this same funnel, and a one-shot backfill aligns
         existing user definitions — without it, a generic block-ref render of
-        <code>((fieldId))</code> shows a blank label.
+        <code>::((fieldId))</code> shows a blank label.
         B2 also owns the third definition lifecycle event, <em>deletion</em>
         (PR-review P2, round 26): a soft-deleted definition dropping out of the
-        registry would silently un-classify every <code>((fieldId))</code> row —
+        registry would silently un-classify every <code>::((fieldId))</code> row —
         machinery surfacing as ordinary orphan subtrees, cell keys stranded. The
         rule is the same identity-preserving one as §9's dangling-value decision —
         and it has a same-tx precondition (PR-review round 28): the
         inline-deleted-refs processor must exempt recognized machinery rows
         (§9's dangling entry), or the delete tx itself rewrites every
-        <code>((fieldId))</code> row into inlined prose before any
+        <code>::((fieldId))</code> row into inlined prose before any
         tombstone-resolution can matter. With that exemption in place:
         <em>recognition keeps resolving tombstoned definitions</em> (classification
         is about shape, not liveness — rows stay field rows, display marks them
@@ -2339,7 +3228,114 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         used-by count (§9 backlinks answer it directly) and offers the drain
         (unset everywhere) as the explicit destructive variant, and restoring the
         definition snaps everything back. Reversible by default; mass-unset only
-        by deliberate choice.
+        by deliberate choice. That is the <em>id-form</em> column of the
+        deletion matrix — and under the generalized marker grammar plus §9's
+        successor-keyed release rule the matrix <strong>collapses to that one
+        column</strong> (owner decision, 07-23, superseding the 07-22
+        name-goes-dormant half and this revision's earlier seat-rebind /
+        prompted-revive choreography): deleting a definition <em>releases</em>
+        its alias claims, and the release rewrite runs over live backlink
+        spans in the delete flow — <code>::[[status]]</code> becomes
+        <code>::[status](((A)))</code>, still a field row, now
+        identity-pinned to the tombstoned definition and tombstone-resolvable
+        exactly like <code>::((A))</code> — so name rows ride the id-form
+        rules above (recognition through tombstones, the used-by count, drain
+        as the explicit destructive variant), and restoring the definition
+        just re-adds the claim: the pinned spans never broke, nothing to
+        revive, no seat was ever minted. (The alias index remains a registry
+        of <em>live</em> claims — the point is that no span is left
+        consulting it for a dead name.) Prompted seat-merge resolution
+        survives only where seats actually arise: names that never resolved,
+        §7's paste case. Both forms preserve the
+        baseline — no deletion event ever silently removes property data — and
+        the remaining asymmetry is about <em>life</em>, not deletion:
+        id-carrying rows are identity-pinned, name rows follow the living
+        name, exactly as links do — deletion converges them (release pins).
+        The release rewrite finds its rows via the raw-reference-table
+        enumeration (referrers of A whose edge carries the released alias —
+        <code>block_references</code> keeps the alias per edge, so name-form
+        spans are enumerable without parsing content; once bound, a name
+        row's <em>columns</em> are identical to an id row's, which is why
+        column reads can't distinguish them and the rewrite keys on the edge),
+        behind a <em>references-parse fence</em> shared with the merge sweep
+        (PR #417 review: those edges are written by the post-commit
+        <code>references.parseReferences</code> pass, not the same-tx derive
+        — a <code>::[[status]]</code> row typed just before the definition's
+        delete/merge may not be in the table yet, and the enumeration would
+        silently miss it; both flows are prompted one-shots, so they drain
+        pending reference parsing for the workspace before enumerating —
+        cheap, and the same-tx <code>is_field_form</code> bit doubles as the
+        audit check that the drained table covers every marked row),
+        and it runs in the delete flow <em>before</em> the claim drops — the
+        §9 ordering invariant instantiated (superseding the 07-22 "release
+        direction of the late-binding re-derive" mechanism and its
+        clears-vs-seats analysis). And
+        the <em>fourth</em> lifecycle event,
+        definition <em>merge</em> (PR #417 areview — reachable today via the
+        merge picker, and the designed remedy for alias collisions once AC
+        claims names): the retarget rewrite itself works by construction
+        (<code>::((A))</code>→<code>::((B))</code> — the ref regex is a substring
+        match, the marker survives, the column recomputes inline), but the
+        retarget is a plugin processor registered <em>after</em> project in the
+        single-pass tx, so the rewritten field rows are never re-projected in
+        the merge tx: every consuming owner's cell keeps <code>name(A)</code> —
+        a key whose definition is tombstoned, which nothing may delete (§5's
+        never-delete rule) and nothing can re-back, permanently blocking the
+        cell-off gate. The rule: a definition merge is rename <em>and</em> potentially codec
+        change combined (PR #417 review: A's values were encoded under A's
+        preset — retargeted under B with a different codec, the next projection
+        would skip them as invalid and the property reads unset) — so it runs
+        the rename-style cell re-key <em>plus</em> B2's codec-change
+        re-encode/validate pass over the retargeted rows (unconvertible values
+        report via the user-error channel, never silently unset) in the same tx
+        through B2's funnel, with the ordering pinned; incompatible presets
+        refuse the merge up front — and incompatible <em>write scopes</em>
+        refuse it the same way (PR #417 review): retargeting A's rows
+        re-buckets every future edit, undo grouping, and read-only policy
+        under B's <code>changeScope</code> for B3 scope routing — the same
+        policy boundary the write path already enforces
+        (<code>scopePoliciesEquivalent</code>, txEngine's
+        <code>assertPropertyWriteScope</code>) — so the preflight requires
+        scope equivalence alongside codec compatibility; a cross-scope merge
+        proceeds only as an explicitly confirmed scoped migration, never an
+        implicit side effect of the re-key. Name-form rows need <em>no rewrite</em>
+        (PR #417 review corrected the previous revision here:
+        <code>renameBacklinks</code> plans per <em>losing</em> target — its
+        rewrite would pin spans to tombstoned A, not B — and runs post-commit
+        in a References tx, not the merge tx; wrong on direction <em>and</em>
+        timing): a definition merge is the §9 <em>handoff</em> case — A's
+        alias moves to live B, so name spans keep following the name to B via
+        late-binding, with §9's lifecycle re-keying making the processor
+        recognize the handoff instead of pinning to the loser. The merge tx
+        enumerates <em>all</em> of A's marked referrers via the reference
+        table before the alias surgery (§9 ordering invariant) and runs the
+        re-encode/re-key pass over them in one sweep — id, aliased, and name
+        forms alike — and for the no-rewrite name forms the sweep
+        <em>explicitly restamps</em> their derived columns and swaps their
+        raw ref edges A→B in the same tx (PR #417 review: the derive is
+        content-triggered and a handoff makes no content edit, and the
+        additive late-binding only fills NULL targets — without the explicit
+        restamp a bound <code>::[[α]]</code> row would stay classified and
+        reprojected under merged-away A until some unrelated edit touched it;
+        this is the bound-row reclaim mechanism, the same one AC rebuilds —
+        and the structural home for the restamp scheduling and the
+        owner-cell re-projection alike is <strong>#402</strong>, §11 work
+        items). The generalized grammar removes only the
+        <em>ejection</em> risk of a stray pin-to-loser rewrite
+        (<code>::[A-name](((A)))</code> is still a field row) — not the
+        mispin (PR #417 review corrected this revision's "harmless" claim:
+        the legacy plan fires <em>post-commit</em>, after the merge tx — the
+        retarget sweep has already run and can never touch the newly
+        inserted <code>((A))</code>, so the row would stay pinned to
+        tombstoned A and the consuming cell keyed to the loser). The §9
+        lifecycle re-keying is therefore a <strong>hard precondition</strong>
+        of definition merge — equivalently, the merge flow
+        suppresses/drains the legacy pin-to-loser plan before its alias
+        surgery — not belt-and-suspenders. Marked rows
+        <em>unresolvable</em> at merge time are listed
+        in the merge report. Until all of that exists,
+        definition-vs-definition merges are
+        refused, not silently degraded.
         <strong>B3 (integration):</strong> merge/orphan/panel-layout handling — as
         shipped, merge is <em>union-with-dedupe</em> (§9): content-equal values
         fold (one canonical <code>deleteSubtreeInTx</code>, with the relocate rule
@@ -2450,22 +3446,22 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         the sync config, recorded here so it survives refactors: the workspaces
         stream must never be split from (or deprioritized below) the blocks
         stream, or the guarantee — and with it the safety of every late syncer —
-        silently evaporates. An earlier
-        revision put a pre-flip triage step here for pre-existing whole-block
-        <code>[[name]]</code> rows the flip would retroactively reinterpret
-        (PR-review P2); under §7's id-content shape that hazard is <em>almost</em>
-        gone at the flip — <code>[[name]]</code> doesn't resolve to definitions —
-        but "nothing that wasn't machinery-minted" overclaims (PR-review P2, round
-        25): a whole-block <em>exact ref</em> a user pointed at a definition
-        (a hand-typed <code>((id))</code>, a field-row line pasted while the
-        workspace was still cell-only) does light up. What remains here is a slim
-        preflight over exactly that set — whole-block exact refs whose
-        derived <code>reference_target_id</code> is a definition id, enumerable by
-        SQL against the column slice A already stamps — triaged like the
-        auto-claim set: reword genuine prose, keep hand-authored fields. The
-        <code>[[name]]</code> triage obligation
-        moves wholesale to the auto-claim step (below), which is when
-        prose <code>[[status]]</code> rows first become classifiable.
+        silently evaporates. The retroactive-reinterpretation triage families
+        collapse under the <code>::</code> grammar (07-22; superseding the
+        round-25 slim preflight over definition-targeting exact refs, which the
+        marker makes moot): unmarked <code>((id))</code> and <code>[[name]]</code>
+        rows never classify, so the only rows the flip can light up are those
+        already in the <em>marked</em> form — enumerable by the
+        <code>is_field_form</code> bit slice A stamps, expected ~zero
+        pre-flip (a typed or pasted <code>::((id))</code> line; marked-alias
+        <code>::[[name]]</code> rows carry the bit too but bind to nothing
+        pre-AC — names don't resolve to definitions yet — so the flip lights
+        only <em>resolvable</em> marked rows, and the AC runbook lists
+        newly-binding name rows at claim time) — triage any
+        hits: they were authored as fields or pasted field-row lines; keep or
+        reword. The <code>[[name]]</code> triage obligation at auto-claim
+        disappears entirely — claiming a name can no longer reinterpret prose
+        (AC below).
         Sequence the first production run deliberately: it's an upload burst of 2 rows
         per (block, property) — run workspace-by-workspace, watch <code>ps_crud</code>
         drain — and it presupposes the <code>row_events</code> optimization
@@ -2537,23 +3533,58 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
       <div class="name">Auto-claim + copy-resolves-references (follow-up, deliberately
         out of A/B scope)</div>
       <p>
-        The step that turns <code>[[name]]</code> from "resolves to a page or
-        nothing" into a live property affordance: <strong>property definitions claim
-        their name as an alias</strong>, exactly like type blocks do today — the
-        generic alias index, no property-special tier (§7). Recognition needs
-        <em>no change</em> (it is already form-agnostic, §9); the pre-marked spots
-        that activate: the sync same-tx prospective probe gains its async
-        <code>[[alias]]</code> branch, and the reference-target <em>reclaim</em>
-        (re-pointing already-bound rows — e.g. a <code>[[status]]</code> row bound to
-        an ordinary page before the definition claimed the name) is rebuilt
-        <em>together with cell reprojection</em>, having been deleted from slice A as
-        dead code. Its trap list, collected from earlier review rounds because they
-        re-arise here, not at the flip: <em>retroactive reinterpretation</em> — the
-        moment a definition claims its name, every pre-existing whole-block
-        <code>[[name]]</code> row in a flipped workspace lights up as a field row,
-        hidden, children projected as values (PR-review P2, relocated from slice C's
-        runbook): enumerate and triage them with the claim, per definition — reword
-        genuine prose, keep hand-authored fields; <em>name-collision pastes</em>
+        The step that makes definitions <em>name-resolvable</em>:
+        <strong>property definitions claim
+        their name as an alias</strong>, riding the generic alias index with no
+        property-special tier (§7) — noting the types precedent is
+        user-authored-only (§7, round 29): seeded type backing blocks
+        deliberately claim <em>no</em> alias today, so the bulk claim here must
+        cover <em>seeded and user</em> property definitions explicitly rather
+        than assuming seeds "already work like types" — and the seeded half
+        writes through the seed-owned lifecycle path (Automation-scoped),
+        not the ordinary user path: the seed-write guard
+        rejects normal BlockDefault bag edits of valid seed definitions, so a
+        uniform user-path bulk claim would silently fail exactly the seeded
+        half (PR #417 review). That path must be a real <em>repair/update
+        pass over existing live seed rows</em>, not just revised-seed
+        creation (review ×2: <code>materializeSeeds</code> skips live rows —
+        it inserts missing ones and only warns when a stored revision trails
+        — so in an already-materialized workspace neither the materializer
+        nor the guarded user path would ever write the alias/PAGE_TYPE claim,
+        and <code>::[[name]]</code> imports would stay unbound for every
+        kernel/plugin property; AC ships the Automation-scoped upgrade that
+        stamps existing seed rows). Under the <code>::</code>
+        grammar (07-22) this step's stakes shrink: <strong>recognition never
+        consults names</strong> — hand-authoring runs on the registry-backed
+        <code>::</code> input flow with no auto-claim dependency (§7), an
+        unmarked <code>[[name]]</code> link can never become machinery, and the
+        step's old trap list is mostly dead. What the claim buys is navigation,
+        cross-workspace readability, and <em>name-form binding</em>:
+        <code>[[status]]</code> links resolve to the definition
+        page; <code>::[[name]]</code> becomes the cross-workspace export form
+        of a field row, resolving back on import <em>like any link</em> (no
+        rewrite step — §7's uniform-resolution ruling; in-workspace readable
+        export is already free via <code>::[label](((fieldId)))</code>,
+        07-23); and this is the moment
+        pre-existing marked-alias rows <em>bind</em>. The trap distinction is
+        now intent-based, not form-based: an <em>unmarked</em>
+        <code>[[name]]</code> row lighting up as machinery remains structurally
+        impossible (no triage obligation); a <em>marked</em>
+        <code>::[[name]]</code> row lighting up at claim time is declared
+        intent catching up — by design, with the claim runbook <em>listing</em>
+        newly-bound name rows per definition (visibility, not blocking). The
+        reference-target <em>reclaim</em> is not a re-pointing pass
+        (PR #417 review: stated as one, it would drag prose links off a real
+        page): it is ordinary late-binding re-resolution — plus cell
+        reprojection — of whatever spans <em>still carry the name</em> at
+        claim time. Which spans those are is settled upstream by the prompted
+        flows under the §9 ordering invariant: property-wins canonicalizes
+        marked rows and pins prose toward the page <em>before</em> the claim,
+        and a seat claim goes through the approve-list — so the spans that
+        flip are exactly the ones that should (marked rows binding = declared
+        intent; an approved seat's spans, whose seat was a placeholder for
+        the name).
+        <em>Name-collision pastes</em>
         (same-named schema, incompatible codec) become reachable then and lean on the
         §9 sweep report; alias collision semantics ride the alias machinery's
         existing seat/winner rules — which cuts both ways (PR-review P2, round 26):
@@ -2562,20 +3593,64 @@ movement design) — and <strong>#402</strong>, same-tx derivation liveness.
         <strong>claimant preflight</strong> — enumerate existing owners of every
         definition name <em>before</em> claiming, surface page-vs-definition
         conflicts for resolution (rename the page's alias, rename the property, or
-        accept page-wins), and record refused claims in the report. A definition
+        accept page-wins), and record refused claims in the report. The
+        <em>property-wins</em> resolution is an instance of the §9 ordering
+        invariant, its rewrites explicit flow steps chosen by the prompted
+        resolution (the name moving page→definition is a §9 <em>handoff</em>,
+        which by itself rewrites nothing): behind the references-parse fence
+        B2 pins for delete/merge (PR #417 review: the marked-row and
+        prose-link sets those steps rewrite come from
+        <code>block_references</code>, which a <code>[[status]]</code> typed
+        just before the prompt hasn't reached — parsing is post-commit — so
+        an unfenced enumeration would miss that freshest span, pin nothing,
+        and let the alias move silently rebind it), <em>first</em> rewrite the marked
+        <code>::[[status]]</code> rows to <code>::((fieldId))</code> (the
+        same canonicalization the create affordance performs, in bulk) and
+        pin prose links to the page in the aliased form
+        (<code>[status](((pageId)))</code>) — the flow's meaning-preserving
+        choice for prose, carrying the same label guard as export/release
+        (PR #417 review: <code>renderAliasedBlockref</code> strips
+        <code>]</code>/newline, so a lossy page alias would silently change
+        the displayed link text; prose has no id-form fallback that preserves
+        display, so on a lossy label the prompted flow does what prompted
+        flows do — list the affected rows and their sanitized labels in the
+        resolution report, visible rather than silent) —
+        <em>then</em> move the name to the definition. A definition
         whose claim was refused stays id-addressable but never becomes
         name-resolvable; that state must be visible, not a silent bulk-claim
         casualty. Pairs with <strong>"copy resolves
         references"</strong> (owner call, follow-up not blocker): a generic
-        copy-boundary mechanism rendering id refs as <code>[[name]]</code> on the way
-        out — which is what makes markdown export readable and cross-workspace
-        property paste meaningful (§7); the §8/§9 structural cross-workspace rules
+        copy-boundary mechanism rendering id refs readably on the way out.
+        The generalized grammar shrinks its property obligations (07-23):
+        <em>readable</em> in-workspace export is nearly free —
+        <code>::[label](((fieldId)))</code> carries the name as display text
+        and round-trips <em>identity</em> losslessly regardless of claim
+        state — with one guard (PR #417 review):
+        <code>renderAliasedBlockref</code> strips <code>]</code>/newline from
+        labels (the parser's label grammar excludes them), so a name
+        containing either would export with a silently altered label; the
+        export path re-uses <code>replacementFor</code>'s established guard
+        pattern — render, parse back, compare — and falls back to canonical
+        <code>::((fieldId))</code> when the label is lossy (B2's name hygiene
+        rejects <code>]]</code>-lossy names, not <code>]</code>/newline, and
+        synced-in names predate any hygiene rule, so the export-time guard is
+        required regardless). <code>[[name]]</code>-form rendering then
+        matters only for
+        cross-workspace/interop paste, and only when the name
+        <em>round-trips</em>: a definition whose claim was refused or never
+        ran exports the aliased form (label-guarded) or id form instead, or
+        the paste would re-bind the property to
+        whatever owns the name (PR #417 review); the §8/§9 structural cross-workspace rules
         (clear-and-re-derive, seed-strip, de-structure) activate alongside it if a
         structural move ships.
       </p>
-      <p class="deliv">Hand-typing <code>[[status]]</code> creates a field; markdown
-        export reads as prose; cross-workspace paste resolves by name. The "it's
-        just blocks" promise completes here rather than in slice A — sequenced, not
+      <p class="deliv"><code>[[status]]</code> links resolve to the definition page;
+        markdown
+        export reads as prose (<code>::[[name]]</code> cross-workspace;
+        <code>::[label](((fieldId)))</code> is already readable in-workspace
+        without AC); cross-workspace paste
+        resolves by name. Hand-typing a field needs none of this — the
+        <code>::</code> flow ships earlier (§7) — sequenced, not
         dropped.</p>
     </div>
   </div>
@@ -2777,9 +3852,18 @@ no infrastructure needed:
 <ol>
   <li><strong>Read-side floor (zero setup, live client):</strong>
     <code>pnpm agent sql all</code> timing the aggregate join — field rows
-    (<code>reference_target_id</code> restricted to <em>registered schema
-    fieldIds</em>; plain <code>IS NOT NULL</code> also catches ordinary
-    exact-reference rows the derive processor stamps, over-counting the join and
+    (the §7 named predicate: <code>is_field_form = 1</code> <em>and</em>
+    <code>reference_target_id</code> restricted to the
+    <em>tombstone-tolerant</em> fieldId set — registered schemas <em>plus</em>
+    tombstoned definition rows, the same set recognition's condition-3
+    tombstone leg reads (PR #417 review: the live registry drops deleted
+    definitions, so a registered-only restriction silently excludes the
+    still-machinery rows of a deleted-but-undrained property and could
+    green-light the cell-off while B2's deletion leg still relies on them
+    being projected); plain <code>IS NOT NULL</code> catches ordinary
+    exact-reference rows, and the fieldId restriction alone still counts
+    <em>unmarked</em> ref rows pointing at definition blocks — either way
+    over-counting the join and
     skewing the gate) joined to their value children, grouped by parent — over the
     already-materialized live DB. Real engine, real data, read-only.</li>
   <li><strong>Full pass offline (~40-line Node script):</strong> export the local DB
@@ -2937,16 +4021,12 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
       <td>A plugin-less client keeps cell authority for a custom-codec key (C)</td>
     </tr>
     <tr>
-      <td><strong>Recognition = column + workspace flip + subtree role, and is
-        form-agnostic.</strong> A
-        field row's <code>reference_target_id</code> is a definition id (whatever
-        bracket form produced it — <code>[[name]]</code> is never
-        property-special-cased), the
-        workspace is flipped (<code>properties_migration</code> at or past
-        <code>'children'</code> — never an equality test),
-        <em>and</em> its parent is a content-role block. Roles alternate (§9):
-        children of field rows are values, children of value rows are content — and
-        content inside a property subtree can carry field rows of its own.</td>
+      <td><strong>Recognition = the §7 grammar box's predicate;
+        content-intrinsic, no position.</strong> Flip comparison is at-or-past
+        <code>'children'</code>, never an equality test. Move-proof at any
+        non-root position; roles and the value-set selection discipline are
+        §7/§9's — unmarked <code>[[name]]</code>/<code>((id))</code> rows are
+        never machinery.</td>
       <td><a href="#s9">§9</a></td>
       <td>Rendering, hidden filtering, the visible-view opt-in
         (<code>hidePropertyChildren</code>), projection, dedup walk</td>
@@ -2960,7 +4040,7 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
         re-derives at the destination (§9).</td>
       <td><a href="#s9">§9</a></td>
       <td>Copy/move/paste paths; the §8 e2ee de-structure is its encrypted case</td>
-      <td>A pasted foreign field row degrades to an unresolvable reference block
+      <td>A pasted foreign field row degrades to an honest unknown-field row
         (until auto-claim + copy-resolves-references)</td>
     </tr>
     <tr>
@@ -2974,10 +4054,16 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
     <tr>
       <td><strong>Undo restores what processors won't re-derive.</strong> Same-tx
         processors are skipped on replay by design, so history snapshots and replay
-        SQL must carry every storage column.</td>
+        SQL must carry every storage column <em>and both local derived columns</em>
+        (<code>reference_target_id</code>, <code>is_field_form</code> — deliberately
+        <em>not</em> storage columns, so "every storage column" alone excludes
+        exactly the two at stake; PR #417 review). A replayed row with content but
+        a stale bit misclassifies: prose with <code>is_field_form = 1</code>
+        vanishes into the hidden-tier filter; a restored marked row with
+        <code>0</code> silently stops projecting.</td>
       <td><a href="#s12">§12</a>, slice A</td>
       <td><code>row_events</code> serialization, undo replay column list</td>
-      <td>Undoing <code>[[status]]</code> → text clears the column (A)</td>
+      <td>Undoing <code>::((fieldId))</code> → text clears both columns (A)</td>
     </tr>
     <tr>
       <td><strong>Repairs propagate visibly.</strong> Writes that preserve
