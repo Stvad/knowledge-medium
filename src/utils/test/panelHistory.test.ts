@@ -268,4 +268,38 @@ describe('PanelHistoryStore', () => {
       expect(a).toBe(b)
     })
   })
+
+  describe('takeBack / forget (content recovery)', () => {
+    it('takeBack pops without recording a forward entry', () => {
+      store.push('p1', e('b-a'))
+      store.push('p1', e('b-b'))
+      expect(store.takeBack('p1')).toEqual(e('b-b'))
+      // Unlike back(), the popped entry does NOT reappear on forward — recovery
+      // must not park the dead page where a Forward click would re-expose it.
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: []})
+      expect(store.takeBack('p1')).toEqual(e('b-a'))
+      expect(store.takeBack('p1')).toBeNull()
+    })
+
+    it('forget drops the block from both stacks, keeping the rest', () => {
+      store.push('p1', e('b-a'))
+      store.push('p1', e('dead'))
+      store.push('p1', e('b-b'))
+      store.back('p1', e('dead')) // forward now holds the dead page
+      store.forget('p1', 'dead')
+      const snap = store.getSnapshot('p1')
+      expect(snap.back).toEqual([e('b-a')])
+      expect(snap.forward).toEqual([])
+    })
+
+    it('forget notifies subscribers only when something was removed', () => {
+      let n = 0
+      store.push('p1', e('b-a'))
+      store.subscribe('p1', () => { n += 1 })
+      store.forget('p1', 'absent')
+      expect(n).toBe(0)
+      store.forget('p1', 'b-a')
+      expect(n).toBe(1)
+    })
+  })
 })

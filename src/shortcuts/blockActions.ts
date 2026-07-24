@@ -19,10 +19,7 @@ import {
   topLevelBlockIdProp,
   type EditorSelectionState,
 } from '@/data/properties.js'
-import { goBackInPanel, panelHistory } from '@/utils/panelHistory.js'
-import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { PANEL_TYPE } from '@/data/blockTypes.js'
-import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import {
   ActionConfig,
@@ -98,31 +95,6 @@ const reorderBlock = async (
   scopeRootId: string | undefined,
 ): Promise<boolean> =>
   repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
-
-/** Move a panel off the page it currently shows, so deleting that page
- *  doesn't tombstone the surface. Browser-tab semantics: step back to where
- *  the user came from; with no back-history, close the pane (an empty layout
- *  re-lands on the daily note). Pages are workspace-root blocks
- *  (`parentId: null`) far more often than not, so a "zoom to parent" fallback
- *  would strand most real pages — history/close is the destination that
- *  always resolves.
- *
- *  Returns false when neither is possible: a bare UI-state block (the agent
- *  bridge, headless tests) carries no `PANEL_TYPE` and has no pane to close,
- *  so there is nowhere to send it — the caller then refuses the delete rather
- *  than strand a non-panel surface.
- *
- *  Ordered before the delete so the panel is already off the page: `goBack`
- *  pushes the current page onto the FORWARD stack (never back) and
- *  `deletePanelRow` clears the panel's history, so the Back button can't
- *  return to the just-deleted page. */
-const navigatePanelOffPage = async (panelBlock: Block): Promise<boolean> => {
-  if (await goBackInPanel(panelBlock)) return true
-  await panelBlock.load()
-  if (!panelBlock.hasType(PANEL_TYPE)) return false
-  await deletePanelRow(panelBlock.repo, panelBlock.id)
-  return true
-}
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {
@@ -310,53 +282,39 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
 
       const {isScopeRoot} = await structuralEditPolicyForBlock(block, scopeRootId)
 
-      // Deleting the scope root in place would tombstone the rendered surface
-      // out from under the panel (see StructuralEditPolicy.canDelete — every
-      // other structural handler refuses at this boundary). But the scope
-      // root of a panel's *focal* outline IS its current page, and "delete
-      // this page" is a first-class gesture — historically the only
-      // page-deletion UI. Reconcile the two: move the panel OFF the page
-      // first (history back / close the pane), THEN delete, so the surface
-      // never renders a tombstone.
+      // The scope root of a panel's focal outline IS its current page. "Delete
+      // this page" is a first-class gesture, but deleting the block in place
+      // would tombstone the surface — so, deliberately, we DON'T navigate
+      // here. We just delete; a mounted `PanelContentRecovery` watcher
+      // reactively steps EVERY pane showing the (now dead) page onto a live
+      // destination (nearest live history entry → workspace landing). That
+      // decoupling is what makes the hard cases fall out for free: multi-pane
+      // duplicates, deleted-block history entries, and same-page self-embeds
+      // all recover through the one watcher instead of N special cases here.
       if (isScopeRoot) {
-        // Only the panel's focal page render deletes the whole page. The same
-        // block embedded/backlinked within its own outline is also a scope
-        // root with the same id, but a nested surface — deleting there must
-        // not nuke the page. `scopeRootForcesOpen === false` marks nested
-        // surfaces (useShortcutSurfaceActivations sets it to !isNestedSurface,
-        // exactly useIsFocalRender's second axis); focal roots force-open.
-        const isFocalPage =
-          uiStateBlock.peekProperty(topLevelBlockIdProp) === block.id &&
-          deps.scopeRootForcesOpen !== false
-        if (!isFocalPage) return
-
-        // Refuse deletes the data layer would reject anyway — otherwise we move
-        // the panel off a page that then survives the (failed) delete. Two
-        // sources, both checked BEFORE any panel write:
-        //  - read-only workspace: block.delete() is a BlockDefault write, rejected;
-        //  - a materialized seed-definition block (a code-owned system page): its
-        //    row is undeletable (SeededDefinitionWriteError), even when writable.
-        if (block.repo.isReadOnly) return
-        await block.load()
-        const data = block.peek()
-        if (data && isValidSeededDefinition(data)) return
-
-        // Only delete once the panel is safely off the page. If it couldn't be
-        // moved (no history AND not a real panel surface — e.g. the headless
-        // bridge), refuse rather than tombstone the surface. This is also what
-        // keeps defaultActions.fuzz.test.ts's scope-root invariant green: its
-        // `uiStateBlock` is a bare block with no PANEL_TYPE, so the focal page
-        // stays live.
-        if (!(await navigatePanelOffPage(uiStateBlock))) return
-        await withMoveTransition(async () => {
-          await block.delete()
-        })
-        // The page is gone: drop it from this pane's history so neither Back nor
-        // Forward lands on its tombstone. `goBackInPanel` parks the current page
-        // on the FORWARD stack as it steps back, so without this the Forward
-        // button would navigate straight to the just-deleted block.
-        panelHistory.forget(uiStateBlock.id, block.id)
-        return
+        // Is `block` the pane's own page (the focal outline root, OR a
+        // self-embed/backlink of it — same id)? Then it's a page delete.
+        const isFocalPage = uiStateBlock.peekProperty(topLevelBlockIdProp) === block.id
+        if (isFocalPage) {
+          // A real panel has a mounted recovery watcher to catch the fallout; a
+          // headless caller (agent bridge, fuzz) has a bare uiStateBlock with
+          // no PANEL_TYPE and no watcher, so refuse rather than orphan the
+          // surface. This is also what keeps defaultActions.fuzz.test.ts's
+          // scope-root invariant green.
+          await uiStateBlock.load()
+          if (!uiStateBlock.hasType(PANEL_TYPE)) return
+          // The delete is atomic: a read-only workspace, or a guarded
+          // seed-definition ANYWHERE in the subtree, rolls the whole delete
+          // back and throws — and because nothing else has moved, there is no
+          // half-state to clean up. No preflight needed.
+          await withMoveTransition(async () => {
+            await block.delete()
+          })
+          return
+        }
+        // A non-focal scope root — a backlink entry or embed of ANOTHER block —
+        // is an ordinary, deletable block; the nested surface just re-queries.
+        // Fall through to the normal delete path below.
       }
 
       // Beyond the scope-root handling above, `scopeRootId` only locates

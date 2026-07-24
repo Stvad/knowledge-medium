@@ -37,6 +37,7 @@ import {
   goForwardInPanel,
   navigateInPanel,
   panelHistory,
+  recoverPanelOffDeadContent,
 } from '@/utils/panelHistory'
 
 const WS = 'ws-1'
@@ -1412,5 +1413,83 @@ describe('PanelLayoutProjection', () => {
     expect(notified).toBe(1)
     unsubscribe()
     projection.dispose()
+  })
+})
+
+describe('recoverPanelOffDeadContent', () => {
+  const seedBlocks = async (ids: readonly string[]): Promise<void> => {
+    await env.repo.tx(async tx => {
+      const orderKeys = keysBetween(null, null, ids.length)
+      for (let i = 0; i < ids.length; i++) {
+        await tx.create({
+          id: ids[i], workspaceId: WS, parentId: null, orderKey: orderKeys[i], content: ids[i],
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'seed content blocks'})
+  }
+
+  /** A panel row pointed at `blockId`, with panelHistory reset for the row. */
+  const panelShowing = async (blockId: string): Promise<Block> => {
+    await createPanelRows([blockId])
+    const row = (await rows())[0]
+    panelHistory.clear(row.id)
+    return env.repo.block(row.id)
+  }
+
+  it('steps back to the nearest LIVE history entry, skipping tombstones', async () => {
+    await seedBlocks(['alive', 'doomed-child', 'page'])
+    const panel = await panelShowing('page')
+    // Back stack (oldest → newest): alive, then a block that dies with the page.
+    panelHistory.push(panel.id, {blockId: 'alive'})
+    panelHistory.push(panel.id, {blockId: 'doomed-child'})
+
+    await env.repo.block('doomed-child').delete()
+    await env.repo.block('page').delete()
+    await recoverPanelOffDeadContent(panel, 'page', null)
+
+    // 'doomed-child' is dead, so recovery skipped it and landed on 'alive'.
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('alive')
+    const snap = panelHistory.getSnapshot(panel.id)
+    expect(snap.forward).toEqual([])
+    expect(snap.back.some(e => e.blockId === 'page')).toBe(false)
+  })
+
+  it('falls back to the landing block when no history entry is live', async () => {
+    await seedBlocks(['landing', 'page'])
+    const panel = await panelShowing('page')
+
+    await env.repo.block('page').delete()
+    await recoverPanelOffDeadContent(panel, 'page', 'landing')
+
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('landing')
+  })
+
+  it('leaves the pane alone when neither history nor the landing block is live', async () => {
+    await seedBlocks(['page'])
+    const panel = await panelShowing('page')
+
+    await env.repo.block('page').delete()
+    await recoverPanelOffDeadContent(panel, 'page', 'never-existed')
+
+    // No live destination: don't close or blank the pane, just leave it.
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('page')
+  })
+
+  it('recovers every pane showing the deleted page (multi-panel)', async () => {
+    await seedBlocks(['landing', 'page'])
+    await createPanelRows(['page', 'page'])
+    const [rowA, rowB] = await rows()
+    panelHistory.clear(rowA.id)
+    panelHistory.clear(rowB.id)
+    const panelA = env.repo.block(rowA.id)
+    const panelB = env.repo.block(rowB.id)
+
+    await env.repo.block('page').delete()
+    // Each pane runs its own recovery (one watcher instance per panel).
+    await recoverPanelOffDeadContent(panelA, 'page', 'landing')
+    await recoverPanelOffDeadContent(panelB, 'page', 'landing')
+
+    expect(panelA.peekProperty(topLevelBlockIdProp)).toBe('landing')
+    expect(panelB.peekProperty(topLevelBlockIdProp)).toBe('landing')
   })
 })
