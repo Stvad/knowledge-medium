@@ -247,10 +247,20 @@ const reprojectParentField = async (
   // Additive mode also declines to break a TIE. Adding the key is an
   // unsettled write, so materialize follows it — and with two field rows for
   // one definition that means `collapseDuplicateFieldRow`, which tombstones
-  // the loser and uploads the tombstone. Values survive as peer siblings, so
-  // it is churn rather than loss, but a background repair still has no
-  // business reaping a user's row: leave the duplicate visible and let a
-  // real edit (which projects settled) do the collapse.
+  // the loser and uploads the tombstone. A background repair has no business
+  // reaping a user's row, so this bails instead.
+  //
+  // Be clear about what the user gets, because it is not "the duplicate
+  // stays visible": post-flip BOTH rows are recognized, so both are filtered
+  // out of every `hidePropertyChildren` listing (which the outline hooks
+  // always pass), and the cell key stays unset — so the property and its
+  // rows are all invisible until something converges them. Nor does editing
+  // the OWNER help: `collectAffectedProjection` maps a changed row through
+  // its own bit or its parent's, so the owner's own edits don't reproject
+  // its field. It takes a write to that property name (setProperty →
+  // materialize → collapse) or a definition-rename migration. Nothing is
+  // lost and it does converge, but the trade is "temporarily invisible" vs
+  // "silently reaped" — not "visible" vs "reaped".
   if (mode === 'additive' && fieldRows.length > 1) return
   const projected = await firstProjectedFieldValue(tx, schema, fieldRows)
   const nextProperties = {...parent.properties}
