@@ -21,6 +21,7 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
   getRootBlock,
+  blockAfterSubtreeRemoval,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -336,16 +337,28 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
-    // Registered here even though NORMAL_MODE only activates with the vim
-    // plugin, for the same reason the copy actions above were promoted out of
-    // it: an action has to be IN THE REGISTRY to be dispatchable at all, and
-    // the block/swipe menu and the command palette dispatch by id with
-    // supplied deps rather than through an active keyboard context. Defined
-    // only by vim, `delete_block` was absent on a default install — so the
-    // swipe menu rendered a red Delete button that logged "not registered"
-    // and did nothing (`DEFAULT_QUICK_ACTION_ITEMS` lists these three).
-    // The keys still only fire in NORMAL_MODE, so vim stays the thing that
-    // makes them reachable from the keyboard.
+  ]
+
+  /**
+   * Block actions that non-keyboard surfaces dispatch BY ID — the block/swipe
+   * menu (`DEFAULT_QUICK_ACTION_ITEMS` names exactly these three) and the
+   * command palette, both of which supply their own deps rather than going
+   * through an active keyboard context.
+   *
+   * Kept out of the `normalModeActions` group on purpose: that group lives
+   * inside the `system:default-actions` toggle, and an action has to be in the
+   * registry to be dispatchable at all. Defined only by the vim plugin, these
+   * were missing on a default install and the menu's Delete button logged "not
+   * registered" and did nothing; put them in the defaults group instead and the
+   * same button breaks again for anyone who turns default shortcuts off. They
+   * back UI affordances, so their registration can't hang off a keybinding
+   * toggle.
+   *
+   * Their NORMAL_MODE bindings therefore survive that toggle. That costs
+   * nothing in practice: NORMAL_MODE is activated solely by the vim plugin, so
+   * a user without vim sees no binding either way.
+   */
+  const blockSurfaceActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     {...deleteBlockAction, defaultBinding: {keys: ['Delete', 'Backspace', 'd d']}},
     togglePropertiesDisplayAction,
     toggleBlockCollapseAction,
@@ -1161,17 +1174,25 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    *  - the copy while the blocks still exist, in SELECTION order (the delete
    *    runs leaf-first so each removal can't disturb the next, which is not the
    *    order the markdown should come out in);
-   *  - the selection reset only after a delete actually happened, so a refusal
-   *    leaves it intact to narrow and retry.
+   *  - the selection reset only after a delete actually HAPPENED, so a refusal
+   *    leaves it intact to narrow and retry. `deleteBlocksThroughUi` re-asks
+   *    the guards immediately before writing, and a guard is not contracted to
+   *    answer the same way twice — an answer that flips during the clipboard
+   *    write would otherwise clear the selection having deleted nothing.
    *
-   * Focus after the batch is left to the mounted `PanelFocusRecovery`, the same
-   * DOM-side watcher that handles blocks vanishing for any other reason.
+   * Focus is moved explicitly rather than left to `PanelFocusRecovery`: that
+   * watcher is mounted by the spatial-navigation plugin, which is a toggle, so
+   * relying on it would leave focus pointing at a tombstone whenever the plugin
+   * is off. The target is computed BEFORE the delete (it has to be walked while
+   * the tree still exists) from the last selected block, skipping its subtree;
+   * if that lands back inside the selection there is no sensible target and we
+   * leave focus alone.
    */
   const deleteSelectedBlocks = async (
     deps: MultiSelectModeDependencies,
     {copyFirst}: {copyFirst: boolean},
   ): Promise<void> => {
-    const {uiStateBlock, selectedBlocks} = deps
+    const {uiStateBlock, selectedBlocks, scopeRootId} = deps
     if (!selectedBlocks.length) return
 
     const blocks = selectedBlocks.toReversed()
@@ -1181,10 +1202,22 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     // ui-state selection: with supplied deps the two can differ, and the copy
     // would quietly no-op while the delete went ahead.
     if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+
+    const selectedIds = new Set(selectedBlocks.map(block => block.id))
+    const after = scopeRootId
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+      : null
+    const focusTarget = after && !selectedIds.has(after.id) ? after : null
+
+    let deleted = false
     await withMoveTransition(async () => {
-      await deleteBlocksThroughUi(blocks)
+      deleted = await deleteBlocksThroughUi(blocks)
     })
+    if (!deleted) return
     await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    if (focusTarget) {
+      void focusBlock(uiStateBlock, focusTarget.id)
+    }
   }
 
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
@@ -1294,6 +1327,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   return {
     globalActions,
     normalModeActions,
+    blockSurfaceActions,
     editModeCMActions,
     multiSelectModeActions,
   }
@@ -1303,6 +1337,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   const {
     globalActions,
     normalModeActions,
+    blockSurfaceActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
@@ -1310,6 +1345,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   return [
     ...globalActions,
     ...normalModeActions,
+    ...blockSurfaceActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
@@ -1326,6 +1362,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
     globalActions,
     normalModeActions,
+    blockSurfaceActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
@@ -1337,7 +1374,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     ...multiSelectModeActions,
   ] as ActionConfig[]
 
-  return systemToggle({
+  const toggled = systemToggle({
     id: 'system:default-actions',
     name: 'Default keyboard shortcuts',
     description: 'Built-in shortcuts (Enter/Tab/Cmd+K-style). Disabling removes the default bindings; user-defined ones still work.',
@@ -1346,4 +1383,9 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     // (dedupById), so DialogHost is registered once no matter how many
     // dialog-using plugins contribute it.
   }).of([...actions.map(action => actionsFacet.of(action)), dialogAppMountExtension])
+
+  // `blockSurfaceActions` sits OUTSIDE that toggle: the block/swipe menu and
+  // the command palette dispatch those ids directly, so turning default
+  // keybindings off must not un-register the actions their buttons resolve to.
+  return [toggled, ...blockSurfaceActions.map(action => actionsFacet.of(action as ActionConfig))]
 }

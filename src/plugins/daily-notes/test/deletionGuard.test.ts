@@ -16,7 +16,7 @@ import {
   todayIso,
 } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
-import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '../schema.ts'
+import { dailyNoteDateProp } from '../schema.ts'
 import { dailyNoteDateValue } from '../dailyNotes.ts'
 import { dailyNotesDeletionGuard } from '../deletionGuard.ts'
 
@@ -47,21 +47,25 @@ describe('dailyNotesDeletionGuard', () => {
     expect(await dailyNotesDeletionGuard(journal)).toMatch(/Journal/)
   })
 
-  it('keys on identity, not the type chip', async () => {
-    // Types are user-editable, so a type-membership check got both directions
-    // wrong. A real note keeps its protection with the chip removed, and an
-    // ordinary page tagged as a daily note stays deletable.
+  it('recognises a note by either signal, since neither is immutable', async () => {
+    // Either signal suffices, because neither is immutable: dropping the type
+    // chip leaves the id-from-date derivation, and editing the date leaves the
+    // chip. Only stripping both gives up protection.
     const note = await getOrCreateDailyNote(repo, WS, todayIso())
     await note.set(typesProp, [])
     expect(await dailyNotesDeletionGuard(note)).toMatch(/Daily notes/)
+
+    const dated = await getOrCreateDailyNote(repo, WS, todayIso())
+    await dated.set(dailyNoteDateProp, dailyNoteDateValue('1999-01-01'))
+    expect(await dailyNotesDeletionGuard(dated)).toMatch(/Daily notes/)
 
     await repo.tx(async tx => {
       await tx.create({id: 'impostor', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'x'})
     }, {scope: ChangeScope.BlockDefault})
     const impostor = repo.block('impostor')
     await impostor.load()
-    await impostor.set(typesProp, [DAILY_NOTE_TYPE])
     await impostor.set(dailyNoteDateProp, dailyNoteDateValue(todayIso()))
+    // Not at its derived address and not tagged: not a daily note.
     expect(await dailyNotesDeletionGuard(impostor)).toBeNull()
   })
 
