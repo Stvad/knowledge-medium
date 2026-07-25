@@ -295,12 +295,11 @@ export const renderAliasedBlockref = (label: string, id: string): string => {
 export interface SpanReplacement {
   /** Literal text to splice in place of the old span. */
   text: string
-  /** Alias the source's `BlockReference` entry must carry once `text`
-   *  is spliced in — i.e. what a re-parse of `text` produces. Wikilink
-   *  form → the alias; blockref form → the target id (parseReferences
-   *  sets `alias === id` for blockref edges). Keeping this alongside
-   *  the text is what lets a rewriter update content and the stored
-   *  `references` list in lockstep instead of guessing. */
+  /** The alias a re-parse of `text` yields: the alias itself for the
+   *  wikilink form, the normalized target id for the pinned form (the
+   *  grammar makes an aliased blockref's alias its id). Returned
+   *  alongside the text so a rewriter can update content and its stored
+   *  edge list in lockstep instead of re-deriving one from the other. */
   refAlias: string
   /** Normalized target id the spliced text actually binds to, when the
    *  replacement PINS to one. `null` for the wikilink form, which is

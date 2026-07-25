@@ -53,12 +53,8 @@ import {
   generatedSeatFieldIds,
   matchesAliasSeatSeed,
 } from '@/data/targets'
-import {
-  faithfulWikilinkReplacement,
-  pinnedSpanReplacement,
-  rewriteWikilinks,
-  type SpanReplacement,
-} from './referenceParser.ts'
+import { rewriteWikilinks, type SpanReplacement } from './referenceParser.ts'
+import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
@@ -241,19 +237,18 @@ const decodeAliases = (block: BlockData): readonly string[] => {
   }
 }
 
-/** A verified replacement span: the literal text spliced into source
- *  content AND the alias the source's `references` entry must carry
- *  afterwards. Both halves come from the shared round-trip guard, so
- *  they can't drift apart. */
-export type Replacement = SpanReplacement
-
 /** Replacement form for a single removed alias α — the rename ladder,
- *  composed from the whole-span round-trip guard in
- *  `referenceParser.ts`.
+ *  composed from the shared `preferredSpanReplacement` policy.
  *
  *  `null` means "leave every span for this alias alone": no rendering
  *  could carry the reference, so any rewrite would destroy the link
  *  outright. Already reported by the time it returns.
+ *
+ *  R1/R2/A1-cascade: a clean 1-for-1 swap keeps the late-binding
+ *  wikilink form. Everything else (R4/R5/R6/R7, A2-cascade) — and a
+ *  1-for-1 whose new alias isn't wikilink-safe — pins to the target,
+ *  labelled with the REMOVED alias so the source author's display text
+ *  survives.
  *
  *  NOT YET IMPLEMENTED (§11 group 2, tracked on #443): the doc's
  *  marked-row arm — "its lossy-name fallback for marked rows is
@@ -268,42 +263,12 @@ export const replacementFor = (
   removed: readonly string[],
   added: readonly string[],
   targetId: string,
-): Replacement | null => {
-  if (removed.length === 1 && added.length === 1) {
-    // R1/R2/A1-cascade: 1-for-1 swap keeps the late-binding wikilink
-    // form — but only when it roundtrips to the same alias. Known
-    // failures (blank alias, alias containing `]]`) fall through to
-    // the pinned form rather than silently corrupting the backlink.
-    const wikilink = faithfulWikilinkReplacement(added[0])
-    if (wikilink !== null) return wikilink
-  }
-  // R4/R5/R6/R7/A2-cascade (and the wikilink-unsafe 1-for-1 fallback):
-  // aliased blockref preserves the original display text the source
-  // author wrote while pinning to the stable target id.
-  const pinned = pinnedSpanReplacement(alias, targetId)
-  if (pinned === null) {
-    // No renderable pinned form: the aliased grammar is UUID-only, or
-    // the label would smuggle a wikilink opener. Splicing text that
-    // doesn't parse turns a live backlink into prose, irreversibly.
-    // Leaving `[[α]]` is the better of two bad states — NOT because the
-    // stored entry survives (it doesn't: `isRetainableAbsentRef` refuses
-    // every content ref, so the next parse re-seats the span) but
-    // because the span stays a LINK. A re-seat is recoverable and
-    // converges; destroyed text is neither.
-    console.warn(
-      `[${RENAME_BACKLINKS_PROCESSOR}] target "${targetId}" cannot be pinned ` +
-      `(not UUID-shaped); leaving [[${alias}]] spans unrewritten`,
-    )
-    return null
-  }
-  if (pinned.lossyLabel) {
-    console.warn(
-      `[${RENAME_BACKLINKS_PROCESSOR}] pinned span for alias "${alias}" displays ` +
-      `sanitized text (\`]\`/newline stripped, whitespace trimmed); link preserved`,
-    )
-  }
-  return pinned
-}
+): SpanReplacement | null => preferredSpanReplacement({
+  wikilinkAlias: removed.length === 1 && added.length === 1 ? added[0] : null,
+  pinLabel: alias,
+  targetId,
+  context: RENAME_BACKLINKS_PROCESSOR,
+})
 
 /** One rewrite operation applied to a single source. The target pair
  *  plus `refAlias` drive the inline references update: each content ref

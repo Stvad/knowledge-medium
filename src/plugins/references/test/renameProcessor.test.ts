@@ -107,6 +107,15 @@ const seedTarget = async (
   await flush()
 }
 
+/** Content edges from `sourceId` to `targetId`, as the trigger-
+ *  maintained projection sees them. */
+const blockReferences = async (sourceId: string, targetId: string) =>
+  env.h.db.getAll<{alias: string}>(
+    `SELECT alias FROM block_references
+     WHERE source_id = ? AND target_id = ? ORDER BY alias`,
+    [sourceId, targetId],
+  )
+
 const seedSource = async (id: string, content: string): Promise<void> => {
   await env.repo.tx(
     tx => tx.create({id, workspaceId: WS, parentId: null, orderKey: 'b0', content}),
@@ -451,73 +460,49 @@ describe('rename — rapid title edits cascade fully', () => {
 })
 
 describe('rename — replacement form roundtrip safety', () => {
-  // Aliased blockrefs only parse for UUID-shaped target ids (the
-  // grammar pins the id segment to that). Use a real UUID here so
-  // the rewritten content roundtrips through parseReferences and the
-  // backlink survives all the way into `block_references`.
-  const TARGET_UUID = '11111111-2222-4333-8444-555555555555'
-
-  const blockReferences = async (sourceId: string, targetId: string) =>
-    env.h.db.getAll<{alias: string; source_field: string}>(
-      `SELECT alias, source_field FROM block_references
-       WHERE source_id = ? AND target_id = ?
-       ORDER BY alias, source_field`,
-      [sourceId, targetId],
-    )
-
   it('falls back to blockref form when the added alias is blank', async () => {
     // `renderWikilink('')` = `[[]]`, which parseReferences ignores —
     // emitting it would silently drop the backlink. Use blockref form.
-    await seedTarget(TARGET_UUID, 'X', ['Old'])
+    await seedTarget(PIN_TARGET, 'X', ['Old'])
     await seedSource('s', 'see [[Old]] please')
 
     await env.repo.tx(
-      tx => tx.setProperty(TARGET_UUID, aliasesProp, ['']),
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, ['']),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
 
     expect((await env.read('s'))!.content).toBe(
-      `see [Old](((${TARGET_UUID}))) please`,
+      `see [Old](((${PIN_TARGET}))) please`,
     )
     // Backlink must actually resolve: parseReferences re-parses the
-    // rewritten content, the aliased blockref pins to TARGET_UUID,
+    // rewritten content, the aliased blockref pins to PIN_TARGET,
     // and the trigger-maintained `block_references` row carries
-    // alias=TARGET_UUID (the blockref convention — alias === id).
-    expect(await blockReferences('s', TARGET_UUID)).toEqual([
-      {alias: TARGET_UUID, source_field: ''},
-    ])
+    // alias=PIN_TARGET (the blockref convention — alias === id).
+    expect(await blockReferences('s', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
   })
 
   it('falls back to blockref form when the added alias does not roundtrip', async () => {
     // `renderWikilink('foo]]bar')` collapses `]]` to `] ]`; the result
     // parses to `foo] ]bar`, not the original alias. Emitting it
     // would corrupt the backlink text. Blockref form preserves intent.
-    await seedTarget(TARGET_UUID, 'X', ['Old'])
+    await seedTarget(PIN_TARGET, 'X', ['Old'])
     await seedSource('s', 'see [[Old]] please')
 
     await env.repo.tx(
-      tx => tx.setProperty(TARGET_UUID, aliasesProp, ['foo]]bar']),
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, ['foo]]bar']),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
 
     expect((await env.read('s'))!.content).toBe(
-      `see [Old](((${TARGET_UUID}))) please`,
+      `see [Old](((${PIN_TARGET}))) please`,
     )
-    expect(await blockReferences('s', TARGET_UUID)).toEqual([
-      {alias: TARGET_UUID, source_field: ''},
-    ])
+    expect(await blockReferences('s', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
   })
 })
 
 describe('rename — whole-span round-trip guard (§11 group 2)', () => {
-  const blockReferences = async (sourceId: string, targetId: string) =>
-    env.h.db.getAll<{alias: string}>(
-      `SELECT alias FROM block_references WHERE source_id = ? AND target_id = ?`,
-      [sourceId, targetId],
-    )
-
   it('pins a span whose alias only survives sanitization, and reports the changed display text', async () => {
     // `]` is legal inside a wikilink alias (`[[a]b]]` parses to `a]b`)
     // but illegal inside an aliased-blockref label, so the pinned form
@@ -563,7 +548,7 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
 
       expect((await env.read('s'))!.content).toBe('see [[A]] please')
       expect(await blockReferences('s', 't')).toEqual([{alias: 'A'}])
-      expect(warn.mock.calls.flat().join(' ')).toContain('cannot be pinned')
+      expect(warn.mock.calls.flat().join(' ')).toContain('cannot pin a span')
     } finally {
       warn.mockRestore()
     }

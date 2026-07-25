@@ -16,12 +16,11 @@ import {
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import {
-  faithfulWikilinkReplacement,
-  pinnedSpanReplacement,
   rewriteBlockRefs,
   rewriteWikilinks,
   type SpanReplacement,
 } from './referenceParser.ts'
+import { preferredSpanReplacement } from './spanReplacement.ts'
 import { inlineDeletedBlockRefsProcessor } from './inlineDeletedBlockRefsProcessor.ts'
 import { projectedIdOf } from './referenceProjection.ts'
 
@@ -60,33 +59,18 @@ const resolveAliasReplacements = (
 ): Map<string, SpanReplacement> => {
   const out = new Map<string, SpanReplacement>()
   for (const {fromAlias, toAlias} of aliasRewrites) {
-    const wikilink = faithfulWikilinkReplacement(toAlias)
-    if (wikilink !== null) {
-      out.set(fromAlias, wikilink)
-      continue
-    }
-    // The wikilink form can't carry `toAlias`; pin to the merge target
-    // instead. NOTE the label is `toAlias`, not the source author's
-    // original text — an alias-collision merge deliberately re-titles
-    // the span to the surviving name. (`replacementFor` on the rename
-    // side pins the REMOVED alias, which does preserve what the author
-    // wrote; the two look alike and mean different things.)
-    const pinned = pinnedSpanReplacement(toAlias, intoId)
-    if (pinned === null) {
-      console.warn(
-        `[${RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR}] merge target "${intoId}" ` +
-        `cannot be pinned (not UUID-shaped) and alias "${toAlias}" is not ` +
-        `wikilink-safe; leaving [[${fromAlias}]] spans unrewritten`,
-      )
-      continue
-    }
-    if (pinned.lossyLabel) {
-      console.warn(
-        `[${RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR}] pinned span for alias ` +
-        `"${toAlias}" displays sanitized text; link preserved`,
-      )
-    }
-    out.set(fromAlias, pinned)
+    // `pinLabel` is `toAlias`, NOT the source author's original text —
+    // an alias-collision merge deliberately re-titles the span to the
+    // surviving name. (The rename side pins the REMOVED alias, which
+    // does preserve what the author wrote; same ladder, different
+    // label, and the difference matters.)
+    const replacement = preferredSpanReplacement({
+      wikilinkAlias: toAlias,
+      pinLabel: toAlias,
+      targetId: intoId,
+      context: RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR,
+    })
+    if (replacement !== null) out.set(fromAlias, replacement)
   }
   return out
 }
