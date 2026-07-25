@@ -263,6 +263,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // workout would be marked done with all its pre-filled sets still open.
       const flushed = draftRef.current.map(ex => ({...ex, sets: ex.sets.map(s => ({...s}))}))
       for (const [i, ex] of flushed.entries()) {
+        // Nothing accepted and nothing on disk: creating blocks here only to
+        // prune them two lines later is pure churn (and, after an or-group
+        // switch, a create→delete round trip on every Finish).
+        if (!ex.blockId && !ex.sets.some(s => s.done)) continue
         for (const [j, set] of ex.sets.entries()) {
           const blockId = await resolveSetBlock(flushed, i, j)
           if (!blockId) continue
@@ -275,7 +279,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       }
 
       const wid = workoutIdRef.current
-      if (!wid) throw new Error('Could not create the workout')
+      if (!wid) {
+        // Only reachable if the session was switched out from under this
+        // Finish — the create then keeps its ids rather than pointing the new
+        // draft at the old workout. Say so instead of throwing into a void
+        // click handler, where it would surface as nothing at all.
+        setStatus('Session changed while finishing — nothing was logged. Try again.')
+        return
+      }
 
       const pending = detectPendingLayoff(history, day, config)
       if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
