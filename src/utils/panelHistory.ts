@@ -468,13 +468,6 @@ export const navigateInPanel = async (
   await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel', {viewMode: options.viewMode})
 }
 
-/** True once `block`'s row is loaded and live (not tombstoned/missing). */
-export const isBlockLive = async (block: Block): Promise<boolean> => {
-  if (block.peek()) return true
-  await block.load()
-  return block.peek() !== null
-}
-
 /**
  * Drop entries from the top of one of a panel's stacks while the destination is
  * gone, so the next consumer lands on something live.
@@ -499,7 +492,7 @@ const pruneDeadTop = async (
   for (;;) {
     const top = panelHistory.peek(panelBlock.id, side)
     if (!top) return
-    if (top.blockId !== alsoDeadId && await isBlockLive(panelBlock.repo.block(top.blockId))) return
+    if (top.blockId !== alsoDeadId && await panelBlock.repo.exists(top.blockId)) return
     // Compare-and-swap on the entry we just inspected: a navigation during the
     // await above pushes a NEW entry onto this same stack, and a blind drop
     // would discard THAT instead of the dead one — losing the user's way back
@@ -590,7 +583,7 @@ export const recoverPanelOffDeadContent = async (
     // `!== deadBlockId` is belt-and-braces — a resolver is contracted to
     // decline the excluded id (`WorkspaceLandingContext.excludeBlockId`) — but
     // landing here would strand the pane right back on the tombstone.
-    if (fallbackId && fallbackId !== deadBlockId && (await isBlockLive(repo.block(fallbackId)))) {
+    if (fallbackId && fallbackId !== deadBlockId && (await repo.exists(fallbackId))) {
       targetId = fallbackId
     }
   }

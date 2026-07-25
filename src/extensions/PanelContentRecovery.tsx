@@ -1,8 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
-import { usePropertyValue } from '@/hooks/block.js'
-import { useBlockExists } from '@/hooks/block.js'
+import { useBlockExists, usePropertyValue } from '@/hooks/block.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import {
   panelHasSeenLive,

@@ -6,7 +6,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties.js'
 import { panelRenderScopeId } from '@/utils/renderScope'
-import { goBackInPanel, isBlockLive, navigateInPanel, panelHistory } from '@/utils/panelHistory'
+import { goBackInPanel, navigateInPanel, panelHistory } from '@/utils/panelHistory'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 const focusVideoNoteChild = async (
@@ -118,7 +118,7 @@ export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
     // older, unrelated page. Neither is "close the notes view"; clearing the
     // mode in place is.
     if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE
-      && await isBlockLive(panelBlock.repo.block(backTop.blockId))
+      && await panelBlock.repo.exists(backTop.blockId)
       && await goBackInPanel(panelBlock)) {
       return
     }
