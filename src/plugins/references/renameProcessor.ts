@@ -66,7 +66,18 @@ export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
  *  children signal from inverting after the workspace flip. In an
  *  UN-flipped workspace the caller passes ids that match nothing, so any
  *  live child blocks: there, a `reference_target_id` match under a seat
- *  is by construction user-authored content, not machinery. */
+ *  is by construction user-authored content, not machinery.
+ *
+ *  The subtraction requires `is_field_form = 1` as well as the target
+ *  match, because `reference_target_id` alone does not say "generated
+ *  field row": `core.deriveReferenceTarget` stamps the column on ANY
+ *  whole-block reference, so a child the user wrote as a bare
+ *  `((alias-property-definition))` ref carries the same target id with
+ *  the `::` marker bit unset. Subtracting on the id alone would read
+ *  that hand-written child as machinery and let a seat the user has
+ *  already adopted be re-keyed (and later reaped). `IS NOT 1` rather
+ *  than `= 0` per the column's convention — it is nullable, and `= 0`
+ *  would drop every untouched row to SQL NULL. */
 const SEAT_COLUMNS_SQL = (t: string, generatedFieldIdCount: number) => `
          ${t}.id AS targetId,
          ${t}.content AS targetContent,
@@ -77,7 +88,8 @@ const SEAT_COLUMNS_SQL = (t: string, generatedFieldIdCount: number) => `
            SELECT 1 FROM blocks child
            WHERE child.parent_id = ${t}.id
              AND child.deleted = 0
-             AND (child.reference_target_id IS NULL
+             AND (child.is_field_form IS NOT 1
+                  OR child.reference_target_id IS NULL
                   OR child.reference_target_id NOT IN (${
                     Array.from({length: generatedFieldIdCount}, () => '?').join(', ')
                   }))
@@ -329,7 +341,13 @@ export interface Rewrite {
    *  says today. Usually the renaming block; a window-bound span
    *  carries the α-seat instead. Matching key for the entry swap. */
   fromTargetId: string
-  /** Where the replacement text points — always the renaming block. */
+  /** Where the replacement text points — always the renaming block,
+   *  and always its id EXACTLY. The wikilink branch stores `after.id`
+   *  directly; the pinned branch stores what a re-parse of the spliced
+   *  span yields, and `pinnedSpanReplacement` now refuses any target
+   *  whose id does not survive that round trip character-for-character.
+   *  `aliasStillReleased` leans on this to recognize the renaming block
+   *  among α's claimants, so the two must not drift apart. */
   toTargetId: string
   refAlias: string
   /** This alias's seat-slot window, carried so the write phase can
@@ -466,7 +484,29 @@ export const applyRefRewrites = (
   for (const ref of refs) {
     const sourceField = ref.sourceField ?? ''
     if (sourceField !== '') { next.push(ref); continue }
-    const swapped = swaps.get(key(ref.id, ref.alias))
+    let swapped = swaps.get(key(ref.id, ref.alias))
+    if (swapped === undefined) {
+      // The edge may have MOVED since the plan recorded `fromTargetId`.
+      // `references.parseReferences` can re-derive this source's
+      // unchanged `[[α]]` onto a freshly minted α-seat in the gap between
+      // the read phase and this write tx, and nothing upstream catches
+      // that: `applyPlan`'s guard compares CONTENT, which a re-derive
+      // does not touch, and the claimant re-assert deliberately permits a
+      // pristine seat. Keying the swap on the stale `fromTargetId` alone
+      // would then rewrite the content while leaving the stored edge on
+      // the seat — self-healing at the next re-parse, but until then a
+      // rapid second rename enumerating by that edge misses this source
+      // and strands the span on an intermediate name.
+      //
+      // The seat slots are the same window the read phase already treats
+      // as this rename's own artifacts, and by this point
+      // `aliasStillReleased` has confirmed no non-seat claimant holds α —
+      // so an edge parked at one of them is machinery to follow, not a
+      // third party to leave alone. Checked only as a FALLBACK so an
+      // exact `(fromTargetId, alias)` hit keeps its existing precedence.
+      const moved = rewrites.find(rw => rw.alias === ref.alias && rw.seatIds.has(ref.id))
+      if (moved !== undefined) swapped = {id: moved.toTargetId, alias: moved.refAlias}
+    }
     next.push(swapped === undefined ? ref : {...ref, id: swapped.id, alias: swapped.alias})
   }
   return normalizeReferences(next)
@@ -515,11 +555,33 @@ const aliasStillReleased = (
     const claimants = await tx.aliasClaimants(rewrite.alias, workspaceId)
     // A gap-arriving claimant sitting at one of this alias's seat slots
     // is a fresh mint or a pristine-tombstone restore — machinery, not a
-    // successor. Anything else vetoes. The shape checks the read phase
-    // runs are deliberately skipped here: `Tx` returns whole blocks, and
-    // re-deriving `matchesAliasSeatSeed` in-tx would gate a data-loss
-    // guard on a stricter predicate than the hazard needs.
-    return claimants.every(claimant => rewrite.seatIds.has(claimant.id))
+    // successor. Anything else vetoes.
+    //
+    // The slot id ALONE does not say that, and testing it alone was
+    // wrong in the one direction that costs data. Seats are adopted IN
+    // PLACE: a page born by typing `[[α]]` keeps its `computeAliasSeatId`
+    // slot id forever, so the renaming block is itself very often a
+    // member of `seatIds` for the alias it is releasing. An undo (or any
+    // later tx re-adding α to that same block) then comes back from
+    // `aliasClaimants` and passed a slot-id-only test — certifying "still
+    // released" for an alias that is live again on the original owner,
+    // and splicing every backlink away from it irreversibly.
+    //
+    // So: the renaming block never exempts itself (if it claims α, α was
+    // not released, whatever shape it has), and every other claimant must
+    // still LOOK like a pristine seat. That last part restores the shape
+    // half of the read phase's `isWindowMintedAliasSeat`; only the
+    // timestamp leg is dropped, since `aliasClaimants` hands back whole
+    // blocks and nothing in a `BlockData` dates the mint any better than
+    // the read phase already did. Being stricter here is the safe
+    // direction — an over-veto leaves `[[α]]` late-binding to the seat,
+    // which is the pre-existing behaviour.
+    return claimants.every(claimant =>
+      claimant.id !== rewrite.toTargetId
+      && rewrite.seatIds.has(claimant.id)
+      && claimant.content === rewrite.alias
+      && matchesAliasSeatSeed(claimant),
+    )
   })()
   cache.set(key, pending)
   return pending

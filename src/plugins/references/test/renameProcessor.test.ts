@@ -22,6 +22,7 @@ import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
+import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
   applyRefRewrites,
@@ -652,6 +653,31 @@ describe('applyRefRewrites — surgical entry swap', () => {
       [rw({})],
     )).toEqual([{id: PIN_TARGET, alias: 'Win', sourceField: 'ref'}])
   })
+
+  it('follows an edge that MOVED to a seat after the plan was built', async () => {
+    // `fromTargetId` is a read-phase snapshot. `references.parseReferences`
+    // can rebind this source's unchanged `[[Win]]` onto a freshly minted
+    // Win-seat in the gap before the write tx — content untouched, so
+    // `applyPlan`'s content guard never sees it, and the claimant
+    // re-assert deliberately permits a pristine seat. Matching the stale
+    // id alone rewrites the content while stranding the edge on the seat.
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    expect(applyRefRewrites(
+      [{id: seatId, alias: 'Win'}],
+      [rw({fromTargetId: PIN_TARGET, seatIds: new Set([seatId])})],
+    )).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
+  })
+
+  it('leaves an edge alone when its target is neither planned nor a seat slot', async () => {
+    // The seat fallback is scoped to THIS alias's slot window, so an edge
+    // pointing at some unrelated block that shares the alias text is not
+    // ours to move.
+    const other = '99999999-8888-4777-8666-555555555555'
+    expect(applyRefRewrites(
+      [{id: other, alias: 'Win'}],
+      [rw({fromTargetId: PIN_TARGET, seatIds: new Set([computeAliasSeatId('Win', WS, 0)])})],
+    )).toEqual([{id: other, alias: 'Win'}])
+  })
 })
 
 describe('rename — seat classification hardening (#443 group 2 review)', () => {
@@ -733,6 +759,54 @@ describe('rename — seat classification hardening (#443 group 2 review)', () =>
     expect(seatChildren.every(c => c.content.startsWith('::'))).toBe(true)
     expect((await env.read('s'))!.content).toBe(`see [Win](((${PIN_TARGET}))) please`)
   })
+
+  it('counts a hand-written ref to a generated field definition as a blocking child', async () => {
+    // The generated-children subtraction matches on `reference_target_id`,
+    // but that column is stamped on ANY whole-block reference, not just
+    // generated field rows: a child the user wrote as a bare
+    // `((alias-property-definition))` carries the same target id with the
+    // `::` marker bit unset. Subtracting on the id alone reads that
+    // hand-written child as machinery, so a seat the user has already
+    // adopted classifies as pristine — its backlinks get re-keyed, and
+    // the orphan reaper is then free to delete the child with it.
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    const aliasFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await ensureAliasTarget(tx, env.repo, 'Win', WS)
+      // `core.deriveReferenceTarget` is a SAME-tx processor, so this
+      // child's derived columns are already stamped when the post-commit
+      // rename pass reads them.
+      await tx.create({
+        id: 'uc', workspaceId: WS, parentId: seatId, orderKey: 'm0',
+        content: `((${aliasFieldId}))`,
+      })
+      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // The child really does carry the generated field's target id with the
+    // marker bit unset — without this the test passes for the wrong
+    // reason (an unstamped child blocks on the `IS NULL` leg anyway).
+    const child = (await env.h.db.get<{reference_target_id: string | null; is_field_form: number | null}>(
+      `SELECT reference_target_id, is_field_form FROM blocks WHERE id = 'uc'`))!
+    expect(child.reference_target_id).toBe(aliasFieldId)
+    expect(child.is_field_form).not.toBe(1)
+
+    // Blocked: the seat carries user content, so it is not this window's
+    // machinery and `[[Win]]` keeps late-binding to it.
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
 })
 
 describe('rename — claimant re-assert inside the write tx (#443 group 2 review)', () => {
@@ -779,6 +853,76 @@ describe('rename — claimant re-assert inside the write tx (#443 group 2 review
 
     // Untouched — `[[Shared]]` still late-binds, and now to U.
     expect((await env.read('s'))!.content).toBe('see [[Shared]] please')
+  })
+
+  it('vetoes the renaming block itself when it re-claims the alias from its own seat slot', async () => {
+    // Seats are adopted IN PLACE — a page born by typing `[[Win]]` keeps
+    // its `computeAliasSeatId` slot id forever — so the renaming block is
+    // very often a member of the seat window for the alias it is
+    // releasing. Exempting claimants on the slot id ALONE therefore reads
+    // an undo (the same block taking `Win` back in the gap) as "still
+    // released", and R1 rewrites every `[[Win]]` to `[[Won]]`, a name
+    // nothing claims once the undo lands. The block is left pristine here
+    // deliberately: it satisfies every SHAPE check a real window seat
+    // does, so only "you are the block being renamed" can veto it.
+    await seedSource('s', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    expect(await blockReferences('s', seatId)).toEqual([{alias: 'Win'}])
+    // Snapshot the pristine seat row so the re-claim below restores it
+    // EXACTLY — content equal to the alias, properties matching
+    // `aliasSeatSeed`, id in the slot window. Restoring BOTH columns is
+    // what an undo does, and it is what makes this sharp: every shape
+    // signal then says "pristine window seat", and only identity says
+    // otherwise. (Content has to come back too because the alias plugin
+    // renames a seat's content along with its alias, so a
+    // properties-only restore would trip the content check instead.)
+    const pristine = (await env.read(seatId))!
+    expect(pristine.content).toBe('Win')
+
+    const realTx = env.repo.tx.bind(env.repo)
+    let injected = false
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementation((async (fn: never, opts: never) => {
+      const description = (opts as {description?: string} | undefined)?.description
+      if (!injected && description?.includes(RENAME_BACKLINKS_PROCESSOR)) {
+        injected = true
+        // `Win` comes back to the very block that released it. Written
+        // RAW, the shape a sync-applied re-claim has: `block_aliases` is
+        // trigger-maintained so the claim is live immediately, but no
+        // post-commit pass fires. That matters — a re-claim through
+        // `repo.tx` would queue a rename of its own behind this one and
+        // quietly rewrite `[[Won]]` back to `[[Win]]`, laundering the
+        // damage and making this test pass no matter what the guard does.
+        await env.h.db.writeTransaction(async tx => {
+          await tx.execute(
+            `UPDATE blocks SET content = ?, properties_json = ? WHERE id = ?`,
+            [pristine.content, pristine.properties_json, seatId],
+          )
+        })
+      }
+      return realTx(fn, opts)
+    }) as never)
+
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty(seatId, aliasesProp, ['Won']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+      expect(injected).toBe(true)
+    } finally {
+      txSpy.mockRestore()
+    }
+
+    // The block really did end up looking exactly like a pristine window
+    // seat for 'Win' again — the state in which only identity can veto.
+    const seat = (await env.read(seatId))!
+    expect(seat.content).toBe('Win')
+    expect(seat.properties_json).toBe(pristine.properties_json)
+
+    // `Win` is live again on that same block, so the span stays put.
+    // Without the veto this becomes `[[Won]]` — a name nothing claims.
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+    expect(await blockReferences('s', seatId)).toEqual([{alias: 'Win'}])
   })
 })
 

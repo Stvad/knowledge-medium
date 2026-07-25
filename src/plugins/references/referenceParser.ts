@@ -355,7 +355,18 @@ export const pinnedSpanReplacement = (
   if (marks.length !== 1) return null
   const [mark] = marks
   if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
-  if (mark.blockId !== targetId.toLowerCase()) return null
+  // EXACT, not `targetId.toLowerCase()`. The parser canonicalizes
+  // UUID-shaped ids to lowercase, so comparing against a pre-lowered
+  // target re-states the parser's rule here and certifies a round trip
+  // that did not happen: for a caller-supplied upper-case id (`tx.create`
+  // and the agent bridge both accept caller ids verbatim, and SQLite
+  // compares `blocks.id` case-sensitively) the check would pass while the
+  // spliced text and the stored edge bind to a lowercase id no row has.
+  // `referenceBlockContentForId` rejects this same divergence on the
+  // `((id))` form for the same reason (PR #386 review); a whole-span guard
+  // that tolerates it is strictly worse than one that refuses, because the
+  // caller then leaves the span alone instead of re-pointing it at nothing.
+  if (mark.blockId !== targetId) return null
   // The span must also be INERT under the other grammar sharing this
   // text. `renderAliasedBlockref` strips `]` and newlines but keeps `[`,
   // so a label like `a[[b` renders a perfectly valid aliased blockref

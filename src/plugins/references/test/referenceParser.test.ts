@@ -445,6 +445,22 @@ Another [[normal-ref]]
       expect(pinnedSpanReplacement('Plain', 'not-a-uuid')).toBeNull()
     })
 
+    it('refuses a target id the parser would canonicalize away', () => {
+      // `parseBlockRefs` lower-cases UUID-shaped ids, but `blocks.id` is
+      // compared case-sensitively and both `tx.create` and the agent
+      // bridge accept caller-supplied ids verbatim. So an upper-case
+      // target renders a span that binds to a lowercase id no row has —
+      // and comparing the parse against `targetId.toLowerCase()` would
+      // certify exactly that as a faithful round trip. Same divergence
+      // `referenceBlockContentForId` rejects on the `((id))` form.
+      // Hex LETTERS, so the id actually has a case to differ in.
+      const mixed = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+      const upper = mixed.toUpperCase()
+      expect(upper).not.toBe(mixed)
+      expect(pinnedSpanReplacement('Plain', mixed)).not.toBeNull()
+      expect(pinnedSpanReplacement('Plain', upper)).toBeNull()
+    })
+
     it('refuses a pinned span whose label smuggles a wikilink opener', () => {
       // `renderAliasedBlockref` strips `]` and newlines but NOT `[`, so
       // this renders a valid aliased blockref that also carries an
