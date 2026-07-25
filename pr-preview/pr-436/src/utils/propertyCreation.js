@@ -1,2 +1,0 @@
-import{showPropertiesProp as e}from"../data/properties.js";import{requestPropertyCreate as t}from"./propertyNavigation.js";var n=async(n,r)=>{if(r.isReadOnly)return!1;let i=n.peek()??await n.load(),a=i?.parentId;return!i||!a||(await r.query.childIds({id:n.id,hidePropertyChildren:!1}).load()).length>0||Object.keys(i.properties).length>0?!1:(await r.block(a).set(e,!0),t({blockId:a}),await n.delete(),!0)};export{n as convertEmptyChildBlockToProperty};
-//# sourceMappingURL=propertyCreation.js.map
