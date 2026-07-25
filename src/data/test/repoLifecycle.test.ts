@@ -13,6 +13,10 @@
  *   - activeLayoutSessionId getter/setter round-trip; falls back to the
  *     per-device base id when unset (replaces the old module-global
  *     `activeLayoutSessionId` store's own unit tests)
+ *   - repo.client (ClientContext): user exposure, per-instance
+ *     independence, and shim ⇄ client state sharing — the acting-as
+ *     state has one home on ClientContext and Repo's public
+ *     user/activeWorkspaceId/activeLayoutSessionId API delegates to it
  *   - instanceId is unique across Repo constructions (memoize-key
  *     contract used by globalState.ts)
  *
@@ -51,6 +55,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {kernelDataExtension} from '@/data/kernelDataExtension'
 import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
+import { ClientContext, type ClientContextReader } from '../clientContext'
 
 interface Harness {
   h: TestDb
@@ -438,6 +443,57 @@ describe('repo.activeLayoutSessionId', () => {
     } finally {
       await other.h.cleanup()
     }
+  })
+})
+
+describe('repo.client (ClientContext)', () => {
+  // `repo.client` is publicly typed as `ClientContextReader` (no set
+  // methods — see clientContext.ts) so production code can't bypass Repo's
+  // transition. These tests deliberately reach the CONCRETE ClientContext
+  // to prove ITS OWN bare-write contract (no Repo side effects; one shared
+  // home for the field) — the thing only the concrete class can exercise.
+  // Never do this cast outside a test.
+  const asConcrete = (client: ClientContextReader): ClientContext => client as ClientContext
+
+  it('exposes the acting user; repo.user delegates to it', () => {
+    expect(env.repo.client.user).toEqual({id: 'user-1'})
+    expect(env.repo.user).toBe(env.repo.client.user)
+  })
+
+  it('is per-Repo-instance (independent acting-as state)', async () => {
+    const other = await setup()
+    try {
+      expect(other.repo.client).not.toBe(env.repo.client)
+      asConcrete(env.repo.client).setActiveLayoutSessionId('mine')
+      expect(other.repo.client.activeLayoutSessionId).toBe('base-session-id')
+    } finally {
+      asConcrete(env.repo.client).setActiveLayoutSessionId(null)
+      await other.h.cleanup()
+    }
+  })
+
+  it('layout-session fallback + set round-trip directly via repo.client', () => {
+    expect(env.repo.client.activeLayoutSessionId).toBe('base-session-id')
+    asConcrete(env.repo.client).setActiveLayoutSessionId('perspective-direct')
+    expect(env.repo.client.activeLayoutSessionId).toBe('perspective-direct')
+    // The Repo shims read/write the SAME state — one home for the field.
+    expect(env.repo.activeLayoutSessionId).toBe('perspective-direct')
+    env.repo.setActiveLayoutSessionId(null)
+    expect(env.repo.client.activeLayoutSessionId).toBe('base-session-id')
+  })
+
+  it('workspace pin state is shared between the Repo shim and client reads', () => {
+    expect(env.repo.client.activeWorkspaceId).toBeNull()
+    env.repo.setActiveWorkspaceId('ws-client')
+    expect(env.repo.client.activeWorkspaceId).toBe('ws-client')
+    env.repo.setActiveWorkspaceId(null)
+    expect(env.repo.client.activeWorkspaceId).toBeNull()
+    // Reverse direction: a bare client write (no Repo side effects — see
+    // ClientContext's doc) is visible through the Repo shim, pinning that
+    // there is exactly one home for the field.
+    asConcrete(env.repo.client).setActiveWorkspaceId('ws-direct')
+    expect(env.repo.activeWorkspaceId).toBe('ws-direct')
+    asConcrete(env.repo.client).setActiveWorkspaceId(null)
   })
 })
 

@@ -67,7 +67,7 @@ const getLayoutSessionStorageTarget = (): LayoutSessionStorageTarget | null => {
  *  getLayoutSessionId instead of the injected channel" case the rule is
  *  otherwise guarding against.
  *
- *  @ambient allowIn: src/utils/layoutSessionId.ts, src/data/repo.ts, src/bootstrap/workspaceBootstrap.ts, src/utils/test/layoutSessionId.test.ts
+ *  @ambient allowIn: src/utils/layoutSessionId.ts, src/data/clientContext.ts, src/bootstrap/workspaceBootstrap.ts, src/utils/test/layoutSessionId.test.ts
  *  @ambientMessage getLayoutSessionId is the per-device base id (boot seed only). Use repo.activeLayoutSessionId in imperative code, or the layoutSessionBlockId block context in the render tree (PR 2).
  */
 export const getLayoutSessionId = (): string => {

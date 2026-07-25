@@ -63,8 +63,10 @@ import { Repo } from '@/data/repo'
  *  must NOT also be facade overrides (double-listing is asserted). */
 const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   // ── reads (getters / pure lookups) ──
-  activeWorkspaceId: 'getter read',
-  activeLayoutSessionId: 'getter read',
+  activeWorkspaceId: 'getter read (delegates to the shared ClientContext)',
+  activeLayoutSessionId: 'getter read (delegates to the shared ClientContext)',
+  user: 'getter read (delegates to the shared ClientContext)',
+  client: 'getter read — narrows the private `_client` field to ClientContextReader (see its SAFE_INSTANCE_FIELDS entry); assigns nothing',
   facetRuntime: 'getter read',
   propertiesPageId: 'getter read',
   propertyEditorOverrides: 'getter read',
@@ -166,8 +168,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  `(x as any).field =` dynamic write would escape the inventory —
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
-  _activeWorkspaceId: 'data field',
-  _activeLayoutSessionId: 'data field',
   _propertyDefinitionRegistry: 'data field',
   _previousPropertyDefinitionRegistry: 'data field',
   _typeDefinitionRegistry: 'data field',
@@ -179,6 +179,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   _workspaceBackfills: 'data field',
   blockFacades: 'shared identity map (facade never mints into it — `block` override)',
   cache: 'shared object',
+  _client: 'shared ClientContext — captures no repo; interior state mutated only via its own set methods (reached through the delegated setActiveWorkspaceId / setActiveLayoutSessionId overrides); exposed publicly only as the narrower ClientContextReader via the `client` getter',
   db: 'shared object',
   dbMetrics: 'shared object',
   facetBridge: 'collaborator constructor-bound to the real repo',
@@ -212,7 +213,6 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   txLog: 'shared array (mutated in place, never reassigned outside constructor)',
   typeTagger: 'collaborator constructor-bound to the real repo — facade hosts its own for addType & co.',
   undoManagers: 'shared map (values capture no repo)',
-  user: 'data field',
   userErrorListeners: 'shared CallbackSet',
   userSchemas: 'stateful service constructor-bound to the real repo — documented group-escaping',
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
