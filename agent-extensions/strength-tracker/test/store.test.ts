@@ -1,8 +1,8 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildHistory, buildLayoffs} from '../src/km/history'
+import {buildAltChoices, buildHistory, buildLayoffs, buildLiveWorkouts} from '../src/km/history'
 import {dateToDay, dayToDate} from '../src/km/day'
-import {FIELD, type StoredSet} from '../src/km/fields'
+import {FIELD} from '../src/km/fields'
 import {detectLeftRightAsymmetry, shoulderChecklist} from '../src/engine/shoulder'
 import type {WorkoutRecord} from '../src/engine/types'
 
@@ -26,38 +26,91 @@ describe('day round-trip', () => {
   })
 })
 
+const setBlock = (id: string, parentId: string, orderKey: string, weight: number, reps: number, extra: Array<[string, unknown]> = []) =>
+  block(id, parentId, orderKey, encode([[FIELD.weight, weight], [FIELD.reps, reps], [FIELD.todoStatus, 'done'], ...extra]))
+
 describe('buildHistory', () => {
-  it('assembles workouts and their exercise entries from encoded blocks', () => {
-    const sets: StoredSet[] = [{weight: 135, reps: 10}, {weight: 135, reps: 10}, {weight: 135, reps: 10}]
+  it('assembles workouts, exercise entries, and their done set blocks', () => {
     const workout = block('w1', 'page', 'a0', encode([
       [FIELD.session, 'A'],
       [FIELD.date, dayToDate('2026-07-16')],
+      [FIELD.status, 'done'],
     ]))
-    const bench = block('e1', 'w1', 'a0', encode([
-      [FIELD.exercise, 'Bench press'],
-      [FIELD.sets, sets],
-      [FIELD.prescribedSets, 3],
-    ]))
-    const row = block('e2', 'w1', 'a1', encode([
-      [FIELD.exercise, 'Bent-over row'],
-      [FIELD.sets, [{weight: 95, reps: 8}]],
-    ]))
+    const bench = block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press'], [FIELD.prescribedSets, 3]]))
+    const row = block('e2', 'w1', 'a1', encode([[FIELD.exercise, 'Bent-over row']]))
+    const sets = [
+      setBlock('s1', 'e1', 'a0', 135, 10),
+      setBlock('s2', 'e1', 'a1', 135, 10),
+      setBlock('s3', 'e2', 'a0', 95, 8),
+      // an un-accepted set is ignored
+      block('s4', 'e1', 'a2', encode([[FIELD.weight, 135], [FIELD.reps, 4], [FIELD.todoStatus, 'open']])),
+    ]
 
-    const history = buildHistory([workout], [bench, row])
+    const history = buildHistory([workout], [bench, row], sets)
     expect(history).toHaveLength(1)
     expect(history[0].session).toBe('A')
     expect(dateToDay(new Date(history[0].date))).toBe('2026-07-16')
     expect(history[0].exercises.map(e => e.exercise)).toEqual(['Bench press', 'Bent-over row'])
-    expect(history[0].exercises[0].sets).toEqual(sets)
+    expect(history[0].exercises[0].sets).toEqual([{weight: 135, reps: 10}, {weight: 135, reps: 10}])
     expect(history[0].exercises[0].prescribedSets).toBe(3)
   })
 
-  it('orders workouts by logged date and entries by order key', () => {
-    const mk = (id: string, day: string) => block(id, 'page', 'a0', encode([
-      [FIELD.session, 'A'], [FIELD.date, dayToDate(day)],
+  it('carries the definition link so progression can follow a renamed lift', () => {
+    const workout = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, dayToDate('2026-07-16')], [FIELD.status, 'done'],
     ]))
-    const history = buildHistory([mk('w2', '2026-07-23'), mk('w1', '2026-07-16')], [])
+    const bench = block('e1', 'w1', 'a0', encode([
+      [FIELD.exercise, 'Bench press'], [FIELD.definition, 'def-bench'],
+    ]))
+    const history = buildHistory([workout], [bench], [setBlock('s1', 'e1', 'a0', 135, 10)])
+    expect(history[0].exercises[0].definitionId).toBe('def-bench')
+  })
+
+  it('excludes in-progress workouts from history', () => {
+    const wip = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, dayToDate('2026-07-16')], [FIELD.status, 'in-progress'],
+    ]))
+    expect(buildHistory([wip], [], [])).toHaveLength(0)
+  })
+
+  it('orders workouts by logged date', () => {
+    const mk = (id: string, day: string) => block(id, 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, dayToDate(day)], [FIELD.status, 'done'],
+    ]))
+    const history = buildHistory([mk('w2', '2026-07-23'), mk('w1', '2026-07-16')], [], [])
     expect(history.map(w => w.id)).toEqual(['w1', 'w2'])
+  })
+})
+
+describe('buildLiveWorkouts', () => {
+  it('surfaces only in-progress workouts, keeping every set (done or not) with its id', () => {
+    const wip = block('w9', 'page', 'a0', encode([
+      [FIELD.session, 'B'], [FIELD.date, dayToDate('2026-07-19')], [FIELD.status, 'in-progress'],
+    ]))
+    const squat = block('e9', 'w9', 'a0', encode([[FIELD.exercise, 'Squat'], [FIELD.unit, 'lb']]))
+    const sets = [
+      setBlock('s1', 'e9', 'a0', 185, 8),
+      block('s2', 'e9', 'a1', encode([[FIELD.weight, 185], [FIELD.reps, 8], [FIELD.todoStatus, 'open']])),
+    ]
+    const live = buildLiveWorkouts([wip], [squat], sets)
+    expect(live).toHaveLength(1)
+    expect(live[0]).toMatchObject({id: 'w9', day: '2026-07-19', session: 'B'})
+    expect(live[0].exercises[0].id).toBe('e9')
+    expect(live[0].exercises[0].sets.map(s => [s.id, s.done])).toEqual([['s1', true], ['s2', false]])
+  })
+})
+
+describe('buildAltChoices', () => {
+  it('maps each answered or-group to its tracked option', () => {
+    const choice = (id: string, group: string, option: string) =>
+      block(id, 'settings', id, encode([[FIELD.choiceGroup, group], [FIELD.choiceOption, option]]))
+    expect(buildAltChoices([choice('c1', 'g1', 'opt-rdl'), choice('c2', 'g2', 'opt-ohp')]))
+      .toEqual({g1: 'opt-rdl', g2: 'opt-ohp'})
+  })
+
+  it('ignores a half-written choice rather than guessing', () => {
+    const orphan = block('c1', 'settings', 'a0', encode([[FIELD.choiceGroup, 'g1']]))
+    expect(buildAltChoices([orphan])).toEqual({})
   })
 })
 

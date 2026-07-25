@@ -52,15 +52,29 @@ export const modalWeight = (sets: readonly SetRecord[]): number | undefined => {
 export const workingWeight = (entry: ExerciseRecord): number | undefined =>
   modalWeight(progressionSets(entry.sets))
 
+/** Does this logged entry belong to the exercise we're asking about?
+ *
+ *  Identity wins over spelling: when the entry and the config both name a
+ *  plan block, only that decides — so renaming a lift in the plan keeps its
+ *  progression line, and two same-named definitions stay separate lines.
+ *  Whenever either side lacks one (entries logged before the plan blocks
+ *  were typed, a hand-written plan, callers that only know a name) it falls
+ *  back to matching the name, which is what the log has always used. */
+const entryMatches = (entry: ExerciseRecord, exercise: string, defId?: string): boolean =>
+  defId !== undefined && entry.definitionId !== undefined
+    ? entry.definitionId === defId
+    : entry.exercise === exercise
+
 /** Most recent logged entry for an exercise, or undefined. `history` may
  *  arrive in any order; the caller's day ordering is not assumed. */
 export const lastEntryFor = (
   history: readonly WorkoutRecord[],
   exercise: string,
+  defId?: string,
 ): {workout: WorkoutRecord; entry: ExerciseRecord} | undefined => {
   let best: {workout: WorkoutRecord; entry: ExerciseRecord} | undefined
   for (const workout of history) {
-    const entry = workout.exercises.find(e => e.exercise === exercise)
+    const entry = workout.exercises.find(e => entryMatches(e, exercise, defId))
     if (!entry || entry.sets.length === 0) continue
     if (!best || workout.date > best.workout.date) best = {workout, entry}
   }

@@ -18,10 +18,15 @@ export const isFullSession = (session: SessionType): boolean =>
   session === 'A' || session === 'B'
 
 export interface ExerciseConfig {
-  /** Canonical name; the join key against `strength:exercise` on logged
-   *  entries. Renaming here without renaming logged blocks starts a new
-   *  progression line, which is why the UI edits config rather than code. */
+  /** Canonical name; the human-readable join key against
+   *  `strength:exercise` on logged entries, and the only one available for
+   *  a hand-typed plan line. */
   name: string
+  /** The plan block this exercise is defined by, when the config was read
+   *  from an outline. Logged entries record it too, which is what lets a
+   *  rename keep its progression line: identity beats spelling whenever
+   *  both sides have it (see `lastEntryFor`). */
+  defId?: string
   session: SessionType
   /** Working sets prescribed at full health. */
   sets: number
@@ -49,7 +54,25 @@ export interface ExerciseConfig {
   catchUpRpe?: number
   /** Demo/technique links lifted from the plan line's markdown links. */
   videos?: readonly ExerciseVideo[]
+  /** When this exercise is the resolved option of a plan `or`-group: the
+   *  group's stable key (the group block id) and every option in the slot.
+   *  The engine ignores these — they exist so the UI can offer a switch, and
+   *  so a switch reselects a different option of the same slot. */
+  altGroupKey?: string
+  altOptions?: readonly AltOption[]
 }
+
+/** One option of an `or`-group. Carries the block behind it when the plan is
+ *  a typed outline, so a choice survives renaming the option. */
+export interface AltOption {
+  name: string
+  defId?: string
+}
+
+/** How an option is addressed once chosen (stored in the plan's
+ *  `strength:default` and in the user's `altChoices`): the block id when
+ *  there is one, else the name — which is all a hand-written plan has. */
+export const altOptionKey = (option: AltOption): string => option.defId ?? option.name
 
 export interface ExerciseVideo {
   label: string
@@ -147,6 +170,8 @@ export interface SetRecord {
 
 export interface ExerciseRecord {
   exercise: string
+  /** The plan block this was performed from, when known. */
+  definitionId?: string
   /** What the engine asked for at the time. Kept so progression judges
    *  "all prescribed sets" against the prescription that was actually
    *  live, not against today's config. */
@@ -180,6 +205,9 @@ export interface LayoffRecord {
 
 export interface PrescribedExercise {
   exercise: string
+  /** Plan block behind this prescription — recorded on the logged entry so
+   *  the log links back to the program. */
+  defId?: string
   sets: number
   repMin?: number
   repMax?: number
@@ -190,6 +218,8 @@ export interface PrescribedExercise {
   freeform: boolean
   note?: string
   videos?: readonly ExerciseVideo[]
+  altGroupKey?: string
+  altOptions?: readonly AltOption[]
   /** One line explaining where `weight` came from. Always shown: the
    *  plan's whole point is that the number is never a mystery. */
   rationale: string

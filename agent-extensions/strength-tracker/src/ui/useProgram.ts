@@ -19,8 +19,9 @@ import type {LayoffRecord, Prescription, ProgramConfig, SessionType, WorkoutReco
 import {DEFAULT_CONFIG} from '../program/defaults'
 import {loadConfig} from '../km/config'
 import {getOrCreateSettingsBlock} from '../km/page'
-import {buildHistory, buildLayoffs} from '../km/history'
-import {EXERCISE_ENTRY_TYPE, LAYOFF_TYPE, WORKOUT_TYPE} from '../km/fields'
+import {writeAltChoice} from '../km/store'
+import {buildHistory, buildLayoffs, buildLiveWorkouts, type LiveWorkout} from '../km/history'
+import {EXERCISE_ENTRY_TYPE, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from '../km/fields'
 
 export interface ProgramState {
   config: ProgramConfig
@@ -29,10 +30,16 @@ export interface ProgramState {
   settingsBlockId: string | null
   history: readonly WorkoutRecord[]
   layoffs: readonly LayoffRecord[]
+  /** In-progress (unfinished) workouts, block-backed with set ids. */
+  liveWorkouts: readonly LiveWorkout[]
   day: string
   session: SessionType
   setSession: (session: SessionType | null) => void
   prescription: Prescription
+  /** Track a different option of a plan `or`-group, by its option key
+   *  (`altOptionKey`). `label` is the option's name — it becomes the choice
+   *  block's readable content. */
+  setAltChoice: (groupKey: string, optionKey: string, label: string) => void
   reload: () => void
 }
 
@@ -65,9 +72,17 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
 
   const workoutRows = useBlockQuery({workspaceId, types: [WORKOUT_TYPE]})
   const exerciseRows = useBlockQuery({workspaceId, types: [EXERCISE_ENTRY_TYPE]})
+  const setRows = useBlockQuery({workspaceId, types: [SET_TYPE]})
   const layoffRows = useBlockQuery({workspaceId, types: [LAYOFF_TYPE]})
 
-  const history = useMemo(() => buildHistory(workoutRows, exerciseRows), [workoutRows, exerciseRows])
+  const history = useMemo(
+    () => buildHistory(workoutRows, exerciseRows, setRows),
+    [workoutRows, exerciseRows, setRows],
+  )
+  const liveWorkouts = useMemo(
+    () => buildLiveWorkouts(workoutRows, exerciseRows, setRows),
+    [workoutRows, exerciseRows, setRows],
+  )
   const layoffs = useMemo(() => buildLayoffs(layoffRows), [layoffRows])
 
   const day = useMemo(() => trainingDay(now, config.dayRolloverHour), [now, config.dayRolloverHour])
@@ -84,10 +99,16 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     settingsBlockId,
     history,
     layoffs,
+    liveWorkouts,
     day,
     session: prescription.session,
     setSession: setSessionOverride,
     prescription,
+    setAltChoice: (groupKey, optionKey, label) => {
+      if (!settingsBlockId) return
+      void writeAltChoice(repo, settingsBlockId, groupKey, optionKey, label)
+        .then(() => setReloadKey(k => k + 1))
+    },
     reload: () => setReloadKey(k => k + 1),
   }
 }
