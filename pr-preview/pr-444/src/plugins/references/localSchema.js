@@ -15,6 +15,9 @@ var e=`
   CREATE INDEX IF NOT EXISTS idx_block_references_target
   ON block_references (target_id, workspace_id)
 `,r=`
+  CREATE INDEX IF NOT EXISTS idx_block_references_ws_alias
+  ON block_references (workspace_id, alias)
+`,i=`
   CREATE TRIGGER IF NOT EXISTS blocks_references_insert
   AFTER INSERT ON blocks
   WHEN NEW.deleted = 0
@@ -36,7 +39,7 @@ var e=`
         );
 `.trim())(`NEW`)}
   END
-`,i=`
+`,a=`
   CREATE TRIGGER IF NOT EXISTS blocks_references_update
   AFTER UPDATE OF references_json, deleted, workspace_id ON blocks
   BEGIN
@@ -57,23 +60,23 @@ var e=`
         OR typeof(json_extract(je.value, '$.sourceField')) = 'text'
       );
   END
-`,a=`
+`,o=`
   CREATE TRIGGER IF NOT EXISTS blocks_references_delete
   AFTER DELETE ON blocks
   BEGIN
     DELETE FROM block_references WHERE source_id = OLD.id;
   END
-`,o=`block_references_backfill_v1`,s=`block_references_source_field_v1`,c=`
-  SELECT 1 FROM client_schema_state WHERE key = '${o}'
-`,l=`
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${o}', strftime('%s', 'now') * 1000)
-`,u=`
+`,s=`block_references_backfill_v1`,c=`block_references_source_field_v1`,l=`
   SELECT 1 FROM client_schema_state WHERE key = '${s}'
-`,d=`
+`,u=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES ('${s}', strftime('%s', 'now') * 1000)
+`,d=`
+  SELECT 1 FROM client_schema_state WHERE key = '${c}'
 `,f=`
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${c}', strftime('%s', 'now') * 1000)
+`,p=`
   INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)
   SELECT
     b.id,
@@ -89,5 +92,5 @@ var e=`
       json_type(je.value, '$.sourceField') IS NULL
       OR typeof(json_extract(je.value, '$.sourceField')) = 'text'
     )
-`,p=async e=>{await e.getOptional(c)===null&&(await e.execute(f),await e.execute(l))},m=[`blocks_references_insert`,`blocks_references_update`,`blocks_references_delete`],h=async e=>{if(await e.getOptional(u)===null){for(let t of m)await e.execute(`DROP TRIGGER IF EXISTS ${t}`);await e.execute(`DROP TABLE IF EXISTS block_references`),await e.execute(t),await e.execute(n),await e.execute(r),await e.execute(i),await e.execute(a),await e.execute(f),await e.execute(d)}},g={id:`references.local-schema`,statements:[e,t,n,r,i,a],triggerNames:m,backfills:[{id:`references.block-references-source-field`,run:h},{id:`references.block-references-backfill`,run:p}]};export{f as BACKFILL_BLOCK_REFERENCES_SQL,o as BLOCK_REFERENCES_BACKFILL_MARKER_KEY,s as BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY,m as BLOCK_REFERENCES_TRIGGER_NAMES,a as CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,r as CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,i as CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,e as CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,t as CREATE_BLOCK_REFERENCES_TABLE_SQL,n as CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,l as RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL,d as RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL,c as SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL,u as SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL,p as backfillBlockReferencesIfEmpty,h as backfillBlockReferencesSourceFieldIfNeeded,g as referencesLocalSchema};
+`,m=async e=>{await e.getOptional(l)===null&&(await e.execute(p),await e.execute(u))},h=[`blocks_references_insert`,`blocks_references_update`,`blocks_references_delete`],g=async e=>{if(await e.getOptional(d)===null){for(let t of h)await e.execute(`DROP TRIGGER IF EXISTS ${t}`);await e.execute(`DROP TABLE IF EXISTS block_references`),await e.execute(t),await e.execute(n),await e.execute(i),await e.execute(a),await e.execute(o),await e.execute(p),await e.execute(f)}},_={id:`references.local-schema`,statements:[e,t,n,r,i,a,o],triggerNames:h,backfills:[{id:`references.block-references-source-field`,run:g},{id:`references.block-references-backfill`,run:m}]};export{p as BACKFILL_BLOCK_REFERENCES_SQL,s as BLOCK_REFERENCES_BACKFILL_MARKER_KEY,c as BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY,h as BLOCK_REFERENCES_TRIGGER_NAMES,o as CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,i as CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,a as CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,e as CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,t as CREATE_BLOCK_REFERENCES_TABLE_SQL,n as CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,r as CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL,u as RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL,f as RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL,l as SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL,d as SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL,m as backfillBlockReferencesIfEmpty,g as backfillBlockReferencesSourceFieldIfNeeded,_ as referencesLocalSchema};
 //# sourceMappingURL=localSchema.js.map
