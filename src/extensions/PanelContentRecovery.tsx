@@ -9,7 +9,7 @@ import {
   recoverPanelOffDeadContent,
   rememberPanelSeenLive,
 } from '@/utils/panelHistory.js'
-import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
+import { isBlockTombstoned } from '@/data/blockLiveness.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
 
 /**
@@ -91,7 +91,6 @@ export function PanelContentRecovery({block}: {block: Block}) {
     // bookmark, a shared link, a browser-history entry for a since-deleted
     // page).
     let cancelled = false
-    let disposeSyncWait: (() => void) | undefined
 
     const armRecovery = () => {
       if (cancelled) return
@@ -123,26 +122,24 @@ export function PanelContentRecovery({block}: {block: Block}) {
         armRecovery()
         return
       }
-      // Never live in this pane. A missing local row means "deleted" OR "hasn't
-      // replicated yet", and those are indistinguishable here — so wait for the
-      // initial sync to settle and re-ask before concluding it's gone. Without
-      // this, opening a valid shared link in a not-yet-synced workspace would
-      // bounce the pane to the landing page and canonicalize the URL, losing
-      // the deep link. In a local-only/offline session `onFirstSync` never
-      // fires, which is the safe outcome: leave the pane where it is.
-      // Cast per the established idiom (see startup-metrics/record.ts): the
-      // Repo's wrapped db type doesn't declare the optional sync-status fields,
-      // and onFirstSync treats an object without them as already-synced.
-      disposeSyncWait = onFirstSync(block.repo.db as unknown as SyncStatusDb, () => {
-        void shown.load().then(afterSync => {
-          if (!cancelled && !afterSync) armRecovery()
-        })
+      // Never live in this pane, so `load()` returning null is ambiguous:
+      // deleted, or simply not replicated here yet. Ask the row directly and
+      // recover ONLY on a real tombstone — a missing row means "unknown", and
+      // moving the pane off a valid deep link that is still syncing would lose
+      // it (the layout projection then rewrites the URL in place, so browser
+      // Back can't get it back either).
+      //
+      // An earlier version waited on `onFirstSync` instead. That gate was
+      // vacuous: PowerSync's `hasSynced` persists across sessions (see
+      // repoProvider's "already completed in a prior session" note), so on every
+      // warm client the callback fired synchronously and decided nothing.
+      void isBlockTombstoned(block.repo, topLevelBlockId).then(tombstoned => {
+        if (!cancelled && tombstoned) armRecovery()
       })
     })
 
     return () => {
       cancelled = true
-      disposeSyncWait?.()
       if (timerRef.current != null) {
         clearTimeout(timerRef.current)
         timerRef.current = null

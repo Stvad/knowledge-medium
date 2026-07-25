@@ -2,7 +2,14 @@
  * The single choke point for deleting a block **from the UI**.
  *
  * Every user-initiated delete goes through here so the deletion guards
- * (`blockDeletionGuardsFacet`) are consulted exactly once, in one place. The
+ * (`blockDeletionGuardsFacet`) are consulted in one place.
+ *
+ * Scope: the guards are asked about the blocks the GESTURE targets, not about
+ * every block the delete will tombstone. `block.delete()` cascades through
+ * `deleteSubtreeInTx`, so a guarded block sitting under a deleted ancestor goes
+ * with it, unasked. That's deliberate — this is a UI affordance stopping a
+ * keystroke from doing something pointless, not an immortality bit — but don't
+ * read the guards as a subtree-wide protection when adding one. The
  * previous shape — each handler calling `block.delete()` and remembering to ask
  * first — lasted one commit before diverging: `delete_block` checked,
  * `delete_empty_block_cm` and `cut_selected_blocks` did not, so `Delete` on a

@@ -241,10 +241,6 @@ export class PanelHistoryStore {
     const seen = this.seenLive.get(panelId)
     if (seen) seen.add(blockId)
     else this.seenLive.set(panelId, new Set([blockId]))
-    // Observing it live retires any recorded death: undo restores blocks, and a
-    // stale "confirmed deleted" would keep the layout projection overwriting
-    // the restored page's browser-history entry for the rest of the session.
-    unmarkBlockConfirmedDeleted(blockId)
   }
 
   hasSeenLive(panelId: string, blockId: string): boolean {
@@ -323,9 +319,11 @@ export const panelHistory = new PanelHistoryStore()
  * whether a hash entry is worth keeping in browser history — ask here instead
  * of inferring from that marker.
  *
- * Only ids that failed a re-verified liveness check are recorded, so a
- * membership answer is a fact rather than a heuristic. Ids only, bounded by
- * deletes observed in one session, and never persisted.
+ * Recorded only when recovery actually moved a pane off the block, and only
+ * for blocks it established were gone (watched live and then vanished, or
+ * confirmed tombstoned by `isBlockTombstoned`). Retracted the moment any pane
+ * sees the block live again. Ids only, bounded by deletes observed in one
+ * session, and never persisted.
  */
 const confirmedDeletedBlockIds = new Set<string>()
 
@@ -353,8 +351,15 @@ export const __resetConfirmedDeletedForTesting = (): void => {
 
 /** Free functions over the store's seen-live memory, so the recovery watchdog
  *  doesn't reach for the store instance directly. */
-export const rememberPanelSeenLive = (panelId: string, blockId: string): void =>
+export const rememberPanelSeenLive = (panelId: string, blockId: string): void => {
   panelHistory.rememberSeenLive(panelId, blockId)
+  // Observing it live retires any recorded death: undo restores blocks, and a
+  // stale "confirmed deleted" would keep the layout projection overwriting the
+  // restored page's browser-history entry for the rest of the session. Done
+  // here rather than inside the store method so a non-singleton store (the unit
+  // tests build one) can't mutate module-global state as a side effect.
+  unmarkBlockConfirmedDeleted(blockId)
+}
 
 export const panelHasSeenLive = (panelId: string, blockId: string): boolean =>
   panelHistory.hasSeenLive(panelId, blockId)
@@ -587,10 +592,6 @@ export const recoverPanelOffDeadContent = async (
     panelBlock.peekProperty(topLevelBlockIdProp) === deadBlockId
     && !repo.block(deadBlockId).peek()
   if (!stillStranded()) return
-  // We've now verified this block is gone (the caller re-checked, and so did
-  // we). Record it, so the layout projection can tell a real delete from a
-  // row that merely hasn't synced — it can't get that from the cache.
-  markBlockConfirmedDeleted(deadBlockId)
 
   await pruneDeadTop(panelBlock, 'back', deadBlockId)
   const dest = panelHistory.peek(panelBlock.id, 'back')
@@ -606,6 +607,11 @@ export const recoverPanelOffDeadContent = async (
   }
   if (!stillStranded()) return
   if (targetId) {
+    // Record the confirmed delete only now that we're actually moving the pane
+    // off it. Marking before knowing a destination exists left a STRANDED pane's
+    // page recorded as dead, which then made every later navigation out of that
+    // pane replace its history entry instead of pushing.
+    markBlockConfirmedDeleted(deadBlockId)
     if (dest) panelHistory.dropTop(panelBlock.id, 'back', dest)
     panelHistory.enqueueRestore(panelBlock.id, dest?.state)
     await transactPanelContent(

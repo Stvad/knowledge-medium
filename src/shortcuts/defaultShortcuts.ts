@@ -1046,6 +1046,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
 
+        // Ask the deletion guards BEFORE any side effect — the merge destroys
+        // `nextVisible`, so a guarded page must not be folded away. This has to
+        // precede the editor re-arm below: that dispatch is a real doc change,
+        // so CodeMirror's onChange fires and `pushChange` persists the
+        // concatenated text ~300ms later. Guarding after it left the refusal
+        // path writing the merged content while the other block survived —
+        // silent duplication on exactly the blocks the guard protects.
+        // (Forward-delete at doc end is a CM no-op, so returning before
+        // `preventDefault` loses nothing.)
+        if (!await ensureDeletableThroughUi([nextVisible])) return
+
         // CodeMirror's forward-delete at doc end is a no-op, but stop the
         // event anyway to avoid any chance of double-handling.
         trigger.preventDefault()
@@ -1067,10 +1078,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
           selection: EditorSelection.cursor(joinOffset),
         })
-
-        // Same as the Backspace merge, but here it's the NEXT block that gets
-        // destroyed — Delete-at-end-of-line must not fold a guarded page away.
-        if (!await ensureDeletableThroughUi([repo.block(fromId)])) return
 
         // Single tx: flush the editor's live content into `into` first so
         // core.merge concatenates the latest text, then fold `next` in.

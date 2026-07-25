@@ -19,6 +19,7 @@
  */
 import type { WorkspaceLandingResolver } from '@/extensions/core.js'
 import { dailyNoteBlockId, getOrCreateDailyNote, journalBlockId, todayIso } from './dailyNotes.ts'
+import { anyBlockTombstoned } from '@/data/blockLiveness.js'
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
   repo,
@@ -45,14 +46,10 @@ export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
     // recovering after a Journal delete would resurrect it and hang a fresh
     // daily note under it.
     //
-    // Read the rows directly: `block.load()` returns null for BOTH a tombstone
-    // and a missing row, and markMissing's the tombstone on the way, so the
-    // Block facade can't tell "deleted" (decline) from "never existed"
-    // (creating it is fine and wanted).
-    const rows = await repo.db.getAll<{deleted: number}>(
-      'SELECT deleted FROM blocks WHERE id IN (?, ?)', [id, journalBlockId(workspaceId)],
-    )
-    if (rows.some(row => row.deleted === 1)) return null
+    // `anyBlockTombstoned` reads the rows directly because the Block facade
+    // can't tell "deleted" (decline) from "never existed" (creating it is fine
+    // and wanted) — see its docblock.
+    if (await anyBlockTombstoned(repo, [id, journalBlockId(workspaceId)])) return null
   }
   const dailyNote = await getOrCreateDailyNote(repo, workspaceId, iso)
   return dailyNote.id

@@ -775,6 +775,79 @@ describe('default CodeMirror shortcuts', () => {
     expect(await childIds('current')).toEqual(['child'])
   })
 
+  it('a guarded next block is not merged away — and the editor is left untouched', async () => {
+    // A merge DESTROYS the next block (`core.merge` soft-deletes its `from`),
+    // so it needs the deletion guards. The editor assertion is the load-bearing
+    // one: this handler re-arms CodeMirror with the concatenated text, and that
+    // dispatch is a real doc change, so `onChange` → debounced `pushChange`
+    // persists it. Guarding after the dispatch (as the first version did) left
+    // a refused merge writing the merged content while the next block survived.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    // No half-applied merge parked in the editor waiting to be flushed.
+    expect(editorView.state.doc.toString()).toBe('current')
+  })
+
+  it('a guarded block is not merged away by Backspace at offset 0', async () => {
+    // The Backspace twin of the above: this branch merges the CURRENT block
+    // into the previous one, which destroys the current block.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'protected')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('protected'),
+      editorView: codeMirrorEditorView('protected', 0),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(env.repo.block('first').peek()?.content).toBe('first')
+  })
+
   it('merges the next block into the current block when pressing delete at block end', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
