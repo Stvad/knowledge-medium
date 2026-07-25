@@ -32,6 +32,15 @@ export interface ProgramState {
   layoffs: readonly LayoffRecord[]
   /** In-progress (unfinished) workouts, block-backed with set ids. */
   liveWorkouts: readonly LiveWorkout[]
+  /** Has the plan outline been read yet?
+   *
+   *  `config` is seeded synchronously with plan-faithful defaults so the
+   *  surface is usable the instant it mounts — but those defaults carry no
+   *  plan-block ids, and a logged entry's block id is DERIVED from its plan
+   *  block. Writing before this is true derives name-keyed ids for records
+   *  that already exist under defId-keyed ones, i.e. a whole parallel set of
+   *  blocks. Read-only surfaces can ignore it; the write path must not. */
+  configLoaded: boolean
   day: string
   session: SessionType
   setSession: (session: SessionType | null) => void
@@ -45,6 +54,7 @@ export interface ProgramState {
 
 export const useProgram = (repo: Repo, workspaceId: string, pageId: string): ProgramState => {
   const [config, setConfig] = useState<ProgramConfig>(DEFAULT_CONFIG)
+  const [configLoaded, setConfigLoaded] = useState(false)
   const [warnings, setWarnings] = useState<readonly string[]>([])
   const [planRootId, setPlanRootId] = useState<string | null>(null)
   const [settingsBlockId, setSettingsBlockId] = useState<string | null>(null)
@@ -59,11 +69,20 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
       const settingsId = await getOrCreateSettingsBlock(repo, workspaceId, pageId).catch(() => null)
       if (cancelled) return
       setSettingsBlockId(settingsId)
-      const loaded = await loadConfig(repo, workspaceId, settingsId)
-      if (cancelled) return
-      setConfig(loaded.config)
-      setWarnings(loaded.warnings)
-      setPlanRootId(loaded.planRootId)
+      try {
+        const loaded = await loadConfig(repo, workspaceId, settingsId)
+        if (cancelled) return
+        setConfig(loaded.config)
+        setWarnings(loaded.warnings)
+        setPlanRootId(loaded.planRootId)
+      } catch (error) {
+        console.error('[strength] could not read the plan outline', error)
+      } finally {
+        // Settled either way — including when the read FAILED and we kept the
+        // defaults. This gates writing, and blocking logging forever on an
+        // unreadable plan is worse than logging against the default names.
+        if (!cancelled) setConfigLoaded(true)
+      }
     })()
     return () => {
       cancelled = true
@@ -100,6 +119,7 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     history,
     layoffs,
     liveWorkouts,
+    configLoaded,
     day,
     session: prescription.session,
     setSession: setSessionOverride,

@@ -126,6 +126,20 @@ describe('overlayLiveValues', () => {
     expect(next[0].sets[0]).toMatchObject({weight: 135, done: false})
   })
 
+  it('leaves a set with a write in flight alone — the block is behind, not ahead', () => {
+    // The tap already happened and its write is still going. "The block wins"
+    // here reverts the user's own checkbox in front of them, and during an
+    // "all ✓" loop it ripples through every set the loop hasn't reached yet.
+    const draft = materialized()
+    draft[0].sets[0] = {...draft[0].sets[0], done: true}
+    const next = overlayLiveValues(
+      draft,
+      liveWith([{id: 's0', weight: 135, reps: 10, done: false}]),
+      new Set(['s0']),
+    )
+    expect(next).toBe(draft)
+  })
+
   it('ignores sets with no block yet, and touches no structure', () => {
     const draft = buildDraft(prescription(), 'lb')
     expect(overlayLiveValues(draft, liveWith([{id: 's0', weight: 999, reps: 1, done: true}]))).toBe(draft)

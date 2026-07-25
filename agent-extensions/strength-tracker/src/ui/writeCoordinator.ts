@@ -40,7 +40,7 @@ export interface ResolvedWrite {
 /** The writes this coordinator orchestrates but never performs. */
 export interface WriteEffects {
   createWorkout(draft: readonly DraftExercise[]): Promise<MaterializedWorkout>
-  createExercise(workoutId: string, exercise: DraftExercise): Promise<ExerciseEntryIds>
+  createExercise(workoutId: string, exercise: DraftExercise, exIdx: number): Promise<ExerciseEntryIds>
 }
 
 /** Identity of an exercise ROW, so switching the same slot twice doesn't
@@ -124,12 +124,13 @@ export const createWriteCoordinator = (
   const createExerciseOnce = async (
     key: string,
     exercise: DraftExercise,
+    exIdx: number,
     forWorkoutId: string,
     effects: WriteEffects,
   ): Promise<{value: ExerciseEntryIds; stale: boolean}> => {
     const at = generation
     const running = creatingExercises.get(key)
-      ?? effects.createExercise(forWorkoutId, exercise).catch(error => {
+      ?? effects.createExercise(forWorkoutId, exercise, exIdx).catch(error => {
         if (at === generation && creatingExercises.get(key) === running) creatingExercises.delete(key)
         throw error
       })
@@ -219,6 +220,7 @@ export const createWriteCoordinator = (
       const {value, stale} = await createExerciseOnce(
         exerciseKey(exercise, exIdx),
         exercise,
+        exIdx,
         workoutId,
         effects,
       )

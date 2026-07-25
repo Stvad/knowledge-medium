@@ -162,6 +162,58 @@ describe('getOrCreateTypedChild', () => {
       ...over,
     }), {scope: ChangeScope.BlockDefault})
 
+  it('gives different identities different records, and the same key different records per namespace', async () => {
+    // Without this the suite passes with `derivedBlockId` ignoring the key
+    // entirely — every other test uses one key against a fresh db, so none of
+    // them can tell. This is the property the namespaces exist for.
+    const a = await record('ws-1|2026-07-24|A')
+    const b = await record('ws-1|2026-07-24|B')
+    expect(a.id).not.toBe(b.id)
+
+    const otherNamespace = await repo.tx(tx => getOrCreateTypedChild(repo, tx, {
+      identity: {namespace: 'f1e2d3c4-b5a6-4978-8a9b-0c1d2e3f4a5b', key: 'ws-1|2026-07-24|A'},
+      parentId: 'parent',
+      types: [recordType.id],
+    }), {scope: ChangeScope.BlockDefault})
+    expect(otherNamespace).toEqual({status: 'created', id: expect.any(String)})
+    expect(otherNamespace.id).not.toBe(a.id)
+
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', ['parent'],
+    )
+    expect(rows).toHaveLength(3)
+  })
+
+  it('adopts within a single transaction, since the probe must see its own insert', async () => {
+    // Two rows of one draft resolving the same identity inside ONE tx. If
+    // `tx.get` ever stopped reading through to the transaction's own writes,
+    // both would insert and the second would throw DuplicateIdError.
+    const [first, second] = await repo.tx(async tx => [
+      await getOrCreateTypedChild(repo, tx, {
+        identity: identity('same-tx'), parentId: 'parent', types: [recordType.id],
+      }),
+      await getOrCreateTypedChild(repo, tx, {
+        identity: identity('same-tx'), parentId: 'parent', types: [recordType.id],
+      }),
+    ], {scope: ChangeScope.BlockDefault})
+
+    expect(first.status).toBe('created')
+    expect(second.status).toBe('adopted')
+    expect(second.id).toBe(first.id)
+  })
+
+  it('mints pristine, so two devices deriving one id both yield to the server', async () => {
+    // Not cosmetic: syncObserver/reconcile.ts's invariant I1 treats equal
+    // NONZERO stamps as the same write. Two devices minting the same derived
+    // id in the same millisecond would produce equal nonzero stamps from
+    // different writes, and the insert-or-skip loser would strand forever.
+    const {id} = await record('pristine')
+    const [row] = await sharedDb.db.getAll<{updated_at: number}>(
+      'SELECT updated_at FROM blocks WHERE id = ?', [id],
+    )
+    expect(row.updated_at).toBe(0)
+  })
+
   it('creates once and adopts thereafter, so a repeated create converges on one block', async () => {
     const first = await record('ws-1|2026-07-24|A')
     const second = await record('ws-1|2026-07-24|A')

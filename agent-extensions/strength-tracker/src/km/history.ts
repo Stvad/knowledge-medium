@@ -154,7 +154,10 @@ export interface LiveWorkout {
   exercises: LiveExercise[]
 }
 
-const toLiveSet = (row: RowLike): LiveSet => ({
+/** Exported because the WRITE side needs it too: a set write is a patch
+ *  merged over what the block currently holds, and this is the one decoder
+ *  that says what "currently holds" means. */
+export const toLiveSet = (row: RowLike): LiveSet => ({
   id: row.id,
   weight: num(row, FIELD.weight, 0),
   reps: num(row, FIELD.reps, 0),
@@ -181,10 +184,21 @@ export const matchLiveExercises = (
   live: LiveWorkout | undefined,
 ): (LiveExercise | undefined)[] => {
   if (!live) return rows.map(() => undefined)
-  const byName = new Map(live.exercises.map(e => [e.exercise, e]))
-  const byDefId = new Map(
-    live.exercises.filter(e => e.definitionId !== undefined).map(e => [e.definitionId as string, e]),
-  )
+  // FIRST wins, not last. Two entries can share a key — that is exactly the
+  // case the write side's `occurrence` counter exists for — and they are
+  // ordered the same way the draft's rows are, so row 0 must see entry 0.
+  // `new Map(pairs)` keeps the LAST of each key, which handed row 0 the
+  // second entry's blocks and left row 1 with nothing.
+  const first = (pick: (e: LiveExercise) => string | undefined): Map<string, LiveExercise> => {
+    const byKey = new Map<string, LiveExercise>()
+    for (const e of live.exercises) {
+      const key = pick(e)
+      if (key !== undefined && !byKey.has(key)) byKey.set(key, e)
+    }
+    return byKey
+  }
+  const byName = first(e => e.exercise)
+  const byDefId = first(e => e.definitionId)
   const claimed = new Set<string>()
   return rows.map(row => {
     const match = (row.defId !== undefined ? byDefId.get(row.defId) : undefined) ?? byName.get(row.name)

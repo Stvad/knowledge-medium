@@ -18,7 +18,7 @@
 
 import { v5 as uuidv5 } from 'uuid'
 import type { AnyPropertyAssignment, BlockData, BlockReference, Tx, TypeRegistrySnapshot } from './api'
-import { createChild } from './mutators'
+import { createChild, orderKeyForInsert } from './mutators'
 import type { Repo } from './repo'
 
 export interface TypedChildSpec {
@@ -115,10 +115,20 @@ export interface DerivedIdentity {
   key: string
 }
 
-/** The block id a `DerivedIdentity` resolves to. `slot` > 0 addresses the
- *  fallbacks `getOrCreateTypedChild` probes when earlier ones are taken. */
+/** The block id a `DerivedIdentity` resolves to AT `slot`.
+ *
+ *  Not a lookup: an identity whose earlier slots are occupied lives at a
+ *  later one, so `repo.load(derivedBlockId(identity))` can hand you the
+ *  discarded or finished occupant of slot 0. Only `getOrCreateTypedChild`
+ *  knows which slot is current.
+ *
+ *  The slot varies the NAMESPACE rather than the key, so the slot can't be
+ *  spelled inside a key: with a `${key}#${slot}` suffix, identity `"Row#1"`
+ *  at slot 0 and identity `"Row"` at slot 1 hash the same string and two
+ *  different records land on one row. Slot 0 is a bare `uuidv5(key,
+ *  namespace)`, matching every other derived id in the app. */
 export const derivedBlockId = (identity: DerivedIdentity, slot = 0): string =>
-  uuidv5(slot === 0 ? identity.key : `${identity.key}#${slot}`, identity.namespace)
+  uuidv5(identity.key, slot === 0 ? identity.namespace : uuidv5(`slot/${slot}`, identity.namespace))
 
 export type DerivedChildOutcome =
   /** Nothing was there; the record was written from `spec`. */
@@ -129,10 +139,18 @@ export type DerivedChildOutcome =
 
 export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id'> {
   identity: DerivedIdentity
-  /** May this existing block serve as the record? Soft-deleted blocks are
-   *  never offered (a deleted record was deleted on purpose, and silently
-   *  resurrecting it is worse than making a new one). Default: any live
-   *  block is adoptable. Return false and the next slot is probed. */
+  /** May this existing block serve as the record? Soft-deleted blocks and
+   *  blocks in another workspace are never offered (a deleted record was
+   *  deleted on purpose, and silently resurrecting it is worse than making a
+   *  new one). Default: any live block is adoptable. Return false and the
+   *  next slot is probed.
+   *
+   *  `block.properties` is the RAW bag: codec-ENCODED (a `date` reads as an
+   *  ISO string, a `ref` as an id) and keyed by the literal property name
+   *  with no schema resolution, so a renamed or shadowed property reads as
+   *  `undefined`. Comparing a `Date` against it silently takes the wrong
+   *  branch. Decode through the schema's codec for anything that isn't a
+   *  plain string or number. */
   adoptable?: (block: BlockData) => boolean
   /** How many slots to probe before giving up. Each rejected slot is a real
    *  record that already occupies this identity — a discarded workout, or a
@@ -153,6 +171,18 @@ export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id'> {
  * read absent and both create. A derived id sidesteps the race instead of
  * narrowing it — both writers produce the SAME block id, so they converge on
  * one row at sync instead of leaving a duplicate nobody can reach.
+ *
+ * Know what that convergence is and isn't. It is row-level: you get one
+ * record instead of two. It is NOT a merge — the losing insert is skipped
+ * whole (`apply_block_creates` is insert-or-touch), and later edits settle
+ * column-wise last-write-wins. So values only one writer ever wrote, and
+ * which nothing re-asserts afterwards, are lost with the race. If a record's
+ * FIELDS are genuinely written by two parties, this primitive gives you one
+ * row and one winner, not both writers' data.
+ *
+ * "One live record per identity" is likewise the honest-but-narrower "the
+ * first adoptable slot": restoring a tombstone (undo of a delete) can put a
+ * second live record on a later slot, and nothing here detects that.
  *
  * ```ts
  * await repo.tx(async tx => {
@@ -176,12 +206,18 @@ export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id'> {
  * there — or leave the old kind on its hand-rolled lookup and use this for
  * the next one.
  *
- * On adopt, `content` and `properties` are deliberately NOT applied: the
+ * On adopt, everything describing the record's CONTENT — `content`,
+ * `properties`, `position`, `references` — is deliberately not applied: the
  * block on disk holds real state, and overwriting it with the defaults this
  * caller happens to hold is the data loss the whole primitive exists to
- * avoid. Callers wanting upsert semantics write their properties after the
+ * avoid (a caller's default `position` would also re-home a record the user
+ * moved). Callers wanting upsert semantics write their properties after the
  * call, where the intent is explicit. Missing `types` ARE re-tagged, so a
  * record that lost a type tag repairs itself.
+ *
+ * A caller that adopts must not then blind-write its own snapshot over the
+ * record — that hands back with one statement exactly what the adopt
+ * protected. Write the fields you actually changed.
  */
 export const getOrCreateTypedChild = async (
   repo: Repo,
@@ -190,19 +226,68 @@ export const getOrCreateTypedChild = async (
 ): Promise<DerivedChildOutcome> => {
   const {identity, adoptable, maxSlots: slotLimit, ...childSpec} = spec
   const maxSlots = slotLimit ?? 16
+
+  const parent = await tx.get(childSpec.parentId)
+  if (!parent || parent.deleted) {
+    throw new Error(`getOrCreateTypedChild: parent ${childSpec.parentId} is missing or deleted`)
+  }
+
+  const adopt = async (block: BlockData): Promise<DerivedChildOutcome> => {
+    for (const typeId of childSpec.types) {
+      await repo.addTypeInTx(tx, block.id, typeId, {}, childSpec.typeSnapshot)
+    }
+    return {status: 'adopted', id: block.id, block}
+  }
+  // A row in another workspace is never ours, whatever the key says: adopting
+  // it would write this whole record's children into that workspace.
+  const usable = (block: BlockData | null): boolean =>
+    block !== null
+    && !block.deleted
+    && block.workspaceId === parent.workspaceId
+    && (adoptable?.(block) ?? true)
+
   for (let slot = 0; slot < maxSlots; slot += 1) {
     const id = derivedBlockId(identity, slot)
     const existing = await tx.get(id)
 
-    if (existing && !existing.deleted && (adoptable?.(existing) ?? true)) {
-      for (const typeId of childSpec.types) {
-        await repo.addTypeInTx(tx, id, typeId, {}, childSpec.typeSnapshot)
-      }
-      return {status: 'adopted', id, block: existing}
-    }
+    if (usable(existing)) return adopt(existing as BlockData)
     if (existing) continue // taken by a tombstone or a record this caller rejected
 
-    await createTypedChild(repo, tx, {...childSpec, id})
+    const orderKey = await orderKeyForInsert(
+      tx, childSpec.parentId, parent.workspaceId, childSpec.position ?? {kind: 'last'},
+    )
+    // `createOrGet`, not `createChild`: this is the insert the platform means
+    // by a deterministic-id mint. It carries `systemMint` — which `createChild`
+    // has no way to pass — and stamping 0 is not optional here. Per
+    // `syncObserver/reconcile.ts`, two devices that mint the SAME derived id in
+    // the same millisecond produce equal nonzero stamps from DIFFERENT writes,
+    // which invariant I1 misreads as the same write and skips; the insert-or-
+    // skip loser then strands, permanently divergent from the server. A
+    // 0-stamped row always yields instead. It also gives us the cross-workspace
+    // guard and insert-or-fetch atomicity for free.
+    const {inserted} = await tx.createOrGet({
+      id,
+      workspaceId: parent.workspaceId,
+      parentId: childSpec.parentId,
+      orderKey,
+      content: childSpec.content ?? '',
+      ...(childSpec.references !== undefined ? {references: [...childSpec.references]} : {}),
+    }, {systemMint: true})
+
+    if (!inserted) {
+      // Someone claimed the slot between our read and our insert. Re-read and
+      // treat it like any other occupant rather than assuming it's ours.
+      const claimed = await tx.get(id)
+      if (usable(claimed)) return adopt(claimed as BlockData)
+      continue
+    }
+
+    for (const typeId of childSpec.types) {
+      await repo.addTypeInTx(tx, id, typeId, {}, childSpec.typeSnapshot)
+    }
+    if (childSpec.properties && childSpec.properties.length > 0) {
+      await tx.setProperties(id, {set: childSpec.properties})
+    }
     return {status: 'created', id}
   }
   throw new Error(

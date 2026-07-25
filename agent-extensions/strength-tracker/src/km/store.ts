@@ -50,7 +50,7 @@ import {
 import {dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
-import {buildAltChoices} from './history'
+import {buildAltChoices, toLiveSet} from './history'
 
 // ──── draft shapes the writer consumes ────
 
@@ -278,29 +278,57 @@ export const materializeExercise = async (
   repo: Repo,
   workoutId: string,
   ex: ExerciseDraft,
+  occurrence: number,
 ): Promise<ExerciseEntryIds> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, 0, typeSnapshot),
+  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, occurrence, typeSnapshot),
     {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 
-/** Persist one set's current state to its block (in place). Writes the full
- *  set so the block always mirrors the UI, and refreshes the readable content
- *  line. */
+/** Persist the fields of one set that actually changed, merged over what the
+ *  block holds RIGHT NOW (read inside the transaction).
+ *
+ *  A patch, not a whole-set replace, and that distinction is load-bearing.
+ *  The draft this is called from can legitimately be behind the block: the
+ *  live query answers `[]` until it resolves, so a tap in that window reaches
+ *  a draft that is pure prescription while the block holds a real set you
+ *  logged an hour ago. Writing the whole set there replaced 205×5 with the
+ *  prescribed 185×8 — and the adopt that had just carefully preserved those
+ *  values handed them back one statement later. Writing only the tapped field
+ *  makes "the draft's other fields are stale" unrepresentable.
+ *
+ *  The merge is also what keeps `content` honest: the readable line needs the
+ *  weight and reps that will be on the block after this write, not the ones
+ *  the caller happens to be holding. */
 export const writeSet = async (
   repo: Repo,
   setId: string,
-  set: SetDraft,
+  patch: Partial<SetDraft>,
   unit: string,
 ): Promise<void> => {
   await repo.tx(async tx => {
-    await tx.update(setId, {content: setContent(set, unit)})
-    await tx.setProperty(setId, weightProp, set.weight)
-    await tx.setProperty(setId, repsProp, set.reps)
-    await tx.setProperty(setId, rpeProp, set.rpe)
-    await tx.setProperty(setId, sideProp, set.side)
-    await tx.setProperty(setId, completedAtProp, set.completedAt)
-    await tx.setProperty(setId, todoStatusProp, todoStatus(set.done))
+    const before = await tx.get(setId)
+    if (!before || before.deleted) return
+    const {id: _id, ...current} = toLiveSet(before)
+    const next: SetDraft = {...current, ...patch}
+
+    const assignments = [
+      ...(patch.weight !== undefined ? [propertyValue(weightProp, next.weight)] : []),
+      ...(patch.reps !== undefined ? [propertyValue(repsProp, next.reps)] : []),
+      ...(patch.rpe !== undefined ? [propertyValue(rpeProp, next.rpe)] : []),
+      ...(patch.side !== undefined ? [propertyValue(sideProp, next.side)] : []),
+      ...(patch.done !== undefined ? [propertyValue(todoStatusProp, todoStatus(next.done))] : []),
+      ...(patch.completedAt !== undefined ? [propertyValue(completedAtProp, next.completedAt)] : []),
+    ]
+    // `completedAt: undefined` inside the patch means "un-done, clear it" —
+    // distinguishable from "not in the patch" only by the key's presence.
+    const unset = 'completedAt' in patch && patch.completedAt === undefined ? [completedAtProp] : []
+
+    if (assignments.length > 0 || unset.length > 0) {
+      await tx.setProperties(setId, {set: assignments, unset})
+    }
+    const content = setContent(next, unit)
+    if (content !== before.content) await tx.update(setId, {content})
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
 }
 
@@ -319,16 +347,37 @@ export interface FinishPlan {
  *  what was actually performed. One transaction. */
 export const finishWorkout = async (repo: Repo, plan: FinishPlan): Promise<void> => {
   await repo.tx(async tx => {
+    /** Done-ness as the BLOCK states it right now, inside this transaction.
+     *
+     *  The plan was computed from a draft and a query snapshot, both of which
+     *  can be minutes old by the time Finish's dozen-plus writes get here —
+     *  and done-ness is the built-in todo checkbox, so it can be set from the
+     *  outline just below this view, from a phone, from anywhere. Deleting on
+     *  the strength of a stale snapshot is how a set you actually performed
+     *  disappears. A re-read costs one indexed row per candidate. */
+    const isDone = async (id: string): Promise<boolean> => {
+      const block = await tx.get(id)
+      return block !== null && !block.deleted && block.properties[FIELD.todoStatus] === 'done'
+    }
+
     // Subtree delete, not `tx.delete`: a skipped exercise still has its
     // pre-filled set blocks, and those are todo-typed. Tombstoning only the
     // parent would leave them live — stray open todos under a deleted block.
-    for (const exId of plan.removeExerciseIds) await tx.run(deleteBlock, {id: exId})
+    for (const exId of plan.removeExerciseIds) {
+      const sets = await tx.childrenOf(exId)
+      const performed = await Promise.all(sets.filter(s => !s.deleted).map(s => isDone(s.id)))
+      if (performed.some(Boolean)) continue // someone logged into it after the plan was made
+      await tx.run(deleteBlock, {id: exId})
+    }
     for (const ex of plan.keep) {
       // Subtree, like the exercise prune above: a set block is a normal block,
       // so a note the user typed under it would otherwise stay live under a
       // tombstone (and, in a child-backed workspace, so would the set's own
       // property rows).
-      for (const setId of ex.removeSetIds) await tx.run(deleteBlock, {id: setId})
+      for (const setId of ex.removeSetIds) {
+        if (await isDone(setId)) continue
+        await tx.run(deleteBlock, {id: setId})
+      }
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
     await tx.setProperty(plan.workoutId, statusProp, 'done')

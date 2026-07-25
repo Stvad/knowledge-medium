@@ -143,11 +143,19 @@ const sameAsBlock = (draftSet: DraftSet, live: LiveSet): boolean =>
  *  arrive the same way, and Finish writing the draft back can never clobber a
  *  value it has already re-read.
  *
- *  Unconditional only because the draft holds no uncommitted state: a number
- *  being typed lives in the input's own React state until blur, so there is
- *  nothing here for a query emission to yank away. Keep it that way — moving
- *  keystrokes back into the draft would need a per-set dirty flag to make
- *  this safe again, and that flag is exactly what this design avoids.
+ *  Safe to be unconditional because the draft holds no uncommitted state: a
+ *  number being typed lives in the input's own React state until blur. Keep
+ *  it that way — moving keystrokes back into the draft would need a per-set
+ *  dirty flag to make this safe again, and that flag is exactly what this
+ *  design avoids.
+ *
+ *  `writing` is the one exemption, and it is not a value the draft carries:
+ *  those sets have a write IN FLIGHT, so the block is momentarily behind what
+ *  the user just did and "the block wins" would revert their own tap in front
+ *  of them. A failed write is deliberately NOT exempt — it reverts, which is
+ *  the honest outcome. The caller owns that set because only it knows which
+ *  of its writes are outstanding; a pure function cannot tell in-flight from
+ *  failed.
  *
  *  Returns the input array unchanged (same reference) when nothing moved, so
  *  running it on every query emission costs one comparison pass and no
@@ -155,6 +163,7 @@ const sameAsBlock = (draftSet: DraftSet, live: LiveSet): boolean =>
 export const overlayLiveValues = (
   draft: DraftExercise[],
   live: LiveWorkout | undefined,
+  writing: ReadonlySet<string> = new Set(),
 ): DraftExercise[] => {
   if (!live) return draft
   const byId = new Map<string, LiveSet>()
@@ -164,6 +173,7 @@ export const overlayLiveValues = (
   const next = draft.map(ex => {
     let rowChanged = false
     const sets = ex.sets.map(s => {
+      if (s.blockId !== undefined && writing.has(s.blockId)) return s
       const block = s.blockId !== undefined ? byId.get(s.blockId) : undefined
       if (!block || sameAsBlock(s, block)) return s
       rowChanged = true

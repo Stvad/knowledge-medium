@@ -47,7 +47,6 @@ import {
   overlayLive,
   overlayLiveValues,
   toExerciseDraft,
-  toSetDraft,
   toMaterializeDraft,
   type DraftExercise,
   type DraftSet,
@@ -64,7 +63,7 @@ interface Props {
 }
 
 export function TonightView({repo, workspaceId, pageId, program}: Props) {
-  const {prescription, session, setSession, config, history, layoffs, liveWorkouts, day} = program
+  const {prescription, session, setSession, config, history, layoffs, liveWorkouts, configLoaded, day} = program
   const readOnly = repo.isReadOnly
   const unit = config.unit
 
@@ -78,6 +77,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // freshly-computed next state without awaiting a re-render.
   const draftRef = useRef(draft)
   draftRef.current = draft
+  const liveRef = useRef(live)
+  liveRef.current = live
+
+  /** Set blocks with a write in flight — the block is momentarily behind what
+   *  the user just did, and the live overlay must not "correct" it back.
+   *
+   *  This is the one job the removed per-set `dirty` flag was doing that
+   *  moving keystrokes into the input did NOT replace. It lives here rather
+   *  than in the draft because it is not a property of the set — it is a
+   *  property of this client's outstanding I/O — and because a pure overlay
+   *  cannot tell an in-flight write from a failed one. */
+  const inFlightRef = useRef(new Set<string>())
 
   // "Which block does this set write to, and what has to be created first" —
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
@@ -98,7 +109,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // query hasn't resolved — indistinguishable from "nothing logged". It
     // adopts an in-progress workout for this day+session when there is one.
     createWorkout: rows => startWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, rows)),
-    createExercise: (workoutId, ex) => materializeExercise(repo, workoutId, toExerciseDraft(ex)),
+    createExercise: (workoutId, ex, exIdx) => materializeExercise(
+      repo, workoutId, toExerciseDraft(ex),
+      // Which row of this lift THIS is. Two rows of one lift derive different
+      // entry ids only if the occurrence is right; passing 0 blindly made the
+      // second row adopt the first's blocks and write over its sets.
+      prescription.exercises.slice(0, exIdx).filter(e => (e.defId ?? e.exercise) === (ex.defId ?? ex.exercise)).length,
+    ),
   }
 
   // Reseed the editing state only when the underlying identity changes — a
@@ -155,7 +172,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // uncommitted state, because a number being typed lives in the input's own
   // state until blur. Structure stays the reseed effect's job.
   useEffect(() => {
-    setDraft(cur => overlayLiveValues(cur, live))
+    setDraft(cur => overlayLiveValues(cur, live, inFlightRef.current))
   }, [live])
 
   const applyPatch = (
@@ -175,12 +192,29 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     next: readonly DraftExercise[],
     exIdx: number,
     setIdx: number,
+    change: Partial<DraftSet>,
   ): Promise<IdPatch | undefined> => {
-    if (readOnly) return undefined
+    // Writing before the plan outline has been read derives ids from exercise
+    // NAMES, while the records that exist are keyed on their plan block — a
+    // whole parallel tree of blocks for a session already in progress.
+    if (readOnly || !configLoaded) return undefined
     const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
     if (patch) setDraft(cur => applyIdPatch(cur, patch))
     if (blockId) {
-      await writeSet(repo, blockId, toSetDraft(next[exIdx].sets[setIdx]), next[exIdx].unit)
+      inFlightRef.current.add(blockId)
+      try {
+        // The CHANGE, not the whole set: the rest of this row may be older
+        // than the block (the live query hadn't resolved when the draft was
+        // built), and writing it back is how logged reps got replaced by the
+        // prescription's.
+        await writeSet(repo, blockId, change, next[exIdx].unit)
+      } finally {
+        inFlightRef.current.delete(blockId)
+        // Re-run the overlay now that this set is no longer exempt, so a value
+        // that landed while we were writing isn't held back until the next
+        // emission — and a write that FAILED reverts to what the block says.
+        setDraft(cur => overlayLiveValues(cur, liveRef.current, inFlightRef.current))
+      }
     }
     return patch
   }
@@ -195,7 +229,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
-    void persist(next, exIdx, setIdx).catch(reportWriteFailure)
+    void persist(next, exIdx, setIdx, patch).catch(reportWriteFailure)
   }
 
   const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
@@ -217,7 +251,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     void (async () => {
       let rows: readonly DraftExercise[] = next
       for (let j = 0; j < rows[exIdx].sets.length; j += 1) {
-        const patch = await persist(rows, exIdx, j)
+        const patch = await persist(rows, exIdx, j, {done: true, completedAt: now})
         if (patch) rows = applyIdPatch(rows, patch)
       }
     })().catch(reportWriteFailure)
@@ -225,6 +259,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
 
   const finish = async () => {
     if (readOnly || busy || !canFinish) return
+    // Finishing PRUNES. Doing that against a draft that hasn't met the blocks
+    // yet — the live query still resolving, so every set reads un-done — marks
+    // the workout done and deletes the whole session. Wait for the view to be
+    // looking at the workout it is about to finish.
+    const pending = coordinator.workoutId()
+    if (!configLoaded || (pending !== null && live?.id !== pending)) {
+      setStatus('Still catching up with tonight’s log — give it a moment and tap Finish again.')
+      return
+    }
     setBusy(true)
     // Finish is a dozen-plus transactions. If the draft is reseeded under it
     // (a session switch, a plan reload), everything after that point would be
@@ -248,12 +291,22 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         // switch, a create→delete round trip on every Finish).
         if (!flushed[i].blockId && !flushed[i].sets.some(s => s.done)) continue
         for (let j = 0; j < flushed[i].sets.length; j += 1) {
+          // Only the acceptance, and only for sets this view believes are
+          // done. Weight and reps were written by their own blur, and
+          // re-asserting them here would push this draft's copy back over
+          // whatever the block has learned since — including from the outline
+          // right below, or another device. A set that is done on the block
+          // but open here is left alone: `finishPlan` unions both.
+          if (!flushed[i].sets[j].done) continue
           const {blockId, patch} = await coordinator.resolveSet(flushed, i, j, effects)
           if (patch) {
             flushed = applyIdPatch(flushed, patch)
             setDraft(cur => applyIdPatch(cur, patch))
           }
-          if (blockId) await writeSet(repo, blockId, toSetDraft(flushed[i].sets[j]), flushed[i].unit)
+          if (blockId) {
+            const {done, completedAt} = flushed[i].sets[j]
+            await writeSet(repo, blockId, {done, completedAt}, flushed[i].unit)
+          }
         }
       }
 
@@ -271,7 +324,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
         await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
       }
-      await finishWorkout(repo, finishPlan(wid, flushed, live))
+            // `live` is only admissible evidence about the workout being finished.
+      // If it describes a different one, its sets would decide what to keep.
+      await finishWorkout(repo, finishPlan(wid, flushed, live?.id === wid ? live : undefined))
       const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length
       setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
 
@@ -577,6 +632,11 @@ function NumberField({
   const [text, setText] = useState(() => fieldText(value))
   const [shown, setShown] = useState(value)
   const [editing, setEditing] = useState(false)
+  // What the field read when focus arrived. Blur commits only if the USER
+  // moved it: comparing against `value` instead would commit whenever the
+  // block changed underneath a focused field, writing the number the user was
+  // merely looking at back over the newer one.
+  const enteredRef = useRef('')
 
   // Follow the block when the change came from anywhere but this input — but
   // never while it's focused, or a set someone ticks elsewhere would rewrite
@@ -596,15 +656,23 @@ function NumberField({
       // Select on focus so a tap-and-type replaces the pre-filled number.
       onFocus={e => {
         setEditing(true)
+        enteredRef.current = e.currentTarget.value
         e.currentTarget.select()
       }}
       onChange={e => setText(e.currentTarget.value)}
+      // Enter is how you say "done with this field" on a phone keyboard.
+      // Without it the typed value lives only in the DOM until something else
+      // blurs it — lock the phone first and it is gone.
+      onKeyDown={e => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+      }}
       // Persist the settled value on blur (cheap, and the block is the record).
       onBlur={e => {
         setEditing(false)
-        const next = e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value)
+        const raw = e.currentTarget.value
+        const next = raw === '' ? 0 : Number(raw)
         setText(fieldText(next))
-        if (next !== value) onCommit(next)
+        if (raw !== enteredRef.current) onCommit(next)
       }}
       className="h-9 w-16 rounded border border-border bg-background px-2 text-right text-sm tabular-nums"
     />
