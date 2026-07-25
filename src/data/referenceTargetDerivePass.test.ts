@@ -528,23 +528,61 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     const repo = setup()
     await rawSeedSweepFixture()
     repo.setReadOnly(true)
+    // The guard has to be pinned on the ATTEMPT, not the outcome: the
+    // projection tx is wrapped in a catch, so without the guard the throw is
+    // swallowed and every other observable here looks identical. A silent
+    // console.error on every read-only workspace open is exactly the
+    // regression this catches.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     await expect(runPass(repo)).resolves.toBeUndefined()
 
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
     // The local bookkeeping still happened — that part really is read-only
     // safe — but no cell was written.
     expect(await readColumn('row')).toBe(STATUS_FIELD_ID)
     expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
   })
 
-  it('projects on the same sweep when the workspace IS writable (read-only control)', async () => {
+  // Adding the key is an unsettled write, so materialize follows it — and
+  // with two field rows for one definition that means
+  // `collapseDuplicateFieldRow`, which tombstones the loser and uploads the
+  // tombstone. A background repair must not reap a user's row.
+  it('declines to break a tie — two field rows for one definition are left alone', async () => {
     await seedDormantWorkspace()
     const repo = setup()
-    await rawSeedSweepFixture()
-
     await runPass(repo)
+    await repo.tx(async tx => {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({
+        id: STATUS_FIELD_ID, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'status',
+      })
+      await tx.create({id: 'rowA', workspaceId: WS, parentId: 'owner', orderKey: 'a2', content: '::[[Foo]]'})
+      await tx.create({id: 'valA', workspaceId: WS, parentId: 'rowA', orderKey: 'a0', content: 'from-A'})
+      await tx.create({id: 'rowB', workspaceId: WS, parentId: 'owner', orderKey: 'a3', content: '::[[Foo]]'})
+      await tx.create({id: 'valB', workspaceId: WS, parentId: 'rowB', orderKey: 'a0', content: 'from-B'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flipSeededWorkspace()
 
-    expect(await cellOf('owner', statusSchema.name)).toBe('done')
+    await repo.tx(tx => tx.setProperty(STATUS_FIELD_ID, aliasesProp, ['Foo']),
+      {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+    await vi.waitFor(async () => {
+      await repo.awaitReferenceTargetDerive()
+      expect(await readColumn('rowA')).toBe(STATUS_FIELD_ID)
+      expect(await readColumn('rowB')).toBe(STATUS_FIELD_ID)
+    })
+    await repo.awaitProcessors()
+
+    const rowB = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', ['rowB'],
+    )
+    expect(rowB.deleted).toBe(0)
+    // The cell stays unset too: the repair declined the whole projection
+    // rather than picking a winner. A real user edit projects settled and
+    // resolves it then.
+    expect(await cellOf('owner', statusSchema.name)).toBeUndefined()
   })
 
   it('keeps the repair off the user cmd-Z stack', async () => {

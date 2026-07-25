@@ -1053,6 +1053,16 @@ export type { ChangeSnapshot } from '@/data/invalidation.js'
  *  `handleStore.invalidate({tables: [...]})` directly, or (better)
  *  contribute an `InvalidationRule` that emits a narrow plugin channel.
  */
+/** Did either column §9 recognition keys on move? Defined once because the
+ *  two parent-edge branches below MUST ask the identical question — the
+ *  visible-membership edge and the row's own `children(id)` edge are the two
+ *  halves of one recognition flip, and a version that checked only the
+ *  target would silently miss every `::` add/remove (which leaves the target
+ *  untouched) in exactly one of them. */
+const recognitionColumnsChanged = (entry: ChangeSnapshot): boolean =>
+  (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
+  || (entry.before?.isFieldForm ?? false) !== (entry.after?.isFieldForm ?? false)
+
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
   invalidationRules: readonly InvalidationRule[] = [],
@@ -1099,17 +1109,17 @@ export const snapshotsToChangeNotification = (
       parentIds.add(beforeParent)
     }
     // Field-row recognition flipped in place (live both sides, same
-    // parent, `referenceTargetId` changed): in a child-backed workspace
-    // the VISIBLE child set default-excludes recognized field rows
-    // (PR #288 §9), so a row becoming/ceasing to be a field row changes
-    // the parent's visible membership even though the tree edge didn't.
-    // Un-flipped workspaces get a rare spurious re-resolve (content edits
-    // to/from whole-block references) — harmless.
+    // parent, either recognition column changed): in a child-backed
+    // workspace the VISIBLE child set default-excludes recognized field
+    // rows (PR #288 §9), so a row becoming/ceasing to be a field row
+    // changes the parent's visible membership even though the tree edge
+    // didn't. Un-flipped workspaces get a rare spurious re-resolve (content
+    // edits to/from whole-block references) — harmless.
     else if (
       beforeLive
       && afterLive
       && beforeParent !== null
-      && (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
+      && recognitionColumnsChanged(entry)
     ) {
       parentIds.add(beforeParent)
     }
@@ -1118,21 +1128,15 @@ export const snapshotsToChangeNotification = (
     // already declares row deps on each child for this case.
 
     // Independent of the membership transition above (NOT chained with
-    // `else if`): whenever a live row's `referenceTargetId` changes,
+    // `else if`): whenever a live row's recognition columns change,
     // `children(id)` must also re-resolve — `id` flipping field-row-ness
-    // toggles whether its OWN children are property-subtree interior (a
-    // child that resolves to a definition is EXCLUDED from `children(id)`
-    // while `id` is a normal row but SHOWN as a value once `id` is a field
-    // row, §9). This holds even when the row ALSO moved in the same tx —
-    // e.g. `mergeBlocksInTx` clears a value's stamp AND relocates it in one
-    // commit, which matches the mutually-exclusive "Moved" branch above; a
-    // chained `else if` would then swallow this self-edge and strand a
-    // `children(id)` handle stale.
-    if (
-      beforeLive
-      && afterLive
-      && (entry.before?.referenceTargetId ?? null) !== (entry.after?.referenceTargetId ?? null)
-    ) {
+    // toggles whether its OWN children read as that field row's values
+    // rather than ordinary content (§9). This holds even when the row ALSO
+    // moved in the same tx — e.g. `mergeBlocksInTx` clears a value's stamp
+    // AND relocates it in one commit, which matches the mutually-exclusive
+    // "Moved" branch above; a chained `else if` would then swallow this
+    // self-edge and strand a `children(id)` handle stale.
+    if (beforeLive && afterLive && recognitionColumnsChanged(entry)) {
       parentIds.add(id)
     }
 

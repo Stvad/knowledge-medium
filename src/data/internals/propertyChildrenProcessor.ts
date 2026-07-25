@@ -244,6 +244,14 @@ const reprojectParentField = async (
   // gone: unmarked rows never classify.
   const children = await tx.childrenOf(affected.parentId, undefined)
   const fieldRows = fieldRowsForSchema(children, affected.fieldId)
+  // Additive mode also declines to break a TIE. Adding the key is an
+  // unsettled write, so materialize follows it — and with two field rows for
+  // one definition that means `collapseDuplicateFieldRow`, which tombstones
+  // the loser and uploads the tombstone. Values survive as peer siblings, so
+  // it is churn rather than loss, but a background repair still has no
+  // business reaping a user's row: leave the duplicate visible and let a
+  // real edit (which projects settled) do the collapse.
+  if (mode === 'additive' && fieldRows.length > 1) return
   const projected = await firstProjectedFieldValue(tx, schema, fieldRows)
   const nextProperties = {...parent.properties}
   if (projected === undefined) {

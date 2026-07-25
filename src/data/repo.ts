@@ -2718,14 +2718,12 @@ export class Repo {
     updates: readonly ReferenceTargetStamp[],
     context: ReferenceTargetStampContext,
   ): Promise<void> {
-    // Decide ONCE, before any work: a dormant workspace has no cells to
-    // project, and a read-only one must not be writing them. Checking here
-    // rather than after the loop keeps a dormant device — which is every
-    // device until slice C — from retaining a single row for a repair it
-    // will never run, and keeps the sweep's documented "safe in a read-only
-    // workspace" contract true (the projection tx would be rejected).
-    const reproject = !this.isReadOnly
-      && await readIsChildBackedWorkspace(this.db, context.workspaceId)
+    // A dormant workspace has no cells to project. Read once up front: it
+    // keeps a dormant device — every device until slice C — from retaining a
+    // single row for a repair it will never run, and the flip is a one-way
+    // slice C transition, so a stale read can only mean "not flipped yet",
+    // which the next pass picks up.
+    const flipped = await readIsChildBackedWorkspace(this.db, context.workspaceId)
     const CHUNK = 200
     for (let i = 0; i < updates.length; i += CHUNK) {
       const chunk = updates.slice(i, i + CHUNK)
@@ -2761,7 +2759,7 @@ export class Repo {
           // Only the "turns on" direction is reachable: the CAS above writes
           // only rows still at a NULL target, and §9 recognition needs a
           // resolved one — so nothing here was a field row beforehand.
-          if (reproject && targetId !== null && isFieldForm && after.parentId !== null) {
+          if (flipped && targetId !== null && isFieldForm && after.parentId !== null) {
             newlyRecognized.push({
               id: after.id,
               parentId: after.parentId,
@@ -2791,6 +2789,15 @@ export class Repo {
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
       if (newlyRecognized.length === 0) continue
+      // Read-only is re-checked HERE, per chunk, not hoisted with the flip
+      // check: it is mutable and resolved asynchronously (a membership sync
+      // can flip a session from viewer to writer mid-pass). Hoisting it is
+      // stale in the UNSAFE direction — the rows would still be stamped, so
+      // `reference_target_id IS NULL` stops matching and no later sweep or
+      // drain can ever find them again, which is the same silent-no-op
+      // hazard the captured resolver exists to avoid. Stale the other way is
+      // benign: the tx throws and the catch below absorbs it.
+      if (this.isReadOnly) continue
       try {
         await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
       } catch (err) {
