@@ -220,13 +220,21 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     description: 'Data-layer public API — property/type authoring (seedType, defineProperty, seedProperty, codecs, ChangeScope). Directory module: import the explicit /index.js.',
     exports: [
       'defineProperty', 'definePropertyEditorOverride', 'seedProperty', 'seedType',
-      'codecs', 'ChangeScope', 'INFRASTRUCTURE_TYPE_DISPLAY',
+      'codecs', 'ChangeScope', 'INFRASTRUCTURE_TYPE_DISPLAY', 'propertyValue',
     ],
     types: [
-      'BlockData', 'Codec', 'PropertyEditorOverride', 'PropertyEditorProps', 'PropertyHandle',
+      'AnyPropertyAssignment', 'BlockData', 'Codec', 'PropertyAssignment',
+      'PropertyEditorOverride', 'PropertyEditorProps', 'PropertyHandle',
       'PropertySeedDeclaration', 'PropertySchema', 'PropertySchemaEntry', 'ResolvedPropertySchema',
-      'TypeContribution', 'TypeSeedDeclaration',
+      'Tx', 'TypeContribution', 'TypeSeedDeclaration',
     ],
+  },
+  {
+    category: 'data',
+    importPath: '@/data/typedRecords.js',
+    description: 'createTypedChild — one call per record block (create + type-tag + typed properties inside your tx). The cheap way to keep records as blocks instead of a JSON cell.',
+    exports: ['createTypedChild'],
+    types: ['TypedChildSpec'],
   },
   {
     category: 'data',
@@ -251,6 +259,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
       'focusBlock',
     ],
     types: ['FocusedBlockLocation'],
+  },
+  {
+    category: 'data',
+    importPath: '@/plugins/todo/schema.js',
+    description: 'The built-in todo: type id + its `status` (open|done) property. Compose these onto your own record instead of declaring a private done flag — the block then renders as a checkbox and answers todo queries.',
+    exports: ['TODO_TYPE', 'statusProp', 'todoType'],
+    types: ['TodoStatus'],
   },
   {
     category: 'data',

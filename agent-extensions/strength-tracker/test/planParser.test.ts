@@ -4,15 +4,21 @@ import {
   configFromPlan,
   extractVideos,
   mergePlan,
+  parseExercise,
   parseExerciseLine,
   parsePlan,
   type PlanNode,
 } from '../src/program/planParser'
 
-const node = (content: string, children: PlanNode[] = []): PlanNode => ({
-  id: content.slice(0, 8),
+const node = (
+  content: string,
+  children: PlanNode[] = [],
+  extra: {id?: string; properties?: Record<string, unknown>} = {},
+): PlanNode => ({
+  id: extra.id ?? content.slice(0, 8),
   content,
   children,
+  properties: extra.properties,
 })
 
 /** A trimmed but faithful copy of the live plan outline's shape. */
@@ -117,6 +123,31 @@ describe('extractVideos', () => {
   })
 })
 
+describe('parseExercise', () => {
+  it('lets structured properties override the prose line', () => {
+    const ex = parseExercise(
+      node('Bench press — 3×6–10', [], {properties: {'strength:targetSets': 4, 'strength:repMax': 12}}),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.sets).toBe(4)
+    expect(ex?.repMax).toBe(12)
+    // Untouched by a prop, repMin still comes from the prose.
+    expect(ex?.repMin).toBe(6)
+  })
+
+  it('gathers the description from plain child bullets, including a video child', () => {
+    const ex = parseExercise(
+      node('Split squat — 2×8–12/leg', [node('light, knee-friendly'), node('[video](https://youtu.be/x)')]),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.note).toContain('light, knee-friendly')
+    expect(ex?.note).not.toContain('http')
+    expect(ex?.videos).toEqual([{label: 'video', url: 'https://youtu.be/x'}])
+  })
+})
+
 describe('parsePlan', () => {
   it('reads every session exercise from the outline', () => {
     const overlay = parsePlan(samplePlan())
@@ -192,5 +223,136 @@ describe('mergePlan / configFromPlan', () => {
     expect(bench.repMax).toBe(8)
     // A lift the overlay didn't mention keeps its default.
     expect(config.exercises.some(e => e.name === 'Squat')).toBe(true)
+  })
+})
+
+describe('or-groups', () => {
+  /** A single "Session A" with one `or`-group of two options, so we can
+   *  isolate group-resolution behaviour from the rest of the plan. */
+  const altGroupPlan = (groupExtra: {id?: string; properties?: Record<string, unknown>} = {id: 'g1'}) =>
+    node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('or', [
+          node('Overhead press — 3×6–10', [], {id: 'ohp'}),
+          node('Landmine press — 3×6–10', [], {id: 'landmine'}),
+        ], groupExtra),
+      ]),
+    ])
+
+  const chosen = (plan: PlanNode, altChoices?: Record<string, string>) =>
+    configFromPlan(plan, altChoices).config.exercises.find(e => e.altGroupKey === 'g1')
+
+  it('emits every option, tagged with the group key, and defaults to the first', () => {
+    const {config} = configFromPlan(altGroupPlan())
+    const inGroup = config.exercises.filter(e => e.altGroupKey === 'g1')
+    expect(inGroup).toHaveLength(1)
+    expect(inGroup[0].name).toBe('Overhead press')
+    expect(inGroup[0].altOptions).toEqual([
+      {name: 'Overhead press', defId: 'ohp'},
+      {name: 'Landmine press', defId: 'landmine'},
+    ])
+  })
+
+  it('resolves to an explicit runtime choice over the default', () => {
+    expect(chosen(altGroupPlan(), {g1: 'landmine'})?.name).toBe('Landmine press')
+  })
+
+  it('honors a strength:default ref over the first option', () => {
+    const plan = altGroupPlan({id: 'g1', properties: {'strength:default': 'landmine'}})
+    expect(chosen(plan)?.name).toBe('Landmine press')
+  })
+
+  it('still accepts a default or a choice written as a bare name', () => {
+    // A hand-written plan has no block to point at, and choices stored
+    // before the outline was typed name their option.
+    const plan = altGroupPlan({id: 'g1', properties: {'strength:default': 'Landmine press'}})
+    expect(chosen(plan)?.name).toBe('Landmine press')
+    expect(chosen(altGroupPlan(), {g1: 'Landmine press'})?.name).toBe('Landmine press')
+  })
+
+  it('falls back to the default when a choice matches no option', () => {
+    const plan = altGroupPlan({id: 'g1', properties: {'strength:default': 'landmine'}})
+    expect(chosen(plan, {g1: 'deleted-block-id'})?.name).toBe('Landmine press')
+  })
+
+  it('recognizes an "or" bullet by prose alone, without a strength:kind property', () => {
+    const overlay = parsePlan(altGroupPlan({id: 'g1'}))
+    expect(overlay.altDefaults).toEqual({g1: 'ohp'})
+  })
+})
+
+describe('typed program blocks', () => {
+  const typed = (types: string[], props: Record<string, unknown> = {}) => ({...props, types})
+
+  it('reads a group off its type, whatever the bullet says', () => {
+    const plan = node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('pick one', [
+          node('Overhead press — 3×6–10', [], {id: 'ohp'}),
+          node('Landmine press — 3×6–10', [], {id: 'landmine'}),
+        ], {id: 'g1', properties: typed(['strength-alt-group'])}),
+      ]),
+    ])
+    expect(parsePlan(plan).altDefaults).toEqual({g1: 'ohp'})
+  })
+
+  it('treats only the declared children of a group as options, so a group can carry a description', () => {
+    const option = (content: string, id: string) =>
+      node(content, [], {id, properties: typed(['strength-exercise-def'])})
+    const plan = node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('or', [
+          // Reads as an exercise to the prose rules ("3 sets") — only the
+          // declared children keep it out of the option list.
+          node('alternate cycles — 3 sets each, whichever the shoulder likes'),
+          option('Overhead press — 3×6–10', 'ohp'),
+          option('Landmine press — 3×6–10', 'landmine'),
+        ], {id: 'g1', properties: typed(['strength-alt-group'])}),
+      ]),
+    ])
+    const {config} = configFromPlan(plan)
+    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.altOptions)
+      .toEqual([{name: 'Overhead press', defId: 'ohp'}, {name: 'Landmine press', defId: 'landmine'}])
+  })
+
+  it('warns when a declared or-group option cannot be read, instead of dropping it silently', () => {
+    const typedOption = (content: string, id: string) =>
+      node(content, [], {id, properties: typed(['strength-exercise-def'])})
+    const plan = node('**Strength Plan**', [
+      node('**Session A (Thu)**', [
+        node('or', [
+          typedOption('Overhead press — 3×6–10', 'ohp'),
+          typedOption('Landmine press', 'landmine'),   // no sets anywhere → unreadable
+        ], {id: 'g1', properties: typed(['strength-alt-group'])}),
+      ]),
+    ])
+    const {config, warnings} = configFromPlan(plan)
+    expect(warnings.some(w => w.includes('Landmine press'))).toBe(true)
+    // The readable option still resolves — one bad alternative doesn't sink the slot.
+    expect(config.exercises.find(e => e.altGroupKey === 'g1')?.name).toBe('Overhead press')
+  })
+
+  it('carries the definition block id onto the parsed exercise', () => {
+    const ex = parseExercise(
+      node('Bench press — 3×6–10', [], {id: 'def-bench'}),
+      'A',
+      {upper: 5, lower: 10},
+    )
+    expect(ex?.defId).toBe('def-bench')
+    // A bare line (no block behind it) has nothing to link back to.
+    expect(parseExerciseLine('Bench press — 3×6–10', 'A', {upper: 5, lower: 10})?.defId).toBeUndefined()
+  })
+
+  it('warns about an unreadable exercise even where unquantified prose is expected', () => {
+    const plan = node('**Strength Plan**', [
+      node('**Mini day (Tue, optional)**', [
+        node('Shoulder prep circuit'),
+        node('Bottoms-up KB press', [], {id: 'bukb', properties: typed(['strength-exercise-def'])}),
+      ]),
+    ])
+    const {warnings} = parsePlan(plan)
+    expect(warnings.some(w => w.includes('Bottoms-up KB press'))).toBe(true)
+    // The untyped freeform line is still expected prose, not a parse failure.
+    expect(warnings.some(w => w.includes('Shoulder prep circuit'))).toBe(false)
   })
 })

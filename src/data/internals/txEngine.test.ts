@@ -424,7 +424,7 @@ describe('tx.stampReferenceTarget (local, no-upload)', () => {
     env.tick() // advance the clock: a stray updated_at bump would use this later value
     const crudBefore = (await env.psCrud()).length
 
-    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x'), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x', false), {scope: ChangeScope.BlockDefault})
 
     const snap = env.cache.getSnapshot(id)!
     expect(snap.referenceTargetId).toBe('target-x')  // column written
@@ -437,12 +437,12 @@ describe('tx.stampReferenceTarget (local, no-upload)', () => {
       tx => tx.create({workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '((t))'}),
       {scope: ChangeScope.BlockDefault},
     )
-    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x'), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x', false), {scope: ChangeScope.BlockDefault})
     const rowEventsAfterFirst = (
       await env.h.db.getAll('SELECT id FROM row_events WHERE block_id = ?', [id])
     ).length
 
-    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x'), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.stampReferenceTarget(id, 'target-x', false), {scope: ChangeScope.BlockDefault})
 
     // The guard short-circuits before any UPDATE, so the no-WHEN row_event
     // trigger never fires — the count is unchanged.

@@ -21,10 +21,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   layoutBlockIdsFromRows,
@@ -70,7 +67,7 @@ afterEach(() => {
 
 const layoutSessionBlock = async () => {
   const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-  return getLayoutSessionBlock(uiState, getLayoutSessionId())
+  return getLayoutSessionBlock(uiState, env.repo.activeLayoutSessionId)
 }
 
 const currentPanelRows = async () => (await layoutSessionBlock()).children.load()

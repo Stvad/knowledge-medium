@@ -45,6 +45,7 @@ import {
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createChild } from '@/data/mutators'
+import { assertNotGrammarShapedLabel } from '@/data/referenceBlock'
 import { pickLeastUsedTypeColor } from '@/data/typeColors'
 import { typesPageBlockId } from '@/data/typesPage'
 
@@ -133,6 +134,9 @@ export async function createTypeBlock(
       `UserTypesService.tryBuildType silently drops a block-type block with an empty label.`,
     )
   }
+  // Name hygiene (PR #288 §7): the label is mirrored into the definition
+  // block's `content` below.
+  assertNotGrammarShapedLabel(trimmedLabel, 'createTypeBlock: label')
 
   // The Types page must exist in `args.workspaceId` before we can
   // parent the new type block under it. We resolve the id from

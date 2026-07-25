@@ -11,7 +11,7 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
-import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
   presetConfigProp,
@@ -110,7 +110,13 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
     // re-derive-by-content path bind through that form, so a lossy label
     // (e.g. one containing `]]`) would strand the schema's field rows.
     // Reject by reverting the draft; the committed name stands.
-    if (!isRoundTrippableReferenceLabel(next)) {
+    //
+    // BOTH halves of the hygiene, matching `addSchema` — the round-trip
+    // guard alone leaves the rename path open as a bypass, because
+    // `((id))` and `::((id))` round-trip perfectly well (nothing about
+    // them is `]]`-lossy) while reading as a reference to some other block
+    // wherever the name is rendered.
+    if (!isRoundTrippableReferenceLabel(next) || isGrammarShapedLabel(next)) {
       setDraftName(propertyName)
       return
     }

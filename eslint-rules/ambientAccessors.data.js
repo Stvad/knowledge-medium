@@ -47,6 +47,18 @@ export const generatedEntries = [
       'src/plugins/attachments/assetResolver.ts',
     ],
   },
+  {
+    kind: 'import',
+    module: '@/utils/layoutSessionId',
+    names: ['getLayoutSessionId'],
+    message: 'getLayoutSessionId is the per-device base id (boot seed only). Use repo.activeLayoutSessionId in imperative code, or the layoutSessionBlockId block context in the render tree (PR 2).',
+    allowIn: [
+      'src/utils/layoutSessionId.ts',
+      'src/data/repo.ts',
+      'src/bootstrap/workspaceBootstrap.ts',
+      'src/utils/test/layoutSessionId.test.ts',
+    ],
+  },
 ]
 // --- END GENERATED ambientAccessors ---
 

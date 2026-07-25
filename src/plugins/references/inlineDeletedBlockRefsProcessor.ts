@@ -41,7 +41,7 @@ import {
   type SameTxCtx,
 } from '@/data/api'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import { isPropertyFieldRow, isPropertyValueRow } from '@/data/propertyChildren'
@@ -136,22 +136,25 @@ const inlineSource = async (
     current.references.filter(ref => !isContentBlockRefTo(ref, deletedId)),
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'references' | 'referenceTargetId'>> = {}
+  const patch: Partial<Pick<BlockData, 'content' | 'references' | 'referenceTargetId' | 'isFieldForm'>> = {}
   if (nextContent !== current.content) {
     patch.content = nextContent
     // `core.deriveReferenceTarget` already ran earlier in this same tx pass
-    // and stamped the column from the PRE-inline content. A whole-block
-    // `((deletedId))` row would otherwise keep `referenceTargetId:
-    // deletedId` even though content is now plain inlined text (or,
-    // rarely, itself an exact reference) — recompute from the rewritten
-    // content so the column and content never disagree.
+    // and stamped both local columns from the PRE-inline content. A
+    // whole-block `((deletedId))` row would otherwise keep
+    // `referenceTargetId: deletedId` even though content is now plain
+    // inlined text (or, rarely, itself an exact reference) — recompute from
+    // the rewritten content so the columns and content never disagree.
     const lookups = sameTxReferenceTargetLookups(tx)
-    const derived = await deriveReferenceTargetId(nextContent, current.workspaceId, lookups)
+    const derived = await deriveReferenceColumns(nextContent, current.workspaceId, lookups)
     // Always an update of an existing row (never a create): an
     // unresolvable alias (`undefined`) clears the column.
-    const nextTargetId = derived ?? null
+    const nextTargetId = derived.targetId ?? null
     if ((current.referenceTargetId ?? null) !== nextTargetId) {
       patch.referenceTargetId = nextTargetId
+    }
+    if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
+      patch.isFieldForm = derived.isFieldForm
     }
   }
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {

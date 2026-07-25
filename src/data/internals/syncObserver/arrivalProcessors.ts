@@ -61,7 +61,7 @@
 import type { BlockData } from '@/data/api'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import type { TxDb } from '@/data/internals/txEngine.js'
-import { deriveReferenceTargetId } from '@/data/internals/referenceTargetProcessor.js'
+import { deriveReferenceColumns } from '@/data/internals/referenceTargetProcessor.js'
 import type { MaterializeDeps, SyncSnapshot } from './materialize.js'
 
 /** One id the arrival-processor pass runs over this window: its pre-write
@@ -202,8 +202,9 @@ export const runArrivalProcessors = async (
  * content-changed arrivals instead, inside the same Phase-2 write tx.
  *
  * Content-changed rows (including a fresh arrival,
- * `before === null`) re-derive via `deriveReferenceTargetId` — the same
+ * `before === null`) re-derive via `deriveReferenceColumns` — the same
  * resolution seam the same-tx processor uses, so the two write paths agree
+ * on BOTH local columns (`reference_target_id` + `is_field_form`)
  * — and deleted/tombstoned arrivals derive too: a content edit that syncs
  * while the row is tombstoned would otherwise leave a stale column that a
  * later content-unchanged restore never repairs. Content-unchanged rows
@@ -229,23 +230,35 @@ export const deriveReferenceTargetArrivalProcessor: ArrivalProcessor = {
     return async (row, snapshots) => {
       const { id, before, after } = row
       const currentColumn = before?.referenceTargetId ?? null
-      // Set the snapshot to the DB column FIRST — the upsert left it untouched
-      // (it's outside `UPDATE_ASSIGNMENTS`), so `currentColumn` is what the row
-      // actually holds, while the Phase-2 `parseBlockRow` put `null` there (the
-      // staging row has no such column). Doing this before the throwable derive
-      // means a quarantined row's snapshot still matches the DB rather than
-      // lying `null` to the invalidation fan-out.
-      snapshots.set(id, { before, after: { ...after, referenceTargetId: currentColumn } })
+      const currentBit = before?.isFieldForm ?? false
+      // Set the snapshot to the DB columns FIRST — the upsert left both local
+      // columns untouched (outside `UPDATE_ASSIGNMENTS`), so the `before` row
+      // is what the table actually holds, while the Phase-2 `parseBlockRow`
+      // of the staging row put `null`/`false` there (staging has no local
+      // columns). Doing this before the throwable derive means a quarantined
+      // row's snapshot still matches the DB rather than lying to the
+      // invalidation fan-out.
+      snapshots.set(id, {
+        before,
+        after: { ...after, referenceTargetId: currentColumn, isFieldForm: currentBit },
+      })
       const contentChanged = before === null || before.content !== after.content
       if (!contentChanged) return
-      const derived =
-        (await deriveReferenceTargetId(after.content, after.workspaceId, lookups)) ?? null
-      if (derived !== currentColumn) {
+      const derived = await deriveReferenceColumns(after.content, after.workspaceId, lookups)
+      const derivedTarget = derived.targetId ?? null
+      if (derivedTarget !== currentColumn || derived.isFieldForm !== currentBit) {
         await ctx.tx.execute(
-          'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
-          [derived, id],
+          'UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?',
+          [derivedTarget, derived.isFieldForm ? 1 : null, id],
         )
-        snapshots.set(id, { before, after: { ...after, referenceTargetId: derived } })
+        snapshots.set(id, {
+          before,
+          after: {
+            ...after,
+            referenceTargetId: derivedTarget,
+            isFieldForm: derived.isFieldForm,
+          },
+        })
       }
     }
   },

@@ -52,6 +52,23 @@ describe('writeBlockTypeLabel', () => {
     return repo
   }
 
+  // The mirror below is exactly why the label needs hygiene (PR #288 §7):
+  // a reference-shaped label becomes reference-shaped CONTENT, and a
+  // `::`-marked one makes the type's own block a recognized property field
+  // row of the Types page — hidden from the outline, keyed onto its cell.
+  it.each([
+    ['a marked exact ref', '::((0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b))'],
+    ['a bare exact ref', '((0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b))'],
+    ['a wikilink', '[[Author]]'],
+  ])('refuses %s as a label, leaving content and label untouched', async (_case, label) => {
+    const repo = await setupTypeBlock()
+    const block = repo.block('type-1')
+    await expect(writeBlockTypeLabel(block, '', '', label))
+      .rejects.toThrow(/reads as a block reference/)
+    expect(block.peek()?.content).toBe('')
+    expect(block.peekProperty(blockTypeLabelProp)).toBe('')
+  })
+
   it('mirrors the type label into block content for ordinary block search', async () => {
     const repo = await setupTypeBlock()
     const block = repo.block('type-1')

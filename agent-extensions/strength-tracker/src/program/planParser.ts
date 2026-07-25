@@ -15,6 +15,7 @@
  */
 
 import type {
+  AltOption,
   ExerciseConfig,
   ExerciseVideo,
   Milestone,
@@ -22,6 +23,8 @@ import type {
   ReentryTier,
   SessionType,
 } from '../engine/types'
+import {altOptionKey} from '../engine/types'
+import {ALT_GROUP_TYPE, EXERCISE_DEF_TYPE, FIELD} from '../km/fields'
 import {DEFAULT_CONFIG} from './defaults'
 
 const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g
@@ -41,6 +44,10 @@ export interface PlanNode {
   id: string
   content: string
   children: readonly PlanNode[]
+  /** The block's own property map, when the caller has one. Structured
+   *  props (see the `strength:*` readers below) win over anything the
+   *  prose regexes would otherwise infer from `content`. */
+  properties?: Record<string, unknown>
 }
 
 export interface PlanOverlay {
@@ -48,6 +55,11 @@ export interface PlanOverlay {
   reentry?: readonly ReentryTier[]
   milestones?: readonly Milestone[]
   sessionNotes?: Partial<Record<SessionType, readonly string[]>>
+  /** or-group key → the default option's key (its block id, or its name for
+   *  an untyped plan), for every `or`-group the plan declared.
+   *  `configFromPlan` resolves each group down to one exercise using this
+   *  (overridable by an explicit runtime choice). */
+  altDefaults?: Record<string, string>
   warnings: readonly string[]
 }
 
@@ -87,12 +99,46 @@ const findChild = (root: PlanNode, pattern: RegExp): PlanNode | undefined =>
 const incrementFor = (name: string, upper: number, lower: number): number =>
   LOWER_BODY.test(name) ? lower : upper
 
-export const parseExerciseLine = (
-  content: string,
+// Typed property readers: undefined whenever the key is absent or holds the
+// wrong type, so a mis-typed prop falls back to prose rather than throwing
+// or silently coercing.
+const numProp = (properties: Record<string, unknown> | undefined, key: string): number | undefined => {
+  const value = properties?.[key]
+  return typeof value === 'number' ? value : undefined
+}
+const strProp = (properties: Record<string, unknown> | undefined, key: string): string | undefined => {
+  const value = properties?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+const boolProp = (properties: Record<string, unknown> | undefined, key: string): boolean | undefined => {
+  const value = properties?.[key]
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/** The block's type membership. Read straight off the raw property map (the
+ *  app stores types there) rather than via the runtime helper, to keep this
+ *  module free of `@/` imports and testable in plain node. */
+const nodeTypes = (node: PlanNode): readonly string[] => {
+  const raw = node.properties?.[FIELD.blockTypes]
+  return Array.isArray(raw) ? raw.filter((t): t is string => typeof t === 'string') : []
+}
+
+/** A block that *declares* itself an exercise — as opposed to one the prose
+ *  rules merely read as one. A declaration is a promise the line is
+ *  quantified, so failing to parse it is worth a warning. */
+export const isExerciseDef = (node: PlanNode): boolean => nodeTypes(node).includes(EXERCISE_DEF_TYPE)
+
+/** Parse one exercise block: structured `strength:*` properties first,
+ *  prose (the `content` line, via the same regexes as before) filling in
+ *  whatever a property didn't state. The description (`note`) and videos
+ *  additionally pull from the node's own children, so a plan can carry a
+ *  cue or a demo link as a sub-bullet instead of cramming it onto the line. */
+export const parseExercise = (
+  node: PlanNode,
   session: SessionType,
   increments: {upper: number; lower: number},
 ): ExerciseConfig | null => {
-  const text = plainText(content)
+  const text = plainText(node.content)
   if (/^warm-?up\b/i.test(text)) return null
   const split = splitLine(text)
   const rawName = split?.name ?? text
@@ -112,15 +158,32 @@ export const parseExerciseLine = (
   const range = SETS_RANGE.exec(rest)
   const single = range ? null : SETS_SINGLE.exec(rest)
   const bare = range || single ? null : BARE_SETS.exec(rest)
-  if (!range && !single && !bare) return null
+  const proseSets = range || single || bare ? Number(range?.[1] ?? single?.[1] ?? bare?.[1]) : undefined
+  const proseRepMin = range ? Number(range[2]) : single ? Number(single[2]) : undefined
+  const proseRepMax = range ? Number(range[3]) : single ? Number(single[2]) : undefined
 
-  const sets = Number(range?.[1] ?? single?.[1] ?? bare?.[1])
-  const repMin = range ? Number(range[2]) : single ? Number(single[2]) : undefined
-  const repMax = range ? Number(range[3]) : single ? Number(single[2]) : undefined
+  const props = node.properties
+  const sets = numProp(props, FIELD.targetSets) ?? proseSets
+  // No sets from either source means there's nothing to prescribe — decline
+  // rather than guess, same as the prose-only parser did.
+  if (sets === undefined) return null
 
-  // Videos come from the raw content (plainText has already collapsed the
-  // markdown links to their labels in `rest`).
-  const videos = extractVideos(content)
+  const repMin = numProp(props, FIELD.repMin) ?? proseRepMin
+  const repMax = numProp(props, FIELD.repMax) ?? proseRepMax
+  const increment = numProp(props, FIELD.increment) ?? incrementFor(name, increments.upper, increments.lower)
+  const perSide = boolProp(props, FIELD.perSide) ?? PER_SIDE.test(rest)
+  const kind = strProp(props, FIELD.kind)
+  const freeform = kind === 'carry' || kind === 'bodyweight' ? true : repMax === undefined || FREEFORM.test(rest)
+
+  // Description: the line's own prose tail, plus every child's plain text —
+  // a description sub-bullet ("light, knee-friendly") or a demo link lives
+  // as a child rather than crowding the exercise line.
+  const childNotes = node.children.map(child => plainText(child.content)).filter(Boolean)
+  const noteParts = [rest, ...childNotes].filter(Boolean)
+
+  // Videos come from the raw content (plainText collapses markdown links to
+  // their labels) AND from every child's raw content.
+  const videos = [...extractVideos(node.content), ...node.children.flatMap(child => extractVideos(child.content))]
 
   return {
     name,
@@ -128,13 +191,26 @@ export const parseExerciseLine = (
     sets,
     repMin,
     repMax,
-    increment: incrementFor(name, increments.upper, increments.lower),
-    perSide: PER_SIDE.test(rest),
-    freeform: repMax === undefined || FREEFORM.test(rest),
-    note: rest || undefined,
+    increment,
+    perSide,
+    freeform,
+    note: noteParts.length > 0 ? noteParts.join('\n') : undefined,
+    catchUpIncrement: numProp(props, FIELD.catchUpIncrement),
+    catchUpRpe: numProp(props, FIELD.catchUpRpe),
     videos: videos.length > 0 ? videos : undefined,
+    // Only a real block can be referenced back to; the line-only wrapper
+    // below passes an empty id and gets no definition link.
+    defId: node.id || undefined,
   }
 }
+
+/** Thin prose-only wrapper kept for callers (and tests) that only have a
+ *  line of text, no block/properties. */
+export const parseExerciseLine = (
+  content: string,
+  session: SessionType,
+  increments: {upper: number; lower: number},
+): ExerciseConfig | null => parseExercise({id: '', content, children: []}, session, increments)
 
 const parseIncrements = (root: PlanNode): {upper: number; lower: number} => {
   const section = findChild(root, /^progression rules/i)
@@ -155,13 +231,47 @@ const SESSION_HEADINGS: ReadonlyArray<{session: SessionType; pattern: RegExp}> =
   {session: 'mini', pattern: /^mini day\b/i},
 ]
 
+/** An `or`-group bullet names alternatives rather than a single exercise —
+ *  its children are the options. Recognized by the block's type first, then
+ *  by the older `strength:kind: alt-group` marker, then by prose. */
+const isAltGroup = (node: PlanNode, text: string): boolean =>
+  nodeTypes(node).includes(ALT_GROUP_TYPE) ||
+  strProp(node.properties, FIELD.kind) === 'alt-group' ||
+  /^(or|either)\b/i.test(text)
+
+/** The option blocks of an `or`-group. Once any child declares itself an
+ *  exercise definition, only the declared ones are options — that's what
+ *  lets a group carry its own description bullet without it being read as a
+ *  nameless third alternative. Untyped groups keep the old "every child is
+ *  an option" rule. */
+const altOptionNodes = (group: PlanNode): readonly PlanNode[] => {
+  const declared = group.children.filter(isExerciseDef)
+  return declared.length > 0 ? declared : group.children
+}
+
+/** Resolve a stored choice or default (`strength:default`, `altChoices`) to
+ *  one option. A block id wins; a bare name still matches, so a hand-written
+ *  plan — and anything chosen before the outline was typed — keeps working. */
+const matchOption = <T extends AltOption>(
+  options: readonly T[],
+  wanted: string | undefined,
+): T | undefined =>
+  wanted === undefined || wanted === ''
+    ? undefined
+    : options.find(o => o.defId === wanted) ?? options.find(o => o.name === wanted)
+
 const parseSessions = (
   root: PlanNode,
   increments: {upper: number; lower: number},
   warnings: string[],
-): {exercises: ExerciseConfig[]; notes: Partial<Record<SessionType, readonly string[]>>} => {
+): {
+  exercises: ExerciseConfig[]
+  notes: Partial<Record<SessionType, readonly string[]>>
+  altDefaults: Record<string, string>
+} => {
   const exercises: ExerciseConfig[] = []
   const notes: Partial<Record<SessionType, readonly string[]>> = {}
+  const altDefaults: Record<string, string> = {}
 
   for (const {session, pattern} of SESSION_HEADINGS) {
     const section = findChild(root, pattern)
@@ -182,13 +292,54 @@ const parseSessions = (
         sessionNotes.push(text)
         continue
       }
-      const exercise = parseExerciseLine(child.content, session, increments)
+
+      if (isAltGroup(child, text)) {
+        // Every child is an option; all get parsed and emitted (each tagged
+        // with the group key), and one is picked as the default. The flat
+        // list carries every option through — resolving down to one
+        // exercise per slot happens later, in configFromPlan, where an
+        // explicit runtime choice can also override the default.
+        const optionNodes = altOptionNodes(child)
+        const options = optionNodes
+          .map(option => parseExercise(option, session, increments))
+          .filter((e): e is ExerciseConfig => e !== null)
+        // An option that DECLARES itself an exercise but can't be read would
+        // otherwise disappear from the switcher without a word — same reason a
+        // declared exercise outside a group warns.
+        for (const option of optionNodes) {
+          if (!isExerciseDef(option)) continue
+          if (parseExercise(option, session, increments)) continue
+          warnings.push(
+            `Session ${session}: or-group option "${plainText(option.content)}" could not be read — dropped from the choices.`,
+          )
+        }
+        if (options.length === 0) {
+          sessionNotes.push(text)
+          if (quantified) {
+            warnings.push(`Session ${session}: or-group "${text}" had no readable options — kept as a note.`)
+          }
+          continue
+        }
+        const optionRefs: AltOption[] = options.map(o => ({name: o.name, defId: o.defId}))
+        const requestedDefault = strProp(child.properties, FIELD.altDefault)
+        altDefaults[child.id] = altOptionKey(matchOption(optionRefs, requestedDefault) ?? optionRefs[0])
+        for (const option of options) {
+          exercises.push({...option, altGroupKey: child.id, altOptions: optionRefs})
+          parsed += 1
+        }
+        continue
+      }
+
+      const exercise = parseExercise(child, session, increments)
       if (exercise) {
         exercises.push(exercise)
         parsed += 1
       } else {
         sessionNotes.push(text)
-        if (quantified) {
+        // A block typed as an exercise definition is a claim that it *is*
+        // one, so an unreadable line is worth flagging even on the mini day,
+        // where unquantified prose is otherwise expected.
+        if (quantified || isExerciseDef(child)) {
           warnings.push(`Session ${session}: could not read sets/reps from "${text}" — kept as a note.`)
         }
       }
@@ -199,7 +350,7 @@ const parseSessions = (
     if (sessionNotes.length > 0) notes[session] = sessionNotes
   }
 
-  return {exercises, notes}
+  return {exercises, notes, altDefaults}
 }
 
 const TIER_PATTERNS: ReadonlyArray<{id: string; pattern: RegExp}> = [
@@ -305,12 +456,13 @@ const parseMilestones = (root: PlanNode): Milestone[] | undefined => {
 export const parsePlan = (root: PlanNode): PlanOverlay => {
   const warnings: string[] = []
   const increments = parseIncrements(root)
-  const {exercises, notes} = parseSessions(root, increments, warnings)
+  const {exercises, notes, altDefaults} = parseSessions(root, increments, warnings)
   return {
     exercises: exercises.length > 0 ? exercises : undefined,
     reentry: parseReentry(root, warnings),
     milestones: parseMilestones(root),
     sessionNotes: Object.keys(notes).length > 0 ? notes : undefined,
+    altDefaults: Object.keys(altDefaults).length > 0 ? altDefaults : undefined,
     warnings,
   }
 }
@@ -351,7 +503,48 @@ export const mergePlan = (overlay: PlanOverlay, base: ProgramConfig = DEFAULT_CO
   }
 }
 
-export const configFromPlan = (root: PlanNode): {config: ProgramConfig; warnings: readonly string[]} => {
+/** Resolve every `or`-group down to exactly one exercise per slot — the
+ *  engine and the workout UI both want one prescription per session slot,
+ *  not a menu. Preference order: an explicit runtime choice (`altChoices`,
+ *  keyed by the group id), else the plan's own `strength:default`/first-
+ *  option default (`altDefaults`), else the first option — each looked up by
+ *  block id, falling back to name. The chosen exercise keeps its
+ *  `altGroupKey`/`altOptions` so the UI can still offer a switch; the rest
+ *  of the group is dropped. Order is preserved by keeping the winner at the
+ *  group's first-appearance position. */
+const resolveAltGroups = (
+  config: ProgramConfig,
+  altDefaults: Record<string, string>,
+  altChoices: Record<string, string>,
+): ProgramConfig => {
+  const groups = new Map<string, ExerciseConfig[]>()
+  for (const exercise of config.exercises) {
+    if (!exercise.altGroupKey) continue
+    const group = groups.get(exercise.altGroupKey)
+    if (group) group.push(exercise)
+    else groups.set(exercise.altGroupKey, [exercise])
+  }
+  if (groups.size === 0) return config
+
+  const resolvedGroups = new Set<string>()
+  const exercises = config.exercises.flatMap(exercise => {
+    const key = exercise.altGroupKey
+    if (!key) return [exercise]
+    if (resolvedGroups.has(key)) return []
+    resolvedGroups.add(key)
+
+    const options = groups.get(key)!
+    return [matchOption(options, altChoices[key]) ?? matchOption(options, altDefaults[key]) ?? options[0]]
+  })
+
+  return {...config, exercises}
+}
+
+export const configFromPlan = (
+  root: PlanNode,
+  altChoices: Record<string, string> = {},
+): {config: ProgramConfig; warnings: readonly string[]} => {
   const overlay = parsePlan(root)
-  return {config: mergePlan(overlay), warnings: overlay.warnings}
+  const config = resolveAltGroups(mergePlan(overlay), overlay.altDefaults ?? {}, altChoices)
+  return {config, warnings: overlay.warnings}
 }

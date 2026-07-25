@@ -41,6 +41,7 @@ import {
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
 import {renderSubtreeOutline} from './subtreeOutline.js'
+import {extensionScaffold, slugify, titleize} from './scaffold.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const kernelTypesDir = path.join(here, 'kernel-types')
@@ -885,6 +886,45 @@ cli
   .command('uninstall-extension <handle>', wireDescription('uninstall-extension'))
   .action(async (handle: string) => {
     await runAndPrint({type: 'uninstall-extension', ...extensionHandle(handle)})
+  })
+
+cli
+  .command('new-extension <name> [dir]', 'Scaffold a standalone extension project (default dir: ./<slug>). Emits a small WORKING extension in the shape the record-grain guide asks for — namespaced types, a ref property instead of an id string, one block per record via createTypedChild, done-ness composed from the built-in todo, a pure read path with a test — plus the `@/…` kernel declarations, so `npm install && npm run check` passes with no checkout of the app. Refuses to overwrite an existing directory.')
+  .action(async (name: string, dir: string | undefined) => {
+    const slug = slugify(name)
+    const title = titleize(slug)
+    const target = dir ?? slug
+    // Never clobber: a scaffold that silently overwrote a real project
+    // would be the worst possible first impression.
+    const existing = await fs.stat(target).catch(() => null)
+    if (existing) throw new Error(`${target} already exists — pass a different directory`)
+
+    const files = extensionScaffold(name)
+    for (const file of files) {
+      const full = path.join(target, file.path)
+      await fs.mkdir(path.dirname(full), {recursive: true})
+      await fs.writeFile(full, file.contents, 'utf8')
+    }
+    // The `@/…` declarations ship with this CLI. Copying them in is what
+    // lets the generated project typecheck standalone — most authors have
+    // the CLI and no checkout of the app.
+    const types = await writeKernelTypes(path.join(target, 'types'), {force: true})
+    process.stdout.write(`${JSON.stringify({
+      directory: target,
+      name: title,
+      files: [...files.map(file => file.path), `types/ (${types.fileCount} declarations)`],
+      next: [
+        `cd ${target} && npm install && npm run check`,
+        `kmagent install-extension "dist/${title}.js"`,
+        `kmagent enable-extension "${title}"`,
+      ],
+    }, null, 2)}\n`)
+  })
+
+cli
+  .command('audit-extension <handle>', wireDescription('audit-extension'))
+  .action(async (handle: string) => {
+    await runAndPrint({type: 'audit-extension', ...extensionHandle(handle)})
   })
 
 cli

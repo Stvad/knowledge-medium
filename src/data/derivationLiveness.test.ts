@@ -106,28 +106,31 @@ interface Row {
   id: string
   content: string
   reference_target_id: string | null
+  is_field_form: number | null
   deleted: number
   properties_json: string
 }
 
+const ROW_COLUMNS = 'id, content, reference_target_id, is_field_form, deleted, properties_json'
+
 const rowOf = async (id: string): Promise<Row> =>
-  sharedDb.db.get<Row>(
-    `SELECT id, content, reference_target_id, deleted, properties_json
-       FROM blocks WHERE id = ?`, [id],
-  )
+  sharedDb.db.get<Row>(`SELECT ${ROW_COLUMNS} FROM blocks WHERE id = ?`, [id])
 
 const childrenOf = async (parentId: string): Promise<Row[]> =>
   (await sharedDb.db.getAll<Row>(
-    `SELECT id, content, reference_target_id, deleted, properties_json
-       FROM blocks WHERE parent_id = ? ORDER BY order_key, id`,
+    `SELECT ${ROW_COLUMNS} FROM blocks WHERE parent_id = ? ORDER BY order_key, id`,
     [parentId],
   )).filter(r => r.deleted === 0)
 
 const cellOf = async (id: string, name: string): Promise<unknown> =>
   (JSON.parse((await rowOf(id)).properties_json) as Record<string, unknown>)[name]
 
+// Both §9 recognition columns, not just the target: an UNMARKED `((fieldId))`
+// child is an ordinary reference, and a helper keyed on the stamp alone would
+// call it a field row and hide a real regression.
 const liveFieldRows = async (parentId: string, fieldId: string): Promise<Row[]> =>
-  (await childrenOf(parentId)).filter(r => r.reference_target_id === fieldId)
+  (await childrenOf(parentId))
+    .filter(r => r.is_field_form === 1 && r.reference_target_id === fieldId)
 
 describe('defineSameTxProcessor validation', () => {
   it('rejects rerunOnDirtyRows on an event-watch processor', () => {
@@ -312,8 +315,8 @@ describe('merge retarget → kernel derivations (same tx)', () => {
 
   // Doc §11 acceptance case (a) / matrix row "mergeRetarget content →
   // PROJECT (owner cell)": merging property DEFINITION A into B retargets
-  // each owner's field row `((A))` → `((B))`, which changes WHICH schema
-  // the owner's children denote — the owner cell must re-key from
+  // each owner's field row `::((A))` → `::((B))`, which changes WHICH
+  // schema the owner's children denote — the owner cell must re-key from
   // `alpha` to `beta` in the same tx (B2's definition-merge problem).
   it('re-keys consuming owner cells when a property definition is merged away', async () => {
     const repo = await setup()
@@ -339,7 +342,10 @@ describe('merge retarget → kernel derivations (same tx)', () => {
 
     const fieldRows = await liveFieldRows('o', DEF_B)
     expect(fieldRows).toHaveLength(1)
-    expect(fieldRows[0]!.content).toBe(`((${DEF_B}))`)
+    // The retarget rewrote the SPAN and left the `::` marker in place: a
+    // rewrite that dropped it would silently demote the row to an ordinary
+    // reference and orphan the value children under it (§7 round-trip).
+    expect(fieldRows[0]!.content).toBe(`::((${DEF_B}))`)
     // The owner cell followed the retarget in the SAME tx: the old key is
     // gone and the value now projects under the surviving definition.
     expect(await cellOf('o', alphaSchema.name)).toBeUndefined()
@@ -349,7 +355,7 @@ describe('merge retarget → kernel derivations (same tx)', () => {
 
 describe('alias reverse-sync → PROJECT (same tx)', () => {
   // Matrix row: "alias.sync content → PROJECT" — an AR1 alias swap
-  // rewrites a child's content to `((fieldId))` AFTER the kernel PROJECT
+  // rewrites a child's content to `::((fieldId))` AFTER the kernel PROJECT
   // pass ran, so the row becomes a field row with the owner's cell unset
   // until some unrelated tree edit (found by Codex on PR #386).
   it('projects the owner cell when an alias swap turns a child into a field row', async () => {
@@ -366,16 +372,49 @@ describe('alias reverse-sync → PROJECT (same tx)', () => {
 
     // The 1-for-1 alias swap whose removed entry matches current content
     // (AR1): alias.sync rewrites `c`'s content to the added alias — here
-    // spelled as an exact reference to the status definition.
+    // spelled as a MARKED reference to the status definition. The marker is
+    // what makes it a field row: the same swap to a bare `((fieldId))`
+    // leaves an ordinary reference (asserted below), which is the whole
+    // point of §7 — no block becomes property machinery by accident.
+    await repo.tx(tx => tx.setProperty('c', aliasesProp, [`::((${STATUS_FIELD_ID}))`]),
+      {scope: ChangeScope.BlockDefault})
+
+    const c = await rowOf('c')
+    expect(c.content).toBe(`::((${STATUS_FIELD_ID}))`)
+    expect(c.reference_target_id).toBe(STATUS_FIELD_ID)
+    // The plugin's content rewrite re-derived BOTH recognition columns, not
+    // just the target — recognition is keyed on the bit.
+    expect(c.is_field_form).toBe(1)
+    // The re-run PROJECT saw the plugin's rewrite: `c` now denotes the
+    // status property of `p`, and the first parseable value projected.
+    expect(await cellOf('p', statusSchema.name)).toBe('done')
+  })
+
+  // The unmarked twin of the case above, pinning the §7 boundary from the
+  // other side: an alias swap to a bare `((fieldId))` stamps the target but
+  // must NOT make `c` a field row, so `p`'s cell stays untouched and `v`
+  // stays an ordinary child rather than being read as a property value.
+  it('leaves the owner cell alone when the same swap lands an UNMARKED reference', async () => {
+    const repo = await setup()
+    await repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'c', workspaceId: WS, parentId: 'p', orderKey: 'a0', content: 'x'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => {
+      await tx.create({id: 'v', workspaceId: WS, parentId: 'c', orderKey: 'a0', content: 'done'})
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(tx => tx.setProperty('c', aliasesProp, ['x']),
+      {scope: ChangeScope.BlockDefault})
+
     await repo.tx(tx => tx.setProperty('c', aliasesProp, [`((${STATUS_FIELD_ID}))`]),
       {scope: ChangeScope.BlockDefault})
 
     const c = await rowOf('c')
     expect(c.content).toBe(`((${STATUS_FIELD_ID}))`)
+    // Target stamps for every reference form; the field-form bit does not.
     expect(c.reference_target_id).toBe(STATUS_FIELD_ID)
-    // The re-run PROJECT saw the plugin's rewrite: `c` now denotes the
-    // status property of `p`, and the first parseable value projected.
-    expect(await cellOf('p', statusSchema.name)).toBe('done')
+    expect(c.is_field_form).not.toBe(1)
+    expect(await cellOf('p', statusSchema.name)).toBeUndefined()
   })
 })
 
@@ -430,7 +469,7 @@ describe('settled-write laundering (PR #428 adversarial review)', () => {
 
 describe('field row becoming ordinary → MATERIALIZE (same tx)', () => {
   // Issue comment, instance 2: one tx rewrites a field row's content away
-  // from `((fieldId))` AND writes a property on it. MATERIALIZE's
+  // from `::((fieldId))` AND writes a property on it. MATERIALIZE's
   // ancestry gate read the STORED stamp (still a field row) and skipped;
   // DERIVE cleared the stamp later in the pass. The re-run MATERIALIZE
   // sees the cleared stamp and materializes the now-ordinary row's bag.
@@ -450,6 +489,8 @@ describe('field row becoming ordinary → MATERIALIZE (same tx)', () => {
 
     const row = await rowOf(fieldRow!.id)
     expect(row.reference_target_id).toBeNull()
+    // Prose clears the bit too — both columns move together on a re-derive.
+    expect(row.is_field_form).not.toBe(1)
     // The owner's cell dropped the key (PROJECT saw the field row leave
     // in pass one)...
     expect(await cellOf('p', statusSchema.name)).toBeUndefined()
@@ -464,7 +505,11 @@ describe('field row becoming ordinary → MATERIALIZE (same tx)', () => {
     // undo restores the field row, the owner cell, and removes the
     // re-run's materialized children together.
     await repo.undo(ChangeScope.BlockDefault)
-    expect((await rowOf(fieldRow!.id)).content).toBe(`((${STATUS_FIELD_ID}))`)
+    // Undo restores the marker as well as the span — the snapshot carries
+    // the bit, since same-tx processors are skipped on replay.
+    const restored = await rowOf(fieldRow!.id)
+    expect(restored.content).toBe(`::((${STATUS_FIELD_ID}))`)
+    expect(restored.is_field_form).toBe(1)
     expect(await cellOf('p', statusSchema.name)).toBe('done')
     expect(await liveFieldRows(fieldRow!.id, STATUS_FIELD_ID)).toEqual([])
   })

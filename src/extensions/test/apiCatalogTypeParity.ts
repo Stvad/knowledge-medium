@@ -121,8 +121,10 @@ export type {
 } from '@/shortcuts/actionDispatch.js'
 
 export type {
+  AnyPropertyAssignment,
   BlockData,
   Codec,
+  PropertyAssignment,
   PropertyEditorOverride,
   PropertyEditorProps,
   PropertyHandle,
@@ -130,9 +132,14 @@ export type {
   PropertySchema,
   PropertySchemaEntry,
   ResolvedPropertySchema,
+  Tx,
   TypeContribution,
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
+
+export type { TypedChildSpec } from '@/data/typedRecords.js'
+
+export type { TodoStatus } from '@/plugins/todo/schema.js'
 
 export type { FocusedBlockLocation } from '@/data/properties.js'
 

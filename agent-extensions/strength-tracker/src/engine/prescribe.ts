@@ -64,7 +64,7 @@ const prescribeExercise = (
 ): PrescribedExercise => {
   const sets = setsFor(exercise, reentry)
   const {repMin, repMax} = repsFor(exercise, reentry)
-  const last = lastEntryFor(basis, exercise.name)
+  const last = lastEntryFor(basis, exercise.name, exercise.defId)
   const lastWeight = last ? workingWeight(last.entry) : undefined
   const lastTime = last && lastWeight !== undefined
     ? {
@@ -76,6 +76,7 @@ const prescribeExercise = (
 
   const base: Omit<PrescribedExercise, 'weight' | 'rationale'> = {
     exercise: exercise.name,
+    defId: exercise.defId,
     sets,
     repMin,
     repMax,
@@ -83,6 +84,8 @@ const prescribeExercise = (
     freeform: exercise.freeform,
     note: exercise.note,
     videos: exercise.videos,
+    altGroupKey: exercise.altGroupKey,
+    altOptions: exercise.altOptions,
     lastTime,
   }
 
