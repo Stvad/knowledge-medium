@@ -7,8 +7,9 @@
  * vanished. So "delete a page and end up somewhere sane" rests entirely on
  * WHEN this component decides to call `recoverPanelOffDeadContent` (already
  * covered directly by panelLayoutProjection.test.ts). These tests pin the
- * "when": debounce timing, the seen-live-vs-missing distinction, and the
- * fire-time re-checks that guard against undo / navigation racing the timer.
+ * "when": debounce timing, the tombstone-vs-merely-missing distinction, and
+ * the fire-time re-checks that guard against undo / navigation racing the
+ * timer.
  *
  * `recoverPanelOffDeadContent` is spied (call-through, real implementation)
  * rather than left un-instrumented: it has its OWN redundant "still stranded"
@@ -21,7 +22,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -37,12 +38,7 @@ vi.mock('@/utils/panelHistory.js', async (importOriginal) => {
   }
 })
 
-const {
-  panelHistory,
-  panelHasSeenLive,
-  recoverPanelOffDeadContent,
-  __resetConfirmedDeletedForTesting,
-} = await import('@/utils/panelHistory.js')
+const {panelHistory, recoverPanelOffDeadContent} = await import('@/utils/panelHistory.js')
 const recoverSpy = vi.mocked(recoverPanelOffDeadContent)
 
 const { PanelContentRecovery, RECOVERY_DEBOUNCE_MS } = await import('./PanelContentRecovery.tsx')
@@ -74,7 +70,6 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   env = await setup()
   panelHistory.clear(PANEL_ID)
-  __resetConfirmedDeletedForTesting()
   recoverSpy.mockClear()
 })
 afterEach(() => {
@@ -146,7 +141,7 @@ const captureDebounceTimer = (): {
 }
 
 describe('PanelContentRecovery', () => {
-  it('recovers a seen-live block once it is deleted, after the debounce', async () => {
+  it('recovers a block once it is deleted, after the debounce', async () => {
     await createContentBlocks(['a', 'landing'])
     await createPanel('a')
     // A history destination so recovery can land without needing the
@@ -155,7 +150,7 @@ describe('PanelContentRecovery', () => {
     panelHistory.push(PANEL_ID, {blockId: 'landing'})
 
     render(<PanelContentRecovery block={panel()} />)
-    await vi.waitFor(() => expect(panelHasSeenLive(PANEL_ID, 'a')).toBe(true))
+    await act(async () => {}) // let the mount effect run while 'a' is still live
 
     await env.repo.block('a').delete()
 
@@ -172,7 +167,7 @@ describe('PanelContentRecovery', () => {
 
     const {getId, getCallback} = captureDebounceTimer()
     render(<PanelContentRecovery block={panel()} />)
-    await vi.waitFor(() => expect(panelHasSeenLive(PANEL_ID, 'a')).toBe(true))
+    await act(async () => {}) // let the mount effect run while 'a' is still live
 
     await env.repo.block('a').delete()
     await vi.waitFor(() => expect(getCallback()).toBeDefined())
@@ -242,14 +237,11 @@ describe('PanelContentRecovery', () => {
 
     const {clearSpy, getId} = captureDebounceTimer()
     const {unmount} = render(<PanelContentRecovery block={panel()} />)
-    await vi.waitFor(() => expect(panelHasSeenLive(PANEL_ID, 'a')).toBe(true))
+    await act(async () => {}) // let the mount effect run while 'a' is still live
 
     await env.repo.block('a').delete()
-    // The debounce timer is armed synchronously with the cache's transition
-    // to confirmed-missing (both happen inside the same `shown.load().then`
-    // callback), so this is a reliable proxy for "the timer now exists".
-    await vi.waitFor(() => expect(env.repo.cache.isMissing('a')).toBe(true))
-    expect(getId()).toBeDefined()
+    // Wait on the timer itself rather than a proxy for it.
+    await vi.waitFor(() => expect(getId()).toBeDefined())
 
     unmount()
 
@@ -265,7 +257,7 @@ describe('PanelContentRecovery', () => {
 
     const {getId, getCallback} = captureDebounceTimer()
     render(<PanelContentRecovery block={panel()} />)
-    await vi.waitFor(() => expect(panelHasSeenLive(PANEL_ID, 'a')).toBe(true))
+    await act(async () => {}) // let the mount effect run while 'a' is still live
 
     await env.repo.block('a').delete()
     await vi.waitFor(() => expect(getCallback()).toBeDefined())

@@ -33,6 +33,7 @@ import {
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { CallbackSet } from '@/utils/callbackSet'
 import { withMoveTransition } from '@/utils/viewTransition'
+import { isBlockTombstoned } from '@/data/blockLiveness'
 
 /** Per-(panel, block-visit) ephemeral state captured at navigation time
  *  and replayed on back/forward. New fields can be added freely; consumers
@@ -82,7 +83,6 @@ export class PanelHistoryStore {
   private readonly listeners = new Map<string, CallbackSet<[]>>()
   private readonly snapshotters = new Map<string, () => VisitState | undefined>()
   private readonly pendingRestore = new Map<string, VisitState>()
-  private readonly seenLive = new Map<string, Set<string>>()
 
   getSnapshot = (panelId: string): PanelHistoryState =>
     this.state.get(panelId) ?? EMPTY
@@ -217,34 +217,7 @@ export class PanelHistoryStore {
     const had = this.state.has(panelId)
     this.state.delete(panelId)
     this.pendingRestore.delete(panelId)
-    this.seenLive.delete(panelId)
     if (had) this.notify(panelId)
-  }
-
-  /**
-   * Remember that this pane has been observed rendering `blockId` live.
-   *
-   * Lives on the store — same panel-scoped, in-memory, never-persisted contract
-   * as the stacks, and cleared by the same `clear()` when the row goes away —
-   * rather than in the watchdog component, because it must OUTLIVE the
-   * component. A remount inside the recovery debounce would otherwise wipe the
-   * pane's memory of having seen the block live, sending it down the
-   * wait-for-sync branch; in a never-synced session that never fires, and the
-   * pane sits on the tombstone forever with nothing left to re-trigger it.
-   *
-   * What it buys: a page that vanished WHILE WE WATCHED IT is certainly deleted
-   * and recovers immediately, whereas one never live here might simply not have
-   * replicated yet and must wait for the initial sync before we conclude
-   * anything.
-   */
-  rememberSeenLive(panelId: string, blockId: string): void {
-    const seen = this.seenLive.get(panelId)
-    if (seen) seen.add(blockId)
-    else this.seenLive.set(panelId, new Set([blockId]))
-  }
-
-  hasSeenLive(panelId: string, blockId: string): boolean {
-    return this.seenLive.get(panelId)?.has(blockId) ?? false
   }
 
   /** Register a snapshotter for a panel — a function that reads the
@@ -304,27 +277,32 @@ export const panelHistory = new PanelHistoryStore()
  * whether a hash entry is worth keeping in browser history — ask here instead
  * of inferring from that marker.
  *
- * Recorded only when recovery actually moved a pane off the block, and only
- * for blocks it established were gone (watched live and then vanished, or
- * confirmed tombstoned by `isBlockTombstoned`). Retracted when a pane displays
- * the block as its top-level content again — NOT the moment it comes back to
- * life: undo can restore a page nobody reopens, and that id stays marked for
- * the session. Harmless, because the mark is only ever consulted for ids
- * present in the current layout, and reopening the page retracts it before it
- * can matter. Ids only, bounded by deletes observed in one session, and never
- * persisted.
+ * WRITE-ONCE. Recovery records an id here and nothing ever removes it.
+ *
+ * The lifetime can't be scoped to the recovery write, tempting as that is: the
+ * projection learns about the commit through a loader-backed query
+ * subscription, which fires only after the loader re-resolves — well after
+ * `transactPanelContent` has resolved. So a release in a `finally` (or any
+ * refcount over the in-flight window) would be gone before the only reader
+ * looks.
+ *
+ * Retraction was tried and is worse than the disease. Removing an id when a
+ * pane observed the block live again, or when a recovery write failed, meant
+ * one pane could drop a mark another pane was still relying on — two panes on
+ * the same page recover concurrently, and the loser's commit then PUSHED a
+ * history entry rendering a tombstone instead of replacing it. Two review
+ * rounds found two different versions of that race. Write-once has none of it.
+ *
+ * What write-once costs: a page restored by undo stays recorded, so navigating
+ * a pane off it replaces rather than pushes one history entry. That is one
+ * skipped Back step in an already-exceptional flow — cheap next to a Back
+ * button that lands on a deleted page. Ids only, bounded by the deletes one
+ * session actually recovered from, never persisted.
  */
 const confirmedDeletedBlockIds = new Set<string>()
 
 export const markBlockConfirmedDeleted = (blockId: string): void => {
   confirmedDeletedBlockIds.add(blockId)
-}
-
-/** Retract a recorded death — the block was observed live again (undo, or a
- *  row that finally replicated). Without this the record is write-only for the
- *  session and outlives its own truth. */
-export const unmarkBlockConfirmedDeleted = (blockId: string): void => {
-  confirmedDeletedBlockIds.delete(blockId)
 }
 
 export const isBlockConfirmedDeleted = (blockId: string): boolean =>
@@ -337,21 +315,6 @@ export const isBlockConfirmedDeleted = (blockId: string): boolean =>
 export const __resetConfirmedDeletedForTesting = (): void => {
   confirmedDeletedBlockIds.clear()
 }
-
-/** Free functions over the store's seen-live memory, so the recovery watchdog
- *  doesn't reach for the store instance directly. */
-export const rememberPanelSeenLive = (panelId: string, blockId: string): void => {
-  panelHistory.rememberSeenLive(panelId, blockId)
-  // Observing it live retires any recorded death: undo restores blocks, and a
-  // stale "confirmed deleted" would keep the layout projection overwriting the
-  // restored page's browser-history entry for the rest of the session. Done
-  // here rather than inside the store method so a non-singleton store (the unit
-  // tests build one) can't mutate module-global state as a side effect.
-  unmarkBlockConfirmedDeleted(blockId)
-}
-
-export const panelHasSeenLive = (panelId: string, blockId: string): boolean =>
-  panelHistory.hasSeenLive(panelId, blockId)
 
 export interface WritePanelContentOptions {
   /** The pane's view mode AFTER this write. Defaults to undefined = CLEAR:
@@ -480,8 +443,8 @@ export const navigateInPanel = async (
  * validated at CONSUMPTION time instead: whatever went stale surfaces at the
  * top eventually and is dropped there, whatever killed it.
  *
- * Lazy on purpose — only the leading run of dead entries is loaded, never the
- * whole stack. `alsoDeadId` treats an id as dead regardless of what the loader
+ * Lazy on purpose — only the leading run of dead entries is checked, never the
+ * whole stack. `alsoDeadId` treats an id as dead regardless of what the row
  * says, for the recovery path where the caller already knows the page is gone.
  */
 const pruneDeadTop = async (
@@ -492,7 +455,13 @@ const pruneDeadTop = async (
   for (;;) {
     const top = panelHistory.peek(panelBlock.id, side)
     if (!top) return
-    if (top.blockId !== alsoDeadId && await panelBlock.repo.exists(top.blockId)) return
+    // TOMBSTONED, not merely absent. `repo.exists` answers false for both, and
+    // dropping on that lost a valid entry for good: follow a shared link whose
+    // row hasn't replicated yet, navigate on, press Back before it arrives, and
+    // the only in-app route to that page was gone — even though the row showed
+    // up moments later. Same rule the recovery watchdog follows; an unsynced
+    // destination is worth landing on blank, a deleted one is not.
+    if (top.blockId !== alsoDeadId && !await isBlockTombstoned(panelBlock.repo, top.blockId)) return
     // Compare-and-swap on the entry we just inspected: a navigation during the
     // await above pushes a NEW entry onto this same stack, and a blind drop
     // would discard THAT instead of the dead one — losing the user's way back
@@ -588,17 +557,11 @@ export const recoverPanelOffDeadContent = async (
   }
   if (!stillStranded()) return
   if (!targetId) return
-  // Record the confirmed delete only now that we're actually moving the pane
-  // off it. Marking before knowing a destination exists left a STRANDED pane's
-  // page recorded as dead, which then made every later navigation out of that
-  // pane replace its history entry instead of pushing. It still has to happen
-  // BEFORE the write, not after: the projection evaluates `leavingDeletedBlock`
-  // synchronously inside the commit.
-  // `confirmedDeletedBlockIds` is shared by every pane, so only retract on
-  // failure if THIS call is what put the id there — another pane recovering off
-  // the same page concurrently has its own claim on the mark, and dropping it
-  // would let that pane's commit push a history entry rendering a tombstone.
-  const alreadyMarked = isBlockConfirmedDeleted(deadBlockId)
+  // Record the confirmed delete before the write. By now the cached tombstone
+  // the projection would otherwise read is gone — the hook's ensure-load
+  // markMissing's it — so this set is the only thing that can still tell the
+  // projection this page was DELETED rather than merely absent, which is what
+  // keeps browser Back off it. Never retracted; see the set's docblock.
   markBlockConfirmedDeleted(deadBlockId)
   panelHistory.enqueueRestore(panelBlock.id, dest?.state)
   try {
@@ -607,12 +570,8 @@ export const recoverPanelOffDeadContent = async (
       {viewMode: dest?.state?.viewMode},
     )
   } catch (error) {
-    // The write failed, so the pane is still ON the dead block. Roll back the
-    // bookkeeping done in anticipation of the move: otherwise we land in
-    // exactly the stranded-and-marked-dead state the mark was relocated to
-    // avoid, and it is never retracted — retraction needs some pane to observe
-    // the block live again, which will never happen for a deleted one.
-    if (!alreadyMarked) unmarkBlockConfirmedDeleted(deadBlockId)
+    // The write failed, so the pane is still ON the dead block. Drain the
+    // restore queued in anticipation of a move that didn't happen.
     panelHistory.consumeRestore(panelBlock.id)
     console.error('[panel-history] recovery write failed; pane left on the dead block', error)
     return

@@ -1147,6 +1147,46 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  /**
+   * The body of BOTH destructive multi-select gestures. `Delete` and `d` differ
+   * only in whether the selection reaches the clipboard on its way out, so they
+   * share everything else rather than each re-deriving it — the divergence is
+   * what let `d` destroy a daily note that `Delete` refused, and later let
+   * `Delete` leave the pane in multi-select over tombstones that `d` exited
+   * cleanly.
+   *
+   * Order is load-bearing:
+   *  - guards BEFORE the clipboard write, so a refused cut can't leave the user
+   *    believing the content was copied;
+   *  - the copy while the blocks still exist, in SELECTION order (the delete
+   *    runs leaf-first so each removal can't disturb the next, which is not the
+   *    order the markdown should come out in);
+   *  - the selection reset only after a delete actually happened, so a refusal
+   *    leaves it intact to narrow and retry.
+   *
+   * Focus after the batch is left to the mounted `PanelFocusRecovery`, the same
+   * DOM-side watcher that handles blocks vanishing for any other reason.
+   */
+  const deleteSelectedBlocks = async (
+    deps: MultiSelectModeDependencies,
+    {copyFirst}: {copyFirst: boolean},
+  ): Promise<void> => {
+    const {uiStateBlock, selectedBlocks} = deps
+    if (!selectedBlocks.length) return
+
+    const blocks = selectedBlocks.toReversed()
+    if (!await ensureDeletableThroughUi(blocks)) return
+
+    // Copy exactly the set we're about to delete rather than re-reading the
+    // ui-state selection: with supplied deps the two can differ, and the copy
+    // would quietly no-op while the delete went ahead.
+    if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+    await withMoveTransition(async () => {
+      await deleteBlocksThroughUi(blocks)
+    })
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
@@ -1154,13 +1194,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    // Check the WHOLE selection before deleting any of it, so `Delete` and `d`
-    // on the same selection can't disagree. Scope and limits of that promise:
-    // see `deleteBlocksThroughUi`'s docblock.
-    applyToAllBlocksInSelection(deleteBlockAction, {
-      preflight: blocks => ensureDeletableThroughUi(blocks),
-      clearSelectionAfter: true,
-    }),
+    // Not a per-block fan-out: `Delete` on a selection IS `cut` minus the
+    // clipboard, so both run the same batch below rather than converging on it
+    // by having two code paths remember the same rules.
+    {
+      ...makeMultiSelect(deleteBlockAction),
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: false}),
+    },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
     {
@@ -1189,29 +1229,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_selected_blocks',
       description: 'Cut selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        if (!selectedBlocks.length) return
-
-        // Guard BEFORE the clipboard write: a cut the guards refuse must not
-        // leave the user believing the content is on the clipboard. The copy
-        // has to run while the blocks still exist, which is why this uses the
-        // check and the delete separately.
-        const blocks = selectedBlocks.toReversed()
-        if (!await ensureDeletableThroughUi(blocks)) return
-
-        // Copy exactly the set we're about to delete, rather than re-reading
-        // the ui-state selection: with supplied deps the two can differ, and
-        // the copy would quietly no-op while the delete went ahead. In
-        // SELECTION order — `blocks` is reversed for the delete (leaf-first, so
-        // each removal can't disturb the next), which is not the order the
-        // markdown should come out in.
-        await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
-        await withMoveTransition(async () => {
-          await deleteBlocksThroughUi(blocks)
-        })
-        await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-      },
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: true}),
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {

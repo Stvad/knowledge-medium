@@ -10,7 +10,6 @@ import {
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
 import { invokeAction } from './actionDispatch.ts'
-import { selectionStateProp } from '@/data/properties'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement
@@ -102,35 +101,11 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
  */
 export interface ApplyToAllOptions {
   applyInReverseOrder?: boolean
-  /**
-   * Run ONCE over the whole selection before any block is touched; return false
-   * to abort the gesture entirely.
-   *
-   * The fan-out is per-block by construction, so an action that can refuse
-   * individual blocks would otherwise apply to some and skip others. For a
-   * destructive action that half-outcome is the worst one — the user can't undo
-   * it by re-selecting, and it diverges from the batch gestures (`cut`) that
-   * refuse wholesale. Actions that are naturally per-block (indent, collapse)
-   * just omit this.
-   */
-  preflight?: (blocks: readonly Block[]) => Promise<boolean>
-  /**
-   * Clear the selection once the fan-out has run. Destructive actions need it:
-   * MULTI_SELECT_MODE is modal and stays active while `selectedBlockIds` is
-   * non-empty, so after deleting the selection the pane sat in multi-select
-   * over ids that no longer exist — nothing highlighted, every keystroke still
-   * routed to multi-select handlers until Escape. `cut` already did this
-   * inline; `Delete` and `d` on the same selection must not disagree.
-   *
-   * Actions that leave their blocks in place (indent, collapse, move) keep the
-   * selection so the user can chain another one.
-   */
-  clearSelectionAfter?: boolean
 }
 
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
-  {applyInReverseOrder, preflight, clearSelectionAfter}: ApplyToAllOptions = { applyInReverseOrder: false},
+  {applyInReverseOrder}: ApplyToAllOptions = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block.
   // Wrap the whole batch in one view transition so users see a single
@@ -141,7 +116,6 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
     const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
-    if (preflight && !await preflight(blocks)) return
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
     // todo Wrap all per-block actions into a single repo.tx so undo
@@ -169,9 +143,6 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           : actionConfig.handler(originalDeps, trigger))
       }
     })
-    if (clearSelectionAfter) {
-      await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-    }
   }
 
   return makeMultiSelect({

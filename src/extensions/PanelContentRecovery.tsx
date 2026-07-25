@@ -3,11 +3,7 @@ import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { useBlockExists, usePropertyValue } from '@/hooks/block.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
-import {
-  panelHasSeenLive,
-  recoverPanelOffDeadContent,
-  rememberPanelSeenLive,
-} from '@/utils/panelHistory.js'
+import { recoverPanelOffDeadContent } from '@/utils/panelHistory.js'
 import { isBlockTombstoned } from '@/data/blockLiveness.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
 
@@ -58,8 +54,9 @@ const resolveLandingId = async (repo: Repo, excludeBlockId: string): Promise<str
  * recovered in all of them, and the delete handler doesn't have to know about
  * any of it — it just deletes.
  *
- * Only recovers a block it has previously observed live, so an initial mount
- * where the block hasn't loaded yet isn't mistaken for a deletion.
+ * Only recovers on a confirmed TOMBSTONE, never on a merely-absent row, so an
+ * initial mount before the block has loaded — or a deep link whose row hasn't
+ * replicated yet — is not mistaken for a deletion.
  */
 export function PanelContentRecovery({block}: {block: Block}) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -77,18 +74,26 @@ export function PanelContentRecovery({block}: {block: Block}) {
     }
     if (!topLevelBlockId) return
 
-    if (shownExists) {
-      rememberPanelSeenLive(block.id, topLevelBlockId)
-      return
-    }
+    if (shownExists) return
 
     // Not live — but `useBlockExists` reports "still loading" and "confirmed
     // missing" identically, and a confirmation produces no further transition
-    // to re-run this effect. So ask the loader directly instead of inferring
-    // absence from what this pane happens to have seen: that inference left
-    // panes stranded forever on any id they never observed live (a stale
-    // bookmark, a shared link, a browser-history entry for a since-deleted
-    // page).
+    // to re-run this effect. So ask the row directly: it is the only source
+    // that separates "deleted" from "not replicated here yet", and recovering
+    // on the latter would move the pane off a valid deep link that is still
+    // syncing (the projection then rewrites the URL in place, so browser Back
+    // can't get it back either).
+    //
+    // This pane's own memory of having seen the block live used to gate a
+    // faster path here. It was redundant — a block this pane watched vanish is
+    // precisely a block whose row is now a tombstone, so both branches asked
+    // the same question — and it was one more piece of cross-pane state to
+    // keep honest.
+    //
+    // An earlier version instead waited on `onFirstSync` before concluding
+    // anything. That gate was vacuous: PowerSync's `hasSynced` persists across
+    // sessions (see repoProvider's "already completed in a prior session"
+    // note), so on every warm client it fired synchronously and decided nothing.
     let cancelled = false
 
     const armRecovery = () => {
@@ -99,10 +104,6 @@ export function PanelContentRecovery({block}: {block: Block}) {
         // restored by undo, not a mid-load blip that resolved).
         if (block.peekProperty(topLevelBlockIdProp) !== topLevelBlockId) return
         if (block.repo.block(topLevelBlockId).peek()) return
-        // Deliberately NOT forgetting the seen-live entry here: recovery is a
-        // documented no-op when nothing live exists, and dropping the memory
-        // would send a later effect run down the wait-for-sync branch for a
-        // block we know was deleted. It's cleared with the panel instead.
         // The landing resolver is passed as a thunk, not a resolved id: it can
         // write (get-or-create), so it must only run if history yields nothing
         // live. `recoverPanelOffDeadContent` re-checks that the pane is still
@@ -114,32 +115,14 @@ export function PanelContentRecovery({block}: {block: Block}) {
       }, RECOVERY_DEBOUNCE_MS)
     }
 
-    void shown.load().then(data => {
-      if (cancelled || data) return
-      // Watched this block be live, so its absence now is a delete — recover.
-      if (panelHasSeenLive(block.id, topLevelBlockId)) {
-        armRecovery()
-        return
-      }
-      // Never live in this pane, so `load()` returning null is ambiguous:
-      // deleted, or simply not replicated here yet. Ask the row directly and
-      // recover ONLY on a real tombstone — a missing row means "unknown", and
-      // moving the pane off a valid deep link that is still syncing would lose
-      // it (the layout projection then rewrites the URL in place, so browser
-      // Back can't get it back either).
-      //
-      // An earlier version waited on `onFirstSync` instead. That gate was
-      // vacuous: PowerSync's `hasSynced` persists across sessions (see
-      // repoProvider's "already completed in a prior session" note), so on every
-      // warm client the callback fired synchronously and decided nothing.
-      void isBlockTombstoned(block.repo, topLevelBlockId).then(tombstoned => {
+    void isBlockTombstoned(block.repo, topLevelBlockId)
+      .then(tombstoned => {
         if (!cancelled && tombstoned) armRecovery()
-      }).catch(error => console.error('[panel-content-recovery] liveness read failed', error))
-    })
+      })
       // The db can go away under us (sign-out, workspace switch) while a pane
       // is mid-check. Leaving the pane as-is is the right outcome; an
       // unhandled rejection is not.
-      .catch(error => console.error('[panel-content-recovery] load failed', error))
+      .catch(error => console.error('[panel-content-recovery] liveness read failed', error))
 
     return () => {
       cancelled = true

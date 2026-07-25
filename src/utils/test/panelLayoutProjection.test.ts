@@ -1,5 +1,26 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+/** One-shot hook into the liveness read `pruneDeadTop` performs, so a test can
+ *  interleave a navigation at exactly that await instead of racing timers.
+ *  Null unless a test installs it; consumed on first match. */
+const livenessHook = vi.hoisted(() => ({
+  onCheck: null as null | ((blockId: string) => Promise<void>),
+}))
+vi.mock('@/data/blockLiveness', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/data/blockLiveness')>()
+  return {
+    ...actual,
+    isBlockTombstoned: async (repo: Parameters<typeof actual.isBlockTombstoned>[0], id: string) => {
+      const hook = livenessHook.onCheck
+      if (hook) {
+        livenessHook.onCheck = null
+        await hook(id)
+      }
+      return actual.isBlockTombstoned(repo, id)
+    },
+  }
+})
 import { ChangeScope, type BlockData, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
@@ -33,12 +54,12 @@ import {
   retargetPanelBlockIds,
 } from '@/utils/panelLayoutProjection'
 import {
+  __resetConfirmedDeletedForTesting,
   goBackInPanel,
   goForwardInPanel,
   navigateInPanel,
   panelHistory,
   recoverPanelOffDeadContent,
-  __resetConfirmedDeletedForTesting,
 } from '@/utils/panelHistory'
 
 const WS = 'ws-1'
@@ -70,6 +91,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   env = await setup()
   __resetConfirmedDeletedForTesting()
+  livenessHook.onCheck = null
 })
 
 const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
@@ -1623,13 +1645,12 @@ describe('recoverPanelOffDeadContent', () => {
     panelHistory.push(panel.id, {blockId: 'gone'})
     await env.repo.block('gone').delete()
 
-    // Drive the navigation from inside the prune's liveness check so the
-    // interleaving is deterministic rather than timing-dependent.
-    const realExists = env.repo.exists.bind(env.repo)
-    vi.spyOn(env.repo, 'exists').mockImplementation(async (id: string) => {
+    // Drive the navigation from inside the prune's liveness read so the
+    // interleaving is deterministic rather than timing-dependent. The prune
+    // asks `isBlockTombstoned`, which is one `getOptional` against `blocks`.
+    livenessHook.onCheck = async id => {
       if (id === 'gone') await navigateInPanel(panel, 'elsewhere')
-      return realExists(id)
-    })
+    }
 
     expect(await goBackInPanel(panel)).toBe(false)
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('elsewhere')
