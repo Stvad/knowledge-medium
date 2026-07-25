@@ -43,10 +43,17 @@ const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
  *  `toAlias` + `intoId`, never on the source being rewritten).
  *
  *  Pairs whose replacement can't round-trip are DROPPED from the map
- *  entirely rather than emitted unverified. Dropping is what keeps
- *  content and reference entries coherent: `retargetReference` reads
- *  the same map, so a pair the content rewrite skipped no longer has
- *  its stored entry re-aliased to a name the content doesn't carry. */
+ *  entirely rather than emitted unverified — writing text that doesn't
+ *  parse would destroy the span outright. Both the content rewrite and
+ *  `retargetReference` read this same map, so a dropped pair is dropped
+ *  consistently on both sides rather than re-aliasing the stored entry
+ *  to a name the content never got.
+ *
+ *  That is damage control, not coherence: a dropped pair still leaves
+ *  `[[fromAlias]]` in content while the entry retargets to `intoId`,
+ *  which no longer claims that name, so the next parse re-seats it.
+ *  Unreachable in practice — the drop arm needs a non-UUID `intoId`,
+ *  and every id generator here is uuidv4/uuidv5. */
 const resolveAliasReplacements = (
   aliasRewrites: readonly {fromAlias: string; toAlias: string}[],
   intoId: string,
@@ -59,7 +66,11 @@ const resolveAliasReplacements = (
       continue
     }
     // The wikilink form can't carry `toAlias`; pin to the merge target
-    // instead, preserving the display text the source author wrote.
+    // instead. NOTE the label is `toAlias`, not the source author's
+    // original text — an alias-collision merge deliberately re-titles
+    // the span to the surviving name. (`replacementFor` on the rename
+    // side pins the REMOVED alias, which does preserve what the author
+    // wrote; the two look alike and mean different things.)
     const pinned = pinnedSpanReplacement(toAlias, intoId)
     if (pinned === null) {
       console.warn(

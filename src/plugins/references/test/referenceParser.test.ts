@@ -13,6 +13,8 @@ import {
   rewriteWikilinks,
   inlineBlockRefs,
   rewriteBlockRefs,
+  faithfulWikilinkReplacement,
+  pinnedSpanReplacement,
 } from '../referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
@@ -415,6 +417,56 @@ Another [[normal-ref]]
     it('returns input unchanged when no mark targets the id', () => {
       const content = `nothing ((${OTHER_UUID})) here`
       expect(inlineBlockRefs(content, UUID, 'BODY')).toBe(content)
+    })
+  })
+
+  describe('whole-span round-trip guard', () => {
+    it('accepts a label that survives rendering intact', () => {
+      expect(pinnedSpanReplacement('Plain', UUID)).toEqual({
+        text: `[Plain](((${UUID})))`,
+        refAlias: UUID,
+        toTargetId: UUID,
+        lossyLabel: false,
+      })
+    })
+
+    it('flags a label the renderer had to sanitize, keeping the link', () => {
+      // `]` is legal in a wikilink alias but illegal in a blockref label.
+      const result = pinnedSpanReplacement('a]b', UUID)
+      expect(result).toEqual({
+        text: `[ab](((${UUID})))`,
+        refAlias: UUID,
+        toTargetId: UUID,
+        lossyLabel: true,
+      })
+    })
+
+    it('refuses a target that cannot be represented in the pinned grammar', () => {
+      expect(pinnedSpanReplacement('Plain', 'not-a-uuid')).toBeNull()
+    })
+
+    it('refuses a pinned span whose label smuggles a wikilink opener', () => {
+      // `renderAliasedBlockref` strips `]` and newlines but NOT `[`, so
+      // this renders a valid aliased blockref that also carries an
+      // unbalanced `[[`. Spliced next to any later `]]` the pair closes
+      // across the spliced text and manufactures a bogus wikilink —
+      // which binds a reference and mints a seat. Checking only the
+      // grammar we rendered into would certify it as faithful.
+      expect(pinnedSpanReplacement('a[[b', UUID)).toBeNull()
+      expect(
+        parseReferences(`see ${renderAliasedBlockref('a[[b', UUID)} tail]]`).length,
+      ).toBe(1)
+    })
+
+    it('refuses wikilink forms that do not parse back to the same alias', () => {
+      expect(faithfulWikilinkReplacement('')).toBeNull()
+      expect(faithfulWikilinkReplacement('foo]]bar')).toBeNull()
+      expect(faithfulWikilinkReplacement('Plain')).toEqual({
+        text: '[[Plain]]',
+        refAlias: 'Plain',
+        toTargetId: null,
+        lossyLabel: false,
+      })
     })
   })
 })

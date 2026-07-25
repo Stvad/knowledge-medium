@@ -302,6 +302,11 @@ export interface SpanReplacement {
    *  the text is what lets a rewriter update content and the stored
    *  `references` list in lockstep instead of guessing. */
   refAlias: string
+  /** Normalized target id the spliced text actually binds to, when the
+   *  replacement PINS to one. `null` for the wikilink form, which is
+   *  late-binding and names no id. Callers use it so the stored edge's
+   *  `id` and `alias` stay in the same normalization as each other. */
+  toTargetId: string | null
   /** True when `text` resolves to the intended target but DISPLAYS
    *  something other than the requested label (`]`/newline stripped,
    *  surrounding whitespace trimmed). The link is intact; the visible
@@ -322,7 +327,7 @@ export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | nu
   const [mark] = marks
   if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
   if (mark.alias !== alias) return null
-  return {text, refAlias: alias, lossyLabel: false}
+  return {text, refAlias: alias, toTargetId: null, lossyLabel: false}
 }
 
 /** `[label](((targetId)))` — the pinned form, which keeps the display
@@ -351,17 +356,35 @@ export const pinnedSpanReplacement = (
   if (marks.length !== 1) return null
   const [mark] = marks
   if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
-  // Unreachable while `renderAliasedBlockref` embeds the id verbatim —
-  // kept because this guard's whole job is catching renderer/parser
-  // drift, and the id is one `renderAliasedBlockref` sanitization step
-  // away from being mangled the way the label already is.
   if (mark.blockId !== targetId.toLowerCase()) return null
-  // `refAlias` is what a re-parse ACTUALLY yields, so it carries the
-  // parser's normalized (lower-cased) id — `parseReferences` emits
-  // `{id: mark.blockId, alias: mark.blockId}` for blockref edges.
+  // The span must also be INERT under the other grammar sharing this
+  // text. `renderAliasedBlockref` strips `]` and newlines but keeps `[`,
+  // so a label like `a[[b` renders a perfectly valid aliased blockref
+  // that also carries an unbalanced wikilink OPENER. Parsing the span in
+  // isolation sees nothing wrong — there's no closing `]]` in it — but
+  // splice it into a source with any later `]]` and the pair closes
+  // across the spliced text, manufacturing a bogus wikilink that binds a
+  // reference and mints a seat. `renderWikilink` already spaces adjacent
+  // delimiters apart for exactly this reason; the pinned form can't
+  // (its leading `[` is grammar), so it refuses instead.
+  //
+  // `]]` needs no test: the renderer strips every `]` from the label and
+  // the template contributes exactly one, so a closer can't be formed.
+  if (text.includes('[[')) return null
+  // `refAlias` / `toTargetId` are what a re-parse ACTUALLY yields, so
+  // both carry the parser's normalized (lower-cased) id —
+  // `parseReferences` emits `{id: mark.blockId, alias: mark.blockId}`
+  // for blockref edges. Returning a normalized alias beside an
+  // unnormalized id would write an entry pair no re-parse produces, and
+  // whose `block_references.target_id` joins nothing.
   // `parseBlockRefs` trims the captured label, so leading/trailing
   // whitespace counts as lossy alongside the stripped characters.
-  return {text, refAlias: mark.blockId, lossyLabel: mark.label !== label}
+  return {
+    text,
+    refAlias: mark.blockId,
+    toTargetId: mark.blockId,
+    lossyLabel: mark.label !== label,
+  }
 }
 
 /** Replace every wikilink whose alias exactly matches `alias` with

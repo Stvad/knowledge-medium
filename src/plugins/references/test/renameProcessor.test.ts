@@ -23,7 +23,11 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
 import { referencesDataExtension } from '../dataExtension.ts'
-import { applyRefRewrites, type Rewrite } from '../renameProcessor.ts'
+import {
+  applyRefRewrites,
+  RENAME_BACKLINKS_PROCESSOR,
+  type Rewrite,
+} from '../renameProcessor.ts'
 
 interface Harness {
   h: TestDb
@@ -44,6 +48,10 @@ const setup = async (): Promise<Harness> => {
       aliasDataExtension,
     ],
   })
+  // Property child-backing is workspace-scoped and reads the ACTIVE
+  // workspace, so the flipped-workspace case below is a no-op without
+  // this (and the seat would silently have no generated children).
+  repo.setActiveWorkspaceId(WS)
   // h.cleanup disposes this Repo's observer (not the shared DB).
   const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {
@@ -641,6 +649,7 @@ describe('applyRefRewrites — surgical entry swap', () => {
     fromTargetId: PIN_TARGET,
     toTargetId: PIN_TARGET,
     refAlias: PIN_TARGET,
+    seatIds: new Set<string>(),
     ...over,
   })
 
@@ -657,5 +666,133 @@ describe('applyRefRewrites — surgical entry swap', () => {
       [{id: PIN_TARGET, alias: 'Win', sourceField: 'ref'}],
       [rw({})],
     )).toEqual([{id: PIN_TARGET, alias: 'Win', sourceField: 'ref'}])
+  })
+})
+
+describe('rename — seat classification hardening (#443 group 2 review)', () => {
+  const refsOf = async (id: string) =>
+    JSON.parse((await env.read(id))!.references_json) as Array<{id: string; alias: string}>
+
+  it('does not hijack a PRE-EXISTING seat’s backlinks when a co-claimant releases the alias', async () => {
+    // The seat exemption describes a PRISTINE seat, not one this rename
+    // produced. Without a recency gate, a seat that has owned the name
+    // since long before the releasing block existed satisfies the shape
+    // checks identically — and following its edges re-points every
+    // `[[Win]]` onto a block that never owned the name here.
+    //
+    // Reachable without any race: `block_aliases_workspace_alias_unique`
+    // only fires for local user txs, so a SYNC-APPLIED row can co-claim
+    // an alias a local seat already holds. A raw insert outside repo.tx
+    // leaves `tx_context.source` NULL — the same shape.
+    await seedSource('s', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    expect((await env.read(seatId))!.deleted).toBe(0)
+    expect(await refsOf('s')).toEqual([{id: seatId, alias: 'Win'}])
+
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, created_at, updated_at,
+                             created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, 'z0', 'Squatter', ?, '[]', 1, 1, 'u', 'u', 0)`,
+        [PIN_TARGET, WS, JSON.stringify({alias: ['Win']})],
+      )
+    })
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // Untouched: the span still late-binds to the seat that owns the name.
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+    expect(await refsOf('s')).toEqual([{id: seatId, alias: 'Win'}])
+    expect((await env.read(seatId))!.deleted).toBe(0)
+  })
+
+  it('still rewrites a window-bound span in a child-backed workspace', async () => {
+    // Post-flip, `ensureAliasTarget`'s two setProperty calls route through
+    // writePropertyValueChild, so EVERY seat is born with live children.
+    // A bare "has live children?" gate doesn't just fail to recognize the
+    // seat there — it inverts: the seat counts as a real claimant and
+    // suppresses the rewrite entirely, which is worse than not having the
+    // claimant check at all.
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await ensureAliasTarget(tx, env.repo, 'Win', WS)
+      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // The seat really was born with generated children here — otherwise
+    // this test would pass for the wrong reason (an unflipped workspace
+    // produces a childless seat, which the bare gate accepts anyway).
+    // Queried WITHOUT `deleted = 0`: the rewrite orphans the seat and the
+    // reaper soft-deletes it and its generated subtree, so by now the
+    // live count is legitimately zero.
+    const seatChildren = await env.h.db.getAll<{id: string; content: string}>(
+      `SELECT id, content FROM blocks WHERE parent_id = ?`, [seatId])
+    expect(seatChildren.length).toBeGreaterThan(0)
+    expect(seatChildren.every(c => c.content.startsWith('::'))).toBe(true)
+    expect((await env.read('s'))!.content).toBe(`see [Win](((${PIN_TARGET}))) please`)
+  })
+})
+
+describe('rename — claimant re-assert inside the write tx (#443 group 2 review)', () => {
+  it('drops the rewrite when the alias is claimed between the read phase and the write', async () => {
+    // The read-phase claimant check is a committed-state read outside any
+    // transaction, and `serializeRename` only serializes rename against
+    // rename — anything else commits freely in the gap. `applyPlan`'s
+    // content guard is structurally blind to this: a third party claiming
+    // the alias never touches the SOURCE, so the source's content is
+    // unchanged and the rewrite proceeds, pinning the span to the block
+    // that just gave the name up. Irreversibly, and precisely the outcome
+    // the claimant check exists to prevent.
+    await seedTarget(PIN_TARGET, 'T', ['Shared'])
+    await seedTarget('u', 'U', [])
+    await seedSource('s', 'see [[Shared]] please')
+
+    // Land the competing claim in the gap: the rename's plan is already
+    // built when its write tx opens, so committing here reproduces the
+    // interleaving deterministically.
+    const realTx = env.repo.tx.bind(env.repo)
+    let injected = false
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementation((async (fn: never, opts: never) => {
+      const description = (opts as {description?: string} | undefined)?.description
+      if (!injected && description?.includes(RENAME_BACKLINKS_PROCESSOR)) {
+        injected = true
+        await realTx(
+          tx => tx.setProperty('u', aliasesProp, ['Shared']),
+          {scope: ChangeScope.BlockDefault},
+        )
+      }
+      return realTx(fn, opts)
+    }) as never)
+
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+      expect(injected).toBe(true)
+    } finally {
+      txSpy.mockRestore()
+    }
+
+    // Untouched — `[[Shared]]` still late-binds, and now to U.
+    expect((await env.read('s'))!.content).toBe('see [[Shared]] please')
   })
 })
