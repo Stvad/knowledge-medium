@@ -550,9 +550,8 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
  *  is what handles a back stack pointing INTO the deleted subtree (its
  *  descendants are all dead) — else falls back to `fallbackId` (the workspace
  *  landing page). The dead current page is never parked on the forward stack
- *  (unlike `goBackInPanel`), and every remaining reference to `deadBlockId` is
- *  purged from the stacks afterwards. Entries that die deeper in either stack
- *  aren't chased here — `pruneDeadTop` catches them when a chevron reaches
+ *  (unlike `goBackInPanel`). Entries that die deeper in either stack aren't
+ *  chased here — `pruneDeadTop` catches them when a chevron reaches
  *  them. A no-op when no live destination exists — leaves the pane as-is rather
  *  than closing it. Each pane runs its own recovery, so a page open in several
  *  panes is retargeted in all of them. */
@@ -595,6 +594,11 @@ export const recoverPanelOffDeadContent = async (
   // pane replace its history entry instead of pushing. It still has to happen
   // BEFORE the write, not after: the projection evaluates `leavingDeletedBlock`
   // synchronously inside the commit.
+  // `confirmedDeletedBlockIds` is shared by every pane, so only retract on
+  // failure if THIS call is what put the id there — another pane recovering off
+  // the same page concurrently has its own claim on the mark, and dropping it
+  // would let that pane's commit push a history entry rendering a tombstone.
+  const alreadyMarked = isBlockConfirmedDeleted(deadBlockId)
   markBlockConfirmedDeleted(deadBlockId)
   panelHistory.enqueueRestore(panelBlock.id, dest?.state)
   try {
@@ -608,15 +612,23 @@ export const recoverPanelOffDeadContent = async (
     // exactly the stranded-and-marked-dead state the mark was relocated to
     // avoid, and it is never retracted — retraction needs some pane to observe
     // the block live again, which will never happen for a deleted one.
-    unmarkBlockConfirmedDeleted(deadBlockId)
+    if (!alreadyMarked) unmarkBlockConfirmedDeleted(deadBlockId)
     panelHistory.consumeRestore(panelBlock.id)
     console.error('[panel-history] recovery write failed; pane left on the dead block', error)
     return
   }
   // Consume the destination only once the pane is actually on it, so a failed
-  // write costs the user nothing. Compare-and-swap because the write awaited: a
-  // navigation in the meantime replaces the top, and that entry is the user's
-  // way back to where they now are.
+  // write costs the user nothing. Compare-and-swap because the write awaited: if
+  // something pushed in the meantime, that new entry is the user's way back to
+  // where they now are and must not be discarded in its place.
+  //
+  // Not airtight, and can't be made so from here: a navigation landing in this
+  // window pushes the pane's CURRENT block, which is `dest.blockId` — and
+  // `push` DEDUPES against an identical top rather than stacking, so the top is
+  // still `dest`, the swap matches, and the drop removes an entry the
+  // navigation meant to keep. Reaching it needs a programmatic navigation
+  // inside the gap between the commit and this line (one macrotask), not a
+  // human one, and the cost is one skipped Back step.
   if (dest) panelHistory.dropTop(panelBlock.id, 'back', dest)
   // Deliberately NOT purging the dead id from the stacks here. Entries are
   // validated at CONSUMPTION time (`pruneDeadTop`), which already covers
