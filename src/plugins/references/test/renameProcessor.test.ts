@@ -672,6 +672,28 @@ describe('applyRefRewrites — surgical entry swap', () => {
     )).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
   })
 
+  it('keeps the old edge when a page embed survived the pinned rewrite', async () => {
+    // `rewriteWikilinks` steps over `![[Win]]` for pinned replacements, so
+    // a source holding both `[[Win]]` and `![[Win]]` still has a live
+    // `Win` span afterwards — but `normalizeReferences` gave both
+    // occurrences ONE entry. Swapping it outright drops the surviving
+    // embed out of `block_references` until the async re-parse rebuilds
+    // it, and a rename landing in that window cannot see the embed.
+    const out = applyRefRewrites(
+      [{id: PIN_TARGET, alias: 'Win'}],
+      [rw({})],
+      new Set(['Win']),
+    )
+    expect(out).toHaveLength(2)
+    expect(out).toEqual(expect.arrayContaining([
+      {id: PIN_TARGET, alias: 'Win'},
+      {id: PIN_TARGET, alias: PIN_TARGET},
+    ]))
+    // Nothing retained when every occurrence was rewritten.
+    expect(applyRefRewrites([{id: PIN_TARGET, alias: 'Win'}], [rw({})]))
+      .toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
+  })
+
   it('leaves an edge alone when its target is neither planned nor a seat slot', async () => {
     // The seat fallback is scoped to THIS alias's slot window, so an edge
     // pointing at some unrelated block that shares the alias text is not

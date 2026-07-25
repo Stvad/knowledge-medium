@@ -56,8 +56,8 @@ const SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL = `
 const resolveAliasReplacements = (
   aliasRewrites: readonly {fromAlias: string; toAlias: string}[],
   intoId: string,
-): Map<string, SpanReplacement> => {
-  const out = new Map<string, SpanReplacement>()
+): Map<string, SpanReplacement | null> => {
+  const out = new Map<string, SpanReplacement | null>()
   for (const {fromAlias, toAlias} of aliasRewrites) {
     // `pinLabel` is `toAlias`, NOT the source author's original text —
     // an alias-collision merge deliberately re-titles the span to the
@@ -70,7 +70,12 @@ const resolveAliasReplacements = (
       targetId: intoId,
       context: RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR,
     })
-    if (replacement !== null) out.set(fromAlias, replacement)
+    // `null` is RECORDED, not skipped. It means "we meant to rewrite
+    // this alias and could not render any form of it", which the entry
+    // retarget below has to know about: dropping the key entirely made
+    // an unrenderable pair indistinguishable from an alias that was
+    // never in this merge, and those two want opposite handling.
+    out.set(fromAlias, replacement)
   }
   return out
 }
@@ -79,9 +84,20 @@ const retargetReference = (
   ref: BlockReference,
   fromId: string,
   intoId: string,
-  aliasReplacements: ReadonlyMap<string, SpanReplacement>,
+  aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
 ): BlockReference => {
   if (ref.id !== fromId) return ref
+  // An alias this merge MEANT to rewrite but could not render leaves the
+  // content saying `[[fromAlias]]`. Moving its edge to `intoId` anyway
+  // writes an entry the content does not support: the merge strips
+  // `fromAlias` from the surviving block, so the next re-parse binds that
+  // span to a fresh seat, not to `intoId`. Content and entries move in
+  // lockstep here or not at all — leave the whole reference alone and let
+  // the re-parse be the single source of truth. (Reachable whenever both
+  // ladder rungs fail, e.g. a surviving alias containing `[[`, which the
+  // wikilink form cannot carry and the pinned form refuses as a
+  // delimiter-smuggling label.)
+  if (ref.alias !== fromId && aliasReplacements.get(ref.alias) === null) return ref
   // `refAlias`, not the bare `toAlias`: when the rewrite fell back to
   // the pinned form the content now reads `[toAlias](((intoId)))`,
   // which re-parses to a blockref edge whose alias IS the id. Keying
@@ -140,10 +156,11 @@ const retargetReferenceContent = (
   content: string,
   fromId: string,
   intoId: string,
-  aliasReplacements: ReadonlyMap<string, SpanReplacement>,
+  aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
 ): string => {
   let next = rewriteBlockRefs(content, fromId, intoId)
   for (const [fromAlias, replacement] of aliasReplacements) {
+    if (replacement === null) continue
     next = rewriteWikilinks(next, fromAlias, replacement.text,
       {skipEmbeds: replacement.toTargetId !== null})
   }
@@ -154,7 +171,7 @@ const retargetSource = async (
   ctx: SameTxCtx,
   sourceId: string,
   event: CoreBlockMergedEvent,
-  aliasReplacements: ReadonlyMap<string, SpanReplacement>,
+  aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): Promise<void> => {
   const tx = ctx.tx

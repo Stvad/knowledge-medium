@@ -54,7 +54,7 @@ import {
   generatedSeatFieldIds,
   matchesAliasSeatSeed,
 } from '@/data/targets'
-import { rewriteWikilinks, type SpanReplacement } from './referenceParser.ts'
+import { parseReferences, rewriteWikilinks, type SpanReplacement } from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
@@ -559,6 +559,15 @@ const collectTargetPlans = async (
 export const applyRefRewrites = (
   refs: ReadonlyArray<BlockReference>,
   rewrites: ReadonlyArray<Rewrite>,
+  /** Aliases that still have a live span in the rewritten content — a
+   *  page embed the pinned form deliberately stepped over. Their old
+   *  edge is KEPT alongside the new one: `normalizeReferences` has
+   *  already collapsed both occurrences into a single entry, so swapping
+   *  it outright would drop the surviving embed out of the
+   *  `block_references` projection until the async re-parse rebuilds it,
+   *  and a rename or backlink query landing in that window would not see
+   *  the embed at all. */
+  retainedAliases: ReadonlySet<string> = new Set(),
 ): BlockReference[] => {
   if (rewrites.length === 0) return [...refs]
   // (fromTargetId, oldAlias) → (toTargetId, newRefAlias). Last-write-
@@ -596,7 +605,9 @@ export const applyRefRewrites = (
       const moved = rewrites.find(rw => rw.alias === ref.alias && rw.seat.slotIds.has(ref.id))
       if (moved !== undefined) swapped = {id: moved.toTargetId, alias: moved.refAlias}
     }
-    next.push(swapped === undefined ? ref : {...ref, id: swapped.id, alias: swapped.alias})
+    if (swapped === undefined) { next.push(ref); continue }
+    if (retainedAliases.has(ref.alias)) next.push(ref)
+    next.push({...ref, id: swapped.id, alias: swapped.alias})
   }
   return normalizeReferences(next)
 }
@@ -753,7 +764,14 @@ const applyPlan = async (
   // on the content change and re-emit the same list (idempotent), but
   // by then the next rename's SELECT already sees the up-to-date
   // index — no race window.
-  const nextRefs = applyRefRewrites(current.references, live)
+  // A pinned rewrite steps over `![[α]]` page embeds, so α can still have
+  // a live span after its own rewrite ran. `normalizeReferences` gives
+  // both occurrences one shared entry, so that entry has to survive.
+  const remaining = new Set(parseReferences(nextContent).map(mark => mark.alias))
+  const retained = new Set(
+    live.filter(rw => rw.pinned && remaining.has(rw.alias)).map(rw => rw.alias),
+  )
+  const nextRefs = applyRefRewrites(current.references, live, retained)
   await tx.update(
     plan.sourceId,
     {content: nextContent, references: nextRefs},

@@ -261,6 +261,46 @@ describe('references.retargetMergedBlockReferences', () => {
     )
   })
 
+  it('leaves content AND entry alone when neither form can carry the surviving alias', async () => {
+    // `a[[b` defeats BOTH rungs of the ladder: `renderWikilink` spaces
+    // the delimiters apart, and the pinned form refuses a label carrying
+    // a `[[` opener (spliced next to any later `]]` it would manufacture
+    // a bogus wikilink). The content therefore keeps saying
+    // `[[Partial]]` — so moving its ENTRY to the merge target writes a
+    // pairing the content does not support, and since the merge strips
+    // `Partial`, the next re-parse binds that span to a fresh seat rather
+    // than to `into`. Content and entries move together or not at all.
+    const intoId = '55555555-5555-4555-8555-555555555555'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: intoId, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'Target', properties: aliasProperty(['a[[b']),
+      })
+      await tx.create({
+        id: 'source', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: 'Partial', properties: aliasProperty(['Partial']),
+      })
+      await tx.create({
+        id: 'ref', workspaceId: WS, parentId: null, orderKey: 'a2',
+        content: 'see [[Partial]]',
+        references: [{id: 'source', alias: 'Partial'}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId,
+      fromId: 'source',
+      collisionAlias: 'a[[b',
+      dropSourceAliases: ['Partial'],
+    })
+
+    expect(env.read('ref')!.content).toBe('see [[Partial]]')
+    expect(env.read('ref')!.references).toEqual(
+      normalizeReferences([{id: 'source', alias: 'Partial'}]),
+    )
+  })
+
   // Regression (found by referencesRecompute.fuzz.test.ts): property-derived
   // refs project from the property VALUE, so retargeting the ref entry
   // without rewriting the value left a projection anomaly that the next
