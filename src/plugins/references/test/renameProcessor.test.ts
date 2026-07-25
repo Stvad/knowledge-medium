@@ -21,13 +21,17 @@ import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
-import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
+import { aliasSeatSeed, computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
 import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
   applyRefRewrites,
+  hasDeepUserContent,
+  isWindowMintedAliasSeat,
   RENAME_BACKLINKS_PROCESSOR,
+  seatClassificationCtx,
   type Rewrite,
+  type SeatCandidateRow,
 } from '../renameProcessor.ts'
 
 interface Harness {
@@ -635,7 +639,7 @@ describe('applyRefRewrites — surgical entry swap', () => {
     fromTargetId: PIN_TARGET,
     toTargetId: PIN_TARGET,
     refAlias: PIN_TARGET,
-    seatIds: new Set<string>(),
+    seat: {slotIds: new Set<string>(), mintedAfter: 0, generatedFieldIds: []},
     pinned: true,
   } satisfies Rewrite, over)
 
@@ -664,7 +668,7 @@ describe('applyRefRewrites — surgical entry swap', () => {
     const seatId = computeAliasSeatId('Win', WS, 0)
     expect(applyRefRewrites(
       [{id: seatId, alias: 'Win'}],
-      [rw({fromTargetId: PIN_TARGET, seatIds: new Set([seatId])})],
+      [rw({fromTargetId: PIN_TARGET, seat: {slotIds: new Set([seatId]), mintedAfter: 0, generatedFieldIds: []}})],
     )).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
   })
 
@@ -675,7 +679,7 @@ describe('applyRefRewrites — surgical entry swap', () => {
     const other = '99999999-8888-4777-8666-555555555555'
     expect(applyRefRewrites(
       [{id: other, alias: 'Win'}],
-      [rw({fromTargetId: PIN_TARGET, seatIds: new Set([computeAliasSeatId('Win', WS, 0)])})],
+      [rw({fromTargetId: PIN_TARGET, seat: {slotIds: new Set([computeAliasSeatId('Win', WS, 0)]), mintedAfter: 0, generatedFieldIds: []}})],
     )).toEqual([{id: other, alias: 'Win'}])
   })
 })
@@ -1045,6 +1049,258 @@ describe('rename — seat dating (#443 group 2, review round 2)', () => {
     } finally {
       txSpy.mockRestore()
     }
+
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
+})
+
+describe('rename — Codex round 2 (#444)', () => {
+  it('rejects a seat whose stamp merely TIES the rename commit', () => {
+    // The stated invariant is "materialized AFTER the commit we are
+    // reacting to". A tie does not say that: `seatMaterializedAt` can
+    // take `user_updated_at` straight off a synced row, stamped by
+    // another device's clock, so an equal value is coincidence rather
+    // than evidence. Rejecting a tie only skips a rewrite; accepting one
+    // on a seat that predates us hijacks its backlinks.
+    const row = (stamp: number): SeatCandidateRow => ({
+      targetId: computeAliasSeatId('Win', WS, 0),
+      targetContent: 'Win',
+      targetProperties: JSON.stringify(aliasSeatSeed('Win').properties),
+      targetCreatedAt: stamp,
+      targetUserUpdatedAt: null,
+      targetBlockingChildren: 0,
+    })
+    const ctx = seatClassificationCtx('Win', WS, 100, [])
+    expect(isWindowMintedAliasSeat(row(100), 'Win', ctx)).toBe(false)
+    expect(isWindowMintedAliasSeat(row(101), 'Win', ctx)).toBe(true)
+  })
+
+  it('vetoes a gap-arriving seat that PREDATES the rename commit', async () => {
+    // Sync can materialize a long-lived pristine seat from another device
+    // in the read→write gap. On slot id and shape alone it is
+    // indistinguishable from a seat this rename just minted — only the
+    // stamp separates them, and the in-tx re-assert skipped that check
+    // entirely, so the arriving seat read as our own machinery and its
+    // backlinks were re-pointed at the block that released the name.
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+
+    const realTx = env.repo.tx.bind(env.repo)
+    let injected = false
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementation((async (fn: never, opts: never) => {
+      const description = (opts as {description?: string} | undefined)?.description
+      if (!injected && description?.includes(RENAME_BACKLINKS_PROCESSOR)) {
+        injected = true
+        // Raw + sync-shaped: exact seat seed, ANCIENT stamps.
+        await env.h.db.writeTransaction(async tx => {
+          await tx.execute(
+            `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                                 properties_json, references_json, created_at, updated_at,
+                                 user_updated_at, created_by, updated_by, deleted)
+             VALUES (?, ?, NULL, 'z0', 'Win', ?, '[]', 1, 1, 1, 'u', 'u', 0)`,
+            [seatId, WS, JSON.stringify(aliasSeatSeed('Win').properties)],
+          )
+        })
+      }
+      return realTx(fn, opts)
+    }) as never)
+
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+      expect(injected).toBe(true)
+    } finally {
+      txSpy.mockRestore()
+    }
+
+    // The arriving seat owns `Win`, so the span keeps late-binding to it.
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
+
+  /** Land a pristine-shaped seat for `Win` in the read→write gap, with
+   *  whatever subtree `children` adds, and return the source's content
+   *  after the rename has run. Stamped far in the FUTURE so the recency
+   *  leg can never be what vetoes — only the children signal can. */
+  const renameWithGapSeat = async (
+    children: (exec: (sql: string, args: unknown[]) => Promise<unknown>, seatId: string) => Promise<void>,
+  ): Promise<string> => {
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+
+    const realTx = env.repo.tx.bind(env.repo)
+    let injected = false
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementation((async (fn: never, opts: never) => {
+      const description = (opts as {description?: string} | undefined)?.description
+      if (!injected && description?.includes(RENAME_BACKLINKS_PROCESSOR)) {
+        injected = true
+        await env.h.db.writeTransaction(async tx => {
+          const exec = (sql: string, args: unknown[]) => tx.execute(sql, args as never)
+          await exec(
+            `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                                 properties_json, references_json, created_at, updated_at,
+                                 user_updated_at, created_by, updated_by, deleted)
+             VALUES (?, ?, NULL, 'z0', 'Win', ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
+            [seatId, WS, JSON.stringify(aliasSeatSeed('Win').properties),
+             9999999999999, 9999999999999, 9999999999999],
+          )
+          await children(exec, seatId)
+        })
+      }
+      return realTx(fn, opts)
+    }) as never)
+
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+      expect(injected).toBe(true)
+    } finally {
+      txSpy.mockRestore()
+    }
+    return (await env.read('s'))!.content
+  }
+
+  const rawRow = (
+    id: string, parent: string, content: string, fieldId?: string,
+  ): [string, unknown[]] => [
+    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                         properties_json, references_json, reference_target_id,
+                         is_field_form, created_at, updated_at, created_by,
+                         updated_by, deleted)
+     VALUES (?, ?, ?, 'a0', ?, '{}', '[]', ?, ?, 1, 1, 'u', 'u', 0)`,
+    [id, WS, parent, content, fieldId ?? null, fieldId === undefined ? null : 1],
+  ]
+
+  it('vetoes a gap-arriving seat carrying a plain user child', async () => {
+    // An adopted page sitting at a seat slot: its child is not one of the
+    // seat's own generated field rows, so it blocks outright.
+    const content = await renameWithGapSeat(async (exec, seatId) => {
+      const [sql, args] = rawRow('kid', seatId, 'a page note')
+      await exec(sql, args)
+    })
+    expect(content).toBe('see [[Win]] please')
+  })
+
+  it('vetoes a gap-arriving seat with a note beside a generated value child', async () => {
+    // Here every direct child IS generated machinery, so the shallow
+    // signal clears it — the user data is one level further down, beside
+    // the field row's single value child. Needs the flipped workspace:
+    // un-flipped, `generatedFieldIds` is empty, nothing is recognized as
+    // machinery, and the field row would block on the shallow leg
+    // instead — passing for the wrong reason.
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    const fieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    const content = await renameWithGapSeat(async (exec, seatId) => {
+      for (const row of [
+        rawRow('fieldrow', seatId, `::((${fieldId}))`, fieldId),
+        rawRow('value', 'fieldrow', 'Win'),
+        rawRow('beside', 'fieldrow', 'stray note'),
+      ]) await exec(row[0], row[1])
+    })
+    expect(content).toBe('see [[Win]] please')
+  })
+
+  it('sees user content nested under a generated field row', async () => {
+    // The direct-children signal subtracts a generated field row
+    // wholesale, so a comment thread parked under its value child is
+    // invisible to it — and the seat reads as pristine machinery. Same
+    // rule as the orphan reaper's deep guard: a machine seat's generated
+    // subtree is exactly field row → at most ONE leaf value child.
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    const fieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    const row = async (id: string, parent: string, content: string, fieldForm: boolean) =>
+      env.h.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, reference_target_id,
+                             is_field_form, created_at, updated_at, created_by,
+                             updated_by, deleted)
+         VALUES (?, ?, ?, 'a0', ?, '{}', '[]', ?, ?, 1, 1, 'u', 'u', 0)`,
+        [id, WS, parent, content, fieldForm ? fieldId : null, fieldForm ? 1 : null],
+      )
+    await row(seatId, null as unknown as string, 'Win', false)
+    await row('fieldrow', seatId, `::((${fieldId}))`, true)
+    await row('value', 'fieldrow', 'Win', false)
+
+    // Field row → one leaf value child is pure machinery.
+    expect(await hasDeepUserContent(env.h.db, seatId, [fieldId])).toBe(false)
+    // A comment thread UNDER the value child is user data.
+    await row('note', 'value', 'my note', false)
+    expect(await hasDeepUserContent(env.h.db, seatId, [fieldId])).toBe(true)
+    // And so is a second live child beside the value child.
+    await env.h.db.execute(`UPDATE blocks SET deleted = 1 WHERE id = 'note'`)
+    expect(await hasDeepUserContent(env.h.db, seatId, [fieldId])).toBe(false)
+    await row('beside', 'fieldrow', 'stray note', false)
+    expect(await hasDeepUserContent(env.h.db, seatId, [fieldId])).toBe(true)
+
+    // Un-flipped workspaces have no generated rows to look under.
+    expect(await hasDeepUserContent(env.h.db, seatId, [])).toBe(false)
+  })
+
+  it('does not treat a seat with user content under a generated field row as pristine', async () => {
+    // Post-flip a seat is born with generated field rows, which the
+    // children signal subtracts wholesale — so a note the user parked
+    // beside the alias field row's value child is invisible to the
+    // direct-children test and the seat reads as machinery. Its backlinks
+    // are then re-keyed and the orphan reaper takes the note with the
+    // seat. Same guard the reaper already carries for its own sweep.
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    const aliasFieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    let fieldRowId = ''
+    let valueChildId = ''
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await ensureAliasTarget(tx, env.repo, 'Win', WS)
+      const kids = await tx.childrenOf(seatId)
+      fieldRowId = kids.find(k => k.referenceTargetId === aliasFieldId)!.id
+      // UNDER the value child, not beside it — a comment thread on the
+      // property value. Parking it as a second child of the field row
+      // would instead make `core.projectPropertyChildren` fold it into
+      // the projected alias value, and the seat would fail the SHAPE
+      // check rather than this one, which proves nothing about the
+      // deep guard.
+      const valueChildren = await tx.childrenOf(fieldRowId)
+      valueChildId = valueChildren[0]!.id
+      await tx.create({
+        id: 'note', workspaceId: WS, parentId: valueChildId, orderKey: 'z9',
+        content: 'my note',
+      })
+      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // The note really is two levels under the seat, and the seat's own
+    // shape is still pristine — so the ONLY thing that can veto here is
+    // the deep guard, not the direct-children or shape signals.
+    expect(fieldRowId).not.toBe('')
+    const note = (await env.h.db.get<{parent_id: string}>(
+      `SELECT parent_id FROM blocks WHERE id = 'note'`))!
+    expect(note.parent_id).toBe(valueChildId)
+    const fieldRowKids = await env.h.db.getAll<{id: string}>(
+      `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [fieldRowId])
+    expect(fieldRowKids).toHaveLength(1)
+    expect((await env.read(seatId))!.properties_json)
+      .toBe(JSON.stringify(aliasSeatSeed('Win').properties))
 
     expect((await env.read('s'))!.content).toBe('see [[Win]] please')
   })

@@ -95,7 +95,7 @@ const SEAT_COLUMNS_SQL = (t: string, generatedFieldIdCount: number) => `
                   }))
          ) AS targetBlockingChildren`
 
-interface SeatCandidateRow {
+export interface SeatCandidateRow {
   targetId: string
   targetContent: string
   targetProperties: string
@@ -146,18 +146,79 @@ interface SeatClassificationCtx {
   /** Wall-clock floor: a seat older than this predates the commit we're
    *  reacting to, so it is not this rename's window artifact. */
   mintedAfter: number
+  /** The seat's own generated property field-row targets, or empty in an
+   *  un-flipped workspace. Carried so the write phase can repeat the
+   *  same children subtraction the read phase's SQL does. */
+  generatedFieldIds: readonly string[]
 }
 
-const seatClassificationCtx = (
+export const seatClassificationCtx = (
   alias: string,
   workspaceId: string,
   mintedAfter: number,
+  generatedFieldIds: readonly string[],
 ): SeatClassificationCtx => {
   const slotIds = new Set<string>()
   for (let i = 0; i < ALIAS_SEAT_PROBE_SLOTS; i++) {
     slotIds.add(computeAliasSeatId(alias, workspaceId, i))
   }
-  return {slotIds, mintedAfter}
+  return {slotIds, mintedAfter, generatedFieldIds}
+}
+
+/** Does user content hide BENEATH one of the seat's generated field
+ *  rows? The direct-children signal cannot see it: the field row is
+ *  subtracted wholesale as machinery, so a comment thread parked under
+ *  its value child makes the seat read as pristine — and then its
+ *  backlinks are re-keyed and the orphan reaper deletes the thread with
+ *  the seat.
+ *
+ *  Same rule and same reasoning as the reaper's own deep guard
+ *  (`referencesProcessor.ts`, PR #428 adversarial review): a machine
+ *  seat's generated subtree is exactly field row → at most ONE leaf
+ *  value child, so a second live grandchild, or a grandchild with
+ *  children of its own, is user data. Kept as a separate pass rather
+ *  than folded into the projection SQL because it only has to run for
+ *  rows that already passed every cheap signal — typically none.
+ *
+ *  Un-flipped workspaces have no generated rows at all, so there is
+ *  nothing to look under and this is a no-op.
+ *
+ *  Defence in depth, deliberately: `isWindowMintedSeatInTx` runs the
+ *  same walk over every alias CLAIMANT under the write lock, and a row
+ *  matching `aliasSeatSeed` necessarily claims its alias, so no case
+ *  could be constructed where only this copy decides. Kept anyway
+ *  because the two run over different populations — source-row targets
+ *  here, alias claimants there — and a read phase that answers
+ *  "pristine machinery" for a page the user has adopted is wrong on its
+ *  own terms, whoever catches it next. Pinned by a direct unit test
+ *  rather than through the processor for exactly that reason. */
+export const hasDeepUserContent = async (
+  db: ProcessorCtx['db'],
+  seatId: string,
+  generatedFieldIds: readonly string[],
+): Promise<boolean> => {
+  if (generatedFieldIds.length === 0) return false
+  const placeholders = generatedFieldIds.map(() => '?').join(', ')
+  const fieldRows = await db.getAll<{id: string}>(
+    `SELECT id FROM blocks
+     WHERE parent_id = ? AND deleted = 0 AND is_field_form = 1
+       AND reference_target_id IN (${placeholders})`,
+    [seatId, ...generatedFieldIds],
+  )
+  for (const fieldRow of fieldRows) {
+    const grandchildren = await db.getAll<{id: string}>(
+      `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [fieldRow.id],
+    )
+    if (grandchildren.length > 1) return true
+    if (grandchildren.length === 1) {
+      const deeper = await db.getOptional<{one: number}>(
+        `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
+        [grandchildren[0]!.id],
+      )
+      if (deeper !== null && deeper !== undefined) return true
+    }
+  }
+  return false
 }
 
 /** Backlink sources for one removed alias — keyed on the ALIAS alone,
@@ -267,13 +328,20 @@ const selectAliasClaimantsSql = (generatedFieldIdCount: number) => `
  *  by failing closed, but if it keeps springing leaks the honest answer is to
  *  drop the seat leg entirely (the window span then stays bound to the
  *  seat — a working link to a stub, and the pre-existing behaviour). */
-const isWindowMintedAliasSeat = (
+export const isWindowMintedAliasSeat = (
   row: SeatCandidateRow,
   alias: string,
   ctx: SeatClassificationCtx,
 ): boolean => {
   if (row.targetContent !== alias) return false
-  if (seatMaterializedAt(row) < ctx.mintedAfter) return false
+  // STRICTLY newer. The invariant is "materialized AFTER the commit we
+  // are reacting to", and a tie does not say that: `seatMaterializedAt`
+  // can take `user_updated_at` straight off a synced row, whose clock is
+  // another device's, so an equal stamp is coincidence rather than
+  // evidence. Rejecting a tie only ever skips a rewrite (the span stays
+  // late-bound to the seat); accepting one on a seat that predates us
+  // hijacks its backlinks.
+  if (seatMaterializedAt(row) <= ctx.mintedAfter) return false
   if (row.targetBlockingChildren === 1) return false
   if (!ctx.slotIds.has(row.targetId)) return false
   let properties: Record<string, unknown>
@@ -284,6 +352,19 @@ const isWindowMintedAliasSeat = (
   }
   return matchesAliasSeatSeed({content: row.targetContent, properties})
 }
+
+/** `isWindowMintedAliasSeat` plus the deep-content guard. Every call
+ *  site wants this one; the sync predicate above is just the cheap half,
+ *  kept separate so the extra queries only run for rows that already
+ *  passed it. */
+const isWindowMintedSeat = async (
+  db: ProcessorCtx['db'],
+  row: SeatCandidateRow,
+  alias: string,
+  ctx: SeatClassificationCtx,
+): Promise<boolean> =>
+  isWindowMintedAliasSeat(row, alias, ctx)
+  && !(await hasDeepUserContent(db, row.targetId, ctx.generatedFieldIds))
 
 const decodeAliases = (block: BlockData): readonly string[] => {
   const encoded = block.properties[aliasesProp.name]
@@ -350,9 +431,10 @@ export interface Rewrite {
    *  among α's claimants, so the two must not drift apart. */
   toTargetId: string
   refAlias: string
-  /** This alias's seat-slot window, carried so the write phase can
-   *  re-assert the release without recomputing 64 uuidv5 hashes. */
-  seatIds: ReadonlySet<string>
+  /** This alias's classification context, carried so the write phase can
+   *  re-assert the release without recomputing 64 uuidv5 hashes — and
+   *  can apply the SAME seat test the read phase did, not a weaker one. */
+  seat: SeatClassificationCtx
   /** True when `replacement` is the PINNED form `[label](((id)))`.
    *  Drives the embed guard at the splice — see `rewriteWikilinks`. */
   pinned: boolean
@@ -397,7 +479,9 @@ const collectTargetPlans = async (
     ? [...generatedSeatFieldIds(after.workspaceId)]
     : []
   for (const alias of removed) {
-    const seatCtx = seatClassificationCtx(alias, after.workspaceId, renameCommitStamp(after))
+    const seatCtx = seatClassificationCtx(
+      alias, after.workspaceId, renameCommitStamp(after), generatedFieldIds,
+    )
     // Consult α's POST-TX claimant before deciding anything (§11
     // group 2). A live claimant means α is not ours to re-key:
     //   - handoff — some other block owns the name now, so `[[α]]`
@@ -415,9 +499,14 @@ const collectTargetPlans = async (
       selectAliasClaimantsSql(generatedFieldIds.length),
       [...generatedFieldIds, after.workspaceId, alias],
     )
-    if (claimants.some(row => !isWindowMintedAliasSeat(row, alias, seatCtx))) {
-      continue
+    let claimed = false
+    for (const row of claimants) {
+      if (!(await isWindowMintedSeat(ctx.db, row, alias, seatCtx))) {
+        claimed = true
+        break
+      }
     }
+    if (claimed) continue
 
     const replacement = replacementFor(alias, removed, added, after.id)
     // No rendering could carry this span — leave every source alone
@@ -433,7 +522,7 @@ const collectTargetPlans = async (
       // Anything else is a different block that happens to share the
       // alias text — not ours.
       if (row.targetId !== after.id
-        && !isWindowMintedAliasSeat(row, alias, seatCtx)) continue
+        && !(await isWindowMintedSeat(ctx.db, row, alias, seatCtx))) continue
       // First sighting of this source pins `originalContent`. If a
       // later target rename hits the same source within this event,
       // both reads are inside the same committed snapshot so the
@@ -449,7 +538,7 @@ const collectTargetPlans = async (
         fromTargetId: row.targetId,
         toTargetId: replacement.toTargetId ?? after.id,
         refAlias: replacement.refAlias,
-        seatIds: seatCtx.slotIds,
+        seat: seatCtx,
         pinned: replacement.toTargetId !== null,
       })
     }
@@ -504,7 +593,7 @@ export const applyRefRewrites = (
       // so an edge parked at one of them is machinery to follow, not a
       // third party to leave alone. Checked only as a FALLBACK so an
       // exact `(fromTargetId, alias)` hit keeps its existing precedence.
-      const moved = rewrites.find(rw => rw.alias === ref.alias && rw.seatIds.has(ref.id))
+      const moved = rewrites.find(rw => rw.alias === ref.alias && rw.seat.slotIds.has(ref.id))
       if (moved !== undefined) swapped = {id: moved.toTargetId, alias: moved.refAlias}
     }
     next.push(swapped === undefined ? ref : {...ref, id: swapped.id, alias: swapped.alias})
@@ -542,6 +631,64 @@ export const applyRefRewrites = (
  *  nothing else in the app can write. */
 type ReleaseCache = Map<string, Promise<boolean>>
 
+/** The read phase's seat test, re-run in-tx against a whole `BlockData`.
+ *
+ *  This deliberately mirrors `isWindowMintedSeat` signal for signal.
+ *  An earlier version tested only the slot id, on the reasoning that a
+ *  stricter predicate than the hazard needs would be wrong for a
+ *  data-loss guard. That had it backwards twice over. Stricter here
+ *  means MORE vetoes, and a veto just leaves `[[α]]` late-binding to the
+ *  seat — the pre-existing behaviour — while a missed veto splices
+ *  content irreversibly. And the gap is exactly where the unusual
+ *  claimants arrive: sync can materialize a long-lived pristine seat
+ *  from another device between the read phase and here, and on the slot
+ *  id alone it read as this rename's own machinery.
+ *
+ *  The renaming block is never exempt, whatever shape it has. Seats are
+ *  adopted IN PLACE, so it is routinely a member of its own alias's slot
+ *  window; if it claims α again — an undo, a synced-in revert — then α
+ *  was not released and there is nothing here to re-key. */
+const isWindowMintedSeatInTx = async (
+  tx: Tx,
+  claimant: BlockData,
+  rewrite: Rewrite,
+): Promise<boolean> => {
+  if (claimant.id === rewrite.toTargetId) return false
+  if (!rewrite.seat.slotIds.has(claimant.id)) return false
+  if (claimant.content !== rewrite.alias) return false
+  if (!matchesAliasSeatSeed(claimant)) return false
+  // Same stamp rule as `seatMaterializedAt` / `isWindowMintedAliasSeat`:
+  // a restore refreshes `user_updated_at` but never `created_at`, and a
+  // tie is not evidence of having been minted after us.
+  if (Math.max(claimant.createdAt, claimant.userUpdatedAt) <= rewrite.seat.mintedAfter) {
+    return false
+  }
+  return !(await hasBlockingChildrenInTx(tx, claimant.id, rewrite.seat.generatedFieldIds))
+}
+
+/** In-tx twin of the read phase's `targetBlockingChildren` column plus
+ *  its deep guard: any live child that is not one of the seat's own
+ *  generated field rows blocks, and so does user content nested under
+ *  one of those rows. */
+const hasBlockingChildrenInTx = async (
+  tx: Tx,
+  seatId: string,
+  generatedFieldIds: readonly string[],
+): Promise<boolean> => {
+  for (const child of await tx.childrenOf(seatId)) {
+    const target = child.referenceTargetId ?? null
+    const generated = child.isFieldForm === true
+      && target !== null
+      && generatedFieldIds.includes(target)
+    if (!generated) return true
+    const grandchildren = await tx.childrenOf(child.id)
+    if (grandchildren.length > 1) return true
+    if (grandchildren.length === 1
+      && (await tx.childrenOf(grandchildren[0]!.id)).length > 0) return true
+  }
+  return false
+}
+
 const aliasStillReleased = (
   tx: Tx,
   workspaceId: string,
@@ -553,35 +700,13 @@ const aliasStillReleased = (
   if (cached !== undefined) return cached
   const pending = (async () => {
     const claimants = await tx.aliasClaimants(rewrite.alias, workspaceId)
-    // A gap-arriving claimant sitting at one of this alias's seat slots
-    // is a fresh mint or a pristine-tombstone restore — machinery, not a
-    // successor. Anything else vetoes.
-    //
-    // The slot id ALONE does not say that, and testing it alone was
-    // wrong in the one direction that costs data. Seats are adopted IN
-    // PLACE: a page born by typing `[[α]]` keeps its `computeAliasSeatId`
-    // slot id forever, so the renaming block is itself very often a
-    // member of `seatIds` for the alias it is releasing. An undo (or any
-    // later tx re-adding α to that same block) then comes back from
-    // `aliasClaimants` and passed a slot-id-only test — certifying "still
-    // released" for an alias that is live again on the original owner,
-    // and splicing every backlink away from it irreversibly.
-    //
-    // So: the renaming block never exempts itself (if it claims α, α was
-    // not released, whatever shape it has), and every other claimant must
-    // still LOOK like a pristine seat. That last part restores the shape
-    // half of the read phase's `isWindowMintedAliasSeat`; only the
-    // timestamp leg is dropped, since `aliasClaimants` hands back whole
-    // blocks and nothing in a `BlockData` dates the mint any better than
-    // the read phase already did. Being stricter here is the safe
-    // direction — an over-veto leaves `[[α]]` late-binding to the seat,
-    // which is the pre-existing behaviour.
-    return claimants.every(claimant =>
-      claimant.id !== rewrite.toTargetId
-      && rewrite.seatIds.has(claimant.id)
-      && claimant.content === rewrite.alias
-      && matchesAliasSeatSeed(claimant),
-    )
+    for (const claimant of claimants) {
+      if (!(await isWindowMintedSeatInTx(tx, claimant, rewrite))) return false
+    }
+    // A gap-arriving claimant is exempt only if it is provably this
+    // rename's own machinery — see `isWindowMintedSeatInTx`. Anything
+    // else vetoes.
+    return true
   })()
   cache.set(key, pending)
   return pending
