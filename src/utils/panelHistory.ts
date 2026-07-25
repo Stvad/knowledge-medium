@@ -247,21 +247,6 @@ export class PanelHistoryStore {
     return this.seenLive.get(panelId)?.has(blockId) ?? false
   }
 
-  /** Drop every entry (back OR forward) that points at `blockId`. Called when
-   *  a block is deleted so neither Back nor Forward can land the pane on its
-   *  tombstone — in particular the delete-page flow steps back via `back()`,
-   *  which parks the just-deleted page on the forward stack. Keeps the rest of
-   *  the stacks intact (legitimate other entries survive). */
-  forget(panelId: string, blockId: string): void {
-    const current = this.state.get(panelId)
-    if (!current) return
-    const back = current.back.filter(entry => entry.blockId !== blockId)
-    const forward = current.forward.filter(entry => entry.blockId !== blockId)
-    if (back.length === current.back.length && forward.length === current.forward.length) return
-    this.state.set(panelId, {back, forward})
-    this.notify(panelId)
-  }
-
   /** Register a snapshotter for a panel — a function that reads the
    *  panel's current ephemeral state (focused block, scroll, …) so the
    *  store can capture it before the panel navigates. Returns an
@@ -321,9 +306,13 @@ export const panelHistory = new PanelHistoryStore()
  *
  * Recorded only when recovery actually moved a pane off the block, and only
  * for blocks it established were gone (watched live and then vanished, or
- * confirmed tombstoned by `isBlockTombstoned`). Retracted the moment any pane
- * sees the block live again. Ids only, bounded by deletes observed in one
- * session, and never persisted.
+ * confirmed tombstoned by `isBlockTombstoned`). Retracted when a pane displays
+ * the block as its top-level content again — NOT the moment it comes back to
+ * life: undo can restore a page nobody reopens, and that id stays marked for
+ * the session. Harmless, because the mark is only ever consulted for ids
+ * present in the current layout, and reopening the page retracts it before it
+ * can matter. Ids only, bounded by deletes observed in one session, and never
+ * persisted.
  */
 const confirmedDeletedBlockIds = new Set<string>()
 
@@ -606,20 +595,41 @@ export const recoverPanelOffDeadContent = async (
     }
   }
   if (!stillStranded()) return
-  if (targetId) {
-    // Record the confirmed delete only now that we're actually moving the pane
-    // off it. Marking before knowing a destination exists left a STRANDED pane's
-    // page recorded as dead, which then made every later navigation out of that
-    // pane replace its history entry instead of pushing.
-    markBlockConfirmedDeleted(deadBlockId)
-    if (dest) panelHistory.dropTop(panelBlock.id, 'back', dest)
-    panelHistory.enqueueRestore(panelBlock.id, dest?.state)
+  if (!targetId) return
+  // Record the confirmed delete only now that we're actually moving the pane
+  // off it. Marking before knowing a destination exists left a STRANDED pane's
+  // page recorded as dead, which then made every later navigation out of that
+  // pane replace its history entry instead of pushing. It still has to happen
+  // BEFORE the write, not after: the projection evaluates `leavingDeletedBlock`
+  // synchronously inside the commit.
+  markBlockConfirmedDeleted(deadBlockId)
+  panelHistory.enqueueRestore(panelBlock.id, dest?.state)
+  try {
     await transactPanelContent(
       panelBlock, targetId, dest?.state, 'recover panel off deleted content',
       {viewMode: dest?.state?.viewMode},
     )
+  } catch (error) {
+    // The write failed, so the pane is still ON the dead block. Roll back the
+    // bookkeeping done in anticipation of the move: otherwise we land in
+    // exactly the stranded-and-marked-dead state the mark was relocated to
+    // avoid, and it is never retracted — retraction needs some pane to observe
+    // the block live again, which will never happen for a deleted one.
+    unmarkBlockConfirmedDeleted(deadBlockId)
+    panelHistory.consumeRestore(panelBlock.id)
+    console.error('[panel-history] recovery write failed; pane left on the dead block', error)
+    return
   }
-  panelHistory.forget(panelBlock.id, deadBlockId)
+  // Consume the destination only once the pane is actually on it, so a failed
+  // write costs the user nothing. Compare-and-swap because the write awaited: a
+  // navigation in the meantime replaces the top, and that entry is the user's
+  // way back to where they now are.
+  if (dest) panelHistory.dropTop(panelBlock.id, 'back', dest)
+  // Deliberately NOT purging the dead id from the stacks here. Entries are
+  // validated at CONSUMPTION time (`pruneDeadTop`), which already covers
+  // anything this could purge — and purging made undo a one-way door: restore
+  // the page and neither chevron could reach it again, because the entries
+  // pointing at it were gone.
 }
 
 /** React hook surfacing per-panel back/forward availability for UI

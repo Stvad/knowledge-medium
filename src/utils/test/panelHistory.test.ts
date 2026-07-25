@@ -334,25 +334,5 @@ describe('PanelHistoryStore', () => {
       expect(n).toBe(1)
     })
 
-    it('forget drops the block from both stacks, keeping the rest', () => {
-      store.push('p1', e('b-a'))
-      store.push('p1', e('dead'))
-      store.push('p1', e('b-b'))
-      store.back('p1', e('dead')) // forward now holds the dead page
-      store.forget('p1', 'dead')
-      const snap = store.getSnapshot('p1')
-      expect(snap.back).toEqual([e('b-a')])
-      expect(snap.forward).toEqual([])
-    })
-
-    it('forget notifies subscribers only when something was removed', () => {
-      let n = 0
-      store.push('p1', e('b-a'))
-      store.subscribe('p1', () => { n += 1 })
-      store.forget('p1', 'absent')
-      expect(n).toBe(0)
-      store.forget('p1', 'b-a')
-      expect(n).toBe(1)
-    })
   })
 })

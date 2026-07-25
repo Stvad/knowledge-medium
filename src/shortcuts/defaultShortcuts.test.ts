@@ -662,6 +662,11 @@ describe('default CodeMirror shortcuts', () => {
       ),
     ]))
 
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['ordinary', 'protected'],
+    })
+
     const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
     await action.handler({
       uiStateBlock,
@@ -671,6 +676,39 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+    // Refused: the selection is intact so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
+      .toEqual(['ordinary', 'protected'])
+  })
+
+  it('multi-select Delete clears the selection, so the pane leaves multi-select', async () => {
+    // MULTI_SELECT_MODE is modal and stays active while `selectedBlockIds` is
+    // non-empty. Leaving the deleted ids there parked the pane in multi-select
+    // over tombstones — nothing highlighted, every keystroke still routed to
+    // multi-select handlers. `cut` cleared it; `Delete` did not.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'one', content: 'one'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'two', content: 'two'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['one', 'two'],
+    })
+
+    const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('one'), env.repo.block('two')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'one')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'two')).toBe(true)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
   })
 
   it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
@@ -695,6 +733,14 @@ describe('default CodeMirror shortcuts', () => {
       ),
     ]))
 
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['ordinary', 'protected'],
+    })
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
     const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
     await action.handler({
       uiStateBlock,
@@ -706,6 +752,16 @@ describe('default CodeMirror shortcuts', () => {
     // selection being half-cut.
     expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
     expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+    // And the guard runs BEFORE the copy: a refused cut must not leave the
+    // user believing the content is on their clipboard. Asserting only that
+    // nothing was deleted can't see this — `deleteBlocksThroughUi` re-checks
+    // the guards itself, so the deletion assertions pass even with the
+    // pre-copy check removed.
+    expect(write).not.toHaveBeenCalled()
+    // The selection survives too, so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
+      .toEqual(['ordinary', 'protected'])
+    vi.unstubAllGlobals()
   })
 
   it("merges a first child with children into its parent when it is the parent's only child", async () => {

@@ -48,6 +48,12 @@ export const deleteBlockThroughUi = async (block: Block): Promise<boolean> =>
  *  can narrow it and retry — a partial cut is not something they can undo by
  *  re-selecting.
  *
+ *  All-or-nothing describes the GUARDS, not the writes. The deletes are N
+ *  independent transactions, so a tx-layer refusal on block K (a read-only
+ *  workspace, a seeded definition somewhere in its subtree) still leaves
+ *  1..K-1 tombstoned. Making that atomic is the same open item as
+ *  `applyToAllBlocksInSelection`'s "one tx so undo collapses the batch" todo.
+ *
  *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
  *  selection here directly; `multi_select.delete_block` fans out per block
  *  through `applyToAllBlocksInSelection`, so it runs the same check once over

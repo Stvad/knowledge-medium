@@ -111,7 +111,7 @@ export function PanelContentRecovery({block}: {block: Block}) {
         // user navigates or undoes while that resolution is in flight.
         void recoverPanelOffDeadContent(block, topLevelBlockId, () =>
           resolveLandingId(block.repo, topLevelBlockId),
-        )
+        ).catch(error => console.error('[panel-content-recovery] recovery failed', error))
       }, RECOVERY_DEBOUNCE_MS)
     }
 
@@ -135,8 +135,12 @@ export function PanelContentRecovery({block}: {block: Block}) {
       // warm client the callback fired synchronously and decided nothing.
       void isBlockTombstoned(block.repo, topLevelBlockId).then(tombstoned => {
         if (!cancelled && tombstoned) armRecovery()
-      })
+      }).catch(error => console.error('[panel-content-recovery] liveness read failed', error))
     })
+      // The db can go away under us (sign-out, workspace switch) while a pane
+      // is mid-check. Leaving the pane as-is is the right outcome; an
+      // unhandled rejection is not.
+      .catch(error => console.error('[panel-content-recovery] load failed', error))
 
     return () => {
       cancelled = true

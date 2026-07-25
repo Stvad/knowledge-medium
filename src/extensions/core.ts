@@ -43,7 +43,18 @@ export interface WorkspaceLandingContext {
    *  `getOrCreateDailyNote` restores a soft-deleted row, so resolving the
    *  landing during delete-recovery would silently resurrect the page the
    *  user just deleted. Decide it from an id you can compute, not from a
-   *  row you had to create first. Unset outside recovery (bootstrap). */
+   *  row you had to create first. Unset outside recovery (bootstrap).
+   *
+   *  Declining on an EXACT id match is not enough. The excluded id is the page
+   *  of the pane being recovered, which need not be the root of the deleted
+   *  subtree — a pane zoomed into a child recovers with the child's id, and a
+   *  resolver that only checks equality sails past and recreates the deleted
+   *  parent. If your resolver's get-or-create can restore an ancestor (or any
+   *  other row) that the delete may have taken, check those for tombstones too
+   *  — `anyBlockTombstoned` in `@/data/blockLiveness` reads them directly,
+   *  which is necessary because the Block facade can't tell a tombstone from a
+   *  row that simply isn't here. `todayDailyNoteLanding` does exactly this for
+   *  today's note and the Journal. */
   excludeBlockId?: string
 }
 
@@ -318,19 +329,54 @@ export const blockDeletionGuardsFacet = defineFacet<BlockDeletionGuard, readonly
   validate: (value): value is BlockDeletionGuard => typeof value === 'function',
 })
 
+/** How long a single guard gets to answer before it is treated as "allow".
+ *  Guards are supposed to be a types/id check; anything at this scale is a bug,
+ *  and the alternative to giving up is a Delete key that hangs forever. */
+const GUARD_TIMEOUT_MS = 5_000
+/** Distinguishes "the timeout won the race" from a guard that legitimately
+ *  answered null, so only the former is reported as broken. */
+const GUARD_TIMED_OUT = Symbol('deletion-guard-timeout')
+
 /** First refusal reason from any registered guard, or null when every guard
- *  allows the delete. A throwing guard is logged and treated as "allow" — a
- *  broken plugin shouldn't be able to make blocks undeletable. */
+ *  allows the delete.
+ *
+ *  A guard that throws, rejects, hangs, or answers with something that isn't a
+ *  non-empty string is logged and treated as "allow": guards come from
+ *  user-installable extensions, and a broken one shouldn't be able to make
+ *  blocks undeletable. (An earlier version handled only the throw/reject case,
+ *  so a guard that never settled left `ensureDeletableThroughUi` awaiting
+ *  forever — a permanent, silent veto, exactly what the rule forbids.) Erring
+ *  toward allowing is the right side to fail on: the delete is soft and
+ *  undoable, whereas an unresponsive gesture is not recoverable at all. */
 export const resolveDeletionRefusal = async (
   repo: Repo,
   block: Block,
 ): Promise<string | null> => {
   for (const guard of repo.facetRuntime?.read(blockDeletionGuardsFacet) ?? []) {
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      const reason = await guard(block)
-      if (reason) return reason
+      // The timer is cleared in `finally`, so a guard that answers promptly
+      // neither logs nor leaves a pending timeout behind.
+      const reason = await Promise.race([
+        Promise.resolve(guard(block)),
+        new Promise<typeof GUARD_TIMED_OUT>(resolve => {
+          timer = setTimeout(() => resolve(GUARD_TIMED_OUT), GUARD_TIMEOUT_MS)
+        }),
+      ])
+      if (reason === GUARD_TIMED_OUT) {
+        console.error('[deletion-guard] guard did not answer in time; allowing the delete')
+        continue
+      }
+      if (!reason) continue
+      if (typeof reason !== 'string') {
+        console.error('[deletion-guard] guard returned a non-string reason; allowing the delete', reason)
+        continue
+      }
+      return reason
     } catch (error) {
       console.error('[deletion-guard] guard threw; allowing the delete', error)
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
   }
   return null

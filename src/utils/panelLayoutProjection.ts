@@ -267,6 +267,16 @@ const sameLayoutSlots = (
     return false
   })
 
+/** How many panes render each block id, for comparing two layouts by
+ *  occurrence rather than by leaf position (see `leavingDeletedBlock`). */
+const countLeavesByBlockId = (slots: readonly LayoutSlot[]): Map<string, number> => {
+  const counts = new Map<string, number>()
+  for (const leaf of collectLeafSlots(slots)) {
+    counts.set(leaf.blockId, (counts.get(leaf.blockId) ?? 0) + 1)
+  }
+  return counts
+}
+
 // Unknown context entries (`rest`) have no row representation — they live
 // only in the URL. When a hash is rebuilt from rows (outbound writes,
 // inbound canonicalization), carry the current hash's rest entries onto the
@@ -1104,19 +1114,28 @@ export class PanelLayoutProjection {
     current: readonly LayoutSlot[],
     next: readonly LayoutSlot[],
   ): boolean {
-    // Compared PANE BY PANE (positionally), not as a set of block ids: with the
-    // same page open in two panes and only one recovering, a set-difference
-    // sees the id still present in `next` and concludes nothing was left — so
-    // it pushed a history entry in which a pane still renders a dead block.
-    const currentLeaves = collectLeafSlots(current)
-    const nextLeaves = collectLeafSlots(next)
-    return currentLeaves.some((slot, index) => {
-      // A pane that kept its block isn't being left. A pane that closed
-      // (no counterpart in `next`) is.
-      if (nextLeaves[index]?.blockId === slot.blockId) return false
-      return this.repo.block(slot.blockId).peekRaw()?.deleted === true
-        || isBlockConfirmedDeleted(slot.blockId)
-    })
+    // Compared by OCCURRENCE COUNT, not as a set of ids and not positionally.
+    //
+    // A set difference is too weak: with the same page open in two panes and
+    // only one recovering, the id is still present in `next`, so it concludes
+    // nothing was left and pushes a history entry in which a pane still renders
+    // a dead block.
+    //
+    // A positional (index-by-index) compare is too strong: closing a pane
+    // shifts every later leaf down an index, so a pane that kept its block
+    // reads as "left". With another pane stranded on a tombstone, closing an
+    // unrelated pane then replaced instead of pushed, and Back skipped the
+    // whole layout.
+    //
+    // Counts get both right: a block is being left iff strictly fewer panes
+    // render it after the navigation than before.
+    const nextCounts = countLeavesByBlockId(next)
+    for (const [blockId, count] of countLeavesByBlockId(current)) {
+      if (count <= (nextCounts.get(blockId) ?? 0)) continue
+      if (this.repo.block(blockId).peekRaw()?.deleted === true
+        || isBlockConfirmedDeleted(blockId)) return true
+    }
+    return false
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {

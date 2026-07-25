@@ -52,7 +52,7 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
-import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
 import {
   deleteBlockThroughUi,
   deleteBlocksThroughUi,
@@ -337,6 +337,19 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
+    // Registered here even though NORMAL_MODE only activates with the vim
+    // plugin, for the same reason the copy actions above were promoted out of
+    // it: an action has to be IN THE REGISTRY to be dispatchable at all, and
+    // the block/swipe menu and the command palette dispatch by id with
+    // supplied deps rather than through an active keyboard context. Defined
+    // only by vim, `delete_block` was absent on a default install — so the
+    // swipe menu rendered a red Delete button that logged "not registered"
+    // and did nothing (`DEFAULT_QUICK_ACTION_ITEMS` lists these three).
+    // The keys still only fire in NORMAL_MODE, so vim stays the thing that
+    // makes them reachable from the keyboard.
+    {...deleteBlockAction, defaultBinding: {keys: ['Delete', 'Backspace', 'd d']}},
+    togglePropertiesDisplayAction,
+    toggleBlockCollapseAction,
   ]
 
   // CodeMirror versions of move actions
@@ -973,8 +986,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== block.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
 
-        // CodeMirror's backspace at pos 0 is a no-op, but stop the event
-        // anyway to avoid any chance of double-handling.
+        // Vestigial, and kept only because it costs nothing: every branch above
+        // awaits, so the event has finished dispatching by now and the browser
+        // default has already run — `move_up_from_cm_start` states that rule
+        // and calls preventDefault BEFORE its async hop for exactly this
+        // reason. There is nothing to suppress in any case: block editors pass
+        // `defaultKeymap: false`, so Backspace has no CodeMirror command, and
+        // native backspace at offset 0 of the editing host does nothing.
         trigger.preventDefault()
 
         const intoContentBefore = prevVisible.peek()?.content ?? ''
@@ -1053,12 +1071,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // concatenated text ~300ms later. Guarding after it left the refusal
         // path writing the merged content while the other block survived —
         // silent duplication on exactly the blocks the guard protects.
-        // (Forward-delete at doc end is a CM no-op, so returning before
-        // `preventDefault` loses nothing.)
+        // (Nothing is lost by returning before the `preventDefault` below:
+        // block editors pass `defaultKeymap: false`, so Delete has no
+        // CodeMirror command at all, and native forward-delete at the end of
+        // the editing host is a no-op. That call is vestigial anyway — see the
+        // Backspace twin.)
         if (!await ensureDeletableThroughUi([nextVisible])) return
 
-        // CodeMirror's forward-delete at doc end is a no-op, but stop the
-        // event anyway to avoid any chance of double-handling.
         trigger.preventDefault()
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
@@ -1136,13 +1155,16 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    // All-or-nothing: check the WHOLE selection before deleting any of it, so a
-    // mix of guarded and unguarded blocks refuses wholesale instead of deleting
-    // the unguarded ones and leaving the rest. Matches `cut_selected_blocks`,
-    // which passes its whole selection to the same check — `Delete` and `d` on
-    // the same selection should not disagree.
+    // All-or-nothing on the GUARDS: check the WHOLE selection before deleting
+    // any of it, so a mix of guarded and unguarded blocks refuses wholesale
+    // instead of deleting the unguarded ones and leaving the rest. Matches
+    // `cut_selected_blocks`, which passes its whole selection to the same check
+    // — `Delete` and `d` on the same selection should not disagree. A tx-layer
+    // refusal partway through (read-only workspace, seeded definition) can
+    // still half-apply; see the one-tx todo in `applyToAllBlocksInSelection`.
     applyToAllBlocksInSelection(deleteBlockAction, {
       preflight: blocks => ensureDeletableThroughUi(blocks),
+      clearSelectionAfter: true,
     }),
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
@@ -1184,7 +1206,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const blocks = selectedBlocks.toReversed()
         if (!await ensureDeletableThroughUi(blocks)) return
 
-        await copySelectedBlocksToClipboard(uiStateBlock, repo)
+        // Copy exactly the set we're about to delete, rather than re-reading
+        // the ui-state selection: with supplied deps the two can differ, and
+        // the copy would quietly no-op while the delete went ahead. In
+        // SELECTION order — `blocks` is reversed for the delete (leaf-first, so
+        // each removal can't disturb the next), which is not the order the
+        // markdown should come out in.
+        await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
         await withMoveTransition(async () => {
           await deleteBlocksThroughUi(blocks)
         })

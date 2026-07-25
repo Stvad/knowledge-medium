@@ -38,13 +38,19 @@ const b3CustomEventRestriction = {
 // didn't, so `Delete` on a daily note was refused while `d` on the same
 // selection destroyed it.
 //
-// TWO selectors, because there are two ways to destroy a block and an
-// arity-only rule missed one: `Block.delete()` is zero-arg (Set/Map/query-
-// builder deletes all take an argument, so arity alone separates them), but it
-// is a thin wrapper over `repo.mutate.delete({id})`, which is ONE-arg and is
-// what two user-facing delete buttons actually call. The first version of this
-// rule claimed to catch block deletes "wherever written" and silently missed
-// that form — a review caught the overclaim.
+// FOUR selectors, because the repo has four ways to destroy a block and each
+// earlier version of this rule claimed completeness while missing some:
+//   1. `block.delete()` — zero-arg (Set/Map/query-builder deletes all take an
+//      argument, so arity alone separates them).
+//   2. `repo.mutate.delete({id})` — what `Block.delete()` wraps, and what two
+//      user-facing delete buttons actually call. An arity-only rule missed it.
+//   3. `tx.delete(id)` inside a `repo.tx(...)` — how `blockMerge`, the agent
+//      bridge, `subtreeDelete` and the references processor destroy blocks, so
+//      it is the shape a new handler is most likely to copy.
+//   4. `deleteSubtreeInTx(tx, id)` — the cascade helper behind (1) and (2).
+// Matched on the conventional receiver names for a tx (`tx`/`t`/`trx`); a tx
+// bound to some other name slips through, which is why this is a tripwire for
+// the common shapes rather than a proof.
 //
 // Applied to `src/` only (see the files block); ops scripts have no Blocks, so
 // their zero-arg `.delete()` calls are Supabase query builders and linting them
@@ -52,9 +58,12 @@ const b3CustomEventRestriction = {
 // deletes inside `src/` opt out inline with a reason — that's the point of the
 // guard being UI-layer rather than a data-layer rule.
 //
-// Still not airtight: a merge also destroys a block (`core.merge` soft-deletes
-// its `from`), and that's a `tx.run(mergeMutator, …)` no syntactic rule will
-// recognise. Those call sites are guarded by hand.
+// Still not airtight, and deliberately so — the guards are a UI affordance, not
+// an immortality bit. A merge also destroys a block (`core.merge` soft-deletes
+// its `from`) via `tx.run(mergeMutator, …)`, which no syntactic rule will
+// recognise; those call sites are guarded by hand. Aliasing (`const {mutate} =
+// repo`), computed access (`block['delete']()`) and detached references all
+// slip through as well.
 const uiDeleteMessage =
   'A user-initiated delete must go through `deleteBlockThroughUi` / `deleteBlocksThroughUi` / `ensureDeletableThroughUi` (@/utils/deleteBlockThroughUi) so blockDeletionGuardsFacet is consulted — otherwise a new delete path silently skips the guards, as cut_selected_blocks, delete_empty_block_cm and the merge handlers did. For a delete that is deliberately NOT user-initiated, add `// eslint-disable-next-line no-restricted-syntax -- programmatic delete: <why>`.'
 
@@ -65,6 +74,16 @@ const uiDeleteRestriction = {
 
 const uiMutateDeleteRestriction = {
   selector: "CallExpression[callee.property.name='delete'][callee.object.property.name='mutate']",
+  message: uiDeleteMessage,
+}
+
+const uiTxDeleteRestriction = {
+  selector: "CallExpression[callee.property.name='delete'][callee.object.name=/^(tx|t|trx)$/]",
+  message: uiDeleteMessage,
+}
+
+const uiDeleteSubtreeRestriction = {
+  selector: "CallExpression[callee.name='deleteSubtreeInTx']",
   message: uiDeleteMessage,
 }
 
@@ -179,6 +198,28 @@ export default tseslint.config(
     files: ['src/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction, uiMutateDeleteRestriction],
+    },
+  },
+  {
+    // The in-transaction forms, everywhere EXCEPT the data layer. `tx.delete` /
+    // `deleteSubtreeInTx` are how deletion is IMPLEMENTED, so `src/data/**` is
+    // full of legitimate uses and flagging them would just mean a dozen
+    // disable comments explaining that the delete mutator deletes. Outside it,
+    // reaching for a raw tx delete is the shape a new UI handler would copy
+    // from `blockMerge` — which is exactly the mistake this rule exists to
+    // catch. Non-UI callers out here (the agent bridge, processors) opt out
+    // inline with a reason, same as the other selectors.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/data/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        b3CustomEventRestriction,
+        uiDeleteRestriction,
+        uiMutateDeleteRestriction,
+        uiTxDeleteRestriction,
+        uiDeleteSubtreeRestriction,
+      ],
     },
   },
   {

@@ -10,6 +10,7 @@ import {
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
 import { invokeAction } from './actionDispatch.ts'
+import { selectionStateProp } from '@/data/properties'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement
@@ -113,11 +114,23 @@ export interface ApplyToAllOptions {
    * just omit this.
    */
   preflight?: (blocks: readonly Block[]) => Promise<boolean>
+  /**
+   * Clear the selection once the fan-out has run. Destructive actions need it:
+   * MULTI_SELECT_MODE is modal and stays active while `selectedBlockIds` is
+   * non-empty, so after deleting the selection the pane sat in multi-select
+   * over ids that no longer exist — nothing highlighted, every keystroke still
+   * routed to multi-select handlers until Escape. `cut` already did this
+   * inline; `Delete` and `d` on the same selection must not disagree.
+   *
+   * Actions that leave their blocks in place (indent, collapse, move) keep the
+   * selection so the user can chain another one.
+   */
+  clearSelectionAfter?: boolean
 }
 
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
-  {applyInReverseOrder, preflight}: ApplyToAllOptions = { applyInReverseOrder: false},
+  {applyInReverseOrder, preflight, clearSelectionAfter}: ApplyToAllOptions = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block.
   // Wrap the whole batch in one view transition so users see a single
@@ -156,6 +169,9 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           : actionConfig.handler(originalDeps, trigger))
       }
     })
+    if (clearSelectionAfter) {
+      await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    }
   }
 
   return makeMultiSelect({

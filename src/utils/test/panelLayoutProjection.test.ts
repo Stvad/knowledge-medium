@@ -690,6 +690,25 @@ describe('view-mode navigation semantics', () => {
       panelHistory.clear(rowA)
       projection.dispose()
     })
+
+    it('PUSHES when closing a pane shifts a stranded pane down an index', async () => {
+      // Same shape as above, but the navigation is a pane CLOSE. Comparing the
+      // two layouts leaf-by-INDEX made every leaf after the closed pane read as
+      // "left" — so the stranded pane's tombstone was attributed to a
+      // navigation that never touched it, and Back skipped the whole layout.
+      await seedBlocks(['a', 'stuck'])
+      await applyUrl('#ws-1/a/stuck')
+      const rowA = (await rowIdsByBlock()).get('a')!
+      const {projection, pushes, replaces} = startProjection('#ws-1/a/stuck')
+      await projection.start()
+
+      await env.repo.block('stuck').delete() // pane 2 is stranded
+      await deletePanelRow(env.repo, rowA) // pane 1 closes; 'stuck' shifts 1 → 0
+
+      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/stuck']))
+      expect(replaces).toEqual([])
+      projection.dispose()
+    })
   })
 
   it('navigateInPanel with viewMode: one viewModeEnter-stamped entry, ONE push carrying both changes', async () => {
@@ -1571,6 +1590,27 @@ describe('recoverPanelOffDeadContent', () => {
     // 'child' is still on the forward stack, and it is now dead.
     expect(await goForwardInPanel(panel)).toBe(false)
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('landing')
+  })
+
+  it('leaves the dead page in the stacks, so undo makes it reachable again', async () => {
+    // Recovery used to purge every entry pointing at the deleted page. That
+    // made undo a one-way door: the page came back but neither chevron could
+    // reach it. Entries are validated at CONSUMPTION time instead, so a dead
+    // one costs nothing while it sits there and is simply alive again after
+    // undo.
+    await seedBlocks(['landing', 'page', 'elsewhere'])
+    const panel = await panelShowing('page')
+    panelHistory.push(panel.id, {blockId: 'page'})
+    panelHistory.push(panel.id, {blockId: 'elsewhere'})
+
+    await env.repo.block('page').delete()
+    await recoverPanelOffDeadContent(panel, 'page', async () => 'landing')
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('elsewhere')
+    expect(panelHistory.getSnapshot(panel.id).back.map(e => e.blockId)).toEqual(['page'])
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await goBackInPanel(panel)).toBe(true)
+    expect(panel.peekProperty(topLevelBlockIdProp)).toBe('page')
   })
 
   it('abandons a chevron press if the pane navigated during the prune', async () => {
