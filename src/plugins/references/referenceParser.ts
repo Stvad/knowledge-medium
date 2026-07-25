@@ -275,6 +275,95 @@ export const renderAliasedBlockref = (label: string, id: string): string => {
   return `[${safeLabel}](((${id})))`
 }
 
+// ──── Whole-span round-trip guard (props-as-blocks §11, group 2) ────
+//
+// Both renderers above are deliberately lossy-but-SAFE: they mangle
+// input that would break the grammar (`renderWikilink` spaces apart
+// adjacent delimiters; `renderAliasedBlockref` strips `]` and newlines
+// from the label) so the output always PARSES. "Parses" is not "means
+// what the author wrote" — and every site that renders a span to
+// REPLACE an existing one is trading the author's text for machine
+// text, so it owes a proof that the trade preserved both halves of the
+// span's meaning: the target it resolves to, and the text it displays.
+//
+// The guard is that proof: render → parse back through this same
+// parser → compare target AND label. Callers get one of three
+// outcomes rather than a bare string, because the right fallback
+// differs by which half failed (see `SpanReplacement`).
+
+/** A verified replacement for one reference span. */
+export interface SpanReplacement {
+  /** Literal text to splice in place of the old span. */
+  text: string
+  /** Alias the source's `BlockReference` entry must carry once `text`
+   *  is spliced in — i.e. what a re-parse of `text` produces. Wikilink
+   *  form → the alias; blockref form → the target id (parseReferences
+   *  sets `alias === id` for blockref edges). Keeping this alongside
+   *  the text is what lets a rewriter update content and the stored
+   *  `references` list in lockstep instead of guessing. */
+  refAlias: string
+  /** True when `text` resolves to the intended target but DISPLAYS
+   *  something other than the requested label (`]`/newline stripped,
+   *  surrounding whitespace trimmed). The link is intact; the visible
+   *  text changed, so callers report it rather than failing. */
+  lossyLabel: boolean
+}
+
+/** `[[alias]]`, but only when it parses back to exactly this alias and
+ *  nothing else. Returns `null` when the wikilink form cannot carry
+ *  the alias faithfully — blank (`[[]]` parses to zero references) or
+ *  containing delimiters `renderWikilink` has to space apart. There is
+ *  no lossy tier here: a wikilink's label IS its target, so a mangled
+ *  label is a mangled binding. */
+export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | null => {
+  const text = renderWikilink(alias)
+  const marks = parseOutermostReferences(text)
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  if (mark.alias !== alias) return null
+  return {text, refAlias: alias, lossyLabel: false}
+}
+
+/** `[label](((targetId)))` — the pinned form, which keeps the display
+ *  text the source author wrote while binding to a stable id.
+ *
+ *  Returns `null` when the rendered span does not parse back to
+ *  `targetId`. The aliased form's id segment is UUID-only
+ *  (`ALIASED_BLOCK_REF_RE`), so a non-UUID-shaped target fails here —
+ *  and that failure MUST NOT be papered over: emitting the text anyway
+ *  turns the span into prose and destroys the reference outright.
+ *  Callers leave the span alone and report instead.
+ *
+ *  A label that survives the round-trip only after sanitization comes
+ *  back with `lossyLabel: true`. That tier exists because the two
+ *  failures are not equally bad: the reference still lands on the
+ *  right block, only its visible text changed, and refusing to rewrite
+ *  would strand the span on a name nothing claims. */
+export const pinnedSpanReplacement = (
+  label: string,
+  targetId: string,
+): SpanReplacement | null => {
+  const text = renderAliasedBlockref(label, targetId)
+  const marks = parseBlockRefs(text)
+  // A non-UUID target fails HERE, not on the id comparison below: the
+  // grammar simply doesn't match, so the span parses to zero marks.
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  // Unreachable while `renderAliasedBlockref` embeds the id verbatim —
+  // kept because this guard's whole job is catching renderer/parser
+  // drift, and the id is one `renderAliasedBlockref` sanitization step
+  // away from being mangled the way the label already is.
+  if (mark.blockId !== targetId.toLowerCase()) return null
+  // `refAlias` is what a re-parse ACTUALLY yields, so it carries the
+  // parser's normalized (lower-cased) id — `parseReferences` emits
+  // `{id: mark.blockId, alias: mark.blockId}` for blockref edges.
+  // `parseBlockRefs` trims the captured label, so leading/trailing
+  // whitespace counts as lossy alongside the stripped characters.
+  return {text, refAlias: mark.blockId, lossyLabel: mark.label !== label}
+}
+
 /** Replace every wikilink whose alias exactly matches `alias` with
  *  the literal `replacement` string. Uses `parseReferences` to find
  *  spans and avoids the

@@ -212,6 +212,55 @@ describe('references.retargetMergedBlockReferences', () => {
     ]))
   })
 
+  it('pins the span and re-keys the entry to the id when the collision alias is not wikilink-safe', async () => {
+    // `a]]b` is a legal wikilink alias but `renderWikilink` has to
+    // space the delimiters apart, so the wikilink form can't carry it.
+    // The rewrite falls back to the pinned form — and the stored entry
+    // has to follow the CONTENT: `[ab](((into)))` re-parses to a
+    // blockref edge whose alias IS the id. Keying the entry on the raw
+    // `toAlias` left the two disagreeing until the next re-parse.
+    const intoId = '44444444-4444-4444-8444-444444444444'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: intoId,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Target',
+        properties: aliasProperty(['a]]b']),
+      })
+      await tx.create({
+        id: 'source',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Partial',
+        properties: aliasProperty(['Partial']),
+      })
+      await tx.create({
+        id: 'ref',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'see [[Partial]]',
+        references: [{id: 'source', alias: 'Partial'}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId,
+      fromId: 'source',
+      collisionAlias: 'a]]b',
+      dropSourceAliases: ['Partial'],
+    })
+
+    expect(env.read('ref')!.content).toBe(`see [ab](((${intoId})))`)
+    expect(env.read('ref')!.references).toEqual(
+      normalizeReferences([{id: intoId, alias: intoId}]),
+    )
+  })
+
   // Regression (found by referencesRecompute.fuzz.test.ts): property-derived
   // refs project from the property VALUE, so retargeting the ref entry
   // without rewriting the value left a projection anomaly that the next

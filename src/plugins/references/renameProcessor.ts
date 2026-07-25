@@ -47,21 +47,45 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
+import { isAliasSeatSlotId, matchesAliasSeatSeed } from '@/data/targets'
 import {
-  parseReferences,
-  renderAliasedBlockref,
-  renderWikilink,
+  faithfulWikilinkReplacement,
+  pinnedSpanReplacement,
   rewriteWikilinks,
+  type SpanReplacement,
 } from './referenceParser.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
+/** Backlink sources for one removed alias — keyed on the ALIAS alone,
+ *  with the target row joined so the caller can apply the
+ *  claimant-or-provable-seat disjunction in JS (§11 group 2).
+ *
+ *  Keying on `(target_id, alias)` — as this did — silently skipped
+ *  spans whose reference edge had already moved off the renaming
+ *  claimant. That happens in the rename window: the rename case is
+ *  necessarily outside the "rewrite content before alias surgery"
+ *  ordering invariant (the rewrite CONSUMES the alias diff, and a
+ *  synced-in rename arrives with the alias already moved), so a
+ *  concurrent re-derive of `[[α]]` can bind the span to a freshly
+ *  minted α-seat first. Such an edge matches the alias but not the
+ *  target, and no later pass owns it — leaving a permanently
+ *  seat-bound span. Enumerating by alias and filtering by target in
+ *  JS lets those window-bound spans rewrite with the rest. */
 const SELECT_BACKLINK_SOURCES_SQL = `
-  SELECT br.source_id AS sourceId, source.content AS sourceContent
+  SELECT br.source_id AS sourceId,
+         source.content AS sourceContent,
+         br.target_id AS targetId,
+         target.content AS targetContent,
+         target.properties_json AS targetProperties,
+         EXISTS(
+           SELECT 1 FROM blocks child
+           WHERE child.parent_id = target.id AND child.deleted = 0
+         ) AS targetHasLiveChildren
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
+  JOIN blocks target ON target.id = br.target_id
   WHERE br.workspace_id = ?
-    AND br.target_id = ?
     AND br.alias = ?
     AND source.deleted = 0
 `
@@ -69,6 +93,61 @@ const SELECT_BACKLINK_SOURCES_SQL = `
 interface BacklinkSourceRow {
   sourceId: string
   sourceContent: string
+  targetId: string
+  targetContent: string
+  targetProperties: string
+  targetHasLiveChildren: 0 | 1
+}
+
+/** Live claimants of `alias`, with the same seat-shape columns as
+ *  above, so a claim can be classified as a real block's or a
+ *  throwaway machine seat's. */
+const SELECT_ALIAS_CLAIMANTS_SQL = `
+  SELECT b.id AS targetId,
+         b.content AS targetContent,
+         b.properties_json AS targetProperties,
+         EXISTS(
+           SELECT 1 FROM blocks child
+           WHERE child.parent_id = b.id AND child.deleted = 0
+         ) AS targetHasLiveChildren
+  FROM block_aliases ba
+  JOIN blocks b ON b.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND ba.alias = ?
+    AND b.deleted = 0
+`
+
+/** The §7 seat-shape predicate evaluated on a joined `blocks` row: is
+ *  this a machine-minted, never-touched seat for `alias`?
+ *
+ *  Three signals, none sufficient alone. The SHAPE (`aliasSeatSeed`)
+ *  says nothing drifted — no rename, no user property, no extra alias
+ *  — but quick-find's create-page writes exactly that shape too. The
+ *  SLOT ID is what separates them: only `ensureAliasTarget` mints rows
+ *  at `computeAliasSeatId(alias, ws, i)`, so a user's page carrying the
+ *  same shape still has a random uuid. Live CHILDREN mean a user
+ *  treated it as a real page regardless of the other two.
+ *
+ *  (Post-flip this needs to ignore the seat's own GENERATED property
+ *  children rather than counting any live child — tracked as the seat
+ *  predicate in #443 group 4, alongside `cleanupOrphanAliasesProcessor`.
+ *  Today no seat has generated children, so the bare check matches
+ *  `isRestorableTransientTombstone`'s.) */
+const isMachineAliasSeat = (
+  row: Pick<BacklinkSourceRow, 'targetId' | 'targetContent' | 'targetProperties' | 'targetHasLiveChildren'>,
+  alias: string,
+  workspaceId: string,
+): boolean => {
+  if (row.targetContent !== alias) return false
+  if (row.targetHasLiveChildren === 1) return false
+  if (!isAliasSeatSlotId(row.targetId, alias, workspaceId)) return false
+  let properties: Record<string, unknown>
+  try {
+    properties = JSON.parse(row.targetProperties) as Record<string, unknown>
+  } catch {
+    return false
+  }
+  return matchesAliasSeatSeed({content: row.targetContent, properties})
 }
 
 const decodeAliases = (block: BlockData): readonly string[] => {
@@ -81,59 +160,73 @@ const decodeAliases = (block: BlockData): readonly string[] => {
   }
 }
 
-/** Replacement form for a single removed alias α. Returns both the
- *  literal text spliced into source content AND the alias that should
- *  appear in the source's `references` entry for this target after
- *  the rewrite (so the inline references update mirrors what
- *  parseReferences would emit on a re-parse of the new content). */
-export interface Replacement {
-  /** Text spliced into source content in place of `[[α]]`. */
-  text: string
-  /** Alias the corresponding `BlockReference` carries after the
-   *  rewrite. Wikilink form → the new alias `β`. Blockref form →
-   *  the target id (parseReferences sets `alias === id` for blockref
-   *  edges; see referencesProcessor.ts buildSourcePlan). */
-  refAlias: string
-}
+/** A verified replacement span: the literal text spliced into source
+ *  content AND the alias the source's `references` entry must carry
+ *  afterwards. Both halves come from the shared round-trip guard, so
+ *  they can't drift apart. */
+export type Replacement = SpanReplacement
 
+/** Replacement form for a single removed alias α — the rename ladder,
+ *  composed from the whole-span round-trip guard in
+ *  `referenceParser.ts`.
+ *
+ *  `null` means "leave every span for this alias alone": no rendering
+ *  could carry the reference, so any rewrite would destroy the link
+ *  outright. Already reported by the time it returns. */
 export const replacementFor = (
   alias: string,
   removed: readonly string[],
   added: readonly string[],
   targetId: string,
-): Replacement => {
+): Replacement | null => {
   if (removed.length === 1 && added.length === 1) {
-    // Only emit the wikilink form when it roundtrips through the
-    // parser to the same alias. Known failures:
-    //   - Blank alias → `renderWikilink('')` = `[[]]`, which
-    //     parseReferences ignores (no link, dropped on the floor).
-    //   - Alias containing `]]` → `renderWikilink` collapses it to
-    //     `] ]`; the rendered form parses to a different alias than
-    //     intended, silently corrupting the backlink text.
-    // Fall through to the blockref form (which preserves the original
-    // display text and pins to the target id) when the wikilink would
-    // be lossy.
-    const candidate = renderWikilink(added[0])
-    if (parseReferences(candidate)[0]?.alias === added[0]) {
-      return {text: candidate, refAlias: added[0]}
-    }
+    // R1/R2/A1-cascade: 1-for-1 swap keeps the late-binding wikilink
+    // form — but only when it roundtrips to the same alias. Known
+    // failures (blank alias, alias containing `]]`) fall through to
+    // the pinned form rather than silently corrupting the backlink.
+    const wikilink = faithfulWikilinkReplacement(added[0])
+    if (wikilink !== null) return wikilink
   }
   // R4/R5/R6/R7/A2-cascade (and the wikilink-unsafe 1-for-1 fallback):
   // aliased blockref preserves the original display text the source
   // author wrote while pinning to the stable target id.
-  return {text: renderAliasedBlockref(alias, targetId), refAlias: targetId}
+  const pinned = pinnedSpanReplacement(alias, targetId)
+  if (pinned === null) {
+    // The aliased form is UUID-only, so a non-UUID-shaped target can't
+    // be pinned at all. Splicing the unparseable text would turn a
+    // live backlink into prose; leaving `[[α]]` keeps the stored
+    // reference entry (retained by the add-only contract) pointing at
+    // the target, which is strictly the better of two bad states.
+    console.warn(
+      `[${RENAME_BACKLINKS_PROCESSOR}] target "${targetId}" cannot be pinned ` +
+      `(not UUID-shaped); leaving [[${alias}]] spans unrewritten`,
+    )
+    return null
+  }
+  if (pinned.lossyLabel) {
+    console.warn(
+      `[${RENAME_BACKLINKS_PROCESSOR}] pinned span for alias "${alias}" displays ` +
+      `sanitized text (\`]\`/newline stripped, whitespace trimmed); link preserved`,
+    )
+  }
+  return pinned
 }
 
-/** One rewrite operation applied to a single source. `targetId` +
- *  `refAlias` drive the inline references update: each content ref
- *  matching `(targetId, alias, sourceField:'')` becomes
- *  `(targetId, refAlias, sourceField:'')`. Multiple rewrites per
+/** One rewrite operation applied to a single source. The target pair
+ *  plus `refAlias` drive the inline references update: each content ref
+ *  matching `(fromTargetId, alias, sourceField:'')` becomes
+ *  `(toTargetId, refAlias, sourceField:'')`. Multiple rewrites per
  *  source accumulate when several aliases on the same target are
  *  removed in one commit. Order matters: applied in collection order. */
-interface Rewrite {
+export interface Rewrite {
   alias: string
   replacement: string
-  targetId: string
+  /** The edge's CURRENT target — what the stored `references` entry
+   *  says today. Usually the renaming block; a window-bound span
+   *  carries the α-seat instead. Matching key for the entry swap. */
+  fromTargetId: string
+  /** Where the replacement text points — always the renaming block. */
+  toTargetId: string
   refAlias: string
 }
 
@@ -166,12 +259,37 @@ const collectTargetPlans = async (
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
 
   for (const alias of removed) {
+    // Consult α's POST-TX claimant before deciding anything (§11
+    // group 2). A live claimant means α is not ours to re-key:
+    //   - handoff — some other block owns the name now, so `[[α]]`
+    //     already resolves where the author would expect. Rewriting
+    //     it (to the new alias, or pinned to the block that just gave
+    //     α up) would steal the span from its rightful target.
+    //   - re-claim — a later tx put α back on this same block, so the
+    //     removal we're reacting to no longer holds.
+    // Only a genuine RELEASE (nobody claims α) falls through to the
+    // rename ladder. Machine seats are excluded from "claimant" on
+    // purpose: a window-minted α-seat is the artifact this pass exists
+    // to rewrite past, not a successor to defer to.
+    const claimants = await ctx.db.getAll<
+      Pick<BacklinkSourceRow, 'targetId' | 'targetContent' | 'targetProperties' | 'targetHasLiveChildren'>
+    >(SELECT_ALIAS_CLAIMANTS_SQL, [after.workspaceId, alias])
+    if (claimants.some(row => !isMachineAliasSeat(row, alias, after.workspaceId))) continue
+
     const replacement = replacementFor(alias, removed, added, after.id)
+    // No rendering could carry this span — leave every source alone
+    // (already reported by `replacementFor`).
+    if (replacement === null) continue
     const sources = await ctx.db.getAll<BacklinkSourceRow>(
       SELECT_BACKLINK_SOURCES_SQL,
-      [after.workspaceId, after.id, alias],
+      [after.workspaceId, alias],
     )
     for (const row of sources) {
+      // Target disjunction: the renaming claimant, or a
+      // provably-untouched machine α-seat a window re-derive bound the
+      // span to. Anything else is a different block that happens to
+      // share the alias text — not ours.
+      if (row.targetId !== after.id && !isMachineAliasSeat(row, alias, after.workspaceId)) continue
       // First sighting of this source pins `originalContent`. If a
       // later target rename hits the same source within this event,
       // both reads are inside the same committed snapshot so the
@@ -184,37 +302,44 @@ const collectTargetPlans = async (
       plan.rewrites.push({
         alias,
         replacement: replacement.text,
-        targetId: after.id,
+        fromTargetId: row.targetId,
+        toTargetId: after.id,
         refAlias: replacement.refAlias,
       })
     }
   }
 }
 
-/** Apply rewrites to a source's `references` list. Swaps the alias on
- *  content edges matching `(targetId, oldAlias)` to the new ref alias.
+/** Apply rewrites to a source's `references` list. Content edges
+ *  matching `(fromTargetId, oldAlias)` are re-pointed at
+ *  `(toTargetId, refAlias)`. BOTH halves move: a window-bound span's
+ *  edge names the α-seat while the replacement text pins to the
+ *  renaming block, so swapping only the alias would leave the entry
+ *  naming a target the content no longer references.
  *  Property-typed refs (`sourceField !== ''`) are untouched — wikilink
  *  rewrites never affect them. Returned list is run through
  *  `normalizeReferences` so duplicates introduced by the swap (e.g.
  *  source already had `[[β]]` before we rewrote `[[α]] → [[β]]`)
  *  collapse, and the on-disk JSON stays canonical. */
-const applyRefRewrites = (
+export const applyRefRewrites = (
   refs: ReadonlyArray<BlockReference>,
   rewrites: ReadonlyArray<Rewrite>,
 ): BlockReference[] => {
   if (rewrites.length === 0) return [...refs]
-  // (targetId, oldAlias) → newRefAlias. Last-write-wins across rewrites
-  // — mirrors the content rewrite order (each `rewriteWikilinks` pass
-  // operates on the prior pass's output).
-  const swaps = new Map<string, string>()
+  // (fromTargetId, oldAlias) → (toTargetId, newRefAlias). Last-write-
+  // wins across rewrites — mirrors the content rewrite order (each
+  // `rewriteWikilinks` pass operates on the prior pass's output).
+  const swaps = new Map<string, {id: string; alias: string}>()
   const key = (targetId: string, alias: string) => `${targetId}\u0000${alias}`
-  for (const rw of rewrites) swaps.set(key(rw.targetId, rw.alias), rw.refAlias)
+  for (const rw of rewrites) {
+    swaps.set(key(rw.fromTargetId, rw.alias), {id: rw.toTargetId, alias: rw.refAlias})
+  }
   const next: BlockReference[] = []
   for (const ref of refs) {
     const sourceField = ref.sourceField ?? ''
     if (sourceField !== '') { next.push(ref); continue }
     const swapped = swaps.get(key(ref.id, ref.alias))
-    next.push(swapped === undefined ? ref : {...ref, alias: swapped})
+    next.push(swapped === undefined ? ref : {...ref, id: swapped.id, alias: swapped.alias})
   }
   return normalizeReferences(next)
 }

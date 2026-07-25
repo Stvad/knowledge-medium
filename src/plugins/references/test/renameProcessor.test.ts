@@ -21,7 +21,9 @@ import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
+import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { applyRefRewrites, type Rewrite } from '../renameProcessor.ts'
 
 interface Harness {
   h: TestDb
@@ -69,6 +71,13 @@ afterEach(async () => {
 })
 
 const WS = 'ws-1'
+
+/** Target id for every case whose expected rewrite is the PINNED form
+ *  `[label](((id)))`. The aliased-blockref grammar pins its id segment
+ *  to a UUID shape, so a short test id like `'t'` renders a span that
+ *  does not parse back as a reference at all — asserting it would pin
+ *  a destroyed backlink rather than a preserved one. */
+const PIN_TARGET = '11111111-2222-4333-8444-555555555555'
 
 const flush = async () => {
   for (let i = 0; i < 3; i++) {
@@ -195,31 +204,31 @@ describe('rename — Case R1 (clean 1-for-1 swap)', () => {
 
 describe('rename — Case R4 (pure remove, some aliases remain)', () => {
   it('rewrites [[B]] → [B](((target-id))) on source content', async () => {
-    await seedTarget('t', '', ['A', 'B'])
+    await seedTarget(PIN_TARGET, '', ['A', 'B'])
     await seedSource('s', 'see [[B]] please')
 
     await env.repo.tx(
-      tx => tx.setProperty('t', aliasesProp, ['A']),
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, ['A']),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
 
-    expect((await env.read('s'))!.content).toBe('see [B](((t))) please')
+    expect((await env.read('s'))!.content).toBe(`see [B](((${PIN_TARGET}))) please`)
   })
 })
 
 describe('rename — Case R7 (remove last alias)', () => {
   it('rewrites [[A]] → [A](((target-id))) (only blockref form preserves the link)', async () => {
-    await seedTarget('t', '', ['A'])
+    await seedTarget(PIN_TARGET, '', ['A'])
     await seedSource('s', 'see [[A]] please')
 
     await env.repo.tx(
-      tx => tx.setProperty('t', aliasesProp, []),
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
 
-    expect((await env.read('s'))!.content).toBe('see [A](((t))) please')
+    expect((await env.read('s'))!.content).toBe(`see [A](((${PIN_TARGET}))) please`)
   })
 })
 
@@ -230,15 +239,15 @@ describe('rename — composition with sync (A2-cascade hits R4)', () => {
     // aliases, dedupe → ["Y"]. The cascading alias-swap is a pure
     // remove of "X" (Case A2 cascade → R4); rename rewrites [[X]] to
     // [X](((target-id))) in source backlinks.
-    await seedTarget('t', 'X', ['X', 'Y'])
+    await seedTarget(PIN_TARGET, 'X', ['X', 'Y'])
     await seedSource('s', 'see [[X]] please')
 
-    await env.repo.mutate.setContent({id: 't', content: 'Y'})
+    await env.repo.mutate.setContent({id: PIN_TARGET, content: 'Y'})
     await flush()
 
-    expect((await env.read('t'))!.content).toBe('Y')
-    expect(JSON.parse((await env.read('t'))!.properties_json).alias).toEqual(['Y'])
-    expect((await env.read('s'))!.content).toBe('see [X](((t))) please')
+    expect((await env.read(PIN_TARGET))!.content).toBe('Y')
+    expect(JSON.parse((await env.read(PIN_TARGET))!.properties_json).alias).toEqual(['Y'])
+    expect((await env.read('s'))!.content).toBe(`see [X](((${PIN_TARGET}))) please`)
   })
 })
 
@@ -491,5 +500,154 @@ describe('rename — replacement form roundtrip safety', () => {
     expect(await blockReferences('s', TARGET_UUID)).toEqual([
       {alias: TARGET_UUID, source_field: ''},
     ])
+  })
+})
+
+describe('rename — whole-span round-trip guard (§11 group 2)', () => {
+  const blockReferences = async (sourceId: string, targetId: string) =>
+    env.h.db.getAll<{alias: string}>(
+      `SELECT alias FROM block_references WHERE source_id = ? AND target_id = ?`,
+      [sourceId, targetId],
+    )
+
+  it('pins a span whose alias only survives sanitization, and reports the changed display text', async () => {
+    // `]` is legal inside a wikilink alias (`[[a]b]]` parses to `a]b`)
+    // but illegal inside an aliased-blockref label, so the pinned form
+    // can only display `ab`. The LINK is what matters — dropping the
+    // rewrite would strand the span on a name nothing claims — so the
+    // rewrite proceeds and the lossy display text is reported.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget(PIN_TARGET, '', ['a]b'])
+      await seedSource('s', 'see [[a]b]] please')
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('s'))!.content).toBe(`see [ab](((${PIN_TARGET}))) please`)
+      // The pinned span really binds: it re-parses to a blockref edge
+      // whose alias is the id.
+      expect(await blockReferences('s', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
+      expect(warn.mock.calls.flat().join(' ')).toContain('sanitized text')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('leaves the span unrewritten when the target cannot be pinned at all', async () => {
+    // A non-UUID target has no representable aliased-blockref form:
+    // `[A](((t)))` parses as prose, so splicing it would convert a live
+    // backlink into text. Keeping `[[A]]` keeps the stored reference
+    // entry pointing at the target.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget('t', '', ['A'])
+      await seedSource('s', 'see [[A]] please')
+
+      await env.repo.tx(
+        tx => tx.setProperty('t', aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('s'))!.content).toBe('see [[A]] please')
+      expect(await blockReferences('s', 't')).toEqual([{alias: 'A'}])
+      expect(warn.mock.calls.flat().join(' ')).toContain('cannot be pinned')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('rename — post-tx claimant (§11 group 2)', () => {
+  const refsOf = async (id: string) =>
+    JSON.parse((await env.read(id))!.references_json) as Array<{id: string; alias: string}>
+
+  it('leaves the span alone when the alias was handed off to another live block', async () => {
+    // Handoff in one tx: T gives up "Shared", U takes it. `[[Shared]]`
+    // already resolves where the author would expect, so rewriting it
+    // — to a new alias of T's, or pinned to T — would steal the span
+    // from the block that now owns the name.
+    await seedTarget(PIN_TARGET, 'T', ['Shared'])
+    await seedTarget('u', 'U', [])
+    await seedSource('s', 'see [[Shared]] please')
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await tx.setProperty('u', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[Shared]] please')
+
+    // Not rewriting is what keeps the span ABLE to follow the name:
+    // the next re-parse binds it to U. (The stored entry stays on T
+    // until something re-parses — the retained-binding half of #383,
+    // untouched here.) Under the old behaviour the content would read
+    // `[Shared](((T)))` and no amount of re-parsing could ever move
+    // it off the block that gave the name up.
+    await env.repo.mutate.setContent({id: 's', content: 'see [[Shared]] please!'})
+    await flush()
+    expect(await refsOf('s')).toEqual([{id: 'u', alias: 'Shared'}])
+  })
+
+  it('still rewrites when the only claimant is a machine seat, and follows the span onto it', async () => {
+    // The rename window: the rename rewrite CONSUMES the alias diff, so
+    // no flow can rewrite content before the alias moves. A re-derive
+    // landing in that window mints an α-seat and re-binds the span to
+    // it. The seat must not count as a successor (it would suppress the
+    // rewrite) and the seat-bound edge must still be found (the old
+    // (target_id, alias) enumeration missed it) — otherwise the span is
+    // permanently stranded on a throwaway seat.
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await ensureAliasTarget(tx, env.repo, 'Win', WS)
+      // What the window's re-derive would have written.
+      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe(`see [Win](((${PIN_TARGET}))) please`)
+    // The entry moved off the seat too — id AND alias, not just alias.
+    expect(await refsOf('s')).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
+  })
+})
+
+describe('applyRefRewrites — surgical entry swap', () => {
+  // This runs in the same tx as the content rewrite so the
+  // `block_references` trigger refreshes in lockstep; parseReferences
+  // later re-emits the same list. Asserting it through the processor
+  // therefore proves nothing — the async re-parse produces the right
+  // answer either way. The reason it exists is the window BEFORE that
+  // re-parse, which a second rapid rename reads.
+  const rw = (over: Partial<Rewrite>): Rewrite => ({
+    alias: 'Win',
+    replacement: `[Win](((${PIN_TARGET})))`,
+    fromTargetId: PIN_TARGET,
+    toTargetId: PIN_TARGET,
+    refAlias: PIN_TARGET,
+    ...over,
+  })
+
+  it('moves a window-bound edge off the seat — id and alias together', async () => {
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    expect(applyRefRewrites(
+      [{id: seatId, alias: 'Win'}],
+      [rw({fromTargetId: seatId})],
+    )).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
+  })
+
+  it('leaves property-derived edges alone', async () => {
+    expect(applyRefRewrites(
+      [{id: PIN_TARGET, alias: 'Win', sourceField: 'ref'}],
+      [rw({})],
+    )).toEqual([{id: PIN_TARGET, alias: 'Win', sourceField: 'ref'}])
   })
 })
