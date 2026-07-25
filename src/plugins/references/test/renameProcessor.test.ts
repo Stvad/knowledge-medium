@@ -617,6 +617,14 @@ describe('rename — post-tx claimant (§11 group 2)', () => {
     expect((await env.read('s'))!.content).toBe(`see [Win](((${PIN_TARGET}))) please`)
     // The entry moved off the seat too — id AND alias, not just alias.
     expect(await refsOf('s')).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
+    // …which drops the seat's last reference, so the already-landed
+    // reference-drop reaper (`references.reapOrphanAliasSeats`, #402)
+    // collects it. This is the composition §11 group 1(c) describes:
+    // the rewrite doesn't schedule cleanup itself, it produces the
+    // derived transition the reaper observes. Without the rewrite the
+    // seat keeps squatting the released name — its own mint-time 4s
+    // check already ran while the span still referenced it.
+    expect((await env.read(seatId))!.deleted).toBe(1)
   })
 })
 

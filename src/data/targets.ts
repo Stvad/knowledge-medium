@@ -67,13 +67,18 @@ export interface CreateOrRestoreArgs {
   orderKey: string
   /** Applied on both insert and restore. */
   freshContent: string
-  /** Mint the row as a speculative engine default (`system:<userId>`
-   *  author) so it yields to an older-but-authoritative server row under
-   *  the reconcile gate. Applies to the INSERT path only — a tombstone
-   *  restore is an update and stays user-authored (create-only, per
-   *  TxInsertOpts). Seat materializers (alias / daily-note seats,
-   *  shortcuts) set this; content-bearing creators (Roam import, which
-   *  uses its own tx.create, not this primitive) do not. */
+  /** Mint the row as a speculative engine default so it yields to an
+   *  older-but-authoritative server row under the reconcile gate. The
+   *  marker is `updated_at = 0` — the pristine sentinel the gate's
+   *  stamp-0 exemption keys on; `created_by` / `updated_by` stay the
+   *  REAL user, since provenance stopped being the discriminator (see
+   *  `TxInsertOpts` and `SYSTEM_AUTHOR_PREFIX`, retained only as a
+   *  display shim for pre-migration rows). Applies to the INSERT path
+   *  only — a tombstone restore is an update and takes a real
+   *  row-version (create-only, per TxInsertOpts). Seat materializers
+   *  (alias / daily-note seats, shortcuts) set this; content-bearing
+   *  creators (Roam import, which uses its own tx.create, not this
+   *  primitive) do not. */
   systemMint?: boolean
   /** Strip the tombstone bag's `aliases` key in the SAME restore UPDATE.
    *  Set by callers whose `onInsertedOrRestored` OWNS the alias write
