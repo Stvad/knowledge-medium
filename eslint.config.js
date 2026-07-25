@@ -38,19 +38,34 @@ const b3CustomEventRestriction = {
 // didn't, so `Delete` on a daily note was refused while `d` on the same
 // selection destroyed it.
 //
-// Matched on ARITY rather than variable names: `Block.delete()` is the only
-// zero-argument `.delete()` in app code — Set/Map/query-builder deletes all take
-// an argument — so this catches a block delete wherever in `src/` it's written,
-// without the "which directory holds delete handlers?" race the
-// child-visibility guardrail below documents losing. Applied to `src/` only
-// (see the files block); ops scripts have no Blocks, so linting them would be
-// noise in files that can't have the defect. The handful of legitimate
-// programmatic deletes inside `src/` opt out inline with a reason — that's the
-// point of the guard being UI-layer rather than a data-layer rule.
+// TWO selectors, because there are two ways to destroy a block and an
+// arity-only rule missed one: `Block.delete()` is zero-arg (Set/Map/query-
+// builder deletes all take an argument, so arity alone separates them), but it
+// is a thin wrapper over `repo.mutate.delete({id})`, which is ONE-arg and is
+// what two user-facing delete buttons actually call. The first version of this
+// rule claimed to catch block deletes "wherever written" and silently missed
+// that form — a review caught the overclaim.
+//
+// Applied to `src/` only (see the files block); ops scripts have no Blocks, so
+// their zero-arg `.delete()` calls are Supabase query builders and linting them
+// would be noise in files that can't have the defect. Legitimate programmatic
+// deletes inside `src/` opt out inline with a reason — that's the point of the
+// guard being UI-layer rather than a data-layer rule.
+//
+// Still not airtight: a merge also destroys a block (`core.merge` soft-deletes
+// its `from`), and that's a `tx.run(mergeMutator, …)` no syntactic rule will
+// recognise. Those call sites are guarded by hand.
+const uiDeleteMessage =
+  'A user-initiated delete must go through `deleteBlockThroughUi` / `deleteBlocksThroughUi` / `ensureDeletableThroughUi` (@/utils/deleteBlockThroughUi) so blockDeletionGuardsFacet is consulted — otherwise a new delete path silently skips the guards, as cut_selected_blocks, delete_empty_block_cm and the merge handlers did. For a delete that is deliberately NOT user-initiated, add `// eslint-disable-next-line no-restricted-syntax -- programmatic delete: <why>`.'
+
 const uiDeleteRestriction = {
   selector: "CallExpression[callee.property.name='delete'][arguments.length=0]",
-  message:
-    'A user-initiated delete must go through `deleteBlockThroughUi` / `deleteBlocksThroughUi` (@/utils/deleteBlockThroughUi) so blockDeletionGuardsFacet is consulted — otherwise a new delete path silently skips the guards, as cut_selected_blocks and delete_empty_block_cm did. For a delete that is deliberately NOT user-initiated, add `// eslint-disable-next-line no-restricted-syntax -- programmatic delete: <why>`.',
+  message: uiDeleteMessage,
+}
+
+const uiMutateDeleteRestriction = {
+  selector: "CallExpression[callee.property.name='delete'][callee.object.property.name='mutate']",
+  message: uiDeleteMessage,
 }
 
 export default tseslint.config(
@@ -163,7 +178,7 @@ export default tseslint.config(
     // noise in files that can never have the defect.
     files: ['src/**/*.{ts,tsx}'],
     rules: {
-      'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction],
+      'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction, uiMutateDeleteRestriction],
     },
   },
   {

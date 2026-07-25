@@ -652,6 +652,26 @@ describe('view-mode navigation semantics', () => {
       projection.dispose()
     })
 
+    it('REPLACES when the same dead block is in two panes and only one recovers', async () => {
+      // Panes recover independently (each debounced separately), so this is the
+      // routine multi-pane sequence, not an exotic one. Comparing block-id SETS
+      // saw 'dup' still present in the new layout and concluded nothing was
+      // left — pushing a history entry where pane 2 still renders a tombstone.
+      await seedBlocks(['dup', 'landing'])
+      await applyUrl('#ws-1/dup/dup')
+      const rowA = (await rows())[0]
+      const {projection, pushes, replaces} = startProjection('#ws-1/dup/dup')
+      await projection.start()
+
+      await env.repo.block('dup').delete()
+      await navigateInPanel(env.repo.block(rowA.id), 'landing')
+
+      await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/landing/dup']))
+      expect(pushes).toEqual([])
+      panelHistory.clear(rowA.id)
+      projection.dispose()
+    })
+
     it('PUSHES when the dead block is in a pane we are NOT leaving', async () => {
       // Scoped to the panes actually being navigated away from. Scanning the
       // whole layout meant one pane stuck on a tombstone downgraded EVERY

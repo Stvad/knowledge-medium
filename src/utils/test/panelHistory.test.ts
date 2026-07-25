@@ -310,6 +310,20 @@ describe('PanelHistoryStore', () => {
       expect(store.getSnapshot('p1').back.map(x => x.blockId)).toEqual(['b-a'])
     })
 
+    it('seen-live memory is per panel and dies with the panel', () => {
+      // Lives on the store rather than in the watchdog component precisely so
+      // it survives a remount: a component-local memo was wiped by a remount
+      // inside the recovery debounce, which sent the pane down the
+      // wait-for-sync branch and stranded it on a tombstone forever.
+      store.rememberSeenLive('p1', 'page')
+      expect(store.hasSeenLive('p1', 'page')).toBe(true)
+      expect(store.hasSeenLive('p2', 'page')).toBe(false)
+      expect(store.hasSeenLive('p1', 'other')).toBe(false)
+
+      store.clear('p1')
+      expect(store.hasSeenLive('p1', 'page')).toBe(false)
+    })
+
     it('dropTop notifies only when something was removed', () => {
       let n = 0
       store.push('p1', e('b-a'))

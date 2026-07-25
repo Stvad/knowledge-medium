@@ -241,6 +241,10 @@ export class PanelHistoryStore {
     const seen = this.seenLive.get(panelId)
     if (seen) seen.add(blockId)
     else this.seenLive.set(panelId, new Set([blockId]))
+    // Observing it live retires any recorded death: undo restores blocks, and a
+    // stale "confirmed deleted" would keep the layout projection overwriting
+    // the restored page's browser-history entry for the rest of the session.
+    unmarkBlockConfirmedDeleted(blockId)
   }
 
   hasSeenLive(panelId: string, blockId: string): boolean {
@@ -327,6 +331,13 @@ const confirmedDeletedBlockIds = new Set<string>()
 
 export const markBlockConfirmedDeleted = (blockId: string): void => {
   confirmedDeletedBlockIds.add(blockId)
+}
+
+/** Retract a recorded death — the block was observed live again (undo, or a
+ *  row that finally replicated). Without this the record is write-only for the
+ *  session and outlives its own truth. */
+export const unmarkBlockConfirmedDeleted = (blockId: string): void => {
+  confirmedDeletedBlockIds.delete(blockId)
 }
 
 export const isBlockConfirmedDeleted = (blockId: string): boolean =>

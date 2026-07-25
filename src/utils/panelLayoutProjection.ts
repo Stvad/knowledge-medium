@@ -1104,12 +1104,19 @@ export class PanelLayoutProjection {
     current: readonly LayoutSlot[],
     next: readonly LayoutSlot[],
   ): boolean {
-    const stillShown = new Set(collectLeafSlots(next).map(slot => slot.blockId))
-    return collectLeafSlots(current)
-      .filter(slot => !stillShown.has(slot.blockId))
-      .some(slot =>
-        this.repo.block(slot.blockId).peekRaw()?.deleted === true
-        || isBlockConfirmedDeleted(slot.blockId))
+    // Compared PANE BY PANE (positionally), not as a set of block ids: with the
+    // same page open in two panes and only one recovering, a set-difference
+    // sees the id still present in `next` and concludes nothing was left — so
+    // it pushed a history entry in which a pane still renders a dead block.
+    const currentLeaves = collectLeafSlots(current)
+    const nextLeaves = collectLeafSlots(next)
+    return currentLeaves.some((slot, index) => {
+      // A pane that kept its block isn't being left. A pane that closed
+      // (no counterpart in `next`) is.
+      if (nextLeaves[index]?.blockId === slot.blockId) return false
+      return this.repo.block(slot.blockId).peekRaw()?.deleted === true
+        || isBlockConfirmedDeleted(slot.blockId)
+    })
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {

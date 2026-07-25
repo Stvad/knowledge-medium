@@ -981,6 +981,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const joinOffset = intoContentBefore.length
         const prevId = prevVisible.id
 
+        // A merge DESTROYS `from` (core.merge soft-deletes it), so it needs the
+        // same veto as an outright delete — otherwise Backspace at offset 0 of a
+        // guarded page merges it away while `Delete` on it is refused.
+        if (!await ensureDeletableThroughUi([block])) return
+
         // Single tx: flush the editor's live content into `from` first so
         // core.merge concatenates the latest text, then run the merge.
         // tx.run sees writes from the same tx via SQL.
@@ -1062,6 +1067,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
           selection: EditorSelection.cursor(joinOffset),
         })
+
+        // Same as the Backspace merge, but here it's the NEXT block that gets
+        // destroyed — Delete-at-end-of-line must not fold a guarded page away.
+        if (!await ensureDeletableThroughUi([repo.block(fromId)])) return
 
         // Single tx: flush the editor's live content into `into` first so
         // core.merge concatenates the latest text, then fold `next` in.

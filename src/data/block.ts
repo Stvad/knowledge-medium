@@ -338,6 +338,7 @@ export class Block implements Handle<BlockData | null> {
 
   /** Subtree-aware soft-delete (mirrors legacy `Block.delete`). */
   async delete(): Promise<void> {
+    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: this IS the primitive the UI choke point wraps
     await this.repo.mutate.delete({id: this.id})
   }
 }
