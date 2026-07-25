@@ -1623,14 +1623,12 @@ describe('recoverPanelOffDeadContent', () => {
     panelHistory.push(panel.id, {blockId: 'gone'})
     await env.repo.block('gone').delete()
 
-    // Drive the navigation from inside the prune's load so the interleaving is
-    // deterministic rather than timing-dependent. `repo.block` is id-memoized,
-    // so this is the very instance pruneDeadTop loads.
-    const gone = env.repo.block('gone')
-    const realLoad = gone.load.bind(gone)
-    vi.spyOn(gone, 'load').mockImplementation(async () => {
-      await navigateInPanel(panel, 'elsewhere')
-      return realLoad()
+    // Drive the navigation from inside the prune's liveness check so the
+    // interleaving is deterministic rather than timing-dependent.
+    const realExists = env.repo.exists.bind(env.repo)
+    vi.spyOn(env.repo, 'exists').mockImplementation(async (id: string) => {
+      if (id === 'gone') await navigateInPanel(panel, 'elsewhere')
+      return realExists(id)
     })
 
     expect(await goBackInPanel(panel)).toBe(false)

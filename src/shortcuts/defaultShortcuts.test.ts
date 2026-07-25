@@ -1413,7 +1413,7 @@ describe('default CodeMirror shortcuts', () => {
     await env.repo.mutate.createChild({parentId: 'page', id: 'child', content: 'child'})
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const panelId = await insertPanelRow(env.repo, layoutSession, 'page')
     const uiStateBlock = env.repo.block(panelId)
 
