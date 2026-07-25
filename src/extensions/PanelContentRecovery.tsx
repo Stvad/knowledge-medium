@@ -4,7 +4,11 @@ import type { Repo } from '@/data/repo.js'
 import { usePropertyValue } from '@/hooks/block.js'
 import { useBlockExists } from '@/hooks/block.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
-import { recoverPanelOffDeadContent } from '@/utils/panelHistory.js'
+import {
+  panelHasSeenLive,
+  recoverPanelOffDeadContent,
+  rememberPanelSeenLive,
+} from '@/utils/panelHistory.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
 
@@ -17,6 +21,7 @@ import { workspaceLandingFacet } from '@/extensions/core.js'
  * user registers the content changed, we're past it.
  */
 const RECOVERY_DEBOUNCE_MS = 120
+
 
 /** Resolve the workspace's landing block (today's daily note, by default) off
  *  the live app runtime — the terminal fallback when a recovering pane has no
@@ -64,10 +69,6 @@ export function PanelContentRecovery({block}: {block: Block}) {
   // always called on a real block (the effect below gates on topLevelBlockId).
   const shown = block.repo.block(topLevelBlockId ?? block.id)
   const shownExists = useBlockExists(shown)
-  /** Blocks this pane has watched be live. Only used to pick the debounce:
-   *  a page that vanished under us is certainly deleted, while one that was
-   *  never live here might still be syncing in. */
-  const seenLiveRef = useRef<Set<string>>(new Set())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -78,7 +79,7 @@ export function PanelContentRecovery({block}: {block: Block}) {
     if (!topLevelBlockId) return
 
     if (shownExists) {
-      seenLiveRef.current.add(topLevelBlockId)
+      rememberPanelSeenLive(block.id, topLevelBlockId)
       return
     }
 
@@ -100,7 +101,10 @@ export function PanelContentRecovery({block}: {block: Block}) {
         // restored by undo, not a mid-load blip that resolved).
         if (block.peekProperty(topLevelBlockIdProp) !== topLevelBlockId) return
         if (block.repo.block(topLevelBlockId).peek()) return
-        seenLiveRef.current.delete(topLevelBlockId)
+        // Deliberately NOT forgetting the seen-live entry here: recovery is a
+        // documented no-op when nothing live exists, and dropping the memory
+        // would send a later effect run down the wait-for-sync branch for a
+        // block we know was deleted. It's cleared with the panel instead.
         // The landing resolver is passed as a thunk, not a resolved id: it can
         // write (get-or-create), so it must only run if history yields nothing
         // live. `recoverPanelOffDeadContent` re-checks that the pane is still
@@ -115,7 +119,7 @@ export function PanelContentRecovery({block}: {block: Block}) {
     void shown.load().then(data => {
       if (cancelled || data) return
       // Watched this block be live, so its absence now is a delete — recover.
-      if (seenLiveRef.current.has(topLevelBlockId)) {
+      if (panelHasSeenLive(block.id, topLevelBlockId)) {
         armRecovery()
         return
       }

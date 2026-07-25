@@ -53,6 +53,11 @@ import {
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import {
+  deleteBlockThroughUi,
+  deleteBlocksThroughUi,
+  ensureDeletableThroughUi,
+} from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
@@ -929,6 +934,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (liveContent === '') {
           if (!canMergeUp) return
           trigger.preventDefault()
+          // Ask the deletion guards BEFORE moving focus — a refused delete that
+          // had already moved the cursor would look like the block vanished.
+          // This path deletes the block's whole subtree, so it needs the same
+          // veto as `delete_block`; emptying a daily note's title and pressing
+          // Backspace used to destroy it straight past the guard.
+          if (!await ensureDeletableThroughUi([block])) return
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {
             const prevData = await prevVisible.load()
@@ -938,7 +949,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             })
             await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
-          await block.delete()
+          await deleteBlockThroughUi(block)
           return
         }
 
@@ -1142,11 +1153,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {uiStateBlock, selectedBlocks} = deps
         if (!selectedBlocks.length) return
 
+        // Guard BEFORE the clipboard write: a cut the guards refuse must not
+        // leave the user believing the content is on the clipboard. The check
+        // is all-or-nothing across the selection, so a protected block can't be
+        // half-cut. The copy has to run while the blocks still exist, which is
+        // why this uses the check and the delete separately.
+        const blocks = selectedBlocks.toReversed()
+        if (!await ensureDeletableThroughUi(blocks)) return
+
         await copySelectedBlocksToClipboard(uiStateBlock, repo)
         await withMoveTransition(async () => {
-          for (const block of selectedBlocks.toReversed()) {
-            await block.delete()
-          }
+          await deleteBlocksThroughUi(blocks)
         })
         await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
       },

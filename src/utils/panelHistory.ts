@@ -82,6 +82,7 @@ export class PanelHistoryStore {
   private readonly listeners = new Map<string, CallbackSet<[]>>()
   private readonly snapshotters = new Map<string, () => VisitState | undefined>()
   private readonly pendingRestore = new Map<string, VisitState>()
+  private readonly seenLive = new Map<string, Set<string>>()
 
   getSnapshot = (panelId: string): PanelHistoryState =>
     this.state.get(panelId) ?? EMPTY
@@ -216,7 +217,34 @@ export class PanelHistoryStore {
     const had = this.state.has(panelId)
     this.state.delete(panelId)
     this.pendingRestore.delete(panelId)
+    this.seenLive.delete(panelId)
     if (had) this.notify(panelId)
+  }
+
+  /**
+   * Remember that this pane has been observed rendering `blockId` live.
+   *
+   * Lives on the store — same panel-scoped, in-memory, never-persisted contract
+   * as the stacks, and cleared by the same `clear()` when the row goes away —
+   * rather than in the watchdog component, because it must OUTLIVE the
+   * component. A remount inside the recovery debounce would otherwise wipe the
+   * pane's memory of having seen the block live, sending it down the
+   * wait-for-sync branch; in a never-synced session that never fires, and the
+   * pane sits on the tombstone forever with nothing left to re-trigger it.
+   *
+   * What it buys: a page that vanished WHILE WE WATCHED IT is certainly deleted
+   * and recovers immediately, whereas one never live here might simply not have
+   * replicated yet and must wait for the initial sync before we conclude
+   * anything.
+   */
+  rememberSeenLive(panelId: string, blockId: string): void {
+    const seen = this.seenLive.get(panelId)
+    if (seen) seen.add(blockId)
+    else this.seenLive.set(panelId, new Set([blockId]))
+  }
+
+  hasSeenLive(panelId: string, blockId: string): boolean {
+    return this.seenLive.get(panelId)?.has(blockId) ?? false
   }
 
   /** Drop every entry (back OR forward) that points at `blockId`. Called when
@@ -280,6 +308,45 @@ export class PanelHistoryStore {
 }
 
 export const panelHistory = new PanelHistoryStore()
+
+/**
+ * Blocks recovery has POSITIVELY confirmed deleted this session.
+ *
+ * Exists because the cache can't answer the question: `repo.load` marks any row
+ * it can't find as missing, which covers "deleted" and "hasn't replicated yet"
+ * alike, and `PanelContentRecovery` calls `load()` on precisely the ambiguous
+ * ones. Consumers that must not guess wrong — the layout projection deciding
+ * whether a hash entry is worth keeping in browser history — ask here instead
+ * of inferring from that marker.
+ *
+ * Only ids that failed a re-verified liveness check are recorded, so a
+ * membership answer is a fact rather than a heuristic. Ids only, bounded by
+ * deletes observed in one session, and never persisted.
+ */
+const confirmedDeletedBlockIds = new Set<string>()
+
+export const markBlockConfirmedDeleted = (blockId: string): void => {
+  confirmedDeletedBlockIds.add(blockId)
+}
+
+export const isBlockConfirmedDeleted = (blockId: string): boolean =>
+  confirmedDeletedBlockIds.has(blockId)
+
+/** Module-global state outlives a test's DB reset, and suites reuse block ids
+ *  across cases — so a delete in one case would otherwise still read as
+ *  confirmed-dead in the next. Production never needs this (ids are uuids and
+ *  the set dies with the page). */
+export const __resetConfirmedDeletedForTesting = (): void => {
+  confirmedDeletedBlockIds.clear()
+}
+
+/** Free functions over the store's seen-live memory, so the recovery watchdog
+ *  doesn't reach for the store instance directly. */
+export const rememberPanelSeenLive = (panelId: string, blockId: string): void =>
+  panelHistory.rememberSeenLive(panelId, blockId)
+
+export const panelHasSeenLive = (panelId: string, blockId: string): boolean =>
+  panelHistory.hasSeenLive(panelId, blockId)
 
 export interface WritePanelContentOptions {
   /** The pane's view mode AFTER this write. Defaults to undefined = CLEAR:
@@ -509,6 +576,10 @@ export const recoverPanelOffDeadContent = async (
     panelBlock.peekProperty(topLevelBlockIdProp) === deadBlockId
     && !repo.block(deadBlockId).peek()
   if (!stillStranded()) return
+  // We've now verified this block is gone (the caller re-checked, and so did
+  // we). Record it, so the layout projection can tell a real delete from a
+  // row that merely hasn't synced — it can't get that from the cache.
+  markBlockConfirmedDeleted(deadBlockId)
 
   await pruneDeadTop(panelBlock, 'back', deadBlockId)
   const dest = panelHistory.peek(panelBlock.id, 'back')

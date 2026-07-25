@@ -356,6 +356,7 @@ const applyBlockDelete = async (id: string) => {
   const client = assertSupabase()
 
   console.debug('[powersync] DELETE', id)
+  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: Supabase query builder, not a Block
   const {error, status} = await client
     .from('blocks')
     .delete()

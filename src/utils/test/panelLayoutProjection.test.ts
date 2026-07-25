@@ -38,6 +38,7 @@ import {
   navigateInPanel,
   panelHistory,
   recoverPanelOffDeadContent,
+  __resetConfirmedDeletedForTesting,
 } from '@/utils/panelHistory'
 
 const WS = 'ws-1'
@@ -66,7 +67,10 @@ let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => { env = await setup() })
+beforeEach(async () => {
+  env = await setup()
+  __resetConfirmedDeletedForTesting()
+})
 
 const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
 
@@ -581,28 +585,91 @@ describe('view-mode navigation semantics', () => {
       scrollTop: 7,
     }))
 
-  it('REPLACES rather than pushes when leaving an entry that shows a deleted block', async () => {
-    // Delete-recovery retargets the pane. Pushing would trap the user: browser
-    // Back lands on the dead page, the watcher retargets and pushes again, and
-    // the dead entry can never be stepped past.
-    await seedBlocks(['a', 'b'])
-    await applyUrl('#ws-1/a')
-    const rowA = await rowFor('a')
-    const {projection, pushes, replaces} = startProjection('#ws-1/a')
-    await projection.start()
+  // Pushing a replacement on top of a dead entry traps the user: browser Back
+  // lands on the dead page, the watcher retargets and pushes again, and the
+  // dead entry can never be stepped past. But "dead" has to mean *known*
+  // deleted — a row that merely hasn't replicated is a valid deep link.
+  describe('leaving an entry that shows a deleted block', () => {
+    it('REPLACES when the block is a cached tombstone', async () => {
+      await seedBlocks(['a', 'b'])
+      await applyUrl('#ws-1/a')
+      const rowA = await rowFor('a')
+      const {projection, pushes, replaces} = startProjection('#ws-1/a')
+      await projection.start()
 
-    await env.repo.block('a').delete()
-    // Reproduce the REAL sequence: PanelContentRecovery loads the dead block
-    // before retargeting, and `repo.load` markMissing's it — which deletes the
-    // cached tombstone. A guard that only recognised `deleted === true` was
-    // inert here, so the test must do this load or it proves nothing.
-    await env.repo.block('a').load()
-    await navigateInPanel(panelBlock(rowA), 'b')
+      await env.repo.block('a').delete()
+      await navigateInPanel(panelBlock(rowA), 'b')
 
-    await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/b']))
-    expect(pushes).toEqual([])
-    panelHistory.clear(rowA)
-    projection.dispose()
+      await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/b']))
+      expect(pushes).toEqual([])
+      panelHistory.clear(rowA)
+      projection.dispose()
+    })
+
+    it('REPLACES after recovery confirmed the delete, even once the tombstone is gone', async () => {
+      // The real sequence: PanelContentRecovery loads the dead block before
+      // retargeting, and `repo.load` markMissing's it — which DELETES the
+      // cached tombstone. Recovery records the confirmed delete so the
+      // projection can still tell; without that this guard was inert on the
+      // exact path it exists for.
+      await seedBlocks(['a', 'b', 'landing'])
+      await applyUrl('#ws-1/a')
+      const rowA = await rowFor('a')
+      const panel = env.repo.block(rowA)
+      panelHistory.clear(rowA)
+      const {projection, pushes, replaces} = startProjection('#ws-1/a')
+      await projection.start()
+
+      await env.repo.block('a').delete()
+      await env.repo.block('a').load() // wipes the tombstone, leaves a missing marker
+      await recoverPanelOffDeadContent(panel, 'a', async () => 'landing')
+
+      // Recovery's own retarget is the write that must not push — that's the
+      // entry the user would otherwise be sent back to.
+      await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/landing']))
+      expect(pushes).toEqual([])
+      panelHistory.clear(rowA)
+      projection.dispose()
+    })
+
+    it('PUSHES for a block that is merely missing locally — it may still be syncing', async () => {
+      // A valid shared-link target that hasn't replicated yet is confirmed-
+      // missing in cache, exactly like a delete. Treating that as dead would
+      // replace the deep link's history entry, so Back could never return to it
+      // once the row arrived.
+      await seedBlocks(['b'])
+      await applyUrl('#ws-1/not-yet-synced')
+      const row = await rowFor('not-yet-synced')
+      await env.repo.block('not-yet-synced').load() // records the missing marker
+      const {projection, pushes, replaces} = startProjection('#ws-1/not-yet-synced')
+      await projection.start()
+
+      await navigateInPanel(panelBlock(row), 'b')
+
+      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+      expect(replaces).toEqual([])
+      panelHistory.clear(row)
+      projection.dispose()
+    })
+
+    it('PUSHES when the dead block is in a pane we are NOT leaving', async () => {
+      // Scoped to the panes actually being navigated away from. Scanning the
+      // whole layout meant one pane stuck on a tombstone downgraded EVERY
+      // navigation in EVERY pane to a replace for the rest of the session.
+      await seedBlocks(['a', 'b', 'stuck'])
+      await applyUrl('#ws-1/a/stuck')
+      const rowA = (await rowIdsByBlock()).get('a')!
+      const {projection, pushes, replaces} = startProjection('#ws-1/a/stuck')
+      await projection.start()
+
+      await env.repo.block('stuck').delete() // pane 2 is stranded
+      await navigateInPanel(panelBlock(rowA), 'b') // pane 1 navigates normally
+
+      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b/stuck']))
+      expect(replaces).toEqual([])
+      panelHistory.clear(rowA)
+      projection.dispose()
+    })
   })
 
   it('navigateInPanel with viewMode: one viewModeEnter-stamped entry, ONE push carrying both changes', async () => {
@@ -1508,8 +1575,13 @@ describe('recoverPanelOffDeadContent', () => {
 
     expect(await goBackInPanel(panel)).toBe(false)
     expect(panel.peekProperty(topLevelBlockIdProp)).toBe('elsewhere')
-    // The stale press consumed nothing: 'alive' is still available to go back to.
-    expect(panelHistory.getSnapshot(panel.id).back.some(e => e.blockId === 'alive')).toBe(true)
+    // The whole stack survives, INCLUDING the entry the interleaved navigation
+    // pushed ('page'). Asserting only that 'alive' survived passed even with a
+    // blind (non-compare-and-swap) dropTop, because the entry a blind drop
+    // destroys is the newly-pushed one — i.e. the user's way back to the page
+    // they just left. Mutation-tested: reverting the CAS fails this.
+    expect(panelHistory.getSnapshot(panel.id).back.map(e => e.blockId))
+      .toEqual(['alive', 'gone', 'page'])
   })
 
   it('skips back entries that died since they were pushed', async () => {

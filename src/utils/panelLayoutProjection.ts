@@ -23,7 +23,7 @@ import {
   splitHashRouteAndParams,
   type LayoutSlot,
 } from '@/utils/routing'
-import { panelHistory, writePanelContent } from '@/utils/panelHistory'
+import { isBlockConfirmedDeleted, panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
@@ -1084,24 +1084,32 @@ export class PanelLayoutProjection {
     return this.inboundQueue
   }
 
-  /** Does any pane in `slots` render a block confirmed NOT live — a tombstone
-   *  or a confirmed-missing row?
+  /**
+   * Is the hash entry we're LEAVING unreturnable — i.e. does a pane we're
+   * navigating away from render a block known to be deleted?
    *
-   *  Both states have to count. A cached tombstone only survives until someone
-   *  calls `load()` on it: `repo.load` markMissing's the id, which DELETES the
-   *  raw snapshot. `PanelContentRecovery` loads the dead block before it
-   *  retargets, so by the time this runs the tombstone is normally already
-   *  gone and only the missing marker is left — checking `deleted === true`
-   *  alone made this guard inert on the exact path it exists for.
+   * Scoped to the blocks actually being left (`current` minus `next`), not
+   * every leaf in the layout. Scanning the whole layout meant one pane stuck on
+   * a tombstone downgraded *every* navigation in *every* pane to a replace for
+   * the rest of the session, silently killing browser Back.
    *
-   *  `undefined` (never loaded) is not enough: that's the ordinary case for a
-   *  block this client simply hasn't read yet, and must still push. */
-  private showsDeletedBlock(slots: readonly LayoutSlot[]): boolean {
-    return collectLeafSlots(slots)
-      .some(slot => {
-        const raw = this.repo.block(slot.blockId).peekRaw()
-        return raw === null || raw?.deleted === true
-      })
+   * "Known deleted" is a tombstone in cache, or an id recovery has positively
+   * confirmed dead — NOT merely a confirmed-missing cache marker. `repo.load`
+   * markMissing's any row it can't find, including one that simply hasn't
+   * replicated yet, and `PanelContentRecovery` calls `load()` on exactly those.
+   * Inferring death from that marker would replace the hash entry for a valid
+   * deep link, so Back could never return to it once the row arrived.
+   */
+  private leavingDeletedBlock(
+    current: readonly LayoutSlot[],
+    next: readonly LayoutSlot[],
+  ): boolean {
+    const stillShown = new Set(collectLeafSlots(next).map(slot => slot.blockId))
+    return collectLeafSlots(current)
+      .filter(slot => !stillShown.has(slot.blockId))
+      .some(slot =>
+        this.repo.block(slot.blockId).peekRaw()?.deleted === true
+        || isBlockConfirmedDeleted(slot.blockId))
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {
@@ -1137,7 +1145,7 @@ export class PanelLayoutProjection {
       // Active-only diff: which pane is focused is not a history entry —
       // rewrite the current one instead of pushing.
       this.replaceHash(nextHash)
-    } else if (sameWorkspace && this.showsDeletedBlock(current.slots)) {
+    } else if (sameWorkspace && this.leavingDeletedBlock(current.slots, slots)) {
       // The entry we'd be leaving renders a DELETED block, so it is not
       // somewhere the user can meaningfully return to. Pushing would trap
       // them: browser Back lands on the dead page, `PanelContentRecovery`

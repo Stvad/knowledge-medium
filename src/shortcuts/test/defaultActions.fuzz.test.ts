@@ -224,13 +224,22 @@ const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
   const foreign = await db.getAll<{id: string}>('SELECT id FROM blocks WHERE workspace_id != ?', [WS])
   expect(foreign, 'block outside the seeded workspace').toEqual([])
 
-  // Scope-root protection: every structural handler must refuse to
-  // indent/outdent/delete/merge-away the scope root.
   const root = await db.getAll<{parent_id: string | null; deleted: number}>(
     'SELECT parent_id, deleted FROM blocks WHERE id = ?', [ROOT])
   expect(root, 'scope root exists').toHaveLength(1)
-  expect({parent: root[0].parent_id, deleted: root[0].deleted}, 'scope root live at workspace root')
-    .toEqual({parent: null, deleted: 0})
+
+  // THE invariant: no structural handler may RELOCATE the scope root out of
+  // the workspace root (indent / outdent / merge-away). Deletion is
+  // deliberately not part of this — deleting the scope root is the
+  // page-deletion gesture (see the docblock).
+  expect(root[0].parent_id, 'scope root relocated out of the workspace root').toBeNull()
+
+  // Fixture guard, NOT an invariant: root-targeted deletes are excluded from
+  // the op stream (they empty the tree and leave later ops nothing to
+  // exercise), so ROOT should still be live. If this fires, a newly-pooled
+  // action can delete the page — extend the exclusion below to cover it rather
+  // than relaxing this line, which is what keeps the rest of a case meaningful.
+  expect(root[0].deleted, 'scope root deleted — op-stream exclusion has a hole').toBe(0)
 }
 
 // ──── case execution ────
@@ -340,8 +349,17 @@ const runCase = async (
         await focusBlock(uiStateBlock, focusedId)
       }
       // Page deletion is legal but ends the sequence's usefulness — see the
-      // scope-root note in the docblock.
+      // scope-root note in the docblock. BOTH delete variants can reach ROOT:
+      // `previousVisibleBlock` deliberately returns the parent even when it is
+      // the scope root (selection.ts), so extend-up from the page's first child
+      // collapses the selection onto ROOT and the multi-select fan-out deletes
+      // it. Excluding only the NORMAL_MODE variant left that path live, and the
+      // deep fuzz tier found it (seed 977003719).
       if (id === 'delete_block' && focusedId === ROOT) continue
+      if (
+        id === 'multi_select.delete_block' &&
+        (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds ?? []).includes(ROOT)
+      ) continue
       const block = repo.block(focusedId)
 
       const base = {uiStateBlock, scopeRootId: ROOT}

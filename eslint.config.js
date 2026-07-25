@@ -31,6 +31,28 @@ const b3CustomEventRestriction = {
     'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
 }
 
+// Every USER-INITIATED delete must route through `deleteBlockThroughUi` so the
+// deletion guards (`blockDeletionGuardsFacet`) are consulted. Handlers calling
+// `block.delete()` and remembering to ask first lasted exactly one commit:
+// `delete_block` checked, `cut_selected_blocks` and `delete_empty_block_cm`
+// didn't, so `Delete` on a daily note was refused while `d` on the same
+// selection destroyed it.
+//
+// Matched on ARITY rather than variable names: `Block.delete()` is the only
+// zero-argument `.delete()` in app code — Set/Map/query-builder deletes all take
+// an argument — so this catches a block delete wherever in `src/` it's written,
+// without the "which directory holds delete handlers?" race the
+// child-visibility guardrail below documents losing. Applied to `src/` only
+// (see the files block); ops scripts have no Blocks, so linting them would be
+// noise in files that can't have the defect. The handful of legitimate
+// programmatic deletes inside `src/` opt out inline with a reason — that's the
+// point of the guard being UI-layer rather than a data-layer rule.
+const uiDeleteRestriction = {
+  selector: "CallExpression[callee.property.name='delete'][arguments.length=0]",
+  message:
+    'A user-initiated delete must go through `deleteBlockThroughUi` / `deleteBlocksThroughUi` (@/utils/deleteBlockThroughUi) so blockDeletionGuardsFacet is consulted — otherwise a new delete path silently skips the guards, as cut_selected_blocks and delete_empty_block_cm did. For a delete that is deliberately NOT user-initiated, add `// eslint-disable-next-line no-restricted-syntax -- programmatic delete: <why>`.',
+}
+
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
@@ -132,6 +154,16 @@ export default tseslint.config(
     plugins: {'child-view': childView},
     rules: {
       'child-view/require-explicit-child-view': ['error', {check: 'query'}],
+    },
+  },
+  {
+    // The UI-delete guardrail applies to app code only. `scripts/` and other
+    // ops tooling have no Block deletes at all — their zero-arg `.delete()`
+    // calls are Supabase query builders — so linting them here would be pure
+    // noise in files that can never have the defect.
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction],
     },
   },
   {

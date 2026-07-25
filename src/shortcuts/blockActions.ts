@@ -19,8 +19,7 @@ import {
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
-import { resolveDeletionRefusal } from '@/extensions/core.js'
-import { showInfo } from '@/utils/toast.js'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -280,17 +279,6 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      // Plugin vetoes on deleting THIS block from the UI (e.g. daily-notes
-      // refuses its own pages, which get-or-create would just recreate).
-      // Multi-select delete fans out through this same handler
-      // (`applyToAllBlocksInSelection`), so it is covered too.
-      await block.load()
-      const refusal = await resolveDeletionRefusal(repo, block)
-      if (refusal) {
-        showInfo(refusal)
-        return
-      }
-
       // No scope-root special case: deleting the root of a surface is an
       // ordinary delete. Delete REMOVES a subtree, it doesn't relocate one
       // across the surface boundary, so unlike indent / outdent / merge-up it
@@ -322,10 +310,12 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
       const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
+      let deleted = false
       await withMoveTransition(async () => {
-        await block.delete()
+        deleted = await deleteBlockThroughUi(block)
       })
-      if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+      // Don't move focus for a delete a guard refused.
+      if (deleted && next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',

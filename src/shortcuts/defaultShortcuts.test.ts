@@ -40,9 +40,11 @@ import {
   type ActionTrigger,
   type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
+  type MultiSelectModeDependencies,
 } from '@/shortcuts/types'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
 import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const WS = 'ws-1'
@@ -131,6 +133,18 @@ const findEditModeAction = (
   const action = getDefaultActions({repo}).find(
     (candidate): candidate is ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =>
       candidate.id === id && candidate.context === ActionContextTypes.EDIT_MODE_CM,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
+const findMultiSelectAction = (
+  repo: Repo,
+  id: string,
+): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
+  const action = getDefaultActions({repo}).find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> =>
+      candidate.id === id && candidate.context === ActionContextTypes.MULTI_SELECT_MODE,
   )
   if (!action) throw new Error(`Action not found: ${id}`)
   return action
@@ -589,6 +603,78 @@ describe('default CodeMirror shortcuts', () => {
     expect(trigger.preventDefault).not.toHaveBeenCalled()
     expect(env.repo.block('root').peek()).not.toBeNull()
     expect(env.repo.block('root').peekRaw()?.deleted).toBe(false)
+  })
+
+  it('Backspace on an empty block consults the deletion guards', async () => {
+    // Not the scope root, so `canMergeUp` is true and this path used to run
+    // straight to `block.delete()`. That let a daily note rendered as a child
+    // (its natural place, under the Journal) be destroyed by emptying its title
+    // and pressing Backspace — straight past the veto.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('protected'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    // Focus must not have moved for a delete that never happened.
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
+    // `cut_selected_blocks` is bound to `d` in multi-select. It called
+    // `block.delete()` directly, so `Delete` on a daily note was refused while
+    // `d` on the identical selection destroyed it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('ordinary'), env.repo.block('protected')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // All-or-nothing: the unguarded sibling survives too, rather than the
+    // selection being half-cut.
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
   })
 
   it("merges a first child with children into its parent when it is the parent's only child", async () => {
@@ -1216,6 +1302,9 @@ describe('default CodeMirror shortcuts', () => {
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
     }, {scope: ChangeScope.BlockDefault})
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
       blockDeletionGuardsFacet.of(
         block => (block.id === 'protected' ? 'Nope.' : null),
         {source: 'test'},
