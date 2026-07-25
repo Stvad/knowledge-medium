@@ -45,16 +45,11 @@ const {
 } = await import('@/utils/panelHistory.js')
 const recoverSpy = vi.mocked(recoverPanelOffDeadContent)
 
-const { PanelContentRecovery } = await import('./PanelContentRecovery.tsx')
+const { PanelContentRecovery, RECOVERY_DEBOUNCE_MS } = await import('./PanelContentRecovery.tsx')
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
 const PANEL_ID = 'panel'
-
-// Mirrors the component's own RECOVERY_DEBOUNCE_MS — used only to identify
-// which `setTimeout` call is the recovery timer (case 5's clearTimeout pin),
-// not to assert the constant's value.
-const RECOVERY_DEBOUNCE_MS = 120
 
 interface Harness {
   h: TestDb

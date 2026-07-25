@@ -19,7 +19,7 @@ import { workspaceLandingFacet } from '@/extensions/core.js'
  * bouncing the pane. Kept well below human-perceptible latency: by the time a
  * user registers the content changed, we're past it.
  */
-const RECOVERY_DEBOUNCE_MS = 120
+export const RECOVERY_DEBOUNCE_MS = 120
 
 
 /** Resolve the workspace's landing block (today's daily note, by default) off

@@ -15,10 +15,9 @@
  * `delete_empty_block_cm` and `cut_selected_blocks` did not, so `Delete` on a
  * daily note was refused while `d` on the same selection destroyed it.
  *
- * Deliberately NOT a data-layer guard. `block.delete()` stays unguarded for
- * programmatic callers (the agent bridge, migrations, cleanup); the rules that
- * genuinely cannot be bypassed live in the tx engine
- * (`SeededDefinitionWriteError`, read-only workspaces).
+ * Why this is a UI affordance rather than a data-layer guard, and what IS
+ * unbypassable instead, is on `BlockDeletionGuard` in `@/extensions/core` —
+ * the interface these rules are a contract for.
  *
  * A bare `block.delete()` in handler code is an ESLint error pointing here —
  * discipline that's checked beats discipline that's remembered.

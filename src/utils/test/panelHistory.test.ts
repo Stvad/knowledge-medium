@@ -269,7 +269,7 @@ describe('PanelHistoryStore', () => {
     })
   })
 
-  describe('peek / dropTop / forget (content recovery)', () => {
+  describe('peek / dropTop (content recovery)', () => {
     it('peek reads the top of either stack without consuming it', () => {
       store.push('p1', e('b-a'))
       store.push('p1', e('b-b'))

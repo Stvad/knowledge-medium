@@ -1154,13 +1154,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    // All-or-nothing on the GUARDS: check the WHOLE selection before deleting
-    // any of it, so a mix of guarded and unguarded blocks refuses wholesale
-    // instead of deleting the unguarded ones and leaving the rest. Matches
-    // `cut_selected_blocks`, which passes its whole selection to the same check
-    // — `Delete` and `d` on the same selection should not disagree. A tx-layer
-    // refusal partway through (read-only workspace, seeded definition) can
-    // still half-apply; see the one-tx todo in `applyToAllBlocksInSelection`.
+    // Check the WHOLE selection before deleting any of it, so `Delete` and `d`
+    // on the same selection can't disagree. Scope and limits of that promise:
+    // see `deleteBlocksThroughUi`'s docblock.
     applyToAllBlocksInSelection(deleteBlockAction, {
       preflight: blocks => ensureDeletableThroughUi(blocks),
       clearSelectionAfter: true,
@@ -1198,10 +1194,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         if (!selectedBlocks.length) return
 
         // Guard BEFORE the clipboard write: a cut the guards refuse must not
-        // leave the user believing the content is on the clipboard. The check
-        // is all-or-nothing across the selection, so a protected block can't be
-        // half-cut. The copy has to run while the blocks still exist, which is
-        // why this uses the check and the delete separately.
+        // leave the user believing the content is on the clipboard. The copy
+        // has to run while the blocks still exist, which is why this uses the
+        // check and the delete separately.
         const blocks = selectedBlocks.toReversed()
         if (!await ensureDeletableThroughUi(blocks)) return
 
