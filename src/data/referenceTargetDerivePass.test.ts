@@ -373,6 +373,23 @@ describe('late-binding stamp → owner-cell re-projection (§9 recognition, issu
     await vi.waitFor(async () => {
       expect(await cellOf('owner', statusSchema.name)).toBe('done')
     })
+
+    // The ADD path writes an unsettled cell key, so materialize runs over it
+    // and converges the field row to the canonical id form. That
+    // canonicalization is materialize's pre-existing behavior for EVERY
+    // field row it touches (unchanged on master — this branch only changed
+    // what "canonical" means), so the alias form is transient by design and
+    // the same rewrite would land on the user's next property edit anyway.
+    // Pinned so a future change to the repair path can't quietly start
+    // preserving or mangling the form without someone deciding to.
+    await repo.awaitProcessors()
+    const row = await sharedDb.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?', ['row'],
+    )
+    expect(row.content).toBe(`::((${STATUS_FIELD_ID}))`)
+    // What must NOT change is the value — the repair added the key, and the
+    // user's value child still backs it.
+    expect(await cellOf('owner', statusSchema.name)).toBe('done')
   })
 
   it('leaves the owner cell alone when the late-bound row is UNMARKED', async () => {
