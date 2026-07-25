@@ -172,18 +172,20 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // exercise as block-less and keep NOTHING — the workout would be marked
       // done with all its pre-filled sets still open.
       let flushed = draftRef.current
-      for (const [i, ex] of flushed.entries()) {
+      // Indexed, not destructured: `flushed` is REPLACED whenever a create
+      // hands back ids, so a captured `ex` would go stale mid-loop.
+      for (let i = 0; i < flushed.length; i += 1) {
         // Nothing accepted and nothing on disk: creating blocks here only to
         // prune them two lines later is pure churn (and, after an or-group
         // switch, a create→delete round trip on every Finish).
-        if (!ex.blockId && !ex.sets.some(s => s.done)) continue
-        for (const [j] of ex.sets.entries()) {
+        if (!flushed[i].blockId && !flushed[i].sets.some(s => s.done)) continue
+        for (let j = 0; j < flushed[i].sets.length; j += 1) {
           const {blockId, patch} = await coordinator.resolveSet(flushed, i, j, effects)
           if (patch) {
             flushed = applyIdPatch(flushed, patch)
             setDraft(cur => applyIdPatch(cur, patch))
           }
-          if (blockId) await writeSet(repo, blockId, toDraftSet(flushed[i].sets[j]), ex.unit)
+          if (blockId) await writeSet(repo, blockId, toDraftSet(flushed[i].sets[j]), flushed[i].unit)
         }
       }
 
