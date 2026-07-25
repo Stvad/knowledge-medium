@@ -32,7 +32,8 @@ import {
 } from '@/data/properties'
 import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {typesPageBlockId} from '@/data/typesPage'
-import {seedType, type TypeSeedDeclaration} from '@/data/typeSeeds'
+import {isTypeSeedDeclaration, seedType, type TypeSeedDeclaration} from '@/data/typeSeeds'
+import {isPropertySeedDeclaration} from '@/data/propertySeeds'
 import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import {typeSeedsFacet} from '@/data/facets'
 import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
@@ -88,6 +89,58 @@ beforeEach(async () => {
   repo = createTestRepo({db: sharedDb.db}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.ensureSystemPages(WS)
+})
+
+describe('seed name hygiene — a seed name/label is mirrored into block content (§7)', () => {
+  const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+
+  // `materializePropertySeeds`/`materializeTypeSeeds` write the seed's
+  // name/label as its backing block's `content`. A reference-shaped one mints
+  // a block that reads as a span rather than a definition — and a `::`-marked
+  // one is a recognized property field row of the Properties/Types page,
+  // hidden from the outline and keyed onto that page's cell. Seeds are
+  // code-owned, so this has to fail at declaration, not at materialization.
+  it.each([
+    ['a marked exact ref', `::((${UUID}))`],
+    ['a bare exact ref', `((${UUID}))`],
+    ['a wikilink', '[[status]]'],
+  ])('seedProperty rejects %s as a name', (_label, name) => {
+    expect(() => seedProperty({
+      seedKey: 'system:test/property/bad', revision: 1, name,
+      preset: 'string', changeScope: ChangeScope.BlockDefault,
+    })).toThrow(/reads as a block reference/)
+  })
+
+  it.each([
+    ['a marked exact ref', `::((${UUID}))`],
+    ['a bare exact ref', `((${UUID}))`],
+    ['a wikilink', '[[Widget]]'],
+  ])('seedType rejects %s as a label', (_label, label) => {
+    expect(() => seedType({
+      seedKey: 'system:test/type/bad', revision: 1, id: 'bad', label,
+    })).toThrow(/reads as a block reference/)
+  })
+
+  // The runtime boundary drops rather than throws: one malformed dynamic
+  // contribution must not abort the shared materialization pass.
+  it('the declaration guards drop a reference-shaped dynamic contribution', () => {
+    expect(isTypeSeedDeclaration({
+      ...typeSeed, label: `::((${UUID}))`,
+    })).toBe(false)
+    expect(isPropertySeedDeclaration({
+      ...seed, name: `::((${UUID}))`,
+    })).toBe(false)
+    // Control: the same objects unmodified still pass, so the assertions
+    // above fail on the label/name and not on some unrelated field.
+    expect(isTypeSeedDeclaration(typeSeed)).toBe(true)
+    expect(isPropertySeedDeclaration(seed)).toBe(true)
+  })
+
+  it('leaves an ordinary name that merely contains grammar characters alone', () => {
+    expect(() => seedType({
+      seedKey: 'system:test/type/ok', revision: 1, id: 'ok', label: 'Status:: notes',
+    })).not.toThrow()
+  })
 })
 
 describe('property definition identity and payload', () => {

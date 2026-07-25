@@ -42,7 +42,7 @@ import {
   type SameTxEvent,
 } from '@/data/api'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import { aliasesProp, getAliases } from '@/data/properties'
@@ -200,20 +200,23 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
     // in a child-backed workspace a stamp resolving to a property definition
     // is what makes a row a field row, so the row would stay hidden and
     // projected under the wrong definition.
-    const patch: Partial<Pick<BlockData, 'content' | 'referenceTargetId'>> = {
+    const patch: Partial<Pick<BlockData, 'content' | 'referenceTargetId' | 'isFieldForm'>> = {
       content: plan.contentNext,
     }
-    const derived = await deriveReferenceTargetId(
+    const derived = await deriveReferenceColumns(
       plan.contentNext,
       plan.workspaceId,
       sameTxReferenceTargetLookups(ctx.tx),
     )
     // Always an update of an existing row (never a create), so an
     // unresolvable alias (`undefined`) clears rather than preserving an id.
-    const nextTargetId = derived ?? null
+    const nextTargetId = derived.targetId ?? null
     if ((plan.referenceTargetIdBefore ?? null) !== nextTargetId) {
       patch.referenceTargetId = nextTargetId
     }
+    // The bit rides the same recompute — a rewrite can move content into or
+    // out of the marked form, and nothing else re-derives it this tx.
+    patch.isFieldForm = derived.isFieldForm
     await ctx.tx.update(plan.id, patch, {skipMetadata: true})
   }
 }

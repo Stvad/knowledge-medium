@@ -20,7 +20,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, BLOCK_LOCAL_COLUMNS, blockToSyncedRowParams } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import type { BlockData } from '@/data/api'
 
@@ -57,25 +57,29 @@ beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
 
 describe('blocks_synced staging table', () => {
   it('mirrors the blocks column shape exactly, minus the local-only columns (name + type + nullability)', async () => {
-    // PR #288 slice A: `blocks` gained a LOCAL-only derived column
-    // (`reference_target_id`) that is deliberately never staged/synced.
+    // PR #288 slice A: `blocks` gained LOCAL-only derived columns
+    // (`reference_target_id`, `is_field_form`) that are deliberately never
+    // staged/synced.
     // `blocks_synced` must still match `blocks` on every STORAGE column.
     const normalize = (rows: ColumnInfo[]) =>
       rows.map(({ name, type, notnull, pk }) => ({ name, type, notnull, pk }))
     const blocks = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks)')
     const staged = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks_synced)')
     expect(staged.length).toBeGreaterThan(0)
-    const storageOnlyBlocks = blocks.filter(column => column.name !== 'reference_target_id')
+    const localNames = new Set(BLOCK_LOCAL_COLUMNS.map(column => column.name as string))
+    const storageOnlyBlocks = blocks.filter(column => !localNames.has(column.name))
     expect(normalize(staged)).toEqual(normalize(storageOnlyBlocks))
   })
 
-  it('keeps reference_target_id local-only: present on blocks, absent on blocks_synced', async () => {
+  it('keeps every local column local-only: present on blocks, absent on blocks_synced', async () => {
     // PR #288 slice A: this asymmetry is deliberate, not an oversight — see
     // BLOCK_LOCAL_COLUMNS in blockSchema.ts.
     const blocks = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks)')
     const staged = await env.db.getAll<ColumnInfo>('PRAGMA table_info(blocks_synced)')
-    expect(blocks.some(column => column.name === 'reference_target_id')).toBe(true)
-    expect(staged.some(column => column.name === 'reference_target_id')).toBe(false)
+    for (const local of BLOCK_LOCAL_COLUMNS) {
+      expect(blocks.some(column => column.name === local.name)).toBe(true)
+      expect(staged.some(column => column.name === local.name)).toBe(false)
+    }
   })
 
   it('is a passive landing zone — a write enqueues no upload and logs no row_event', async () => {

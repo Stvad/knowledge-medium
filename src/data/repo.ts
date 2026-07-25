@@ -105,7 +105,7 @@ import {
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
 } from './internals/clientSchema'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
@@ -115,11 +115,17 @@ import type {
 } from './internals/propertyDefinitionMigrations'
 import {
   encodedPropertyValueToChildContent,
+  isFieldValueChild,
   isPropertyFieldInstance,
   propertyChildContentToEncodedValue,
   rekeyParentPropertyCell,
   type IsPropertyFieldDefinition,
 } from './propertyChildren'
+import {
+  reprojectOwnersForRowStates,
+  type ProjectableRow,
+  type ProjectionLookups,
+} from './internals/propertyChildrenProcessor'
 import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
@@ -401,16 +407,35 @@ export type SyncObserverOptions = Pick<
   'onCycleDetected' | 'throttleMs' | 'onError'
 >
 
-/** One CAS-guarded `reference_target_id` write for `stampReferenceTargets`.
- *  Strictly ADDITIVE: callers pass only rows the scan saw at a NULL column,
+/** One CAS-guarded local-columns write for `stampReferenceTargets` —
+ *  `reference_target_id` plus the `is_field_form` bit (§7 grammar box), both
+ *  from the same derive. Strictly ADDITIVE: callers pass only rows the scan
+ *  saw at a NULL target column,
  *  and the CAS re-checks (NULL column, unchanged content) inside the write tx
- *  — so a concurrent local edit or sync arrival that already owns the column
+ *  — so a concurrent local edit or sync arrival that already owns the columns
  *  since the scan is never clobbered. Re-pointing an already-stamped row is
- *  deliberately out of scope (see `drainNameRederives`). */
+ *  deliberately out of scope (see `drainNameRederives`). `targetId` may be
+ *  null for a marked row whose span doesn't resolve — the bit still stamps
+ *  (pure syntax; only the target late-binds). */
 interface ReferenceTargetStamp {
   id: string
   scannedContent: string
-  targetId: string
+  targetId: string | null
+  isFieldForm: boolean
+}
+
+/** What a stamping pass needs to also re-project the owners of rows it turns
+ *  into field rows. `resolver` is CAPTURED at the pass's registry gate and
+ *  threaded through — never re-read at write time. Both passes are deferred
+ *  idle jobs that can span workspace switches, and
+ *  `propertySchemaResolverFor` serves only the active or immediately-previous
+ *  workspace: a run-time re-resolve after two switches fails closed, every
+ *  fieldId stops resolving, and the repair silently becomes a no-op that no
+ *  later scan can find again (the rows are no longer NULL-targeted). Same
+ *  hazard, same fix, as `runPropertyDefinitionMigrationBatch`. */
+interface ReferenceTargetStampContext {
+  readonly workspaceId: string
+  readonly resolver: PropertySchemaResolver
 }
 
 export class Repo {
@@ -2598,6 +2623,12 @@ export class Repo {
     // `((id))` derives textually and `[[alias]]` through the alias index.)
     const registry = this._propertyDefinitionRegistry
     if (!registry || registry.workspaceId !== workspaceId) return
+    // Captured HERE, at the gate that just proved this workspace's registry
+    // is live — not at write time, which is many awaits and possibly two
+    // workspace switches later (see ReferenceTargetStampContext).
+    const stampContext: ReferenceTargetStampContext = {
+      workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
+    }
 
     // Candidate prefilter in SQL (cheap LIKEs over one workspace, one-time);
     // the real grammar check is `parseExactReferenceBlockContent` inside
@@ -2607,6 +2638,9 @@ export class Repo {
     // additive — it never second-guesses a processor- or arrival-derived
     // value. Lean scan (id + content): the write phase re-reads fresh rows
     // in-tx, so full rows here would only feed stale snapshots.
+    // The `'::%'` probe is the marked-form twin (§7 grammar box): every
+    // content-shape prefilter carries it, or a pasted `::[[future-field]]`
+    // (bit-worthy, target unresolvable) would never be revisited by repair.
     const candidates = await this.db.getAll<{id: string; content: string}>(
       `SELECT id, content FROM blocks
         WHERE workspace_id = ?
@@ -2614,6 +2648,8 @@ export class Repo {
           AND (
             (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
             OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+            OR TRIM(content) LIKE '[%](((%)))'
+            OR TRIM(content) LIKE '::%'
           )`,
       [workspaceId],
     )
@@ -2622,17 +2658,21 @@ export class Repo {
 
     const updates: ReferenceTargetStamp[] = []
     for (const row of candidates) {
-      const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-      // Column is already NULL, so unresolved (`undefined`) and non-reference
-      // (`null`) alike mean "nothing to write".
-      if (typeof derived === 'string') {
+      const derived = await deriveReferenceColumns(row.content, workspaceId, lookups)
+      // Target column is already NULL, so unresolved (`undefined`) and
+      // non-reference (`null`) alike mean "no target to write" — but a
+      // marked row stamps its bit regardless (pure syntax; §9 condition 1).
+      if (typeof derived.targetId === 'string' || derived.isFieldForm) {
         updates.push({
-          id: row.id, scannedContent: row.content, targetId: derived,
+          id: row.id,
+          scannedContent: row.content,
+          targetId: derived.targetId ?? null,
+          isFieldForm: derived.isFieldForm,
         })
       }
     }
 
-    await this.stampReferenceTargets(updates)
+    await this.stampReferenceTargets(updates, stampContext)
 
     this.referenceTargetSweepDone.add(workspaceId)
     // Defense only — pre-sweep scheduling never accumulates. Note the
@@ -2676,14 +2716,32 @@ export class Repo {
    *  in-tx fresh rows, never scan-time state. */
   private async stampReferenceTargets(
     updates: readonly ReferenceTargetStamp[],
+    context: ReferenceTargetStampContext,
   ): Promise<void> {
     const CHUNK = 200
     for (let i = 0; i < updates.length; i += CHUNK) {
       const chunk = updates.slice(i, i + CHUNK)
+      // BOTH gates are re-read per chunk, and the symmetry is the point.
+      // `properties_migration` is server-driven (a synced `workspaces` row,
+      // no local writer) and `isReadOnly` is mutable and resolved
+      // asynchronously, so either can land mid-pass. Hoisting is stale in
+      // the UNSAFE direction for both: the rows still get stamped, and both
+      // repair scans require `reference_target_id IS NULL`, so once stamped
+      // nothing — not the next open's sweep, not the drain — ever re-finds
+      // them. A dormant workspace collects nothing, so the cost of asking
+      // again is one indexed row read per 200 stamps.
+      const reproject = !this.isReadOnly
+        && await readIsChildBackedWorkspace(this.db, context.workspaceId)
+      // Rows THIS chunk turned into recognized field rows. Per chunk, not
+      // per pass: the re-projection then follows its own stamps immediately,
+      // so a crash or a closed tab loses at most one chunk of repair instead
+      // of all of it — and the rows are no longer NULL-targeted, so no later
+      // scan would ever find them again.
+      const newlyRecognized: ProjectableRow[] = []
       const snapshots = new Map<string, {before: BlockData; after: BlockData}>()
       await this.db.writeTransaction(async tx => {
         await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
-        for (const {id, scannedContent, targetId} of chunk) {
+        for (const {id, scannedContent, targetId, isFieldForm} of chunk) {
           const freshRow = await tx.getOptional<BlockRow>(
             `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id = ?`,
             [id],
@@ -2692,13 +2750,29 @@ export class Repo {
             freshRow === null
             || (freshRow.reference_target_id ?? null) !== null
             || freshRow.content !== scannedContent
+            // Bit-only stamps (marked row, unresolvable span) skip when the
+            // bit already matches — nothing to write, no snapshot churn.
+            || (targetId === null && (freshRow.is_field_form === 1) === isFieldForm)
           ) continue
           await tx.execute(
-            'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
-            [targetId, id],
+            'UPDATE blocks SET reference_target_id = ?, is_field_form = ? WHERE id = ?',
+            [targetId, isFieldForm ? 1 : null, id],
           )
           const before = parseBlockRow(freshRow)
-          snapshots.set(id, {before, after: {...before, referenceTargetId: targetId}})
+          const after = {...before, referenceTargetId: targetId, isFieldForm}
+          snapshots.set(id, {before, after})
+          // Only the "turns on" direction is reachable: the CAS above writes
+          // only rows still at a NULL target, and §9 recognition needs a
+          // resolved one — so nothing here was a field row beforehand.
+          if (reproject && targetId !== null && isFieldForm && after.parentId !== null) {
+            newlyRecognized.push({
+              id: after.id,
+              parentId: after.parentId,
+              workspaceId: after.workspaceId,
+              referenceTargetId: targetId,
+              isFieldForm,
+            })
+          }
         }
       })
       if (snapshots.size === 0) continue
@@ -2719,7 +2793,73 @@ export class Repo {
       this.handleStore.invalidate(
         snapshotsToChangeNotification(snapshots, this.invalidationRules),
       )
+      if (newlyRecognized.length === 0) continue
+      try {
+        await this.reprojectOwnersOfStampedFieldRows(newlyRecognized, context)
+      } catch (err) {
+        // The stamps are the primary job and they committed; a projection
+        // failure must not abort the pass (the sweep would never set its
+        // marker, disabling late-binding for the whole session). The repair
+        // is additive and idempotent, so any later edit to the subtree
+        // re-projects it through the ordinary processor.
+        const reason = err instanceof Error ? err.message : String(err)
+        console.error(
+          `[referenceTargetStamp] owner re-projection failed for workspace `
+          + `${context.workspaceId}: ${reason}`,
+        )
+      }
     }
+  }
+
+  /** Owner-cell re-projection for rows a raw stamp just turned into
+   *  recognized field rows (PR #288 §9 / issue #402's derivation-liveness
+   *  group). The stamp itself deliberately bypasses `repo.tx` to preserve
+   *  `updated_at`, so no processor sees it — but resolving a `::[[Foo]]`
+   *  row's target IS the transition that makes it a field row, and the
+   *  owner's cell must gain the key at that moment rather than waiting for
+   *  an unrelated edit to the subtree.
+   *
+   *  Reachable post-flip only (the caller owns that gate): a hand-typed or
+   *  imported `::[[status]]` written before anything claimed "status"
+   *  derives to a NULL target, and the alias-claim drain (or the next open's
+   *  sweep) resolves it later. Unlike the stamp, this write goes through
+   *  `repo.tx` — it's a cell write on the PARENT, ordinary derived state,
+   *  and the projection's `skipMetadata` keeps it off "last edited".
+   *
+   *  ADDITIVE, and that is load-bearing (adversarial review). Running
+   *  outside the PROJECT processor means the cell write is not settled, so
+   *  `core.materializePropertyChildren` reads it as a key change. A `full`
+   *  projection here would therefore be destructive in the ordinary case,
+   *  not an exotic one: between a workspace flipping and its backfill
+   *  landing every owner holds cell keys with NO field rows, so the first
+   *  sweep would project "nothing parses" into an unset, and materialize
+   *  would read that unset as a user deleting the key and tombstone the
+   *  very rows the stamp just recognized — uploading the tombstones. The
+   *  overwrite direction is barred for the same reason: reconciling a
+   *  populated cell against children is the backfill's job.
+   *
+   *  `References`, not `BlockDefault` (the same call the deferred definition
+   *  migration batch makes, for the same reason): a `BlockDefault` tx lands
+   *  on the user's cmd-Z stack, so a background repair would become the
+   *  thing their next undo reverts. */
+  private async reprojectOwnersOfStampedFieldRows(
+    rows: readonly ProjectableRow[],
+    context: ReferenceTargetStampContext,
+  ): Promise<void> {
+    if (rows.length === 0) return
+    const lookups: ProjectionLookups = {
+      resolveFieldSchema: (fieldId) => {
+        const resolution = context.resolver.resolveField(fieldId)
+        return resolution.status === 'resolved' ? resolution.schema : undefined
+      },
+    }
+    await this.tx(
+      tx => reprojectOwnersForRowStates(tx, rows, lookups, 'additive'),
+      {
+        scope: ChangeScope.References,
+        description: 'reproject property cells after reference-target stamp',
+      },
+    )
   }
 
   /** Targeted re-derive for NEWLY-ADDED property definitions (PR #288 §9's
@@ -2761,6 +2901,10 @@ export class Repo {
     if (!pending || pending.size === 0) return
     const registry = this._propertyDefinitionRegistry
     if (!registry || registry.workspaceId !== workspaceId) return
+    // Captured at the gate, not at write time (see ReferenceTargetStampContext).
+    const stampContext: ReferenceTargetStampContext = {
+      workspaceId, resolver: this.propertySchemaResolverFor(workspaceId),
+    }
     this.pendingNameRederives.delete(workspaceId)
     try {
       // Strictly additive (`reference_target_id IS NULL`, like the sweep):
@@ -2774,14 +2918,20 @@ export class Repo {
       // change nothing any reader observes. That reclaim (with the cell
       // reprojection a raw stamp currently skips) belongs to the auto-claim
       // work that makes definitions name-resolvable.
+      // `'::[[%'` twin: marked alias rows late-bind exactly like unmarked
+      // ones (§7 — the bit is already stamped by derive; this repairs the
+      // target), and a prefilter without the twin would leave a pasted
+      // `::[[future-field]]` bit=1/target-NULL forever once its name mints.
+      // Alias forms ONLY, unlike the sweep's all-forms prefilter: this drain
+      // discards anything that isn't `kind === 'alias'` two lines below, and
+      // an id form can't be one. Fetching `((%…%))` rows here would scan a
+      // whole workspace's exact refs to throw every one of them away.
       const candidates = await this.db.getAll<{id: string; content: string}>(
         `SELECT id, content FROM blocks
           WHERE workspace_id = ?
             AND reference_target_id IS NULL
-            AND (
-              (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
-              OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
-            )`,
+            AND TRIM(content) LIKE '%]]'
+            AND (TRIM(content) LIKE '[[%' OR TRIM(content) LIKE '::[[%')`,
         [workspaceId],
       )
       const lookups = this.referenceTargetLookupsVia()
@@ -2789,12 +2939,17 @@ export class Repo {
       for (const row of candidates) {
         const exact = parseExactReferenceBlockContent(row.content)
         if (exact?.kind !== 'alias' || !pending.has(exact.alias)) continue
-        const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
-        if (typeof derived === 'string') {
-          updates.push({id: row.id, scannedContent: row.content, targetId: derived})
+        const derived = await deriveReferenceColumns(row.content, workspaceId, lookups)
+        if (typeof derived.targetId === 'string') {
+          updates.push({
+            id: row.id,
+            scannedContent: row.content,
+            targetId: derived.targetId,
+            isFieldForm: derived.isFieldForm,
+          })
         }
       }
-      await this.stampReferenceTargets(updates)
+      await this.stampReferenceTargets(updates, stampContext)
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[referenceTargetRederive] workspace ${workspaceId} failed: ${reason}`)
@@ -2934,6 +3089,7 @@ export class Repo {
       const candidates = await this.db.getAll<{parent_id: string | null}>(
         `SELECT DISTINCT parent_id FROM blocks
           WHERE workspace_id = ? AND reference_target_id IN (${fieldChunk.map(() => '?').join(', ')})
+            AND is_field_form = 1
             AND deleted = 0 AND parent_id IS NOT NULL`,
         [workspaceId, ...fieldChunk],
       )
@@ -2950,12 +3106,11 @@ export class Repo {
     for (let i = 0; i < parentIds.length; i += CHUNK) {
       const chunk = parentIds.slice(i, i + CHUNK)
       await this.tx(async tx => {
-        // §9 ancestry rule, memoized per tx (fresh per chunk — a fresh `tx()`
-        // per chunk sees the previous chunk's own committed writes, and the
-        // memo shouldn't outlive the tx it was walked against): a row whose
-        // parent chain passes through a field row is a VALUE/comment (e.g. a
-        // ref-typed value pointing at this very definition), not a field row
-        // — never retitle or re-key those.
+        // Flat §9 recognition: field-row selection below keys on the BIT +
+        // fieldId (the bit is what keeps a ref-typed value pointing at this
+        // very definition from being misread as a field row — no ancestry
+        // walk exists anymore, and every owner re-keys uniformly at any
+        // depth).
         //
         // `isFieldDefinition` closes over the batch's captured `resolver`
         // (schedule-time snapshot, captured in
@@ -2989,7 +3144,6 @@ export class Repo {
         // `change.fieldId` resolves when `plans` was built) — the guard below
         // stays for the root-half/shared-recognizer symmetry with the
         // ancestor walk, not as a live re-check.
-        const subtreeMemo = new Map<string, boolean>()
         const isFieldDefinition: IsPropertyFieldDefinition = (fieldId) => {
           const rowResolution = resolver.resolveField(fieldId)
           return rowResolution.status === 'resolved'
@@ -2997,13 +3151,13 @@ export class Repo {
         }
 
         for (const parentId of chunk) {
-          // Shared swap-safe re-key: the helper owns the parent guard, the §9
-          // ancestry gate, and the drop-all-then-set-all apply (symmetric with
-          // the same-tx rename processor). This computePlan is the codec half —
-          // it re-encodes value children under the (possibly new) codec and
+          // Shared swap-safe re-key: the helper owns the parent guard and
+          // the drop-all-then-set-all apply (symmetric with the same-tx
+          // rename processor). This computePlan is the codec half — it
+          // re-encodes value children under the (possibly new) codec and
           // reports unconvertibles.
           await rekeyParentPropertyCell(
-            tx, parentId, isFieldDefinition, subtreeMemo,
+            tx, parentId,
             async (siblings) => {
               const oldNames: string[] = []
               const assignments: Array<{name: string; value: unknown; unset: boolean}> = []
@@ -3012,22 +3166,23 @@ export class Repo {
                 let hasProjection = false
                 let parentUnconvertible = 0
                 let sawFieldRow = false
-                // Field-row content is `((fieldId))` — id-addressed and
-                // rename-stable (§7), nothing to retitle. Two conditions select
-                // THIS definition's field rows: the fieldId equality picks them
-                // out (isPropertyFieldInstance has no notion of "which"
-                // definition); isPropertyFieldInstance reuses the shared §9
-                // recognizer (a no-op here for the root half — siblings are all
-                // actual children — and the resolvability half —
-                // `isFieldDefinition(change.fieldId)` is always true here — kept
-                // for symmetry with the ancestor walk).
+                // Field-row content is `::((fieldId))` — id-addressed and
+                // rename-stable (§7), nothing to retitle. The fieldId
+                // equality picks THIS definition's field rows; the shared §9
+                // recognizer supplies the bit + root + resolvability
+                // conditions (`isFieldDefinition(change.fieldId)` is always
+                // true here — kept as the one composed predicate rather than
+                // a hand-rolled restatement).
                 for (const sibling of siblings) {
                   if (
                     (sibling.referenceTargetId ?? null) !== change.fieldId
                     || !isPropertyFieldInstance(sibling, isFieldDefinition)
                   ) continue
                   sawFieldRow = true
-                  const values = await tx.childrenOf(sibling.id, undefined)
+                  // §9 value set: bit-filtered — nested marked rows are
+                  // machinery, never value candidates.
+                  const values = (await tx.childrenOf(sibling.id, undefined))
+                    .filter(isFieldValueChild)
                   for (const value of values) {
                     try {
                       const encoded = propertyChildContentToEncodedValue(

@@ -17,6 +17,12 @@ export interface BlockRow {
    *  `blocks_synced` (and pre-migration row_events snapshots) don't carry
    *  it; `parseBlockRow` normalizes absence to `null`. */
   reference_target_id?: string | null
+  /** LOCAL-only derived bit (§7 grammar box): 1 when the row's whole trimmed
+   *  content is the `::`-marked field form, NULL otherwise — ordinary rows
+   *  are never stamped 0, so value-set predicates read
+   *  `is_field_form IS NOT 1`, never `= 0`. Same local-column treatment as
+   *  `reference_target_id`; `parseBlockRow` normalizes to boolean. */
+  is_field_form?: number | null
   order_key: string
   content: string
   properties_json: string
@@ -77,12 +83,18 @@ export const BLOCK_STORAGE_COLUMNS = [
  *
  *  `reference_target_id` (properties-as-blocks migration, slice A): the
  *  resolved target when the row's whole content is exactly one reference
- *  token (`((uuid))` / `[[alias]]`) — for property field rows this is the
+ *  span (`((id))` / `[[alias]]` / `[label](((uuid)))`, marked or not) — for
+ *  property field rows this is the
  *  schema's fieldId. Kept local by owner decision (PR #288 §8/§11): a synced
  *  plaintext copy would leak reference-edge metadata that e2ee workspaces
- *  encrypt, and no server-side consumer exists. */
+ *  encrypt, and no server-side consumer exists.
+ *
+ *  `is_field_form` (§7 grammar box): 1 when the `::` field marker matched —
+ *  pure syntax, stamped by the same derive pass regardless of whether the
+ *  span resolves; NULL on every other row (never 0). */
 export const BLOCK_LOCAL_COLUMNS = [
   {name: 'reference_target_id', definition: 'reference_target_id TEXT'},
+  {name: 'is_field_form', definition: 'is_field_form INTEGER'},
 ] as const satisfies readonly {readonly name: keyof BlockRow; readonly definition: string}[]
 
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
@@ -176,6 +188,16 @@ export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
   WHERE deleted = 0 AND reference_target_id IS NOT NULL
 `
 
+/** Partial index over the field-form bit (§9): "all field rows under X" /
+ *  "all field rows in workspace W" scans hit
+ *  `(workspace_id, parent_id, reference_target_id)` filtered to marked rows
+ *  only — the `= 1` predicate keeps it as small as the set of field rows. */
+export const CREATE_BLOCKS_FIELD_FORM_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_field_form
+  ON blocks (workspace_id, parent_id, reference_target_id)
+  WHERE deleted = 0 AND is_field_form = 1
+`
+
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 
@@ -210,6 +232,9 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
   {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
   {key: 'referenceTargetId', sqlExpression: rowRef => `${rowRef}.reference_target_id`},
+  // Same undo/history treatment as `referenceTargetId`: the bit rides row
+  // snapshots so replay restores it (same-tx processors are skipped on undo).
+  {key: 'isFieldForm', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.is_field_form = 1 THEN 'true' ELSE 'false' END)`},
   {key: 'orderKey', sqlExpression: rowRef => `${rowRef}.order_key`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
@@ -249,6 +274,8 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   // Local-only column: absent on `blocks_synced` rows and pre-migration
   // row_events snapshots — normalize to null (optional-in, null-out).
   referenceTargetId: row.reference_target_id ?? null,
+  // Local-only bit: 1 or NULL on disk (never 0) — normalize to boolean.
+  isFieldForm: row.is_field_form === 1,
   orderKey: row.order_key,
   content: row.content,
   properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}),
@@ -278,6 +305,7 @@ type BlockRowParams = [
   updatedBy: string,
   deleted: 0 | 1,
   referenceTargetId: string | null,
+  isFieldForm: 1 | null,
 ]
 
 /** Positional params for an INSERT into the live `blocks` table — ordered
@@ -299,6 +327,9 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.updatedBy,
   blockData.deleted ? 1 : 0,
   blockData.referenceTargetId ?? null,
+  // 1-or-NULL storage convention: unmarked rows carry NULL, never 0, so SQL
+  // value-set predicates (`is_field_form IS NOT 1`) match underived rows too.
+  blockData.isFieldForm ? 1 : null,
 ]
 
 /** Positional params for the `blocks_synced` staging put (and any other

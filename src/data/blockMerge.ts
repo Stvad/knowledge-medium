@@ -96,15 +96,20 @@ export const mergeBlocksInTx = async (
   // union-with-dedupe:
   //   - a `from` value equal to `into`'s winning value folds (its
   //     user-authored descendants ride onto `into`'s value);
-  //   - a DIVERGENT `from` value nests under `into`'s winning value child —
-  //     preserved, and still property-subtree INTERIOR, so §9 never
-  //     reclassifies it. That is why no derived stamp is cleared here: the
-  //     old path relocated losers to ORDINARY content and had to null a
-  //     definition-shaped `reference_target_id` to stop them projecting as
-  //     `into`'s field rows — but that column is content-derived and
-  //     device-LOCAL, so the clear evaporated on the next edit and never
-  //     synced (a peer kept hiding the row). Keeping the loser interior
-  //     removes the need entirely (#19).
+  //   - a DIVERGENT `from` value is kept as a peer SIBLING value under the
+  //     survivor field row (NOT nested under the winner as if it were an
+  //     annotation — see `collapseDuplicateFieldRow`): projection reads the
+  //     first value, so the cell keeps the winner while the conflicting one
+  //     stays visible and reconcilable. It is never reclassified either:
+  //     §9 recognition needs the `::` bit, and a value row doesn't carry
+  //     one wherever it is moved. That
+  //     is why no derived stamp is cleared here. The old path relocated
+  //     losers to ORDINARY content and had to null a definition-shaped
+  //     `reference_target_id` to stop them projecting as `into`'s field
+  //     rows — but that column is content-derived and device-LOCAL, so the
+  //     clear evaporated on the next edit and never synced (a peer kept
+  //     hiding the row). Marked-form recognition removes the need entirely
+  //     (#19): the loser is unmarked, so nothing can read it as machinery.
   //   - a property `into` LACKS: the whole `from` field row moves over
   //     intact (value + comments), becoming `into`'s field row for it.
   const mergedProperties = mergeProps(into.properties, from.properties)
@@ -114,24 +119,22 @@ export const mergeBlocksInTx = async (
   // Destination map, built the SAME way as `fromPropertyChildren` above:
   // raw children minus the visible ones, so a row counts as `into`'s field row
   // only when the canonical exclusion actually hid it — which carries the flip
-  // gate, definition-ness, AND the §9 positional rule with it.
+  // gate, definition-ness, AND the `::` bit with it.
   //
   // Reading `referenceTargetId` off every raw child instead (the first version
   // of this, PR #386 review) skipped all three. The column is a bare
-  // content-derived stamp: ANY child that is a whole-block ref carries one. So
-  // when `into` is itself property-subtree INTERIOR — a value row, which
-  // `hidePropertyChildren` deliberately exempts from filtering, making its
-  // children ordinary content — an ordinary `((definitionId))` child was
-  // recorded as the destination field row, and `collapseDuplicateFieldRow`
-  // then relocated `from`'s real values/comments under that unrelated block and
-  // tombstoned the genuine field row. Reachable from the "Merge into…" picker,
-  // not just raw tooling: its `searchByContent` has no property-child
-  // exclusion, so a property VALUE row matches on its own text and can be
-  // picked as the target.
+  // content-derived stamp: ANY child that is a whole-block ref carries one, so
+  // an ordinary `((definitionId))` child was recorded as the destination field
+  // row, and `collapseDuplicateFieldRow` then relocated `from`'s real
+  // values/comments under that unrelated block and tombstoned the genuine
+  // field row. Reachable from the "Merge into…" picker, not just raw tooling:
+  // its `searchByContent` has no property-child exclusion, so a property VALUE
+  // row matches on its own text and can be picked as the target.
   //
-  // With the map empty for an interior `into`, the branch below adopts the
-  // `from` field row intact instead — the documented "`into` LACKS this field"
-  // case, which is the correct outcome.
+  // Under flat §9 recognition this needs no special case for a value-row
+  // `into`: every block hosts its own field rows through its `::` children at
+  // any depth, so the same raw-minus-visible difference is the right answer
+  // whether `into` is a page, a field row, or a value row.
   //
   // `intoAnchor` still walks EVERY raw child: it is the placement anchor for an
   // adopted field row, so it wants the last physical sibling, hidden or not.
