@@ -1293,6 +1293,50 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
   })
 
+  it('Shift+Up from the first bullet selects the whole page, and Delete then removes it', async () => {
+    // Records ACCEPTED behaviour, deliberately, so it isn't left living only in
+    // a fuzz-harness exclusion. `previousVisibleBlock` returns the parent even
+    // when it is the scope root, and `validateSelectionHierarchy` keeps an
+    // ancestor while dropping its descendants — so a second extend-up from a
+    // page's first bullet COLLAPSES the selection onto the page rather than
+    // growing it. Deleting then takes the page and its subtree.
+    //
+    // This is intended: the page renders highlighted while selected (the
+    // selection background wraps `<Children/>`, so the whole subtree is
+    // visibly shaded), and deleting a selected block has always taken its
+    // subtree. If the collapse is ever made to stop at the scope root instead,
+    // this test should fail and be rewritten — that's the point of it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'c1', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'c2', content: 'second'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, 'c1')
+
+    const {extendSelectionUp, deleteBlock} = createSharedBlockActions({repo: env.repo})
+    const deps = {uiStateBlock, block: env.repo.block('c1'), scopeRootId: 'page'}
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await extendSelectionUp.handler(deps, trigger)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['c1'])
+
+    // Second press: collapses onto the page rather than extending.
+    await extendSelectionUp.handler(deps, trigger)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['page'])
+
+    await deleteBlock.handler(
+      {uiStateBlock, block: env.repo.block('page'), scopeRootId: 'page'},
+      trigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'c1')).toBe(true)
+  })
+
   it('refuses when a registered deletion guard vetoes the block', async () => {
     // The guard facet is how daily-notes protects its get-or-create pages.
     // Multi-select delete fans out through this same handler, so it's covered
