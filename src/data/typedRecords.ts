@@ -16,7 +16,8 @@
  * hand-rolled record stays true here.
  */
 
-import type { AnyPropertyAssignment, BlockReference, Tx, TypeRegistrySnapshot } from './api'
+import { v5 as uuidv5 } from 'uuid'
+import type { AnyPropertyAssignment, BlockData, BlockReference, Tx, TypeRegistrySnapshot } from './api'
 import { createChild } from './mutators'
 import type { Repo } from './repo'
 
@@ -97,4 +98,115 @@ export const createTypedChild = async (
   }
 
   return id
+}
+
+/**
+ * A record whose block id is derived from what it IS, rather than minted at
+ * random.
+ *
+ * `namespace` is a uuid-v5 namespace, one per record kind — generate a fresh
+ * random uuid for it and hard-code it. `key` is the record's natural
+ * identity: everything that makes it *this* record and not another one
+ * ("<workspaceId>|2026-07-24|A"). Include the workspace unless the parent
+ * already scopes it.
+ */
+export interface DerivedIdentity {
+  namespace: string
+  key: string
+}
+
+/** The block id a `DerivedIdentity` resolves to. `slot` > 0 addresses the
+ *  fallbacks `getOrCreateTypedChild` probes when earlier ones are taken. */
+export const derivedBlockId = (identity: DerivedIdentity, slot = 0): string =>
+  uuidv5(slot === 0 ? identity.key : `${identity.key}#${slot}`, identity.namespace)
+
+export type DerivedChildOutcome =
+  /** Nothing was there; the record was written from `spec`. */
+  | { status: 'created'; id: string }
+  /** A usable block was already at this identity. Its content and properties
+   *  were NOT touched — only missing types were re-tagged. */
+  | { status: 'adopted'; id: string; block: BlockData }
+
+export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id'> {
+  identity: DerivedIdentity
+  /** May this existing block serve as the record? Soft-deleted blocks are
+   *  never offered (a deleted record was deleted on purpose, and silently
+   *  resurrecting it is worse than making a new one). Default: any live
+   *  block is adoptable. Return false and the next slot is probed. */
+  adoptable?: (block: BlockData) => boolean
+  /** How many slots to probe before giving up. Each rejected slot is a real
+   *  record that already occupies this identity — a discarded workout, or a
+   *  second session on the same evening — so the default is generous enough
+   *  to never be hit in practice and low enough to fail loudly if a caller's
+   *  `adoptable` rejects everything. */
+  maxSlots?: number
+}
+
+/**
+ * Get-or-create a record at a derived identity, inside the caller's tx.
+ *
+ * Reach for this whenever a record has a natural identity and something
+ * other than you controls when the create fires — a UI gesture, a sync
+ * callback, a bootstrap that runs on every launch. The alternative shape,
+ * "query for it, then create if absent", cannot be made correct: the query
+ * answers for the moment it ran, and two clients (or one client twice) both
+ * read absent and both create. A derived id sidesteps the race instead of
+ * narrowing it — both writers produce the SAME block id, so they converge on
+ * one row at sync instead of leaving a duplicate nobody can reach.
+ *
+ * ```ts
+ * await repo.tx(async tx => {
+ *   const outcome = await getOrCreateTypedChild(repo, tx, {
+ *     identity: {namespace: WORKOUT_NS, key: `${workspaceId}|${day}|${session}`},
+ *     parentId: pageId,
+ *     content: `Session ${session} · ${day}`,
+ *     types: [WORKOUT_TYPE],
+ *     properties: [propertyValue(statusProp, 'in-progress')],
+ *     // A finished workout is not this evening's log — take the next slot.
+ *     adoptable: block => block.properties[statusProp.name] !== 'done',
+ *   })
+ *   if (outcome.status === 'created') …
+ * })
+ * ```
+ *
+ * Free for a NEW record kind, and a migration for an existing one: records
+ * already written with random ids are invisible to a derived lookup, so
+ * switching a live kind over creates a second row beside every one of them.
+ * Convert only alongside a plan for what happens to the rows already out
+ * there — or leave the old kind on its hand-rolled lookup and use this for
+ * the next one.
+ *
+ * On adopt, `content` and `properties` are deliberately NOT applied: the
+ * block on disk holds real state, and overwriting it with the defaults this
+ * caller happens to hold is the data loss the whole primitive exists to
+ * avoid. Callers wanting upsert semantics write their properties after the
+ * call, where the intent is explicit. Missing `types` ARE re-tagged, so a
+ * record that lost a type tag repairs itself.
+ */
+export const getOrCreateTypedChild = async (
+  repo: Repo,
+  tx: Tx,
+  spec: DerivedChildSpec,
+): Promise<DerivedChildOutcome> => {
+  const {identity, adoptable, maxSlots: slotLimit, ...childSpec} = spec
+  const maxSlots = slotLimit ?? 16
+  for (let slot = 0; slot < maxSlots; slot += 1) {
+    const id = derivedBlockId(identity, slot)
+    const existing = await tx.get(id)
+
+    if (existing && !existing.deleted && (adoptable?.(existing) ?? true)) {
+      for (const typeId of childSpec.types) {
+        await repo.addTypeInTx(tx, id, typeId, {}, childSpec.typeSnapshot)
+      }
+      return {status: 'adopted', id, block: existing}
+    }
+    if (existing) continue // taken by a tombstone or a record this caller rejected
+
+    await createTypedChild(repo, tx, {...childSpec, id})
+    return {status: 'created', id}
+  }
+  throw new Error(
+    `getOrCreateTypedChild: all ${maxSlots} slots for "${identity.key}" are taken. ` +
+    'Either the identity key is not specific enough, or `adoptable` rejects everything.',
+  )
 }

@@ -232,9 +232,9 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/typedRecords.js',
-    description: 'createTypedChild — one call per record block (create + type-tag + typed properties inside your tx). The cheap way to keep records as blocks instead of a JSON cell.',
-    exports: ['createTypedChild'],
-    types: ['TypedChildSpec'],
+    description: 'createTypedChild — one call per record block (create + type-tag + typed properties inside your tx). The cheap way to keep records as blocks instead of a JSON cell. getOrCreateTypedChild derives the block id from what the record IS, so a create fired by a UI gesture or a bootstrap is idempotent: repeat it and it adopts, and two clients converge on one row instead of leaving a duplicate nobody can reach.',
+    exports: ['createTypedChild', 'derivedBlockId', 'getOrCreateTypedChild'],
+    types: ['DerivedChildOutcome', 'DerivedChildSpec', 'DerivedIdentity', 'TypedChildSpec'],
   },
   {
     category: 'data',

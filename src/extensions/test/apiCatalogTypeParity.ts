@@ -137,7 +137,12 @@ export type {
   TypeSeedDeclaration,
 } from '@/data/api/index.js'
 
-export type { TypedChildSpec } from '@/data/typedRecords.js'
+export type {
+  DerivedChildOutcome,
+  DerivedChildSpec,
+  DerivedIdentity,
+  TypedChildSpec,
+} from '@/data/typedRecords.js'
 
 export type { TodoStatus } from '@/plugins/todo/schema.js'
 

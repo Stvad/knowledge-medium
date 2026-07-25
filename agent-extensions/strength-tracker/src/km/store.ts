@@ -13,7 +13,7 @@
 import {ChangeScope, propertyValue, type Tx} from '@/data/api/index.js'
 import {createChild, deleteBlock} from '@/data/mutators.js'
 import type {Repo} from '@/data/repo.js'
-import {createTypedChild} from '@/data/typedRecords.js'
+import {createTypedChild, getOrCreateTypedChild, type DerivedIdentity} from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: it carries the todo type + its
 // `status` prop, so done-ness is the native checkbox and reuses todo tooling.
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
@@ -50,8 +50,7 @@ import {
 import {dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
-import {buildAltChoices, buildLiveWorkouts, type LiveWorkout} from './history'
-import {reconcilePlan} from './reconcile'
+import {buildAltChoices} from './history'
 
 // ──── draft shapes the writer consumes ────
 
@@ -107,181 +106,181 @@ const todoStatus = (done: boolean): 'open' | 'done' => (done ? 'done' : 'open')
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
+// ──── derived identities ────
+//
+// Every block of a logged session has its id DERIVED from what it is, not
+// minted at random. That is what makes starting a session idempotent, and it
+// has to be: the create fires from a checkbox tap, at a moment this view
+// doesn't choose and can't predict. On first paint the live query still
+// answers `[]` — indistinguishable from "nothing logged" — and a tap there
+// used to build a second workout that the query then hid behind the first:
+// never rendered, never finishable, a full set of open todo sets left in the
+// agenda forever.
+//
+// Deriving the id makes that unrepresentable rather than unlikely. Two taps,
+// two tabs, two devices: same inputs, same block ids, so they converge on one
+// row at sync instead of racing. No read-before-write, and no window between
+// the read and the write for the answer to change.
+//
+// Fresh, randomly-generated uuid-v5 namespaces — one per record kind, so two
+// kinds can never derive the same id from the same key.
+const WORKOUT_NS = '80ae2b6d-7bde-4de7-9790-04e2d24eeb02'
+const EXERCISE_NS = '6d216957-1c1f-45c8-8ee6-b44bb0e7f4aa'
+const SET_NS = 'feda0816-3421-4fe5-8249-ac2655cc962b'
+
+/** One workout per workspace/day/session. */
+const workoutIdentity = (workspaceId: string, day: string, session: SessionType): DerivedIdentity =>
+  ({namespace: WORKOUT_NS, key: `${workspaceId}|${day}|${session}`})
+
+/** One entry per lift in a workout — keyed on the plan block where there is
+ *  one, so a lift renamed mid-session stays the same entry. `occurrence`
+ *  separates two rows of the same lift in one session; without it the second
+ *  row would adopt the first row's blocks and they would write over each
+ *  other. */
+const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity =>
+  ({namespace: EXERCISE_NS, key: occurrence === 0 ? `${workoutId}|${key}` : `${workoutId}|${key}|${occurrence}`})
+
+/** Sets are positional within their entry — including the L/R rows of a
+ *  per-side lift, which alternate. */
+const setIdentity = (exerciseId: string, index: number): DerivedIdentity =>
+  ({namespace: SET_NS, key: `${exerciseId}|${index}`})
+
 /** One set block under an exercise entry, inside the caller's transaction.
- *  Its own function because sets get written in two situations now: with the
- *  entry that owns them, and one at a time into an entry that was ADOPTED
- *  with fewer sets than the draft prescribes. */
+ *  Adopts the block already at this position rather than appending a second
+ *  one — which is what lets the caller re-run the whole write for a session
+ *  that is half-logged and get its existing ids back. */
 const writeSetBlock = async (
   repo: Repo,
   tx: Tx,
   exerciseId: string,
   s: SetDraft,
+  index: number,
   unit: string,
   typeSnapshot: TypeSnapshot,
 ): Promise<string> => {
-  const setId = await tx.run(createChild, {parentId: exerciseId, content: setContent(s, unit)})
-  await tx.setProperty(setId, weightProp, s.weight)
-  await tx.setProperty(setId, repsProp, s.reps)
-  await tx.setProperty(setId, rpeProp, s.rpe)
-  await tx.setProperty(setId, sideProp, s.side)
-  await tx.setProperty(setId, completedAtProp, s.completedAt)
-  await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
-  await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
-  await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
-  return setId
+  const {id} = await getOrCreateTypedChild(repo, tx, {
+    identity: setIdentity(exerciseId, index),
+    parentId: exerciseId,
+    content: setContent(s, unit),
+    // Composed with the built-in todo: done-ness is the native checkbox.
+    types: [SET_TYPE, TODO_TYPE],
+    properties: [
+      propertyValue(weightProp, s.weight),
+      propertyValue(repsProp, s.reps),
+      ...(s.rpe !== undefined ? [propertyValue(rpeProp, s.rpe)] : []),
+      ...(s.side !== undefined ? [propertyValue(sideProp, s.side)] : []),
+      ...(s.completedAt !== undefined ? [propertyValue(completedAtProp, s.completedAt)] : []),
+      propertyValue(todoStatusProp, todoStatus(s.done)),
+    ],
+    typeSnapshot,
+  })
+  return id
 }
 
 /** One exercise entry + its set blocks, inside the caller's transaction.
- *  Shared by "start the session" and "add this lift mid-session", so an
- *  entry written either way is identical. */
+ *  Shared by "start the session" and "add this lift mid-session", so an entry
+ *  written either way is identical — and, because the ids are derived,
+ *  switching an `or`-group away and back RESTORES the sets you logged on it
+ *  instead of starting a parallel entry beside them. */
 const writeExercise = async (
   repo: Repo,
   tx: Tx,
   workoutId: string,
   ex: ExerciseDraft,
+  occurrence: number,
   typeSnapshot: TypeSnapshot,
 ): Promise<ExerciseEntryIds> => {
-  const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
-  await tx.setProperty(exId, exerciseProp, ex.exercise)
-  await tx.setProperty(exId, definitionProp, ex.definitionId)
-  await tx.setProperty(exId, unitProp, ex.unit)
-  if (ex.prescribedWeight !== undefined) await tx.setProperty(exId, prescribedWeightProp, ex.prescribedWeight)
-  if (ex.prescribedSets !== undefined) await tx.setProperty(exId, prescribedSetsProp, ex.prescribedSets)
-  await repo.addTypeInTx(tx, exId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
+  const {id: exId} = await getOrCreateTypedChild(repo, tx, {
+    identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, occurrence),
+    parentId: workoutId,
+    content: ex.exercise,
+    types: [EXERCISE_ENTRY_TYPE],
+    properties: [
+      propertyValue(exerciseProp, ex.exercise),
+      // A ref, so the definition block's backlinks are this lift's history.
+      ...(ex.definitionId !== undefined ? [propertyValue(definitionProp, ex.definitionId)] : []),
+      propertyValue(unitProp, ex.unit),
+      ...(ex.prescribedWeight !== undefined ? [propertyValue(prescribedWeightProp, ex.prescribedWeight)] : []),
+      ...(ex.prescribedSets !== undefined ? [propertyValue(prescribedSetsProp, ex.prescribedSets)] : []),
+    ],
+    typeSnapshot,
+  })
 
   const setIds: string[] = []
-  for (const s of ex.sets) setIds.push(await writeSetBlock(repo, tx, exId, s, ex.unit, typeSnapshot))
+  for (const [i, s] of ex.sets.entries()) {
+    setIds.push(await writeSetBlock(repo, tx, exId, s, i, ex.unit, typeSnapshot))
+  }
   return {id: exId, setIds}
 }
 
 // ──── live logging writes ────
 
-/** Create the workout + one child per exercise + one grandchild per set, all
- *  in a single transaction (so it lands and undoes atomically). The workout is
- *  born `in-progress`; the set blocks carry whatever the draft already holds
- *  (usually the pre-filled prescription, `done: false`). Returns the ids so
- *  the caller can write set edits straight to their blocks.
+/** Begin logging tonight's session: get-or-create the workout, one entry per
+ *  prescribed lift, and one block per set — all in a single transaction, so
+ *  it lands and undoes atomically. Returns the ids so the caller can write
+ *  set edits straight to their blocks.
  *
- *  Deliberately NOT exported: `startWorkout` is the way in. An unconditional
- *  create is only correct if you already know nothing is in progress for this
- *  day+session, and the one caller that starts workouts (a checkbox tap) is
- *  exactly the one that can't know that. */
-const materializeWorkout = async (
-  repo: Repo,
-  workspaceId: string,
-  pageId: string,
-  draft: WorkoutDraft,
-): Promise<MaterializedWorkout> => {
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => {
-    const workoutId = await tx.run(createChild, {
-      parentId: pageId,
-      content: `${sessionLabel(draft.session)} · ${draft.day}`,
-      position: {kind: 'first'},
-    })
-    await tx.setProperty(workoutId, sessionProp, draft.session)
-    await tx.setProperty(workoutId, dateProp, dayToDate(draft.day))
-    await tx.setProperty(workoutId, statusProp, 'in-progress')
-    await repo.addTypeInTx(tx, workoutId, WORKOUT_TYPE, {}, typeSnapshot)
-
-    const exercises: {id: string; setIds: string[]}[] = []
-    for (const ex of draft.exercises) {
-      exercises.push(await writeExercise(repo, tx, workoutId, ex, typeSnapshot))
-    }
-    return {workoutId, exercises}
-  }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
-}
-
-/** The in-progress workout for this day+session, read straight from the
- *  blocks rather than from the reactive query the UI renders.
+ *  Safe to call again for the same session. Everything it touches is
+ *  addressed by a derived id, so a second call adopts what the first made:
+ *  same workout, same entries, same set blocks, and — crucially — the values
+ *  already logged in them are left exactly as they are. Only what is genuinely
+ *  missing gets written.
  *
- *  That distinction is the whole point: the reactive handle answers `[]`
- *  while it loads, so "no workout yet" and "not loaded yet" are the same
- *  value to a caller about to create one. `queryBlocks` awaits the load, so
- *  this answers the question the create actually needs to ask.
- *
- *  Cheap in the common case: one small typed query (workouts only, a couple
- *  hundred rows over years), and it stops there unless something is actually
- *  in progress. */
-export const findInProgressWorkout = async (
-  repo: Repo,
-  workspaceId: string,
-  day: string,
-  session: SessionType,
-): Promise<LiveWorkout | undefined> => {
-  const workoutRows = await repo.queryBlocks({workspaceId, types: [WORKOUT_TYPE]})
-  if (!workoutRows.some(row => row.properties[FIELD.status] === 'in-progress')) return undefined
-  const [exerciseRows, setRows] = await Promise.all([
-    repo.queryBlocks({workspaceId, types: [EXERCISE_ENTRY_TYPE]}),
-    repo.queryBlocks({workspaceId, types: [SET_TYPE]}),
-  ])
-  return buildLiveWorkouts(workoutRows, exerciseRows, setRows)
-    .find(w => w.day === day && w.session === session)
-}
-
-/** Fill in what an existing workout is missing for this draft, and return the
- *  ids as if we had just created it — so the caller can't tell the two apart.
- *  Only additive: an entry that matched keeps its blocks (and its values, and
- *  its history), and an entry the draft has no row for is left completely
- *  alone. */
-const adoptWorkout = async (
-  repo: Repo,
-  existing: LiveWorkout,
-  draft: WorkoutDraft,
-): Promise<MaterializedWorkout> => {
-  const plan = reconcilePlan(existing, draft)
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => {
-    const exercises: ExerciseEntryIds[] = []
-    for (const [i, entry] of plan.entries()) {
-      const ex = draft.exercises[i]
-      if (entry.existingId === undefined) {
-        exercises.push(await writeExercise(repo, tx, existing.id, ex, typeSnapshot))
-        continue
-      }
-      const setIds: string[] = []
-      for (const [j, s] of ex.sets.entries()) {
-        setIds.push(entry.setIds[j] ?? await writeSetBlock(repo, tx, entry.existingId, s, ex.unit, typeSnapshot))
-      }
-      exercises.push({id: entry.existingId, setIds})
-    }
-    return {workoutId: existing.id, exercises}
-  }, {scope: ChangeScope.BlockDefault, description: `Resume ${sessionLabel(draft.session)}`})
-}
-
-/** Begin logging: adopt the workout that's already in progress for this
- *  day+session, or create one.
- *
- *  The adopt half makes starting a session IDEMPOTENT, which is what the
- *  logging UI actually needs — its create fires from a checkbox tap whose
- *  timing it doesn't control, and firing twice used to mean two workouts for
- *  one evening with the second one unreachable. It also covers two devices
- *  opening the same session, to the extent sync latency allows: whichever
- *  one's workout has synced by then gets adopted by the other. */
+ *  The one thing it will NOT adopt is a workout already marked `done`. That
+ *  is not tonight's log, it's this morning's, so the derivation falls through
+ *  to the next slot — which is how "I did session A twice today" (or "I
+ *  discarded the first attempt") stays representable while staying
+ *  deterministic. */
 export const startWorkout = async (
   repo: Repo,
   workspaceId: string,
   pageId: string,
   draft: WorkoutDraft,
 ): Promise<MaterializedWorkout> => {
-  const existing = await findInProgressWorkout(repo, workspaceId, draft.day, draft.session)
-  return existing
-    ? adoptWorkout(repo, existing, draft)
-    : materializeWorkout(repo, workspaceId, pageId, draft)
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  return repo.tx(async tx => {
+    const workout = await getOrCreateTypedChild(repo, tx, {
+      identity: workoutIdentity(workspaceId, draft.day, draft.session),
+      parentId: pageId,
+      content: `${sessionLabel(draft.session)} · ${draft.day}`,
+      position: {kind: 'first'},
+      types: [WORKOUT_TYPE],
+      properties: [
+        propertyValue(sessionProp, draft.session),
+        propertyValue(dateProp, dayToDate(draft.day)),
+        propertyValue(statusProp, 'in-progress'),
+      ],
+      adoptable: block => block.properties[FIELD.status] !== 'done',
+      typeSnapshot,
+    })
+
+    // Two rows of the same lift in one session each need their own entry.
+    const occurrences = new Map<string, number>()
+    const exercises: ExerciseEntryIds[] = []
+    for (const ex of draft.exercises) {
+      const key = ex.definitionId ?? ex.exercise
+      const occurrence = occurrences.get(key) ?? 0
+      occurrences.set(key, occurrence + 1)
+      exercises.push(await writeExercise(repo, tx, workout.id, ex, occurrence, typeSnapshot))
+    }
+    return {workoutId: workout.id, exercises}
+  }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
 }
 
 /** Add ONE exercise (and its pre-filled sets) to a workout that already
  *  exists. This is the mid-session case: you switch an `or`-group to the
  *  other option because your shoulder complained, and the option you switched
- *  to has no blocks yet. Same shape as `materializeWorkout` writes, so the
- *  entry is indistinguishable from one created at the start. */
+ *  to has no blocks yet. Same shape as `startWorkout` writes, so the entry is
+ *  indistinguishable from one created at the start — and if you switch BACK,
+ *  the derived id lands on the entry you already logged into and hands its
+ *  sets straight back. */
 export const materializeExercise = async (
   repo: Repo,
   workoutId: string,
   ex: ExerciseDraft,
 ): Promise<ExerciseEntryIds> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot),
+  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, 0, typeSnapshot),
     {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 

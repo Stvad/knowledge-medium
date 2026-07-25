@@ -15,7 +15,10 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { getBlockTypes } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { createTypedChild } from '@/data/typedRecords'
+import { createTypedChild, derivedBlockId, getOrCreateTypedChild } from '@/data/typedRecords'
+
+const NS = 'd6c7f0e1-5b42-4a90-9d18-2f7c4e6a1b03'
+const identity = (key: string) => ({namespace: NS, key})
 
 const weightProp = seedProperty({
   seedKey: 'test/property/rec-weight',
@@ -138,5 +141,88 @@ describe('createTypedChild', () => {
 
     const rows = await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks WHERE id = ?', ['doomed'])
     expect(rows).toEqual([])
+  })
+})
+
+/**
+ * `getOrCreateTypedChild` exists because "query for it, then create if
+ * absent" cannot be made correct — the query answers for the moment it ran.
+ * These tests pin the two properties that make a derived id better than a
+ * narrower race: repeating the call converges on one block, and adopting one
+ * never overwrites what it found.
+ */
+describe('getOrCreateTypedChild', () => {
+  const record = (key: string, over: Partial<Parameters<typeof getOrCreateTypedChild>[2]> = {}) =>
+    repo.tx(tx => getOrCreateTypedChild(repo, tx, {
+      identity: identity(key),
+      parentId: 'parent',
+      content: 'Session A',
+      types: [recordType.id],
+      properties: [propertyValue(weightProp, 135)],
+      ...over,
+    }), {scope: ChangeScope.BlockDefault})
+
+  it('creates once and adopts thereafter, so a repeated create converges on one block', async () => {
+    const first = await record('ws-1|2026-07-24|A')
+    const second = await record('ws-1|2026-07-24|A')
+
+    expect(first).toEqual({status: 'created', id: derivedBlockId(identity('ws-1|2026-07-24|A'))})
+    expect(second.status).toBe('adopted')
+    expect(second.id).toBe(first.id)
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', ['parent'],
+    )
+    expect(rows).toHaveLength(1)
+  })
+
+  it('leaves the adopted block\'s content and properties alone', async () => {
+    // The whole point. The second caller holds pre-filled defaults; the block
+    // holds real logged state. Applying the spec on adopt would overwrite it.
+    const {id} = await record('logged')
+    await repo.tx(async tx => {
+      await tx.update(id, {content: '145lb × 8'})
+      await tx.setProperty(id, weightProp, 145)
+    }, {scope: ChangeScope.BlockDefault})
+
+    await record('logged')
+
+    expect(cache.getSnapshot(id)!.content).toBe('145lb × 8')
+    expect(repo.block(id).peekProperty(weightProp)).toBe(145)
+  })
+
+  it('re-tags a type the block is missing, so a record repairs itself', async () => {
+    const {id} = await record('repairable')
+    await record('repairable', {types: [recordType.id, companionType.id]})
+    expect(getBlockTypes(cache.getSnapshot(id)!)).toEqual([recordType.id, companionType.id])
+  })
+
+  it('takes the next slot rather than resurrecting a deleted record', async () => {
+    // Discarding a workout and then tapping a checkbox again must not bring
+    // the discarded one back — but it must still be idempotent, so the
+    // fallback is derived too, not random.
+    const first = await record('discarded')
+    await repo.tx(tx => tx.delete(first.id), {scope: ChangeScope.BlockDefault})
+
+    const second = await record('discarded')
+    const third = await record('discarded')
+
+    expect(second).toEqual({status: 'created', id: derivedBlockId(identity('discarded'), 1)})
+    expect(third.status).toBe('adopted')
+    expect(third.id).toBe(second.id)
+  })
+
+  it('takes the next slot when the caller rejects what it found', async () => {
+    const done = await record('slot-taken')
+    await repo.tx(tx => tx.setProperty(done.id, doneProp, true), {scope: ChangeScope.BlockDefault})
+
+    const next = await record('slot-taken', {adoptable: b => b.properties[doneProp.name] !== true})
+    expect(next.status).toBe('created')
+    expect(next.id).toBe(derivedBlockId(identity('slot-taken'), 1))
+  })
+
+  it('fails loudly when every slot is rejected, instead of silently creating a duplicate', async () => {
+    await record('always-rejected')
+    await expect(record('always-rejected', {adoptable: () => false, maxSlots: 1}))
+      .rejects.toThrow(/all 1 slots/)
   })
 })

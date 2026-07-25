@@ -171,9 +171,11 @@ const toLiveSet = (row: RowLike): LiveSet => ({
  *  ONE row: two rows sharing a name (a hand-written plan, a default-config
  *  session) would otherwise both adopt it and then write over each other.
  *
- *  Shared, because two callers must agree on the answer or they corrupt each
- *  other: the draft overlay decides which blocks a row *edits*, and the
- *  adopt path decides which blocks a row *reuses* instead of creating. */
+ *  Its own function, and pure, because it is the read-side mirror of how the
+ *  write side derives an entry's block id (plan block if there is one, else
+ *  name, plus an occurrence counter). The two have to agree about what counts
+ *  as "the same lift" or the draft edits blocks the writer thinks belong to a
+ *  different row. */
 export const matchLiveExercises = (
   rows: readonly {readonly name: string; readonly defId?: string}[],
   live: LiveWorkout | undefined,
