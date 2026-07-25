@@ -150,10 +150,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   }, [slot, session, unit, live, prescription, shape, coordinator])
 
   // Values from the blocks, on every emission — another device's tick, the
-  // outline's checkbox, or the workout this view ADOPTED rather than created
-  // (whose real values it has never seen). Structure stays the reseed
-  // effect's job; this one can't discard what you're typing, because a set
-  // you touched is `dirty` until the block catches up.
+  // outline's checkbox, or the values of a workout this view adopted rather
+  // than created. Unconditional, and safe to be: the draft holds no
+  // uncommitted state, because a number being typed lives in the input's own
+  // state until blur. Structure stays the reseed effect's job.
   useEffect(() => {
     setDraft(cur => overlayLiveValues(cur, live))
   }, [live])
@@ -165,9 +165,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     patch: Partial<DraftSet>,
   ): DraftExercise[] =>
     prev.map((ex, i) =>
-      i !== exIdx
-        ? ex
-        : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch, dirty: true}))},
+      i !== exIdx ? ex : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch}))},
     )
 
   /** Resolve the block for one set (creating whatever is missing) and write
@@ -194,9 +192,6 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     setStatus('Could not save that — check the connection and tap it again.')
   }
 
-  const editSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) =>
-    setDraft(prev => applyPatch(prev, exIdx, setIdx, patch))
-
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
@@ -209,9 +204,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const acceptAll = (exIdx: number) => {
     const now = Date.now()
     const next = draftRef.current.map((ex, i) =>
-      i !== exIdx
-        ? ex
-        : {...ex, sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: now, dirty: true}))},
+      i !== exIdx ? ex : {...ex, sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: now}))},
     )
     setDraft(next)
     // Persist every set of this exercise; materialize on the first if needed.
@@ -255,13 +248,6 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         // switch, a create→delete round trip on every Finish).
         if (!flushed[i].blockId && !flushed[i].sets.some(s => s.done)) continue
         for (let j = 0; j < flushed[i].sets.length; j += 1) {
-          // Only what this client changed. A clean set's block already holds
-          // these values — either it was written at materialize time or the
-          // live overlay handed them to us — so rewriting it would push a
-          // value we merely inherited back over a newer one from the device
-          // that made it. A failed write stays dirty, so this still retries.
-          const set = flushed[i].sets[j]
-          if (set.blockId !== undefined && !set.dirty) continue
           const {blockId, patch} = await coordinator.resolveSet(flushed, i, j, effects)
           if (patch) {
             flushed = applyIdPatch(flushed, patch)
@@ -380,7 +366,6 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             ex={ex}
             unit={unit}
             locked={readOnly || busy}
-            onEdit={(setIdx, patch) => editSet(exIdx, setIdx, patch)}
             onCommit={(setIdx, patch) => commitSet(exIdx, setIdx, patch)}
             onToggleDone={(setIdx, done) => toggleDone(exIdx, setIdx, done)}
             onAcceptAll={() => acceptAll(exIdx)}
@@ -455,7 +440,6 @@ function ExerciseCard({
   ex,
   unit,
   locked,
-  onEdit,
   onCommit,
   onToggleDone,
   onAcceptAll,
@@ -467,7 +451,6 @@ function ExerciseCard({
    *  made during Finish would be written and then pruned by the plan that
    *  was snapshotted before it). */
   locked: boolean
-  onEdit: (setIdx: number, patch: Partial<DraftSet>) => void
   onCommit: (setIdx: number, patch: Partial<DraftSet>) => void
   onToggleDone: (setIdx: number, done: boolean) => void
   onAcceptAll: () => void
@@ -541,7 +524,6 @@ function ExerciseCard({
             set={s}
             unit={unit}
             locked={locked}
-            onEdit={patch => onEdit(i, patch)}
             onCommit={patch => onCommit(i, patch)}
             onToggleDone={done => onToggleDone(i, done)}
           />
@@ -569,45 +551,92 @@ function VideoLinks({videos}: {videos: readonly ExerciseVideo[]}) {
   )
 }
 
+const fieldText = (value: number): string => (Number.isFinite(value) ? String(value) : '')
+
+/** The one place uncommitted state lives.
+ *
+ *  Keystrokes stay inside this input until blur, so the draft — and every
+ *  block under it — only ever holds settled values. That is what lets the
+ *  live overlay apply unconditionally: there is nothing half-typed anywhere
+ *  for it to overwrite. The alternative (keystrokes in the shared draft)
+ *  needs a per-set dirty flag on every set to stay safe, which is a lot of
+ *  machinery to protect one text field.
+ *
+ *  It also stops a full re-render of every card on each digit. */
+function NumberField({
+  value,
+  label,
+  disabled,
+  onCommit,
+}: {
+  value: number
+  label: string
+  disabled: boolean
+  onCommit: (value: number) => void
+}) {
+  const [text, setText] = useState(() => fieldText(value))
+  const [shown, setShown] = useState(value)
+  const [editing, setEditing] = useState(false)
+
+  // Follow the block when the change came from anywhere but this input — but
+  // never while it's focused, or a set someone ticks elsewhere would rewrite
+  // the number under the cursor.
+  if (value !== shown) {
+    setShown(value)
+    if (!editing) setText(fieldText(value))
+  }
+
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      aria-label={label}
+      disabled={disabled}
+      value={text}
+      // Select on focus so a tap-and-type replaces the pre-filled number.
+      onFocus={e => {
+        setEditing(true)
+        e.currentTarget.select()
+      }}
+      onChange={e => setText(e.currentTarget.value)}
+      // Persist the settled value on blur (cheap, and the block is the record).
+      onBlur={e => {
+        setEditing(false)
+        const next = e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value)
+        setText(fieldText(next))
+        if (next !== value) onCommit(next)
+      }}
+      className="h-9 w-16 rounded border border-border bg-background px-2 text-right text-sm tabular-nums"
+    />
+  )
+}
+
 function SetRow({
   set,
   unit,
   locked,
-  onEdit,
   onCommit,
   onToggleDone,
 }: {
   set: DraftSet
   unit: string
   locked: boolean
-  onEdit: (patch: Partial<DraftSet>) => void
   onCommit: (patch: Partial<DraftSet>) => void
   onToggleDone: (done: boolean) => void
 }) {
-  const numberField = (value: number, key: 'weight' | 'reps', label: string) => (
-    <input
-      type="number"
-      inputMode="numeric"
-      aria-label={label}
-      disabled={locked}
-      value={Number.isFinite(value) ? value : ''}
-      // Select on focus so a tap-and-type replaces the pre-filled number.
-      onFocus={e => e.currentTarget.select()}
-      onChange={e => onEdit({[key]: e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value)})}
-      // Persist the settled value on blur (cheap, and the block is the record).
-      onBlur={e => onCommit({[key]: e.currentTarget.value === '' ? 0 : Number(e.currentTarget.value)})}
-      className="h-9 w-16 rounded border border-border bg-background px-2 text-right text-sm tabular-nums"
-    />
-  )
-
   return (
     <div className={'flex items-center gap-2 rounded px-1 py-1 ' + (set.done ? 'bg-primary/10' : '')}>
       {set.side && (
         <span className="w-4 shrink-0 text-center text-xs font-medium text-muted-foreground">{set.side}</span>
       )}
-      {numberField(set.weight, 'weight', 'weight')}
+      <NumberField
+        value={set.weight}
+        label="weight"
+        disabled={locked}
+        onCommit={weight => onCommit({weight})}
+      />
       <span className="shrink-0 text-xs text-muted-foreground">{unit} ×</span>
-      {numberField(set.reps, 'reps', 'reps')}
+      <NumberField value={set.reps} label="reps" disabled={locked} onCommit={reps => onCommit({reps})} />
       <label className="ml-auto flex cursor-pointer items-center gap-1.5 py-1 pl-2 text-xs text-muted-foreground">
         <span>done</span>
         <input

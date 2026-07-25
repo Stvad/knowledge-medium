@@ -25,18 +25,6 @@ export interface DraftSet {
   /** The set block once the workout is materialized; undefined while the
    *  draft is still ephemeral (before the first edit). */
   blockId?: string
-  /** This client changed the set and the block doesn't hold that yet.
-   *
-   *  The blocks are the record, and any of them can move under us — the
-   *  outline's checkbox, another device, or a workout this view *adopted*
-   *  rather than created. So values flow block → draft continuously
-   *  (`overlayLiveValues`). `dirty` is the exception that makes that safe:
-   *  a row you are editing right now must not be overwritten by the value
-   *  it had a moment ago, and Finish must not write a value it merely
-   *  inherited back over someone else's newer one. Cleared by the overlay
-   *  itself, once the block agrees — so a failed write stays dirty and is
-   *  retried at Finish instead of being silently dropped. */
-  dirty?: boolean
 }
 
 export interface DraftExercise {
@@ -149,17 +137,17 @@ const sameAsBlock = (draftSet: DraftSet, live: LiveSet): boolean =>
 /** Track the blocks' current values without touching structure or ids.
  *
  *  Matched by set block, so it only ever speaks about sets this draft has
- *  already attached to a block. Three cases, and the third is why `dirty`
- *  exists at all:
+ *  already attached to a block — and it always wins, because the block IS the
+ *  record. That is what makes the draft un-stale-able: another device's tick,
+ *  the outline's checkbox, and the values of a workout this view adopted all
+ *  arrive the same way, and Finish writing the draft back can never clobber a
+ *  value it has already re-read.
  *
- *   - clean set, block differs → adopt the block's values. That is another
- *     device's tick, the outline's checkbox, or the workout this view
- *     adopted mid-session showing up.
- *   - dirty set, block agrees → our write landed; clear `dirty`. Clearing it
- *     HERE rather than when `writeSet` resolves means a write that failed
- *     stays dirty and gets retried at Finish.
- *   - dirty set, block differs → leave it. This is the value being typed, or
- *     a tick whose write is still in flight.
+ *  Unconditional only because the draft holds no uncommitted state: a number
+ *  being typed lives in the input's own React state until blur, so there is
+ *  nothing here for a query emission to yank away. Keep it that way — moving
+ *  keystrokes back into the draft would need a per-set dirty flag to make
+ *  this safe again, and that flag is exactly what this design avoids.
  *
  *  Returns the input array unchanged (same reference) when nothing moved, so
  *  running it on every query emission costs one comparison pass and no
@@ -177,14 +165,7 @@ export const overlayLiveValues = (
     let rowChanged = false
     const sets = ex.sets.map(s => {
       const block = s.blockId !== undefined ? byId.get(s.blockId) : undefined
-      if (!block) return s
-      if (sameAsBlock(s, block)) {
-        if (!s.dirty) return s
-        rowChanged = true
-        const {dirty: _landed, ...clean} = s
-        return clean
-      }
-      if (s.dirty) return s
+      if (!block || sameAsBlock(s, block)) return s
       rowChanged = true
       return {
         ...s,

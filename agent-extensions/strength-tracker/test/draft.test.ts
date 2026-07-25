@@ -115,31 +115,15 @@ describe('overlayLiveValues', () => {
     expect(next[0].sets[0]).toMatchObject({weight: 145, reps: 9, done: true, completedAt: 111})
   })
 
-  it('leaves a set this client is editing alone', () => {
+  it('lets the block win over a local value — that is what makes the draft un-stale-able', () => {
+    // Unconditional on purpose. The draft holds only settled values (a
+    // number being typed lives in the input's own state), so there is
+    // nothing half-finished here to protect, and Finish writing the draft
+    // back can't clobber a value it has already re-read.
     const draft = materialized()
-    draft[0].sets[0] = {...draft[0].sets[0], weight: 150, dirty: true}
+    draft[0].sets[0] = {...draft[0].sets[0], weight: 150, done: true}
     const next = overlayLiveValues(draft, liveWith([{id: 's0', weight: 135, reps: 10, done: false}]))
-    expect(next[0].sets[0].weight).toBe(150)
-    expect(next[0].sets[0].dirty).toBe(true)
-  })
-
-  it('clears dirty once the block agrees — that is how a landed write is observed', () => {
-    const draft = materialized()
-    draft[0].sets[0] = {...draft[0].sets[0], done: true, completedAt: 222, dirty: true}
-    const next = overlayLiveValues(draft, liveWith([
-      {id: 's0', weight: 135, reps: 10, done: true, completedAt: 222},
-    ]))
-    expect(next[0].sets[0].dirty).toBeUndefined()
-  })
-
-  it('keeps a failed write dirty, so Finish retries it', () => {
-    // The write rejected: the block still says open while the draft says
-    // done. Clearing dirty on write-resolve would have lost the tick here;
-    // clearing it on block agreement keeps it queued.
-    const draft = materialized()
-    draft[0].sets[0] = {...draft[0].sets[0], done: true, dirty: true}
-    const next = overlayLiveValues(draft, liveWith([{id: 's0', weight: 135, reps: 10, done: false}]))
-    expect(next[0].sets[0]).toMatchObject({done: true, dirty: true})
+    expect(next[0].sets[0]).toMatchObject({weight: 135, done: false})
   })
 
   it('ignores sets with no block yet, and touches no structure', () => {
