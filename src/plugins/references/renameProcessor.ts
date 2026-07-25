@@ -47,6 +47,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
+import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
 import {
   ALIAS_SEAT_PROBE_SLOTS,
   computeAliasSeatId,
@@ -66,17 +67,20 @@ export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
  *  UN-flipped workspace the caller passes ids that match nothing, so any
  *  live child blocks: there, a `reference_target_id` match under a seat
  *  is by construction user-authored content, not machinery. */
-const SEAT_COLUMNS_SQL = (t: string) => `
+const SEAT_COLUMNS_SQL = (t: string, generatedFieldIdCount: number) => `
          ${t}.id AS targetId,
          ${t}.content AS targetContent,
          ${t}.properties_json AS targetProperties,
          ${t}.created_at AS targetCreatedAt,
+         ${t}.user_updated_at AS targetUserUpdatedAt,
          EXISTS(
            SELECT 1 FROM blocks child
            WHERE child.parent_id = ${t}.id
              AND child.deleted = 0
              AND (child.reference_target_id IS NULL
-                  OR child.reference_target_id NOT IN (?, ?))
+                  OR child.reference_target_id NOT IN (${
+                    Array.from({length: generatedFieldIdCount}, () => '?').join(', ')
+                  }))
          ) AS targetBlockingChildren`
 
 interface SeatCandidateRow {
@@ -84,8 +88,41 @@ interface SeatCandidateRow {
   targetContent: string
   targetProperties: string
   targetCreatedAt: number
+  targetUserUpdatedAt: number | null
   targetBlockingChildren: 0 | 1
 }
+
+/** When this row was last MATERIALIZED as a seat. `created_at` alone is
+ *  wrong: `resolveAliasSeatId` deliberately reuses a slot holding a
+ *  pristine tombstone (so a hot name doesn't burn a fresh slot every
+ *  reap cycle), and `tx.restore` refreshes `user_updated_at` but never
+ *  `created_at` — that column is immutable by contract. A restored seat
+ *  would therefore read as ancient and be rejected, skipping the rename
+ *  entirely and stranding the span. Both mint paths stamp
+ *  `user_updated_at`, so the max covers fresh insert and restore alike;
+ *  the shape/slot/children signals already exclude a seat a user
+ *  touched, so the looser stamp doesn't widen the exemption. */
+const seatMaterializedAt = (row: SeatCandidateRow): number =>
+  Math.max(row.targetCreatedAt, row.targetUserUpdatedAt ?? 0)
+
+/** Wall-clock floor for "materialized after the commit we are reacting
+ *  to". NOT `userUpdatedAt` alone: that is the DISPLAY stamp, and
+ *  `metadataPatch` leaves it untouched on a `{skipMetadata}` write while
+ *  still advancing `updatedAt`. Several paths write the alias cell that
+ *  way — `core.projectPropertyChildren` (the post-flip rename gesture,
+ *  where a user edits the `alias::` field row and the projection writes
+ *  the parent bag), `rekeyParentPropertyCell`, `alias.sync`, the merge
+ *  retarget — so the display stamp can be days stale. Stale means a
+ *  LOWER floor, which is the unsafe direction: an older pre-existing
+ *  seat starts passing the recency gate and its backlinks get hijacked.
+ *
+ *  `updatedAt` is the row-version and always ratchets
+ *  (`Math.max(now, before.updatedAt + 1)`); the `systemMint` 0-sentinel
+ *  is insert-only, and a rename is always an UPDATE. Taking the max errs
+ *  HIGH — a server-ratcheted version from sync can overshoot wall clock,
+ *  which only makes us skip a rename. Fails closed. */
+const renameCommitStamp = (after: BlockData): number =>
+  Math.max(after.updatedAt, after.userUpdatedAt ?? 0)
 
 /** Per-alias classification context, built once instead of per row.
  *  `slotIds` is the whole probe window precomputed — `isAliasSeatSlotId`
@@ -141,11 +178,11 @@ const seatClassificationCtx = (
  *  get its edges re-pointed — plausibly desirable (the seat is dead, so
  *  the span is stranded either way), but it is not what this change set
  *  out to do and nothing tests it. */
-const SELECT_BACKLINK_SOURCES_SQL = `
+const selectBacklinkSourcesSql = (generatedFieldIdCount: number) => `
   SELECT br.source_id AS sourceId,
          source.content AS sourceContent,
          br.target_id AS targetId,
-         ${SEAT_COLUMNS_SQL('target')}
+         ${SEAT_COLUMNS_SQL('target', generatedFieldIdCount)}
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
   JOIN blocks target ON target.id = br.target_id
@@ -166,8 +203,8 @@ interface BacklinkSourceRow extends SeatCandidateRow {
  *  oldest claimant, and the uniqueness trigger only fires for local user
  *  txs (`clientSchema.ts`), so sync-applied rows can leave several live
  *  blocks claiming one alias. We need to classify ALL of them. */
-const SELECT_ALIAS_CLAIMANTS_SQL = `
-  SELECT ${SEAT_COLUMNS_SQL('b')}
+const selectAliasClaimantsSql = (generatedFieldIdCount: number) => `
+  SELECT ${SEAT_COLUMNS_SQL('b', generatedFieldIdCount)}
   FROM block_aliases ba
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
@@ -204,18 +241,27 @@ const SELECT_ALIAS_CLAIMANTS_SQL = `
  *  never owned the name here. Reachable without any race: the alias
  *  uniqueness trigger is skipped for sync-applied rows, so a synced
  *  block can co-claim an alias a local seat already holds, and releasing
- *  it would hijack the seat's backlinks. A window seat is minted AFTER
- *  the commit we are reacting to, so it cannot predate that commit's
- *  wall-clock stamp. On clock skew the comparison fails closed (the seat
- *  reads as a real claimant, we skip, `[[α]]` keeps late-binding to it)
- *  — the safe direction. */
+ *  it would hijack the seat's backlinks. A window seat is materialized
+ *  AFTER the commit we are reacting to, so it cannot predate it.
+ *
+ *  Both sides of that comparison are picked to fail CLOSED — too-recent
+ *  a floor, or too-old a seat, means "treat it as a real claimant and
+ *  skip", which leaves `[[α]]` late-binding to the seat. The opposite
+ *  error is an irreversible content splice. See `seatMaterializedAt`
+ *  for the seat side and `renameCommitStamp` for the floor.
+ *
+ *  This is a heuristic on timestamps, not a structural signal: nothing
+ *  in current state records WHICH rename minted a seat. It is bounded
+ *  by failing closed, but if it keeps springing leaks the honest answer is to
+ *  drop the seat leg entirely (the window span then stays bound to the
+ *  seat — a working link to a stub, and the pre-existing behaviour). */
 const isWindowMintedAliasSeat = (
   row: SeatCandidateRow,
   alias: string,
   ctx: SeatClassificationCtx,
 ): boolean => {
   if (row.targetContent !== alias) return false
-  if (row.targetCreatedAt < ctx.mintedAfter) return false
+  if (seatMaterializedAt(row) < ctx.mintedAfter) return false
   if (row.targetBlockingChildren === 1) return false
   if (!ctx.slotIds.has(row.targetId)) return false
   let properties: Record<string, unknown>
@@ -319,15 +365,18 @@ const collectTargetPlans = async (
   if (removed.length === 0) return
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
 
-  // The commit we're reacting to. A seat minted by THIS rename's window
-  // cannot predate it — see `isWindowMintedAliasSeat`'s RECENCY note.
-  // `userUpdatedAt` is the wall-clock display stamp (advanced by this
-  // alias write, which is a user property write, not a `skipMetadata`
-  // bookkeeping one); `updatedAt` would be wrong here — it's a ratcheting
-  // row-version, not a clock.
-  const [generatedA, generatedB] = [...generatedSeatFieldIds(after.workspaceId)]
+  // Generated-children subtraction is FLIP-GATED, per
+  // `generatedSeatFieldIds`' own contract: in an un-flipped workspace a
+  // `reference_target_id` match under a seat is by construction
+  // user-authored content (`core.deriveReferenceTarget` stamps the
+  // column on a hand-written `::` row too), not machinery's to ignore.
+  // Subtracting unconditionally would let a user who typed `alias:: …`
+  // under a seat page have that page classified as pristine machinery.
+  const generatedFieldIds = await readIsChildBackedWorkspace(ctx.db, after.workspaceId)
+    ? [...generatedSeatFieldIds(after.workspaceId)]
+    : []
   for (const alias of removed) {
-    const seatCtx = seatClassificationCtx(alias, after.workspaceId, after.userUpdatedAt)
+    const seatCtx = seatClassificationCtx(alias, after.workspaceId, renameCommitStamp(after))
     // Consult α's POST-TX claimant before deciding anything (§11
     // group 2). A live claimant means α is not ours to re-key:
     //   - handoff — some other block owns the name now, so `[[α]]`
@@ -342,7 +391,9 @@ const collectTargetPlans = async (
     // defer to. Re-asserted inside the write tx (`applyPlan`), because
     // this read is outside any transaction.
     const claimants = await ctx.db.getAll<SeatCandidateRow>(
-      SELECT_ALIAS_CLAIMANTS_SQL, [generatedA, generatedB, after.workspaceId, alias])
+      selectAliasClaimantsSql(generatedFieldIds.length),
+      [...generatedFieldIds, after.workspaceId, alias],
+    )
     if (claimants.some(row => !isWindowMintedAliasSeat(row, alias, seatCtx))) {
       continue
     }
@@ -352,8 +403,8 @@ const collectTargetPlans = async (
     // (already reported by `replacementFor`).
     if (replacement === null) continue
     const sources = await ctx.db.getAll<BacklinkSourceRow>(
-      SELECT_BACKLINK_SOURCES_SQL,
-      [generatedA, generatedB, after.workspaceId, alias],
+      selectBacklinkSourcesSql(generatedFieldIds.length),
+      [...generatedFieldIds, after.workspaceId, alias],
     )
     for (const row of sources) {
       // Target disjunction: the renaming claimant, or a window-minted
@@ -417,8 +468,8 @@ export const applyRefRewrites = (
   return normalizeReferences(next)
 }
 
-/** Re-assert, INSIDE the write tx, that every alias this plan rewrites
- *  is still unclaimed (or claimed only by a window seat).
+/** Re-assert, INSIDE the write tx, that every alias a plan rewrites is
+ *  still unclaimed (or claimed only by a window seat).
  *
  *  The read-phase check is a committed-state read outside any
  *  transaction, and `serializeRename` only serializes rename against
@@ -426,31 +477,55 @@ export const applyRefRewrites = (
  *  writes all commit freely in the gap. `applyPlan`'s content guard is
  *  structurally blind to this: a third party claiming α doesn't touch
  *  the SOURCE, so the source's content is unchanged and the rewrite
- *  proceeds, pinning the span to the block that just gave the name up —
- *  irreversibly, and precisely the outcome the claimant check exists to
- *  prevent.
+ *  proceeds, pinning the span to the block that just gave the name up.
  *
- *  `tx.aliasLookup` reads `block_aliases` through the tx's own db handle,
- *  so this IS answerable in-tx. (The residual documented on the reaper —
- *  "the referrer probe can't run in-tx" — is about `block_references`,
- *  which the `Tx` surface genuinely can't reach. `block_aliases` it
- *  can.) It returns the oldest single claimant, which is all we need:
- *  any claimant that isn't a window seat vetoes. */
-const aliasStillReleased = async (
+ *  Uses `tx.aliasClaimants`, NOT `tx.aliasLookup`. The single-row form
+ *  is `ORDER BY created_at LIMIT 1`, so when a window seat is OLDER than
+ *  a claimant that landed in the gap — the normal ordering, since the
+ *  competitor is newly created or newly synced — it returns the seat,
+ *  the seat check passes, and the rewrite proceeds anyway. That is the
+ *  very hijack this re-assert exists to stop, surviving in a narrower
+ *  configuration. Every claimant has to be classified, exactly as the
+ *  read phase does. (`block_aliases` IS reachable in-tx; the residual
+ *  documented on the reaper is about `block_references`, which the `Tx`
+ *  surface genuinely cannot read.)
+ *
+ *  Memoized per alias for the tx's lifetime: the answer depends only on
+ *  `(workspaceId, alias)`, and `applyPlan` writes only `content` /
+ *  `references`, never the `aliases` property, so `block_aliases` cannot
+ *  change mid-tx. Without this the check ran once per rewrite PER
+ *  SOURCE — hundreds of identical reads held under the write lock, where
+ *  nothing else in the app can write. */
+type ReleaseCache = Map<string, Promise<boolean>>
+
+const aliasStillReleased = (
   tx: Tx,
   workspaceId: string,
-  alias: string,
-  seatIds: ReadonlySet<string>,
+  rewrite: Rewrite,
+  cache: ReleaseCache,
 ): Promise<boolean> => {
-  const claimant = await tx.aliasLookup(alias, workspaceId)
-  if (claimant === null) return true
-  // Cheap in-tx re-classification. Full shape is unnecessary: a claimant
-  // sitting at one of this alias's seat slots is machinery either way,
-  // and anything else is a real block whose claim must win.
-  return seatIds.has(claimant.id)
+  const key = `${workspaceId}\u0000${rewrite.alias}`
+  const cached = cache.get(key)
+  if (cached !== undefined) return cached
+  const pending = (async () => {
+    const claimants = await tx.aliasClaimants(rewrite.alias, workspaceId)
+    // A gap-arriving claimant sitting at one of this alias's seat slots
+    // is a fresh mint or a pristine-tombstone restore — machinery, not a
+    // successor. Anything else vetoes. The shape checks the read phase
+    // runs are deliberately skipped here: `Tx` returns whole blocks, and
+    // re-deriving `matchesAliasSeatSeed` in-tx would gate a data-loss
+    // guard on a stricter predicate than the hazard needs.
+    return claimants.every(claimant => rewrite.seatIds.has(claimant.id))
+  })()
+  cache.set(key, pending)
+  return pending
 }
 
-const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
+const applyPlan = async (
+  tx: Tx,
+  plan: SourcePlan,
+  releaseCache: ReleaseCache,
+): Promise<void> => {
   // Strict "later user edit wins": if source content has changed
   // between our read phase and this write tx, skip entirely. Without
   // this we'd also rewrite `[[α]]` spans the user typed in the race
@@ -467,7 +542,7 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   // claimed in the gap — the rest of the plan is still good.
   const live: Rewrite[] = []
   for (const rewrite of plan.rewrites) {
-    if (await aliasStillReleased(tx, current.workspaceId, rewrite.alias, rewrite.seatIds)) {
+    if (await aliasStillReleased(tx, current.workspaceId, rewrite, releaseCache)) {
       live.push(rewrite)
     }
   }
@@ -561,7 +636,10 @@ export const renameBacklinksProcessor = definePostCommitProcessor({
       if (plansBySourceId.size === 0) return
 
       await ctx.repo.tx(async tx => {
-        for (const plan of plansBySourceId.values()) await applyPlan(tx, plan)
+        const releaseCache: ReleaseCache = new Map()
+        for (const plan of plansBySourceId.values()) {
+          await applyPlan(tx, plan, releaseCache)
+        }
       }, {
         scope: ChangeScope.References,
         description: `processor: ${RENAME_BACKLINKS_PROCESSOR}`,

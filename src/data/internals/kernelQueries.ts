@@ -344,6 +344,24 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   LIMIT 1
 `
 
+/** ALL live claimants of an exact alias in a workspace — no `LIMIT 1`.
+ *  The single-row lookups above tie-break on `created_at`, which is a
+ *  defense-in-depth convenience for callers that just want "the block
+ *  named X". A caller deciding whether an alias is CLAIMED cannot use
+ *  them: `block_aliases_workspace_alias_unique` only fires for local
+ *  user txs (`tx_context.source IS NOT NULL`), so sync-applied rows can
+ *  leave several live claimants, and the oldest is not necessarily the
+ *  one that matters. Same index (`idx_block_aliases_ws_alias`). */
+export const SELECT_BLOCKS_BY_ALIAS_IN_WORKSPACE_SQL = `
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  FROM block_aliases ba
+  JOIN blocks ON blocks.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND ba.alias = ?
+    AND blocks.deleted = 0
+  ORDER BY blocks.created_at
+`
+
 /** Variant of `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL` that ignores
  *  one specific block. Same plan as above with an extra `blocks.id !=
  *  ?` predicate. Used exclusively by the same-tx collision-detection

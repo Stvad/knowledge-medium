@@ -781,3 +781,127 @@ describe('rename — claimant re-assert inside the write tx (#443 group 2 review
     expect((await env.read('s'))!.content).toBe('see [[Shared]] please')
   })
 })
+
+describe('rename — seat dating (#443 group 2, review round 2)', () => {
+  const stamps = async (id: string) =>
+    (await env.h.db.get<{created_at: number; user_updated_at: number | null}>(
+      `SELECT created_at, user_updated_at FROM blocks WHERE id = ?`, [id]))!
+
+  it('recognizes a seat materialized by RESTORE, whose created_at is ancient', async () => {
+    // `resolveAliasSeatId` deliberately reuses a slot holding a pristine
+    // tombstone so a hot name doesn't burn a fresh slot every reap cycle,
+    // and `tx.restore` refreshes `user_updated_at` but never `created_at`
+    // (immutable by contract). Dating the seat by `created_at` alone
+    // reads a restored seat as ancient, rejects it, and skips the rename
+    // — stranding the span on an empty stub that no later pass owns.
+    await seedSource('s1', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    await env.repo.mutate.setContent({id: 's1', content: ''})
+    await flush()
+    expect((await env.read(seatId))!.deleted).toBe(1)
+    const bornAt = (await stamps(seatId)).created_at
+
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await ensureAliasTarget(tx, env.repo, 'Win', WS)
+      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // It really was a restore, not a fresh mint at a new slot.
+    expect((await stamps(seatId)).created_at).toBe(bornAt)
+    expect((await env.read('s'))!.content).toBe(`see [Win](((${PIN_TARGET}))) please`)
+  })
+
+  it('does not hijack when the alias write left the display stamp stale', async () => {
+    // `metadataPatch` leaves `user_updated_at` untouched on a
+    // `{skipMetadata}` write while still advancing `updated_at`. Several
+    // paths write the alias cell that way — notably
+    // `core.projectPropertyChildren`, the post-flip rename gesture. Dating
+    // the commit by the display stamp reads whatever the page's last REAL
+    // edit was, which can be older than the seat, so a long-lived seat
+    // passes as window-minted and its backlinks get hijacked.
+    //
+    // Seat first, so it is the oldest claimant and `s` binds to it; `T`
+    // co-claims via a raw (sync-shaped) insert that bypasses the
+    // uniqueness trigger, carrying a display stamp frozen BEHIND the
+    // seat's creation.
+    await seedSource('s', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    const seatBorn = (await stamps(seatId)).created_at
+    expect(await blockReferences('s', seatId)).toEqual([{alias: 'Win'}])
+
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, created_at, updated_at,
+                             user_updated_at, created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, 'z0', 'T', ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
+        [PIN_TARGET, WS, JSON.stringify({alias: ['Win']}),
+         seatBorn + 1, seatBorn + 1, seatBorn - 1],
+      )
+    })
+
+    // Release through a bookkeeping write — the shape that freezes
+    // `user_updated_at` while still advancing the row version.
+    await env.repo.tx(
+      tx => tx.update(PIN_TARGET, {properties: {}}, {skipMetadata: true}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await stamps(PIN_TARGET)).user_updated_at).toBe(seatBorn - 1)
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+    expect(await blockReferences('s', seatId)).toEqual([{alias: 'Win'}])
+  })
+
+  it('vetoes a gap-arriving claimant that is YOUNGER than the window seat', async () => {
+    // The in-tx re-assert must see every claimant. `aliasLookup` is
+    // `ORDER BY created_at LIMIT 1`, so when the window seat is older
+    // than the competitor — the normal ordering, since the competitor is
+    // newly created or newly synced — it returns the SEAT, the seat check
+    // passes, and the rewrite proceeds into the hijack this guard exists
+    // to stop.
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+    const seatId = computeAliasSeatId('Win', WS, 0)
+
+    const realTx = env.repo.tx.bind(env.repo)
+    let injected = false
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementation((async (fn: never, opts: never) => {
+      const description = (opts as {description?: string} | undefined)?.description
+      if (!injected && description?.includes(RENAME_BACKLINKS_PROCESSOR)) {
+        injected = true
+        const seatBorn = (await stamps(seatId)).created_at
+        await env.h.db.writeTransaction(async raw => {
+          await raw.execute(
+            `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                                 properties_json, references_json, created_at, updated_at,
+                                 user_updated_at, created_by, updated_by, deleted)
+             VALUES ('newpage', ?, NULL, 'z9', 'New Page', ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
+            [WS, JSON.stringify({alias: ['Win']}),
+             seatBorn + 1, seatBorn + 1, seatBorn + 1],
+          )
+        })
+      }
+      return realTx(fn, opts)
+    }) as never)
+
+    try {
+      await env.repo.tx(async tx => {
+        await tx.setProperty(PIN_TARGET, aliasesProp, [])
+        await ensureAliasTarget(tx, env.repo, 'Win', WS)
+        await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+      }, {scope: ChangeScope.BlockDefault})
+      await flush()
+      expect(injected).toBe(true)
+    } finally {
+      txSpy.mockRestore()
+    }
+
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
+})

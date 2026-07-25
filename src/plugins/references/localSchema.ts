@@ -161,6 +161,13 @@ export const backfillBlockReferencesSourceFieldIfNeeded = async (
   await db.execute('DROP TABLE IF EXISTS block_references')
   await db.execute(CREATE_BLOCK_REFERENCES_TABLE_SQL)
   await db.execute(CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL)
+  // Every index on the table went with the DROP above. `statements` ran
+  // BEFORE this backfill (applyLocalSchemaContributions does all
+  // statements, then all backfills), so anything created there is gone
+  // and must be recreated HERE — otherwise the install spends its whole
+  // first session without it and only self-heals on the next boot,
+  // which is exactly why tests and manual checks miss the gap.
+  await db.execute(CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL)
