@@ -19,7 +19,7 @@
  *  applying the returned id patches to its draft.
  */
 
-import type {MaterializedWorkout} from '../km/store'
+import type {ExerciseEntryIds, MaterializedWorkout} from '../km/store'
 import type {DraftExercise} from './draft'
 
 /** Ids a create handed back, to be stamped into the draft. Absent from a
@@ -28,10 +28,7 @@ export type IdPatch =
   | {kind: 'workout'; workout: MaterializedWorkout}
   | {kind: 'exercise'; exIdx: number; entry: ExerciseEntryIds}
 
-export interface ExerciseEntryIds {
-  id: string
-  setIds: string[]
-}
+export type {ExerciseEntryIds}
 
 export interface ResolvedWrite {
   /** The block to write this set to. Undefined when nothing could be
@@ -57,10 +54,28 @@ export interface WriteCoordinator {
   /** Ids from this session's create, if the workout was created here rather
    *  than adopted from a live query. */
   materialized(): MaterializedWorkout | null
-  /** Start a new generation: the view reseeded (session/day switch, plan
-   *  change, live structure change). Creates still in flight keep their ids
-   *  to themselves rather than pointing the new draft at the old workout. */
-  reset(workoutId: string | null): void
+  /** Which generation is current. A long operation (Finish) captures this up
+   *  front and bails if it moved — the draft it was working from is gone. */
+  generation(): number
+  /** The view reseeded. Two identifiers, because a reseed means several very
+   *  different things and only one of them is "a different workout":
+   *
+   *   - `slot` — the day + session being logged. ONLY a change here means a
+   *     different workout, so only here may a workout id be dropped. A
+   *     reseed that arrives with no live workout (the query hasn't caught up,
+   *     or the config load shifted the day) must NOT forget the workout this
+   *     coordinator just created — doing that is what started a second one.
+   *   - `shape` — which exercises are being logged. A change (an `or`-group
+   *     switched, the plan loaded) invalidates the positional ids in
+   *     `materialized` and starts a new generation, but the workout is the
+   *     same one and keeps being written to. */
+  reset(workoutId: string | null, slot: string, shape: string): void
+  /** The workout was discarded. Results from creates already in flight stop
+   *  yielding a block to write to — those blocks are about to be (or already
+   *  are) tombstoned, and writing into them leaves live todo sets under a
+   *  deleted parent. Distinct from `reset`, where a write into the session
+   *  you just left is still the right thing. */
+  abandon(): void
   /** Resolve — and create, if needed — the block for one set. */
   resolveSet(
     draft: readonly DraftExercise[],
@@ -70,9 +85,16 @@ export interface WriteCoordinator {
   ): Promise<ResolvedWrite>
 }
 
-export const createWriteCoordinator = (initialWorkoutId: string | null = null): WriteCoordinator => {
+export const createWriteCoordinator = (
+  initialWorkoutId: string | null = null,
+  initialSlot = '',
+  initialShape = '',
+): WriteCoordinator => {
   let generation = 0
+  let abandonedThrough = -1
   let workoutId = initialWorkoutId
+  let slot = initialSlot
+  let shape = initialShape
   let materialized: MaterializedWorkout | null = null
   let creatingWorkout: Promise<MaterializedWorkout> | null = null
   let creatingExercises = new Map<string, Promise<ExerciseEntryIds>>()
@@ -85,7 +107,15 @@ export const createWriteCoordinator = (initialWorkoutId: string | null = null): 
     effects: WriteEffects,
   ): Promise<{value: MaterializedWorkout; stale: boolean}> => {
     const at = generation
-    if (!creatingWorkout) creatingWorkout = effects.createWorkout(draft)
+    if (!creatingWorkout) {
+      // Drop a FAILED create from the cache, or every later tap awaits the
+      // same rejection and the create is never retried — the user logs a
+      // whole session against a workout that was never made.
+      creatingWorkout = effects.createWorkout(draft).catch(error => {
+        if (at === generation) creatingWorkout = null
+        throw error
+      })
+    }
     const value = await creatingWorkout
     return {value, stale: at !== generation}
   }
@@ -98,7 +128,11 @@ export const createWriteCoordinator = (initialWorkoutId: string | null = null): 
     effects: WriteEffects,
   ): Promise<{value: ExerciseEntryIds; stale: boolean}> => {
     const at = generation
-    const running = creatingExercises.get(key) ?? effects.createExercise(forWorkoutId, exercise)
+    const running = creatingExercises.get(key)
+      ?? effects.createExercise(forWorkoutId, exercise).catch(error => {
+        if (at === generation && creatingExercises.get(key) === running) creatingExercises.delete(key)
+        throw error
+      })
     creatingExercises.set(key, running)
     const value = await running
     return {value, stale: at !== generation}
@@ -107,10 +141,44 @@ export const createWriteCoordinator = (initialWorkoutId: string | null = null): 
   return {
     workoutId: () => workoutId,
     materialized: () => materialized,
+    generation: () => generation,
 
-    reset(nextWorkoutId) {
+    reset(nextWorkoutId, nextSlot, nextShape) {
+      if (nextSlot !== slot) {
+        // A different day/session: a different workout, so everything here is
+        // about something else now.
+        generation += 1
+        slot = nextSlot
+        shape = nextShape
+        workoutId = nextWorkoutId
+        materialized = null
+        creatingWorkout = null
+        creatingExercises = new Map()
+        return
+      }
+
+      // Same slot. Adopt a live id if one turned up, but never fall back to
+      // null: no live workout usually means the query hasn't caught up with
+      // the one we just made, and forgetting it starts a duplicate.
+      workoutId = nextWorkoutId ?? workoutId
+      if (nextShape === shape) return
+
+      // The exercise list changed under us. `materialized` is positional, so
+      // it no longer describes this draft, and an in-flight create's ids
+      // would land on the wrong rows — new generation. The workout itself is
+      // unchanged and keeps being written to.
       generation += 1
-      workoutId = nextWorkoutId
+      shape = nextShape
+      materialized = null
+      creatingWorkout = null
+      creatingExercises = new Map()
+    },
+
+    abandon() {
+      abandonedThrough = generation
+      generation += 1
+      slot = ''
+      workoutId = null
       materialized = null
       creatingWorkout = null
       creatingExercises = new Map()
@@ -126,11 +194,13 @@ export const createWriteCoordinator = (initialWorkoutId: string | null = null): 
       if (set.blockId) return {blockId: set.blockId}
 
       if (!workoutId) {
+        const at = generation
         const {value, stale} = await createWorkoutOnce(draft, effects)
         if (!stale) {
           workoutId = value.workoutId
           materialized = value
         }
+        if (at <= abandonedThrough) return {}
         return {
           blockId: value.exercises[exIdx]?.setIds[setIdx],
           ...(stale ? {} : {patch: {kind: 'workout' as const, workout: value}}),
@@ -145,12 +215,17 @@ export const createWriteCoordinator = (initialWorkoutId: string | null = null): 
 
       // The workout exists but this exercise has no blocks: switched in
       // mid-session.
+      const at = generation
       const {value, stale} = await createExerciseOnce(
         exerciseKey(exercise, exIdx),
         exercise,
         workoutId,
         effects,
       )
+      // Discarded while this was in flight: the blocks it just made are
+      // children of a workout that is being deleted, so writing into them
+      // would strand live todo sets under a tombstone.
+      if (at <= abandonedThrough) return {}
       return {
         blockId: value.setIds[setIdx],
         ...(stale ? {} : {patch: {kind: 'exercise' as const, exIdx, entry: value}}),

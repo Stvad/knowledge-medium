@@ -35,6 +35,7 @@ import type {ProgramState} from './useProgram'
 import {
   applyIdPatch,
   createWriteCoordinator,
+  type IdPatch,
   type WriteCoordinator,
   type WriteEffects,
 } from './writeCoordinator'
@@ -45,6 +46,7 @@ import {
   liveIdentity,
   overlayLive,
   toExerciseDraft,
+  toSetDraft,
   toMaterializeDraft,
   type DraftExercise,
   type DraftSet,
@@ -79,8 +81,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // "Which block does this set write to, and what has to be created first" —
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
   // the React half: applying the ids it hands back.
+  const slot = `${day}|${session}`
+  const shape = prescription.exercises
+    .map(e => `${e.defId ?? e.exercise}:${e.weight ?? ''}:${e.sets}:${e.repMin ?? ''}-${e.repMax ?? ''}:${e.perSide}`)
+    .join(',')
   const coordinatorRef = useRef<WriteCoordinator | null>(null)
-  coordinatorRef.current ??= createWriteCoordinator(live?.id ?? null)
+  coordinatorRef.current ??= createWriteCoordinator(live?.id ?? null, slot, shape)
   const coordinator = coordinatorRef.current
 
   /** The writes the coordinator orchestrates. Rebuilt per render so a create
@@ -95,6 +101,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // (materialization, another device). Value edits keep the same ids, so they
   // don't trigger a reseed and never clobber in-progress typing.
   const seededKeyRef = useRef<string | null>(null)
+  const seededSlotRef = useRef<string>(slot)
   useEffect(() => {
     // The key covers everything the draft is BUILT from — not just which
     // exercises, but the numbers pre-filled into their sets. A plan edit (or
@@ -102,16 +109,29 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // rep range for the same lifts, and the draft has to follow. Logging sets
     // in THIS session doesn't move these: history only counts finished
     // workouts, so an in-progress session can't reseed itself mid-edit.
-    const shape = prescription.exercises
-      .map(e => `${e.exercise}:${e.weight ?? ''}:${e.sets}:${e.repMin ?? ''}-${e.repMax ?? ''}:${e.perSide}`)
-      .join(',')
-    const key = `${session}|${unit}|${liveIdentity(live)}|${shape}`
+    const key = `${slot}|${unit}|${liveIdentity(live)}|${shape}`
     if (key === seededKeyRef.current) return
+    const previousSlot = seededSlotRef.current
     seededKeyRef.current = key
+    seededSlotRef.current = slot
+
+    // The live query catching up with the workout WE just created carries no
+    // news — we stamped those ids ourselves. Rebuilding the draft from the
+    // blocks here would throw away a number being typed right now, or a tick
+    // whose write hasn't landed yet (which Finish would then prune).
+    const ourWorkoutArrived = live !== undefined
+      && live.id === coordinator.materialized()?.workoutId
+      && draftRef.current.some(ex => ex.blockId !== undefined)
+    coordinator.reset(live?.id ?? null, slot, shape)
+    if (ourWorkoutArrived) return
+
     setDraft(overlayLive(buildDraft(prescription, unit), live))
-    coordinator.reset(live?.id ?? null)
-    setStatus(null)
-  }, [session, unit, live, prescription])
+    // Keep a confirmation the user hasn't seen. Finishing makes the workout
+    // leave `liveWorkouts`, which reseeds — clearing "Logged Session A" the
+    // instant it appeared and leaving a screen that looks like nothing
+    // happened, which invites a second workout for tonight.
+    if (slot !== previousSlot) setStatus(null)
+  }, [slot, session, unit, live, prescription, shape, coordinator])
 
   const applyPatch = (
     prev: DraftExercise[],
@@ -126,13 +146,25 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   /** Resolve the block for one set (creating whatever is missing) and write
    *  it. Reads from `next` so it never races React state; ids that come back
    *  are stamped into the draft. */
-  const persist = async (next: DraftExercise[], exIdx: number, setIdx: number) => {
-    if (readOnly) return
+  const persist = async (
+    next: readonly DraftExercise[],
+    exIdx: number,
+    setIdx: number,
+  ): Promise<IdPatch | undefined> => {
+    if (readOnly) return undefined
     const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
     if (patch) setDraft(cur => applyIdPatch(cur, patch))
     if (blockId) {
-      await writeSet(repo, blockId, toDraftSet(next[exIdx].sets[setIdx]), next[exIdx].unit)
+      await writeSet(repo, blockId, toSetDraft(next[exIdx].sets[setIdx]), next[exIdx].unit)
     }
+    return patch
+  }
+
+  /** A write failing must not be silent: the checkbox stays ticked on screen
+   *  and the user would have no idea their session is going nowhere. */
+  const reportWriteFailure = (error: unknown) => {
+    console.error('[strength] write failed', error)
+    setStatus('Could not save that — check the connection and tap it again.')
   }
 
   const editSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) =>
@@ -141,7 +173,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
-    void persist(next, exIdx, setIdx)
+    void persist(next, exIdx, setIdx).catch(reportWriteFailure)
   }
 
   const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
@@ -154,14 +186,28 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     )
     setDraft(next)
     // Persist every set of this exercise; materialize on the first if needed.
+    //
+    // `rows` is REASSIGNED as ids come back, exactly like the Finish loop:
+    // handing the same block-less snapshot to every iteration made the later
+    // sets look like an exercise that needed creating, so a reseed landing
+    // mid-loop (the create's own query update does that) grew a duplicate
+    // entry and scattered the sets across the two.
     void (async () => {
-      for (let j = 0; j < next[exIdx].sets.length; j++) await persist(next, exIdx, j)
-    })()
+      let rows: readonly DraftExercise[] = next
+      for (let j = 0; j < rows[exIdx].sets.length; j += 1) {
+        const patch = await persist(rows, exIdx, j)
+        if (patch) rows = applyIdPatch(rows, patch)
+      }
+    })().catch(reportWriteFailure)
   }
 
   const finish = async () => {
-    if (readOnly || busy || !hasAcceptedSets(draft)) return
+    if (readOnly || busy || !canFinish) return
     setBusy(true)
+    // Finish is a dozen-plus transactions. If the draft is reseeded under it
+    // (a session switch, a plan reload), everything after that point would be
+    // aimed at a workout this view is no longer editing.
+    const at = coordinator.generation()
     try {
       // Flush every set through the same resolver the edit path uses, so a
       // Finish pressed mid-create (or right after an or-group switch) joins
@@ -185,17 +231,17 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             flushed = applyIdPatch(flushed, patch)
             setDraft(cur => applyIdPatch(cur, patch))
           }
-          if (blockId) await writeSet(repo, blockId, toDraftSet(flushed[i].sets[j]), flushed[i].unit)
+          if (blockId) await writeSet(repo, blockId, toSetDraft(flushed[i].sets[j]), flushed[i].unit)
         }
       }
 
       const wid = coordinator.workoutId()
-      if (!wid) {
-        // Only reachable if the session was switched out from under this
-        // Finish — the create then keeps its ids rather than pointing the new
-        // draft at the old workout. Say so instead of throwing into a void
-        // click handler, where it would surface as nothing at all.
-        setStatus('Session changed while finishing — nothing was logged. Try again.')
+      if (!wid || coordinator.generation() !== at) {
+        // The session moved while this was running. Sets written before that
+        // point DID land in the workout they belonged to — say that, rather
+        // than the old message's claim that nothing was logged, which sent
+        // the user looking for data that exists.
+        setStatus('Session changed while saving — what you logged is kept, but this session was not finished.')
         return
       }
 
@@ -226,9 +272,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     const wid = coordinator.workoutId()
     if (!wid || busy) return
     setBusy(true)
+    // Not `reset`: a create still in flight must not write into the blocks
+    // this is about to tombstone (they'd be live todo sets under a deleted
+    // workout). `abandon` makes those results yield nothing.
+    coordinator.abandon()
     try {
       await discardWorkout(repo, wid)
-      coordinator.reset(null)
       setDraft(buildDraft(prescription, unit))
       setStatus('Discarded')
     } finally {
@@ -236,7 +285,11 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     }
   }
 
-  const canFinish = !readOnly && !busy && hasAcceptedSets(draft)
+  // Done-ness is the built-in todo checkbox, so sets can be accepted from the
+  // outline or another device without this draft hearing about it. Finish has
+  // to be reachable in that case too.
+  const canFinish = !readOnly && !busy
+    && (hasAcceptedSets(draft) || (live?.exercises.some(ex => ex.sets.some(s => s.done)) ?? false))
   // Derived from the draft rather than the coordinator: the coordinator lives
   // in a ref, so reading it here wouldn't re-render when the workout appears.
   // Every materialized row carries a block id, which is the same signal.
@@ -257,6 +310,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
               key={s}
               type="button"
               onClick={() => setSession(s)}
+              // Switching mid-save reseeds the draft under the operation in
+              // flight, which used to split one session's sets across two
+              // workouts (and finish the wrong one).
+              disabled={busy}
               aria-pressed={session === s}
               className={
                 'rounded-md px-3 py-2 text-sm font-medium ' +
@@ -286,7 +343,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             key={ex.altGroupKey ?? ex.exercise}
             ex={ex}
             unit={unit}
-            readOnly={readOnly}
+            locked={readOnly || busy}
             onEdit={(setIdx, patch) => editSet(exIdx, setIdx, patch)}
             onCommit={(setIdx, patch) => commitSet(exIdx, setIdx, patch)}
             onToggleDone={(setIdx, done) => toggleDone(exIdx, setIdx, done)}
@@ -357,19 +414,11 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
 }
 TonightView.displayName = 'TonightView'
 
-const toDraftSet = (s: DraftSet) => ({
-  weight: s.weight,
-  reps: s.reps,
-  done: s.done,
-  ...(s.rpe !== undefined ? {rpe: s.rpe} : {}),
-  ...(s.side !== undefined ? {side: s.side} : {}),
-  ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
-})
 
 function ExerciseCard({
   ex,
   unit,
-  readOnly,
+  locked,
   onEdit,
   onCommit,
   onToggleDone,
@@ -378,7 +427,10 @@ function ExerciseCard({
 }: {
   ex: DraftExercise
   unit: string
-  readOnly: boolean
+  /** No edits right now: read-only workspace, or a save in flight (a tick
+   *  made during Finish would be written and then pruned by the plan that
+   *  was snapshotted before it). */
+  locked: boolean
   onEdit: (setIdx: number, patch: Partial<DraftSet>) => void
   onCommit: (setIdx: number, patch: Partial<DraftSet>) => void
   onToggleDone: (setIdx: number, done: boolean) => void
@@ -406,7 +458,7 @@ function ExerciseCard({
           <div className="text-xs text-muted-foreground">{target}</div>
           <div className="text-xs text-muted-foreground/80">{ex.rationale}</div>
         </div>
-        {!readOnly && (
+        {!locked && (
           <button
             type="button"
             onClick={onAcceptAll}
@@ -452,7 +504,7 @@ function ExerciseCard({
             key={i}
             set={s}
             unit={unit}
-            readOnly={readOnly}
+            locked={locked}
             onEdit={patch => onEdit(i, patch)}
             onCommit={patch => onCommit(i, patch)}
             onToggleDone={done => onToggleDone(i, done)}
@@ -484,14 +536,14 @@ function VideoLinks({videos}: {videos: readonly ExerciseVideo[]}) {
 function SetRow({
   set,
   unit,
-  readOnly,
+  locked,
   onEdit,
   onCommit,
   onToggleDone,
 }: {
   set: DraftSet
   unit: string
-  readOnly: boolean
+  locked: boolean
   onEdit: (patch: Partial<DraftSet>) => void
   onCommit: (patch: Partial<DraftSet>) => void
   onToggleDone: (done: boolean) => void
@@ -501,7 +553,7 @@ function SetRow({
       type="number"
       inputMode="numeric"
       aria-label={label}
-      disabled={readOnly}
+      disabled={locked}
       value={Number.isFinite(value) ? value : ''}
       // Select on focus so a tap-and-type replaces the pre-filled number.
       onFocus={e => e.currentTarget.select()}
@@ -524,7 +576,7 @@ function SetRow({
         <span>done</span>
         <input
           type="checkbox"
-          disabled={readOnly}
+          disabled={locked}
           checked={set.done}
           onChange={e => onToggleDone(e.currentTarget.checked)}
           className="h-6 w-6 rounded border-border accent-primary"

@@ -10,7 +10,7 @@
 import type {AltOption, ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
 import {workingWeight} from '../engine/progression'
 import type {LiveWorkout} from '../km/history'
-import type {ExerciseDraft, FinishPlan, WorkoutDraft} from '../km/store'
+import type {ExerciseDraft, FinishPlan, SetDraft, WorkoutDraft} from '../km/store'
 
 export interface DraftSet {
   weight: number
@@ -105,9 +105,15 @@ export const overlayLive = (
   const byDefId = new Map(
     live.exercises.filter(e => e.definitionId !== undefined).map(e => [e.definitionId as string, e]),
   )
+  // A live entry backs at most ONE draft row. Two rows sharing a name (a
+  // hand-written plan, or a default-config session) would otherwise both
+  // adopt it, and then each would write over the other's blocks.
+  const claimed = new Set<string>()
   return draft.map(ex => {
-    const le = (ex.defId !== undefined ? byDefId.get(ex.defId) : undefined) ?? byName.get(ex.exercise)
+    const match = (ex.defId !== undefined ? byDefId.get(ex.defId) : undefined) ?? byName.get(ex.exercise)
+    const le = match && !claimed.has(match.id) ? match : undefined
     if (!le) return {...ex}
+    claimed.add(le.id)
     return {
       ...ex,
       blockId: le.id,
@@ -134,20 +140,25 @@ export const liveIdentity = (live: LiveWorkout | undefined): string =>
 /** One exercise as the store writes it. Exported because a mid-session
  *  `or`-group switch materializes a single exercise into an existing
  *  workout. */
+/** One set as the store writes it. The single mapper: the write path needs
+ *  it per set (`writeSet`) and per exercise (`materialize*`), and two copies
+ *  of the same field list is a field silently missed on one of them. */
+export const toSetDraft = (s: DraftSet): SetDraft => ({
+  weight: s.weight,
+  reps: s.reps,
+  done: s.done,
+  ...(s.rpe !== undefined ? {rpe: s.rpe} : {}),
+  ...(s.side !== undefined ? {side: s.side} : {}),
+  ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
+})
+
 export const toExerciseDraft = (ex: DraftExercise): ExerciseDraft => ({
   exercise: ex.exercise,
   definitionId: ex.defId,
   unit: ex.unit,
   prescribedWeight: ex.prescribedWeight,
   prescribedSets: ex.prescribedSets,
-  sets: ex.sets.map(s => ({
-    weight: s.weight,
-    reps: s.reps,
-    done: s.done,
-    ...(s.rpe !== undefined ? {rpe: s.rpe} : {}),
-    ...(s.side !== undefined ? {side: s.side} : {}),
-    ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
-  })),
+  sets: ex.sets.map(toSetDraft),
 })
 
 /** The whole draft (every prescribed set, done or not) — what the store
@@ -162,14 +173,23 @@ export const toMaterializeDraft = (
 export const hasAcceptedSets = (draft: readonly DraftExercise[]): boolean =>
   draft.some(ex => ex.sets.some(s => s.done))
 
-/** What "Finish" keeps vs prunes: exercises with ≥1 done set keep only their
- *  done sets (with the derived working weight); exercises with none are
- *  removed. Only meaningful once the draft is materialized (sets have ids).
+/** What "Finish" keeps vs prunes: an exercise with ≥1 accepted set keeps only
+ *  those sets (with the derived working weight); one with none is removed.
+ *  Only meaningful once the draft is materialized (sets have ids).
  *
- *  `live` is the workout as it exists in the DB. Anything it holds that the
- *  draft no longer does is pruned too — that's the `or`-group you switched
- *  away from mid-session, whose blocks would otherwise survive Finish as an
- *  exercise you didn't do (with its pre-filled sets still open todos). */
+ *  Two things make "accepted" wider than "ticked in this view":
+ *
+ *  - A set's done-ness is the built-in todo's checkbox, so it can be ticked
+ *    anywhere — the outline below, a todo view, another device. The draft
+ *    only reseeds on structural change, so it may not know. Done-ness is
+ *    therefore the UNION of the draft and the block; a set the draft thinks
+ *    is open but the block says is done must not be pruned.
+ *  - `live` can hold an exercise the draft no longer does: you switched an
+ *    `or`-group mid-session, so the option you moved off is gone from the
+ *    prescription. It gets the SAME rule — pruned only when nothing was
+ *    accepted. Deleting it outright erased sets that were actually
+ *    performed, which is the one thing this log must never do.
+ */
 export const finishPlan = (
   workoutId: string,
   draft: readonly DraftExercise[],
@@ -178,24 +198,39 @@ export const finishPlan = (
   const keep: FinishPlan['keep'] = []
   const removeExerciseIds: string[] = []
   const draftBlockIds = new Set(draft.map(ex => ex.blockId).filter((id): id is string => id !== undefined))
+  const doneInBlocks = new Set(
+    (live?.exercises ?? []).flatMap(ex => ex.sets.filter(s => s.done).map(s => s.id)),
+  )
+
+  const plan = (
+    exerciseId: string,
+    exerciseName: string,
+    sets: ReadonlyArray<{blockId?: string; weight: number; reps: number; side?: 'L' | 'R'; done: boolean}>,
+  ) => {
+    const accepted = sets.filter(s => s.done || (s.blockId !== undefined && doneInBlocks.has(s.blockId)))
+    if (accepted.length === 0) {
+      removeExerciseIds.push(exerciseId)
+      return
+    }
+    keep.push({
+      exerciseId,
+      workingWeight: workingWeight({
+        exercise: exerciseName,
+        sets: accepted.map(s => ({weight: s.weight, reps: s.reps, side: s.side})),
+      }),
+      removeSetIds: sets
+        .filter(s => !accepted.includes(s) && s.blockId !== undefined)
+        .map(s => s.blockId as string),
+    })
+  }
+
   for (const liveEx of live?.exercises ?? []) {
-    if (!draftBlockIds.has(liveEx.id)) removeExerciseIds.push(liveEx.id)
+    if (draftBlockIds.has(liveEx.id)) continue
+    plan(liveEx.id, liveEx.exercise, liveEx.sets.map(s => ({...s, blockId: s.id})))
   }
   for (const ex of draft) {
     if (ex.blockId === undefined) continue
-    const doneSets = ex.sets.filter(s => s.done)
-    if (doneSets.length === 0) {
-      removeExerciseIds.push(ex.blockId)
-      continue
-    }
-    keep.push({
-      exerciseId: ex.blockId,
-      workingWeight: workingWeight({
-        exercise: ex.exercise,
-        sets: doneSets.map(s => ({weight: s.weight, reps: s.reps, side: s.side})),
-      }),
-      removeSetIds: ex.sets.filter(s => !s.done && s.blockId !== undefined).map(s => s.blockId as string),
-    })
+    plan(ex.blockId, ex.exercise, ex.sets)
   }
   return {workoutId, keep, removeExerciseIds}
 }

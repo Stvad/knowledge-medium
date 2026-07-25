@@ -96,6 +96,52 @@ describe('overlayLive', () => {
 })
 
 describe('finishPlan', () => {
+  it('KEEPS a switched-away exercise that has done sets — those lifts happened', () => {
+    // The headline mid-session flow: log two sets of the or-group's first
+    // option, switch to the other because your shoulder complains, finish.
+    // Pruning the old option outright deleted work that was actually
+    // performed — the one thing this log must never do.
+    const draft = buildDraft(prescription(), 'lb')
+    draft[0].blockId = 'e-landmine'
+    draft[0].sets.forEach((s, i) => (s.blockId = `lm${i}`))
+    draft[0].sets[0].done = true
+    const liveWorkout: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [
+        {id: 'e-landmine', exercise: 'Landmine press', unit: 'lb', sets: []},
+        {id: 'e-ohp', exercise: 'Overhead press', unit: 'lb', sets: [
+          {id: 'ohp0', weight: 95, reps: 8, done: true},
+          {id: 'ohp1', weight: 95, reps: 7, done: true},
+          {id: 'ohp2', weight: 95, reps: 8, done: false},
+        ]},
+      ],
+    }
+    const plan = finishPlan('w1', draft, liveWorkout)
+
+    expect(plan.removeExerciseIds).toEqual([])
+    const ohp = plan.keep.find(k => k.exerciseId === 'e-ohp')
+    expect(ohp).toMatchObject({workingWeight: 95, removeSetIds: ['ohp2']})
+  })
+
+  it('keeps a set ticked outside this view — the checkbox is the built-in todo', () => {
+    // Done-ness is the todo `status` prop, tickable from the outline or
+    // another device. The draft only reseeds on structural change, so it may
+    // still think the set is open; pruning it would delete a logged set.
+    const draft = buildDraft(prescription(), 'lb')
+    draft[0].blockId = 'e1'
+    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
+    draft[0].sets[0].done = true
+    const liveWorkout: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets: [
+        {id: 's0', weight: 135, reps: 10, done: true},
+        {id: 's1', weight: 135, reps: 10, done: true},   // ticked in the outline
+        {id: 's2', weight: 135, reps: 10, done: false},
+      ]}],
+    }
+    expect(finishPlan('w1', draft, liveWorkout).keep[0].removeSetIds).toEqual(['s2'])
+  })
+
   it('prunes an exercise the live workout has but the draft no longer does', () => {
     // The or-group you switched away from mid-session: its blocks are still in
     // the workout, and its pre-filled sets are open todos. Finish must take

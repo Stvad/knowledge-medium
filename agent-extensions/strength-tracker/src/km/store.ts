@@ -83,9 +83,14 @@ export interface WorkoutDraft {
 
 /** The block ids of a materialized workout, so the UI can address individual
  *  set blocks for in-place edits without re-deriving them from a query. */
+export interface ExerciseEntryIds {
+  id: string
+  setIds: string[]
+}
+
 export interface MaterializedWorkout {
   workoutId: string
-  exercises: {id: string; setIds: string[]}[]
+  exercises: ExerciseEntryIds[]
 }
 
 const sessionLabel = (session: SessionType): string =>
@@ -108,7 +113,7 @@ const writeExercise = async (
   workoutId: string,
   ex: ExerciseDraft,
   typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
-): Promise<{id: string; setIds: string[]}> => {
+): Promise<ExerciseEntryIds> => {
   const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
   await tx.setProperty(exId, exerciseProp, ex.exercise)
   await tx.setProperty(exId, definitionProp, ex.definitionId)
@@ -175,7 +180,7 @@ export const materializeExercise = async (
   repo: Repo,
   workoutId: string,
   ex: ExerciseDraft,
-): Promise<{id: string; setIds: string[]}> => {
+): Promise<ExerciseEntryIds> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot),
     {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
@@ -221,7 +226,11 @@ export const finishWorkout = async (repo: Repo, plan: FinishPlan): Promise<void>
     // parent would leave them live — stray open todos under a deleted block.
     for (const exId of plan.removeExerciseIds) await tx.run(deleteBlock, {id: exId})
     for (const ex of plan.keep) {
-      for (const setId of ex.removeSetIds) await tx.delete(setId)
+      // Subtree, like the exercise prune above: a set block is a normal block,
+      // so a note the user typed under it would otherwise stay live under a
+      // tombstone (and, in a child-backed workspace, so would the set's own
+      // property rows).
+      for (const setId of ex.removeSetIds) await tx.run(deleteBlock, {id: setId})
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
     await tx.setProperty(plan.workoutId, statusProp, 'done')

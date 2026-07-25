@@ -4,6 +4,8 @@ import {applyIdPatch, createWriteCoordinator, type WriteEffects} from '../src/ui
 import type {DraftExercise} from '../src/ui/draft'
 import type {MaterializedWorkout} from '../src/km/store'
 
+type ExerciseEntryIdsForTest = {id: string; setIds: string[]}
+
 /** Every bug this module exists to prevent was a SEQUENCING bug — two taps
  *  in flight, a create resolving after a session switch, a batch holding a
  *  snapshot older than the ids it needs. So the fakes here resolve on
@@ -142,6 +144,10 @@ describe('resolveSet — workout already exists', () => {
   })
 })
 
+const SLOT_A = '2026-07-24|A'
+const SLOT_B = '2026-07-24|B'
+const SHAPE = 'bench'
+
 describe('reset — the session was switched', () => {
   it('withholds the ids of a create that lands after the switch', async () => {
     // Those ids belong to the workout that is no longer being edited;
@@ -156,7 +162,7 @@ describe('reset — the session was switched', () => {
     const coord = createWriteCoordinator()
 
     const pending = coord.resolveSet(draft, 0, 0, effects)
-    coord.reset(null)                       // user flipped A → B
+    coord.reset(null, SLOT_B, SHAPE)        // user flipped A → B
     gate.resolve(workoutIds('w-old', [1]))
 
     const result = await pending
@@ -170,12 +176,110 @@ describe('reset — the session was switched', () => {
     const coord = createWriteCoordinator()
     await coord.resolveSet([exercise('Bench press', 1)], 0, 0, effects)
 
-    coord.reset(null)
+    coord.reset(null, SLOT_B, SHAPE)
     await coord.resolveSet([exercise('Squat', 1)], 0, 0, effects)
     expect(calls.workouts).toBe(2)
 
-    coord.reset('w-live')
+    coord.reset('w-live', SLOT_A, SHAPE)
     expect(coord.workoutId()).toBe('w-live')
+  })
+
+  it('keeps what it created when the reseed is only the live query catching up', async () => {
+    // The create's own commit invalidates the queries, so `live` appears and
+    // the view reseeds. Forgetting `materialized` there made the rest of an
+    // "all ✓" batch — still holding the block-less snapshot — create the
+    // exercise a second time.
+    const draft = [exercise('Bench press', 3)]
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+
+    await coord.resolveSet(draft, 0, 0, effects)
+    coord.reset('w1', SLOT_A, SHAPE)              // same slot, same exercises
+    await coord.resolveSet(draft, 0, 1, effects)
+    await coord.resolveSet(draft, 0, 2, effects)
+
+    expect(calls).toEqual({workouts: 1, exercises: []})
+  })
+
+  it('keeps the workout when the exercise list changes under it', async () => {
+    // An or-group switch changes the shape but NOT which workout is being
+    // logged. Nulling the id here started a second workout for the same night.
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+    await coord.resolveSet([exercise('Bench press', 1)], 0, 0, effects)
+
+    coord.reset(null, SLOT_A, 'bench,landmine')
+    expect(coord.workoutId()).toBe('w1')
+    // …and the positional ids from the old shape are dropped, so a set with
+    // no block creates its exercise rather than reusing a stale id.
+    await coord.resolveSet([exercise('Landmine press', 1, {defId: 'def-lm'})], 0, 0, effects)
+    expect(calls).toEqual({workouts: 1, exercises: ['Landmine press']})
+  })
+
+  it('keeps the workout when a reseed arrives with no live workout yet', async () => {
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+    await coord.resolveSet([exercise('Bench press', 1)], 0, 0, effects)
+
+    coord.reset(null, SLOT_A, SHAPE)       // query hasn't surfaced it
+    expect(coord.workoutId()).toBe('w1')
+    expect(calls.workouts).toBe(1)
+  })
+})
+
+describe('failure and abandonment', () => {
+  it('retries after a failed create instead of caching the rejection forever', async () => {
+    let attempts = 0
+    const effects: WriteEffects = {
+      createWorkout: async () => {
+        attempts += 1
+        if (attempts === 1) throw new Error('tx conflict')
+        return workoutIds('w1', [1])
+      },
+      createExercise: async () => ({id: 'x', setIds: ['xs']}),
+    }
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+    const draft = [exercise('Bench press', 1)]
+
+    await expect(coord.resolveSet(draft, 0, 0, effects)).rejects.toThrow('tx conflict')
+    // Before: every later tap awaited the same rejected promise, so the user
+    // logged a whole session that was written nowhere.
+    expect(await coord.resolveSet(draft, 0, 0, effects)).toMatchObject({blockId: 'w1-e0s0'})
+    expect(attempts).toBe(2)
+  })
+
+  it('retries a failed exercise create too', async () => {
+    let attempts = 0
+    const effects: WriteEffects = {
+      createWorkout: async () => workoutIds('w1', [1]),
+      createExercise: async (_workoutId, ex) => {
+        attempts += 1
+        if (attempts === 1) throw new Error('parent deleted')
+        return {id: 'e-new', setIds: ex.sets.map((_, j) => `e-new-s${j}`)}
+      },
+    }
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    const draft = [exercise('Landmine press', 1, {defId: 'def-lm'})]
+
+    await expect(coord.resolveSet(draft, 0, 0, effects)).rejects.toThrow('parent deleted')
+    expect(await coord.resolveSet(draft, 0, 0, effects)).toMatchObject({blockId: 'e-new-s0'})
+  })
+
+  it('yields no block once the workout is discarded, so a late create writes nothing', async () => {
+    // Those blocks are children of a workout being tombstoned; writing into
+    // them would strand live todo sets under a deleted parent.
+    const gate = deferred<ExerciseEntryIdsForTest>()
+    const effects: WriteEffects = {
+      createWorkout: async () => workoutIds('w1', [1]),
+      createExercise: () => gate.promise,
+    }
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+
+    const pending = coord.resolveSet([exercise('Landmine press', 1, {defId: 'def-lm'})], 0, 0, effects)
+    coord.abandon()
+    gate.resolve({id: 'e-late', setIds: ['e-late-s0']})
+
+    expect(await pending).toEqual({})
   })
 })
 
