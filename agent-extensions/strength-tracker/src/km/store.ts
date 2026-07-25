@@ -50,7 +50,8 @@ import {
 import {dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
-import {buildAltChoices} from './history'
+import {buildAltChoices, buildLiveWorkouts, type LiveWorkout} from './history'
+import {reconcilePlan} from './reconcile'
 
 // ──── draft shapes the writer consumes ────
 
@@ -104,6 +105,32 @@ const setContent = (set: SetDraft, unit: string): string => {
 
 const todoStatus = (done: boolean): 'open' | 'done' => (done ? 'done' : 'open')
 
+type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
+
+/** One set block under an exercise entry, inside the caller's transaction.
+ *  Its own function because sets get written in two situations now: with the
+ *  entry that owns them, and one at a time into an entry that was ADOPTED
+ *  with fewer sets than the draft prescribes. */
+const writeSetBlock = async (
+  repo: Repo,
+  tx: Tx,
+  exerciseId: string,
+  s: SetDraft,
+  unit: string,
+  typeSnapshot: TypeSnapshot,
+): Promise<string> => {
+  const setId = await tx.run(createChild, {parentId: exerciseId, content: setContent(s, unit)})
+  await tx.setProperty(setId, weightProp, s.weight)
+  await tx.setProperty(setId, repsProp, s.reps)
+  await tx.setProperty(setId, rpeProp, s.rpe)
+  await tx.setProperty(setId, sideProp, s.side)
+  await tx.setProperty(setId, completedAtProp, s.completedAt)
+  await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
+  await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
+  await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
+  return setId
+}
+
 /** One exercise entry + its set blocks, inside the caller's transaction.
  *  Shared by "start the session" and "add this lift mid-session", so an
  *  entry written either way is identical. */
@@ -112,7 +139,7 @@ const writeExercise = async (
   tx: Tx,
   workoutId: string,
   ex: ExerciseDraft,
-  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
+  typeSnapshot: TypeSnapshot,
 ): Promise<ExerciseEntryIds> => {
   const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
   await tx.setProperty(exId, exerciseProp, ex.exercise)
@@ -123,18 +150,7 @@ const writeExercise = async (
   await repo.addTypeInTx(tx, exId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
 
   const setIds: string[] = []
-  for (const s of ex.sets) {
-    const setId = await tx.run(createChild, {parentId: exId, content: setContent(s, ex.unit)})
-    await tx.setProperty(setId, weightProp, s.weight)
-    await tx.setProperty(setId, repsProp, s.reps)
-    await tx.setProperty(setId, rpeProp, s.rpe)
-    await tx.setProperty(setId, sideProp, s.side)
-    await tx.setProperty(setId, completedAtProp, s.completedAt)
-    await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
-    await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
-    await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
-    setIds.push(setId)
-  }
+  for (const s of ex.sets) setIds.push(await writeSetBlock(repo, tx, exId, s, ex.unit, typeSnapshot))
   return {id: exId, setIds}
 }
 
@@ -144,8 +160,13 @@ const writeExercise = async (
  *  in a single transaction (so it lands and undoes atomically). The workout is
  *  born `in-progress`; the set blocks carry whatever the draft already holds
  *  (usually the pre-filled prescription, `done: false`). Returns the ids so
- *  the caller can write set edits straight to their blocks. */
-export const materializeWorkout = async (
+ *  the caller can write set edits straight to their blocks.
+ *
+ *  Deliberately NOT exported: `startWorkout` is the way in. An unconditional
+ *  create is only correct if you already know nothing is in progress for this
+ *  day+session, and the one caller that starts workouts (a checkbox tap) is
+ *  exactly the one that can't know that. */
+const materializeWorkout = async (
   repo: Repo,
   workspaceId: string,
   pageId: string,
@@ -169,6 +190,84 @@ export const materializeWorkout = async (
     }
     return {workoutId, exercises}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
+}
+
+/** The in-progress workout for this day+session, read straight from the
+ *  blocks rather than from the reactive query the UI renders.
+ *
+ *  That distinction is the whole point: the reactive handle answers `[]`
+ *  while it loads, so "no workout yet" and "not loaded yet" are the same
+ *  value to a caller about to create one. `queryBlocks` awaits the load, so
+ *  this answers the question the create actually needs to ask.
+ *
+ *  Cheap in the common case: one small typed query (workouts only, a couple
+ *  hundred rows over years), and it stops there unless something is actually
+ *  in progress. */
+export const findInProgressWorkout = async (
+  repo: Repo,
+  workspaceId: string,
+  day: string,
+  session: SessionType,
+): Promise<LiveWorkout | undefined> => {
+  const workoutRows = await repo.queryBlocks({workspaceId, types: [WORKOUT_TYPE]})
+  if (!workoutRows.some(row => row.properties[FIELD.status] === 'in-progress')) return undefined
+  const [exerciseRows, setRows] = await Promise.all([
+    repo.queryBlocks({workspaceId, types: [EXERCISE_ENTRY_TYPE]}),
+    repo.queryBlocks({workspaceId, types: [SET_TYPE]}),
+  ])
+  return buildLiveWorkouts(workoutRows, exerciseRows, setRows)
+    .find(w => w.day === day && w.session === session)
+}
+
+/** Fill in what an existing workout is missing for this draft, and return the
+ *  ids as if we had just created it — so the caller can't tell the two apart.
+ *  Only additive: an entry that matched keeps its blocks (and its values, and
+ *  its history), and an entry the draft has no row for is left completely
+ *  alone. */
+const adoptWorkout = async (
+  repo: Repo,
+  existing: LiveWorkout,
+  draft: WorkoutDraft,
+): Promise<MaterializedWorkout> => {
+  const plan = reconcilePlan(existing, draft)
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  return repo.tx(async tx => {
+    const exercises: ExerciseEntryIds[] = []
+    for (const [i, entry] of plan.entries()) {
+      const ex = draft.exercises[i]
+      if (entry.existingId === undefined) {
+        exercises.push(await writeExercise(repo, tx, existing.id, ex, typeSnapshot))
+        continue
+      }
+      const setIds: string[] = []
+      for (const [j, s] of ex.sets.entries()) {
+        setIds.push(entry.setIds[j] ?? await writeSetBlock(repo, tx, entry.existingId, s, ex.unit, typeSnapshot))
+      }
+      exercises.push({id: entry.existingId, setIds})
+    }
+    return {workoutId: existing.id, exercises}
+  }, {scope: ChangeScope.BlockDefault, description: `Resume ${sessionLabel(draft.session)}`})
+}
+
+/** Begin logging: adopt the workout that's already in progress for this
+ *  day+session, or create one.
+ *
+ *  The adopt half makes starting a session IDEMPOTENT, which is what the
+ *  logging UI actually needs — its create fires from a checkbox tap whose
+ *  timing it doesn't control, and firing twice used to mean two workouts for
+ *  one evening with the second one unreachable. It also covers two devices
+ *  opening the same session, to the extent sync latency allows: whichever
+ *  one's workout has synced by then gets adopted by the other. */
+export const startWorkout = async (
+  repo: Repo,
+  workspaceId: string,
+  pageId: string,
+  draft: WorkoutDraft,
+): Promise<MaterializedWorkout> => {
+  const existing = await findInProgressWorkout(repo, workspaceId, draft.day, draft.session)
+  return existing
+    ? adoptWorkout(repo, existing, draft)
+    : materializeWorkout(repo, workspaceId, pageId, draft)
 }
 
 /** Add ONE exercise (and its pre-filled sets) to a workout that already

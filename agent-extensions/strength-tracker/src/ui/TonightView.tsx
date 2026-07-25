@@ -25,7 +25,7 @@ import {
   discardWorkout,
   finishWorkout,
   materializeExercise,
-  materializeWorkout,
+  startWorkout,
   writeLayoff,
   writeSet,
   writeShoulderTodo,
@@ -45,6 +45,7 @@ import {
   hasAcceptedSets,
   liveIdentity,
   overlayLive,
+  overlayLiveValues,
   toExerciseDraft,
   toSetDraft,
   toMaterializeDraft,
@@ -92,7 +93,11 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   /** The writes the coordinator orchestrates. Rebuilt per render so a create
    *  always uses the current day/session. */
   const effects: WriteEffects = {
-    createWorkout: rows => materializeWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, rows)),
+    // `startWorkout`, not a bare create: this fires from a checkbox tap whose
+    // timing we don't control, and on first paint `live` is empty because the
+    // query hasn't resolved — indistinguishable from "nothing logged". It
+    // adopts an in-progress workout for this day+session when there is one.
+    createWorkout: rows => startWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, rows)),
     createExercise: (workoutId, ex) => materializeExercise(repo, workoutId, toExerciseDraft(ex)),
   }
 
@@ -102,6 +107,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // don't trigger a reseed and never clobber in-progress typing.
   const seededKeyRef = useRef<string | null>(null)
   const seededSlotRef = useRef<string>(slot)
+  const seededShapeRef = useRef<string>(shape)
   useEffect(() => {
     // The key covers everything the draft is BUILT from — not just which
     // exercises, but the numbers pre-filled into their sets. A plan edit (or
@@ -112,14 +118,24 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     const key = `${slot}|${unit}|${liveIdentity(live)}|${shape}`
     if (key === seededKeyRef.current) return
     const previousSlot = seededSlotRef.current
+    const previousShape = seededShapeRef.current
     seededKeyRef.current = key
     seededSlotRef.current = slot
+    seededShapeRef.current = shape
 
     // The live query catching up with the workout WE just created carries no
     // news — we stamped those ids ourselves. Rebuilding the draft from the
     // blocks here would throw away a number being typed right now, or a tick
     // whose write hasn't landed yet (which Finish would then prune).
-    const ourWorkoutArrived = live !== undefined
+    //
+    // Only when the slot AND the shape held still, though. That is what makes
+    // it "the same draft, one query behind". An `or`-group switched mid-
+    // session changes the shape, and skipping there left the view rendering
+    // the option you just moved OFF — the switch looked like it did nothing,
+    // and every set logged after it went to the wrong lift.
+    const ourWorkoutArrived = slot === previousSlot
+      && shape === previousShape
+      && live !== undefined
       && live.id === coordinator.materialized()?.workoutId
       && draftRef.current.some(ex => ex.blockId !== undefined)
     coordinator.reset(live?.id ?? null, slot, shape)
@@ -133,6 +149,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     if (slot !== previousSlot) setStatus(null)
   }, [slot, session, unit, live, prescription, shape, coordinator])
 
+  // Values from the blocks, on every emission — another device's tick, the
+  // outline's checkbox, or the workout this view ADOPTED rather than created
+  // (whose real values it has never seen). Structure stays the reseed
+  // effect's job; this one can't discard what you're typing, because a set
+  // you touched is `dirty` until the block catches up.
+  useEffect(() => {
+    setDraft(cur => overlayLiveValues(cur, live))
+  }, [live])
+
   const applyPatch = (
     prev: DraftExercise[],
     exIdx: number,
@@ -140,7 +165,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     patch: Partial<DraftSet>,
   ): DraftExercise[] =>
     prev.map((ex, i) =>
-      i !== exIdx ? ex : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch}))},
+      i !== exIdx
+        ? ex
+        : {...ex, sets: ex.sets.map((s, j) => (j !== setIdx ? s : {...s, ...patch, dirty: true}))},
     )
 
   /** Resolve the block for one set (creating whatever is missing) and write
@@ -182,7 +209,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const acceptAll = (exIdx: number) => {
     const now = Date.now()
     const next = draftRef.current.map((ex, i) =>
-      i !== exIdx ? ex : {...ex, sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: now}))},
+      i !== exIdx
+        ? ex
+        : {...ex, sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: now, dirty: true}))},
     )
     setDraft(next)
     // Persist every set of this exercise; materialize on the first if needed.
@@ -226,6 +255,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         // switch, a create→delete round trip on every Finish).
         if (!flushed[i].blockId && !flushed[i].sets.some(s => s.done)) continue
         for (let j = 0; j < flushed[i].sets.length; j += 1) {
+          // Only what this client changed. A clean set's block already holds
+          // these values — either it was written at materialize time or the
+          // live overlay handed them to us — so rewriting it would push a
+          // value we merely inherited back over a newer one from the device
+          // that made it. A failed write stays dirty, so this still retries.
+          const set = flushed[i].sets[j]
+          if (set.blockId !== undefined && !set.dirty) continue
           const {blockId, patch} = await coordinator.resolveSet(flushed, i, j, effects)
           if (patch) {
             flushed = applyIdPatch(flushed, patch)

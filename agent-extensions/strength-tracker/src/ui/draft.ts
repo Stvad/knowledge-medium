@@ -9,7 +9,8 @@
 
 import type {AltOption, ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
 import {workingWeight} from '../engine/progression'
-import type {LiveWorkout} from '../km/history'
+import {matchLiveExercises} from '../km/history'
+import type {LiveSet, LiveWorkout} from '../km/history'
 import type {ExerciseDraft, FinishPlan, SetDraft, WorkoutDraft} from '../km/store'
 
 export interface DraftSet {
@@ -24,6 +25,18 @@ export interface DraftSet {
   /** The set block once the workout is materialized; undefined while the
    *  draft is still ephemeral (before the first edit). */
   blockId?: string
+  /** This client changed the set and the block doesn't hold that yet.
+   *
+   *  The blocks are the record, and any of them can move under us — the
+   *  outline's checkbox, another device, or a workout this view *adopted*
+   *  rather than created. So values flow block → draft continuously
+   *  (`overlayLiveValues`). `dirty` is the exception that makes that safe:
+   *  a row you are editing right now must not be overwritten by the value
+   *  it had a moment ago, and Finish must not write a value it merely
+   *  inherited back over someone else's newer one. Cleared by the overlay
+   *  itself, once the block agrees — so a failed write stays dirty and is
+   *  retried at Finish instead of being silently dropped. */
+  dirty?: boolean
 }
 
 export interface DraftExercise {
@@ -95,25 +108,20 @@ export const buildDraft = (prescription: Prescription, unit: string): DraftExerc
  *  plan block (falling back to exercise name), the block's set values + ids
  *  replace the pre-filled ones, so the rendered draft reflects (and can edit)
  *  the actual blocks. Exercises the live workout doesn't have keep their
- *  pre-filled sets. */
+ *  pre-filled sets.
+ *
+ *  STRUCTURAL: it rebuilds rows wholesale, so it runs only on a reseed (a
+ *  session switch, the block structure changing). Value-only news uses
+ *  `overlayLiveValues`, which can run on every emission without discarding
+ *  what you are typing. */
 export const overlayLive = (
   draft: readonly DraftExercise[],
   live: LiveWorkout | undefined,
 ): DraftExercise[] => {
-  if (!live) return draft.map(ex => ({...ex}))
-  const byName = new Map(live.exercises.map(e => [e.exercise, e]))
-  const byDefId = new Map(
-    live.exercises.filter(e => e.definitionId !== undefined).map(e => [e.definitionId as string, e]),
-  )
-  // A live entry backs at most ONE draft row. Two rows sharing a name (a
-  // hand-written plan, or a default-config session) would otherwise both
-  // adopt it, and then each would write over the other's blocks.
-  const claimed = new Set<string>()
-  return draft.map(ex => {
-    const match = (ex.defId !== undefined ? byDefId.get(ex.defId) : undefined) ?? byName.get(ex.exercise)
-    const le = match && !claimed.has(match.id) ? match : undefined
+  const matches = matchLiveExercises(draft.map(ex => ({name: ex.exercise, defId: ex.defId})), live)
+  return draft.map((ex, i) => {
+    const le = matches[i]
     if (!le) return {...ex}
-    claimed.add(le.id)
     return {
       ...ex,
       blockId: le.id,
@@ -128,6 +136,71 @@ export const overlayLive = (
       })),
     }
   })
+}
+
+const sameAsBlock = (draftSet: DraftSet, live: LiveSet): boolean =>
+  draftSet.weight === live.weight
+  && draftSet.reps === live.reps
+  && draftSet.done === live.done
+  && draftSet.rpe === live.rpe
+  && draftSet.side === live.side
+  && draftSet.completedAt === live.completedAt
+
+/** Track the blocks' current values without touching structure or ids.
+ *
+ *  Matched by set block, so it only ever speaks about sets this draft has
+ *  already attached to a block. Three cases, and the third is why `dirty`
+ *  exists at all:
+ *
+ *   - clean set, block differs → adopt the block's values. That is another
+ *     device's tick, the outline's checkbox, or the workout this view
+ *     adopted mid-session showing up.
+ *   - dirty set, block agrees → our write landed; clear `dirty`. Clearing it
+ *     HERE rather than when `writeSet` resolves means a write that failed
+ *     stays dirty and gets retried at Finish.
+ *   - dirty set, block differs → leave it. This is the value being typed, or
+ *     a tick whose write is still in flight.
+ *
+ *  Returns the input array unchanged (same reference) when nothing moved, so
+ *  running it on every query emission costs one comparison pass and no
+ *  re-render. */
+export const overlayLiveValues = (
+  draft: DraftExercise[],
+  live: LiveWorkout | undefined,
+): DraftExercise[] => {
+  if (!live) return draft
+  const byId = new Map<string, LiveSet>()
+  for (const ex of live.exercises) for (const s of ex.sets) byId.set(s.id, s)
+
+  let changed = false
+  const next = draft.map(ex => {
+    let rowChanged = false
+    const sets = ex.sets.map(s => {
+      const block = s.blockId !== undefined ? byId.get(s.blockId) : undefined
+      if (!block) return s
+      if (sameAsBlock(s, block)) {
+        if (!s.dirty) return s
+        rowChanged = true
+        const {dirty: _landed, ...clean} = s
+        return clean
+      }
+      if (s.dirty) return s
+      rowChanged = true
+      return {
+        ...s,
+        weight: block.weight,
+        reps: block.reps,
+        done: block.done,
+        rpe: block.rpe,
+        side: block.side,
+        completedAt: block.completedAt,
+      }
+    })
+    if (!rowChanged) return ex
+    changed = true
+    return {...ex, sets}
+  })
+  return changed ? next : draft
 }
 
 /** Stable identity of a live workout's block structure (ids only) — reseed the
@@ -228,9 +301,18 @@ export const finishPlan = (
     if (draftBlockIds.has(liveEx.id)) continue
     plan(liveEx.id, liveEx.exercise, liveEx.sets.map(s => ({...s, blockId: s.id})))
   }
+  const liveById = new Map((live?.exercises ?? []).map(ex => [ex.id, ex]))
   for (const ex of draft) {
     if (ex.blockId === undefined) continue
-    plan(ex.blockId, ex.exercise, ex.sets)
+    // A matched entry can hold set blocks this draft has never seen: it was
+    // ADOPTED rather than created (another device, or a tap before the query
+    // resolved), or a peer appended a set. Planning only the draft's sets
+    // would leave those open todo sets live under a finished workout.
+    const mine = new Set(ex.sets.map(s => s.blockId).filter((id): id is string => id !== undefined))
+    const extra = (liveById.get(ex.blockId)?.sets ?? [])
+      .filter(s => !mine.has(s.id))
+      .map(s => ({...s, blockId: s.id}))
+    plan(ex.blockId, ex.exercise, [...ex.sets, ...extra])
   }
   return {workoutId, keep, removeExerciseIds}
 }

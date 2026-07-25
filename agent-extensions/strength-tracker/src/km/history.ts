@@ -164,6 +164,34 @@ const toLiveSet = (row: RowLike): LiveSet => ({
   ...(optNum(row, FIELD.completedAt) !== undefined ? {completedAt: optNum(row, FIELD.completedAt)} : {}),
 })
 
+/** Which live entry backs each prescribed row, positionally.
+ *
+ *  By plan block first, then by name — so a lift renamed mid-session still
+ *  re-attaches to the entry it was logged into. Each live entry backs at most
+ *  ONE row: two rows sharing a name (a hand-written plan, a default-config
+ *  session) would otherwise both adopt it and then write over each other.
+ *
+ *  Shared, because two callers must agree on the answer or they corrupt each
+ *  other: the draft overlay decides which blocks a row *edits*, and the
+ *  adopt path decides which blocks a row *reuses* instead of creating. */
+export const matchLiveExercises = (
+  rows: readonly {readonly name: string; readonly defId?: string}[],
+  live: LiveWorkout | undefined,
+): (LiveExercise | undefined)[] => {
+  if (!live) return rows.map(() => undefined)
+  const byName = new Map(live.exercises.map(e => [e.exercise, e]))
+  const byDefId = new Map(
+    live.exercises.filter(e => e.definitionId !== undefined).map(e => [e.definitionId as string, e]),
+  )
+  const claimed = new Set<string>()
+  return rows.map(row => {
+    const match = (row.defId !== undefined ? byDefId.get(row.defId) : undefined) ?? byName.get(row.name)
+    if (!match || claimed.has(match.id)) return undefined
+    claimed.add(match.id)
+    return match
+  })
+}
+
 export const buildLiveWorkouts = (
   workoutRows: readonly RowLike[],
   exerciseRows: readonly RowLike[],

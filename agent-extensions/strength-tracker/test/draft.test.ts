@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildDraft, finishPlan, hasAcceptedSets, overlayLive, toMaterializeDraft} from '../src/ui/draft'
+import {buildDraft, finishPlan, hasAcceptedSets, overlayLive, overlayLiveValues, toMaterializeDraft} from '../src/ui/draft'
 import type {LiveWorkout} from '../src/km/history'
 import type {Prescription} from '../src/engine/types'
 
@@ -95,6 +95,67 @@ describe('overlayLive', () => {
   })
 })
 
+describe('overlayLiveValues', () => {
+  const materialized = () => {
+    const draft = buildDraft(prescription(), 'lb')
+    draft[0].blockId = 'e1'
+    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
+    return draft
+  }
+
+  const liveWith = (sets: LiveWorkout['exercises'][number]['sets']): LiveWorkout => ({
+    id: 'w1', day: '2026-07-23', session: 'A',
+    exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets}],
+  })
+
+  it('adopts a value this client has not touched — another device, or an adopted workout', () => {
+    const next = overlayLiveValues(materialized(), liveWith([
+      {id: 's0', weight: 145, reps: 9, done: true, completedAt: 111},
+    ]))
+    expect(next[0].sets[0]).toMatchObject({weight: 145, reps: 9, done: true, completedAt: 111})
+  })
+
+  it('leaves a set this client is editing alone', () => {
+    const draft = materialized()
+    draft[0].sets[0] = {...draft[0].sets[0], weight: 150, dirty: true}
+    const next = overlayLiveValues(draft, liveWith([{id: 's0', weight: 135, reps: 10, done: false}]))
+    expect(next[0].sets[0].weight).toBe(150)
+    expect(next[0].sets[0].dirty).toBe(true)
+  })
+
+  it('clears dirty once the block agrees — that is how a landed write is observed', () => {
+    const draft = materialized()
+    draft[0].sets[0] = {...draft[0].sets[0], done: true, completedAt: 222, dirty: true}
+    const next = overlayLiveValues(draft, liveWith([
+      {id: 's0', weight: 135, reps: 10, done: true, completedAt: 222},
+    ]))
+    expect(next[0].sets[0].dirty).toBeUndefined()
+  })
+
+  it('keeps a failed write dirty, so Finish retries it', () => {
+    // The write rejected: the block still says open while the draft says
+    // done. Clearing dirty on write-resolve would have lost the tick here;
+    // clearing it on block agreement keeps it queued.
+    const draft = materialized()
+    draft[0].sets[0] = {...draft[0].sets[0], done: true, dirty: true}
+    const next = overlayLiveValues(draft, liveWith([{id: 's0', weight: 135, reps: 10, done: false}]))
+    expect(next[0].sets[0]).toMatchObject({done: true, dirty: true})
+  })
+
+  it('ignores sets with no block yet, and touches no structure', () => {
+    const draft = buildDraft(prescription(), 'lb')
+    expect(overlayLiveValues(draft, liveWith([{id: 's0', weight: 999, reps: 1, done: true}]))).toBe(draft)
+  })
+
+  it('returns the same array when nothing moved, so it can run on every emission', () => {
+    const draft = materialized()
+    const live = liveWith(draft[0].sets.map((s, i) => ({
+      id: `s${i}`, weight: s.weight, reps: s.reps, done: s.done,
+    })))
+    expect(overlayLiveValues(draft, live)).toBe(draft)
+  })
+})
+
 describe('finishPlan', () => {
   it('KEEPS a switched-away exercise that has done sets — those lifts happened', () => {
     // The headline mid-session flow: log two sets of the or-group's first
@@ -184,6 +245,37 @@ describe('finishPlan', () => {
     const plan = finishPlan('w1', materialized())
     expect(plan.removeExerciseIds).toEqual(['e1'])
     expect(plan.keep).toEqual([])
+  })
+
+  it('prunes a set block the draft never saw, on an exercise it did', () => {
+    // The adopt case: this view attached to an entry another device (or an
+    // earlier tab) had logged, and that entry has a set the draft has no row
+    // for. Planning only the draft's sets left it live — an open todo set
+    // under a workout marked done.
+    const draft = materialized()
+    draft[0].sets[0].done = true
+    const liveWorkout: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets: [
+        {id: 's0', weight: 135, reps: 10, done: true},
+        {id: 's3', weight: 135, reps: 10, done: false},   // never in this draft
+      ]}],
+    }
+    expect(finishPlan('w1', draft, liveWorkout).keep[0].removeSetIds).toEqual(['s1', 's2', 's3'])
+  })
+
+  it('keeps a set block the draft never saw when it was actually done', () => {
+    const draft = materialized()
+    draft[0].sets.forEach(s => (s.done = true))
+    const liveWorkout: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets: [
+        {id: 's3', weight: 155, reps: 5, done: true},
+      ]}],
+    }
+    const plan = finishPlan('w1', draft, liveWorkout)
+    expect(plan.keep[0].removeSetIds).toEqual([])
+    expect(plan.keep[0].workingWeight).toBe(135)
   })
 })
 
