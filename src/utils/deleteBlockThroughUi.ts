@@ -41,12 +41,11 @@ export const deleteBlockThroughUi = async (block: Block): Promise<boolean> =>
  *  can narrow it and retry — a partial cut is not something they can undo by
  *  re-selecting.
  *
- *  NOTE this is a property of THIS CALL, not of every multi-block gesture.
- *  `cut_selected_blocks` passes the whole selection and so is all-or-nothing;
- *  `multi_select.delete_block` fans out through `applyToAllBlocksInSelection`,
- *  which invokes the single-block handler once per block, so a mixed selection
- *  deletes the unguarded ones and keeps the rest. Aligning the two means giving
- *  multi-select delete a batch handler rather than the generic fan-out. */
+ *  Both multi-block gestures get this. `cut_selected_blocks` passes its whole
+ *  selection here directly; `multi_select.delete_block` fans out per block
+ *  through `applyToAllBlocksInSelection`, so it runs the same check once over
+ *  the selection as that helper's `preflight` before any block is touched.
+ *  `Delete` and `d` on the same selection must not disagree. */
 export const deleteBlocksThroughUi = async (blocks: readonly Block[]): Promise<boolean> => {
   if (!await ensureDeletableThroughUi(blocks)) return false
   // eslint-disable-next-line no-restricted-syntax -- this IS the guarded choke point

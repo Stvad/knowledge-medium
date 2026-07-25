@@ -1129,7 +1129,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    applyToAllBlocksInSelection(deleteBlockAction),
+    // All-or-nothing: check the WHOLE selection before deleting any of it, so a
+    // mix of guarded and unguarded blocks refuses wholesale instead of deleting
+    // the unguarded ones and leaving the rest. Matches `cut_selected_blocks`,
+    // which passes its whole selection to the same check — `Delete` and `d` on
+    // the same selection should not disagree.
+    applyToAllBlocksInSelection(deleteBlockAction, {
+      preflight: blocks => ensureDeletableThroughUi(blocks),
+    }),
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
     {

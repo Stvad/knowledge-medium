@@ -99,9 +99,25 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
  * Creates a multi-select version of an action that applies the original action to each selected block.
  * Uses makeModeAction under the hood with a specialized handler override.
  */
+export interface ApplyToAllOptions {
+  applyInReverseOrder?: boolean
+  /**
+   * Run ONCE over the whole selection before any block is touched; return false
+   * to abort the gesture entirely.
+   *
+   * The fan-out is per-block by construction, so an action that can refuse
+   * individual blocks would otherwise apply to some and skip others. For a
+   * destructive action that half-outcome is the worst one — the user can't undo
+   * it by re-selecting, and it diverges from the batch gestures (`cut`) that
+   * refuse wholesale. Actions that are naturally per-block (indent, collapse)
+   * just omit this.
+   */
+  preflight?: (blocks: readonly Block[]) => Promise<boolean>
+}
+
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
-  {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
+  {applyInReverseOrder, preflight}: ApplyToAllOptions = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block.
   // Wrap the whole batch in one view transition so users see a single
@@ -112,6 +128,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
     const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
+    if (preflight && !await preflight(blocks)) return
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
     // todo Wrap all per-block actions into a single repo.tx so undo

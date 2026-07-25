@@ -642,6 +642,37 @@ describe('default CodeMirror shortcuts', () => {
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
   })
 
+  it('multi-select Delete refuses the whole selection when one block is guarded', async () => {
+    // Matches cut. The fan-out is per-block, so without a batch preflight the
+    // unguarded sibling was deleted and only the protected one survived —
+    // `Delete` half-deleting a selection that `d` refuses wholesale.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('ordinary'), env.repo.block('protected')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+  })
+
   it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
     // `cut_selected_blocks` is bound to `d` in multi-select. It called
     // `block.delete()` directly, so `Delete` on a daily note was refused while
