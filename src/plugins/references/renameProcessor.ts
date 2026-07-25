@@ -335,6 +335,9 @@ export interface Rewrite {
   /** This alias's seat-slot window, carried so the write phase can
    *  re-assert the release without recomputing 64 uuidv5 hashes. */
   seatIds: ReadonlySet<string>
+  /** True when `replacement` is the PINNED form `[label](((id)))`.
+   *  Drives the embed guard at the splice — see `rewriteWikilinks`. */
+  pinned: boolean
 }
 
 /** Per-source plan. Stores rewrites plus the source content observed
@@ -429,6 +432,7 @@ const collectTargetPlans = async (
         toTargetId: replacement.toTargetId ?? after.id,
         refAlias: replacement.refAlias,
         seatIds: seatCtx.slotIds,
+        pinned: replacement.toTargetId !== null,
       })
     }
   }
@@ -549,7 +553,11 @@ const applyPlan = async (
   if (live.length === 0) return
   let nextContent = current.content
   for (const rewrite of live) {
-    nextContent = rewriteWikilinks(nextContent, rewrite.alias, rewrite.replacement)
+    nextContent = rewriteWikilinks(
+      nextContent, rewrite.alias, rewrite.replacement,
+      // Pinned replacements only: see `rewriteWikilinks`' embed note.
+      {skipEmbeds: rewrite.pinned},
+    )
   }
   if (nextContent === current.content) return
   // Surgically swap the matching `references` entries in lockstep with

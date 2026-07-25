@@ -144,7 +144,8 @@ const retargetReferenceContent = (
 ): string => {
   let next = rewriteBlockRefs(content, fromId, intoId)
   for (const [fromAlias, replacement] of aliasReplacements) {
-    next = rewriteWikilinks(next, fromAlias, replacement.text)
+    next = rewriteWikilinks(next, fromAlias, replacement.text,
+      {skipEmbeds: replacement.toTargetId !== null})
   }
   return next
 }

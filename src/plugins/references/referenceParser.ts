@@ -397,6 +397,7 @@ export const rewriteWikilinks = (
   content: string,
   alias: string,
   replacement: string,
+  opts?: {skipEmbeds?: boolean},
 ): string => {
   if (alias === '') return content  // parser never emits empty-alias marks
   const marks = parseReferences(content)
@@ -409,6 +410,19 @@ export const rewriteWikilinks = (
     // rewritten — replacing both would corrupt the outer's text.
     if (mark.startIndex < cursor) continue
     if (mark.alias !== alias) continue
+    // `![[alias]]` is the PAGE EMBED form, and markdown is a third
+    // grammar sharing this text. Splicing the pinned form under a
+    // leading `!` yields `![label](((uuid)))` — a markdown IMAGE, and
+    // `remark-blockrefs` only visits `link`/`text` nodes, so it renders
+    // as a broken `<img>`. The reference survives; the display doesn't,
+    // which is the half of the span's meaning the pinned form exists to
+    // preserve. Callers splicing a pinned replacement pass
+    // `skipEmbeds` and leave those spans as the working late-binding
+    // embed they already are. (A wikilink→wikilink swap is safe under
+    // `!` — still a page embed — so this is opt-in, not automatic.)
+    if (opts?.skipEmbeds && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') {
+      continue
+    }
     result += content.slice(cursor, mark.startIndex)
     result += replacement
     cursor = mark.endIndex

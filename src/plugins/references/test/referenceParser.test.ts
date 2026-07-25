@@ -458,6 +458,22 @@ Another [[normal-ref]]
       ).toBe(1)
     })
 
+    it('leaves a page-embed span alone when splicing the pinned form', () => {
+      // `![[A]]` is the page-embed syntax. Splicing the pinned form under
+      // the `!` yields `![A](((uuid)))` — a markdown IMAGE, and
+      // remark-blockrefs only visits link/text nodes, so it renders as a
+      // broken <img>. The reference survives, the display doesn't.
+      const pinned = pinnedSpanReplacement('A', UUID)!.text
+      expect(rewriteWikilinks('see ![[A]] please', 'A', pinned, {skipEmbeds: true}))
+        .toBe('see ![[A]] please')
+      // A plain (non-embed) span next to it still rewrites.
+      expect(rewriteWikilinks('see [[A]] and ![[A]]', 'A', pinned, {skipEmbeds: true}))
+        .toBe(`see ${pinned} and ![[A]]`)
+      // And a wikilink→wikilink swap under `!` is safe — still an embed.
+      expect(rewriteWikilinks('see ![[A]] please', 'A', '[[B]]'))
+        .toBe('see ![[B]] please')
+    })
+
     it('refuses wikilink forms that do not parse back to the same alias', () => {
       expect(faithfulWikilinkReplacement('')).toBeNull()
       expect(faithfulWikilinkReplacement('foo]]bar')).toBeNull()

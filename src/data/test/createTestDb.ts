@@ -173,9 +173,20 @@ const getTemplateFingerprint = (): string => {
   hash.update('\0')
   hash.update(CLIENT_SCHEMA_STATEMENTS.join('\0'))
   hash.update('\0')
+  // Backfills are part of the schema the template bakes in — several
+  // DROP and rebuild their table, so an edit inside a backfill body can
+  // change the resulting indexes/triggers without touching `statements`.
+  // Hashing only `statements` let such an edit reuse a stale cached
+  // template forever on any machine with a warm /tmp: the suite would
+  // run against the OLD schema and a green `pnpm run check` would prove
+  // nothing about the migration ladder. (Caught exactly that way — the
+  // `block_references` alias index was added to the rebuild and the
+  // template kept serving a DB without it.) `run.toString()` is a cheap
+  // structural fingerprint of the body.
   hash.update(JSON.stringify(localSchemaContributions.map(contribution => ({
     statements: contribution.statements ?? [],
     triggerNames: contribution.triggerNames ?? [],
+    backfills: (contribution.backfills ?? []).map(b => [b.id, b.run.toString()]),
   }))))
   return hash.digest('hex').slice(0, 20)
 }

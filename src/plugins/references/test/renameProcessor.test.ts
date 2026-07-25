@@ -628,15 +628,15 @@ describe('applyRefRewrites — surgical entry swap', () => {
   // therefore proves nothing — the async re-parse produces the right
   // answer either way. The reason it exists is the window BEFORE that
   // re-parse, which a second rapid rename reads.
-  const rw = (over: Partial<Rewrite>): Rewrite => ({
+  const rw = (over: Partial<Rewrite>): Rewrite => Object.assign({
     alias: 'Win',
     replacement: `[Win](((${PIN_TARGET})))`,
     fromTargetId: PIN_TARGET,
     toTargetId: PIN_TARGET,
     refAlias: PIN_TARGET,
     seatIds: new Set<string>(),
-    ...over,
-  })
+    pinned: true,
+  } satisfies Rewrite, over)
 
   it('moves a window-bound edge off the seat — id and alias together', async () => {
     const seatId = computeAliasSeatId('Win', WS, 0)
