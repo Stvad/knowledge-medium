@@ -24,10 +24,7 @@ import {
   RELOAD_IN_SAFE_MODE_ACTION_ID,
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
@@ -345,7 +342,7 @@ describe('default CodeMirror shortcuts', () => {
     const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const prefsBlock = await getUserPrefsBlock(env.repo, WS, USER)
 
     await action.handler(
@@ -410,7 +407,7 @@ describe('default CodeMirror shortcuts', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const panelId = await insertPanelRow(env.repo, layoutSession, 'root')
     await env.repo.block(panelId).set(focusedBlockLocationProp, {
       blockId: 'existing-child',

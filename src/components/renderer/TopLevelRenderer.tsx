@@ -5,6 +5,7 @@ import { NestedBlockContextProvider } from '@/context/block.js'
 import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { usePanelLayoutProjection } from '@/hooks/usePanelLayoutProjection.js'
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
   /**
@@ -22,6 +23,19 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
    */
 
   useActionContext(ActionContextTypes.GLOBAL)
+
+  // TopLevelRenderer is the DEFAULT layout-root renderer: it owns the
+  // URL⇄layout projection for the root block. There are two ways an
+  // extension can take over the root instead of TopLevelRenderer — both
+  // BYPASS this component, so whichever one is used MUST call
+  // usePanelLayoutProjection itself, or the URL⇄layout sync silently dies:
+  //   1. Register a higher-priority renderer for `layoutBoundary && !panelId`
+  //      (useRenderer's canRender/priority resolution, @/hooks/useRendererRegistry).
+  //   2. Set a `renderer` property (rendererProp) directly on the
+  //      layout-session block — useRenderer checks that BEFORE canRender/
+  //      priority, so it wins over TopLevelRenderer even without a
+  //      higher-priority registration.
+  usePanelLayoutProjection(block)
 
   return (
     // paddingTop reserves the iOS status-bar strip. As an installed PWA we run

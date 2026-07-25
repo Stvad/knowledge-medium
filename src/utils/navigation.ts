@@ -45,7 +45,6 @@ import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { navigateInPanel } from './panelHistory'
-import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
 import { parseAppHash } from '@/utils/routing'
 import { isMobileViewport } from '@/utils/viewport'
@@ -143,7 +142,7 @@ export interface NavigationRequest {
 
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-  return getLayoutSessionBlock(uiState, getLayoutSessionId())
+  return getLayoutSessionBlock(uiState, repo.activeLayoutSessionId)
 }
 
 const setActivePanel = async (

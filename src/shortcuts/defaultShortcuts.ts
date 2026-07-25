@@ -59,7 +59,6 @@ import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   navigate,
   navigateFromGlobalCommand,
@@ -168,7 +167,7 @@ const createNodeInActivePanelFromGlobalContext = async (
   const repo = uiStateBlock.repo
   if (repo.isReadOnly) return
 
-  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
   await layoutSessionBlock.load()
   const rows = await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
