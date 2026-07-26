@@ -18,6 +18,7 @@ const deferred = <T>() => {
 
 const exercise = (name: string, sets: number, over: Partial<DraftExercise> = {}): DraftExercise => ({
   exercise: name,
+  occurrence: 0,
   unit: 'lb',
   freeform: false,
   perSide: false,
@@ -44,10 +45,11 @@ const instantEffects = () => {
     },
     createExercise: async (workoutId, ex) => {
       calls.exercises.push(ex.exercise)
-      return {
-        id: `${workoutId}-${ex.exercise}`,
-        setIds: ex.sets.map((_, j) => `${workoutId}-${ex.exercise}-s${j}`),
-      }
+      // Mirrors the real derivation closely enough to be worth asserting on:
+      // the entry's blocks come from the lift AND which occurrence of it this
+      // is, so two rows of one lift land on different blocks.
+      const key = ex.occurrence === 0 ? ex.exercise : `${ex.exercise}#${ex.occurrence}`
+      return {id: `${workoutId}-${key}`, setIds: ex.sets.map((_, j) => `${workoutId}-${key}-s${j}`)}
     },
   }
   return {calls, effects}
@@ -142,6 +144,45 @@ describe('resolveSet — workout already exists', () => {
 
     expect(calls.exercises).toEqual(['Landmine press', 'Overhead press'])
   })
+
+  it('gives each row of a twice-prescribed lift its own entry', async () => {
+    // Same name, same plan block — only `occurrence` tells them apart, and it
+    // is what the derived entry id is built from. Sharing a create here means
+    // both rows write into one entry and overwrite each other set for set.
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator('w1')
+    const draft = [
+      exercise('Face pulls', 1, {defId: 'def-face', occurrence: 0}),
+      exercise('Face pulls', 1, {defId: 'def-face', occurrence: 1}),
+    ]
+
+    const first = await coord.resolveSet(draft, 0, 0, effects)
+    const second = await coord.resolveSet(draft, 1, 0, effects)
+
+    expect(calls.exercises).toEqual(['Face pulls', 'Face pulls'])
+    expect(first.blockId).not.toBe(second.blockId)
+  })
+
+  it('keeps one create per row when a plan edit reorders the session', async () => {
+    // The identity is the lift, not the index. Keyed on the index, the second
+    // call looked like a different row and created the entry twice.
+    const gate = deferred<ExerciseEntryIdsForTest>()
+    let starts = 0
+    const effects: WriteEffects = {
+      createWorkout: async () => workoutIds('w1', [1]),
+      createExercise: () => { starts += 1; return gate.promise },
+    }
+    const coord = createWriteCoordinator('w1')
+    const row = exercise('Landmine press', 2, {defId: 'def-lm'})
+
+    const first = coord.resolveSet([row], 0, 0, effects)
+    const second = coord.resolveSet([exercise('Squat', 1), row], 1, 1, effects)
+    gate.resolve({id: 'e-lm', setIds: ['e-lm-s0', 'e-lm-s1']})
+
+    expect((await first).blockId).toBe('e-lm-s0')
+    expect((await second).blockId).toBe('e-lm-s1')
+    expect(starts).toBe(1)
+  })
 })
 
 const SLOT_A = '2026-07-24|A'
@@ -224,6 +265,16 @@ describe('reset — the session was switched', () => {
     coord.reset(null, SLOT_A, SHAPE)       // query hasn't surfaced it
     expect(coord.workoutId()).toBe('w1')
     expect(calls.workouts).toBe(1)
+  })
+
+  it('reports which of the three kinds of reseed this was', async () => {
+    // The view acts on the transition — clearing a "Logged Session A"
+    // confirmation belongs to a session switch and nothing else. It used to
+    // work this out from its own mirrored copies of `slot` and `shape`.
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+    expect(coord.reset(null, SLOT_A, SHAPE)).toEqual({slotChanged: false, shapeChanged: false})
+    expect(coord.reset(null, SLOT_A, 'bench,landmine')).toEqual({slotChanged: false, shapeChanged: true})
+    expect(coord.reset(null, SLOT_B, 'bench,landmine')).toEqual({slotChanged: true, shapeChanged: true})
   })
 })
 

@@ -20,7 +20,7 @@
  */
 
 import type {ExerciseEntryIds, MaterializedWorkout} from '../km/store'
-import type {DraftExercise} from './draft'
+import {rowKey, type DraftExercise} from './draft'
 
 /** Ids a create handed back, to be stamped into the draft. Absent from a
  *  result when the create landed after a reseed — see `reset`. */
@@ -40,13 +40,18 @@ export interface ResolvedWrite {
 /** The writes this coordinator orchestrates but never performs. */
 export interface WriteEffects {
   createWorkout(draft: readonly DraftExercise[]): Promise<MaterializedWorkout>
-  createExercise(workoutId: string, exercise: DraftExercise, occurrence: number): Promise<ExerciseEntryIds>
+  createExercise(workoutId: string, exercise: DraftExercise): Promise<ExerciseEntryIds>
 }
 
-/** Identity of an exercise ROW, so switching the same slot twice doesn't
- *  reuse the first option's create. */
-const exerciseKey = (exercise: DraftExercise, exIdx: number): string =>
-  `${exIdx}:${exercise.defId ?? exercise.exercise}`
+/** What `reset` actually did — the view needs to tell three very different
+ *  reseeds apart and used to do it by mirroring `slot` and `shape` into refs
+ *  of its own, i.e. by keeping a second copy of state this module owns. */
+export interface ResetOutcome {
+  /** A different day/session, so a different workout. */
+  slotChanged: boolean
+  /** A different set of lifts — same workout, new positional ids. */
+  shapeChanged: boolean
+}
 
 export interface WriteCoordinator {
   /** The workout being logged into, once it exists. */
@@ -68,8 +73,11 @@ export interface WriteCoordinator {
    *   - `shape` — which exercises are being logged. A change (an `or`-group
    *     switched, the plan loaded) invalidates the positional ids in
    *     `materialized` and starts a new generation, but the workout is the
-   *     same one and keeps being written to. */
-  reset(workoutId: string | null, slot: string, shape: string): void
+   *     same one and keeps being written to.
+   *
+   *  Idempotent, and reports what changed — the view calls it on every query
+   *  emission and reacts to the transition rather than tracking one itself. */
+  reset(workoutId: string | null, slot: string, shape: string): ResetOutcome
   /** The workout was discarded. Results from creates already in flight stop
    *  yielding a block to write to — those blocks are about to be (or already
    *  are) tombstoned, and writing into them leaves live todo sets under a
@@ -124,13 +132,12 @@ export const createWriteCoordinator = (
   const createExerciseOnce = async (
     key: string,
     exercise: DraftExercise,
-    occurrence: number,
     forWorkoutId: string,
     effects: WriteEffects,
   ): Promise<{value: ExerciseEntryIds; stale: boolean}> => {
     const at = generation
     const running = creatingExercises.get(key)
-      ?? effects.createExercise(forWorkoutId, exercise, occurrence).catch(error => {
+      ?? effects.createExercise(forWorkoutId, exercise).catch(error => {
         if (at === generation && creatingExercises.get(key) === running) creatingExercises.delete(key)
         throw error
       })
@@ -155,14 +162,14 @@ export const createWriteCoordinator = (
         materialized = null
         creatingWorkout = null
         creatingExercises = new Map()
-        return
+        return {slotChanged: true, shapeChanged: true}
       }
 
       // Same slot. Adopt a live id if one turned up, but never fall back to
       // null: no live workout usually means the query hasn't caught up with
       // the one we just made, and forgetting it starts a duplicate.
       workoutId = nextWorkoutId ?? workoutId
-      if (nextShape === shape) return
+      if (nextShape === shape) return {slotChanged: false, shapeChanged: false}
 
       // The exercise list changed under us. `materialized` is positional, so
       // it no longer describes this draft, and an in-flight create's ids
@@ -173,6 +180,7 @@ export const createWriteCoordinator = (
       materialized = null
       creatingWorkout = null
       creatingExercises = new Map()
+      return {slotChanged: false, shapeChanged: true}
     },
 
     abandon() {
@@ -217,17 +225,11 @@ export const createWriteCoordinator = (
       // The workout exists but this exercise has no blocks: switched in
       // mid-session.
       const at = generation
-      const {value, stale} = await createExerciseOnce(
-        exerciseKey(exercise, exIdx),
-        exercise,
-        // Which row of this lift THIS is, counted over the SAME array we are
-        // indexing. Deriving it from the prescription instead meant two
-        // sources of truth for one index — the exact shape of the bug the
-        // occurrence counter exists to prevent.
-        draft.slice(0, exIdx).filter(e => (e.defId ?? e.exercise) === (exercise.defId ?? exercise.exercise)).length,
-        workoutId,
-        effects,
-      )
+      // Keyed on the ROW, not its index: two rows of one lift are already
+      // distinct here (that is what `occurrence` is), and an index changes
+      // when a plan edit reorders the session — which let a switched-in lift
+      // adopt whatever create its neighbour had in flight.
+      const {value, stale} = await createExerciseOnce(rowKey(exercise), exercise, workoutId, effects)
       // Discarded while this was in flight: the blocks it just made are
       // children of a workout that is being deleted, so writing into them
       // would strand live todo sets under a tombstone.

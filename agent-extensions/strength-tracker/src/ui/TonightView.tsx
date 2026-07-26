@@ -42,9 +42,9 @@ import {
 import {
   buildDraft,
   hasAcceptedSets,
-  liveIdentity,
   overlayLive,
-  overlayLiveValues,
+  rowKey,
+  setKey,
   toExerciseDraft,
   toMaterializeDraft,
   type DraftExercise,
@@ -71,16 +71,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const [draft, setDraft] = useState<DraftExercise[]>(() => overlayLive(buildDraft(prescription, unit), live))
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  /** Bumped to ask the overlay to run again when no query emission is coming
+   *  — i.e. after a write FAILED. Nothing changed on the block, so the draft
+   *  would otherwise keep showing a value that never landed. */
+  const [resync, setResync] = useState(0)
 
   // Mirror the latest draft into a ref so edit handlers can persist the
   // freshly-computed next state without awaiting a re-render.
   const draftRef = useRef(draft)
   draftRef.current = draft
-  const liveRef = useRef(live)
-  liveRef.current = live
 
-  /** Set blocks with a write in flight — the block is momentarily behind what
-   *  the user just did, and the live overlay must not "correct" it back.
+  /** Sets with a write in flight — the block is momentarily behind what the
+   *  user just did, and the live overlay must not "correct" it back.
    *
    *  This is the one job the removed per-set `dirty` flag was doing that
    *  moving keystrokes into the input did NOT replace. It lives here rather
@@ -88,19 +90,23 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  property of this client's outstanding I/O — and because a pure overlay
    *  cannot tell an in-flight write from a failed one.
    *
-   *  COUNTED, not a plain set: one block routinely has two writes in flight
-   *  at once — typing reps and then tapping the checkbox blurs the input
-   *  first, so the reps write and the done write overlap. With a set, the
-   *  first to finish un-exempts the block while the second is still going. */
+   *  Keyed on `setKey`, not the block id: the first write of the night is
+   *  made by the very tap that CREATES the block, so there is no id to key on
+   *  at the moment the exemption has to start.
+   *
+   *  COUNTED, not a plain set: one set routinely has two writes in flight at
+   *  once — typing reps and then tapping the checkbox blurs the input first,
+   *  so the reps write and the done write overlap. With a set, the first to
+   *  finish un-exempts it while the second is still going. */
   const inFlightRef = useRef(new Map<string, number>())
-  const beginWrite = (blockId: string) =>
-    inFlightRef.current.set(blockId, (inFlightRef.current.get(blockId) ?? 0) + 1)
-  const endWrite = (blockId: string) => {
-    const left = (inFlightRef.current.get(blockId) ?? 1) - 1
-    if (left > 0) inFlightRef.current.set(blockId, left)
-    else inFlightRef.current.delete(blockId)
+  const beginWrite = (key: string) =>
+    inFlightRef.current.set(key, (inFlightRef.current.get(key) ?? 0) + 1)
+  const endWrite = (key: string) => {
+    const left = (inFlightRef.current.get(key) ?? 1) - 1
+    if (left > 0) inFlightRef.current.set(key, left)
+    else inFlightRef.current.delete(key)
   }
-  /** The ids currently exempt — `Map` keys read as the `ReadonlySet` the
+  /** The sets currently exempt — `Map` keys read as the `ReadonlySet` the
    *  overlay wants (`has` is all it uses). */
   const writingNow = (): ReadonlySet<string> => new Set(inFlightRef.current.keys())
 
@@ -123,66 +129,29 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // query hasn't resolved — indistinguishable from "nothing logged". It
     // adopts an in-progress workout for this day+session when there is one.
     createWorkout: rows => startWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, rows)),
-    createExercise: (workoutId, ex, occurrence) =>
-      materializeExercise(repo, workoutId, toExerciseDraft(ex), occurrence),
+    createExercise: (workoutId, ex) => materializeExercise(repo, workoutId, toExerciseDraft(ex)),
   }
 
-  // Reseed the editing state only when the underlying identity changes — a
-  // session/day switch, a config refine, or the live block structure changing
-  // (materialization, another device). Value edits keep the same ids, so they
-  // don't trigger a reseed and never clobber in-progress typing.
-  const seededKeyRef = useRef<string | null>(null)
-  const seededSlotRef = useRef<string>(slot)
-  const seededShapeRef = useRef<string>(shape)
+  /** The draft, re-derived from its inputs on every emission.
+   *
+   *  There is no longer a question of whether this emission is worth reacting
+   *  to. `overlayLive` takes what is on screen as an input and merges rather
+   *  than replaces, so running it always is both correct and cheap (it hands
+   *  back the same array when nothing moved). The guard this replaced had to
+   *  decide, from five clauses, whether an arriving `live` was "our own
+   *  create, one query behind" — and every version of that guard was wrong
+   *  about some third case: it skipped an `or`-group switch, or it discarded
+   *  a tick whose write was still in flight. */
   useEffect(() => {
-    // The key covers everything the draft is BUILT from — not just which
-    // exercises, but the numbers pre-filled into their sets. A plan edit (or
-    // another device finishing a session) changes the prescribed weight or
-    // rep range for the same lifts, and the draft has to follow. Logging sets
-    // in THIS session doesn't move these: history only counts finished
-    // workouts, so an in-progress session can't reseed itself mid-edit.
-    const key = `${slot}|${unit}|${liveIdentity(live)}|${shape}`
-    if (key === seededKeyRef.current) return
-    const previousSlot = seededSlotRef.current
-    const previousShape = seededShapeRef.current
-    seededKeyRef.current = key
-    seededSlotRef.current = slot
-    seededShapeRef.current = shape
-
-    // The live query catching up with the workout WE just created carries no
-    // news — we stamped those ids ourselves. Rebuilding the draft from the
-    // blocks here would throw away a number being typed right now, or a tick
-    // whose write hasn't landed yet (which Finish would then prune).
-    //
-    // Only when the slot AND the shape held still, though. That is what makes
-    // it "the same draft, one query behind". An `or`-group switched mid-
-    // session changes the shape, and skipping there left the view rendering
-    // the option you just moved OFF — the switch looked like it did nothing,
-    // and every set logged after it went to the wrong lift.
-    const ourWorkoutArrived = slot === previousSlot
-      && shape === previousShape
-      && live !== undefined
-      && live.id === coordinator.materialized()?.workoutId
-      && draftRef.current.some(ex => ex.blockId !== undefined)
-    coordinator.reset(live?.id ?? null, slot, shape)
-    if (ourWorkoutArrived) return
-
-    setDraft(overlayLive(buildDraft(prescription, unit), live))
+    const {slotChanged} = coordinator.reset(live?.id ?? null, slot, shape)
+    const writing = writingNow()
+    setDraft(cur => overlayLive(buildDraft(prescription, unit), live, cur, writing))
     // Keep a confirmation the user hasn't seen. Finishing makes the workout
-    // leave `liveWorkouts`, which reseeds — clearing "Logged Session A" the
-    // instant it appeared and leaving a screen that looks like nothing
+    // leave `liveWorkouts`, which lands here — clearing "Logged Session A"
+    // the instant it appeared and leaving a screen that looks like nothing
     // happened, which invites a second workout for tonight.
-    if (slot !== previousSlot) setStatus(null)
-  }, [slot, session, unit, live, prescription, shape, coordinator])
-
-  // Values from the blocks, on every emission — another device's tick, the
-  // outline's checkbox, or the values of a workout this view adopted rather
-  // than created. Unconditional, and safe to be: the draft holds no
-  // uncommitted state, because a number being typed lives in the input's own
-  // state until blur. Structure stays the reseed effect's job.
-  useEffect(() => {
-    setDraft(cur => overlayLiveValues(cur, live, writingNow()))
-  }, [live])
+    if (slotChanged) setStatus(null)
+  }, [slot, unit, live, prescription, shape, coordinator, resync])
 
   const applyPatch = (
     prev: DraftExercise[],
@@ -207,34 +176,35 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // NAMES, while the records that exist are keyed on their plan block — a
     // whole parallel tree of blocks for a session already in progress.
     if (readOnly || !configLoaded) return undefined
-    const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
-    if (patch) setDraft(cur => applyIdPatch(cur, patch))
-    if (blockId) {
-      beginWrite(blockId)
-      try {
-        // The CHANGE, not the whole set: the rest of this row may be older
-        // than the block (the live query hadn't resolved when the draft was
-        // built), and writing it back is how logged reps got replaced by the
-        // prescription's.
-        await writeSet(repo, blockId, change, next[exIdx].unit)
-        // No overlay on success, deliberately. The block now agrees with what
-        // is on screen, and the write's OWN query emission re-runs the overlay
-        // a moment later with the news. Re-running it here instead reverted
-        // every tap: a `setDraft` updater is evaluated at the top of the next
-        // render, so it reads the `live` from BEFORE this write — the version
-        // that still says `open` — and un-ticks the box the user just ticked
-        // until the emission lands.
-        endWrite(blockId)
-      } catch (error) {
-        // A failure is the case that genuinely needs it: nothing changed, so
-        // no emission is coming, and the draft would keep showing a value that
-        // never reached the block.
-        endWrite(blockId)
-        setDraft(cur => overlayLiveValues(cur, liveRef.current, writingNow()))
-        throw error
-      }
+    // Exempt from the overlay for the WHOLE round trip, resolve included: the
+    // first tap of the night creates the blocks, and an emission arriving
+    // mid-create would otherwise re-derive this set from the prescription and
+    // drop the tick that started it all.
+    const writingKey = setKey(next[exIdx], setIdx)
+    beginWrite(writingKey)
+    try {
+      const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
+      if (patch) setDraft(cur => applyIdPatch(cur, patch))
+      // The CHANGE, not the whole set: the rest of this row may be older than
+      // the block (the live query hadn't resolved when the draft was built),
+      // and writing it back is how logged reps got replaced by the
+      // prescription's.
+      if (blockId) await writeSet(repo, blockId, change, next[exIdx].unit)
+      endWrite(writingKey)
+      // No overlay on success, deliberately. The block now agrees with what is
+      // on screen, and the write's OWN query emission re-runs the overlay a
+      // moment later with the news. Asking for one here instead reverted every
+      // tap, because the `live` it would run against is the one from before
+      // this write — the version that still says `open`.
+      return patch
+    } catch (error) {
+      // A failure is the case that genuinely needs it: nothing changed on the
+      // block, so no emission is coming, and the draft would keep showing a
+      // value that never reached it.
+      endWrite(writingKey)
+      setResync(n => n + 1)
+      throw error
     }
-    return patch
   }
 
   /** A write failing must not be silent: the checkbox stays ticked on screen
@@ -436,7 +406,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       <ol className="flex flex-col gap-3">
         {draft.map((ex, exIdx) => (
           <ExerciseCard
-            key={`${exIdx}:${ex.altGroupKey ?? ex.defId ?? ex.exercise}`}
+            // The row's own identity — so switching an `or`-group remounts
+            // the card (it is a different lift) while a plan edit that merely
+            // reorders the session does not.
+            key={rowKey(ex)}
             ex={ex}
             unit={unit}
             locked={readOnly || busy || !configLoaded}

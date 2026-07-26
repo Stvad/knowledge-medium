@@ -167,45 +167,48 @@ export const toLiveSet = (row: RowLike): LiveSet => ({
   ...(optNum(row, FIELD.completedAt) !== undefined ? {completedAt: optNum(row, FIELD.completedAt)} : {}),
 })
 
-/** Which live entry backs each prescribed row, positionally.
+/** What identifies a lift WITHIN one workout: its plan block if it has one
+ *  (so a rename mid-session changes nothing), else its name — plus which
+ *  occurrence of that lift this is, because a session can prescribe the same
+ *  lift twice and the two rows must not share an entry.
  *
- *  By plan block first, then by name — so a lift renamed mid-session still
- *  re-attaches to the entry it was logged into. Each live entry backs at most
- *  ONE row: two rows sharing a name (a hand-written plan, a default-config
- *  session) would otherwise both adopt it and then write over each other.
+ *  The one definition of "the same lift", used by all three sides that have to
+ *  agree about it: the write path derives an entry's block id from exactly
+ *  these (`exerciseIdentity` in store.ts), the draft stamps it on every row
+ *  (`rowKey` in draft.ts), and the matcher below re-attaches the draft to the
+ *  blocks. When they disagreed, the draft edited blocks the writer had
+ *  assigned to a different row. */
+export const liftKey = (
+  definitionId: string | undefined,
+  exercise: string,
+  occurrence: number,
+): string => `${definitionId ?? exercise}|${occurrence}`
+
+/** Which live entry backs each draft row, keyed on `liftKey`.
  *
- *  Its own function, and pure, because it is the read-side mirror of how the
- *  write side derives an entry's block id (plan block if there is one, else
- *  name, plus an occurrence counter). The two have to agree about what counts
- *  as "the same lift" or the draft edits blocks the writer thinks belong to a
- *  different row. */
+ *  The live side counts its own occurrences in block order, which is the order
+ *  the entries were written in — the same order the draft rows are in. So row
+ *  "Bench press, occurrence 1" attaches to the second Bench press entry, and
+ *  each entry backs at most one row without any claimed-once bookkeeping.
+ *
+ *  Deliberately no name fallback for a row that HAS a plan block: the write
+ *  path would derive that row's entry id from the plan block, so matching it
+ *  to a name-keyed entry attaches the draft to blocks no later write will ever
+ *  reach. Both sides key the same way or neither does. */
 export const matchLiveExercises = (
-  rows: readonly {readonly name: string; readonly defId?: string}[],
+  keys: readonly string[],
   live: LiveWorkout | undefined,
 ): (LiveExercise | undefined)[] => {
-  if (!live) return rows.map(() => undefined)
-  // FIRST wins, not last. Two entries can share a key — that is exactly the
-  // case the write side's `occurrence` counter exists for — and they are
-  // ordered the same way the draft's rows are, so row 0 must see entry 0.
-  // `new Map(pairs)` keeps the LAST of each key, which handed row 0 the
-  // second entry's blocks and left row 1 with nothing.
-  const first = (pick: (e: LiveExercise) => string | undefined): Map<string, LiveExercise> => {
-    const byKey = new Map<string, LiveExercise>()
-    for (const e of live.exercises) {
-      const key = pick(e)
-      if (key !== undefined && !byKey.has(key)) byKey.set(key, e)
-    }
-    return byKey
+  if (!live) return keys.map(() => undefined)
+  const byKey = new Map<string, LiveExercise>()
+  const seen = new Map<string, number>()
+  for (const e of live.exercises) {
+    const base = e.definitionId ?? e.exercise
+    const occurrence = seen.get(base) ?? 0
+    seen.set(base, occurrence + 1)
+    byKey.set(liftKey(e.definitionId, e.exercise, occurrence), e)
   }
-  const byName = first(e => e.exercise)
-  const byDefId = first(e => e.definitionId)
-  const claimed = new Set<string>()
-  return rows.map(row => {
-    const match = (row.defId !== undefined ? byDefId.get(row.defId) : undefined) ?? byName.get(row.name)
-    if (!match || claimed.has(match.id)) return undefined
-    claimed.add(match.id)
-    return match
-  })
+  return keys.map(key => byKey.get(key))
 }
 
 export const buildLiveWorkouts = (

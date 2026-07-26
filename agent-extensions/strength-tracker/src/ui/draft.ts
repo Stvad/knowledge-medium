@@ -8,10 +8,9 @@
  */
 
 import type {AltOption, ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
-import {workingWeight} from '../engine/progression'
-import {matchLiveExercises} from '../km/history'
-import type {LiveSet, LiveWorkout} from '../km/history'
-import type {ExerciseDraft, FinishPlan, SetDraft, WorkoutDraft} from '../km/store'
+import {liftKey, matchLiveExercises} from '../km/history'
+import type {LiveExercise, LiveSet, LiveWorkout} from '../km/history'
+import type {ExerciseDraft, SetDraft, WorkoutDraft} from '../km/store'
 
 export interface DraftSet {
   weight: number
@@ -31,6 +30,15 @@ export interface DraftExercise {
   exercise: string
   /** Plan block behind this row (see `PrescribedExercise.defId`). */
   defId?: string
+  /** Which row of THIS lift the session is on — 0 unless the plan prescribes
+   *  the same lift twice.
+   *
+   *  Counted once, in `buildDraft`, and carried from here into the block-id
+   *  derivation, the live-block match and the in-flight bookkeeping. It used
+   *  to be recounted at each of those, from a different array each time; two
+   *  counts of the same thing is the shape of every bug this row identity
+   *  exists to prevent. */
+  occurrence: number
   unit: string
   freeform: boolean
   perSide: boolean
@@ -73,133 +81,180 @@ const initialSets = (ex: PrescribedExercise): DraftSet[] => {
   return Array.from({length: n}, () => ({weight, reps, done: false}))
 }
 
-export const buildDraft = (prescription: Prescription, unit: string): DraftExercise[] =>
-  prescription.exercises.map(ex => ({
-    exercise: ex.exercise,
-    defId: ex.defId,
-    unit,
-    freeform: ex.freeform,
-    perSide: ex.perSide,
-    repMin: ex.repMin,
-    repMax: ex.repMax,
-    prescribedWeight: ex.weight,
-    prescribedSets: ex.sets,
-    rationale: ex.rationale,
-    note: ex.note,
-    videos: ex.videos,
-    altGroupKey: ex.altGroupKey,
-    altOptions: ex.altOptions,
-    sets: initialSets(ex),
-  }))
-
-/** Overlay a live in-progress workout onto the prescription draft: matched by
- *  plan block (falling back to exercise name), the block's set values + ids
- *  replace the pre-filled ones, so the rendered draft reflects (and can edit)
- *  the actual blocks. Exercises the live workout doesn't have keep their
- *  pre-filled sets.
- *
- *  STRUCTURAL: it rebuilds rows wholesale, so it runs only on a reseed (a
- *  session switch, the block structure changing). Value-only news uses
- *  `overlayLiveValues`, which can run on every emission without discarding
- *  what you are typing. */
-export const overlayLive = (
-  draft: readonly DraftExercise[],
-  live: LiveWorkout | undefined,
-): DraftExercise[] => {
-  const matches = matchLiveExercises(draft.map(ex => ({name: ex.exercise, defId: ex.defId})), live)
-  return draft.map((ex, i) => {
-    const le = matches[i]
-    if (!le) return {...ex}
+export const buildDraft = (prescription: Prescription, unit: string): DraftExercise[] => {
+  // The ONE place a lift's occurrence within the session is counted.
+  const seen = new Map<string, number>()
+  return prescription.exercises.map(ex => {
+    const base = ex.defId ?? ex.exercise
+    const occurrence = seen.get(base) ?? 0
+    seen.set(base, occurrence + 1)
     return {
-      ...ex,
-      blockId: le.id,
-      sets: le.sets.map(s => ({
-        weight: s.weight,
-        reps: s.reps,
-        done: s.done,
-        completedAt: s.completedAt,
-        rpe: s.rpe,
-        side: s.side,
-        blockId: s.id,
-      })),
+      exercise: ex.exercise,
+      defId: ex.defId,
+      occurrence,
+      unit,
+      freeform: ex.freeform,
+      perSide: ex.perSide,
+      repMin: ex.repMin,
+      repMax: ex.repMax,
+      prescribedWeight: ex.weight,
+      prescribedSets: ex.sets,
+      rationale: ex.rationale,
+      note: ex.note,
+      videos: ex.videos,
+      altGroupKey: ex.altGroupKey,
+      altOptions: ex.altOptions,
+      sets: initialSets(ex),
     }
   })
 }
 
-const sameAsBlock = (draftSet: DraftSet, live: LiveSet): boolean =>
-  draftSet.weight === live.weight
-  && draftSet.reps === live.reps
-  && draftSet.done === live.done
-  && draftSet.rpe === live.rpe
-  && draftSet.side === live.side
-  && draftSet.completedAt === live.completedAt
+/** This row's identity — stable across a re-prescription, a rename, and every
+ *  query emission, because it is the same thing the row's blocks are derived
+ *  from. Row POSITION is not identity: an `or`-group switch reorders nothing
+ *  but a plan edit can, and keying on the index made a switched-in lift adopt
+ *  its neighbour's in-flight create. */
+export const rowKey = (ex: Pick<DraftExercise, 'exercise' | 'defId' | 'occurrence'>): string =>
+  liftKey(ex.defId, ex.exercise, ex.occurrence)
 
-/** Track the blocks' current values without touching structure or ids.
- *
- *  Matched by set block, so it only ever speaks about sets this draft has
- *  already attached to a block — and it always wins, because the block IS the
- *  record. That is what makes the draft un-stale-able: another device's tick,
- *  the outline's checkbox, and the values of a workout this view adopted all
- *  arrive the same way, and Finish writing the draft back can never clobber a
- *  value it has already re-read.
- *
- *  Safe to be unconditional because the draft holds no uncommitted state: a
- *  number being typed lives in the input's own React state until blur. Keep
- *  it that way — moving keystrokes back into the draft would need a per-set
- *  dirty flag to make this safe again, and that flag is exactly what this
- *  design avoids.
- *
- *  `writing` is the one exemption, and it is not a value the draft carries:
- *  those sets have a write IN FLIGHT, so the block is momentarily behind what
- *  the user just did and "the block wins" would revert their own tap in front
- *  of them. A failed write is deliberately NOT exempt — it reverts, which is
- *  the honest outcome. The caller owns that set because only it knows which
- *  of its writes are outstanding; a pure function cannot tell in-flight from
- *  failed.
- *
- *  Returns the input array unchanged (same reference) when nothing moved, so
- *  running it on every query emission costs one comparison pass and no
- *  re-render. */
-export const overlayLiveValues = (
-  draft: DraftExercise[],
-  live: LiveWorkout | undefined,
-  writing: ReadonlySet<string> = new Set(),
-): DraftExercise[] => {
-  if (!live) return draft
-  const byId = new Map<string, LiveSet>()
-  for (const ex of live.exercises) for (const s of ex.sets) byId.set(s.id, s)
+/** Identity of one set row. Sets are positional within their lift — including
+ *  the L/R rows of a per-side lift, which alternate — so the index IS the
+ *  identity here, exactly as it is in the derived set-block id. */
+export const setKey = (
+  ex: Pick<DraftExercise, 'exercise' | 'defId' | 'occurrence'>,
+  setIdx: number,
+): string => `${rowKey(ex)}|${setIdx}`
 
-  let changed = false
-  const next = draft.map(ex => {
-    let rowChanged = false
-    const sets = ex.sets.map(s => {
-      if (s.blockId !== undefined && writing.has(s.blockId)) return s
-      const block = s.blockId !== undefined ? byId.get(s.blockId) : undefined
-      if (!block || sameAsBlock(s, block)) return s
-      rowChanged = true
-      return {
-        ...s,
-        weight: block.weight,
-        reps: block.reps,
-        done: block.done,
-        rpe: block.rpe,
-        side: block.side,
-        completedAt: block.completedAt,
-      }
-    })
-    if (!rowChanged) return ex
-    changed = true
-    return {...ex, sets}
-  })
-  return changed ? next : draft
+const fromLiveSet = (s: LiveSet): DraftSet => ({
+  weight: s.weight,
+  reps: s.reps,
+  done: s.done,
+  ...(s.rpe !== undefined ? {rpe: s.rpe} : {}),
+  ...(s.side !== undefined ? {side: s.side} : {}),
+  ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
+  blockId: s.id,
+})
+
+const sameSet = (a: DraftSet, b: DraftSet): boolean =>
+  a.weight === b.weight
+  && a.reps === b.reps
+  && a.done === b.done
+  && a.rpe === b.rpe
+  && a.side === b.side
+  && a.completedAt === b.completedAt
+  && a.blockId === b.blockId
+
+/** Field-wise, over whatever keys the row has, rather than a hand-written
+ *  list: this exists only to decide whether the previous object can be reused,
+ *  and an enumerated list silently stops noticing a field the moment one is
+ *  added. Over-reporting a change costs a re-render; under-reporting one shows
+ *  stale data, so the generic comparison is the safe direction to be wrong in.
+ *  Array-valued metadata (`videos`, `altOptions`) compares by reference, which
+ *  is stable because the prescription it comes from is memoized. */
+const sameRow = (a: DraftExercise, b: DraftExercise): boolean => {
+  // Over the UNION of both key sets, so a field that is absent on one side
+  // and present-but-undefined on the other still compares equal — which is
+  // exactly the `blockId` of a row built by `buildDraft` versus one that has
+  // been through here before.
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof DraftExercise>) {
+    if (key === 'sets') continue
+    if (a[key] !== b[key]) return false
+  }
+  return a.sets.length === b.sets.length && a.sets.every((s, i) => sameSet(s, b.sets[i]))
 }
 
-/** Stable identity of a live workout's block structure (ids only) — reseed the
- *  editing state when this changes, not on every value edit. */
-export const liveIdentity = (live: LiveWorkout | undefined): string =>
-  live
-    ? `${live.id}:${live.exercises.map(e => `${e.id}[${e.sets.map(s => s.id).join(',')}]`).join('|')}`
-    : ''
+const mergeSets = (
+  row: DraftExercise,
+  live: LiveExercise | undefined,
+  previous: DraftExercise | undefined,
+  writing: ReadonlySet<string>,
+): DraftSet[] => {
+  // Never fewer rows than either side has. The three block queries behind
+  // `live` emit independently, so an entry can legitimately arrive with none
+  // of its sets yet; taking the live count verbatim made every set row vanish
+  // for a beat mid-session. Live having MORE than the plan prescribes is just
+  // as real — a set logged before the plan's set count was edited down.
+  const count = Math.max(row.sets.length, live?.sets.length ?? 0)
+  const sets: DraftSet[] = []
+  for (let i = 0; i < count; i += 1) {
+    const liveSet = live?.sets[i]
+    const previousSet = previous?.sets[i]
+    // A write is in flight for this set: the block is momentarily BEHIND what
+    // the user just did, so letting it win reverts their own tap in front of
+    // them. Everything else here is "the block is the record".
+    if (previousSet && writing.has(setKey(row, i))) {
+      sets.push(liveSet && previousSet.blockId === undefined
+        ? {...previousSet, blockId: liveSet.id}
+        : previousSet)
+      continue
+    }
+    if (liveSet) {
+      sets.push(fromLiveSet(liveSet))
+      continue
+    }
+    // We created this block ourselves and the query hasn't caught up. Keeping
+    // it is what lets this whole function run unconditionally: the id, and the
+    // values written with it, survive an emission that predates them.
+    if (previousSet?.blockId !== undefined) {
+      sets.push(previousSet)
+      continue
+    }
+    sets.push(row.sets[i])
+  }
+  return sets
+}
+
+/** The draft the view renders: tonight's prescription, with the live blocks
+ *  laid over it.
+ *
+ *  Non-destructive, and that is the whole design. It takes what is currently
+ *  on screen as an input rather than replacing it, so it can run on EVERY
+ *  query emission — there is no longer a question of whether this emission
+ *  carries news worth reseeding for, which is what the deleted five-clause
+ *  `ourWorkoutArrived` guard was trying (and failing) to answer. Precedence,
+ *  per set:
+ *
+ *    1. a write in flight — the block is behind, not ahead
+ *    2. the block, whenever there is one — another device's tick, the
+ *       outline's checkbox, the values of a workout this view adopted
+ *    3. what is on screen, if it already has a block id — our own create,
+ *       one query behind
+ *    4. the prescription's pre-filled value
+ *
+ *  Rows are matched by `rowKey` on all three sides, so a row keeps its blocks
+ *  across a re-prescription and loses them exactly when it becomes a different
+ *  lift. A live entry with no row (the `or`-group option you switched away
+ *  from) is deliberately absent from the draft — Finish reads the committed
+ *  tree, so nothing depends on this view having rendered it.
+ *
+ *  Returns `previous` unchanged (same reference) when nothing moved, and
+ *  reuses each unchanged row object, so running it per emission costs one
+ *  comparison pass and no re-render.
+ *
+ *  Safe to be unconditional only because the draft holds no uncommitted state:
+ *  a number being typed lives in the input's own React state until blur. Keep
+ *  it that way. */
+export const overlayLive = (
+  base: readonly DraftExercise[],
+  live: LiveWorkout | undefined,
+  previous: DraftExercise[] = [],
+  writing: ReadonlySet<string> = new Set(),
+): DraftExercise[] => {
+  const matches = matchLiveExercises(base.map(rowKey), live)
+  const previousByKey = new Map(previous.map(ex => [rowKey(ex), ex] as const))
+
+  const next = base.map((row, i) => {
+    const liveEntry = matches[i]
+    const previousRow = previousByKey.get(rowKey(row))
+    const merged: DraftExercise = {
+      ...row,
+      blockId: liveEntry?.id ?? previousRow?.blockId,
+      sets: mergeSets(row, liveEntry, previousRow, writing),
+    }
+    return previousRow && sameRow(merged, previousRow) ? previousRow : merged
+  })
+  return next.length === previous.length && next.every((row, i) => row === previous[i]) ? previous : next
+}
 
 /** One exercise as the store writes it. Exported because a mid-session
  *  `or`-group switch materializes a single exercise into an existing
@@ -219,6 +274,7 @@ export const toSetDraft = (s: DraftSet): SetDraft => ({
 export const toExerciseDraft = (ex: DraftExercise): ExerciseDraft => ({
   exercise: ex.exercise,
   definitionId: ex.defId,
+  occurrence: ex.occurrence,
   unit: ex.unit,
   prescribedWeight: ex.prescribedWeight,
   prescribedSets: ex.prescribedSets,

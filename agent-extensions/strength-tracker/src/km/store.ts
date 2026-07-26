@@ -72,6 +72,11 @@ export interface ExerciseDraft {
    *  from the outline — written as a ref so the definition's backlinks are
    *  the lift's logged history. */
   definitionId?: string
+  /** Which row of this lift the session is on. Carried in, not recounted
+   *  here: the caller's draft is the thing whose rows have to line up with
+   *  the entries, and counting again from a different array is how a row
+   *  ended up writing into its neighbour's blocks. See `liftKey`. */
+  occurrence: number
   unit: string
   prescribedWeight?: number
   prescribedSets?: number
@@ -139,7 +144,9 @@ const workoutIdentity = (workspaceId: string, day: string, session: SessionType)
  *  one, so a lift renamed mid-session stays the same entry. `occurrence`
  *  separates two rows of the same lift in one session; without it the second
  *  row would adopt the first row's blocks and they would write over each
- *  other. */
+ *  other. Same `(plan block ?? name, occurrence)` pair the read side matches
+ *  on — see `liftKey` in history.ts; only the string layout differs, and it
+ *  differs because it is an id we are already committed to.  */
 const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity =>
   ({namespace: EXERCISE_NS, key: occurrence === 0 ? `${workoutId}|${key}` : `${workoutId}|${key}|${occurrence}`})
 
@@ -190,11 +197,10 @@ const writeExercise = async (
   tx: Tx,
   workoutId: string,
   ex: ExerciseDraft,
-  occurrence: number,
   typeSnapshot: TypeSnapshot,
 ): Promise<ExerciseEntryIds> => {
   const {id: exId} = await getOrCreateTypedChild(repo, tx, {
-    identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, occurrence),
+    identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, ex.occurrence),
     parentId: workoutId,
     content: ex.exercise,
     types: [EXERCISE_ENTRY_TYPE],
@@ -257,14 +263,9 @@ export const startWorkout = async (
       typeSnapshot,
     })
 
-    // Two rows of the same lift in one session each need their own entry.
-    const occurrences = new Map<string, number>()
     const exercises: ExerciseEntryIds[] = []
     for (const ex of draft.exercises) {
-      const key = ex.definitionId ?? ex.exercise
-      const occurrence = occurrences.get(key) ?? 0
-      occurrences.set(key, occurrence + 1)
-      exercises.push(await writeExercise(repo, tx, workout.id, ex, occurrence, typeSnapshot))
+      exercises.push(await writeExercise(repo, tx, workout.id, ex, typeSnapshot))
     }
     return {workoutId: workout.id, exercises}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
@@ -281,10 +282,9 @@ export const materializeExercise = async (
   repo: Repo,
   workoutId: string,
   ex: ExerciseDraft,
-  occurrence: number,
 ): Promise<ExerciseEntryIds> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, occurrence, typeSnapshot),
+  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot),
     {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 

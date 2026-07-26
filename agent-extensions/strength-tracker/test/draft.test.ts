@@ -1,18 +1,20 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildDraft, hasAcceptedSets, overlayLive, overlayLiveValues, toMaterializeDraft} from '../src/ui/draft'
+import {buildDraft, hasAcceptedSets, overlayLive, rowKey, setKey, toMaterializeDraft} from '../src/ui/draft'
 import type {LiveWorkout} from '../src/km/history'
 import type {Prescription} from '../src/engine/types'
+
+const exerciseOf = (over: Partial<Prescription['exercises'][number]> = {}) => ({
+  exercise: 'Bench press', sets: 3, repMin: 6, repMax: 10, weight: 135,
+  perSide: false, freeform: false, rationale: 'hold 135', ...over,
+})
 
 const prescription = (over: Partial<Prescription['exercises'][number]> = {}): Prescription => ({
   day: '2026-07-23',
   session: 'A',
   offSchedule: false,
   notes: [],
-  exercises: [{
-    exercise: 'Bench press', sets: 3, repMin: 6, repMax: 10, weight: 135,
-    perSide: false, freeform: false, rationale: 'hold 135', ...over,
-  }],
+  exercises: [exerciseOf(over)],
 })
 
 describe('buildDraft', () => {
@@ -30,6 +32,19 @@ describe('buildDraft', () => {
   it('leaves weight at 0 when there is no prescription yet', () => {
     const draft = buildDraft(prescription({weight: undefined}), 'lb')
     expect(draft[0].sets.every(s => s.weight === 0)).toBe(true)
+  })
+
+  it('numbers the rows of a twice-prescribed lift, so they are different rows', () => {
+    // The whole point of counting here rather than at each use: the block-id
+    // derivation, the live match and the in-flight bookkeeping all read this
+    // one number instead of each recounting from a different array.
+    const twice: Prescription = {
+      ...prescription(),
+      exercises: [exerciseOf({defId: 'def-face'}), exerciseOf({defId: 'def-face'}), exerciseOf({exercise: 'Row'})],
+    }
+    const draft = buildDraft(twice, 'lb')
+    expect(draft.map(ex => ex.occurrence)).toEqual([0, 1, 0])
+    expect(new Set(draft.map(rowKey)).size).toBe(3)
   })
 })
 
@@ -59,98 +74,162 @@ describe('toMaterializeDraft', () => {
 })
 
 describe('overlayLive', () => {
-  const live: LiveWorkout = {
+  const base = () => buildDraft(prescription(), 'lb')
+
+  const liveWith = (
+    sets: LiveWorkout['exercises'][number]['sets'],
+    over: Partial<LiveWorkout['exercises'][number]> = {},
+  ): LiveWorkout => ({
     id: 'w1', day: '2026-07-23', session: 'A',
-    exercises: [{
-      id: 'e1', exercise: 'Bench press', unit: 'lb', prescribedSets: 3,
-      sets: [
-        {id: 's1', weight: 140, reps: 9, done: true},
-        {id: 's2', weight: 140, reps: 8, done: false},
-      ],
-    }],
-  }
-
-  it('overlays the live block set values + ids by exercise name, keeping prescription metadata', () => {
-    const merged = overlayLive(buildDraft(prescription(), 'lb'), live)
-    expect(merged[0].blockId).toBe('e1')
-    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s1', 's2'])
-    expect(merged[0].sets[0]).toMatchObject({weight: 140, reps: 9, done: true})
-    expect(merged[0].rationale).toBe('hold 135') // metadata still from the prescription
+    exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets, ...over}],
   })
 
-  it('keeps pre-filled sets for an exercise the live workout lacks', () => {
-    const merged = overlayLive(buildDraft(prescription(), 'lb'), undefined)
-    expect(merged[0].blockId).toBeUndefined()
-    expect(merged[0].sets).toHaveLength(3)
-  })
-
-  it('re-attaches by plan block when the exercise was renamed mid-session', () => {
-    const renamed: LiveWorkout = {
-      ...live,
-      exercises: [{...live.exercises[0], exercise: 'Bench press (comp grip)', definitionId: 'def-bench'}],
-    }
-    const merged = overlayLive(buildDraft(prescription({defId: 'def-bench'}), 'lb'), renamed)
-    expect(merged[0].blockId).toBe('e1')
-    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s1', 's2'])
-  })
-})
-
-describe('overlayLiveValues', () => {
+  /** What is on screen after the workout was created: every set carries its
+   *  block, values still as prescribed. */
   const materialized = () => {
-    const draft = buildDraft(prescription(), 'lb')
+    const draft = base()
     draft[0].blockId = 'e1'
     draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
     return draft
   }
 
-  const liveWith = (sets: LiveWorkout['exercises'][number]['sets']): LiveWorkout => ({
-    id: 'w1', day: '2026-07-23', session: 'A',
-    exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets}],
+  const live = liveWith([
+    {id: 's1', weight: 140, reps: 9, done: true},
+    {id: 's2', weight: 140, reps: 8, done: false},
+  ], {prescribedSets: 3})
+
+  it('lays the block values + ids over the prescription, keeping its metadata', () => {
+    const merged = overlayLive(base(), live)
+    expect(merged[0].blockId).toBe('e1')
+    expect(merged[0].sets.slice(0, 2).map(s => s.blockId)).toEqual(['s1', 's2'])
+    expect(merged[0].sets[0]).toMatchObject({weight: 140, reps: 9, done: true})
+    expect(merged[0].rationale).toBe('hold 135') // metadata still from the prescription
+  })
+
+  it('keeps pre-filled sets for an exercise the live workout lacks', () => {
+    const merged = overlayLive(base(), undefined)
+    expect(merged[0].blockId).toBeUndefined()
+    expect(merged[0].sets).toHaveLength(3)
+  })
+
+  it('re-attaches by plan block when the exercise was renamed mid-session', () => {
+    const renamed = liveWith(live.exercises[0].sets, {
+      exercise: 'Bench press (comp grip)', definitionId: 'def-bench',
+    })
+    const merged = overlayLive(buildDraft(prescription({defId: 'def-bench'}), 'lb'), renamed)
+    expect(merged[0].blockId).toBe('e1')
+    expect(merged[0].sets.slice(0, 2).map(s => s.blockId)).toEqual(['s1', 's2'])
+  })
+
+  it('never shows fewer set rows than the plan prescribes', () => {
+    // The workout, entry and set queries emit independently, so an entry can
+    // arrive with none of its sets. Taking the live count verbatim made every
+    // row of that lift vanish for a beat mid-session.
+    const merged = overlayLive(base(), liveWith([]))
+    expect(merged[0].sets).toHaveLength(3)
+    expect(merged[0].blockId).toBe('e1')
+  })
+
+  it('shows a logged set the plan no longer prescribes', () => {
+    const shorter = buildDraft(prescription({sets: 1}), 'lb')
+    const merged = overlayLive(shorter, liveWith([
+      {id: 's0', weight: 135, reps: 10, done: true},
+      {id: 's1', weight: 135, reps: 9, done: true},
+    ]))
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1'])
   })
 
   it('adopts a value this client has not touched — another device, or an adopted workout', () => {
-    const next = overlayLiveValues(materialized(), liveWith([
+    const merged = overlayLive(base(), liveWith([
       {id: 's0', weight: 145, reps: 9, done: true, completedAt: 111},
-    ]))
-    expect(next[0].sets[0]).toMatchObject({weight: 145, reps: 9, done: true, completedAt: 111})
+    ]), materialized())
+    expect(merged[0].sets[0]).toMatchObject({weight: 145, reps: 9, done: true, completedAt: 111})
   })
 
-  it('lets the block win over a local value — that is what makes the draft un-stale-able', () => {
-    // Unconditional on purpose. The draft holds only settled values (a
-    // number being typed lives in the input's own state), so there is
-    // nothing half-finished here to protect, and Finish writing the draft
-    // back can't clobber a value it has already re-read.
-    const draft = materialized()
-    draft[0].sets[0] = {...draft[0].sets[0], weight: 150, done: true}
-    const next = overlayLiveValues(draft, liveWith([{id: 's0', weight: 135, reps: 10, done: false}]))
-    expect(next[0].sets[0]).toMatchObject({weight: 135, done: false})
+  it('lets the block win over what is on screen — that is what makes the draft un-stale-able', () => {
+    // Unconditional on purpose. The draft holds only settled values (a number
+    // being typed lives in the input's own state), so there is nothing
+    // half-finished here to protect, and Finish writing the draft back can't
+    // clobber a value it has already re-read.
+    const previous = materialized()
+    previous[0].sets[0] = {...previous[0].sets[0], weight: 150, done: true}
+    const merged = overlayLive(base(), liveWith([{id: 's0', weight: 135, reps: 10, done: false}]), previous)
+    expect(merged[0].sets[0]).toMatchObject({weight: 135, done: false})
   })
 
   it('leaves a set with a write in flight alone — the block is behind, not ahead', () => {
     // The tap already happened and its write is still going. "The block wins"
     // here reverts the user's own checkbox in front of them, and during an
     // "all ✓" loop it ripples through every set the loop hasn't reached yet.
-    const draft = materialized()
-    draft[0].sets[0] = {...draft[0].sets[0], done: true}
-    const next = overlayLiveValues(
-      draft,
+    const previous = materialized()
+    previous[0].sets[0] = {...previous[0].sets[0], done: true}
+    const merged = overlayLive(
+      base(),
       liveWith([{id: 's0', weight: 135, reps: 10, done: false}]),
-      new Set(['s0']),
+      previous,
+      new Set([setKey(previous[0], 0)]),
     )
-    expect(next).toBe(draft)
+    expect(merged).toBe(previous)
   })
 
-  it('ignores sets with no block yet, and touches no structure', () => {
-    const draft = buildDraft(prescription(), 'lb')
-    expect(overlayLiveValues(draft, liveWith([{id: 's0', weight: 999, reps: 1, done: true}]))).toBe(draft)
+  it('protects the very first tap, whose write is what creates the block', () => {
+    // Nothing has a block id yet, so an exemption keyed on the block cannot
+    // name this set at all — and the emission from its own create would
+    // re-derive it from the prescription and drop the tick.
+    const previous = base()
+    previous[0].sets[0] = {...previous[0].sets[0], done: true}
+    const merged = overlayLive(base(), undefined, previous, new Set([setKey(previous[0], 0)]))
+    expect(merged[0].sets[0].done).toBe(true)
+  })
+
+  it('gives an exempt set the id its create just returned', () => {
+    const previous = base()
+    previous[0].sets[0] = {...previous[0].sets[0], done: true}
+    const merged = overlayLive(
+      base(),
+      liveWith([{id: 's0', weight: 135, reps: 10, done: false}]),
+      previous,
+      new Set([setKey(previous[0], 0)]),
+    )
+    expect(merged[0].sets[0]).toMatchObject({done: true, blockId: 's0'})
+  })
+
+  it('keeps ids we created while the query is still catching up', () => {
+    // The create stamped these ids; `live` has not emitted them yet. Losing
+    // them here is what made the next tap start a second workout.
+    const merged = overlayLive(base(), undefined, materialized())
+    expect(merged[0].blockId).toBe('e1')
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', 's2'])
+  })
+
+  it('drops the blocks of a row that became a different lift', () => {
+    // An `or`-group switched away: the new row is not the old row, and
+    // inheriting its blocks would log the new option into the old one.
+    const switched = buildDraft(prescription({exercise: 'Landmine press', defId: 'def-lm'}), 'lb')
+    const merged = overlayLive(switched, undefined, materialized())
+    expect(merged[0].blockId).toBeUndefined()
+    expect(merged[0].sets.every(s => s.blockId === undefined)).toBe(true)
   })
 
   it('returns the same array when nothing moved, so it can run on every emission', () => {
-    const draft = materialized()
-    const live = liveWith(draft[0].sets.map((s, i) => ({
+    const previous = materialized()
+    const unchanged = liveWith(previous[0].sets.map((s, i) => ({
       id: `s${i}`, weight: s.weight, reps: s.reps, done: s.done,
     })))
-    expect(overlayLiveValues(draft, live)).toBe(draft)
+    expect(overlayLive(base(), unchanged, previous)).toBe(previous)
+  })
+
+  it('reuses the row objects that did not move', () => {
+    const previous = [...materialized(), ...buildDraft(prescription({exercise: 'Row'}), 'lb')]
+    const twoRows: Prescription = {
+      ...prescription(),
+      exercises: [exerciseOf(), exerciseOf({exercise: 'Row'})],
+    }
+    const merged = overlayLive(buildDraft(twoRows, 'lb'), liveWith([
+      {id: 's0', weight: 145, reps: 9, done: true},
+    ]), previous)
+    expect(merged[0]).not.toBe(previous[0])   // its first set moved
+    expect(merged[1]).toBe(previous[1])       // this one did not
   })
 })
 
