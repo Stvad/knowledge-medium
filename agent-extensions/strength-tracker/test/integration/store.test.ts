@@ -357,6 +357,38 @@ describe('materializeExercise — explicit entryId', () => {
     expect(repo.block(result.setIds[1]).peekProperty(weightProp)).toBe(145)
   })
 
+  it('gives a deleted middle set a fresh block instead of handing back its neighbour', async () => {
+    // Set blocks are derived from their INDEX inside the lift, so deleting one
+    // from the middle leaves a hole, not a shift. Filling that row in again
+    // must not resolve to the block at the neighbouring index — two draft rows
+    // pointing at one block means the second one's edit overwrites the set the
+    // first one logged. (The overlay's half of this is `overlayLive` matching
+    // sets by id rather than by position in the compacted live list.)
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8), draftSet(135, 8)]),
+    ]))
+    const entryId = started.exercises[0].id
+    const [first, middle, last] = started.exercises[0].setIds
+    expect(await writeSet(repo, first, {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    expect(await writeSet(repo, last, {weight: 195, reps: 3, done: true}, 'lb')).toBe('written')
+    await repo.tx(tx => tx.delete(middle), {scope: ChangeScope.BlockDefault, description: 'delete the middle set'})
+
+    const refilled = await materializeExercise(
+      repo,
+      started.workoutId,
+      exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8), draftSet(135, 8)]),
+      entryId,
+    )
+
+    expect(new Set(refilled.setIds).size).toBe(3)
+    expect(refilled.setIds[0]).toBe(first)
+    expect(refilled.setIds[2]).toBe(last)
+    expect(refilled.setIds[1]).not.toBe(middle)   // the tombstone is not reused
+    // …and the two real sets keep what was logged in them.
+    expect(repo.block(first).peekProperty(weightProp)).toBe(185)
+    expect(repo.block(last).peekProperty(weightProp)).toBe(195)
+  })
+
   it('backfills the plan-block ref onto an entry that was logged without one', async () => {
     // `strength:definition` is an optional-ref, so it projects a real
     // reference: a definition block's backlinks are that lift's whole logged

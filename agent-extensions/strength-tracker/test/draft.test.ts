@@ -187,6 +187,24 @@ describe('overlayLive', () => {
     expect(merged[0].sets[2]).toMatchObject({weight: 135, done: false})
   })
 
+  it('keeps every row on its own block when one is deleted from the middle', () => {
+    // `live.sets` is compacted, so a hole shifts everything after it up a
+    // slot. Matched positionally, row 1 took row 2's block while row 2 came up
+    // empty — and the create that fills row 2 in derives from row 2's INDEX,
+    // handing back the block row 1 was already showing. Two rows, one block,
+    // and row 2's next edit overwrites what row 1 logged.
+    const previous = materialized()
+    const merged = overlayLive(base(), liveWith([
+      {id: 's0', weight: 205, reps: 5, done: true},
+      {id: 's2', weight: 215, reps: 3, done: true},
+    ]), previous)
+
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', undefined, 's2'])
+    expect(merged[0].sets[2]).toMatchObject({weight: 215, reps: 3})
+    // The deleted one reads as un-logged rather than borrowing its neighbour.
+    expect(merged[0].sets[1]).toMatchObject({weight: 135, done: false})
+  })
+
   it('holds its ids while the entry is there but its sets have not emitted', () => {
     // The other side of the same rule: the workout, entry and set queries
     // resolve independently, so an entry really can arrive with none of its
