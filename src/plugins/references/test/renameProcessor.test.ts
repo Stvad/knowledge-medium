@@ -538,12 +538,17 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
   it('leaves the span unrewritten when the target cannot be pinned at all', async () => {
     // A non-UUID target has no representable aliased-blockref form:
     // `[A](((t)))` parses as prose, so splicing it would convert a live
-    // backlink into text. Keeping `[[A]]` keeps the stored reference
-    // entry pointing at the target.
+    // backlink into text. The CONTENT is therefore left alone — but the
+    // stored edge is not: `t` no longer owns `A`, and the renderer
+    // resolves `[[A]]` through that edge, so leaving it there navigates
+    // the span to a block that gave the name up. The edge is dropped,
+    // and dropping it is what schedules the re-parse that re-binds the
+    // span to whatever `[[A]]` means now (here: a fresh seat).
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       await seedTarget('t', '', ['A'])
       await seedSource('s', 'see [[A]] please')
+      expect(await blockReferences('s', 't')).toEqual([{alias: 'A'}])
 
       await env.repo.tx(
         tx => tx.setProperty('t', aliasesProp, []),
@@ -552,7 +557,9 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
       await flush()
 
       expect((await env.read('s'))!.content).toBe('see [[A]] please')
-      expect(await blockReferences('s', 't')).toEqual([{alias: 'A'}])
+      expect(await blockReferences('s', 't')).toEqual([])
+      expect(await blockReferences('s', computeAliasSeatId('A', WS, 0)))
+        .toEqual([{alias: 'A'}])
       expect(warn.mock.calls.flat().join(' ')).toContain('cannot pin a span')
     } finally {
       warn.mockRestore()
@@ -1062,6 +1069,31 @@ describe('rename — seat dating (#443 group 2, review round 2)', () => {
 })
 
 describe('rename — Codex round 2 (#444)', () => {
+  it('rebinds the edge when the alias is handed off to another block', async () => {
+    // Handoff: the span text is correct as written — `[[Shared]]` should
+    // now mean U — so the content is deliberately left alone. The stored
+    // EDGE is a different matter: `wikilinkMarkdownExtension` builds its
+    // alias→id map from the block's references, so an edge still naming
+    // T makes the rendered link navigate to the block that gave the name
+    // up. And because this branch used to write nothing at all, no
+    // watched field changed and `parseReferences` was never scheduled to
+    // notice — the wrong destination was permanent.
+    await seedTarget(PIN_TARGET, 'T', ['Shared'])
+    await seedTarget('u', 'U', [])
+    await seedSource('s', 'see [[Shared]] please')
+    expect(await blockReferences('s', PIN_TARGET)).toEqual([{alias: 'Shared'}])
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await tx.setProperty('u', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[Shared]] please')
+    expect(await blockReferences('s', PIN_TARGET)).toEqual([])
+    expect(await blockReferences('s', 'u')).toEqual([{alias: 'Shared'}])
+  })
+
   it('classifies a gap claimant per rewrite, not once per alias', async () => {
     // Two sync-created co-claimants of `Win` release it in ONE commit, so
     // one `ReleaseCache` serves both rewrites — but they differ in

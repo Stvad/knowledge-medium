@@ -356,6 +356,11 @@ export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | nu
  *  failures are not equally bad: the reference still lands on the
  *  right block, only its visible text changed, and refusing to rewrite
  *  would strand the span on a name nothing claims. */
+/** Characters a label carries through our own round trip but that
+ *  MARKDOWN re-interprets when it renders the span. See the
+ *  `lossyLabel` note in `pinnedSpanReplacement`. */
+const MARKDOWN_UNSAFE_LABEL_RE = /[\\[]/
+
 export const pinnedSpanReplacement = (
   label: string,
   targetId: string,
@@ -405,13 +410,19 @@ export const pinnedSpanReplacement = (
     text,
     refAlias: mark.blockId,
     toTargetId: mark.blockId,
-    // A backslash counts as lossy even though the parsers here round-trip
-    // it: markdown resolves the escape at render time, so the DISPLAYED
-    // label drops it. Unlike the wikilink form this stays a report rather
-    // than a refusal — the id segment carries the binding, so the link
-    // still lands on the right block and only the visible text changes,
-    // which is precisely what `lossyLabel` is for.
-    lossyLabel: mark.label !== label || label.includes('\\'),
+    // Markdown re-parses this label, and two characters survive our own
+    // round trip while changing what it renders:
+    //   `\`  escapes the next character, so `abc\` displays as `abc`.
+    //   `[`  opens a nested link, so `a[b` splits into literal text `[a`
+    //        followed by a link labelled only `b` — the label is
+    //        reordered and only its suffix is clickable.
+    // (`]` needs no entry: the renderer strips every one.)
+    //
+    // Reported rather than refused, unlike the wikilink form: the id
+    // segment carries the binding either way, so the reference still
+    // lands on the right block and only the visible text changes — which
+    // is exactly the distinction `lossyLabel` exists to draw.
+    lossyLabel: mark.label !== label || MARKDOWN_UNSAFE_LABEL_RE.test(label),
   }
 }
 

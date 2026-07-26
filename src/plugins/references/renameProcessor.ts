@@ -467,6 +467,57 @@ interface SourcePlan {
   sourceId: string
   originalContent: string
   rewrites: Rewrite[]
+  /** Edges onto the renaming block that this pass decided NOT to rewrite
+   *  and must therefore INVALIDATE. Dropping them is a `references`
+   *  write, which is what schedules `references.parseReferences` to
+   *  rebuild the binding from content — see `collectStaleEdges`. */
+  staleEdges: Array<{alias: string; targetId: string}>
+}
+
+const planFor = (
+  plansBySourceId: Map<string, SourcePlan>,
+  sourceId: string,
+  originalContent: string,
+): SourcePlan => {
+  const existing = plansBySourceId.get(sourceId)
+  if (existing !== undefined) return existing
+  const created: SourcePlan = {sourceId, originalContent, rewrites: [], staleEdges: []}
+  plansBySourceId.set(sourceId, created)
+  return created
+}
+
+/** Record every edge still pointing at the renaming block for `alias`,
+ *  for a case where the CONTENT is deliberately left alone.
+ *
+ *  Leaving the content is right; leaving the edge is not. The renderer
+ *  resolves `[[alias]]` through the block's STORED references
+ *  (`wikilinkMarkdownExtension` builds its alias→id map from them), so a
+ *  stale edge keeps navigating the span to the block that no longer owns
+ *  the name — and because this pass writes nothing in these cases, no
+ *  watched field changes and `parseReferences` is never scheduled to
+ *  notice. The wrong destination is permanent.
+ *
+ *  Dropped rather than re-pointed at the current winner: the re-parse
+ *  that the drop itself schedules resolves the alias the same way the
+ *  renderer does, so computing the answer here could only disagree with
+ *  it. */
+const collectStaleEdges = async (
+  ctx: ProcessorCtx,
+  after: BlockData,
+  alias: string,
+  generatedFieldIdCount: number,
+  generatedFieldIds: readonly string[],
+  plansBySourceId: Map<string, SourcePlan>,
+): Promise<void> => {
+  const sources = await ctx.db.getAll<BacklinkSourceRow>(
+    selectBacklinkSourcesSql(generatedFieldIdCount),
+    [...generatedFieldIds, after.workspaceId, alias],
+  )
+  for (const row of sources) {
+    if (row.targetId !== after.id) continue
+    planFor(plansBySourceId, row.sourceId, row.sourceContent)
+      .staleEdges.push({alias, targetId: row.targetId})
+  }
 }
 
 /** Pull source plans for one target's alias diff and merge into the
@@ -522,12 +573,26 @@ const collectTargetPlans = async (
         break
       }
     }
-    if (claimed) continue
+    if (claimed) {
+      // Handoff or re-claim: the span stays as written, but its stored
+      // edge still names the block that gave the alias up.
+      await collectStaleEdges(
+        ctx, after, alias, generatedFieldIds.length, generatedFieldIds, plansBySourceId)
+      continue
+    }
 
     const replacement = replacementFor(alias, removed, added, after.id)
-    // No rendering could carry this span — leave every source alone
-    // (already reported by `replacementFor`).
-    if (replacement === null) continue
+    // No rendering could carry this span — leave every source's CONTENT
+    // alone (already reported by `replacementFor`). The edges still have
+    // to be invalidated: the alias was released, so `[[α]]` no longer
+    // means the block the edge names. (Round 4 deferred this as needing
+    // a new write path; the handoff case above needs the same one, so
+    // they share it.)
+    if (replacement === null) {
+      await collectStaleEdges(
+        ctx, after, alias, generatedFieldIds.length, generatedFieldIds, plansBySourceId)
+      continue
+    }
     const sources = await ctx.db.getAll<BacklinkSourceRow>(
       selectBacklinkSourcesSql(generatedFieldIds.length),
       [...generatedFieldIds, after.workspaceId, alias],
@@ -562,12 +627,7 @@ const collectTargetPlans = async (
       // later target rename hits the same source within this event,
       // both reads are inside the same committed snapshot so the
       // pinned value still matches what the second SELECT would see.
-      let plan = plansBySourceId.get(row.sourceId)
-      if (plan === undefined) {
-        plan = {sourceId: row.sourceId, originalContent: row.sourceContent, rewrites: []}
-        plansBySourceId.set(row.sourceId, plan)
-      }
-      plan.rewrites.push({
+      planFor(plansBySourceId, row.sourceId, row.sourceContent).rewrites.push({
         alias,
         replacement: replacement.text,
         fromTargetId: row.targetId,
@@ -799,7 +859,7 @@ const applyPlan = async (
       live.push(rewrite)
     }
   }
-  if (live.length === 0) return
+  if (live.length === 0 && plan.staleEdges.length === 0) return
   // ONE pass over the original spans, not one pass per alias. Sequential
   // passes re-parse the previous pass's output, so with `α → β` and
   // `β → γ` in a single synced commit an original `[[α]]` becomes `[[β]]`
@@ -812,7 +872,7 @@ const applyPlan = async (
     current.content,
     new Map(live.map(rw => [rw.alias, {text: rw.replacement, skipEmbeds: rw.pinned}])),
   )
-  if (nextContent === current.content) return
+
   // Surgically swap the matching `references` entries in lockstep with
   // the content rewrite so the `block_references` trigger refreshes
   // the projection inside this same SQL tx. parseReferences will fire
@@ -826,10 +886,21 @@ const applyPlan = async (
   const retained = new Set(
     live.filter(rw => rw.pinned && remaining.has(rw.alias)).map(rw => rw.alias),
   )
-  const nextRefs = applyRefRewrites(current.references, live, retained)
+  let nextRefs = applyRefRewrites(current.references, live, retained)
+  if (plan.staleEdges.length > 0) {
+    // Content edges only (`sourceField === ''`): a property-derived entry
+    // projects from its property value, which no rename touched.
+    nextRefs = normalizeReferences(nextRefs.filter(ref =>
+      (ref.sourceField ?? '') !== ''
+      || !plan.staleEdges.some(s => s.alias === ref.alias && s.targetId === ref.id)))
+  }
+  const contentChanged = nextContent !== current.content
+  const refsChanged =
+    JSON.stringify(nextRefs) !== JSON.stringify(normalizeReferences([...current.references]))
+  if (!contentChanged && !refsChanged) return
   await tx.update(
     plan.sourceId,
-    {content: nextContent, references: nextRefs},
+    contentChanged ? {content: nextContent, references: nextRefs} : {references: nextRefs},
     {skipMetadata: true},
   )
 }

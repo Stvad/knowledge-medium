@@ -464,6 +464,22 @@ Another [[normal-ref]]
       expect(pinned!.lossyLabel).toBe(true)
     })
 
+    it('flags a pinned label markdown would split at an unmatched bracket', () => {
+      // `[a[b](((uuid)))` clears the `[[` check — there is no doubled
+      // opener — but markdown reads the INNER `[b](...)` as the link and
+      // leaves `[a` outside it as literal text. The reference still lands
+      // on the right block; the label is reordered and only its suffix is
+      // clickable, so the honest report is lossy rather than faithful.
+      const split = pinnedSpanReplacement('a[b', UUID)
+      expect(split).not.toBeNull()
+      expect(split!.toTargetId).toBe(UUID)
+      expect(split!.lossyLabel).toBe(true)
+      // A LEADING `[` is a different case and stays refused outright: it
+      // renders `[[ab](((uuid)))`, whose doubled opener can pair with a
+      // later `]]` and manufacture a wikilink.
+      expect(pinnedSpanReplacement('[ab', UUID)).toBeNull()
+    })
+
     it('refuses a target id the parser would canonicalize away', () => {
       // `parseBlockRefs` lower-cases UUID-shaped ids, but `blocks.id` is
       // compared case-sensitively and both `tx.create` and the agent
