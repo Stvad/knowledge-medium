@@ -129,7 +129,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // query hasn't resolved — indistinguishable from "nothing logged". It
     // adopts an in-progress workout for this day+session when there is one.
     createWorkout: rows => startWorkout(repo, workspaceId, pageId, toMaterializeDraft(day, session, rows)),
-    createExercise: (workoutId, ex) => materializeExercise(repo, workoutId, toExerciseDraft(ex)),
+    // `ex.blockId` — the entry this row is attached to, when it has one. An
+    // entry logged before the plan outline was readable is keyed on the lift's
+    // NAME, while the row now keys on its plan block; re-deriving there builds
+    // a second entry beside the one on screen and the record shows the lift
+    // twice.
+    createExercise: (workoutId, ex) =>
+      materializeExercise(repo, workoutId, toExerciseDraft(ex), ex.blockId),
   }
 
   /** The draft, re-derived from its inputs on every emission.
@@ -145,7 +151,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   useEffect(() => {
     const {slotChanged} = coordinator.reset(live?.id ?? null, slot, shape)
     const writing = writingNow()
-    setDraft(cur => overlayLive(buildDraft(prescription, unit), live, cur, writing))
+    // On a session switch, what is on screen is about the OTHER session, so it
+    // is not an input. Two sessions can prescribe the same lift and the
+    // overlay matches rows BY the lift — so passing the old draft through
+    // handed session B session A's block ids, and the first tap in B wrote
+    // into A's workout, at A's weights, without ever materializing B.
+    setDraft(cur => overlayLive(buildDraft(prescription, unit), live, slotChanged ? [] : cur, writing))
     // Keep a confirmation the user hasn't seen. Finishing makes the workout
     // leave `liveWorkouts`, which lands here — clearing "Logged Session A"
     // the instant it appeared and leaving a screen that looks like nothing
@@ -189,8 +200,16 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // the block (the live query hadn't resolved when the draft was built),
       // and writing it back is how logged reps got replaced by the
       // prescription's.
-      if (blockId) await writeSet(repo, blockId, change, next[exIdx].unit)
+      // A block that is GONE is a failure, not a no-op: the draft is holding
+      // an id for a set that was undone, deleted from the outline, or pruned
+      // by a Finish this view hasn't seen. Treating it as success left the
+      // checkbox ticked over nothing.
+      const outcome = blockId ? await writeSet(repo, blockId, change, next[exIdx].unit) : 'written'
       endWrite(writingKey)
+      if (outcome === 'gone') {
+        setResync(n => n + 1)
+        throw new Error(`writeSet: set block ${blockId} is gone`)
+      }
       // No overlay on success, deliberately. The block now agrees with what is
       // on screen, and the write's OWN query emission re-runs the overlay a
       // moment later with the news. Asking for one here instead reverted every
@@ -225,11 +244,25 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
 
   const acceptAll = (exIdx: number) => {
     const now = Date.now()
+    // Only the sets that weren't already accepted. A set logged an hour ago
+    // has a completion time, and "accept the rest" is not a claim about when
+    // that one happened — writing `now` to it re-dated real history.
+    const pending = draftRef.current[exIdx].sets
+      .map((s, j) => (s.done ? -1 : j))
+      .filter(j => j >= 0)
+    if (pending.length === 0) return
     const next = draftRef.current.map((ex, i) =>
       i !== exIdx ? ex : {...ex, sets: ex.sets.map(s => (s.done ? s : {...s, done: true, completedAt: now}))},
     )
     setDraft(next)
-    // Persist every set of this exercise; materialize on the first if needed.
+    // The WHOLE batch is exempt from the overlay up front, not one set at a
+    // time. Each write's own commit emits, and an emission mid-loop sees every
+    // set the loop hasn't reached yet as un-exempt — so it reverted their
+    // freshly-ticked boxes and the bulk action visibly undid itself.
+    const batch = pending.map(j => setKey(next[exIdx], j))
+    for (const key of batch) beginWrite(key)
+    // Persist every pending set of this exercise; materialize on the first if
+    // needed.
     //
     // `rows` is REASSIGNED as ids come back, exactly like the Finish loop:
     // handing the same block-less snapshot to every iteration made the later
@@ -237,10 +270,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // mid-loop (the create's own query update does that) grew a duplicate
     // entry and scattered the sets across the two.
     void (async () => {
-      let rows: readonly DraftExercise[] = next
-      for (let j = 0; j < rows[exIdx].sets.length; j += 1) {
-        const patch = await persist(rows, exIdx, j, {done: true, completedAt: now})
-        if (patch) rows = applyIdPatch(rows, patch)
+      try {
+        let rows: readonly DraftExercise[] = next
+        for (const j of pending) {
+          const patch = await persist(rows, exIdx, j, {done: true, completedAt: now})
+          if (patch) rows = applyIdPatch(rows, patch)
+        }
+      } finally {
+        for (const key of batch) endWrite(key)
       }
     })().catch(reportWriteFailure)
   }
@@ -316,6 +353,22 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // transaction, so nothing this view believes can prune a set the blocks
       // say was performed.
       await finishWorkout(repo, wid)
+      // Tonight's log is now a RECORD, and this view must stop being attached
+      // to it. Nothing else says so: a finished workout simply leaves
+      // `liveWorkouts`, which is indistinguishable from a query that hasn't
+      // caught up — so the coordinator kept its id (a same-slot reset never
+      // falls back to null, on purpose) and the overlay kept every block id on
+      // screen. `started` stayed true, which left the DISCARD button live: one
+      // tap and the session just logged was tombstoned. Taps on the still-
+      // rendered sets wrote into finished blocks, moving the next session's
+      // prescribed weight; Finish answered "still catching up" forever.
+      //
+      // `completed`, not `abandon`: both stop in-flight creates from landing,
+      // but `abandon` is "this evening is empty again" and this is "this
+      // evening holds a finished workout" — the next session of the same type
+      // gets a new slot rather than adopting this one.
+      coordinator.completed()
+      setDraft(buildDraft(prescription, unit))
       const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length
       setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
 
@@ -416,8 +469,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             onCommit={(setIdx, patch) => commitSet(exIdx, setIdx, patch)}
             onToggleDone={(setIdx, done) => toggleDone(exIdx, setIdx, done)}
             onAcceptAll={() => acceptAll(exIdx)}
+            // `locked`, not just `readOnly`: switching an option changes the
+            // shape, which bumps the coordinator's generation — under a
+            // running Finish that aborts it with "Session changed while
+            // saving". It was the one control that could move the ground
+            // under a save in progress.
             onSwitch={
-              ex.altGroupKey && !readOnly
+              ex.altGroupKey && !readOnly && !busy && configLoaded
                 ? (optionKey, label) => program.setAltChoice(ex.altGroupKey as string, optionKey, label)
                 : undefined
             }

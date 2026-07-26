@@ -9,7 +9,7 @@
 
 import type {AltOption, ExerciseVideo, Prescription, PrescribedExercise} from '../engine/types'
 import {liftKey, matchLiveExercises} from '../km/history'
-import type {LiveExercise, LiveSet, LiveWorkout} from '../km/history'
+import type {LiftRef, LiveExercise, LiveSet, LiveWorkout} from '../km/history'
 import type {ExerciseDraft, SetDraft, WorkoutDraft} from '../km/store'
 
 export interface DraftSet {
@@ -117,6 +117,11 @@ export const buildDraft = (prescription: Prescription, unit: string): DraftExerc
 export const rowKey = (ex: Pick<DraftExercise, 'exercise' | 'defId' | 'occurrence'>): string =>
   liftKey(ex.defId, ex.exercise, ex.occurrence)
 
+/** This row as the block readers name a lift — the draft calls its plan block
+ *  `defId`, a logged entry calls it `definitionId`. */
+export const liftRef = (ex: Pick<DraftExercise, 'exercise' | 'defId' | 'occurrence'>): LiftRef =>
+  ({definitionId: ex.defId, exercise: ex.exercise, occurrence: ex.occurrence})
+
 /** Identity of one set row. Sets are positional within their lift — including
  *  the L/R rows of a per-side lift, which alternate — so the index IS the
  *  identity here, exactly as it is in the derived set-block id. */
@@ -175,6 +180,18 @@ const mergeSets = (
   // for a beat mid-session. Live having MORE than the plan prescribes is just
   // as real — a set logged before the plan's set count was edited down.
   const count = Math.max(row.sets.length, live?.sets.length ?? 0)
+  // Does the live workout have anything to SAY about this lift's sets? An
+  // entry that lists sets is authoritative for every index, including the
+  // indices it doesn't list — those sets are gone. An entry with none yet (or
+  // no entry at all) is simply behind: the workout, entry and set queries emit
+  // independently, so that window is real and short.
+  //
+  // The distinction is the whole reason a set's id is ever carried forward,
+  // and getting it wrong is not symmetric. Carrying too little blanks a lift
+  // for a beat. Carrying too much means the draft keeps pointing at blocks
+  // that are gone — after a Finish pruned them, after an undo, after another
+  // device deleted one — and every tap lands somewhere it shouldn't.
+  const liveIsAuthoritative = live !== undefined && live.sets.length > 0
   const sets: DraftSet[] = []
   for (let i = 0; i < count; i += 1) {
     const liveSet = live?.sets[i]
@@ -195,7 +212,7 @@ const mergeSets = (
     // We created this block ourselves and the query hasn't caught up. Keeping
     // it is what lets this whole function run unconditionally: the id, and the
     // values written with it, survive an emission that predates them.
-    if (previousSet?.blockId !== undefined) {
+    if (!liveIsAuthoritative && previousSet?.blockId !== undefined) {
       sets.push(previousSet)
       continue
     }
@@ -227,6 +244,13 @@ const mergeSets = (
  *  from) is deliberately absent from the draft — Finish reads the committed
  *  tree, so nothing depends on this view having rendered it.
  *
+ *  `previous` is what is on screen NOW, and the caller must not pass it when
+ *  the screen is about to be about something else — a session switch, or a
+ *  workout that just finished. Rule 3 has no way to tell "our create, one
+ *  query behind" from "that workout is over": both look like a live query
+ *  with nothing in it. Passing the old draft there carried a finished
+ *  session's block ids into the next one, and the next tap wrote into it.
+ *
  *  Returns `previous` unchanged (same reference) when nothing moved, and
  *  reuses each unchanged row object, so running it per emission costs one
  *  comparison pass and no re-render.
@@ -240,7 +264,7 @@ export const overlayLive = (
   previous: DraftExercise[] = [],
   writing: ReadonlySet<string> = new Set(),
 ): DraftExercise[] => {
-  const matches = matchLiveExercises(base.map(rowKey), live)
+  const matches = matchLiveExercises(base.map(liftRef), live)
   const previousByKey = new Map(previous.map(ex => [rowKey(ex), ex] as const))
 
   const next = base.map((row, i) => {

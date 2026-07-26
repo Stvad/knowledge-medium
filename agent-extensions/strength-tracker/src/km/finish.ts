@@ -7,7 +7,26 @@
  */
 
 import {workingWeight} from '../engine/progression'
-import type {LiveWorkout} from './history'
+
+/** Exactly what the decision reads off one logged lift — no more.
+ *
+ *  Narrower than `LiveExercise` on purpose: taking the whole thing meant the
+ *  one caller had to invent a `unit`, a `day` and a `session` it does not know
+ *  in order to satisfy the type, and the invented `session` was wrong every
+ *  time a B or mini day was finished. Nothing read them, so nothing broke —
+ *  which is the problem with fabricating data to satisfy a type. A
+ *  `LiveExercise` still satisfies this structurally. */
+export interface FinishEntry {
+  id: string
+  exercise: string
+  sets: readonly {
+    id: string
+    weight: number
+    reps: number
+    side?: 'L' | 'R'
+    done: boolean
+  }[]
+}
 
 /** Instructions for finishing a workout: which sets to keep (with the
  *  exercise's derived working weight) and which un-accepted rows to prune. */
@@ -41,11 +60,11 @@ export interface FinishPlan {
  *  Reading the committed tree makes all three the same case. The draft's job
  *  is to have written its ticks BEFORE this runs, which is what `finish` does.
  */
-export const finishPlan = (workoutId: string, live: LiveWorkout): FinishPlan => {
+export const finishPlan = (workoutId: string, entries: readonly FinishEntry[]): FinishPlan => {
   const keep: FinishPlan['keep'] = []
   const removeExerciseIds: string[] = []
 
-  for (const entry of live.exercises) {
+  for (const entry of entries) {
     const accepted = entry.sets.filter(s => s.done)
     if (accepted.length === 0) {
       removeExerciseIds.push(entry.id)

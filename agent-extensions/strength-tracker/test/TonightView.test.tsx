@@ -46,14 +46,23 @@ const DAY = '2026-07-25'
 
 // ──── a backend with the properties that matter ────
 
-const liftKey = (definitionId: string | undefined, exercise: string, occurrence: number): string =>
-  `${definitionId ?? exercise}|${occurrence}`
+/** How the WRITE side names an entry's block — `store.ts`'s `exerciseIdentity`,
+ *  not the reader's `liftKey`.
+ *
+ *  Deliberately its own copy of the write-side spelling. Sharing one key
+ *  function with the matcher under test makes the two agree by construction,
+ *  and "the writer and the reader disagree about which block this row is" is
+ *  precisely the class of bug this suite has to be able to see. */
+const entryBlockId = (definitionId: string | undefined, exercise: string, occurrence: number): string =>
+  `e:${definitionId ?? exercise}${occurrence === 0 ? '' : `|${occurrence}`}`
 
 const createBackend = () => {
-  /** Entries by derived key, in creation order — the shape a workout's
-   *  children actually have. */
+  /** Entries by block id, in creation order — the shape a workout's children
+   *  actually have. */
   const entries = new Map<string, LiveExercise>()
   let started = false
+  let session: SessionType = 'A'
+  let finished = false
   /** Writes park here while a test holds them, so it can decide what happens
    *  in the window between a tap and its block coming back. */
   let held: (() => void)[] | null = null
@@ -67,10 +76,12 @@ const createBackend = () => {
       ? new Promise<T>(resolve => held!.push(() => resolve(apply())))
       : Promise.resolve(apply())
 
-  const upsertEntry = (ex: ExerciseDraft): ExerciseEntryIds => {
-    const key = liftKey(ex.definitionId, ex.exercise, ex.occurrence)
-    const existing = entries.get(key)
-    const id = existing?.id ?? `e:${key}`
+  const upsertEntry = (ex: ExerciseDraft, entryId?: string): ExerciseEntryIds => {
+    // `entryId` wins when the caller has one — the row is attached to an entry
+    // whose id need not re-derive. Modelling that is the point: without it the
+    // fake would silently make the two spellings the same block.
+    const id = entryId ?? entryBlockId(ex.definitionId, ex.exercise, ex.occurrence)
+    const existing = entries.get(id)
     // Adopting: a set that already exists keeps the values it holds. This is
     // the derived-id contract, and the bug it exists to prevent (the caller
     // writing its pre-filled draft over logged reps) is only visible against
@@ -83,10 +94,10 @@ const createBackend = () => {
       ...(s.side !== undefined ? {side: s.side} : {}),
       ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
     }))
-    entries.set(key, {
+    entries.set(id, {
       id,
-      exercise: ex.exercise,
-      definitionId: ex.definitionId,
+      exercise: existing?.exercise ?? ex.exercise,
+      definitionId: existing?.definitionId ?? ex.definitionId,
       unit: ex.unit,
       sets,
     })
@@ -102,16 +113,24 @@ const createBackend = () => {
   }
 
   return {
-    /** What the live query would answer right now. */
+    /** What the live query would answer right now. A FINISHED workout is
+     *  absent, exactly as `buildLiveWorkouts` drops anything that isn't
+     *  `in-progress` — which is the emission that matters most here, because
+     *  "no live workout" and "the query is behind" look identical. */
     live: (): LiveWorkout[] =>
-      started ? [{id: 'w1', day: DAY, session: 'A', exercises: [...entries.values()]}] : [],
+      started && !finished ? [{id: 'w1', day: DAY, session, exercises: [...entries.values()]}] : [],
+
+    /** Which session the in-progress workout belongs to. */
+    setSession: (next: SessionType) => {
+      session = next
+    },
 
     /** Seed a session that is already in progress — a reload, or another
      *  device. Values here are deliberately NOT the prescription's. */
     seed: (exercise: string, sets: readonly Partial<LiveSet>[], definitionId?: string) => {
       started = true
-      const id = `e:${liftKey(definitionId, exercise, 0)}`
-      entries.set(liftKey(definitionId, exercise, 0), {
+      const id = entryBlockId(definitionId, exercise, 0)
+      entries.set(id, {
         id,
         exercise,
         definitionId,
@@ -121,32 +140,63 @@ const createBackend = () => {
     },
 
     setById: findSet,
+    entryIds: (): string[] => [...entries.keys()],
+    /** A set block deleted from the outline, by undo, or by another device. */
+    deleteSet: (setId: string) => {
+      for (const entry of entries.values()) {
+        entry.sets = entry.sets.filter(s => s.id !== setId)
+      }
+    },
 
     /** Park every write until `release()`. */
     hold: () => {
       held = []
     },
-    release: async () => {
+    /** Let parked writes land — all of them, or just the first `count`.
+     *
+     *  A counted release STAYS held, so writes the caller makes next park too.
+     *  Lifting the hold as soon as the queue drained let the rest of a batch
+     *  run to completion inside the release, which closed the very window
+     *  these tests exist to sit in — two mutants survived on that alone. */
+    release: async (count?: number) => {
       const parked = held ?? []
-      held = null
+      const landing = count === undefined ? parked.splice(0) : parked.splice(0, count)
+      if (count === undefined) held = null
       await act(async () => {
-        for (const resolve of parked) resolve()
+        for (const resolve of landing) resolve()
       })
     },
 
     startWorkout: (draft: {exercises: readonly ExerciseDraft[]}): Promise<MaterializedWorkout> =>
       settle(() => {
         started = true
-        return {workoutId: 'w1', exercises: draft.exercises.map(upsertEntry)}
+        return {workoutId: 'w1', exercises: draft.exercises.map(ex => upsertEntry(ex))}
       }),
 
-    materializeExercise: (_workoutId: string, ex: ExerciseDraft): Promise<ExerciseEntryIds> =>
-      settle(() => upsertEntry(ex)),
+    materializeExercise: (_workoutId: string, ex: ExerciseDraft, entryId?: string): Promise<ExerciseEntryIds> =>
+      settle(() => upsertEntry(ex, entryId)),
 
-    writeSet: (setId: string, patch: Partial<SetDraft>): Promise<void> =>
+    /** Prunes and flips to done, like the real one — so the emission AFTER a
+     *  finish is modelled, which is where the finish path actually breaks. */
+    finishWorkout: (): Promise<void> =>
+      settle(() => {
+        for (const [id, entry] of entries) {
+          if (!entry.sets.some(s => s.done)) entries.delete(id)
+          else entry.sets = entry.sets.filter(s => s.done)
+        }
+        finished = true
+      }),
+
+    discardWorkout: (): Promise<void> =>
+      settle(() => {
+        entries.clear()
+        started = false
+      }),
+
+    writeSet: (setId: string, patch: Partial<SetDraft>): Promise<'written' | 'gone'> =>
       settle(() => {
         const set = findSet(setId)
-        if (!set) return
+        if (!set) return 'gone' as const
         if (patch.weight !== undefined) set.weight = patch.weight
         if (patch.reps !== undefined) set.reps = patch.reps
         if (patch.done !== undefined) set.done = patch.done
@@ -154,6 +204,7 @@ const createBackend = () => {
           if (patch.completedAt === undefined) delete set.completedAt
           else set.completedAt = patch.completedAt
         }
+        return 'written' as const
       }),
   }
 }
@@ -174,9 +225,12 @@ const exercise = (over: Partial<PrescribedExercise> = {}): PrescribedExercise =>
   ...over,
 })
 
-const prescriptionOf = (exercises: PrescribedExercise[] = [exercise()]): Prescription => ({
+const prescriptionOf = (
+  exercises: PrescribedExercise[] = [exercise()],
+  session: SessionType = 'A',
+): Prescription => ({
   day: DAY,
-  session: 'A' as SessionType,
+  session,
   offSchedule: false,
   notes: [],
   exercises,
@@ -190,14 +244,17 @@ let publish: () => void = () => {}
 
 function Harness({
   backend,
-  prescription,
+  prescriptions,
   configLoaded,
 }: {
   backend: Backend
-  prescription: Prescription
+  /** One prescription per session, so switching is a real switch: `slot`
+   *  changes, and the two sessions can prescribe the same lift. */
+  prescriptions: Partial<Record<SessionType, Prescription>>
   configLoaded: boolean
 }) {
   const [liveWorkouts, setLiveWorkouts] = useState<readonly LiveWorkout[]>([])
+  const [session, setSession] = useState<SessionType>('A')
   publish = () => setLiveWorkouts(backend.live())
 
   const program: ProgramState = {
@@ -210,23 +267,42 @@ function Harness({
     liveWorkouts,
     configLoaded,
     day: DAY,
-    session: 'A',
-    setSession: () => {},
-    prescription,
+    session,
+    setSession: next => setSession(next ?? 'A'),
+    prescription: prescriptions[session] ?? prescriptionOf([], session),
     setAltChoice: () => {},
     reload: () => {},
   }
   return <TonightView repo={repo} workspaceId="ws" pageId="page" program={program} />
 }
 
-const mount = (backend: Backend, options: {prescription?: Prescription; configLoaded?: boolean} = {}) =>
+const mount = (
+  backend: Backend,
+  options: {
+    prescription?: Prescription
+    prescriptions?: Partial<Record<SessionType, Prescription>>
+    configLoaded?: boolean
+  } = {},
+) =>
   render(
     <Harness
       backend={backend}
-      prescription={options.prescription ?? prescriptionOf()}
+      prescriptions={options.prescriptions ?? {A: options.prescription ?? prescriptionOf()}}
       configLoaded={options.configLoaded ?? true}
     />,
   )
+
+/** Point the mocked store at a backend. Both suites need it, and the copy that
+ *  drifts is the one that lies. */
+const wire = (backend: Backend) => {
+  vi.mocked(store.startWorkout).mockImplementation((_repo, _ws, _page, draft) =>
+    backend.startWorkout(draft))
+  vi.mocked(store.materializeExercise).mockImplementation((_repo, workoutId, ex, entryId) =>
+    backend.materializeExercise(workoutId, ex, entryId))
+  vi.mocked(store.writeSet).mockImplementation((_repo, setId, patch) => backend.writeSet(setId, patch))
+  vi.mocked(store.finishWorkout).mockImplementation(() => backend.finishWorkout())
+  vi.mocked(store.discardWorkout).mockImplementation(() => backend.discardWorkout())
+}
 
 /** One query emission. */
 const emit = async () => {
@@ -247,18 +323,12 @@ describe('TonightView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     backend = createBackend()
-    vi.mocked(store.startWorkout).mockImplementation((_repo, _ws, _page, draft) =>
-      backend.startWorkout(draft))
-    vi.mocked(store.materializeExercise).mockImplementation((_repo, workoutId, ex) =>
-      backend.materializeExercise(workoutId, ex))
-    vi.mocked(store.writeSet).mockImplementation((_repo, setId, patch) => backend.writeSet(setId, patch))
-    vi.mocked(store.finishWorkout).mockResolvedValue(undefined)
-    vi.mocked(store.discardWorkout).mockResolvedValue(undefined)
+    wire(backend)
   })
 
   afterEach(cleanup)
 
-  it('materializes the session on the first tap and keeps the tick', async () => {
+  it('materializes the session on the first tap', async () => {
     mount(backend)
     fireEvent.click(checkboxes()[0])
 
@@ -266,6 +336,31 @@ describe('TonightView', () => {
     await emit()
     expect(checkboxes()[0].checked).toBe(true)
     expect(backend.live()[0].exercises[0].sets[0].done).toBe(true)
+  })
+
+  it('holds a tick while the block it will live in is still being created', async () => {
+    // The exemption has to start BEFORE the block is resolved, because at the
+    // first tap of the night there is no block id yet to key it on. What can
+    // arrive in that window is another device's copy of this session — derived
+    // ids mean it is the same workout, and its sets are still open, because
+    // the tap that would tick one is happening HERE.
+    //
+    // Deliberately unseeded at mount: with a session already on screen,
+    // `resolveSet` hands back a block id immediately and this window never
+    // opens, which is why a seeded version of this test passes with the
+    // exemption deleted.
+    backend.hold()
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await act(async () => {})
+
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    await emit()
+    expect(checkboxes()[0].checked).toBe(true)
+
+    await backend.release()
+    await emit()
+    expect(checkboxes()[0].checked).toBe(true)
   })
 
   it('does not un-tick when an emission lands while the tick is still being written', async () => {
@@ -297,7 +392,7 @@ describe('TonightView', () => {
 
     fireEvent.click(checkboxes()[0])
     await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
-    backend.setById('e:Bench press|0|0')!.done = false
+    backend.setById('e:Bench press|0')!.done = false
     await emit()
     expect(checkboxes()[0].checked).toBe(false)
   })
@@ -316,7 +411,7 @@ describe('TonightView', () => {
     await emit()
 
     expect(vi.mocked(store.writeSet).mock.calls[0][2]).toEqual({done: true, completedAt: expect.any(Number)})
-    expect(backend.setById('e:Bench press|0|0')).toMatchObject({weight: 205, reps: 5, done: true})
+    expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 205, reps: 5, done: true})
     expect(weights()[0].value).toBe('205')
   })
 
@@ -326,9 +421,111 @@ describe('TonightView', () => {
     await emit()
     expect(checkboxes()[0].checked).toBe(false)
 
-    backend.setById('e:Bench press|0|0')!.done = true
+    backend.setById('e:Bench press|0')!.done = true
     await emit()
     expect(checkboxes()[0].checked).toBe(true)
+  })
+
+  it('lets go of the workout once it is finished', async () => {
+    // A finished workout simply leaves `liveWorkouts` — indistinguishable, to
+    // the overlay, from a query that hasn't caught up. Holding on left every
+    // block id on screen: `started` stayed true so DISCARD stayed live, and
+    // one tap tombstoned the session that had just been logged.
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    await emit()
+
+    expect(screen.queryByRole('button', {name: 'Discard'})).toBeNull()
+    expect((screen.getByRole('button', {name: /Finish/}) as HTMLButtonElement).disabled).toBe(true)
+    expect(checkboxes().some(box => box.checked)).toBe(false)
+    // …and the confirmation the user has not read yet is still there.
+    expect(screen.getByText(/Logged A · upper/)).toBeTruthy()
+  })
+
+  it('starts a second session rather than editing the finished one', async () => {
+    // The view's half of "session A twice tonight": it must ask the store to
+    // start a session again, instead of resolving against the workout id it
+    // was holding. Which BLOCKS that second session gets is the store's
+    // contract — a finished workout fails `adoptable`, so the derivation
+    // takes the next slot — and is covered where the store is.
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    await emit()
+
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalledTimes(2))
+    expect(store.materializeExercise).not.toHaveBeenCalled()
+  })
+
+  it('does not carry one session\'s blocks into another', async () => {
+    // Two sessions can prescribe the same lift, and rows are matched BY the
+    // lift — so what is on screen is not an input once the session changes.
+    const both = {
+      A: prescriptionOf([exercise({exercise: 'Face pulls', defId: 'def-face', weight: 40, sets: 1})], 'A'),
+      B: prescriptionOf([exercise({exercise: 'Face pulls', defId: 'def-face', weight: 50, sets: 1})], 'B'),
+    }
+    mount(backend, {prescriptions: both})
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+
+    vi.mocked(store.writeSet).mockClear()
+    vi.mocked(store.startWorkout).mockClear()
+    fireEvent.click(screen.getByRole('button', {name: 'B · lower'}))
+    await act(async () => {})
+
+    expect(checkboxes()[0].checked).toBe(false)
+    expect(weights()[0].value).toBe('50')          // B's prescription, not A's
+    backend.setSession('B')
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalledTimes(1))
+  })
+
+  it('surfaces a write to a set block that is gone instead of swallowing it', async () => {
+    // Undo is the likeliest cause: one transaction is one undo step, so a
+    // single Cmd-Z after starting a session tombstones its whole subtree.
+    // Silently succeeding left the box ticked and every later tap doing
+    // nothing, with the footer still saying "Saved as you go".
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    backend.deleteSet('e:Bench press|1')
+    fireEvent.click(checkboxes()[1])
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+    await waitFor(() => expect(checkboxes()[1].checked).toBe(false))
+  })
+
+  it('re-attaches to an entry logged before the plan was readable', async () => {
+    // `configLoaded` goes true even when the plan read FAILS, so a session can
+    // legitimately be logged against name-keyed entries and then meet a
+    // prescription that carries plan blocks. Refusing to match there showed a
+    // pristine session over real logged sets and invited a second one.
+    // One set on the block, two prescribed — so the second set has no block
+    // and has to be filled in, which is the half of this that the narrow
+    // fallback alone doesn't fix.
+    backend.seed('Bench press', [{weight: 205, reps: 5, done: true}])
+    mount(backend, {prescription: prescriptionOf([exercise({defId: 'def-bench'})])})
+    await emit()
+
+    expect(checkboxes()[0].checked).toBe(true)
+    expect(weights()[0].value).toBe('205')
+
+    // …and that second set goes under the entry the row is ATTACHED to, not
+    // under a second entry derived from the plan block.
+    fireEvent.click(checkboxes()[1])
+    await waitFor(() => expect(store.materializeExercise).toHaveBeenCalled())
+    await emit()
+    expect(backend.entryIds()).toEqual(['e:Bench press'])
   })
 
   it('refuses to log until the plan has been read, and says so', async () => {
@@ -337,11 +534,14 @@ describe('TonightView', () => {
     // whole parallel tree of blocks for a session already in progress.
     mount(backend, {configLoaded: false})
     expect(screen.getByText('Reading your plan…')).toBeTruthy()
-    expect(checkboxes()[0].disabled).toBe(true)
-
-    fireEvent.click(checkboxes()[0])
-    await act(async () => {})
-    expect(store.startWorkout).not.toHaveBeenCalled()
+    // Every control, not just the checkbox — a blur commit and "all ✓" are
+    // write paths too. (Clicking a disabled input asserts nothing: the DOM
+    // swallows the event, so the earlier version of this test had no force
+    // beyond this line.)
+    expect(checkboxes().every(box => box.disabled)).toBe(true)
+    expect(weights().every(field => field.disabled)).toBe(true)
+    expect(screen.queryByRole('button', {name: 'all ✓'})).toBeNull()
+    expect((screen.getByRole('button', {name: /Finish/}) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('reverts a tick whose write failed, and says why', async () => {
@@ -350,7 +550,9 @@ describe('TonightView', () => {
     fireEvent.click(checkboxes()[0])
 
     await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
-    expect(checkboxes()[0].checked).toBe(false)
+    // One commit later than the message: the revert is the overlay re-running,
+    // which the failure asks for rather than performing itself.
+    await waitFor(() => expect(checkboxes()[0].checked).toBe(false))
   })
 
   it('writes every set of an exercise once when you accept them all', async () => {
@@ -366,6 +568,52 @@ describe('TonightView', () => {
     await emit()
     expect(checkboxes().every(box => box.checked)).toBe(true)
     expect(new Set(vi.mocked(store.writeSet).mock.calls.map(call => call[1])).size).toBe(3)
+  })
+
+  it('does not re-date a set that was already accepted', async () => {
+    // "Accept the rest" is not a claim about when the ones already logged
+    // happened. Writing the batch's shared `now` to every row rewrote real
+    // completion times an hour after the fact.
+    backend.seed('Bench press', [
+      {weight: 205, reps: 5, done: true, completedAt: 111},
+      {weight: 205, reps: 5},
+    ])
+    mount(backend)
+    await emit()
+
+    fireEvent.click(screen.getByRole('button', {name: 'all ✓'}))
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+
+    expect(backend.setById('e:Bench press|0')).toMatchObject({completedAt: 111})
+    expect(backend.setById('e:Bench press|1')!.completedAt).toBeGreaterThan(111)
+    expect(vi.mocked(store.writeSet).mock.calls.map(call => call[1])).toEqual(['e:Bench press|1'])
+  })
+
+  it('keeps the whole batch ticked while it is being written', async () => {
+    // Each write's own commit emits, and an emission mid-loop saw every set
+    // the loop had not reached yet as unprotected — so it reverted their
+    // freshly-ticked boxes and the bulk action visibly undid itself.
+    backend.seed('Bench press', [{weight: 205, reps: 5}, {weight: 205, reps: 5}])
+    mount(backend)
+    await emit()
+
+    backend.hold()
+    fireEvent.click(screen.getByRole('button', {name: 'all ✓'}))
+    await act(async () => {})
+    // The loop is sequential, so right now only the FIRST set is inside
+    // `persist`. Every set after it is ticked on screen and open on the block
+    // — which is exactly what this emission carries.
+    await emit()
+    expect(checkboxes().map(box => box.checked)).toEqual([true, true])
+
+    await backend.release(1)          // the first write lands, the second parks
+    await emit()
+    expect(checkboxes().map(box => box.checked)).toEqual([true, true])
+
+    await backend.release()
+    await emit()
+    expect(checkboxes().map(box => box.checked)).toEqual([true, true])
   })
 
   it('gives two rows of one lift their own blocks', async () => {
@@ -412,11 +660,7 @@ describe('NumberField', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     backend = createBackend()
-    vi.mocked(store.startWorkout).mockImplementation((_repo, _ws, _page, draft) =>
-      backend.startWorkout(draft))
-    vi.mocked(store.materializeExercise).mockImplementation((_repo, workoutId, ex) =>
-      backend.materializeExercise(workoutId, ex))
-    vi.mocked(store.writeSet).mockImplementation((_repo, setId, patch) => backend.writeSet(setId, patch))
+    wire(backend)
   })
 
   afterEach(cleanup)
@@ -461,7 +705,7 @@ describe('NumberField', () => {
 
     const field = weights()[0]
     fireEvent.focus(field)
-    backend.setById('e:Bench press|0|0')!.weight = 195
+    backend.setById('e:Bench press|0')!.weight = 195
     await emit()
     fireEvent.blur(field)
 
@@ -476,7 +720,7 @@ describe('NumberField', () => {
     await emit()
     expect(weights()[0].value).toBe('185')
 
-    backend.setById('e:Bench press|0|0')!.weight = 205
+    backend.setById('e:Bench press|0')!.weight = 205
     await emit()
     expect(weights()[0].value).toBe('205')
   })

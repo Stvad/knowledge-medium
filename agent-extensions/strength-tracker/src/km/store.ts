@@ -12,6 +12,7 @@
 
 import {ChangeScope, propertyValue, type Tx} from '@/data/api/index.js'
 import {createChild, deleteBlock} from '@/data/mutators.js'
+import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 import {createTypedChild, getOrCreateTypedChild, type DerivedIdentity} from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: it carries the todo type + its
@@ -50,9 +51,8 @@ import {
 import {dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
-import {buildAltChoices, toLiveSet} from './history'
-import type {LiveWorkout} from './history'
-import {finishPlan, type FinishPlan} from './finish'
+import {buildAltChoices, escapeKeyPart, toLiveSet} from './history'
+import {finishPlan, type FinishEntry} from './finish'
 export type {FinishPlan} from './finish'
 
 // ──── draft shapes the writer consumes ────
@@ -147,8 +147,15 @@ const workoutIdentity = (workspaceId: string, day: string, session: SessionType)
  *  other. Same `(plan block ?? name, occurrence)` pair the read side matches
  *  on — see `liftKey` in history.ts; only the string layout differs, and it
  *  differs because it is an id we are already committed to.  */
-const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity =>
-  ({namespace: EXERCISE_NS, key: occurrence === 0 ? `${workoutId}|${key}` : `${workoutId}|${key}|${occurrence}`})
+const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity => {
+  // `escapeKeyPart`, because the occurrence-0 spelling omits the occurrence:
+  // an exercise NAMED "Bench|1" would otherwise derive the same block id as
+  // "Bench" at occurrence 1, and the two rows — which the matcher correctly
+  // treats as different lifts — would share an entry and, positionally, a set
+  // block per index.
+  const part = escapeKeyPart(key)
+  return {namespace: EXERCISE_NS, key: occurrence === 0 ? `${workoutId}|${part}` : `${workoutId}|${part}|${occurrence}`}
+}
 
 /** Sets are positional within their entry — including the L/R rows of a
  *  per-side lift, which alternate. */
@@ -172,6 +179,10 @@ const writeSetBlock = async (
     identity: setIdentity(exerciseId, index),
     parentId: exerciseId,
     content: setContent(s, unit),
+    // Positional: see `writeExercise`. A set dragged out of its lift is no
+    // longer this slot's set, and writing into it would leave an open todo
+    // that Finish can never reach.
+    adoptable: block => block.parentId === exerciseId,
     // Composed with the built-in todo: done-ness is the native checkbox.
     types: [SET_TYPE, TODO_TYPE],
     properties: [
@@ -198,8 +209,17 @@ const writeExercise = async (
   workoutId: string,
   ex: ExerciseDraft,
   typeSnapshot: TypeSnapshot,
+  /** The entry this row is already attached to, when the caller has one.
+   *
+   *  An entry's id normally derives from the lift, but the draft can be
+   *  attached to one whose id does NOT re-derive — an entry logged while the
+   *  plan outline was unreadable is keyed on the lift's name, and the same
+   *  row keys on its plan block once the plan resolves. Deriving there builds
+   *  a second entry beside the one on screen and splits the lift in two. What
+   *  the row is attached to wins; only an unattached row derives. */
+  entryId?: string,
 ): Promise<ExerciseEntryIds> => {
-  const {id: exId} = await getOrCreateTypedChild(repo, tx, {
+  const {id: exId} = entryId !== undefined ? {id: entryId} : await getOrCreateTypedChild(repo, tx, {
     identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, ex.occurrence),
     parentId: workoutId,
     content: ex.exercise,
@@ -212,6 +232,12 @@ const writeExercise = async (
       ...(ex.prescribedWeight !== undefined ? [propertyValue(prescribedWeightProp, ex.prescribedWeight)] : []),
       ...(ex.prescribedSets !== undefined ? [propertyValue(prescribedSetsProp, ex.prescribedSets)] : []),
     ],
+    // Positional records: this entry belongs to THIS workout, so a block the
+    // user dragged out of it is not the slot's occupant any more. Adopting
+    // one would write the session's sets into another tree, where
+    // `finishWorkout` — which reads the workout's children — can never see
+    // them again.
+    adoptable: block => block.parentId === workoutId,
     typeSnapshot,
   })
 
@@ -259,7 +285,12 @@ export const startWorkout = async (
         propertyValue(dateProp, dayToDate(draft.day)),
         propertyValue(statusProp, 'in-progress'),
       ],
-      adoptable: block => block.properties[FIELD.status] !== 'done',
+      // `=== 'in-progress'`, not `!== 'done'`. A workout whose status is
+      // missing or unreadable is not tonight's log either: `buildLiveWorkouts`
+      // shows only `in-progress` rows, so adopting one writes the session into
+      // a block the view can never render, while `buildHistory` counts it as
+      // past. Anything but a live session takes the next slot.
+      adoptable: block => block.properties[FIELD.status] === 'in-progress',
       typeSnapshot,
     })
 
@@ -282,9 +313,10 @@ export const materializeExercise = async (
   repo: Repo,
   workoutId: string,
   ex: ExerciseDraft,
+  entryId?: string,
 ): Promise<ExerciseEntryIds> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot),
+  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot, entryId),
     {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 
@@ -308,10 +340,16 @@ export const writeSet = async (
   setId: string,
   patch: Partial<SetDraft>,
   unit: string,
-): Promise<void> => {
-  await repo.tx(async tx => {
+): Promise<'written' | 'gone'> =>
+  repo.tx(async tx => {
     const before = await tx.get(setId)
-    if (!before || before.deleted) return
+    // NOT a silent no-op. The draft can hold a block id whose block is gone —
+    // undone (one transaction is one undo step, so a single Cmd-Z after
+    // starting a session tombstones its whole subtree), deleted from the
+    // outline, or pruned by a Finish this view hasn't caught up with. Swallowing
+    // that left the checkbox ticked, the footer saying "Saved as you go", and
+    // every later tap doing nothing. The caller surfaces it and re-derives.
+    if (!before || before.deleted) return 'gone' as const
     const {id: _id, ...current} = toLiveSet(before)
     const next: SetDraft = {...current, ...patch}
 
@@ -332,14 +370,8 @@ export const writeSet = async (
     }
     const content = setContent(next, unit)
     if (content !== before.content) await tx.update(setId, {content})
+    return 'written' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
-}
-
-/** Does this child carry `typeId`? Reads the raw `types` array. */
-const hasType = (row: {properties: Record<string, unknown>}, typeId: string): boolean => {
-  const types = row.properties.types
-  return Array.isArray(types) && types.includes(typeId)
-}
 
 /** Flip the workout to `done`, stamp each kept exercise's working weight, and
  *  prune the un-accepted sets / empty exercises so the saved record shows only
@@ -365,20 +397,30 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     // A workout's children are not all set blocks: a note the user typed under
     // an entry is one, and in a child-backed workspace so is every property
     // row. Filter on the type before deciding anything.
-    const entries = (await tx.childrenOf(workoutId)).filter(row => hasType(row, EXERCISE_ENTRY_TYPE))
-    const exercises: LiveWorkout['exercises'] = []
+    const children = await tx.childrenOf(workoutId)
+    const entries = children.filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE))
+    // Children but no entries among them is not "an empty session" — it is a
+    // type read that came back wrong, and the plan it produces prunes
+    // EVERYTHING. This is the one place in the extension where a misread
+    // deletes data rather than showing less, so it refuses instead.
+    if (children.length > 0 && entries.length === 0) {
+      throw new Error(
+        `finishWorkout: workout ${workoutId} has ${children.length} children but no `
+        + `"${EXERCISE_ENTRY_TYPE}" among them — refusing to finish, since that would prune the session.`,
+      )
+    }
+    const exercises: FinishEntry[] = []
     for (const entry of entries) {
-      const sets = (await tx.childrenOf(entry.id)).filter(row => hasType(row, SET_TYPE))
+      const sets = (await tx.childrenOf(entry.id)).filter(row => hasBlockType(row, SET_TYPE))
       exercises.push({
         id: entry.id,
         exercise: typeof entry.properties[FIELD.exercise] === 'string'
           ? entry.properties[FIELD.exercise] as string
           : entry.content,
-        unit: 'lb',
         sets: sets.map(toLiveSet),
       })
     }
-    const plan = finishPlan(workoutId, {id: workoutId, day: '', session: 'A', exercises})
+    const plan = finishPlan(workoutId, exercises)
 
     // Subtree deletes, not `tx.delete`: a set block is a normal block, so a
     // note typed under it — and, in a child-backed workspace, its own property

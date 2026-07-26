@@ -165,11 +165,34 @@ describe('overlayLive', () => {
     previous[0].sets[0] = {...previous[0].sets[0], done: true}
     const merged = overlayLive(
       base(),
-      liveWith([{id: 's0', weight: 135, reps: 10, done: false}]),
+      liveWith(previous[0].sets.map((s, i) => ({id: `s${i}`, weight: s.weight, reps: s.reps, done: false}))),
       previous,
       new Set([setKey(previous[0], 0)]),
     )
     expect(merged).toBe(previous)
+  })
+
+  it('drops a set the live entry no longer lists — it was deleted, not delayed', () => {
+    // An entry that lists sets is authoritative for every index, including the
+    // ones it does not list. Holding the id instead left the draft pointing at
+    // a block that was undone, deleted from the outline, or pruned by a
+    // Finish, with every later tap landing nowhere and the checkbox still
+    // ticked.
+    const previous = materialized()
+    const merged = overlayLive(base(), liveWith([
+      {id: 's0', weight: 205, reps: 5, done: true},
+      {id: 's1', weight: 205, reps: 5, done: true},
+    ]), previous)
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', undefined])
+    expect(merged[0].sets[2]).toMatchObject({weight: 135, done: false})
+  })
+
+  it('holds its ids while the entry is there but its sets have not emitted', () => {
+    // The other side of the same rule: the workout, entry and set queries
+    // resolve independently, so an entry really can arrive with none of its
+    // sets. That window must not blank the lift.
+    const merged = overlayLive(base(), liveWith([]), materialized())
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', 's2'])
   })
 
   it('protects the very first tap, whose write is what creates the block', () => {

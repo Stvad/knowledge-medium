@@ -84,6 +84,17 @@ export interface WriteCoordinator {
    *  deleted parent. Distinct from `reset`, where a write into the session
    *  you just left is still the right thing. */
   abandon(): void
+  /** The workout was FINISHED. Same clearing as `abandon` — a create still in
+   *  flight must not write into a session that is now a record — but a
+   *  separate verb because the two differ in what comes next: after a discard
+   *  the evening is empty, after a finish it holds a completed workout and the
+   *  next session of the same type goes to a new slot.
+   *
+   *  Without this the coordinator kept the finished workout's id, because a
+   *  same-slot `reset(null, …)` deliberately never falls back to null (no live
+   *  workout usually means the query is behind). Every later tap then resolved
+   *  against a completed session. */
+  completed(): void
   /** Resolve — and create, if needed — the block for one set. */
   resolveSet(
     draft: readonly DraftExercise[],
@@ -126,6 +137,19 @@ export const createWriteCoordinator = (
     }
     const value = await creatingWorkout
     return {value, stale: at !== generation}
+  }
+
+  /** This workout is no longer the one being logged into — it was discarded
+   *  or finished. Results from creates still in flight stop yielding a block
+   *  to write to: those blocks now belong to a tombstone or to a completed
+   *  record, and either way a write into them is wrong. */
+  const release = () => {
+    abandonedThrough = generation
+    generation += 1
+    workoutId = null
+    materialized = null
+    creatingWorkout = null
+    creatingExercises = new Map()
   }
 
   /** Same, per switched-in exercise. */
@@ -183,14 +207,17 @@ export const createWriteCoordinator = (
       return {slotChanged: false, shapeChanged: true}
     },
 
+    // `slot` is deliberately untouched by both of these. Clearing it made the
+    // next same-slot `reset` report `slotChanged`, and the view answers that
+    // by clearing its status line — wiping the "Discarded" / "Logged Session
+    // A" confirmation the user had not read yet, which is the exact failure
+    // the view's comment there was written to prevent.
     abandon() {
-      abandonedThrough = generation
-      generation += 1
-      slot = ''
-      workoutId = null
-      materialized = null
-      creatingWorkout = null
-      creatingExercises = new Map()
+      release()
+    },
+
+    completed() {
+      release()
     },
 
     async resolveSet(draft, exIdx, setIdx, effects) {
@@ -229,6 +256,13 @@ export const createWriteCoordinator = (
       // distinct here (that is what `occurrence` is), and an index changes
       // when a plan edit reorders the session — which let a switched-in lift
       // adopt whatever create its neighbour had in flight.
+      //
+      // `exercise.blockId` rides along because the entry a row is ATTACHED to
+      // is the authority for its writes. Re-deriving instead is right only
+      // when the row has no entry: a row matched to an entry whose id doesn't
+      // re-derive — one logged before the plan was readable, so keyed on the
+      // lift's name — would otherwise get a second, plan-keyed entry beside
+      // the one it is displaying, and the session shows the lift twice.
       const {value, stale} = await createExerciseOnce(rowKey(exercise), exercise, workoutId, effects)
       // Discarded while this was in flight: the blocks it just made are
       // children of a workout that is being deleted, so writing into them

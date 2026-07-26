@@ -182,33 +182,88 @@ export const liftKey = (
   definitionId: string | undefined,
   exercise: string,
   occurrence: number,
-): string => `${definitionId ?? exercise}|${occurrence}`
+): string => `${escapeKeyPart(definitionId ?? exercise)}|${occurrence}`
+
+/** `|` separates the parts of every identity string here, so a lift whose
+ *  NAME contains one could spell another row's identity: "Bench|1" at
+ *  occurrence 0 and "Bench" at occurrence 1 both read as `Bench|1`, and two
+ *  rows the matcher treats as different lifts would share one entry block —
+ *  and, positionally, one set block per index. Escaping makes the parts
+ *  recoverable, so the separator can only ever be the separator.
+ *
+ *  Exported because the WRITE side spells the same identity into a derived
+ *  block id and has to escape it identically. */
+export const escapeKeyPart = (part: string): string => part.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
+
+/** One lift, as either side names it. The draft calls its plan block `defId`;
+ *  a logged entry calls it `definitionId`. */
+export interface LiftRef {
+  definitionId?: string
+  exercise: string
+  occurrence: number
+}
 
 /** Which live entry backs each draft row, keyed on `liftKey`.
  *
- *  The live side counts its own occurrences in block order, which is the order
- *  the entries were written in — the same order the draft rows are in. So row
- *  "Bench press, occurrence 1" attaches to the second Bench press entry, and
- *  each entry backs at most one row without any claimed-once bookkeeping.
+ *  The live side counts its own occurrences in block order — a deterministic
+ *  total order (`compareByOrderKey` breaks ties on id), so this is stable
+ *  against sync arrival order. It is NOT stable against the user reordering
+ *  entries by hand in the outline, which only matters for a lift prescribed
+ *  twice in one session.
  *
- *  Deliberately no name fallback for a row that HAS a plan block: the write
- *  path would derive that row's entry id from the plan block, so matching it
- *  to a name-keyed entry attaches the draft to blocks no later write will ever
- *  reach. Both sides key the same way or neither does. */
+ *  Rows are matched by plan block where they have one, and by NAME as a
+ *  fallback — but only against an entry that carries no plan block of its own.
+ *  That asymmetry is the whole subtlety. An entry logged while the plan
+ *  outline was unreadable is keyed on the lift's name (`configLoaded` goes
+ *  true even when the read fails, deliberately: blocking logging on an
+ *  unreadable plan is worse), and the same row keys on its plan block the
+ *  moment the plan resolves. Refusing the fallback there orphaned the whole
+ *  session on screen — the sets were safe, since Finish reads the committed
+ *  tree, but the view showed a pristine pre-filled session and invited the
+ *  user to log it a second time.
+ *
+ *  Matching such an entry is safe because the row's own writes follow it: a
+ *  set that has a block writes to that block, and a set that doesn't goes
+ *  through the entry the row is ATTACHED to (see `writeExercise`'s `entryId`)
+ *  rather than re-deriving. An entry that already has a plan block is never
+ *  offered to the name fallback, because that one IS reachable by derivation
+ *  and matching it by name could cross two different lifts. */
 export const matchLiveExercises = (
-  keys: readonly string[],
+  rows: readonly LiftRef[],
   live: LiveWorkout | undefined,
 ): (LiveExercise | undefined)[] => {
-  if (!live) return keys.map(() => undefined)
+  if (!live) return rows.map(() => undefined)
+
   const byKey = new Map<string, LiveExercise>()
-  const seen = new Map<string, number>()
-  for (const e of live.exercises) {
-    const base = e.definitionId ?? e.exercise
-    const occurrence = seen.get(base) ?? 0
-    seen.set(base, occurrence + 1)
-    byKey.set(liftKey(e.definitionId, e.exercise, occurrence), e)
+  const byName = new Map<string, LiveExercise>()
+  const occurrences = new Map<string, number>()
+  const nameOccurrences = new Map<string, number>()
+  const next = (counts: Map<string, number>, of: string): number => {
+    const n = counts.get(of) ?? 0
+    counts.set(of, n + 1)
+    return n
   }
-  return keys.map(key => byKey.get(key))
+  for (const entry of live.exercises) {
+    const base = entry.definitionId ?? entry.exercise
+    byKey.set(liftKey(entry.definitionId, entry.exercise, next(occurrences, base)), entry)
+    // Only entries with no plan block of their own are offered to the name
+    // fallback — one that has a plan block is reachable by derivation, and
+    // matching it by name could cross two genuinely different lifts.
+    if (entry.definitionId === undefined) {
+      byName.set(liftKey(undefined, entry.exercise, next(nameOccurrences, entry.exercise)), entry)
+    }
+  }
+
+  // Claimed-once: with two ways to match, one entry could otherwise back two
+  // rows, which then write over each other set for set.
+  const claimed = new Set<string>()
+  return rows.map(row => {
+    const match = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence))
+      ?? byName.get(liftKey(undefined, row.exercise, row.occurrence))
+    if (!match || claimed.has(match.id)) return undefined
+    claimed.add(match.id)
+    return match
+  })
 }
 
 export const buildLiveWorkouts = (
