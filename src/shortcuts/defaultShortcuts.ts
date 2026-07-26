@@ -337,28 +337,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
-  ]
-
-  /**
-   * Block actions that non-keyboard surfaces dispatch BY ID — the block/swipe
-   * menu (`DEFAULT_QUICK_ACTION_ITEMS` names exactly these three) and the
-   * command palette, both of which supply their own deps rather than going
-   * through an active keyboard context.
-   *
-   * Kept out of the `normalModeActions` group on purpose: that group lives
-   * inside the `system:default-actions` toggle, and an action has to be in the
-   * registry to be dispatchable at all. Defined only by the vim plugin, these
-   * were missing on a default install and the menu's Delete button logged "not
-   * registered" and did nothing; put them in the defaults group instead and the
-   * same button breaks again for anyone who turns default shortcuts off. They
-   * back UI affordances, so their registration can't hang off a keybinding
-   * toggle.
-   *
-   * Their NORMAL_MODE bindings therefore survive that toggle. That costs
-   * nothing in practice: NORMAL_MODE is activated solely by the vim plugin, so
-   * a user without vim sees no binding either way.
-   */
-  const blockSurfaceActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
+    // Promoted out of the vim plugin, like the copy actions above it: an action
+    // has to be IN THE REGISTRY to be dispatchable at all, and the block/swipe
+    // menu and command palette dispatch by id with supplied deps rather than
+    // through an active keyboard context. Defined only by vim (an opt-in
+    // plugin), `delete_block` was absent on a default install, so the menu's
+    // Delete button logged "not registered" and did nothing —
+    // `DEFAULT_QUICK_ACTION_ITEMS` names exactly these three.
+    //
+    // They live in this group, inside `system:default-actions`, so turning that
+    // toggle off takes them with it. Deliberate: everything roots in a toggle.
+    // The keys still only fire in NORMAL_MODE, which only the vim plugin
+    // activates.
     {...deleteBlockAction, defaultBinding: {keys: ['Delete', 'Backspace', 'd d']}},
     togglePropertiesDisplayAction,
     toggleBlockCollapseAction,
@@ -1327,7 +1317,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   return {
     globalActions,
     normalModeActions,
-    blockSurfaceActions,
     editModeCMActions,
     multiSelectModeActions,
   }
@@ -1337,7 +1326,6 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   const {
     globalActions,
     normalModeActions,
-    blockSurfaceActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
@@ -1345,7 +1333,6 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   return [
     ...globalActions,
     ...normalModeActions,
-    ...blockSurfaceActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
@@ -1362,7 +1349,6 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
     globalActions,
     normalModeActions,
-    blockSurfaceActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
@@ -1374,7 +1360,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     ...multiSelectModeActions,
   ] as ActionConfig[]
 
-  const toggled = systemToggle({
+  return systemToggle({
     id: 'system:default-actions',
     name: 'Default keyboard shortcuts',
     description: 'Built-in shortcuts (Enter/Tab/Cmd+K-style). Disabling removes the default bindings; user-defined ones still work.',
@@ -1383,9 +1369,4 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     // (dedupById), so DialogHost is registered once no matter how many
     // dialog-using plugins contribute it.
   }).of([...actions.map(action => actionsFacet.of(action)), dialogAppMountExtension])
-
-  // `blockSurfaceActions` sits OUTSIDE that toggle: the block/swipe menu and
-  // the command palette dispatch those ids directly, so turning default
-  // keybindings off must not un-register the actions their buttons resolve to.
-  return [toggled, ...blockSurfaceActions.map(action => actionsFacet.of(action as ActionConfig))]
 }
