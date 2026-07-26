@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 const renderConfigEditor = (
   preset: AnyJoinedValuePreset,
@@ -167,7 +168,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
   }, [])
 
   const performDelete = useCallback(async () => {
-    await block.repo.mutate.delete({id: block.id})
+    await deleteBlockThroughUi(block)
   }, [block])
 
   const handleDeleteClick = useCallback(async () => {

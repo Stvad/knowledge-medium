@@ -23,7 +23,7 @@ import {
   splitHashRouteAndParams,
   type LayoutSlot,
 } from '@/utils/routing'
-import { panelHistory, writePanelContent } from '@/utils/panelHistory'
+import { isBlockConfirmedDeleted, panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
@@ -266,6 +266,16 @@ const sameLayoutSlots = (
     if (slot.kind === 'sublayout' && other.kind === 'sublayout') return sameLayoutSlots(slot.columns, other.columns, strictness)
     return false
   })
+
+/** How many panes render each block id, for comparing two layouts by
+ *  occurrence rather than by leaf position (see `leavingDeletedBlock`). */
+const countLeavesByBlockId = (slots: readonly LayoutSlot[]): Map<string, number> => {
+  const counts = new Map<string, number>()
+  for (const leaf of collectLeafSlots(slots)) {
+    counts.set(leaf.blockId, (counts.get(leaf.blockId) ?? 0) + 1)
+  }
+  return counts
+}
 
 // Unknown context entries (`rest`) have no row representation — they live
 // only in the URL. When a hash is rebuilt from rows (outbound writes,
@@ -1084,6 +1094,50 @@ export class PanelLayoutProjection {
     return this.inboundQueue
   }
 
+  /**
+   * Is the hash entry we're LEAVING unreturnable — i.e. does a pane we're
+   * navigating away from render a block known to be deleted?
+   *
+   * Scoped to the blocks actually being left (`current` minus `next`), not
+   * every leaf in the layout. Scanning the whole layout meant one pane stuck on
+   * a tombstone downgraded *every* navigation in *every* pane to a replace for
+   * the rest of the session, silently killing browser Back.
+   *
+   * "Known deleted" is a tombstone in cache, or an id recovery has positively
+   * confirmed dead — NOT merely a confirmed-missing cache marker. `repo.load`
+   * markMissing's any row it can't find, including one that simply hasn't
+   * replicated yet, and `PanelContentRecovery` calls `load()` on exactly those.
+   * Inferring death from that marker would replace the hash entry for a valid
+   * deep link, so Back could never return to it once the row arrived.
+   */
+  private leavingDeletedBlock(
+    current: readonly LayoutSlot[],
+    next: readonly LayoutSlot[],
+  ): boolean {
+    // Compared by OCCURRENCE COUNT, not as a set of ids and not positionally.
+    //
+    // A set difference is too weak: with the same page open in two panes and
+    // only one recovering, the id is still present in `next`, so it concludes
+    // nothing was left and pushes a history entry in which a pane still renders
+    // a dead block.
+    //
+    // A positional (index-by-index) compare is too strong: closing a pane
+    // shifts every later leaf down an index, so a pane that kept its block
+    // reads as "left". With another pane stranded on a tombstone, closing an
+    // unrelated pane then replaced instead of pushed, and Back skipped the
+    // whole layout.
+    //
+    // Counts get both right: a block is being left iff strictly fewer panes
+    // render it after the navigation than before.
+    const nextCounts = countLeavesByBlockId(next)
+    for (const [blockId, count] of countLeavesByBlockId(current)) {
+      if (count <= (nextCounts.get(blockId) ?? 0)) continue
+      if (this.repo.block(blockId).peekRaw()?.deleted === true
+        || isBlockConfirmedDeleted(blockId)) return true
+    }
+    return false
+  }
+
   private handleRowsChanged(rows: readonly BlockData[]): void {
     // While an inbound apply is in flight, a rows event necessarily compares
     // OLD rows against the NEW hash — writing that back would clobber the
@@ -1116,6 +1170,13 @@ export class PanelLayoutProjection {
     if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'ignore-active')) {
       // Active-only diff: which pane is focused is not a history entry —
       // rewrite the current one instead of pushing.
+      this.replaceHash(nextHash)
+    } else if (sameWorkspace && this.leavingDeletedBlock(current.slots, slots)) {
+      // The entry we'd be leaving renders a DELETED block, so it is not
+      // somewhere the user can meaningfully return to. Pushing would trap
+      // them: browser Back lands on the dead page, `PanelContentRecovery`
+      // retargets the pane and pushes the replacement again, and the dead
+      // entry can never be stepped past. Rewrite it instead.
       this.replaceHash(nextHash)
     } else {
       this.pushHash(nextHash)

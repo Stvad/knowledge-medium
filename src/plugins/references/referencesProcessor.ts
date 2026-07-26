@@ -698,10 +698,12 @@ const reapSeatsInTx = async (
       if (deepUserContent) continue
       // Soft-delete the seat, then its generated field rows (with their
       // value children).
+      // eslint-disable-next-line no-restricted-syntax -- programmatic delete: processor reaping its own generated reference seats
       await tx.delete(id)
       for (const child of children) {
         const target = child.referenceTargetId ?? null
         if (target !== null && generatedFieldIds.has(target)) {
+          // eslint-disable-next-line no-restricted-syntax -- programmatic delete: same reap, the seat's generated field rows
           await deleteSubtreeInTx(tx, child.id)
         }
       }

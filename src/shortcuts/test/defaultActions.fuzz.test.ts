@@ -47,11 +47,21 @@
  *    handler's own logic.
  *  - structural invariants: no cycles, no live orphans, no order-key
  *    collisions, single workspace.
- *  - scope-root protection: ROOT stays live at the workspace root —
- *    every structural handler must refuse to indent/outdent/delete/
- *    merge-away the scope root (structuralEditPolicyForBlock;
- *    blockActions.ts indent/outdent guards, split_block_cm's
- *    isScopeRoot branch, delete_empty_block_cm's canMergeUp).
+ *  - scope-root protection: ROOT stays live and stays put —
+ *    every structural handler must refuse to RELOCATE the scope root
+ *    across the surface boundary: indent / outdent / merge-away
+ *    (structuralEditPolicyForBlock; blockActions.ts indent/outdent
+ *    guards, split_block_cm's isScopeRoot branch,
+ *    delete_empty_block_cm's canMergeUp).
+ *
+ *    Explicit DELETE of the scope root is deliberately NOT in that set:
+ *    it's the page-deletion gesture, and refusing it is the regression
+ *    this oracle once encoded (see structuralEditPolicy's docblock).
+ *    Deleting ROOT is legal but empties the seeded tree, leaving every
+ *    later op in a sequence a no-op and the structural oracles nothing
+ *    to check — so it's excluded from the op stream below, the same way
+ *    navigation/panel actions are, and covered by targeted tests in
+ *    defaultShortcuts.test.ts instead.
  *
  * Undo/redo run as ACTIONS inside sequences (handler-level paths); the
  * exact undo-all snapshot round-trip stays the kernel fuzzer's job —
@@ -94,13 +104,20 @@ import type { Repo } from '@/data/repo'
 const WS = 'ws-1'
 const ROOT = 'root'
 const UI = 'ui'
+/** Scaffolding around ROOT so scope-root relocation is detectable — see
+ *  `buildEnv`. Outside the visible surface, so no op can target them. */
+const OUTER = 'outer'
+const BEFORE = 'before'
 
 // ──── the action pool ────
 //
 // Sources mirror production registration (defaultShortcuts.ts):
 //  - 'shared': `createSharedBlockActions({repo})` bound to NORMAL_MODE
-//    via `bindBlockActionContext` — the per-block-surface registration
-//    (these are NOT in getDefaultActions' normal-mode group).
+//    via `bindBlockActionContext` — the per-block-surface registration.
+//    Some of these (delete_block, toggle_collapse, toggle_properties) are
+//    ALSO in getDefaultActions' normal-mode group now that they've been
+//    promoted out of the vim plugin; resolving them from
+//    `createSharedBlockActions` still exercises the same handler.
 //  - 'defaults': found in `getDefaultActions({repo})` by (id, context).
 //    Multi-select variants carry the `multi_select.` prefix
 //    (makeMultiSelect, utils.ts:174); CM rebinds of the shared actions
@@ -214,13 +231,23 @@ const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
   const foreign = await db.getAll<{id: string}>('SELECT id FROM blocks WHERE workspace_id != ?', [WS])
   expect(foreign, 'block outside the seeded workspace').toEqual([])
 
-  // Scope-root protection: every structural handler must refuse to
-  // indent/outdent/delete/merge-away the scope root.
   const root = await db.getAll<{parent_id: string | null; deleted: number}>(
     'SELECT parent_id, deleted FROM blocks WHERE id = ?', [ROOT])
   expect(root, 'scope root exists').toHaveLength(1)
-  expect({parent: root[0].parent_id, deleted: root[0].deleted}, 'scope root live at workspace root')
-    .toEqual({parent: null, deleted: 0})
+
+  // THE invariant: no structural handler may RELOCATE the scope root across
+  // the surface boundary (indent / outdent / merge-away). ROOT is seeded
+  // inside OUTER, behind BEFORE, precisely so both directions can be observed
+  // — see `buildEnv`. Deletion is deliberately not part of this: deleting the
+  // scope root is the page-deletion gesture (see the docblock).
+  expect(root[0].parent_id, 'scope root relocated out of its surface').toBe(OUTER)
+
+  // Fixture guard, NOT an invariant: root-targeted deletes are excluded from
+  // the op stream (they empty the tree and leave later ops nothing to
+  // exercise), so ROOT should still be live. If this fires, a newly-pooled
+  // action can delete the page — extend the exclusion below to cover it rather
+  // than relaxing this line, which is what keeps the rest of a case meaningful.
+  expect(root[0].deleted, 'scope root deleted — op-stream exclusion has a hole').toBe(0)
 }
 
 // ──── case execution ────
@@ -253,7 +280,19 @@ const buildEnv = async (seed: ReadonlyArray<{parent: number; content: string}>):
   const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
-    await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+    // ROOT is nested under OUTER, behind a preceding sibling, so that
+    // "the scope root never relocates" is actually FALSIFIABLE. With ROOT at
+    // the workspace root it was not: `core.indent`/`core.outdent` both
+    // hard-return on a null parent (mutators.ts), so `parent_id IS NULL` held
+    // no matter what the handler guards did. Now a de-guarded outdent moves
+    // ROOT to the workspace root and a de-guarded indent tucks it under
+    // BEFORE — both change `parent_id` away from OUTER and trip the sweep.
+    // Neither OUTER nor BEFORE is reachable from the op stream: the visible
+    // surface is `topLevelBlockIdProp = ROOT`, so they only exist to give
+    // relocation somewhere to land.
+    await tx.create({id: OUTER, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'outer'})
+    await tx.create({id: BEFORE, workspaceId: WS, parentId: OUTER, orderKey: 'a0', content: 'before'})
+    await tx.create({id: ROOT, workspaceId: WS, parentId: OUTER, orderKey: 'b0', content: 'page'})
     await tx.create({id: UI, workspaceId: WS, parentId: null, orderKey: 'z0'})
   }, {scope: ChangeScope.BlockDefault})
   const uiStateBlock = repo.block(UI)
@@ -273,8 +312,8 @@ const buildEnv = async (seed: ReadonlyArray<{parent: number; content: string}>):
     ids,
     firstLive: async () => {
       const rows = await sharedDb.db.getAll<{id: string}>(
-        `SELECT id FROM blocks WHERE deleted = 0 AND id != ? ORDER BY (id = ?) DESC, order_key, id LIMIT 1`,
-        [UI, ROOT])
+        `SELECT id FROM blocks WHERE deleted = 0 AND id NOT IN (?, ?, ?) ORDER BY (id = ?) DESC, order_key, id LIMIT 1`,
+        [UI, OUTER, BEFORE, ROOT])
       return rows[0].id
     },
     fence: async () => {
@@ -329,6 +368,18 @@ const runCase = async (
         focusedId = await env.firstLive()
         await focusBlock(uiStateBlock, focusedId)
       }
+      // Page deletion is legal but ends the sequence's usefulness — see the
+      // scope-root note in the docblock. BOTH delete variants can reach ROOT:
+      // `previousVisibleBlock` deliberately returns the parent even when it is
+      // the scope root (selection.ts), so extend-up from the page's first child
+      // collapses the selection onto ROOT and the multi-select fan-out deletes
+      // it. Excluding only the NORMAL_MODE variant left that path live, and the
+      // deep fuzz tier found it (seed 977003719).
+      if (id === 'delete_block' && focusedId === ROOT) continue
+      if (
+        id === 'multi_select.delete_block' &&
+        (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds ?? []).includes(ROOT)
+      ) continue
       const block = repo.block(focusedId)
 
       const base = {uiStateBlock, scopeRootId: ROOT}

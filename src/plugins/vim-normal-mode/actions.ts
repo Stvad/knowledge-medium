@@ -58,23 +58,18 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     outdentBlock,
     moveBlockUp,
     moveBlockDown,
-    deleteBlock,
-    togglePropertiesDisplay,
-    toggleBlockCollapse,
     extendSelectionUp,
     extendSelectionDown,
   } = createSharedBlockActions({repo})
 
+  // `delete_block`, `toggle_properties` and `toggle_collapse` used to be
+  // defined here. They now live in `getDefaultActionGroups` (with the same
+  // NORMAL_MODE context and the same keys) so they are registered on a default
+  // install too — the block/swipe menu dispatches them by id and can't reach an
+  // action that only an opt-in plugin defines. Same move the copy actions made
+  // earlier; see the comment beside them there.
   const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
   const outdentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, outdentBlock)
-  const deleteBlockAction = {
-    ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock),
-    defaultBinding: {
-      keys: ['Delete', 'Backspace', 'd d'],
-    },
-  }
-  const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
-  const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp),
     defaultBinding: {
@@ -141,9 +136,6 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         keys: 'a',
       },
     }),
-    toggleBlockCollapseAction,
-    togglePropertiesDisplayAction,
-    deleteBlockAction,
     bindNormal({
       id: 'create_block_below_and_edit',
       description: 'Create block below (or as child) and enter edit mode',

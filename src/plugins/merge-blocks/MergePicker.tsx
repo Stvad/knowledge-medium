@@ -34,6 +34,7 @@ import {
 } from '@/utils/linkTargetAutocomplete.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import { pickMergeContentStrategy } from './strategy.ts'
+import { ensureDeletableThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
@@ -145,6 +146,11 @@ export function MergePicker({
         console.error('[merge-blocks] source or target missing at commit')
         return
       }
+      // The source block is destroyed by the merge, so it needs the same UI
+      // veto as a delete — this picker explicitly supports merging a whole
+      // page away.
+      if (!await ensureDeletableThroughUi([sourceBlock])) return
+
       const contentStrategy = pickMergeContentStrategy(sourceData, targetData)
       await repo.mutate.merge({
         intoId: targetBlockId,

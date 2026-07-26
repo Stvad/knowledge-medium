@@ -34,6 +34,7 @@ import {
 } from '@/components/propertyPanel/PropertyPicker.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -239,7 +240,7 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const performDelete = useCallback(async () => {
-    await block.repo.mutate.delete({id: block.id})
+    await deleteBlockThroughUi(block)
   }, [block])
 
   if (!data) return null

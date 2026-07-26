@@ -25,9 +25,9 @@ describe('resolveStructuralEditPolicy', () => {
       expect(policy({hasUncollapsedChildren: true}).createAbovePlacement).toBe('sibling-above')
     })
 
-    it('allows indent / outdent / merge-up / delete', () => {
+    it('allows indent / outdent / merge-up', () => {
       const p = policy({parentId: 'somewhere-else'})
-      expect(p).toMatchObject({canIndent: true, canOutdent: true, canMergeUp: true, canDelete: true, isScopeRoot: false})
+      expect(p).toMatchObject({canIndent: true, canOutdent: true, canMergeUp: true, isScopeRoot: false})
     })
 
     it('refuses to outdent past the scope boundary (direct child of root)', () => {
@@ -49,16 +49,21 @@ describe('resolveStructuralEditPolicy', () => {
       expect(root({hasUncollapsedChildren: true}).createAbovePlacement).toBe('child-first')
     })
 
-    it('is a no-op for indent / outdent / merge-up / delete', () => {
+    it('is a no-op for indent / outdent / merge-up', () => {
       expect(root()).toMatchObject({
         isScopeRoot: true,
         canIndent: false,
         canOutdent: false,
         canMergeUp: false,
-        // Deleting the scope root would tombstone the whole rendered
-        // surface (found by defaultActions.fuzz.test.ts).
-        canDelete: false,
       })
+    })
+
+    // Guards the regression this policy caused once: a `canDelete: !isScopeRoot`
+    // rule here made page deletion unreachable from every UI surface. Deletion
+    // removes a subtree rather than relocating one across the surface boundary,
+    // so it is not a scope-relative decision and must not reappear as one.
+    it('says nothing about deletability', () => {
+      expect(root()).not.toHaveProperty('canDelete')
     })
   })
 
@@ -66,8 +71,6 @@ describe('resolveStructuralEditPolicy', () => {
     const p = policy({scopeRootId: undefined})
     expect(p.isScopeRoot).toBe(false)
     expect(p.canIndent).toBe(true)
-    // The agent bridge (no injectable scope) must remain free to delete.
-    expect(p.canDelete).toBe(true)
     // Imperative/CLI dispatch (no surface): `O` falls back to a plain
     // sibling-above rather than no-oping.
     expect(p.createAbovePlacement).toBe('sibling-above')

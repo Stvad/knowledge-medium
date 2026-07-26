@@ -101,6 +101,21 @@ export const copySelectedBlocksToClipboard = async (
     return
   }
 
-  const clipboardData = await serializeSelectedBlocks(selectionState.selectedBlockIds, repo)
-  await writeToClipboard(clipboardData)
+  await copyBlockIdsToClipboard(selectionState.selectedBlockIds, repo)
+}
+
+/** Copy an explicit set of blocks. `cut` needs this: it deletes the blocks its
+ *  DEPS name, and re-deriving the copy set from the ui-state selection means
+ *  the two can disagree — an action dispatched with supplied deps (a group
+ *  header button, the agent bridge) has no ui-state selection at all, so the
+ *  copy silently no-ops while the delete still runs. Cut what you delete. */
+export const copyBlockIdsToClipboard = async (
+  blockIds: readonly string[],
+  repo: Repo,
+): Promise<void> => {
+  if (!blockIds.length) {
+    console.log('No blocks selected to copy')
+    return
+  }
+  await writeToClipboard(await serializeSelectedBlocks([...blockIds], repo))
 }

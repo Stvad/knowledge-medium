@@ -48,6 +48,7 @@ import {
   actionContextsFacet,
   actionsFacet,
   appMountsFacet,
+  blockDeletionGuardsFacet,
   headerItemsFacet,
   workspaceLandingFacet,
   type AppMountContribution,
@@ -65,6 +66,7 @@ import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
 import { openDialog } from '@/utils/dialogs.js'
 import { todayDailyNoteLanding } from './landing.ts'
+import { dailyNotesDeletionGuard } from './deletionGuard.ts'
 import { blockDateAdapterFacet } from './blockDateAdapter.ts'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
 import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
@@ -200,6 +202,9 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
       precedence: 5,
     }),
     workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
+    // Daily notes and the Journal are get-or-create, so a UI delete never
+    // sticks — it just discards the contents. Refuse it (see deletionGuard.ts).
+    blockDeletionGuardsFacet.of(dailyNotesDeletionGuard, {source: 'daily-notes'}),
   ])
 
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'

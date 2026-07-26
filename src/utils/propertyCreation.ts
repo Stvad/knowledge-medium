@@ -37,6 +37,9 @@ export const convertEmptyChildBlockToProperty = async (
   const parent = repo.block(parentId)
   await parent.set(showPropertiesProp, true)
   requestPropertyCreate({blockId: parentId})
+  // Reaping an empty scaffold block the user never saw — not a user-initiated
+  // delete of their content, so the UI deletion guards don't apply.
+  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: scaffold cleanup
   await block.delete()
   return true
 }

@@ -32,7 +32,9 @@ import {
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
+  todayIso,
 } from '@/plugins/daily-notes'
+import { todayDailyNoteLanding } from '@/plugins/daily-notes/landing.js'
 
 const WS = 'ws-1'
 
@@ -234,6 +236,67 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
     expect(restored.peekProperty(dailyNoteDateProp)?.toISOString())
       .toBe('2026-04-28T00:00:00.000Z')
+  })
+})
+
+describe('todayDailyNoteLanding', () => {
+  it('lands on today’s note, creating it if needed', async () => {
+    const id = await todayDailyNoteLanding({repo: env.repo, workspaceId: WS, freshlyCreated: false})
+    expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
+    expect(await isBlockDeleted(env.repo, id!)).toBe(false)
+  })
+
+  it('declines — without resurrecting — when today’s note is the excluded block', async () => {
+    // Delete-recovery asks for a landing while the deleted page is still the
+    // one the pane shows. Since the resolver is get-or-CREATE and restores
+    // soft-deleted rows, answering here would silently undo the user's delete.
+    const note = await getOrCreateDailyNote(env.repo, WS, todayIso())
+    await env.repo.tx(tx => tx.delete(note.id), {scope: ChangeScope.BlockDefault})
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: note.id,
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
+
+  it('still answers when the excluded block is some other page', async () => {
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'unrelated-page',
+    })
+    expect(id).toBe(dailyNoteBlockId(WS, todayIso()))
+  })
+
+  it('declines whenever today’s note is a tombstone, not just on an exact id match', async () => {
+    // A pane zoomed into a CHILD of today's note recovers with the child's id,
+    // so the exact-id check doesn't fire — but answering would still restore
+    // the deleted parent note.
+    const note = await getOrCreateDailyNote(env.repo, WS, todayIso())
+    await env.repo.mutate.createChild({parentId: note.id, id: 'kid', content: 'kid'})
+    await env.repo.block(note.id).delete()
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'kid',
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
+
+  it('declines when the Journal itself is the tombstone', async () => {
+    // getOrCreateDailyNote calls getOrCreateJournalBlock, which restores a
+    // soft-deleted Journal — so recovering after a Journal delete would
+    // resurrect it and hang a fresh daily note under it.
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    await env.repo.block(journal.id).delete()
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: journal.id,
+    })
+
+    expect(id).toBeNull()
+    expect(await isBlockDeleted(env.repo, journal.id)).toBe(true)
   })
 })
 
