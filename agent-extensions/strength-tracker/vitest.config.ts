@@ -16,6 +16,11 @@ export default defineConfig({
     // loudly in node rather than silently passing.
     environment: 'node',
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx'],
+    // `test/integration/**` runs under vitest.integration.config.ts instead
+    // — it imports RUNTIME `@/data/*` modules that only exist as `.d.ts`
+    // stubs here (see that config's docblock), so collecting it under this
+    // config fails at import time rather than merely being redundant.
+    exclude: ['test/integration/**'],
   },
   resolve: {
     alias: [

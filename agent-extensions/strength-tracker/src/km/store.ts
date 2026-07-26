@@ -219,6 +219,24 @@ const writeExercise = async (
    *  the row is attached to wins; only an unattached row derives. */
   entryId?: string,
 ): Promise<ExerciseEntryIds> => {
+  if (entryId !== undefined && ex.definitionId !== undefined) {
+    // Backfill the plan-block ref, and ONLY when the entry has none.
+    //
+    // This is the case `entryId` exists for: the entry was logged while the
+    // outline was unreadable, so it is keyed on the lift's name and carries no
+    // `strength:definition`. The ref is what projects a real reference, so
+    // without this the definition block's backlinks — "everything I have ever
+    // logged for this lift" — silently skip that session forever.
+    //
+    // New information, never an overwrite: an entry that already names a
+    // definition keeps it, because a row is only ever matched to an entry
+    // whose definition agrees or is absent.
+    const existing = await tx.get(entryId)
+    if (existing && !existing.deleted && existing.properties[FIELD.definition] === undefined) {
+      await tx.setProperty(entryId, definitionProp, ex.definitionId)
+    }
+  }
+
   const {id: exId} = entryId !== undefined ? {id: entryId} : await getOrCreateTypedChild(repo, tx, {
     identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, ex.occurrence),
     parentId: workoutId,
