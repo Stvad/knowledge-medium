@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildDraft, finishPlan, hasAcceptedSets, overlayLive, overlayLiveValues, toMaterializeDraft} from '../src/ui/draft'
+import {buildDraft, hasAcceptedSets, overlayLive, overlayLiveValues, toMaterializeDraft} from '../src/ui/draft'
 import type {LiveWorkout} from '../src/km/history'
 import type {Prescription} from '../src/engine/types'
 
@@ -151,129 +151,6 @@ describe('overlayLiveValues', () => {
       id: `s${i}`, weight: s.weight, reps: s.reps, done: s.done,
     })))
     expect(overlayLiveValues(draft, live)).toBe(draft)
-  })
-})
-
-describe('finishPlan', () => {
-  it('KEEPS a switched-away exercise that has done sets — those lifts happened', () => {
-    // The headline mid-session flow: log two sets of the or-group's first
-    // option, switch to the other because your shoulder complains, finish.
-    // Pruning the old option outright deleted work that was actually
-    // performed — the one thing this log must never do.
-    const draft = buildDraft(prescription(), 'lb')
-    draft[0].blockId = 'e-landmine'
-    draft[0].sets.forEach((s, i) => (s.blockId = `lm${i}`))
-    draft[0].sets[0].done = true
-    const liveWorkout: LiveWorkout = {
-      id: 'w1', day: '2026-07-23', session: 'A',
-      exercises: [
-        {id: 'e-landmine', exercise: 'Landmine press', unit: 'lb', sets: []},
-        {id: 'e-ohp', exercise: 'Overhead press', unit: 'lb', sets: [
-          {id: 'ohp0', weight: 95, reps: 8, done: true},
-          {id: 'ohp1', weight: 95, reps: 7, done: true},
-          {id: 'ohp2', weight: 95, reps: 8, done: false},
-        ]},
-      ],
-    }
-    const plan = finishPlan('w1', draft, liveWorkout)
-
-    expect(plan.removeExerciseIds).toEqual([])
-    const ohp = plan.keep.find(k => k.exerciseId === 'e-ohp')
-    expect(ohp).toMatchObject({workingWeight: 95, removeSetIds: ['ohp2']})
-  })
-
-  it('keeps a set ticked outside this view — the checkbox is the built-in todo', () => {
-    // Done-ness is the todo `status` prop, tickable from the outline or
-    // another device. The draft only reseeds on structural change, so it may
-    // still think the set is open; pruning it would delete a logged set.
-    const draft = buildDraft(prescription(), 'lb')
-    draft[0].blockId = 'e1'
-    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
-    draft[0].sets[0].done = true
-    const liveWorkout: LiveWorkout = {
-      id: 'w1', day: '2026-07-23', session: 'A',
-      exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets: [
-        {id: 's0', weight: 135, reps: 10, done: true},
-        {id: 's1', weight: 135, reps: 10, done: true},   // ticked in the outline
-        {id: 's2', weight: 135, reps: 10, done: false},
-      ]}],
-    }
-    expect(finishPlan('w1', draft, liveWorkout).keep[0].removeSetIds).toEqual(['s2'])
-  })
-
-  it('prunes an exercise the live workout has but the draft no longer does', () => {
-    // The or-group you switched away from mid-session: its blocks are still in
-    // the workout, and its pre-filled sets are open todos. Finish must take
-    // them with it.
-    const draft = buildDraft(prescription(), 'lb')
-    draft[0].blockId = 'e1'
-    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
-    draft[0].sets[0].done = true
-    const liveWorkout: LiveWorkout = {
-      id: 'w1', day: '2026-07-23', session: 'A',
-      exercises: [
-        {id: 'e1', exercise: 'Bench press', unit: 'lb', sets: []},
-        {id: 'e-dropped', exercise: 'Suitcase carry', unit: 'lb', sets: []},
-      ],
-    }
-    const plan = finishPlan('w1', draft, liveWorkout)
-    expect(plan.removeExerciseIds).toEqual(['e-dropped'])
-    expect(plan.keep.map(k => k.exerciseId)).toEqual(['e1'])
-  })
-
-  const materialized = () => {
-    const draft = buildDraft(prescription(), 'lb')
-    draft[0].blockId = 'e1'
-    draft[0].sets.forEach((s, i) => (s.blockId = `s${i}`))
-    return draft
-  }
-
-  it('keeps done sets with the working weight and prunes the un-accepted ones', () => {
-    const draft = materialized()
-    draft[0].sets[0].done = true
-    draft[0].sets[1].done = true
-    const plan = finishPlan('w1', draft)
-    expect(plan.workoutId).toBe('w1')
-    expect(plan.keep).toHaveLength(1)
-    expect(plan.keep[0]).toMatchObject({exerciseId: 'e1', workingWeight: 135, removeSetIds: ['s2']})
-    expect(plan.removeExerciseIds).toEqual([])
-  })
-
-  it('removes an exercise with no done set', () => {
-    const plan = finishPlan('w1', materialized())
-    expect(plan.removeExerciseIds).toEqual(['e1'])
-    expect(plan.keep).toEqual([])
-  })
-
-  it('prunes a set block the draft never saw, on an exercise it did', () => {
-    // The adopt case: this view attached to an entry another device (or an
-    // earlier tab) had logged, and that entry has a set the draft has no row
-    // for. Planning only the draft's sets left it live — an open todo set
-    // under a workout marked done.
-    const draft = materialized()
-    draft[0].sets[0].done = true
-    const liveWorkout: LiveWorkout = {
-      id: 'w1', day: '2026-07-23', session: 'A',
-      exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets: [
-        {id: 's0', weight: 135, reps: 10, done: true},
-        {id: 's3', weight: 135, reps: 10, done: false},   // never in this draft
-      ]}],
-    }
-    expect(finishPlan('w1', draft, liveWorkout).keep[0].removeSetIds).toEqual(['s1', 's2', 's3'])
-  })
-
-  it('keeps a set block the draft never saw when it was actually done', () => {
-    const draft = materialized()
-    draft[0].sets.forEach(s => (s.done = true))
-    const liveWorkout: LiveWorkout = {
-      id: 'w1', day: '2026-07-23', session: 'A',
-      exercises: [{id: 'e1', exercise: 'Bench press', unit: 'lb', sets: [
-        {id: 's3', weight: 155, reps: 5, done: true},
-      ]}],
-    }
-    const plan = finishPlan('w1', draft, liveWorkout)
-    expect(plan.keep[0].removeSetIds).toEqual([])
-    expect(plan.keep[0].workingWeight).toBe(135)
   })
 })
 

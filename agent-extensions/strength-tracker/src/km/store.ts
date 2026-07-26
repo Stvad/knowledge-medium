@@ -51,6 +51,9 @@ import {dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
 import {buildAltChoices, toLiveSet} from './history'
+import type {LiveWorkout} from './history'
+import {finishPlan, type FinishPlan} from './finish'
+export type {FinishPlan} from './finish'
 
 // ──── draft shapes the writer consumes ────
 
@@ -332,55 +335,60 @@ export const writeSet = async (
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
 }
 
-/** Instructions for finishing a workout: which sets to keep (with the
- *  exercise's derived working weight) and which un-accepted rows to prune. */
-export interface FinishPlan {
-  workoutId: string
-  /** Exercises that kept at least one done set. */
-  keep: {exerciseId: string; workingWeight: number | undefined; removeSetIds: readonly string[]}[]
-  /** Exercises with no done set — removed wholesale. */
-  removeExerciseIds: readonly string[]
+/** Does this child carry `typeId`? Reads the raw `types` array. */
+const hasType = (row: {properties: Record<string, unknown>}, typeId: string): boolean => {
+  const types = row.properties.types
+  return Array.isArray(types) && types.includes(typeId)
 }
 
 /** Flip the workout to `done`, stamp each kept exercise's working weight, and
  *  prune the un-accepted sets / empty exercises so the saved record shows only
- *  what was actually performed. One transaction. */
-export const finishWorkout = async (repo: Repo, plan: FinishPlan): Promise<void> => {
+ *  what was actually performed. One transaction.
+ *
+ *  Takes the workout ID and re-reads the whole tree INSIDE the transaction,
+ *  rather than a plan the caller computed from its draft. Every way this has
+ *  lost data was a stale-input bug with the same shape: the caller's picture
+ *  is minutes old, while done-ness can be set from the outline, a todo view or
+ *  another device at any moment — including during Finish's own writes. Here
+ *  the answer cannot be out of date, and it costs two indexed child queries
+ *  per exercise.
+ *
+ *  It also covers what the previous re-check could not. That version skipped
+ *  deleting an entry someone had logged into, but then left that entry's OTHER
+ *  sets live — open todos under a finished workout, unreachable forever. And
+ *  an entry a second device added mid-Finish was in neither of the plan's
+ *  lists, so it was never considered at all. Both are just "read the tree".
+ *
+ *  The caller's job is to have flushed its own ticks first. */
+export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void> => {
   await repo.tx(async tx => {
-    /** Done-ness as the BLOCK states it right now, inside this transaction.
-     *
-     *  The plan was computed from a draft and a query snapshot, both of which
-     *  can be minutes old by the time Finish's dozen-plus writes get here —
-     *  and done-ness is the built-in todo checkbox, so it can be set from the
-     *  outline just below this view, from a phone, from anywhere. Deleting on
-     *  the strength of a stale snapshot is how a set you actually performed
-     *  disappears. A re-read costs one indexed row per candidate. */
-    const isDone = async (id: string): Promise<boolean> => {
-      const block = await tx.get(id)
-      return block !== null && !block.deleted && block.properties[FIELD.todoStatus] === 'done'
+    // A workout's children are not all set blocks: a note the user typed under
+    // an entry is one, and in a child-backed workspace so is every property
+    // row. Filter on the type before deciding anything.
+    const entries = (await tx.childrenOf(workoutId)).filter(row => hasType(row, EXERCISE_ENTRY_TYPE))
+    const exercises: LiveWorkout['exercises'] = []
+    for (const entry of entries) {
+      const sets = (await tx.childrenOf(entry.id)).filter(row => hasType(row, SET_TYPE))
+      exercises.push({
+        id: entry.id,
+        exercise: typeof entry.properties[FIELD.exercise] === 'string'
+          ? entry.properties[FIELD.exercise] as string
+          : entry.content,
+        unit: 'lb',
+        sets: sets.map(toLiveSet),
+      })
     }
+    const plan = finishPlan(workoutId, {id: workoutId, day: '', session: 'A', exercises})
 
-    // Subtree delete, not `tx.delete`: a skipped exercise still has its
-    // pre-filled set blocks, and those are todo-typed. Tombstoning only the
-    // parent would leave them live — stray open todos under a deleted block.
-    for (const exId of plan.removeExerciseIds) {
-      const sets = await tx.childrenOf(exId)
-      const performed = await Promise.all(sets.filter(s => !s.deleted).map(s => isDone(s.id)))
-      if (performed.some(Boolean)) continue // someone logged into it after the plan was made
-      await tx.run(deleteBlock, {id: exId})
-    }
+    // Subtree deletes, not `tx.delete`: a set block is a normal block, so a
+    // note typed under it — and, in a child-backed workspace, its own property
+    // rows — would otherwise stay live under a tombstone.
+    for (const exId of plan.removeExerciseIds) await tx.run(deleteBlock, {id: exId})
     for (const ex of plan.keep) {
-      // Subtree, like the exercise prune above: a set block is a normal block,
-      // so a note the user typed under it would otherwise stay live under a
-      // tombstone (and, in a child-backed workspace, so would the set's own
-      // property rows).
-      for (const setId of ex.removeSetIds) {
-        if (await isDone(setId)) continue
-        await tx.run(deleteBlock, {id: setId})
-      }
+      for (const setId of ex.removeSetIds) await tx.run(deleteBlock, {id: setId})
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
-    await tx.setProperty(plan.workoutId, statusProp, 'done')
+    await tx.setProperty(workoutId, statusProp, 'done')
   }, {scope: ChangeScope.BlockDefault, description: 'Finish workout'})
 }
 

@@ -40,7 +40,7 @@ export interface ResolvedWrite {
 /** The writes this coordinator orchestrates but never performs. */
 export interface WriteEffects {
   createWorkout(draft: readonly DraftExercise[]): Promise<MaterializedWorkout>
-  createExercise(workoutId: string, exercise: DraftExercise, exIdx: number): Promise<ExerciseEntryIds>
+  createExercise(workoutId: string, exercise: DraftExercise, occurrence: number): Promise<ExerciseEntryIds>
 }
 
 /** Identity of an exercise ROW, so switching the same slot twice doesn't
@@ -124,13 +124,13 @@ export const createWriteCoordinator = (
   const createExerciseOnce = async (
     key: string,
     exercise: DraftExercise,
-    exIdx: number,
+    occurrence: number,
     forWorkoutId: string,
     effects: WriteEffects,
   ): Promise<{value: ExerciseEntryIds; stale: boolean}> => {
     const at = generation
     const running = creatingExercises.get(key)
-      ?? effects.createExercise(forWorkoutId, exercise, exIdx).catch(error => {
+      ?? effects.createExercise(forWorkoutId, exercise, occurrence).catch(error => {
         if (at === generation && creatingExercises.get(key) === running) creatingExercises.delete(key)
         throw error
       })
@@ -220,7 +220,11 @@ export const createWriteCoordinator = (
       const {value, stale} = await createExerciseOnce(
         exerciseKey(exercise, exIdx),
         exercise,
-        exIdx,
+        // Which row of this lift THIS is, counted over the SAME array we are
+        // indexing. Deriving it from the prescription instead meant two
+        // sources of truth for one index — the exact shape of the bug the
+        // occurrence counter exists to prevent.
+        draft.slice(0, exIdx).filter(e => (e.defId ?? e.exercise) === (exercise.defId ?? exercise.exercise)).length,
         workoutId,
         effects,
       )
