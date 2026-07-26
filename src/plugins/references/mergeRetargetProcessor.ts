@@ -146,7 +146,15 @@ export const retargetReferences = (
     if (ref.sourceField !== undefined && !retargetableFields.has(ref.sourceField)) return [ref]
     const retargeted = retargetReference(ref, fromId, intoId, aliasReplacements)
     if (retargeted === null) return []
-    return retainedAliases.has(ref.alias) ? [ref, retargeted] : [retargeted]
+    // Retention is a CONTENT concern only: it exists because one
+    // normalized entry serves both `[[a]]` and a `![[a]]` the rewrite
+    // stepped over. A property-derived edge projects from the property
+    // VALUE, which has already been rewritten to `intoId` above — keeping
+    // its old entry would leave a `sourceField` edge pointing at the
+    // tombstoned block until the next reprojection, with no surviving
+    // span to justify it.
+    const retain = ref.sourceField === undefined && retainedAliases.has(ref.alias)
+    return retain ? [ref, retargeted] : [retargeted]
   }))
 
 /** Rewrite `fromId` → `intoId` inside a ref/refList property's RAW encoded

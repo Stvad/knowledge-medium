@@ -644,6 +644,20 @@ describe('retargetReferences — entry mapping', () => {
     )).toEqual([])
   })
 
+  it('never retains a property-derived edge', () => {
+    // Retention answers a CONTENT problem — one normalized entry serving
+    // both `[[a]]` and a skipped `![[a]]`. A property-derived edge
+    // projects from the property VALUE, which the merge has already
+    // rewritten to `into`, so keeping its old entry would strand a
+    // `sourceField` edge on the tombstoned block with no span behind it.
+    const out = retargetReferences(
+      [{id: 'source', alias: 'Partial', sourceField: 'reviewer'}], 'source', INTO,
+      new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
+      new Set(['Partial']), new Set(['reviewer']),
+    )
+    expect(out).toEqual([{id: INTO, alias: INTO, sourceField: 'reviewer'}])
+  })
+
   it('replaces an ordinary entry exactly once', () => {
     expect(retargetReferences(
       [{id: 'source', alias: 'Partial'}], 'source', INTO,

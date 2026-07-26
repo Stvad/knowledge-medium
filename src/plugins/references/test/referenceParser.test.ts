@@ -445,6 +445,25 @@ Another [[normal-ref]]
       expect(pinnedSpanReplacement('Plain', 'not-a-uuid')).toBeNull()
     })
 
+    it('refuses a wikilink alias markdown would re-escape, and flags the pinned label', () => {
+      // Markdown owns `\` as an escape and resolves it BEFORE
+      // `remark-wikilinks` sees the text, so `[[abc\]]` renders a link to
+      // alias `abc` while the stored edge says `abc\` — a span pointing
+      // somewhere the projection does not. The parsers here keep the
+      // backslash verbatim, so nothing else notices.
+      expect(faithfulWikilinkReplacement('abc\\')).toBeNull()
+      expect(faithfulWikilinkReplacement('a\\b')).toBeNull()
+      expect(faithfulWikilinkReplacement('abc')).not.toBeNull()
+
+      // The pinned form survives it: the id segment carries the binding,
+      // so only the DISPLAYED label loses the escape — reported, not
+      // refused, which is what keeps the ladder's fallback available.
+      const pinned = pinnedSpanReplacement('abc\\', UUID)
+      expect(pinned).not.toBeNull()
+      expect(pinned!.toTargetId).toBe(UUID)
+      expect(pinned!.lossyLabel).toBe(true)
+    })
+
     it('refuses a target id the parser would canonicalize away', () => {
       // `parseBlockRefs` lower-cases UUID-shaped ids, but `blocks.id` is
       // compared case-sensitively and both `tx.create` and the agent

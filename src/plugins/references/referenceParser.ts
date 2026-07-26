@@ -320,6 +320,18 @@ export interface SpanReplacement {
  *  no lossy tier here: a wikilink's label IS its target, so a mangled
  *  label is a mangled binding. */
 export const faithfulWikilinkReplacement = (alias: string): SpanReplacement | null => {
+  // MARKDOWN is a third grammar over this text, and it owns `\` as an
+  // escape. The parsers here keep a backslash verbatim, so `[[abc\]]`
+  // looks like a clean round trip — but remark resolves `\]` to a literal
+  // `]` before `remark-wikilinks` ever sees the text, and the rendered
+  // link binds to alias `abc` while the edge we store says `abc\`. The
+  // span points somewhere the projection doesn't, which is the exact
+  // failure this guard exists to refuse.
+  //
+  // Refused rather than escaped: doubling the backslash would change the
+  // literal alias text, and the caller has a pinned fallback that keeps
+  // the TARGET regardless of how markdown treats the label.
+  if (alias.includes('\\')) return null
   const text = renderWikilink(alias)
   const marks = parseOutermostReferences(text)
   if (marks.length !== 1) return null
@@ -393,7 +405,13 @@ export const pinnedSpanReplacement = (
     text,
     refAlias: mark.blockId,
     toTargetId: mark.blockId,
-    lossyLabel: mark.label !== label,
+    // A backslash counts as lossy even though the parsers here round-trip
+    // it: markdown resolves the escape at render time, so the DISPLAYED
+    // label drops it. Unlike the wikilink form this stays a report rather
+    // than a refusal — the id segment carries the binding, so the link
+    // still lands on the right block and only the visible text changes,
+    // which is precisely what `lossyLabel` is for.
+    lossyLabel: mark.label !== label || label.includes('\\'),
   }
 }
 
