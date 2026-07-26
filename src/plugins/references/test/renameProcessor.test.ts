@@ -1210,6 +1210,28 @@ describe('rename — Codex round 2 (#444)', () => {
     expect(content).toBe('see [[Win]] please')
   })
 
+  it('vetoes a gap-arriving seat carrying a DUPLICATE generated field row', async () => {
+    // Both rows are shaped exactly like machinery — recognized definition
+    // target, `::` marker set, one leaf value child each. Only the fact
+    // that there are TWO of them says a user built one.
+    const fieldId = propertyDefinitionBlockId(WS, aliasesProp.seedKey)
+    await env.h.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, 'children')`,
+      [WS, 'test ws', 'user-1'],
+    )
+    const content = await renameWithGapSeat(async (exec, seatId) => {
+      for (const r of [
+        rawRow('fieldrow', seatId, `::((${fieldId}))`, fieldId),
+        rawRow('value', 'fieldrow', 'Win'),
+        rawRow('dupe', seatId, `::((${fieldId}))`, fieldId),
+        rawRow('dupevalue', 'dupe', 'Win'),
+      ]) await exec(r[0], r[1])
+    })
+    expect(content).toBe('see [[Win]] please')
+  })
+
   it('vetoes a gap-arriving seat with a note beside a generated value child', async () => {
     // Here every direct child IS generated machinery, so the shallow
     // signal clears it — the user data is one level further down, beside
@@ -1268,6 +1290,18 @@ describe('rename — Codex round 2 (#444)', () => {
 
     // Un-flipped workspaces have no generated rows to look under.
     expect(await hasDeepUserContent(env.h.db, seatId, [])).toBe(false)
+
+    // A DUPLICATE field row for the same definition is user-authored
+    // whatever its subtree looks like — `ensureAliasTarget` writes each
+    // generated property exactly once. Per-row shape testing accepts it
+    // (one leaf value child, same as the real one), and the original
+    // stays the projection winner so the seat's bag still matches the
+    // seed, leaving nothing else to notice the adoption.
+    await env.h.db.execute(`UPDATE blocks SET deleted = 1 WHERE id = 'beside'`)
+    expect(await hasDeepUserContent(env.h.db, seatId, [fieldId])).toBe(false)
+    await row('dupe', seatId, `::((${fieldId}))`, true)
+    await row('dupevalue', 'dupe', 'Win', false)
+    expect(await hasDeepUserContent(env.h.db, seatId, [fieldId])).toBe(true)
   })
 
   it('does not treat a seat with user content under a generated field row as pristine', async () => {

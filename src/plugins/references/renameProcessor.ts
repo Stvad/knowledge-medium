@@ -199,12 +199,24 @@ export const hasDeepUserContent = async (
 ): Promise<boolean> => {
   if (generatedFieldIds.length === 0) return false
   const placeholders = generatedFieldIds.map(() => '?').join(', ')
-  const fieldRows = await db.getAll<{id: string}>(
-    `SELECT id FROM blocks
+  const fieldRows = await db.getAll<{id: string; reference_target_id: string}>(
+    `SELECT id, reference_target_id FROM blocks
      WHERE parent_id = ? AND deleted = 0 AND is_field_form = 1
        AND reference_target_id IN (${placeholders})`,
     [seatId, ...generatedFieldIds],
   )
+  // `ensureAliasTarget` writes each generated property exactly ONCE, so a
+  // second field row addressing the same definition is user-authored —
+  // whatever its subtree looks like. Without this, a duplicate `alias::`
+  // row with its own single leaf value passes the per-row shape test
+  // below just as the generated one does, and (while the original stays
+  // the projection winner, so the seat's bag still matches the seed) the
+  // seat reads as untouched machinery.
+  const seenTargets = new Set<string>()
+  for (const fieldRow of fieldRows) {
+    if (seenTargets.has(fieldRow.reference_target_id)) return true
+    seenTargets.add(fieldRow.reference_target_id)
+  }
   for (const fieldRow of fieldRows) {
     const grandchildren = await db.getAll<{id: string}>(
       `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [fieldRow.id],
@@ -686,12 +698,17 @@ const hasBlockingChildrenInTx = async (
   seatId: string,
   generatedFieldIds: readonly string[],
 ): Promise<boolean> => {
+  const seenTargets = new Set<string>()
   for (const child of await tx.childrenOf(seatId)) {
     const target = child.referenceTargetId ?? null
     const generated = child.isFieldForm === true
       && target !== null
       && generatedFieldIds.includes(target)
     if (!generated) return true
+    // One generated row per definition — a second is the user's. Same
+    // reasoning as `hasDeepUserContent`.
+    if (seenTargets.has(target)) return true
+    seenTargets.add(target)
     const grandchildren = await tx.childrenOf(child.id)
     if (grandchildren.length > 1) return true
     if (grandchildren.length === 1

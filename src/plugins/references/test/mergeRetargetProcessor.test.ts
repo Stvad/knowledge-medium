@@ -11,9 +11,12 @@ import { aliasesProp } from '@/data/properties'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { computeAliasSeatId } from '@/data/targets'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { pinnedSpanReplacement } from '../referenceParser.ts'
+import { retargetReferences } from '../mergeRetargetProcessor.ts'
 import { refTestSeed } from './refTestSeeds.ts'
 
 const WS = 'ws-1'
@@ -295,9 +298,20 @@ describe('references.retargetMergedBlockReferences', () => {
       dropSourceAliases: ['Partial'],
     })
 
+    // Same tx: content untouched, and the entry DROPPED rather than
+    // moved to `into` — neither `source` nor `into` is what the span
+    // means, so ownership goes to the re-parse.
     expect(env.read('ref')!.content).toBe('see [[Partial]]')
+    expect(env.read('ref')!.references).toEqual([])
+
+    // Dropping it is also what SCHEDULES that re-parse: keeping the entry
+    // verbatim leaves the list byte-identical, so no patch is written, no
+    // watched field changes, and the edge stays pinned to the tombstoned
+    // `source` forever. `parseReferences` watches `references` as well as
+    // `content`, so the removal itself re-fires it.
+    await env.repo.awaitProcessors()
     expect(env.read('ref')!.references).toEqual(
-      normalizeReferences([{id: 'source', alias: 'Partial'}]),
+      normalizeReferences([{id: computeAliasSeatId('Partial', WS, 0), alias: 'Partial'}]),
     )
   })
 
@@ -595,5 +609,46 @@ describe('references.retargetMergedBlockReferences', () => {
       expect(env.read('value')!.referenceTargetId).toBe(INTO)
       expect(env.read('value')!.references).toEqual([{id: INTO, alias: INTO}])
     })
+  })
+})
+
+describe('retargetReferences — entry mapping', () => {
+  // Runs in the same tx as the content rewrite, and `parseReferences`
+  // re-derives the same list moments later — so the processor-level
+  // assertion above cannot see this. The window before that re-parse is
+  // what a backlink query or a concurrent rename actually reads.
+  const INTO = '44444444-4444-4444-8444-444444444444'
+
+  it('keeps the old edge when a page embed survived the pinned rewrite', () => {
+    // `[[Partial]]` was pinned; `![[Partial]]` was stepped over. Both
+    // occurrences share ONE normalized entry, so replacing it outright
+    // drops the surviving embed out of the projection.
+    const out = retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
+      new Set(['Partial']), new Set(),
+    )
+    expect(out).toHaveLength(2)
+    expect(out).toEqual(expect.arrayContaining([
+      {id: 'source', alias: 'Partial'},
+      {id: INTO, alias: INTO},
+    ]))
+  })
+
+  it('drops an entry whose rewrite could not be rendered', () => {
+    // Neither `source` nor `into` is what the span means now, and the
+    // removal is itself what re-fires the parse that can decide.
+    expect(retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', null]]), new Set(), new Set(),
+    )).toEqual([])
+  })
+
+  it('replaces an ordinary entry exactly once', () => {
+    expect(retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
+      new Set(), new Set(),
+    )).toEqual([{id: INTO, alias: INTO}])
   })
 })
