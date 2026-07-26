@@ -19,7 +19,7 @@ import {detectPendingLayoff, layoffAlreadyRecorded, layoffFromPending} from '../
 import {detectLeftRightAsymmetry} from '../engine/shoulder'
 import type {ExerciseVideo, SessionType} from '../engine/types'
 import {altOptionKey} from '../engine/types'
-import {SHOULDER_POLICY_BLOCK_ID} from '../km/config'
+import {SHOULDER_POLICY_BLOCK_ID} from '../km/fields'
 import type {LiveWorkout} from '../km/history'
 import {
   discardWorkout,

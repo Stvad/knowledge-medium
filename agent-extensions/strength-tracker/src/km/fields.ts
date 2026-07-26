@@ -27,6 +27,14 @@ export const ALT_GROUP_TYPE = 'strength-alt-group'
  *  leaves a visible dangling link instead of a silently ignored map entry. */
 export const ALT_CHOICE_TYPE = 'strength-alt-choice'
 
+/** Shoulder-policy block referenced by auto-created consult todos.
+ *
+ *  Here rather than in `config.ts` for the reason above: it is a bare id, and
+ *  the logging view needs nothing else from that module — so importing it
+ *  from there pulled the whole seed + parser graph, and its `@/` runtime
+ *  imports, into the view's module graph for one string. */
+export const SHOULDER_POLICY_BLOCK_ID = '3f8866f6-7143-4bbe-b9a0-fa60abf12be5'
+
 export const FIELD = {
   // workout
   session: 'strength:session',

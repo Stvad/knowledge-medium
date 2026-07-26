@@ -29,8 +29,6 @@ import {
  *  "Strength Plan v2" alias when neither points anywhere live. */
 export const DEFAULT_PLAN_ROOT_ID = 'ed2e8053-ea55-4130-9207-01409192a4aa'
 export const PLAN_ALIAS = 'Strength Plan v2'
-/** Shoulder-policy block referenced by auto-created consult todos. */
-export const SHOULDER_POLICY_BLOCK_ID = '3f8866f6-7143-4bbe-b9a0-fa60abf12be5'
 
 const read = <T>(block: BlockData | null, schema: PropertySchema<T>): T => {
   const raw = block?.properties[schema.name]
