@@ -211,23 +211,29 @@ export interface LiftRef {
  *  entries by hand in the outline, which only matters for a lift prescribed
  *  twice in one session.
  *
- *  Rows are matched by plan block where they have one, and by NAME as a
- *  fallback — but only against an entry that carries no plan block of its own.
- *  That asymmetry is the whole subtlety. An entry logged while the plan
- *  outline was unreadable is keyed on the lift's name (`configLoaded` goes
- *  true even when the read fails, deliberately: blocking logging on an
- *  unreadable plan is worse), and the same row keys on its plan block the
- *  moment the plan resolves. Refusing the fallback there orphaned the whole
- *  session on screen — the sets were safe, since Finish reads the committed
- *  tree, but the view showed a pristine pre-filled session and invited the
- *  user to log it a second time.
+ *  A row matches its plan block first, then falls back to the lift's NAME —
+ *  because whether either side knows a lift's plan block is a property of WHEN
+ *  it was written, not of which lift it is. `configLoaded` goes true even when
+ *  the plan read FAILS (deliberately: blocking logging on an unreadable
+ *  outline is worse than logging against the built-in names), so the mismatch
+ *  arises for the same mundane reason in both directions:
  *
- *  Matching such an entry is safe because the row's own writes follow it: a
- *  set that has a block writes to that block, and a set that doesn't goes
- *  through the entry the row is ATTACHED to (see `writeExercise`'s `entryId`)
- *  rather than re-deriving. An entry that already has a plan block is never
- *  offered to the name fallback, because that one IS reachable by derivation
- *  and matching it by name could cross two different lifts. */
+ *   - the entry has no plan block and the row does — logged while the outline
+ *     was unreadable, and then it resolved;
+ *   - the row has no plan block and the entry does — the outline is unreadable
+ *     HERE, and the session was started somewhere it wasn't.
+ *
+ *  Either way, refusing to match orphans a live session. The sets are safe,
+ *  since Finish reads the committed tree, but the view shows a pristine
+ *  pre-filled session over real logged work, and the obvious response is to
+ *  log it again — which builds a second entry tree beside the first.
+ *
+ *  The fallback is safe because a matched row's writes FOLLOW the match: a set
+ *  that has a block writes to that block, and one that doesn't goes through the
+ *  entry the row is attached to (`writeExercise`'s `entryId`) instead of
+ *  re-deriving. The one restriction left is that a row WITH a plan block never
+ *  falls back onto an entry carrying a DIFFERENT one — those are two genuinely
+ *  different lifts that happen to share a name. */
 export const matchLiveExercises = (
   rows: readonly LiftRef[],
   live: LiveWorkout | undefined,
@@ -235,9 +241,14 @@ export const matchLiveExercises = (
   if (!live) return rows.map(() => undefined)
 
   const byKey = new Map<string, LiveExercise>()
+  /** Every entry, by name — what a row with NO plan block falls back to. */
   const byName = new Map<string, LiveExercise>()
+  /** Only entries carrying no plan block — what a row WITH one falls back to,
+   *  so it can never claim an entry that belongs to a different lift. */
+  const byNameUnplanned = new Map<string, LiveExercise>()
   const occurrences = new Map<string, number>()
   const nameOccurrences = new Map<string, number>()
+  const unplannedOccurrences = new Map<string, number>()
   const next = (counts: Map<string, number>, of: string): number => {
     const n = counts.get(of) ?? 0
     counts.set(of, n + 1)
@@ -246,11 +257,12 @@ export const matchLiveExercises = (
   for (const entry of live.exercises) {
     const base = entry.definitionId ?? entry.exercise
     byKey.set(liftKey(entry.definitionId, entry.exercise, next(occurrences, base)), entry)
-    // Only entries with no plan block of their own are offered to the name
-    // fallback — one that has a plan block is reachable by derivation, and
-    // matching it by name could cross two genuinely different lifts.
+    byName.set(liftKey(undefined, entry.exercise, next(nameOccurrences, entry.exercise)), entry)
     if (entry.definitionId === undefined) {
-      byName.set(liftKey(undefined, entry.exercise, next(nameOccurrences, entry.exercise)), entry)
+      byNameUnplanned.set(
+        liftKey(undefined, entry.exercise, next(unplannedOccurrences, entry.exercise)),
+        entry,
+      )
     }
   }
 
@@ -258,8 +270,9 @@ export const matchLiveExercises = (
   // rows, which then write over each other set for set.
   const claimed = new Set<string>()
   return rows.map(row => {
+    const nameKey = liftKey(undefined, row.exercise, row.occurrence)
     const match = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence))
-      ?? byName.get(liftKey(undefined, row.exercise, row.occurrence))
+      ?? (row.definitionId === undefined ? byName.get(nameKey) : byNameUnplanned.get(nameKey))
     if (!match || claimed.has(match.id)) return undefined
     claimed.add(match.id)
     return match

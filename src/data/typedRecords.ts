@@ -215,6 +215,21 @@ export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id'> {
  * first adoptable slot": restoring a tombstone (undo of a delete) can put a
  * second live record on a later slot, and nothing here detects that.
  *
+ * KNOW THE LIMIT OF THE PROBE. Convergence across devices is a property of
+ * SLOT 0 only. Every later slot is chosen from what this device happens to
+ * hold: a device that has synced the finished (or tombstoned) occupant of slot
+ * 0 moves to slot 1, while one that hasn't still sees slot 0 as free and
+ * creates there. Since `apply_block_creates` is insert-or-touch, the second
+ * device's create loses to the row already on the server — so its "new" record
+ * silently becomes the old one, and the children it derives from that id land
+ * in a tree it did not mean to touch.
+ *
+ * So a `adoptable` that rejects live records is safe for anything the user
+ * only reaches from one device at a time, and is NOT a way to model "a second
+ * one of these, deliberately". For that, put whatever distinguishes the second
+ * from the first INTO the key, where every device can see it, rather than
+ * leaving it to be inferred from which rows a device has.
+ *
  * ```ts
  * await repo.tx(async tx => {
  *   const outcome = await getOrCreateTypedChild(repo, tx, {

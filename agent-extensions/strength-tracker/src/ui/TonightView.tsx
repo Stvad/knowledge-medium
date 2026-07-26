@@ -349,7 +349,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
         await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
       }
-            // No plan argument: `finishWorkout` re-reads the tree inside its own
+      // No plan argument: `finishWorkout` re-reads the tree inside its own
       // transaction, so nothing this view believes can prune a set the blocks
       // say was performed.
       await finishWorkout(repo, wid)
@@ -372,14 +372,25 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length
       setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
 
+      // The workout is SAVED from here on, so nothing after this point may
+      // report it as unsaved. The shoulder check is a follow-up prompt, and a
+      // failure in it used to reach `finish`'s caller as "Could not save that
+      // — tap it again" over a session that was already logged. Tapping again
+      // now starts a second session for tonight, because the coordinator has
+      // released this one.
       const fullBefore = history.filter(w => w.session !== 'mini').length
       const isFull = session !== 'mini'
       const due = isFull && ((fullBefore + 1) % SHOULDER_CHECK_EVERY === 0 || detectLeftRightAsymmetry(history))
       if (due) {
-        const result = await openDialog(ShoulderChecklistDialog, {history})
-        if (result && result.checkedPrompts.length > 0) {
-          await writeShoulderTodo(repo, workspaceId, pageId, result.checkedPrompts, SHOULDER_POLICY_BLOCK_ID)
-          setStatus('Shoulder trigger logged → consult todo created')
+        try {
+          const result = await openDialog(ShoulderChecklistDialog, {history})
+          if (result && result.checkedPrompts.length > 0) {
+            await writeShoulderTodo(repo, workspaceId, pageId, result.checkedPrompts, SHOULDER_POLICY_BLOCK_ID)
+            setStatus('Shoulder trigger logged → consult todo created')
+          }
+        } catch (error) {
+          console.error('[strength] shoulder follow-up failed', error)
+          setStatus(`Logged ${SESSION_LABELS[session]} — the shoulder check could not be saved.`)
         }
       }
     } finally {

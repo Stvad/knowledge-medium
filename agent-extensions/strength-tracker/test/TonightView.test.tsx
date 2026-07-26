@@ -23,10 +23,11 @@ import type {Repo} from '@/data/repo.js'
 
 import type {LiveExercise, LiveSet, LiveWorkout} from '../src/km/history'
 import type {ExerciseDraft, ExerciseEntryIds, MaterializedWorkout, SetDraft} from '../src/km/store'
-import type {Prescription, PrescribedExercise, SessionType} from '../src/engine/types'
+import type {Prescription, PrescribedExercise, SessionType, WorkoutRecord} from '../src/engine/types'
 import {DEFAULT_CONFIG} from '../src/program/defaults'
 import {TonightView} from '../src/ui/TonightView'
 import type {ProgramState} from '../src/ui/useProgram'
+import {setDialogAnswer} from './kernel/dialogs'
 
 vi.mock('../src/km/store', () => ({
   startWorkout: vi.fn(),
@@ -246,12 +247,16 @@ function Harness({
   backend,
   prescriptions,
   configLoaded,
+  history,
 }: {
   backend: Backend
   /** One prescription per session, so switching is a real switch: `slot`
    *  changes, and the two sessions can prescribe the same lift. */
   prescriptions: Partial<Record<SessionType, Prescription>>
   configLoaded: boolean
+  /** Finished sessions. The shoulder check is due on every fourth one, so
+   *  this is the only way to reach the post-Finish follow-up at all. */
+  history: readonly WorkoutRecord[]
 }) {
   const [liveWorkouts, setLiveWorkouts] = useState<readonly LiveWorkout[]>([])
   const [session, setSession] = useState<SessionType>('A')
@@ -262,7 +267,7 @@ function Harness({
     warnings: [],
     planRootId: 'plan',
     settingsBlockId: 'settings',
-    history: [],
+    history,
     layoffs: [],
     liveWorkouts,
     configLoaded,
@@ -282,6 +287,7 @@ const mount = (
     prescription?: Prescription
     prescriptions?: Partial<Record<SessionType, Prescription>>
     configLoaded?: boolean
+    history?: readonly WorkoutRecord[]
   } = {},
 ) =>
   render(
@@ -289,8 +295,18 @@ const mount = (
       backend={backend}
       prescriptions={options.prescriptions ?? {A: options.prescription ?? prescriptionOf()}}
       configLoaded={options.configLoaded ?? true}
+      history={options.history ?? []}
     />,
   )
+
+/** `n` finished full sessions — enough to make the shoulder check due. */
+const pastSessions = (n: number): WorkoutRecord[] =>
+  Array.from({length: n}, (_, i) => ({
+    id: `past-${i}`,
+    date: `2026-07-${String(10 + i).padStart(2, '0')}T18:00:00.000Z`,
+    session: 'A' as SessionType,
+    exercises: [],
+  }))
 
 /** Point the mocked store at a backend. Both suites need it, and the copy that
  *  drifts is the one that lies. */
@@ -526,6 +542,44 @@ describe('TonightView', () => {
     await waitFor(() => expect(store.materializeExercise).toHaveBeenCalled())
     await emit()
     expect(backend.entryIds()).toEqual(['e:Bench press'])
+  })
+
+  it('re-attaches when the plan is unreadable HERE but was not where the session started', async () => {
+    // The mirror image of the case above, and it happens for the same reason:
+    // this client's outline read failed, so its rows carry no plan block,
+    // while the entries were written by a client whose read succeeded.
+    // Orphaning them builds a second, name-keyed tree beside the real one.
+    backend.seed('Bench press', [{weight: 205, reps: 5, done: true}, {weight: 205, reps: 5}], 'def-bench')
+    mount(backend)                       // prescription has no defId
+    await emit()
+
+    expect(checkboxes()[0].checked).toBe(true)
+    expect(weights()[0].value).toBe('205')
+    fireEvent.click(checkboxes()[1])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+    expect(backend.entryIds()).toEqual(['e:def-bench'])
+  })
+
+  it('does not report a finished workout as unsaved when the shoulder check fails', async () => {
+    // Everything after `finishWorkout` is follow-up. Letting it reach the
+    // caller's error handler said "Could not save that — tap it again" over a
+    // session that WAS saved, and tapping again starts a second one for
+    // tonight because the coordinator has already released this one.
+    vi.mocked(store.writeShoulderTodo).mockRejectedValue(new Error('offline'))
+    setDialogAnswer({checkedIds: ['t1'], checkedPrompts: ['aching']})
+    // Three finished sessions, so this one is the fourth and the check is due.
+    mount(backend, {history: pastSessions(3)})
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
+    expect(screen.getByText(/Logged A · upper/)).toBeTruthy()
+    setDialogAnswer(null)
   })
 
   it('refuses to log until the plan has been read, and says so', async () => {
