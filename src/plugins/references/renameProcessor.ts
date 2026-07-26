@@ -54,7 +54,11 @@ import {
   generatedSeatFieldIds,
   matchesAliasSeatSeed,
 } from '@/data/targets'
-import { parseReferences, rewriteWikilinks, type SpanReplacement } from './referenceParser.ts'
+import {
+  parseReferences,
+  rewriteWikilinksMulti,
+  type SpanReplacement,
+} from './referenceParser.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
@@ -529,12 +533,31 @@ const collectTargetPlans = async (
       [...generatedFieldIds, after.workspaceId, alias],
     )
     for (const row of sources) {
-      // Target disjunction: the renaming claimant, or a window-minted
-      // machine α-seat a concurrent re-derive bound the span to.
-      // Anything else is a different block that happens to share the
-      // alias text — not ours.
-      if (row.targetId !== after.id
-        && !(await isWindowMintedSeat(ctx.db, row, alias, seatCtx))) continue
+      // ONLY the renaming block. A span whose edge points anywhere else
+      // is not ours to rewrite.
+      //
+      // This deliberately does NOT follow spans onto a window-minted
+      // α-seat, which an earlier version of this pass did (that is what
+      // the alias-keyed enumeration was built for). The leg cannot be
+      // made safe: it admits a source because its edge sits on a seat
+      // younger than the rename, and it cannot tell a PRE-EXISTING span
+      // that a concurrent re-derive moved onto that seat from a `[[α]]`
+      // the USER TYPED after the release — the second is a link they
+      // deliberately pointed at the new seat, and rewriting it hands
+      // their link to the block that just gave the name up.
+      //
+      // The one signal that would separate them is the source's own
+      // stamp, and it cannot: the re-derive writes the source's
+      // `references` (`referencesProcessor`), and `skipMetadata` still
+      // ratchets `updated_at`, so both paths bump it identically. The
+      // content guard cannot help either — the user's edit precedes the
+      // read phase, so it is already baked into `originalContent`.
+      //
+      // Dropping the leg costs a window-bound span its rename: it stays
+      // `[[α]]` late-binding to the seat, a working link to a stub, and
+      // the behaviour that predates this pass. That is strictly better
+      // than silently re-pointing a link the user just wrote.
+      if (row.targetId !== after.id) continue
       // First sighting of this source pins `originalContent`. If a
       // later target rename hits the same source within this event,
       // both reads are inside the same committed snapshot so the
@@ -723,7 +746,18 @@ const aliasStillReleased = (
   rewrite: Rewrite,
   cache: ReleaseCache,
 ): Promise<boolean> => {
-  const key = `${workspaceId}\u0000${rewrite.alias}`
+  // Keyed on everything `isWindowMintedSeatInTx` actually reads, not
+  // just `(workspace, alias)`. One committed event can carry several
+  // sync-created co-claimants releasing the SAME alias, and their
+  // rewrites differ in `toTargetId` and `mintedAfter` — both of which
+  // change the verdict. The narrower key handed the first rewrite's
+  // answer to the rest, so a claimant that is a valid window seat for
+  // one of them could bypass another's veto. (`slotIds` and
+  // `generatedFieldIds` derive from workspace + alias, so they need no
+  // key of their own.)
+  const key = [
+    workspaceId, rewrite.alias, rewrite.toTargetId, rewrite.seat.mintedAfter,
+  ].join('\u0000')
   const cached = cache.get(key)
   if (cached !== undefined) return cached
   const pending = (async () => {
@@ -766,14 +800,18 @@ const applyPlan = async (
     }
   }
   if (live.length === 0) return
-  let nextContent = current.content
-  for (const rewrite of live) {
-    nextContent = rewriteWikilinks(
-      nextContent, rewrite.alias, rewrite.replacement,
-      // Pinned replacements only: see `rewriteWikilinks`' embed note.
-      {skipEmbeds: rewrite.pinned},
-    )
-  }
+  // ONE pass over the original spans, not one pass per alias. Sequential
+  // passes re-parse the previous pass's output, so with `α → β` and
+  // `β → γ` in a single synced commit an original `[[α]]` becomes `[[β]]`
+  // and is then consumed again into `[[γ]]` — stealing α's link, while
+  // `applyRefRewrites` still maps α's entry to β's block.
+  // (`skipEmbeds` is per-alias: it tracks whether THAT replacement is the
+  // pinned form. Last rewrite wins on a duplicate alias, matching the
+  // entry swap's own last-write-wins map.)
+  const nextContent = rewriteWikilinksMulti(
+    current.content,
+    new Map(live.map(rw => [rw.alias, {text: rw.replacement, skipEmbeds: rw.pinned}])),
+  )
   if (nextContent === current.content) return
   // Surgically swap the matching `references` entries in lockstep with
   // the content rewrite so the `block_references` trigger refreshes

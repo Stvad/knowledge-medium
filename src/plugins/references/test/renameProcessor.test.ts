@@ -592,14 +592,13 @@ describe('rename — post-tx claimant (§11 group 2)', () => {
     expect(await refsOf('s')).toEqual([{id: 'u', alias: 'Shared'}])
   })
 
-  it('still rewrites when the only claimant is a machine seat, and follows the span onto it', async () => {
-    // The rename window: the rename rewrite CONSUMES the alias diff, so
-    // no flow can rewrite content before the alias moves. A re-derive
-    // landing in that window mints an α-seat and re-binds the span to
-    // it. The seat must not count as a successor (it would suppress the
-    // rewrite) and the seat-bound edge must still be found (the old
-    // (target_id, alias) enumeration missed it) — otherwise the span is
-    // permanently stranded on a throwaway seat.
+  it('still rewrites when the only claimant is a machine seat', async () => {
+    // The rename window: the rewrite CONSUMES the alias diff, so no flow
+    // can rewrite content before the alias moves, and a re-derive landing
+    // in that window mints an α-seat that CLAIMS the released name. It
+    // must not count as a successor — treat it as one and the rewrite is
+    // suppressed for every source, including the ordinary ones still
+    // bound to the renaming block.
     await seedTarget(PIN_TARGET, 'T', ['Win'])
     await seedSource('s', 'see [[Win]] please')
 
@@ -607,22 +606,12 @@ describe('rename — post-tx claimant (§11 group 2)', () => {
     await env.repo.tx(async tx => {
       await tx.setProperty(PIN_TARGET, aliasesProp, [])
       await ensureAliasTarget(tx, env.repo, 'Win', WS)
-      // What the window's re-derive would have written.
-      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
     }, {scope: ChangeScope.BlockDefault})
     await flush()
 
+    expect((await env.read(seatId))!.content).toBe('Win')
     expect((await env.read('s'))!.content).toBe(`see [Win](((${PIN_TARGET}))) please`)
-    // The entry moved off the seat too — id AND alias, not just alias.
     expect(await refsOf('s')).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
-    // …which drops the seat's last reference, so the already-landed
-    // reference-drop reaper (`references.reapOrphanAliasSeats`, #402)
-    // collects it. This is the composition §11 group 1(c) describes:
-    // the rewrite doesn't schedule cleanup itself, it produces the
-    // derived transition the reaper observes. Without the rewrite the
-    // seat keeps squatting the released name — its own mint-time 4s
-    // check already ran while the span still referenced it.
-    expect((await env.read(seatId))!.deleted).toBe(1)
   })
 })
 
@@ -769,7 +758,6 @@ describe('rename — seat classification hardening (#443 group 2 review)', () =>
     await env.repo.tx(async tx => {
       await tx.setProperty(PIN_TARGET, aliasesProp, [])
       await ensureAliasTarget(tx, env.repo, 'Win', WS)
-      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
     }, {scope: ChangeScope.BlockDefault})
     await flush()
 
@@ -817,7 +805,6 @@ describe('rename — seat classification hardening (#443 group 2 review)', () =>
         id: 'uc', workspaceId: WS, parentId: seatId, orderKey: 'm0',
         content: `((${aliasFieldId}))`,
       })
-      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
     }, {scope: ChangeScope.BlockDefault})
     await flush()
 
@@ -977,7 +964,6 @@ describe('rename — seat dating (#443 group 2, review round 2)', () => {
     await env.repo.tx(async tx => {
       await tx.setProperty(PIN_TARGET, aliasesProp, [])
       await ensureAliasTarget(tx, env.repo, 'Win', WS)
-      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
     }, {scope: ChangeScope.BlockDefault})
     await flush()
 
@@ -1064,8 +1050,7 @@ describe('rename — seat dating (#443 group 2, review round 2)', () => {
       await env.repo.tx(async tx => {
         await tx.setProperty(PIN_TARGET, aliasesProp, [])
         await ensureAliasTarget(tx, env.repo, 'Win', WS)
-        await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
-      }, {scope: ChangeScope.BlockDefault})
+        }, {scope: ChangeScope.BlockDefault})
       await flush()
       expect(injected).toBe(true)
     } finally {
@@ -1077,6 +1062,112 @@ describe('rename — seat dating (#443 group 2, review round 2)', () => {
 })
 
 describe('rename — Codex round 2 (#444)', () => {
+  it('classifies a gap claimant per rewrite, not once per alias', async () => {
+    // Two sync-created co-claimants of `Win` release it in ONE commit, so
+    // one `ReleaseCache` serves both rewrites — but they differ in
+    // `toTargetId` and `mintedAfter`, and `isWindowMintedSeatInTx` reads
+    // both. `B`'s row version is parked far in the future, so a seat
+    // landing in the gap is NEWER than `A`'s commit (valid window
+    // machinery, rewrite proceeds) and OLDER than `B`'s (a pre-existing
+    // seat, veto). Keyed on `(workspace, alias)` alone, whichever
+    // resolved first answered for both.
+    const A = '22222222-3333-4444-8555-666666666666'
+    const B = '33333333-4444-4555-8666-777777777777'
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    const FUTURE = 9000000000000
+    const SEAT_STAMP = 5000000000000
+
+    await env.h.db.writeTransaction(async tx => {
+      for (const [id, content, stamp] of [[A, 'A', 1], [B, 'B', FUTURE]] as const) {
+        await tx.execute(
+          `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                               properties_json, references_json, created_at, updated_at,
+                               user_updated_at, created_by, updated_by, deleted)
+           VALUES (?, ?, NULL, 'z0', ?, ?, '[]', 1, ?, 1, 'u', 'u', 0)`,
+          [id, WS, content, JSON.stringify({alias: ['Win']}), stamp],
+        )
+      }
+    })
+    await seedSource('sA', 'see [[Win]] please')
+    await seedSource('sB', 'see [[Win]] please')
+    // Written RAW. A re-parse resolves `[[Win]]` to the single alias
+    // winner, so an edge onto the OTHER co-claimant only exists the way
+    // it does in life: applied by sync, never re-derived locally.
+    await env.h.db.writeTransaction(async tx => {
+      for (const [source, target] of [['sA', A], ['sB', B]] as const) {
+        await tx.execute(
+          `UPDATE blocks SET references_json = ? WHERE id = ?`,
+          [JSON.stringify([{id: target, alias: 'Win'}]), source],
+        )
+      }
+    })
+
+    const realTx = env.repo.tx.bind(env.repo)
+    let injected = false
+    const txSpy = vi.spyOn(env.repo, 'tx').mockImplementation((async (fn: never, opts: never) => {
+      const description = (opts as {description?: string} | undefined)?.description
+      if (!injected && description?.includes(RENAME_BACKLINKS_PROCESSOR)) {
+        injected = true
+        await env.h.db.writeTransaction(async tx => {
+          await tx.execute(
+            `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                                 properties_json, references_json, created_at, updated_at,
+                                 user_updated_at, created_by, updated_by, deleted)
+             VALUES (?, ?, NULL, 'z1', 'Win', ?, '[]', ?, ?, ?, 'u', 'u', 0)`,
+            [seatId, WS, JSON.stringify(aliasSeatSeed('Win').properties),
+             SEAT_STAMP, SEAT_STAMP, SEAT_STAMP],
+          )
+        })
+      }
+      return realTx(fn, opts)
+    }) as never)
+
+    try {
+      await env.repo.tx(async tx => {
+        await tx.update(A, {properties: {}}, {skipMetadata: true})
+        await tx.update(B, {properties: {}}, {skipMetadata: true})
+      }, {scope: ChangeScope.BlockDefault})
+      await flush()
+      expect(injected).toBe(true)
+    } finally {
+      txSpy.mockRestore()
+    }
+
+    // A's window: the seat postdates its commit, so it is machinery and
+    // A's backlink re-keys. B's: the seat predates its commit, so it is a
+    // real claimant and B's backlink must be left alone.
+    expect((await env.read('sA'))!.content).toBe(`see [Win](((${A}))) please`)
+    expect((await env.read('sB'))!.content).toBe('see [[Win]] please')
+  })
+
+  it('leaves a seat-bound span alone rather than guess how it got there', async () => {
+    // Two histories produce this exact state, and nothing distinguishes
+    // them: a PRE-EXISTING `[[Win]]` whose edge a window re-derive moved
+    // onto the fresh seat, or a `[[Win]]` the USER TYPED after the
+    // release, which the parser legitimately bound to that seat. The
+    // second is a link they deliberately aimed at the new page;
+    // rewriting it hands it to the block that just gave up the name.
+    //
+    // The source's own stamp cannot separate them either — the re-derive
+    // writes `references` and `skipMetadata` still ratchets
+    // `updated_at`, so both bump it — and the content guard cannot,
+    // because a pre-read-phase edit is already in `originalContent`.
+    // So the span stays put: a working late-binding link to a stub.
+    await seedTarget(PIN_TARGET, 'T', ['Win'])
+    await seedSource('s', 'see [[Win]] please')
+
+    const seatId = computeAliasSeatId('Win', WS, 0)
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await ensureAliasTarget(tx, env.repo, 'Win', WS)
+      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read(seatId))!.content).toBe('Win')
+    expect((await env.read('s'))!.content).toBe('see [[Win]] please')
+  })
+
   it('rejects a seat whose stamp merely TIES the rename commit', () => {
     // The stated invariant is "materialized AFTER the commit we are
     // reacting to". A tie does not say that: `seatMaterializedAt` can
@@ -1341,7 +1432,6 @@ describe('rename — Codex round 2 (#444)', () => {
         id: 'note', workspaceId: WS, parentId: valueChildId, orderKey: 'z9',
         content: 'my note',
       })
-      await tx.update('s', {references: [{id: seatId, alias: 'Win'}]}, {skipMetadata: true})
     }, {scope: ChangeScope.BlockDefault})
     await flush()
 

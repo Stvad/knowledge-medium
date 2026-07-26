@@ -441,6 +441,41 @@ export const rewriteWikilinks = (
   return cursor === 0 ? content : result + content.slice(cursor)
 }
 
+/** Apply SEVERAL alias rewrites in ONE pass over the original spans.
+ *
+ *  Not the same as calling `rewriteWikilinks` once per alias. Sequential
+ *  calls each re-parse the previous call's OUTPUT, so a replacement can
+ *  be consumed by a later rewrite: given `α → β` and `β → γ` (one synced
+ *  commit can rename two blocks at once), a source holding `[[α]]` has
+ *  it turned into `[[β]]` by the first pass and then into `[[γ]]` by the
+ *  second — stealing α's link for γ, while the stored edge still maps
+ *  α's entry to β's block. Parsing once and splicing from the ORIGINAL
+ *  content makes each span the target of at most one rewrite.
+ *
+ *  `skipEmbeds` is per-alias because it tracks whether THAT alias's
+ *  replacement is the pinned form (see `rewriteWikilinks`). */
+export const rewriteWikilinksMulti = (
+  content: string,
+  replacements: ReadonlyMap<string, {text: string; skipEmbeds?: boolean}>,
+): string => {
+  if (replacements.size === 0) return content
+  const marks = parseReferences(content)
+  if (marks.length === 0) return content
+  let result = ''
+  let cursor = 0
+  for (const mark of marks) {
+    if (mark.startIndex < cursor) continue
+    const replacement = replacements.get(mark.alias)
+    if (replacement === undefined) continue
+    if (replacement.skipEmbeds
+      && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') continue
+    result += content.slice(cursor, mark.startIndex)
+    result += replacement.text
+    cursor = mark.endIndex
+  }
+  return cursor === 0 ? content : result + content.slice(cursor)
+}
+
 /** Replace block-ref marks targeting `blockId` with inline text — used
  *  when the target block is deleted so its references degrade gracefully
  *  to the text they displayed rather than dangling. Plain `((id))` and
