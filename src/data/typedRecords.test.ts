@@ -244,8 +244,51 @@ describe('getOrCreateTypedChild', () => {
 
   it('re-tags a type the block is missing, so a record repairs itself', async () => {
     const {id} = await record('repairable')
-    await record('repairable', {types: [recordType.id, companionType.id]})
+    const outcome = await record('repairable', {types: [recordType.id, companionType.id]})
     expect(getBlockTypes(cache.getSnapshot(id)!)).toEqual([recordType.id, companionType.id])
+    // …and the block it hands back describes the repaired record, not the one
+    // it walked in on. A caller reading types off it saw the tag still missing.
+    expect(outcome.status === 'adopted' && getBlockTypes(outcome.block))
+      .toEqual([recordType.id, companionType.id])
+  })
+
+  it('never adopts a row belonging to another workspace', async () => {
+    // Two workspaces whose keys collide would otherwise have the first one's
+    // record silently written into by the second — a write into a workspace
+    // the user may not even have open. The probe steps past it instead.
+    const id = derivedBlockId(identity('shared-key'))
+    await repo.tx(async tx => {
+      await tx.create({id: 'parent-2', workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere'})
+      await tx.create({id, workspaceId: 'ws-2', parentId: 'parent-2', orderKey: 'a1', content: 'Theirs'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const ours = await record('shared-key')
+    expect(ours.status).toBe('created')
+    expect(ours.id).not.toBe(id)
+    expect(cache.getSnapshot(id)!.content).toBe('Theirs')
+    expect(getBlockTypes(cache.getSnapshot(id)!)).toEqual([])
+  })
+
+  it('keeps a key that spells a later slot distinct from that slot', async () => {
+    // The slot varies the NAMESPACE rather than suffixing the key, so a key
+    // that literally contains a slot suffix cannot collide with it. Asserting
+    // against `derivedBlockId` alone would move both sides together, so this
+    // needs the colliding PAIR.
+    const spelled = await record('Row#1')
+    await record('Row')
+    const next = await record('Row', {adoptable: () => false})
+    expect(next.id).toBe(derivedBlockId(identity('Row'), 1))
+    expect(spelled.id).not.toBe(next.id)
+  })
+
+  it('honours the requested position', async () => {
+    // `startWorkout` files tonight's session at the TOP of the log; a create
+    // that dropped `position` would put it wherever, silently. Needs an
+    // existing sibling to have an opinion about.
+    const existing = await record('already-there')
+    const newest = await record('positioned', {position: {kind: 'first'}})
+    const children = await repo.block('parent').children.load()
+    expect(children?.map(child => child.id)).toEqual([newest.id, existing.id])
   })
 
   it('takes the next slot rather than resurrecting a deleted record', async () => {
