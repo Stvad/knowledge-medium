@@ -90,6 +90,23 @@ describe('two sessions on one day', () => {
     expect(lastEntryFor(nextDay, 'Squat', 'def-squat', 0)!.workout.id).toBe('tuesday')
   })
 
+  it('does not let a session with no times lose to one that has them', () => {
+    // A missing `recordedAt` is "unknown", not "the beginning of time". Read
+    // as 0 it ranked FIRST, which is this comparison's own bug mirrored: sets
+    // ticked from the OUTLINE go through the native todo checkbox, which
+    // writes no `strength:completedAt` — so an evening session logged that way
+    // lost to the morning's and handed tomorrow the lighter weights.
+    const morningTimed = sameDay()[0]
+    const eveningUntimed: WorkoutRecord = {...sameDay()[1], recordedAt: undefined}
+
+    for (const history of [[morningTimed, eveningUntimed], [eveningUntimed, morningTimed]]) {
+      // Unordered, so whichever arrives first stands — but the timestamped one
+      // must not WIN on the strength of the other having none.
+      const winner = lastEntryFor(history, 'Squat', 'def-squat', 0)!.workout.id
+      expect(winner).toBe(history[0].id)
+    }
+  })
+
   it('leaves records with no times in the order they arrive', () => {
     // Nothing to order them by, so the answer must at least be stable rather
     // than turning on an undefined comparison.

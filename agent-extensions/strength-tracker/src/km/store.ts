@@ -822,6 +822,11 @@ export const finishWorkout = async (
      *  record never mentions, because `buildHistory` groups sets by their
      *  direct exercise parent. */
     const buriedSets: string[] = []
+    /** Set blocks carrying no `strength:completedAt`. Read off the BLOCK
+     *  rather than off `FinishEntry`, which projects only what the pruning
+     *  decision needs — a projection that happens to carry the field today is
+     *  not the same as the block saying so. */
+    const untimed = new Set<string>()
     for (const entry of entries) {
       const entryChildren = await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true})
       const sets: typeof entryChildren = []
@@ -847,6 +852,7 @@ export const finishWorkout = async (
         for (const typeId of [SET_TYPE, TODO_TYPE]) {
           if (!hasBlockType(child, typeId)) await repo.addTypeInTx(tx, child.id, typeId, {}, typeSnapshot)
         }
+        if (child.properties[FIELD.completedAt] === undefined) untimed.add(child.id)
         sets.push(child)
       }
       if (others > 0) holdsMore.add(entry.id)
@@ -888,8 +894,22 @@ export const finishWorkout = async (
         await tx.run(deleteBlock, {id: set.id})
       }
     }
+    // One stamp for the whole session, read once: every set kept by this
+    // finish that has no time of its own gets it. A set ticked from the
+    // OUTLINE went through the native todo checkbox, which writes the todo
+    // status and nothing else — so a session logged entirely that way carries
+    // no `strength:completedAt` anywhere, and `compareRecords` then has
+    // nothing to place it by among the day's other sessions. The finish moment
+    // is not when the set was performed, but it IS on the right side of every
+    // other session that day, which is the only thing this number decides.
+    const finishedAt = Date.now()
     for (const ex of plan.keep) {
+      const pruned = new Set(ex.removeSetIds)
       for (const setId of ex.removeSetIds) await tx.run(deleteBlock, {id: setId})
+      for (const set of exercises.find(entry => entry.id === ex.exerciseId)?.sets ?? []) {
+        if (pruned.has(set.id) || !untimed.has(set.id)) continue
+        await tx.setProperty(set.id, completedAtProp, finishedAt)
+      }
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
     await tx.setProperty(workoutId, statusProp, 'done')
@@ -1049,11 +1069,25 @@ export const migrateLegacyEntries = async (
           ? entry.properties[FIELD.unit] as string
           : 'lb'
         for (const [index, set] of sets.entries()) {
-          await getOrCreateTypedChild(repo, tx, {
+          const spec = setSpec(entry.id, set, index, unit, typeSnapshot)
+          const outcome = await getOrCreateTypedChild(repo, tx, {
             identity: setIdentity(entry.id, index),
-            adoptable: block => block.parentId === entry.id,
-            ...setSpec(entry.id, set, index, unit, typeSnapshot),
+            // Nothing set-like is under this entry — that is the guard above.
+            // So the only things this id can be holding are the TOMBSTONE of a
+            // set migrated here once and since deleted, or a block that is not
+            // a set at all. Neither is this set, and there is no second id to
+            // derive, so the answer is the same as everywhere else in this
+            // file: mint.
+            adoptable: block => block.parentId === entry.id && isSetLike(block),
+            ...spec,
           })
+          // Counted only for a set that actually landed. Incrementing on an
+          // outcome we never read meant an entry whose migrated blocks had all
+          // been deleted reported `converted` and `sets` — and got its workout
+          // stamped `done` on the strength of it — while writing nothing at
+          // all, so re-running the recovery action said it had worked and the
+          // session stayed missing from progression history.
+          if (outcome.status === 'taken') await createTypedChild(repo, tx, spec)
           report.sets += 1
         }
         report.converted += 1

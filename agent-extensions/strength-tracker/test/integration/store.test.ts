@@ -1297,6 +1297,33 @@ describe('migrating the shape this extension first wrote', () => {
     expect(repo.block(live.workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 
+  it('rebuilds an entry whose migrated blocks were all deleted, rather than reporting a write it never made', async () => {
+    // Every derived set id is now a TOMBSTONE, so `getOrCreateTypedChild`
+    // answers `taken` and writes nothing. Counting that as converted — and
+    // stamping the workout `done` on the strength of it — had the recovery
+    // action report success over an entry left with no sets at all, which is
+    // invisible to progression history. The report has to describe what
+    // actually landed.
+    await seedLegacyWorkout('legacy-w1', '2026-06-01', [
+      {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}, {weight: 185, reps: 6}]},
+    ])
+    await migrateLegacyEntries(repo, PAGE_ID)
+    const first = await liveChildren('legacy-e1', SET_TYPE)
+    await repo.tx(async tx => {
+      for (const set of first) await tx.delete(set.id)
+    }, {scope: ChangeScope.BlockDefault, description: 'delete every migrated set'})
+
+    const report = await migrateLegacyEntries(repo, PAGE_ID)
+
+    expect(report).toMatchObject({converted: 1, sets: 2})
+    const rebuilt = await liveChildren('legacy-e1', SET_TYPE)
+    expect(rebuilt).toHaveLength(2)
+    // Minted, not resurrected: a tombstone stays a tombstone.
+    expect(rebuilt.map(s => s.id)).not.toEqual(first.map(s => s.id))
+    expect(rebuilt.map(s => repo.block(s.id).peekProperty(repsProp))).toEqual([8, 6])
+    expect(rebuilt.map(s => repo.block(s.id).peekProperty(setIndexProp))).toEqual([0, 1])
+  })
+
   it('leaves a migrated session closed to further logging', async () => {
     // Stamping `done` is not cosmetic: it is what stops tonight's logging
     // from reaching into a historical session — including one dated TODAY,
@@ -1320,6 +1347,40 @@ describe('migrating the shape this extension first wrote', () => {
 })
 
 describe('two finished sessions on one day', () => {
+  it('gives a set ticked outside this view a time, so its session can still be placed', async () => {
+    // The native todo checkbox in the outline writes the todo status and
+    // nothing else — a set accepted that way carries no
+    // `strength:completedAt`, and a session logged entirely that way could not
+    // be ordered against the day's others at all. Finish is the moment we know
+    // it happened by, so that is what it gets.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)])]))
+    const [ticked, untouched] = started.exercises[0].setIds
+    await repo.tx(tx => tx.setProperty(ticked, todoStatusProp, 'done'),
+      {scope: ChangeScope.BlockDefault, description: 'tick it from the outline'})
+    expect(repo.block(ticked).peekProperty(completedAtProp)).toBeUndefined()
+
+    expect(await finishWorkout(repo, started.workoutId)).toBe('finished')
+
+    expect(repo.block(ticked).peekProperty(completedAtProp)).toEqual(expect.any(Number))
+    // …and the un-accepted one was pruned, not stamped.
+    expect(await isBlockDeleted(repo, untouched)).toBe(true)
+  })
+
+  it('does not overwrite the time a set already carries', async () => {
+    // The finish moment is a fallback, not a correction: a set logged at 09:30
+    // was performed at 09:30 whatever time the session was closed.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    const at = Date.parse('2026-07-24T09:30:00Z')
+    expect(await writeSet(repo, started.exercises[0].setIds[0],
+      {weight: 185, reps: 8, done: true, completedAt: at}, 'lb')).toBe('written')
+
+    expect(await finishWorkout(repo, started.workoutId)).toBe('finished')
+
+    expect(repo.block(started.exercises[0].setIds[0]).peekProperty(completedAtProp)).toBe(at)
+  })
+
   it('reads back in the order they were performed, not the order the rows arrive', async () => {
     // End-to-end for `recordedAt`: both workouts carry the same `date` (local
     // noon of the training day), so the only thing that can order them is the
