@@ -175,7 +175,15 @@ const workoutIdentity = (workspaceId: string, day: string, session: SessionType)
  *
  *  One predicate for both ways of finding a workout — by derived id, and by
  *  scanning the page — because "the session the view would show" must not be
- *  able to mean two things. */
+ *  able to mean two things.
+ *
+ *  Deliberately no type check, so the same properties are both the key and
+ *  the evidence — the circularity `placeStraySets` had to get rid of. Kept
+ *  here because it takes THREE namespaced properties coinciding (a status of
+ *  exactly `in-progress`, this session letter, a date decoding to this day)
+ *  for a non-workout to qualify, where there a single machine-assigned index
+ *  was enough; and because tag-tolerance is what lets a workout that lost its
+ *  type tag be adopted and repaired rather than duplicated. */
 const isTonightsLog = (block: BlockData, draft: WorkoutDraft): boolean =>
   block.properties[FIELD.status] === 'in-progress'
   && block.properties[FIELD.session] === draft.session
@@ -563,7 +571,14 @@ export const startWorkout = async (
  *  entry that lost one is still the entry this lift was logged into —
  *  excluded from matching, a plan-keyed draft derives a different id and
  *  splits the session in two. Matching it repairs it: `entryId` re-tags what
- *  it is handed. */
+ *  it is handed.
+ *
+ *  That second credential is also part of the match key, which is the shape
+ *  `placeStraySets` had to abandon — but here the value has to BE the lift's
+ *  name (or its plan block), not merely a number in range, so a block
+ *  qualifies only by carrying a namespaced property spelled with the exact
+ *  lift the draft is asking about. The repair it buys is one this extension
+ *  actually needed. */
 const liveEntriesOf = async (
   tx: Tx,
   workoutId: string,
