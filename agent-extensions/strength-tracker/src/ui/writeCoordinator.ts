@@ -34,6 +34,14 @@ export interface ResolvedWrite {
   /** The block to write this set to. Undefined when nothing could be
    *  resolved (no workout id, and creating one wasn't possible). */
   blockId?: string
+  /** The workout this block belongs to, as of when it was resolved.
+   *
+   *  Returned rather than read back off the coordinator afterwards, because
+   *  by then it can be a DIFFERENT workout: a create for the session you just
+   *  left is deliberately allowed to finish, and asking "which workout are we
+   *  on now" gives the one you switched TO. Validating the write against that
+   *  rejects a perfectly good set from the session it belongs to. */
+  workoutId?: string
   patch?: IdPatch
 }
 
@@ -312,7 +320,9 @@ export const createWriteCoordinator = (
       // ids into the draft before the write runs, so on a `gone` the very id
       // we were told to forget is sitting right here, and returning it sent
       // the retry back to the same tombstone.
-      if (set.blockId && !deadSets.has(set.blockId)) return {blockId: set.blockId}
+      if (set.blockId && !deadSets.has(set.blockId)) {
+        return {blockId: set.blockId, ...(workoutId !== null ? {workoutId} : {})}
+      }
 
       if (!workoutId) {
         const at = generation
@@ -325,6 +335,7 @@ export const createWriteCoordinator = (
         if (cancelled(atSlot, at)) return {}
         return {
           blockId: value.exercises[exIdx]?.setIds[setIdx],
+          workoutId: value.workoutId,
           ...(stale ? {} : {patch: {kind: 'workout' as const, workout: value}}),
         }
       }
@@ -333,12 +344,13 @@ export const createWriteCoordinator = (
       // those ids, so consult them before concluding anything is missing —
       // otherwise "accept all" creates the exercise a second time.
       const fromCreate = materialized?.exercises[exIdx]?.setIds[setIdx]
-      if (fromCreate && !deadSets.has(fromCreate)) return {blockId: fromCreate}
+      if (fromCreate && !deadSets.has(fromCreate)) return {blockId: fromCreate, workoutId}
 
       // The workout exists but this exercise has no blocks: switched in
       // mid-session.
       const at = generation
       const atSlot = slot
+      const forWorkoutId = workoutId
       // Keyed on the ROW, not its index: two rows of one lift are already
       // distinct here (that is what `occurrence` is), and an index changes
       // when a plan edit reorders the session — which let a switched-in lift
@@ -350,13 +362,14 @@ export const createWriteCoordinator = (
       // re-derive — one logged before the plan was readable, so keyed on the
       // lift's name — would otherwise get a second, plan-keyed entry beside
       // the one it is displaying, and the session shows the lift twice.
-      const {value, stale} = await createExerciseOnce(rowKey(exercise), exercise, workoutId, effects)
+      const {value, stale} = await createExerciseOnce(rowKey(exercise), exercise, forWorkoutId, effects)
       // Discarded while this was in flight: the blocks it just made are
       // children of a workout that is being deleted, so writing into them
       // would strand live todo sets under a tombstone.
       if (cancelled(atSlot, at)) return {}
       return {
         blockId: value.setIds[setIdx],
+        workoutId: forWorkoutId,
         ...(stale ? {} : {patch: {kind: 'exercise' as const, exIdx, entry: value}}),
       }
     },

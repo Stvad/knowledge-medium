@@ -228,7 +228,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     const opKey = `${slot}|${writingKey}|${Object.keys(change).sort().join(',')}`
     beginWrite(writingKey)
     try {
-      const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
+      const {blockId, workoutId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
       if (patch) setDraft(cur => applyIdPatch(cur, patch))
       // The entry this set belongs under — from the create when there was one,
       // because on the FIRST write of a blockless row the caller's snapshot
@@ -247,7 +247,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // by a Finish this view hasn't seen. Treating it as success left the
       // checkbox ticked over nothing.
       const outcome = blockId
-        ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId, coordinator.workoutId() ?? undefined)
+        ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId, workoutId)
         : 'written'
       if (outcome === 'gone') {
         // Its cached copy of this id outlives the block. Left in place, every
@@ -290,15 +290,34 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
 
   /** A write failing must not be silent: the checkbox stays ticked on screen
    *  and the user would have no idea their session is going nowhere. */
+  /** The slot as of the latest render — so a callback that fires long after
+   *  its tap can tell whether the user is still looking at that session. */
+  const slotRef = useRef(slot)
+  slotRef.current = slot
+
   const reportWriteFailure = (error: unknown) => {
     console.error('[strength] write failed', error)
     setStatus(WRITE_FAILED)
   }
 
+  /** Report a failure only if the user is still on the session it happened
+   *  on. A write for the session you just left is deliberately allowed to
+   *  finish; when it fails, its warning belongs to that evening's log — put
+   *  on the screen you switched TO, it could never be cleared from there
+   *  (the marker is keyed to the other slot) and just sat there inviting a
+   *  second, reversing tap. */
+  const reportFor = (forSlot: string) => (error: unknown) => {
+    if (forSlot !== slotRef.current) {
+      console.error('[strength] write failed on a session no longer shown', error)
+      return
+    }
+    reportWriteFailure(error)
+  }
+
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
-    void track(persist(next, exIdx, setIdx, patch)).catch(reportWriteFailure)
+    void track(persist(next, exIdx, setIdx, patch)).catch(reportFor(slot))
   }
 
   const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
@@ -341,7 +360,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       } finally {
         for (const key of batch) endWrite(key)
       }
-    })()).catch(reportWriteFailure)
+    })()).catch(reportFor(slot))
   }
 
   const finish = async () => {

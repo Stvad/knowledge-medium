@@ -109,7 +109,9 @@ describe('resolveSet — workout already exists', () => {
     const {calls, effects} = instantEffects()
     const coord = createWriteCoordinator('w1')
 
-    expect(await coord.resolveSet(draft, 0, 0, effects)).toEqual({blockId: 's1'})
+    // …and says which workout that block belongs to, so the caller validates
+    // against the session it resolved against rather than the current one.
+    expect(await coord.resolveSet(draft, 0, 0, effects)).toEqual({blockId: 's1', workoutId: 'w1'})
     expect(calls).toEqual({workouts: 0, exercises: []})
   })
 

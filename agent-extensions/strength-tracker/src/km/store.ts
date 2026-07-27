@@ -487,6 +487,14 @@ export const writeSet = async (
     if (expectedParentId !== undefined && expectedWorkoutId !== undefined) {
       const entry = await tx.get(expectedParentId)
       if (!entry || entry.deleted || entry.parentId !== expectedWorkoutId) return 'gone' as const
+      // Repair the entry's own tag while we are here. A set whose block id is
+      // already known never goes through `writeExercise`, so this is the only
+      // point on the direct path that can put back a type the entry lost —
+      // and without it the typed query drops the entry and Finish refuses the
+      // whole session, because an untyped workout child owns sets.
+      if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) {
+        await repo.addTypeInTx(tx, expectedParentId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
+      }
     }
     // Restore the todo composition if it has been lost. Done-ness IS the todo
     // `status`, so a set that kept `strength-set` but lost `todo` still counts

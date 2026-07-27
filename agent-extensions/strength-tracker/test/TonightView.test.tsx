@@ -470,6 +470,56 @@ describe('TonightView', () => {
     expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 195})
   })
 
+  it('validates a stale write against the session it was resolved for', async () => {
+    // The coordinator lets a write for the session you just left finish. If
+    // the caller then validates it against the workout it is on NOW, the
+    // chain check rejects a perfectly good set and the tap is lost.
+    const both = {
+      A: prescriptionOf([exercise()], 'A'),
+      B: prescriptionOf([exercise({exercise: 'Squat', weight: 225})], 'B'),
+    }
+    mount(backend, {prescriptions: both})
+
+    backend.hold()
+    fireEvent.click(checkboxes()[0])              // starts session A
+    await act(async () => {})
+
+    fireEvent.click(screen.getByRole('button', {name: 'B · lower'}))
+    await act(async () => {})
+    await backend.release()                      // A's create + write land now
+
+    const calls = vi.mocked(store.writeSet).mock.calls
+    expect(calls).toHaveLength(1)
+    expect(calls[0][5]).toBe('w1')               // A's workout, not B's absence
+    expect(backend.setById('e:Bench press|0')).toMatchObject({done: true})
+  })
+
+  it('does not put a left session\'s failure on the screen you switched to', async () => {
+    // The marker is keyed to the session it failed on, so a warning shown on
+    // the other screen could never be cleared from there — it just sat, and
+    // invited the second, reversing tap.
+    const both = {
+      A: prescriptionOf([exercise()], 'A'),
+      B: prescriptionOf([exercise({exercise: 'Squat', weight: 225})], 'B'),
+    }
+    mount(backend, {prescriptions: both})
+
+    // The rejection has to land AFTER the switch — rejecting before it would
+    // be cleared by the slot change instead, which is a different mechanism.
+    let failA: (error: Error) => void = () => {}
+    vi.mocked(store.startWorkout).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failA = reject }),
+    )
+    fireEvent.click(checkboxes()[0])              // session A, still pending
+    await act(async () => {})
+
+    fireEvent.click(screen.getByRole('button', {name: 'B · lower'}))
+    await act(async () => {})
+
+    await act(async () => { failA(new Error('offline')) })
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
+  })
+
   it('clears the warning on the screen whose write succeeded', async () => {
     // A failure left over from the session you switched AWAY from kept the
     // warning up on a screen where everything had saved — which invites the

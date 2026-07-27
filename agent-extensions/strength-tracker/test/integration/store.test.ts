@@ -290,6 +290,25 @@ describe('writeSet — gone vs. written', () => {
     expect(repo.block(setId).peekProperty(weightProp)).toBe(135)
   })
 
+  it('repairs the entry type on a direct set write', async () => {
+    // A set whose block id is already known never goes through
+    // `writeExercise`, so this is the only point on that path that can put
+    // back a type the entry lost — and without it the typed query drops the
+    // entry and Finish refuses the whole session.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const entryId = workout.exercises[0].id
+    const setId = workout.exercises[0].setIds[0]
+    await repo.tx(tx => tx.setProperty(entryId, typesProp, []),
+      {scope: ChangeScope.BlockDefault, description: 'lose the entry type tag'})
+
+    expect(await writeSet(repo, setId, {done: true}, 'lb', entryId, workout.workoutId)).toBe('written')
+
+    expect(hasBlockType(cache.getSnapshot(entryId)!, EXERCISE_ENTRY_TYPE)).toBe(true)
+    await expect(finishWorkout(repo, workout.workoutId)).resolves.toBeUndefined()
+  })
+
   it('restores the todo composition when a set has lost it', async () => {
     // Done-ness IS the todo `status`. A set that kept `strength-set` but lost
     // `todo` still counts internally while dropping out of every native todo
