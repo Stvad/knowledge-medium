@@ -526,33 +526,7 @@ export const startWorkout = async (
     // So the entries that are here get matched the way the READ side matches
     // them — same function, so "the same lift" cannot mean two things — and
     // whatever a row matches becomes the entry it writes into.
-    const existing = workout.status === 'adopted'
-      ? (await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true}))
-        // Typed OR carrying the exercise property. A tag is hand-editable, and
-        // an entry that lost one is still the entry this lift was logged into
-        // — excluded from matching, a plan-keyed draft derives a different id
-        // and splits the session in two. Matching it repairs it: `entryId`
-        // re-tags what it is handed.
-        .filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE)
-          || typeof row.properties[FIELD.exercise] === 'string')
-        .map(row => ({
-          id: row.id,
-          exercise: typeof row.properties[FIELD.exercise] === 'string'
-            ? row.properties[FIELD.exercise] as string
-            : row.content,
-          definitionId: typeof row.properties[FIELD.definition] === 'string'
-            ? row.properties[FIELD.definition] as string
-            : undefined,
-          // Which occurrence the BLOCK says it is. Without this the adopt path
-          // falls back to sibling order while the live-query path reads the
-          // stored number — and the two disagreeing is worse than either: the
-          // repair below then stamps both blocks with the swapped numbers, so
-          // every later set write lands in the other row's entry.
-          occurrence: typeof row.properties[FIELD.occurrence] === 'number'
-            ? row.properties[FIELD.occurrence] as number
-            : undefined,
-        }))
-      : undefined
+    const existing = workout.status === 'adopted' ? await liveEntriesOf(tx, workout.id) : undefined
     const matched = matchLiveExercises(
       draft.exercises.map(ex => ({
         definitionId: ex.definitionId,
@@ -569,6 +543,40 @@ export const startWorkout = async (
     return {workoutId: workout.id, exercises}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
 }
+
+/** The workout's existing entries, projected the way the READ side matches
+ *  them — same function on both sides, so "the same lift" cannot mean two
+ *  things.
+ *
+ *  Typed OR carrying the exercise property. A tag is hand-editable, and an
+ *  entry that lost one is still the entry this lift was logged into —
+ *  excluded from matching, a plan-keyed draft derives a different id and
+ *  splits the session in two. Matching it repairs it: `entryId` re-tags what
+ *  it is handed. */
+const liveEntriesOf = async (
+  tx: Tx,
+  workoutId: string,
+): Promise<{id: string; exercise: string; definitionId?: string; occurrence?: number}[]> =>
+  (await tx.childrenOf(workoutId, undefined, {hidePropertyChildren: true}))
+    .filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE)
+      || typeof row.properties[FIELD.exercise] === 'string')
+    .map(row => ({
+      id: row.id,
+      exercise: typeof row.properties[FIELD.exercise] === 'string'
+        ? row.properties[FIELD.exercise] as string
+        : row.content,
+      definitionId: typeof row.properties[FIELD.definition] === 'string'
+        ? row.properties[FIELD.definition] as string
+        : undefined,
+      // Which occurrence the BLOCK says it is. Without this the adopt path
+      // falls back to sibling order while the live-query path reads the stored
+      // number — and the two disagreeing is worse than either: the repair in
+      // `writeExercise` then stamps both blocks with the swapped numbers, so
+      // every later set write lands in the other row's entry.
+      occurrence: typeof row.properties[FIELD.occurrence] === 'number'
+        ? row.properties[FIELD.occurrence] as number
+        : undefined,
+    }))
 
 /** Add ONE exercise (and its pre-filled sets) to a workout that already
  *  exists. This is the mid-session case: you switch an `or`-group to the
@@ -594,7 +602,23 @@ export const materializeExercise = async (
     if (!workout || workout.deleted || workout.properties[FIELD.status] !== 'in-progress') {
       throw new Error(`materializeExercise: workout ${workoutId} is no longer in progress`)
     }
-    return writeExercise(repo, tx, workoutId, ex, typeSnapshot, entryId)
+    // The same in-tx match `startWorkout` does, and for the same reason: the
+    // caller's `entryId` comes from the LIVE QUERY, which can be behind. Left
+    // to `writeExercise`, a row whose derived entry id is taken (a tombstone,
+    // or a block dragged out of the workout) mints a fresh entry — and this
+    // call re-runs, so the next one mints ANOTHER, appending a duplicate lift
+    // with a full set of open todo sets every time.
+    //
+    // Matching one row rather than the whole draft is the difference from
+    // `startWorkout`, and it is why the lookup lives here rather than one
+    // level down: `startWorkout` claims entries for every row at once, so its
+    // claims are exclusive, and a per-row lookup inside `writeExercise` could
+    // hand one entry to two of them.
+    const matched = entryId ?? matchLiveExercises(
+      [{definitionId: ex.definitionId, exercise: ex.exercise, occurrence: ex.occurrence}],
+      await liveEntriesOf(tx, workoutId),
+    )[0]?.id
+    return writeExercise(repo, tx, workoutId, ex, typeSnapshot, matched)
   }, {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 
@@ -1010,11 +1034,25 @@ export interface LegacyMigrationReport {
   sets: number
   /** Workouts given an explicit `done` status they were missing. */
   stamped: number
+  /** Entries given a `strength:occurrence`, because their lift was logged
+   *  more than once in that session and nothing said which row was which. */
+  numbered: number
   /** Entries deliberately left alone, so the report says what was NOT done
    *  as loudly as what was. `unreadable` is the one worth looking at: the
    *  cell is there and does not read as a list of sets. */
   skipped: {entryId: string; reason: 'has-set-blocks' | 'no-legacy-sets' | 'unreadable'}[]
 }
+
+/** What makes two legacy entries "the same lift" — the plan block where one
+ *  is named, else the lift's name. Same precedence the matcher and the
+ *  progression lookup use; only the spelling is local, because a legacy entry
+ *  has no `occurrence` to key with yet. */
+const legacyLiftKey = (entry: BlockData): string =>
+  typeof entry.properties[FIELD.definition] === 'string'
+    ? entry.properties[FIELD.definition] as string
+    : typeof entry.properties[FIELD.exercise] === 'string'
+      ? entry.properties[FIELD.exercise] as string
+      : entry.content
 
 /** Convert the sessions this extension logged in its first shape — a lift's
  *  sets in one `strength:sets` JSON cell — into the block-per-set tree
@@ -1039,15 +1077,41 @@ export const migrateLegacyEntries = async (
 ): Promise<LegacyMigrationReport> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
-    const report: LegacyMigrationReport = {converted: 0, sets: 0, stamped: 0, skipped: []}
+    const report: LegacyMigrationReport = {converted: 0, sets: 0, stamped: 0, numbered: 0, skipped: []}
 
     for (const workout of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
       if (!hasBlockType(workout, WORKOUT_TYPE)) continue
       const entries = await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true})
       let touched = false
 
+      // Which occurrence each entry is, for the lifts a session logged TWICE.
+      //
+      // Sibling order is the answer, and here it is evidence rather than a
+      // guess: the first writer appended one child per draft exercise, in
+      // draft order, and `childrenOf` returns `(order_key, id)`. Without the
+      // number, `lastEntryFor` asked for occurrence 1, found no entry claiming
+      // it, and fell back to the first occurrence-less candidate — so BOTH
+      // rows of the next prescription progressed off the heavy row's load.
+      //
+      // Only for lifts that actually repeat. A lift logged once must stay
+      // occurrence-LESS: that absence is what lets a lookup for any occurrence
+      // fall back to it, which is the whole reason records written before the
+      // property existed still progress at all.
+      const seen = new Map<string, number>()
+      const repeats = new Map<string, number>()
       for (const entry of entries) {
         if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) continue
+        const key = legacyLiftKey(entry)
+        repeats.set(key, (repeats.get(key) ?? 0) + 1)
+      }
+
+      for (const entry of entries) {
+        if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) continue
+        // Counted before any skip, so a lift whose FIRST row is unreadable
+        // still leaves its second row as occurrence 1 rather than 0.
+        const liftKey = legacyLiftKey(entry)
+        const nth = seen.get(liftKey) ?? 0
+        seen.set(liftKey, nth + 1)
         const children = await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true})
         // Already migrated (or logged in the current shape). Checked on the
         // BLOCKS rather than on a marker property, because the blocks are the
@@ -1089,6 +1153,10 @@ export const migrateLegacyEntries = async (
           // session stayed missing from progression history.
           if (outcome.status === 'taken') await createTypedChild(repo, tx, spec)
           report.sets += 1
+        }
+        if ((repeats.get(liftKey) ?? 0) > 1 && entry.properties[FIELD.occurrence] === undefined) {
+          await tx.setProperty(entry.id, occurrenceProp, nth)
+          report.numbered += 1
         }
         report.converted += 1
         touched = true

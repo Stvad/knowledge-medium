@@ -625,6 +625,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           // right below, or another device. A set that is done on the block
           // but open here is left alone: `finishPlan` unions both.
           if (!flushed[i].sets[j].done) continue
+          // Before EACH resolution, not just once before the loop. A peer can
+          // replace the workout part-way through, and `resolveSet` answers for
+          // whatever is attached NOW — so a row that never got block ids would
+          // be materialized into the replacement, writing this session's lift
+          // and its sets into a session someone else just started. (The write
+          // then succeeds, because the entry and workout it validates against
+          // are both the replacement's.) Checking only after the loop noticed
+          // that one workout too late.
+          if (coordinator.generation() !== at) {
+            setStatus(SESSION_MOVED)
+            return
+          }
           const {blockId, workoutId: forWorkout, entryId, patch} =
             await coordinator.resolveSet(flushed, i, j, effects)
           if (patch) {

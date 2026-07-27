@@ -840,6 +840,28 @@ describe('materializeExercise — explicit entryId', () => {
     ]))
   })
 
+  it('finds the entry it minted last time instead of appending another lift', async () => {
+    // With the row's derived entry id taken by a tombstone, `writeExercise`
+    // mints. `materializeExercise` re-runs on every resync, so without a
+    // lookup in front of the mint each run appended another copy of the lift —
+    // each with a full set of open todo sets that Finish then refuses to
+    // complete the session around. The caller's `entryId` cannot cover this:
+    // it comes from the live query, which is exactly what is behind.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    await repo.tx(tx => tx.delete(started.exercises[0].id),
+      {scope: ChangeScope.BlockDefault, description: 'delete the derived entry'})
+
+    const ex = exerciseDraft('Bench press', [draftSet(135, 8)])
+    const first = await materializeExercise(repo, started.workoutId, ex)
+    const second = await materializeExercise(repo, started.workoutId, ex)
+
+    expect(first.id).not.toBe(started.exercises[0].id)  // minted, not resurrected
+    expect(second.id).toBe(first.id)
+    expect(second.setIds).toEqual(first.setIds)
+    expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+  })
+
   it('ignores an attached entry that is no longer in this workout', async () => {
     // The entry can be dragged out of the session (or deleted) after the
     // snapshot the caller is holding. Writing sets under it anyway puts them
@@ -1213,7 +1235,13 @@ describe('migrating the shape this extension first wrote', () => {
           content: lift.exercise,
         })
         await tx.setProperty(lift.entryId, exerciseProp, lift.exercise)
-        await tx.update(lift.entryId, {properties: {[LEGACY_SETS_PROP]: JSON.stringify(lift.sets)}})
+        // Spread, because `tx.update`'s `properties` patch REPLACES the bag —
+        // writing the legacy cell on its own wiped `strength:exercise`, so
+        // every entry these tests built read back with an empty lift name.
+        const before = await tx.get(lift.entryId)
+        await tx.update(lift.entryId, {
+          properties: {...before!.properties, [LEGACY_SETS_PROP]: JSON.stringify(lift.sets)},
+        })
         await repo.addTypeInTx(tx, lift.entryId, EXERCISE_ENTRY_TYPE)
       }
     }, {scope: ChangeScope.BlockDefault, description: 'seed a legacy session'})
@@ -1322,6 +1350,41 @@ describe('migrating the shape this extension first wrote', () => {
     expect(rebuilt.map(s => s.id)).not.toEqual(first.map(s => s.id))
     expect(rebuilt.map(s => repo.block(s.id).peekProperty(repsProp))).toEqual([8, 6])
     expect(rebuilt.map(s => repo.block(s.id).peekProperty(setIndexProp))).toEqual([0, 1])
+  })
+
+  it('numbers the rows of a lift a session logged twice, and leaves a lift logged once unnumbered', async () => {
+    // Sibling order IS the answer here rather than a guess: the first writer
+    // appended one child per draft exercise, in draft order. Without the
+    // number, `lastEntryFor` asked for occurrence 1, found nothing claiming
+    // it, and fell back to the first occurrence-less candidate — so both rows
+    // of the next prescription progressed off the heavy row's load.
+    await seedLegacyWorkout('legacy-w1', '2026-06-01', [
+      {entryId: 'legacy-squat-0', exercise: 'Squat', sets: [{weight: 245, reps: 5}]},
+      {entryId: 'legacy-bench', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
+      {entryId: 'legacy-squat-1', exercise: 'Squat', sets: [{weight: 185, reps: 8}]},
+    ])
+
+    const report = await migrateLegacyEntries(repo, PAGE_ID)
+
+    expect(report).toMatchObject({converted: 3, numbered: 2})
+    expect(repo.block('legacy-squat-0').peekProperty(occurrenceProp)).toBe(0)
+    expect(repo.block('legacy-squat-1').peekProperty(occurrenceProp)).toBe(1)
+    // A lift logged ONCE stays unnumbered on purpose: that absence is what
+    // lets a lookup for any occurrence fall back to it, which is why records
+    // written before the property existed still progress at all.
+    expect(repo.block('legacy-bench').peekProperty(occurrenceProp)).toBeUndefined()
+
+    const history = buildHistory(
+      [cache.getSnapshot('legacy-w1')!],
+      await liveChildren('legacy-w1', EXERCISE_ENTRY_TYPE),
+      [...await liveChildren('legacy-squat-0', SET_TYPE),
+        ...await liveChildren('legacy-bench', SET_TYPE),
+        ...await liveChildren('legacy-squat-1', SET_TYPE)],
+    )
+    expect(workingWeight(lastEntryFor(history, 'Squat', undefined, 0)!.entry)).toBe(245)
+    expect(workingWeight(lastEntryFor(history, 'Squat', undefined, 1)!.entry)).toBe(185)
+    // …and the single-lift fallback still works.
+    expect(workingWeight(lastEntryFor(history, 'Bench press', undefined, 1)!.entry)).toBe(185)
   })
 
   it('leaves a migrated session closed to further logging', async () => {

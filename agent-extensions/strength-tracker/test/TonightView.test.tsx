@@ -58,14 +58,19 @@ const entryBlockId = (definitionId: string | undefined, exercise: string, occurr
   `e:${definitionId ?? exercise}${occurrence === 0 ? '' : `|${occurrence}`}`
 
 const createBackend = () => {
-  /** Entries by block id, in creation order — the shape a workout's children
-   *  actually have. Replaced wholesale by `startNextWorkout`, because a
-   *  peer's next session is a different workout with its own blocks. */
-  let entries = new Map<string, LiveExercise>()
+  /** Sessions that EXIST, not just the one on screen. A peer starting a
+   *  second session for the evening does not take the first one's blocks
+   *  away — they stay live and writable — and modelling only one workout at a
+   *  time made that unrepresentable, which is precisely how a Finish flushing
+   *  into the replacement went unnoticed.
+   *
+   *  `entries` is by block id in creation order, the shape a workout's
+   *  children actually have. */
+  type Session = {id: string; entries: Map<string, LiveExercise>; finished: boolean}
+  let current: Session = {id: 'w1', entries: new Map(), finished: false}
+  const sessions: Session[] = [current]
   let started = false
-  let workoutId = 'w1'
   let session: SessionType = 'A'
-  let finished = false
   /** Writes park here while a test holds them, so it can decide what happens
    *  in the window between a tap and its block coming back. */
   let held: (() => void)[] | null = null
@@ -84,7 +89,7 @@ const createBackend = () => {
     // whose id need not re-derive. Modelling that is the point: without it the
     // fake would silently make the two spellings the same block.
     const id = entryId ?? entryBlockId(ex.definitionId, ex.exercise, ex.occurrence)
-    const existing = entries.get(id)
+    const existing = current.entries.get(id)
     // Adopting: a set that already exists keeps the values it holds. This is
     // the derived-id contract, and the bug it exists to prevent (the caller
     // writing its pre-filled draft over logged reps) is only visible against
@@ -97,7 +102,7 @@ const createBackend = () => {
       ...(s.side !== undefined ? {side: s.side} : {}),
       ...(s.completedAt !== undefined ? {completedAt: s.completedAt} : {}),
     }))
-    entries.set(id, {
+    current.entries.set(id, {
       id,
       exercise: existing?.exercise ?? ex.exercise,
       definitionId: existing?.definitionId ?? ex.definitionId,
@@ -109,12 +114,18 @@ const createBackend = () => {
 
   const findSet = (setId: string): LiveSet | undefined => ownerOf(setId)?.set
 
-  /** Which entry a set hangs under — the thing `writeSet`'s parent check is
-   *  actually about. */
-  const ownerOf = (setId: string): {entryId: string; set: LiveSet} | undefined => {
-    for (const entry of entries.values()) {
-      const set = entry.sets.find(s => s.id === setId)
-      if (set) return {entryId: entry.id, set}
+  /** Which entry a set hangs under, and which SESSION that entry belongs to —
+   *  the two things `writeSet`'s checks are about. Searched across every
+   *  session, not just the one on screen: a set in the workout a peer's
+   *  session displaced is still there, and still writable. */
+  const ownerOf = (
+    setId: string,
+  ): {entryId: string; workoutId: string; finished: boolean; set: LiveSet} | undefined => {
+    for (const owner of sessions) {
+      for (const entry of owner.entries.values()) {
+        const set = entry.sets.find(s => s.id === setId)
+        if (set) return {entryId: entry.id, workoutId: owner.id, finished: owner.finished, set}
+      }
     }
     return undefined
   }
@@ -124,25 +135,28 @@ const createBackend = () => {
      *  absent, exactly as `buildLiveWorkouts` drops anything that isn't
      *  `in-progress` — which is the emission that matters most here, because
      *  "no live workout" and "the query is behind" look identical. */
-    live: (): LiveWorkout[] =>
-      started && !finished ? [{id: workoutId, day: DAY, session, exercises: [...entries.values()]}] : [],
+    live: (): LiveWorkout[] => (started
+      ? sessions.filter(s => !s.finished).reverse()   // newest first, as the page files them
+        .map(s => ({id: s.id, day: DAY, session, exercises: [...s.entries.values()]}))
+      : []),
 
     /** A different workout id on the same evening, over the same blocks —
      *  enough for the cases that only care that the ID moved. */
     replaceWorkout: (nextId: string) => {
-      workoutId = nextId
+      current.id = nextId
     },
 
-    /** The fuller version: a peer FINISHED ours and started the next session,
-     *  so the replacement is a different workout with its own, empty set of
-     *  blocks. `replaceWorkout` keeps the old entries, which is fine while a
-     *  test only reads the id — but it cannot show the one thing that makes
-     *  the replacement matter, which is that its logged values are not ours
-     *  and must not be wiped by our finish. */
+    /** The fuller version: a peer started the NEXT session for this evening,
+     *  which is a different workout with its own blocks — and ours does not
+     *  vanish when theirs appears. Two clients both starting a session while
+     *  one is behind on sync is exactly what a minted (rather than derived)
+     *  repeat-workout id makes possible, so it needs to be drivable.
+     *
+     *  `replaceWorkout` renames ours instead, which is fine while a test only
+     *  reads the id, but cannot show a write landing in the wrong session. */
     startNextWorkout: (nextId: string) => {
-      workoutId = nextId
-      entries = new Map()
-      finished = false
+      current = {id: nextId, entries: new Map(), finished: false}
+      sessions.push(current)
     },
 
     /** Which session the in-progress workout belongs to. */
@@ -155,7 +169,7 @@ const createBackend = () => {
     seed: (exercise: string, sets: readonly Partial<LiveSet>[], definitionId?: string) => {
       started = true
       const id = entryBlockId(definitionId, exercise, 0)
-      entries.set(id, {
+      current.entries.set(id, {
         id,
         exercise,
         definitionId,
@@ -165,11 +179,13 @@ const createBackend = () => {
     },
 
     setById: findSet,
-    entryIds: (): string[] => [...entries.keys()],
+    entryIds: (): string[] => [...current.entries.keys()],
     /** A set block deleted from the outline, by undo, or by another device. */
     deleteSet: (setId: string) => {
-      for (const entry of entries.values()) {
-        entry.sets = entry.sets.filter(s => s.id !== setId)
+      for (const owner of sessions) {
+        for (const entry of owner.entries.values()) {
+          entry.sets = entry.sets.filter(s => s.id !== setId)
+        }
       }
     },
 
@@ -195,7 +211,7 @@ const createBackend = () => {
     startWorkout: (draft: {exercises: readonly ExerciseDraft[]}): Promise<MaterializedWorkout> =>
       settle(() => {
         started = true
-        return {workoutId: 'w1', exercises: draft.exercises.map(ex => upsertEntry(ex))}
+        return {workoutId: current.id, exercises: draft.exercises.map(ex => upsertEntry(ex))}
       }),
 
     materializeExercise: (_workoutId: string, ex: ExerciseDraft, entryId?: string): Promise<ExerciseEntryIds> =>
@@ -206,12 +222,12 @@ const createBackend = () => {
     finishWorkout: (): Promise<'finished' | 'gone'> =>
       settle(() => {
         // Refuses a session that is already a record, like the real one.
-        if (!started || finished) return 'gone' as const
-        for (const [id, entry] of entries) {
-          if (!entry.sets.some(s => s.done)) entries.delete(id)
+        if (!started || current.finished) return 'gone' as const
+        for (const [id, entry] of current.entries) {
+          if (!entry.sets.some(s => s.done)) current.entries.delete(id)
           else entry.sets = entry.sets.filter(s => s.done)
         }
-        finished = true
+        current.finished = true
         return 'finished' as const
       }),
 
@@ -219,8 +235,8 @@ const createBackend = () => {
      *  a render, and a peer's finish can land before the click. */
     discardWorkout: (): Promise<'discarded' | 'gone'> =>
       settle(() => {
-        if (!started || finished) return 'gone' as const
-        entries.clear()
+        if (!started || current.finished) return 'gone' as const
+        current.entries.clear()
         started = false
         return 'discarded' as const
       }),
@@ -243,7 +259,7 @@ const createBackend = () => {
         const owner = ownerOf(setId)
         if (!owner) return 'gone' as const
         if (expectedParentId !== undefined && expectedParentId !== owner.entryId) return 'gone' as const
-        if (expectedWorkoutId !== undefined && (expectedWorkoutId !== workoutId || finished)) {
+        if (expectedWorkoutId !== undefined && (expectedWorkoutId !== owner.workoutId || owner.finished)) {
           return 'gone' as const
         }
         const set = owner.set
@@ -1082,6 +1098,38 @@ describe('TonightView', () => {
     // 205 is what the blocks hold; 185 is what the prescription would fill in.
     await waitFor(() => expect(weights()[0].value).toBe('205'))
     expect(checkboxes()[0].checked).toBe(true)
+  })
+
+  it('stops flushing the moment a peer replaces the workout, before building anything in it', async () => {
+    // Finish checked the generation ONCE, before the loop. A replacement
+    // landing part-way through left `resolveSet` answering for whatever was
+    // attached by then — so a row that never got block ids was materialized
+    // into the peer's brand-new session, writing this session's lift and its
+    // sets into theirs. The write even succeeded, because the entry and
+    // workout it validates against were both the replacement's.
+    //
+    // Two accepted lifts, so the flush has a second iteration to reach — and
+    // the replacement lands while the FIRST one's write is still parked, which
+    // is the only window where the pre-loop check cannot see it.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
+    backend.seed('Squat', [{weight: 245, reps: 5, done: true}])
+    mount(backend, {prescriptions: {A: prescriptionOf([
+      exercise(),
+      exercise({exercise: 'Squat', weight: 245}),
+    ])}})
+    await emit()
+
+    backend.hold()
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await act(async () => {})                   // row 0 resolved; its write parks
+    backend.startNextWorkout('w2')              // …and a peer's session appears now
+    await emit()
+    await backend.release()
+
+    expect(screen.getByText(/Session changed while saving/)).toBeTruthy()
+    // The second row was never flushed: one write, not two, and no finish.
+    expect(store.writeSet).toHaveBeenCalledTimes(1)
+    expect(store.finishWorkout).not.toHaveBeenCalled()
   })
 
   it('picks up the replacement\'s OWN logged values, not the ones we were showing', async () => {
