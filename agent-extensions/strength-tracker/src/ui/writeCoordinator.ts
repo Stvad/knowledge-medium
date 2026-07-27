@@ -110,7 +110,19 @@ export const createWriteCoordinator = (
   initialShape = '',
 ): WriteCoordinator => {
   let generation = 0
-  let abandonedThrough = -1
+  /** Per SLOT, the generation at which its workout was released.
+   *
+   *  A pending resolve is cancelled only if the blocks it is about to produce
+   *  belong to a released workout — which means its slot AND its generation,
+   *  not "everything older". A single global cutoff cancelled work belonging
+   *  to a different session entirely: a tap on A whose create was still in
+   *  flight, while the user switched to B and finished B, resolved to no
+   *  block at all — and `persist` reads no-block as nothing-to-do, so the tap
+   *  was lost without an error. Keyed by slot it stays precise in the
+   *  direction that matters too: an `or`-group switch bumps the generation
+   *  within one workout, and a discard must still cancel the create that
+   *  started before it. */
+  const releasedThrough = new Map<string, number>()
   /** Workouts this coordinator has let go of. Finish and Discard invalidate
    *  the workout, entry and set queries INDEPENDENTLY, so an entry or set
    *  emission can rebuild `live` from a workout row that still reads
@@ -153,13 +165,17 @@ export const createWriteCoordinator = (
     return {value, stale: at !== generation}
   }
 
+  /** Has the workout a pending resolve was working towards been released
+   *  since it started? */
+  const cancelled = (atSlot: string, at: number): boolean => (releasedThrough.get(atSlot) ?? -1) >= at
+
   /** This workout is no longer the one being logged into — it was discarded
    *  or finished. Results from creates still in flight stop yielding a block
    *  to write to: those blocks now belong to a tombstone or to a completed
    *  record, and either way a write into them is wrong. */
   const release = () => {
     if (workoutId !== null) released.set(workoutId, slot)
-    abandonedThrough = generation
+    releasedThrough.set(slot, generation)
     generation += 1
     workoutId = null
     materialized = null
@@ -267,12 +283,13 @@ export const createWriteCoordinator = (
 
       if (!workoutId) {
         const at = generation
+        const atSlot = slot
         const {value, stale} = await createWorkoutOnce(draft, effects)
         if (!stale) {
           workoutId = value.workoutId
           materialized = value
         }
-        if (at <= abandonedThrough) return {}
+        if (cancelled(atSlot, at)) return {}
         return {
           blockId: value.exercises[exIdx]?.setIds[setIdx],
           ...(stale ? {} : {patch: {kind: 'workout' as const, workout: value}}),
@@ -288,6 +305,7 @@ export const createWriteCoordinator = (
       // The workout exists but this exercise has no blocks: switched in
       // mid-session.
       const at = generation
+      const atSlot = slot
       // Keyed on the ROW, not its index: two rows of one lift are already
       // distinct here (that is what `occurrence` is), and an index changes
       // when a plan edit reorders the session — which let a switched-in lift
@@ -303,7 +321,7 @@ export const createWriteCoordinator = (
       // Discarded while this was in flight: the blocks it just made are
       // children of a workout that is being deleted, so writing into them
       // would strand live todo sets under a tombstone.
-      if (at <= abandonedThrough) return {}
+      if (cancelled(atSlot, at)) return {}
       return {
         blockId: value.setIds[setIdx],
         ...(stale ? {} : {patch: {kind: 'exercise' as const, exIdx, entry: value}}),

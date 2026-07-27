@@ -374,6 +374,47 @@ describe('failure and abandonment', () => {
     expect(await coord.resolveSet(draft, 0, 0, effects)).toMatchObject({blockId: 'e-new-s0'})
   })
 
+  it('does not cancel another session\'s pending write when this one finishes', async () => {
+    // A tap on A whose create is still in flight, then a switch to B, then
+    // Finish on B. A global "everything older is cancelled" cutoff made A's
+    // resolver yield no block — and `persist` reads no-block as
+    // nothing-to-do, so the tap was lost with no error at all. Only the
+    // released session's own work is cancelled.
+    const gate = deferred<MaterializedWorkout>()
+    const effects: WriteEffects = {
+      createWorkout: () => gate.promise,
+      createExercise: async () => ({id: 'x', setIds: ['xs']}),
+    }
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+
+    const pending = coord.resolveSet([exercise('Bench press', 1)], 0, 0, effects)
+    coord.reset('w-b', SLOT_B, SHAPE)   // the user switches to session B…
+    coord.completed()                    // …and finishes THAT one
+    gate.resolve(workoutIds('w-a', [1]))
+
+    expect((await pending).blockId).toBe('w-a-e0s0')
+  })
+
+  it('still cancels a create that started before a discard on the same session', async () => {
+    // The other direction, which the global cutoff did get right: an
+    // `or`-group switch bumps the generation WITHIN one workout, so a discard
+    // has to cancel a create that started before it — those blocks are about
+    // to be tombstoned.
+    const gate = deferred<ExerciseEntryIdsForTest>()
+    const effects: WriteEffects = {
+      createWorkout: async () => workoutIds('w1', [1]),
+      createExercise: () => gate.promise,
+    }
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+
+    const pending = coord.resolveSet([exercise('Landmine press', 1, {defId: 'def-lm'})], 0, 0, effects)
+    coord.reset('w1', SLOT_A, 'bench,landmine')   // shape change: new generation
+    coord.abandon()
+    gate.resolve({id: 'e-late', setIds: ['e-late-s0']})
+
+    expect(await pending).toEqual({})
+  })
+
   it('yields no block once the workout is discarded, so a late create writes nothing', async () => {
     // Those blocks are children of a workout being tombstoned; writing into
     // them would strand live todo sets under a deleted parent.
