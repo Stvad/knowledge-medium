@@ -999,6 +999,25 @@ describe('TonightView', () => {
     expect(vi.mocked(store.writeSet).mock.calls.map(call => call[1])).toEqual(['e:Bench press|1'])
   })
 
+  it('stops an accept-all batch when the session is discarded under it', async () => {
+    // Discard stays enabled through the batch, so the session can go between
+    // iterations. A later one then found no workout and CREATED one — the
+    // screen said "Discarded" while a fresh, fully-accepted workout survived.
+    backend.seed('Bench press', [{weight: 185, reps: 8}])          // one block…
+    mount(backend, {prescription: prescriptionOf([exercise({sets: 2})])})   // …two prescribed
+    await emit()
+
+    backend.hold()
+    fireEvent.click(screen.getByRole('button', {name: 'all ✓'}))
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await act(async () => {})
+
+    await backend.release()
+    await act(async () => {})
+    expect(store.startWorkout).not.toHaveBeenCalled()
+  })
+
   it('keeps the whole batch ticked while it is being written', async () => {
     // Each write's own commit emits, and an emission mid-loop saw every set
     // the loop had not reached yet as unprotected — so it reverted their

@@ -304,6 +304,22 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(await isBlockDeleted(repo, bench.setIds[0])).toBe(false)
   })
 
+  it('refuses when a set was outdented directly under the workout', async () => {
+    // A set has no children, so a guard that only looks at a child's
+    // DESCENDANTS missed it — Finish completed around a live, possibly open
+    // todo that the record never mentions.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {weight: 185, reps: 5, done: true}, 'lb'))
+      .toBe('written')
+    await repo.tx(tx => tx.move(workout.exercises[0].setIds[0], {parentId: workout.workoutId, orderKey: 'z0'}),
+      {scope: ChangeScope.BlockDefault, description: 'outdent the set up to the workout'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
   it('refuses to finish when a workout has children but none of them are exercise entries', async () => {
     // Children-but-no-entries reads as a type misread, not an empty session
     // — see the guard's own comment in store.ts. A block directly under the

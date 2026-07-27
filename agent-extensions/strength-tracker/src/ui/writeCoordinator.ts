@@ -273,7 +273,19 @@ export const createWriteCoordinator = (
       // Same slot. Adopt a live id if one turned up, but never fall back to
       // null: no live workout usually means the query hasn't caught up with
       // the one we just made, and forgetting it starts a duplicate.
+      const replaced = offered !== null && workoutId !== null && offered !== workoutId
       workoutId = offered ?? workoutId
+      if (replaced) {
+        // A DIFFERENT workout on the same evening — a peer finished ours and
+        // started the next one, and our query jumped straight from one to the
+        // other. Everything cached here is positional inside the old one, and
+        // an id taken from it names a block in a workout that is now a record.
+        generation += 1
+        materialized = null
+        creatingWorkout = null
+        creatingExercises = new Map()
+        return {slotChanged: false, shapeChanged: nextShape !== shape}
+      }
       if (nextShape === shape) return {slotChanged: false, shapeChanged: false}
 
       // The exercise list changed under us. `materialized` is positional, so

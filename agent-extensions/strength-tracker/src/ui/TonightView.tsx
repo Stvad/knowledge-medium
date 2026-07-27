@@ -374,10 +374,16 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // sets look like an exercise that needed creating, so a reseed landing
     // mid-loop (the create's own query update does that) grew a duplicate
     // entry and scattered the sets across the two.
+    // Discard stays enabled through this batch (it is meant to be quick), so
+    // the session can be thrown away between iterations. A later one then
+    // found no workout and CREATED one — the screen said "Discarded" while a
+    // fresh, fully-accepted workout survived at the next slot.
+    const at = coordinator.generation()
     void track((async () => {
       try {
         let rows: readonly DraftExercise[] = next
         for (const j of pending) {
+          if (coordinator.generation() !== at) break
           const patch = await persist(rows, exIdx, j, {done: true, completedAt: now})
           if (patch) rows = applyIdPatch(rows, patch)
         }

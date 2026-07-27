@@ -592,6 +592,14 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     const untypedWithSets: string[] = []
     for (const child of children) {
       if (hasBlockType(child, EXERCISE_ENTRY_TYPE)) continue
+      // The child ITSELF may be a set that was outdented up here. A set has no
+      // children, so looking only at its descendants missed it entirely and
+      // Finish completed around a live, possibly open todo that the record
+      // never mentions.
+      if (isSetLike(child)) {
+        untypedWithSets.push(child.id)
+        continue
+      }
       const grandchildren = await tx.childrenOf(child.id, undefined, {hidePropertyChildren: true})
       if (grandchildren.some(isSetLike)) untypedWithSets.push(child.id)
     }

@@ -259,6 +259,22 @@ describe('reset — the session was switched', () => {
     expect(calls).toEqual({workouts: 1, exercises: ['Landmine press']})
   })
 
+  it('drops the positional ids when a DIFFERENT workout turns up on the same slot', async () => {
+    // A peer finished ours and started the next one, and our query jumped
+    // straight from one to the other. Everything cached is positional inside
+    // the old workout, and an id taken from it names a block in what is now a
+    // finished record.
+    const {effects} = instantEffects()
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+    await coord.resolveSet([exercise('Bench press', 1)], 0, 0, effects)
+    expect(coord.materialized()).not.toBeNull()
+
+    coord.reset('w2', SLOT_A, SHAPE)
+
+    expect(coord.workoutId()).toBe('w2')
+    expect(coord.materialized()).toBeNull()
+  })
+
   it('keeps the workout when a reseed arrives with no live workout yet', async () => {
     const {calls, effects} = instantEffects()
     const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
