@@ -59,8 +59,9 @@ const entryBlockId = (definitionId: string | undefined, exercise: string, occurr
 
 const createBackend = () => {
   /** Entries by block id, in creation order — the shape a workout's children
-   *  actually have. */
-  const entries = new Map<string, LiveExercise>()
+   *  actually have. Replaced wholesale by `startNextWorkout`, because a
+   *  peer's next session is a different workout with its own blocks. */
+  let entries = new Map<string, LiveExercise>()
   let started = false
   let workoutId = 'w1'
   let session: SessionType = 'A'
@@ -106,10 +107,14 @@ const createBackend = () => {
     return {id, setIds: sets.map(s => s.id)}
   }
 
-  const findSet = (setId: string): LiveSet | undefined => {
+  const findSet = (setId: string): LiveSet | undefined => ownerOf(setId)?.set
+
+  /** Which entry a set hangs under — the thing `writeSet`'s parent check is
+   *  actually about. */
+  const ownerOf = (setId: string): {entryId: string; set: LiveSet} | undefined => {
     for (const entry of entries.values()) {
-      const found = entry.sets.find(s => s.id === setId)
-      if (found) return found
+      const set = entry.sets.find(s => s.id === setId)
+      if (set) return {entryId: entry.id, set}
     }
     return undefined
   }
@@ -122,10 +127,22 @@ const createBackend = () => {
     live: (): LiveWorkout[] =>
       started && !finished ? [{id: workoutId, day: DAY, session, exercises: [...entries.values()]}] : [],
 
-    /** A different workout on the same evening — what a peer finishing ours
-     *  and starting the next one looks like from here. */
+    /** A different workout id on the same evening, over the same blocks —
+     *  enough for the cases that only care that the ID moved. */
     replaceWorkout: (nextId: string) => {
       workoutId = nextId
+    },
+
+    /** The fuller version: a peer FINISHED ours and started the next session,
+     *  so the replacement is a different workout with its own, empty set of
+     *  blocks. `replaceWorkout` keeps the old entries, which is fine while a
+     *  test only reads the id — but it cannot show the one thing that makes
+     *  the replacement matter, which is that its logged values are not ours
+     *  and must not be wiped by our finish. */
+    startNextWorkout: (nextId: string) => {
+      workoutId = nextId
+      entries = new Map()
+      finished = false
     },
 
     /** Which session the in-progress workout belongs to. */
@@ -208,10 +225,28 @@ const createBackend = () => {
         return 'discarded' as const
       }),
 
-    writeSet: (setId: string, patch: Partial<SetDraft>): Promise<'written' | 'gone'> =>
+    /** Checks what it was TOLD the set's place is, the way the real one does:
+     *  an entry that has left the workout, or a session that is already a
+     *  record, both answer `gone` rather than reporting a phantom write.
+     *
+     *  Modelling that is what makes it visible whether a caller passes the
+     *  right context at all — the real `writeSet` skips both checks when it
+     *  is handed nothing, so a caller that loses the entry or workout id gets
+     *  a cheerful `written` for a set the finished record will not contain. */
+    writeSet: (
+      setId: string,
+      patch: Partial<SetDraft>,
+      expectedParentId?: string,
+      expectedWorkoutId?: string,
+    ): Promise<'written' | 'gone'> =>
       settle(() => {
-        const set = findSet(setId)
-        if (!set) return 'gone' as const
+        const owner = ownerOf(setId)
+        if (!owner) return 'gone' as const
+        if (expectedParentId !== undefined && expectedParentId !== owner.entryId) return 'gone' as const
+        if (expectedWorkoutId !== undefined && (expectedWorkoutId !== workoutId || finished)) {
+          return 'gone' as const
+        }
+        const set = owner.set
         if (patch.weight !== undefined) set.weight = patch.weight
         if (patch.reps !== undefined) set.reps = patch.reps
         if (patch.done !== undefined) set.done = patch.done
@@ -332,7 +367,10 @@ const wire = (backend: Backend) => {
     backend.startWorkout(draft))
   vi.mocked(store.materializeExercise).mockImplementation((_repo, workoutId, ex, entryId) =>
     backend.materializeExercise(workoutId, ex, entryId))
-  vi.mocked(store.writeSet).mockImplementation((_repo, setId, patch) => backend.writeSet(setId, patch))
+  vi.mocked(store.writeSet).mockImplementation(
+    (_repo, setId, patch, _unit, expectedParentId, expectedWorkoutId) =>
+      backend.writeSet(setId, patch, expectedParentId, expectedWorkoutId),
+  )
   vi.mocked(store.finishWorkout).mockImplementation(() => backend.finishWorkout())
   vi.mocked(store.discardWorkout).mockImplementation(() => backend.discardWorkout())
 }
@@ -1043,6 +1081,32 @@ describe('TonightView', () => {
 
     // 205 is what the blocks hold; 185 is what the prescription would fill in.
     await waitFor(() => expect(weights()[0].value).toBe('205'))
+    expect(checkboxes()[0].checked).toBe(true)
+  })
+
+  it('picks up the replacement\'s OWN logged values, not the ones we were showing', async () => {
+    // The sibling above replaces only the id, so "the replacement's values"
+    // are the same numbers already on screen — which cannot tell whether the
+    // draft was re-overlaid or merely left alone. Here the peer's session is
+    // a different workout with different blocks: 245, where the screen was
+    // showing w1's 205 and the prescription would fill in 185.
+    backend.seed('Bench press', [{weight: 205, reps: 5, done: true}, {weight: 205, reps: 5}])
+    mount(backend)
+    await emit()
+
+    let landFinish: () => void = () => {}
+    vi.mocked(store.finishWorkout).mockImplementationOnce(
+      () => new Promise<'finished'>(resolve => { landFinish = () => resolve('finished') }),
+    )
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+
+    backend.startNextWorkout('w2')
+    backend.seed('Bench press', [{weight: 245, reps: 3, done: true}, {weight: 245, reps: 3}])
+    await emit()
+    await act(async () => { landFinish() })
+
+    await waitFor(() => expect(weights()[0].value).toBe('245'))
     expect(checkboxes()[0].checked).toBe(true)
   })
 

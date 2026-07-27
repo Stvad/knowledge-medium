@@ -711,7 +711,17 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // still attached and still ours to log into — and wiping it back to the
       // prescription hid its logged values behind defaults with nothing left
       // to bring them back: it had already been emitted, so no dependency of
-      // the overlay effect changes afterwards. Ask for the overlay instead.
+      // the overlay effect changes afterwards.
+      //
+      // The resync on the other branch is belt-and-braces, and deliberately
+      // left in: the emission that made `wasOnScreen` false has ALREADY
+      // re-run the overlay (`live` is a dependency of it), so the only input
+      // a resync can pick up that the emission could not is `writing` — the
+      // in-flight-set exemption, which is deliberately not a dependency, and
+      // which a write landing after that emission would otherwise leave stale
+      // until the next one. No test drives that, and the mutant survives; it
+      // stays because re-deriving after letting go of a workout costs one
+      // render and the alternative is a draft nothing will correct.
       if (wasOnScreen) setDraft(buildDraft(prescription, unit))
       else setResync(n => n + 1)
       const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length

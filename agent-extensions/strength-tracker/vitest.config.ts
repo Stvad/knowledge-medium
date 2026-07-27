@@ -30,6 +30,8 @@ export default defineConfig({
       // Those few get a runtime fake here, so the React half is testable at
       // all rather than being reviewed by eye.
       {find: /^@\/utils\/dialogs\.js$/, replacement: resolve(configDir, 'test/kernel/dialogs.ts')},
+      {find: /^@\/hooks\/block\.js$/, replacement: resolve(configDir, 'test/kernel/blockHooks.ts')},
+      {find: /^@\/data\/properties\.js$/, replacement: resolve(configDir, 'test/kernel/properties.ts')},
       {find: /^@\/(.*)$/, replacement: resolve(configDir, '../kernel-types/src/$1')},
     ],
   },
