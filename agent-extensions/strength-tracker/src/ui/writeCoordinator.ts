@@ -159,6 +159,10 @@ export const createWriteCoordinator = (
   /** Set blocks a write has told us are gone. Kept out of `materialized`'s
    *  shortcut so a retry re-derives instead of naming the tombstone again. */
   const deadSets = new Set<string>()
+  /** What the most recent release replaced, so it can be put back. A release
+   *  cancels the pending work for its slot, and that has to be undoable: the
+   *  delete it was made for can fail. */
+  let lastRelease: {id: string; slot: string; previousCutoff: number | undefined} | null = null
   let workoutId = initialWorkoutId
   let slot = initialSlot
   let shape = initialShape
@@ -196,7 +200,10 @@ export const createWriteCoordinator = (
    *  to write to: those blocks now belong to a tombstone or to a completed
    *  record, and either way a write into them is wrong. */
   const release = () => {
-    if (workoutId !== null) released.set(workoutId, slot)
+    if (workoutId !== null) {
+      released.set(workoutId, slot)
+      lastRelease = {id: workoutId, slot, previousCutoff: releasedThrough.get(slot)}
+    }
     releasedThrough.set(slot, generation)
     generation += 1
     workoutId = null
@@ -307,6 +314,15 @@ export const createWriteCoordinator = (
     restore(id) {
       released.delete(id)
       workoutId = id
+      // …and un-cancel what the release cancelled. Handing the workout back
+      // without this left a create still in flight resolving to no block at
+      // all — which `persist` reads as nothing-to-do, so the set edit that
+      // started it vanished with no error, on a workout that is still there.
+      if (lastRelease?.id === id) {
+        if (lastRelease.previousCutoff === undefined) releasedThrough.delete(lastRelease.slot)
+        else releasedThrough.set(lastRelease.slot, lastRelease.previousCutoff)
+        lastRelease = null
+      }
     },
 
     async resolveSet(draft, exIdx, setIdx, effects) {

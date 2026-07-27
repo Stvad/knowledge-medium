@@ -470,6 +470,27 @@ describe('failure and abandonment', () => {
     expect(await pending).toEqual({})
   })
 
+  it('un-cancels the pending write when the discard is taken back', async () => {
+    // A discard cancels the work in flight for its slot, which is right while
+    // the delete is happening — but the delete can fail, and then the workout
+    // is still there. Handing it back without lifting the cancellation left
+    // the create resolving to no block at all, which `persist` reads as
+    // nothing-to-do: the set edit vanished with no error.
+    const gate = deferred<ExerciseEntryIdsForTest>()
+    const effects: WriteEffects = {
+      createWorkout: async () => workoutIds('w1', [1]),
+      createExercise: () => gate.promise,
+    }
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+
+    const pending = coord.resolveSet([exercise('Landmine press', 1, {defId: 'def-lm'})], 0, 0, effects)
+    coord.abandon()
+    coord.restore('w1')                       // …the delete failed
+    gate.resolve({id: 'e-lm', setIds: ['e-lm-s0']})
+
+    expect((await pending).blockId).toBe('e-lm-s0')
+  })
+
   it('yields no block once the workout is discarded, so a late create writes nothing', async () => {
     // Those blocks are children of a workout being tombstoned; writing into
     // them would strand live todo sets under a deleted parent.
