@@ -72,6 +72,13 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
 
   useEffect(() => {
     let cancelled = false
+    // Lock writing for the duration of every load, not just the first. This
+    // latch says "the prescription on screen is the one the plan describes",
+    // and a RELOAD (switching an `or`-group bumps `reloadKey`) makes that
+    // false again until it settles — tapping a set in that window
+    // materialized the option the user had just switched away from, leaving
+    // an extra lift in the session.
+    setConfigLoaded(false)
     void (async () => {
       const settingsId = await getOrCreateSettingsBlock(repo, workspaceId, pageId).catch(() => null)
       if (cancelled) return

@@ -123,6 +123,19 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  to explain it. A retry writes the same fields, so it clears its own. */
   const failedRef = useRef(new Set<string>())
 
+  /** Writes still running. Finish reasserts only ACCEPTANCE, so a weight or
+   *  reps write started by the blur that a Finish tap causes is not part of
+   *  what Finish flushes — it races it. Left unwaited, Finish could finalize
+   *  and release the session while that edit was still in the air, and a
+   *  failure had nowhere left to be retried. */
+  const pendingRef = useRef(new Set<Promise<unknown>>())
+  const track = <T,>(work: Promise<T>): Promise<T> => {
+    pendingRef.current.add(work)
+    const done = () => { pendingRef.current.delete(work) }
+    work.then(done, done)
+    return work
+  }
+
   // "Which block does this set write to, and what has to be created first" —
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
   // the React half: applying the ids it hands back.
@@ -272,7 +285,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
-    void persist(next, exIdx, setIdx, patch).catch(reportWriteFailure)
+    void track(persist(next, exIdx, setIdx, patch)).catch(reportWriteFailure)
   }
 
   const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
@@ -305,7 +318,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // sets look like an exercise that needed creating, so a reseed landing
     // mid-loop (the create's own query update does that) grew a duplicate
     // entry and scattered the sets across the two.
-    void (async () => {
+    void track((async () => {
       try {
         let rows: readonly DraftExercise[] = next
         for (const j of pending) {
@@ -315,7 +328,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       } finally {
         for (const key of batch) endWrite(key)
       }
-    })().catch(reportWriteFailure)
+    })()).catch(reportWriteFailure)
   }
 
   const finish = async () => {
@@ -335,6 +348,21 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // aimed at a workout this view is no longer editing.
     const at = coordinator.generation()
     try {
+      // Let the writes already in the air land first. Tapping Finish blurs
+      // whatever field was focused, which STARTS one — and Finish reasserts
+      // only acceptance, so that number is not something it would write
+      // itself. Finalizing around it meant the session could be logged and
+      // released with the edit still in flight.
+      if (pendingRef.current.size > 0) await Promise.allSettled([...pendingRef.current])
+      if (failedRef.current.size > 0) {
+        // Something genuinely didn't save. Say so before finalizing, but
+        // don't refuse forever: a set that is gone will never write no matter
+        // how often it is retried, and the rest of the session still deserves
+        // to be logged. Cleared here, so tapping again goes through.
+        failedRef.current.clear()
+        setStatus('A change did not save — check the numbers, then tap Finish again to log anyway.')
+        return
+      }
       // Flush every set through the same resolver the edit path uses, so a
       // Finish pressed mid-create (or right after an or-group switch) joins
       // that create instead of racing a second workout.

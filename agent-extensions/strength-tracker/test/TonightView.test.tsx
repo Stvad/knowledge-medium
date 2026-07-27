@@ -445,6 +445,52 @@ describe('TonightView', () => {
     expect(checkboxes()[0].checked).toBe(true)
   })
 
+  it('waits for a field write already in the air before finalizing', async () => {
+    // Tapping Finish blurs whatever field was focused, which STARTS a write —
+    // and Finish reasserts only acceptance, so that number is not something
+    // it writes itself. Finalizing around it logged and released the session
+    // with the edit still in flight, and a failure then had nowhere to go.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    backend.hold()
+    const field = weights()[0]
+    act(() => field.focus())
+    fireEvent.change(field, {target: {value: '195'}})
+    fireEvent.blur(field)                         // the weight write parks
+    await act(async () => {})
+
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await act(async () => {})
+    expect(store.finishWorkout).not.toHaveBeenCalled()   // still waiting
+
+    await backend.release()
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 195})
+  })
+
+  it('says so rather than finalizing over a change that did not save', async () => {
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    const field = weights()[0]
+    act(() => field.focus())
+    fireEvent.change(field, {target: {value: '195'}})
+    fireEvent.blur(field)
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(screen.getByText(/did not save/)).toBeTruthy())
+    expect(store.finishWorkout).not.toHaveBeenCalled()
+
+    // …and it does not refuse forever: a set that is gone will never write.
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+  })
+
   it('lets go of the workout once it is finished', async () => {
     // A finished workout simply leaves `liveWorkouts` — indistinguishable, to
     // the overlay, from a query that hasn't caught up. Holding on left every
