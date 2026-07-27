@@ -248,11 +248,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     const writingKey = setKey(next[exIdx], setIdx)
     // The exemption is per SET — the block is what a query emission can be
     // behind on. The failure marker is per WRITE, because two of them can be
-    // outstanding for one set with different outcomes.
-    const opKey = `${slot}|${writingKey}|${Object.keys(change).sort().join(',')}`
+    // outstanding for one set with different outcomes — and per WORKOUT,
+    // because two of them can share an evening: a peer finishing ours and
+    // starting the next one keeps the slot but changes everything else, and a
+    // late rejection from the first was landing on the second's tab.
+    const entryWorkout = coordinator.workoutId()
+    let forWorkout = entryWorkout
+    const opKey = (workout: string | null) =>
+      `${slot}|${workout ?? 'new'}|${writingKey}|${Object.keys(change).sort().join(',')}`
     beginWrite(writingKey)
     try {
       const {blockId, workoutId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
+      if (workoutId !== undefined) forWorkout = workoutId
       if (patch) setDraft(cur => applyIdPatch(cur, patch))
       // The entry this set belongs under — from the create when there was one,
       // because on the FIRST write of a blockless row the caller's snapshot
@@ -286,7 +293,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // …and against THIS session's failures. A failure left over from the
       // session you switched away from kept the warning up on a screen where
       // everything had saved, which invites the second, reversing tap.
-      if (failedRef.current.delete(opKey)
+      // Both keys: a first attempt that failed BEFORE any workout existed
+      // filed its marker under "new", and the retry that finally creates one
+      // has to be able to take that same marker down.
+      const cleared = failedRef.current.delete(opKey(forWorkout))
+      const clearedPending = failedRef.current.delete(opKey(entryWorkout))
+      if ((cleared || clearedPending)
         && ![...failedRef.current].some(key => key.startsWith(`${slot}|`))) {
         setStatus(current => (current === WRITE_FAILED ? null : current))
       }
@@ -300,7 +312,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
       // value that never reached it.
-      failedRef.current.add(opKey)
+      failedRef.current.add(opKey(forWorkout))
       setResync(n => n + 1)
       throw error
     } finally {
@@ -417,7 +429,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // released with the edit still in flight.
       const mine = [...pendingRef.current].filter(([, forSlot]) => forSlot === slot).map(([work]) => work)
       if (mine.length > 0) await Promise.allSettled(mine)
-      const failedHere = [...failedRef.current].filter(key => key.startsWith(`${slot}|`))
+      const failedHere = [...failedRef.current].filter(
+        key => key.startsWith(`${slot}|${coordinator.workoutId() ?? 'new'}|`),
+      )
       if (failedHere.length > 0) {
         // Something genuinely didn't save. Say so before finalizing, but
         // don't refuse forever: a set that is gone will never write no matter

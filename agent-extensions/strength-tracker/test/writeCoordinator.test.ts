@@ -259,6 +259,21 @@ describe('reset — the session was switched', () => {
     expect(calls).toEqual({workouts: 1, exercises: ['Landmine press']})
   })
 
+  it('remembers the shape it saw when the workout was replaced', async () => {
+    // The replacement branch clears the caches, and it has to record the
+    // shape it arrived with too — otherwise the NEXT emission reads the same
+    // shape as changed again, bumps the generation a second time, and aborts
+    // whatever was mid-flight: an accept-all batch between sets, or a Finish
+    // that then reports the session changed.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+
+    expect(coord.reset('w2', SLOT_A, 'bench,landmine')).toEqual({slotChanged: false, shapeChanged: true})
+    const settled = coord.generation()
+
+    expect(coord.reset('w2', SLOT_A, 'bench,landmine')).toEqual({slotChanged: false, shapeChanged: false})
+    expect(coord.generation()).toBe(settled)
+  })
+
   it('drops the positional ids when a DIFFERENT workout turns up on the same slot', async () => {
     // A peer finished ours and started the next one, and our query jumped
     // straight from one to the other. Everything cached is positional inside

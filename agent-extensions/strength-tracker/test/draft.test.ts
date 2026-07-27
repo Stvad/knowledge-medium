@@ -348,6 +348,26 @@ describe('overlayLive', () => {
     expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', 's2'])
   })
 
+  it('gives a plan-backed row its own entry before a name-only row takes it', () => {
+    // The name-only row comes FIRST, and falls back by name. Allocating in
+    // one pass let it take the very entry the later row matches exactly on
+    // its plan block — that row then read as unlogged, and its next write
+    // attached both rows to one derived entry.
+    const mixed: Prescription = {
+      ...prescription(),
+      exercises: [exerciseOf(), exerciseOf({defId: 'def-bench'})],
+    }
+    const merged = overlayLive(buildDraft(mixed, 'lb'), {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [
+        {id: 'e-plain', exercise: 'Bench press', unit: 'lb', sets: [{id: 'p0', weight: 95, reps: 12, done: true}]},
+        {id: 'e-planned', exercise: 'Bench press', definitionId: 'def-bench', unit: 'lb',
+          sets: [{id: 'q0', weight: 205, reps: 5, done: true}]},
+      ],
+    })
+    expect(merged.map(ex => ex.blockId)).toEqual(['e-plain', 'e-planned'])
+  })
+
   it('gives two same-named lifts their own entries when neither entry knows its plan block', () => {
     // Both were logged while the outline was unreadable, so both entries are
     // name-keyed; once it resolves, each row carries a DIFFERENT plan block

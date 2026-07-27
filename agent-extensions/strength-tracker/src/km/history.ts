@@ -285,12 +285,26 @@ export const matchLiveExercises = <T extends LiftEntry>(
       // share a name. A row without one is free to take either.
       && (row.definitionId === undefined || entry.definitionId === undefined))
 
-  return rows.map(row => {
-    const match = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence)) ?? nextByName(row)
-    if (!match || claimed.has(match.id)) return undefined
-    claimed.add(match.id)
-    return match
+  // TWO passes, exact first. A name-only row earlier in the list would
+  // otherwise fall back onto the very entry that a later row matches on its
+  // plan block — the later row then reads as unlogged even though an entry
+  // was free for the earlier one, and its next write attaches both rows to
+  // one derived entry.
+  const matched: (T | undefined)[] = rows.map(() => undefined)
+  rows.forEach((row, i) => {
+    const exact = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence))
+    if (!exact || claimed.has(exact.id)) return
+    claimed.add(exact.id)
+    matched[i] = exact
   })
+  rows.forEach((row, i) => {
+    if (matched[i] !== undefined) return
+    const fallback = nextByName(row)
+    if (!fallback) return
+    claimed.add(fallback.id)
+    matched[i] = fallback
+  })
+  return matched
 }
 
 export const buildLiveWorkouts = (

@@ -281,10 +281,17 @@ export const createWriteCoordinator = (
         // other. Everything cached here is positional inside the old one, and
         // an id taken from it names a block in a workout that is now a record.
         generation += 1
+        const shapeChanged = nextShape !== shape
+        // …including the shape it arrived with. Leaving it behind made the
+        // NEXT emission read the same shape as changed again, bump the
+        // generation a second time, and abort whatever was mid-flight — an
+        // accept-all batch between sets, or a Finish that then reported the
+        // session had changed.
+        shape = nextShape
         materialized = null
         creatingWorkout = null
         creatingExercises = new Map()
-        return {slotChanged: false, shapeChanged: nextShape !== shape}
+        return {slotChanged: false, shapeChanged}
       }
       if (nextShape === shape) return {slotChanged: false, shapeChanged: false}
 
