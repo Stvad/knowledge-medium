@@ -232,12 +232,12 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/typedRecords.js',
-    description: 'createTypedChild — one call per record block (create + type-tag + typed properties inside your tx). The cheap way to keep records as blocks instead of a JSON cell. getOrCreateTypedChild derives the block id from what the record IS, so a create fired by a UI gesture or a bootstrap is idempotent: repeat it and it adopts, and two clients converge on one row instead of leaving a duplicate nobody can reach.',
-    // `derivedBlockId` is deliberately absent: it computes the id a record
-    // WOULD have at a given slot, which reads like a lookup and isn't — slot 0
-    // may hold a discarded or finished occupant. Only `getOrCreateTypedChild`
-    // knows which slot is current, so that is the only one authors are handed.
-    exports: ['createTypedChild', 'getOrCreateTypedChild'],
+    description: 'createTypedChild — one call per record block (create + type-tag + typed properties inside your tx). The cheap way to keep records as blocks instead of a JSON cell. getOrCreateTypedChild derives the block id from what the record IS, so a create fired by a UI gesture or a bootstrap is idempotent: repeat it and it adopts, and two clients converge on one row instead of leaving a duplicate nobody can reach. It answers `taken` when the id is occupied by something you rejected — a deliberate SECOND record is a lookup plus createTypedChild, never a second derived id. adoptTypedBlock takes the record you found that way, repairing its type tags.',
+    // `derivedBlockId` is deliberately absent: it computes an id, which reads
+    // like a lookup and isn't — what sits there may be a tombstone, another
+    // workspace's row, or a record this caller would reject. Authors get the
+    // get-or-create, which tells them which of those it found.
+    exports: ['adoptTypedBlock', 'createTypedChild', 'getOrCreateTypedChild'],
     types: ['DerivedChildOutcome', 'DerivedChildSpec', 'DerivedIdentity', 'TypedChildSpec'],
   },
   {

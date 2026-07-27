@@ -15,7 +15,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { getBlockTypes } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { createTypedChild, derivedBlockId, getOrCreateTypedChild } from '@/data/typedRecords'
+import { adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild } from '@/data/typedRecords'
 
 const NS = 'd6c7f0e1-5b42-4a90-9d18-2f7c4e6a1b03'
 const identity = (key: string) => ({namespace: NS, key})
@@ -184,7 +184,7 @@ describe('getOrCreateTypedChild', () => {
     expect(rows).toHaveLength(3)
   })
 
-  it('adopts within a single transaction, since the probe must see its own insert', async () => {
+  it('adopts within a single transaction, since the second call must see the first\'s insert', async () => {
     // Two rows of one draft resolving the same identity inside ONE tx. If
     // `tx.get` ever stopped reading through to the transaction's own writes,
     // both would insert and the second would throw DuplicateIdError.
@@ -255,30 +255,16 @@ describe('getOrCreateTypedChild', () => {
   it('never adopts a row belonging to another workspace', async () => {
     // Two workspaces whose keys collide would otherwise have the first one's
     // record silently written into by the second — a write into a workspace
-    // the user may not even have open. The probe steps past it instead.
+    // the user may not even have open.
     const id = derivedBlockId(identity('shared-key'))
     await repo.tx(async tx => {
       await tx.create({id: 'parent-2', workspaceId: 'ws-2', parentId: null, orderKey: 'a0', content: 'Elsewhere'})
       await tx.create({id, workspaceId: 'ws-2', parentId: 'parent-2', orderKey: 'a1', content: 'Theirs'})
     }, {scope: ChangeScope.BlockDefault})
 
-    const ours = await record('shared-key')
-    expect(ours.status).toBe('created')
-    expect(ours.id).not.toBe(id)
+    expect((await record('shared-key')).status).toBe('taken')
     expect(cache.getSnapshot(id)!.content).toBe('Theirs')
     expect(getBlockTypes(cache.getSnapshot(id)!)).toEqual([])
-  })
-
-  it('keeps a key that spells a later slot distinct from that slot', async () => {
-    // The slot varies the NAMESPACE rather than suffixing the key, so a key
-    // that literally contains a slot suffix cannot collide with it. Asserting
-    // against `derivedBlockId` alone would move both sides together, so this
-    // needs the colliding PAIR.
-    const spelled = await record('Row#1')
-    await record('Row')
-    const next = await record('Row', {adoptable: () => false})
-    expect(next.id).toBe(derivedBlockId(identity('Row'), 1))
-    expect(spelled.id).not.toBe(next.id)
   })
 
   it('honours the requested position', async () => {
@@ -291,33 +277,77 @@ describe('getOrCreateTypedChild', () => {
     expect(children?.map(child => child.id)).toEqual([newest.id, existing.id])
   })
 
-  it('takes the next slot rather than resurrecting a deleted record', async () => {
+  it('reports a deleted record as taken rather than resurrecting it', async () => {
     // Discarding a workout and then tapping a checkbox again must not bring
-    // the discarded one back — but it must still be idempotent, so the
-    // fallback is derived too, not random.
+    // the discarded one back. Nor may it quietly derive a SECOND id and create
+    // there: a device that had not synced the delete would still see the first
+    // id free, create there, and lose that insert to the tombstoned row on the
+    // server. Reporting `taken` hands the decision to the caller, who is the
+    // only one who knows what a second record here would mean.
     const first = await record('discarded')
     await repo.tx(tx => tx.delete(first.id), {scope: ChangeScope.BlockDefault})
 
-    const second = await record('discarded')
-    const third = await record('discarded')
-
-    expect(second).toEqual({status: 'created', id: derivedBlockId(identity('discarded'), 1)})
-    expect(third.status).toBe('adopted')
-    expect(third.id).toBe(second.id)
+    expect(await record('discarded')).toEqual({status: 'taken', id: first.id, block: expect.anything()})
   })
 
-  it('takes the next slot when the caller rejects what it found', async () => {
-    const done = await record('slot-taken')
+  it('reports the occupant as taken when the caller rejects what it found, and writes nothing', async () => {
+    const done = await record('occupied')
     await repo.tx(tx => tx.setProperty(done.id, doneProp, true), {scope: ChangeScope.BlockDefault})
 
-    const next = await record('slot-taken', {adoptable: b => b.properties[doneProp.name] !== true})
-    expect(next.status).toBe('created')
-    expect(next.id).toBe(derivedBlockId(identity('slot-taken'), 1))
+    const next = await record('occupied', {adoptable: b => b.properties[doneProp.name] !== true})
+
+    // The rejected block comes back, so the caller can tell WHAT is in the way
+    // without a second read.
+    expect(next.status).toBe('taken')
+    expect(next.id).toBe(done.id)
+    expect(next.status === 'taken' && next.block?.id).toBe(done.id)
+    // …and nothing was written anywhere. A `taken` that had left a stub behind
+    // would put an untyped, propertyless block in the user's outline every
+    // time a caller decided against adopting.
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', ['parent'],
+    )
+    expect(rows.map(r => r.id)).toEqual([done.id])
   })
 
-  it('fails loudly when every slot is rejected, instead of silently creating a duplicate', async () => {
-    await record('always-rejected')
-    await expect(record('always-rejected', {adoptable: () => false, maxSlots: 1}))
-      .rejects.toThrow(/all 1 slots/)
+  it('derives one id per identity and no other, so every device agrees on it', async () => {
+    // The property the probe used to break. A caller that rejects the occupant
+    // must not be handed a different id to create at, because that id could
+    // only ever be chosen from what THIS device has synced.
+    const first = await record('one-id-only')
+    const rejected = await record('one-id-only', {adoptable: () => false})
+    expect(rejected.id).toBe(first.id)
+    expect(rejected.id).toBe(derivedBlockId(identity('one-id-only')))
+  })
+})
+
+describe('adoptTypedBlock', () => {
+  it('repairs the types of a block a caller found for itself', async () => {
+    // The escape hatch from `taken`: a caller that locates the real record by
+    // scanning rather than by id still gets the primitive's repair.
+    const id = await repo.tx(tx => createTypedChild(repo, tx, {
+      parentId: 'parent', types: [recordType.id], content: 'found by scanning',
+    }), {scope: ChangeScope.BlockDefault})
+
+    const outcome = await repo.tx(async tx => adoptTypedBlock(
+      repo, tx, (await tx.get(id))!, [recordType.id, companionType.id],
+    ), {scope: ChangeScope.BlockDefault})
+
+    expect(outcome).toEqual({status: 'adopted', id, block: expect.anything()})
+    expect(getBlockTypes(cache.getSnapshot(id)!)).toEqual([recordType.id, companionType.id])
+    expect(getBlockTypes(outcome.block)).toEqual([recordType.id, companionType.id])
+  })
+
+  it('leaves the block\'s content and properties alone', async () => {
+    const id = await repo.tx(tx => createTypedChild(repo, tx, {
+      parentId: 'parent', types: [recordType.id], content: '145lb × 8',
+      properties: [propertyValue(weightProp, 145)],
+    }), {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => adoptTypedBlock(repo, tx, (await tx.get(id))!, [companionType.id]),
+      {scope: ChangeScope.BlockDefault})
+
+    expect(cache.getSnapshot(id)!.content).toBe('145lb × 8')
+    expect(repo.block(id).peekProperty(weightProp)).toBe(145)
   })
 })

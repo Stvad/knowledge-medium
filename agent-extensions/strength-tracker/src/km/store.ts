@@ -10,11 +10,13 @@
  *  The read side lives in the pure `history.ts` module (re-exported below).
  */
 
-import {ChangeScope, propertyValue, type Tx} from '@/data/api/index.js'
+import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/index.js'
 import {createChild, deleteBlock} from '@/data/mutators.js'
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
-import {createTypedChild, getOrCreateTypedChild, type DerivedIdentity} from '@/data/typedRecords.js'
+import {
+  adoptTypedBlock, createTypedChild, getOrCreateTypedChild, type DerivedIdentity,
+} from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: it carries the todo type + its
 // `status` prop, so done-ness is the native checkbox and reuses todo tooling.
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
@@ -148,9 +150,35 @@ const WORKOUT_NS = '80ae2b6d-7bde-4de7-9790-04e2d24eeb02'
 const EXERCISE_NS = '6d216957-1c1f-45c8-8ee6-b44bb0e7f4aa'
 const SET_NS = 'feda0816-3421-4fe5-8249-ac2655cc962b'
 
-/** One workout per workspace/day/session. */
+/** One workout per workspace/day/session — the FIRST one. A second session of
+ *  the same type on the same day has nothing left to key on (see
+ *  `startWorkout`), so it is minted rather than derived. */
 const workoutIdentity = (workspaceId: string, day: string, session: SessionType): DerivedIdentity =>
   ({namespace: WORKOUT_NS, key: `${workspaceId}|${day}|${session}`})
+
+/** Is this block the session the LOGGING VIEW would show for this draft?
+ *
+ *  Every field `buildLiveWorkouts` filters or files on, not just the status:
+ *
+ *   - `=== 'in-progress'`, not `!== 'done'` — a missing or unreadable status
+ *     is not tonight's log either;
+ *   - the date has to decode AND land on this day — `buildLiveWorkouts` skips
+ *     an undecodable one and files a valid one under whatever day it names;
+ *   - the session has to match, for the same reason.
+ *
+ *  Anything else is a block the view can never render, so writing the session
+ *  into it means logging into thin air: the sets land, nothing shows them, and
+ *  Finish waits forever for a live workout whose id matches. The date and
+ *  session can drift from the id that derived them by an ordinary hand-edit in
+ *  the outline.
+ *
+ *  One predicate for both ways of finding a workout — by derived id, and by
+ *  scanning the page — because "the session the view would show" must not be
+ *  able to mean two things. */
+const isTonightsLog = (block: BlockData, draft: WorkoutDraft): boolean =>
+  block.properties[FIELD.status] === 'in-progress'
+  && block.properties[FIELD.session] === draft.session
+  && liveDay(block.properties[FIELD.date]) === draft.day
 
 /** One entry per lift in a workout — keyed on the plan block where there is
  *  one, so a lift renamed mid-session stays the same entry. `occurrence`
@@ -174,10 +202,38 @@ const exerciseIdentity = (workoutId: string, key: string, occurrence: number): D
 const setIdentity = (exerciseId: string, index: number): DerivedIdentity =>
   ({namespace: SET_NS, key: `${exerciseId}|${index}`})
 
+/** Everything a set block holds — shared by the derived write and the minted
+ *  one, so the two cannot describe different records. */
+const setSpec = (exerciseId: string, s: SetDraft, index: number, unit: string, typeSnapshot: TypeSnapshot) => ({
+  parentId: exerciseId,
+  content: setContent(s, unit),
+  // Composed with the built-in todo: done-ness is the native checkbox.
+  types: [SET_TYPE, TODO_TYPE],
+  properties: [
+    propertyValue(weightProp, s.weight),
+    propertyValue(repsProp, s.reps),
+    // The same number the block id is derived from, written down so a reader
+    // can tell WHICH set this is without counting its siblings — which stops
+    // being the same thing the moment one of them is deleted. It is also what
+    // `placeStraySets` re-finds a set by when the derived id is gone.
+    propertyValue(setIndexProp, index),
+    ...(s.rpe !== undefined ? [propertyValue(rpeProp, s.rpe)] : []),
+    ...(s.side !== undefined ? [propertyValue(sideProp, s.side)] : []),
+    ...(s.completedAt !== undefined ? [propertyValue(completedAtProp, s.completedAt)] : []),
+    propertyValue(todoStatusProp, todoStatus(s.done)),
+  ],
+  typeSnapshot,
+})
+
 /** One set block under an exercise entry, inside the caller's transaction.
  *  Adopts the block already at this position rather than appending a second
  *  one — which is what lets the caller re-run the whole write for a session
- *  that is half-logged and get its existing ids back. */
+ *  that is half-logged and get its existing ids back.
+ *
+ *  `null` when the derived id is taken: by the tombstone of a set deleted out
+ *  of the middle of the lift, or by a block that has since left the entry.
+ *  This index still needs a block and cannot have that one — see
+ *  `placeStraySets`, which is where those are filled in. */
 const writeSetBlock = async (
   repo: Repo,
   tx: Tx,
@@ -186,42 +242,75 @@ const writeSetBlock = async (
   index: number,
   unit: string,
   typeSnapshot: TypeSnapshot,
-): Promise<string> => {
+): Promise<string | null> => {
   const outcome = await getOrCreateTypedChild(repo, tx, {
     identity: setIdentity(exerciseId, index),
-    parentId: exerciseId,
-    content: setContent(s, unit),
     // Positional: see `writeExercise`. A set dragged out of its lift is no
-    // longer this slot's set, and writing into it would leave an open todo
+    // longer this row's set, and writing into it would leave an open todo
     // that Finish can never reach.
     adoptable: block => block.parentId === exerciseId,
-    // Composed with the built-in todo: done-ness is the native checkbox.
-    types: [SET_TYPE, TODO_TYPE],
-    properties: [
-      propertyValue(weightProp, s.weight),
-      propertyValue(repsProp, s.reps),
-      // The same number the block id above was derived from, written down so a
-      // reader can tell WHICH set this is without counting its siblings —
-      // which stops being the same thing the moment one of them is deleted.
-      propertyValue(setIndexProp, index),
-      ...(s.rpe !== undefined ? [propertyValue(rpeProp, s.rpe)] : []),
-      ...(s.side !== undefined ? [propertyValue(sideProp, s.side)] : []),
-      ...(s.completedAt !== undefined ? [propertyValue(completedAtProp, s.completedAt)] : []),
-      propertyValue(todoStatusProp, todoStatus(s.done)),
-    ],
-    typeSnapshot,
+    ...setSpec(exerciseId, s, index, unit, typeSnapshot),
   })
+  if (outcome.status === 'taken') return null
 
   // Repair the stored index on adopt, the same way the primitive repairs a
   // missing type tag. It is an ordinary hand-editable property, but the READ
   // path now trusts it to place the set — so an index that disagrees with the
-  // slot this block's id was derived from would show the set in someone else's
+  // one this block's id was derived from would show the set in someone else's
   // row, or nowhere, while every write still resolved here. The derivation is
   // the authority; the property is its readable copy.
   if (outcome.status === 'adopted' && outcome.block.properties[FIELD.setIndex] !== index) {
     await tx.setProperty(outcome.id, setIndexProp, index)
   }
   return outcome.id
+}
+
+/** Fill in the set rows whose derived id was taken, in place.
+ *
+ *  Those rows need a block that is NOT the one their identity names, and
+ *  there is no second identity to derive — a fallback id could only ever be
+ *  chosen from what this device has synced, which is the one property a
+ *  derived id exists for. So: mint one, and make the NEXT run find it again
+ *  by what it says it is rather than by where it hashes to. That matters
+ *  because this whole write re-runs on every resync; minting blind would
+ *  append another set block each time, and each one an open todo Finish
+ *  refuses to complete the session around.
+ *
+ *  Only ever consulted for rows the derivation could not answer. What keeps a
+ *  hand-edited `strength:setIndex` from pointing two rows at one block is
+ *  `writeSetBlock`'s repair, which stamps every derived-adopted block with the
+ *  index its ID says it is before this scan reads any of them; skipping the
+ *  already-claimed ids below is a second fence behind that, unreachable while
+ *  the repair holds and cheap enough to keep the invariant stated locally. */
+const placeStraySets = async (
+  repo: Repo,
+  tx: Tx,
+  exerciseId: string,
+  ex: ExerciseDraft,
+  typeSnapshot: TypeSnapshot,
+  setIds: (string | null)[],
+): Promise<void> => {
+  const claimed = new Set(setIds.filter((id): id is string => id !== null))
+  const strays = new Map<number, BlockData>()
+  for (const child of await tx.childrenOf(exerciseId, undefined, {hidePropertyChildren: true})) {
+    if (claimed.has(child.id)) continue
+    const at = child.properties[FIELD.setIndex]
+    // First one wins, so two blocks claiming an index resolve the same way on
+    // every device: `childrenOf` orders by `(order_key, id)`, which is the
+    // same order every replica sees.
+    if (typeof at === 'number' && !strays.has(at)) strays.set(at, child)
+  }
+
+  for (const [index, id] of setIds.entries()) {
+    if (id !== null) continue
+    const spec = setSpec(exerciseId, ex.sets[index], index, ex.unit, typeSnapshot)
+    const stray = strays.get(index)
+    // Adopting, not rewriting: a stray holds a real logged set, and the whole
+    // reason to look for it is that it is not disposable.
+    setIds[index] = stray
+      ? (await adoptTypedBlock(repo, tx, stray, spec.types, typeSnapshot)).id
+      : await createTypedChild(repo, tx, spec)
+  }
 }
 
 /** One exercise entry + its set blocks, inside the caller's transaction.
@@ -284,8 +373,7 @@ const writeExercise = async (
     }
   }
 
-  const outcome = entryId !== undefined ? undefined : await getOrCreateTypedChild(repo, tx, {
-    identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, ex.occurrence),
+  const entrySpec = {
     parentId: workoutId,
     content: ex.exercise,
     types: [EXERCISE_ENTRY_TYPE],
@@ -296,21 +384,38 @@ const writeExercise = async (
       propertyValue(unitProp, ex.unit),
       ...(ex.prescribedWeight !== undefined ? [propertyValue(prescribedWeightProp, ex.prescribedWeight)] : []),
       ...(ex.prescribedSets !== undefined ? [propertyValue(prescribedSetsProp, ex.prescribedSets)] : []),
-      // The same number the block id above was derived from, written down so
-      // a reader can tell WHICH occurrence of the lift this is without
-      // counting siblings — which stops being the same thing the moment the
-      // user drags them past each other.
+      // The same number the block id is derived from, written down so a reader
+      // can tell WHICH occurrence of the lift this is without counting
+      // siblings — which stops being the same thing the moment the user drags
+      // them past each other.
       propertyValue(occurrenceProp, ex.occurrence),
     ],
-    // Positional records: this entry belongs to THIS workout, so a block the
-    // user dragged out of it is not the slot's occupant any more. Adopting
-    // one would write the session's sets into another tree, where
-    // `finishWorkout` — which reads the workout's children — can never see
-    // them again.
-    adoptable: block => block.parentId === workoutId,
     typeSnapshot,
+  }
+
+  const outcome = entryId !== undefined ? undefined : await getOrCreateTypedChild(repo, tx, {
+    identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, ex.occurrence),
+    // Positional records: this entry belongs to THIS workout, so a block the
+    // user dragged out of it is not this row's entry any more. Adopting one
+    // would write the session's sets into another tree, where `finishWorkout`
+    // — which reads the workout's children — can never see them again.
+    adoptable: block => block.parentId === workoutId,
+    ...entrySpec,
   })
-  const exId = outcome?.id ?? (entryId as string)
+
+  // The derived id is taken by a tombstone or by a block that left the
+  // workout, so this row needs an entry that is not the one its identity
+  // names. Minting is safe HERE and nowhere else in this file without a
+  // lookup beside it: the caller has already matched this row against the
+  // workout's existing entries (`matchLiveExercises`) and passed the answer in
+  // as `entryId`, so reaching this line means the lookup came back empty.
+  const created = outcome === undefined
+    ? undefined
+    : outcome.status === 'taken'
+      ? await createTypedChild(repo, tx, entrySpec)
+      : undefined
+  const exId = created ?? outcome?.id ?? (entryId as string)
+  const isNew = outcome?.status === 'created' || created !== undefined
 
   // Repair the stored occurrence on any block we did NOT just create — one
   // adopted by the derivation, or handed to us as the attached entry. The READ
@@ -318,18 +423,22 @@ const writeExercise = async (
   // row writing into it would show that row's sets under the other one. The
   // row a block is attached to is the authority: rows are claimed once, so the
   // numbers stay unique within a workout.
-  if (outcome?.status !== 'created') {
+  if (!isNew) {
     const before = await tx.get(exId)
     if (before && !before.deleted && before.properties[FIELD.occurrence] !== ex.occurrence) {
       await tx.setProperty(exId, occurrenceProp, ex.occurrence)
     }
   }
 
-  const setIds: string[] = []
+  const setIds: (string | null)[] = []
   for (const [i, s] of ex.sets.entries()) {
     setIds.push(await writeSetBlock(repo, tx, exId, s, i, ex.unit, typeSnapshot))
   }
-  return {id: exId, setIds}
+  // Only pays for the extra read when the derivation actually came up short —
+  // and on a brand-new entry it cannot, since nothing was under it to be in
+  // the way.
+  if (setIds.includes(null)) await placeStraySets(repo, tx, exId, ex, typeSnapshot, setIds)
+  return {id: exId, setIds: setIds as string[]}
 }
 
 // ──── live logging writes ────
@@ -346,10 +455,23 @@ const writeExercise = async (
  *  missing gets written.
  *
  *  The one thing it will NOT adopt is a workout already marked `done`. That
- *  is not tonight's log, it's this morning's, so the derivation falls through
- *  to the next slot — which is how "I did session A twice today" (or "I
- *  discarded the first attempt") stays representable while staying
- *  deterministic. */
+ *  is not tonight's log, it's this morning's — and "I did session A twice
+ *  today" (or "I discarded the first attempt and started over") has to stay
+ *  representable.
+ *
+ *  There is no second id to derive for that case. Nothing distinguishes the
+ *  evening's session from the morning's except which came first, and "which
+ *  came first" is only knowable from rows a device happens to hold — so an id
+ *  derived from it stops meaning the same thing on every device, which is the
+ *  one property a derived id is for. (Concretely: the device that had synced
+ *  the morning session would move to a second id while the device that hadn't
+ *  would create at the first, lose that insert to the server's row, and log
+ *  the evening into the morning's finished record.)
+ *
+ *  So the repeat session falls back to what the derivation was standing in for
+ *  in the first place: a LOOKUP — here, inside the transaction, where the
+ *  answer cannot change between the read and the write — and a minted id only
+ *  if the lookup comes back empty. */
 export const startWorkout = async (
   repo: Repo,
   workspaceId: string,
@@ -358,41 +480,42 @@ export const startWorkout = async (
 ): Promise<MaterializedWorkout> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
-    const workout = await getOrCreateTypedChild(repo, tx, {
-      identity: workoutIdentity(workspaceId, draft.day, draft.session),
+    const workoutSpec = {
       parentId: pageId,
       content: `${sessionLabel(draft.session)} · ${draft.day}`,
-      position: {kind: 'first'},
+      position: {kind: 'first'} as const,
       types: [WORKOUT_TYPE],
       properties: [
         propertyValue(sessionProp, draft.session),
         propertyValue(dateProp, dayToDate(draft.day)),
         propertyValue(statusProp, 'in-progress'),
       ],
-      // Adopt only a block the LOGGING VIEW would show for this slot, which
-      // means every field `buildLiveWorkouts` filters or files on, not just
-      // the status:
-      //
-      //  - `=== 'in-progress'`, not `!== 'done'` — a missing or unreadable
-      //    status is not tonight's log either;
-      //  - the date has to decode AND land on this day — `buildLiveWorkouts`
-      //    skips an undecodable one and files a valid one under whatever day
-      //    it names;
-      //  - the session has to match, for the same reason.
-      //
-      // Anything else is a block the view can never render, so writing the
-      // session into it means logging into thin air: the sets land, nothing
-      // shows them, and Finish waits forever for a live workout whose id
-      // matches. The date and session can drift from the id that derived them
-      // by an ordinary hand-edit in the outline.
-      adoptable: block =>
-        block.properties[FIELD.status] === 'in-progress'
-        && block.properties[FIELD.session] === draft.session
-        && liveDay(block.properties[FIELD.date]) === draft.day,
       typeSnapshot,
+    }
+    const derived = await getOrCreateTypedChild(repo, tx, {
+      identity: workoutIdentity(workspaceId, draft.day, draft.session),
+      adoptable: block => isTonightsLog(block, draft),
+      ...workoutSpec,
     })
 
-    // When the workout was ADOPTED it already has entries, and they are not
+    // `taken` — the day's first session of this type is finished, discarded,
+    // or hand-edited out of shape, and this is the second. Continue the one
+    // already standing if there is one (the same block the logging view would
+    // be showing), and only then start a new one.
+    const standing = derived.status !== 'taken'
+      ? undefined
+      : (await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
+        // Newest first: `startWorkout` files each session at the top, and
+        // `childrenOf` orders by `(order_key, id)` — the same order on every
+        // replica, so two devices resolve a tie identically.
+        .find(block => block.id !== derived.id && isTonightsLog(block, draft))
+    const workout = derived.status !== 'taken'
+      ? derived
+      : standing !== undefined
+        ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
+        : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
+
+    // A workout we did not just create already has entries, and they are not
     // necessarily the ones this draft would derive: a session logged while the
     // plan outline was unreadable is keyed on each lift's NAME, and the same
     // draft keys on plan blocks once the outline resolves (or the reverse, on a

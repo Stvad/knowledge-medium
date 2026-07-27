@@ -685,7 +685,7 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(repo.block(second.workoutId).peekProperty(sessionProp)).toBe('A')
   })
 
-  it('does not adopt a workout already marked done — a second "start" that day takes the next slot', async () => {
+  it('does not adopt a workout already marked done — a second "start" that day gets its own block', async () => {
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
 
     const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
@@ -696,6 +696,61 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(second.workoutId).not.toBe(first.workoutId)
     expect(repo.block(first.workoutId).peekProperty(statusProp)).toBe('done')
     expect(repo.block(second.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('continues the day\'s second session rather than starting a third each time it re-runs', async () => {
+    // The repeat session's id is MINTED — there is nothing left to derive it
+    // from that means the same thing on two devices (see `startWorkout`). So
+    // its idempotency comes from the lookup instead, and this is the property
+    // that lookup exists for: `startWorkout` re-runs on every resync, and a
+    // mint with no lookup in front of it would append another workout — with a
+    // full set of open todo sets — each time.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)])])
+    const morning = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await finishWorkout(repo, morning.workoutId)
+
+    const evening = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, evening.exercises[0].setIds[0], {weight: 225, reps: 3, done: true}, 'lb'))
+      .toBe('written')
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(again.workoutId).toBe(evening.workoutId)
+    expect(again.exercises[0].id).toBe(evening.exercises[0].id)
+    expect(again.exercises[0].setIds).toEqual(evening.exercises[0].setIds)
+    // …and the re-run's prescription did not land on top of what was logged.
+    expect(repo.block(evening.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(225)
+    expect(await liveChildren(PAGE_ID, WORKOUT_TYPE)).toHaveLength(2)
+  })
+
+  it('starts a third session rather than continuing one that is finished too', async () => {
+    // The lookup uses the same predicate as the derived path's `adoptable`, so
+    // "the session the view would show" cannot mean two different things
+    // depending on which way the workout was found.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await finishWorkout(repo, first.workoutId)
+    const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await finishWorkout(repo, second.workoutId)
+
+    const third = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(new Set([first.workoutId, second.workoutId, third.workoutId]).size).toBe(3)
+    expect(repo.block(third.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('does not continue a repeat session belonging to another day or session type', async () => {
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const finished = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await finishWorkout(repo, finished.workoutId)
+    // A live session sitting on the same page, but a different day — the
+    // lookup scans the whole page, so filtering it is the lookup's job.
+    const otherDay = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])], {day: '2026-07-25'}))
+
+    const repeat = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(repeat.workoutId).not.toBe(otherDay.workoutId)
+    expect(repo.block(repeat.workoutId).peekProperty(dateProp)).toEqual(dayToDate('2026-07-24'))
   })
 })
 
@@ -1127,5 +1182,89 @@ describe('a set buried under the workout itself', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'bury a set under the workout'})
 
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+})
+
+/**
+ * A row whose derived id is taken has to be given a MINTED block, because
+ * there is no second id to derive that means the same thing on every device.
+ * The cost of minting is that it is not idempotent by itself — and every
+ * write in this file re-runs whenever the view resyncs. So each mint is
+ * paired with a lookup that finds it again by what it SAYS it is.
+ */
+describe('a row whose derived block is gone gets a minted one — once', () => {
+  it('re-finds the replacement for a deleted middle set instead of minting another', async () => {
+    const draft = workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8), draftSet(135, 8)]),
+    ])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const entryId = started.exercises[0].id
+    const middle = started.exercises[0].setIds[1]
+    await repo.tx(tx => tx.delete(middle), {scope: ChangeScope.BlockDefault, description: 'delete the middle set'})
+
+    const refilled = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const replacement = refilled.exercises[0].setIds[1]
+    expect(await writeSet(repo, replacement, {weight: 225, reps: 2, done: true}, 'lb')).toBe('written')
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(replacement).not.toBe(middle)
+    expect(again.exercises[0].setIds).toEqual(refilled.exercises[0].setIds)
+    expect(await liveChildren(entryId, SET_TYPE)).toHaveLength(3)
+    // Adopted, not rewritten: the whole reason to look for it is that it holds
+    // a set the user logged.
+    expect(repo.block(replacement).peekProperty(weightProp)).toBe(225)
+  })
+
+  it('does not let a hand-edited index pull a block into a second row', async () => {
+    // The stray lookup keys on `strength:setIndex`, which is hand-editable —
+    // so a block claiming an index it does not own could be handed to a second
+    // row, and two draft rows sharing one block means the second one's edit
+    // silently overwrites the first's set. What prevents it is the repair in
+    // `writeSetBlock`: a block adopted by derivation is stamped with the index
+    // its ID says it is, BEFORE the stray scan reads any of them. (Mutating
+    // that repair away is what fails this test — the `claimed` guard in
+    // `placeStraySets` is a second fence behind it, not the load-bearing one.)
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)])])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const entryId = started.exercises[0].id
+    const [first, second] = started.exercises[0].setIds
+    // Row 0's block leaves the entry, so its derived id is taken; row 1's
+    // block stays put but is hand-edited to claim index 0.
+    await repo.tx(async tx => {
+      await tx.setProperty(second, setIndexProp, 0)
+      await tx.delete(first)
+    }, {scope: ChangeScope.BlockDefault, description: 'delete row 0, point row 1 at index 0'})
+
+    const refilled = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(refilled.exercises[0].setIds[1]).toBe(second)
+    expect(refilled.exercises[0].setIds[0]).not.toBe(second)
+    expect(new Set(refilled.exercises[0].setIds).size).toBe(2)
+    // …and the derivation, not the hand-edit, is what the block ends up saying.
+    expect(repo.block(second).peekProperty(setIndexProp)).toBe(1)
+  })
+
+  it('re-matches a minted entry rather than minting a second one', async () => {
+    // The entry's derived id is taken (its block was dragged out of the
+    // workout), so the row is given a minted entry. On the next run the
+    // derivation is still taken — `matchLiveExercises` is what has to find the
+    // replacement, and it does it by lift + occurrence, off the workout's own
+    // children.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const derivedEntry = started.exercises[0].id
+    await repo.tx(tx => tx.delete(derivedEntry),
+      {scope: ChangeScope.BlockDefault, description: 'delete the entry'})
+
+    const minted = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, minted.exercises[0].setIds[0], {weight: 205, reps: 5, done: true}, 'lb'))
+      .toBe('written')
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(minted.exercises[0].id).not.toBe(derivedEntry)
+    expect(again.exercises[0].id).toBe(minted.exercises[0].id)
+    expect(again.exercises[0].setIds).toEqual(minted.exercises[0].setIds)
+    expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+    expect(repo.block(minted.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(205)
   })
 })
