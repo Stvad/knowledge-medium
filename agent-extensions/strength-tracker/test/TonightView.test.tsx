@@ -1054,6 +1054,35 @@ describe('TonightView', () => {
     expect(screen.getByText(/Logged A · upper/)).toBeTruthy()
   })
 
+  it('does not wipe a session that arrived while the discard was in flight', async () => {
+    // Discarding lets go of OUR workout, but a peer's session can be adopted
+    // onto the slot before the delete resolves. Resetting the draft to the
+    // prescription regardless hid the replacement's logged values behind
+    // defaults with nothing left to bring them back — its emission had
+    // already run the overlay, so no dependency changes afterwards. Same rule
+    // Finish follows.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
+    mount(backend)
+    await emit()
+
+    let landDiscard: () => void = () => {}
+    vi.mocked(store.discardWorkout).mockImplementationOnce(
+      () => new Promise<'discarded'>(resolve => { landDiscard = () => resolve('discarded') }),
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await waitFor(() => expect(store.discardWorkout).toHaveBeenCalled())
+
+    backend.startNextWorkout('w2')
+    backend.seed('Bench press', [{weight: 245, reps: 3, done: true}])
+    await emit()
+    await act(async () => { landDiscard() })
+
+    // 245 is what the replacement's blocks hold; 185 was ours; the
+    // prescription would fill in 185 too, so the tick is the tell-tale.
+    await waitFor(() => expect(weights()[0].value).toBe('245'))
+    expect(checkboxes()[0].checked).toBe(true)
+  })
+
   it('does not leave a value on screen that a failed discard cancelled', async () => {
     // Discard cancels the creates whose blocks it is about to tombstone, and
     // one that resolves in that window yields no block — which `persist`

@@ -956,6 +956,28 @@ describe('materializeExercise — explicit entryId', () => {
     expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
   })
 
+  it('re-matches when the entry it was handed is stale, instead of minting each time', async () => {
+    // The caller's `entryId` is whatever the LIVE QUERY last showed, so it can
+    // name an entry deleted since. `writeExercise` rejects it, finds the
+    // derived id taken by the tombstone, and mints — and with the lookup
+    // skipped on the strength of the supplied id, nothing stands in front of
+    // that mint, so every retry appends another lift with a full set of open
+    // todo sets.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    const stale = started.exercises[0].id
+    await repo.tx(tx => tx.delete(stale),
+      {scope: ChangeScope.BlockDefault, description: 'a peer deletes the entry'})
+
+    const ex = exerciseDraft('Bench press', [draftSet(135, 8)])
+    const first = await materializeExercise(repo, started.workoutId, ex, stale)
+    const second = await materializeExercise(repo, started.workoutId, ex, stale)
+
+    expect(first.id).not.toBe(stale)
+    expect(second.id).toBe(first.id)
+    expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+  })
+
   it('ignores an attached entry that is no longer in this workout', async () => {
     // The entry can be dragged out of the session (or deleted) after the
     // snapshot the caller is holding. Writing sets under it anyway puts them

@@ -189,6 +189,25 @@ const isTonightsLog = (block: BlockData, draft: WorkoutDraft): boolean =>
   && block.properties[FIELD.session] === draft.session
   && liveDay(block.properties[FIELD.date]) === draft.day
 
+/** The entry a row SAYS it is attached to, if that is still true: live, and
+ *  still a child of this workout. `null` otherwise.
+ *
+ *  One definition, because two places have to agree about it. A row's
+ *  attachment comes from the live query, which can be behind — the entry may
+ *  have been deleted or dragged out since — and the two consequences of
+ *  believing it anyway are different sizes. `writeExercise` believing it
+ *  writes the sets somewhere `finishWorkout` never scans; `materializeExercise`
+ *  believing it skips its in-transaction lookup, so the mint underneath has
+ *  nothing in front of it and every retry appends another copy of the lift. */
+const stillAttached = async (
+  tx: Tx,
+  entryId: string,
+  workoutId: string,
+): Promise<BlockData | null> => {
+  const block = await tx.get(entryId)
+  return block && !block.deleted && block.parentId === workoutId ? block : null
+}
+
 /** One entry per lift in a workout — keyed on the plan block where there is
  *  one, so a lift renamed mid-session stays the same entry. `occurrence`
  *  separates two rows of the same lift in one session; without it the second
@@ -360,8 +379,8 @@ const writeExercise = async (
   // `finishWorkout` never scans, and the tap would vanish from the session.
   // Fall back to deriving, which puts them where the workout can see them.
   if (entryId !== undefined) {
-    const attached = await tx.get(entryId)
-    if (!attached || attached.deleted || attached.parentId !== workoutId) entryId = undefined
+    const attached = await stillAttached(tx, entryId, workoutId)
+    if (!attached) entryId = undefined
     // Re-tag it, the way `getOrCreateTypedChild` re-tags what it adopts. This
     // shortcut skips that, so an entry whose type tag went missing was still
     // accepted on liveness and parentage alone — and then written into. The
@@ -638,7 +657,15 @@ export const materializeExercise = async (
     // level down: `startWorkout` claims entries for every row at once, so its
     // claims are exclusive, and a per-row lookup inside `writeExercise` could
     // hand one entry to two of them.
-    const matched = entryId ?? matchLiveExercises(
+    // …and only an attachment that still HOLDS may skip it. The caller's
+    // `entryId` is whatever the live query last showed, so it can name an
+    // entry that has since been deleted or dragged out of this workout —
+    // `writeExercise` then rejects it, finds the derived id taken by the
+    // tombstone, and mints. With the lookup skipped there is nothing in front
+    // of that mint, so the next retry mints again: one duplicate lift, with a
+    // full set of open todo sets, per attempt.
+    const attached = entryId !== undefined ? await stillAttached(tx, entryId, workoutId) : null
+    const matched = attached?.id ?? matchLiveExercises(
       [{definitionId: ex.definitionId, exercise: ex.exercise, occurrence: ex.occurrence}],
       await liveEntriesOf(tx, workoutId),
     )[0]?.id

@@ -811,7 +811,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         if (failed.slot !== slot) continue
         if (failed.workout === wid || failed.workout === null) failedRef.current.delete(id)
       }
-      setDraft(buildDraft(prescription, unit))
+      // Back to the bare prescription only if the evening is actually empty
+      // now. `abandon` above let go of this workout, but a peer's session can
+      // be adopted onto the slot while the delete is in flight — and wiping
+      // the draft then hides ITS logged values behind defaults with nothing
+      // left to bring them back, because its emission already ran the overlay
+      // and no dependency changes afterwards. Same rule Finish follows: reset
+      // what we let go of, re-derive over what took its place.
+      if (coordinator.workoutId() === null) setDraft(buildDraft(prescription, unit))
+      else setResync(n => n + 1)
       // The store refuses to discard a session that is already finished —
       // someone else finished it between this screen rendering and the tap.
       // Letting go of it is still right (it is not ours to write into any
