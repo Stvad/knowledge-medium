@@ -806,6 +806,26 @@ describe('materializeExercise — explicit entryId', () => {
     expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
   })
 
+  it('refuses to add a lift to a workout that has been finished', async () => {
+    // A peer can finish between switching an `or`-group and this create
+    // landing. Building an entry with a full set of OPEN todo sets under a
+    // completed record strands them: the record omits them, nothing renders
+    // them, and a retry adopts the same unusable tree.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    expect(await writeSet(repo, started.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    await finishWorkout(repo, started.workoutId)
+
+    await expect(materializeExercise(
+      repo,
+      started.workoutId,
+      exerciseDraft('Landmine press', [draftSet(95, 8)], {definitionId: 'def-lm', occurrence: 1}),
+    )).rejects.toThrow(/no longer in progress/)
+
+    expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+  })
+
   it('backfills the plan-block ref onto an entry that was logged without one', async () => {
     // `strength:definition` is an optional-ref, so it projects a real
     // reference: a definition block's backlinks are that lift's whole logged

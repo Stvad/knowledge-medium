@@ -62,6 +62,7 @@ const createBackend = () => {
    *  actually have. */
   const entries = new Map<string, LiveExercise>()
   let started = false
+  let workoutId = 'w1'
   let session: SessionType = 'A'
   let finished = false
   /** Writes park here while a test holds them, so it can decide what happens
@@ -119,7 +120,13 @@ const createBackend = () => {
      *  `in-progress` — which is the emission that matters most here, because
      *  "no live workout" and "the query is behind" look identical. */
     live: (): LiveWorkout[] =>
-      started && !finished ? [{id: 'w1', day: DAY, session, exercises: [...entries.values()]}] : [],
+      started && !finished ? [{id: workoutId, day: DAY, session, exercises: [...entries.values()]}] : [],
+
+    /** A different workout on the same evening — what a peer finishing ours
+     *  and starting the next one looks like from here. */
+    replaceWorkout: (nextId: string) => {
+      workoutId = nextId
+    },
 
     /** Which session the in-progress workout belongs to. */
     setSession: (next: SessionType) => {
@@ -492,6 +499,46 @@ describe('TonightView', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0][5]).toBe('w1')               // A's workout, not B's absence
     expect(backend.setById('e:Bench press|0')).toMatchObject({done: true})
+  })
+
+  it('still reports a failure from the tap that created the workout', async () => {
+    // The first tap of the night starts with no workout at all, and by the
+    // time its write fails the create it triggered has produced one. That
+    // operation belongs to the workout it made, so its failure has to be
+    // shown — a stricter "must equal the current workout" would swallow the
+    // one failure the user most needs to see.
+    let failWrite: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failWrite = reject }),
+    )
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalled())
+
+    await act(async () => { failWrite(new Error('offline')) })
+    expect(screen.getByText(/Could not save that/)).toBeTruthy()
+  })
+
+  it('does not put a replaced workout\'s failure on the one that took its place', async () => {
+    // A peer finished ours and started the next one: same day, same session,
+    // different workout. The slot comparison alone let a late rejection from
+    // the first land on the second's screen, where nothing could clear it.
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    let failFirst: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failFirst = reject }),
+    )
+    fireEvent.click(checkboxes()[0])            // against w1, still pending
+    await act(async () => {})
+
+    backend.replaceWorkout('w2')                // the peer's next session arrives
+    await emit()
+
+    await act(async () => { failFirst(new Error('offline')) })
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
   })
 
   it('does not put a left session\'s failure on the screen you switched to', async () => {

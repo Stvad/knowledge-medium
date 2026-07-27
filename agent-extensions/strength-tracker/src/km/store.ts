@@ -432,8 +432,18 @@ export const materializeExercise = async (
   entryId?: string,
 ): Promise<ExerciseEntryIds> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot, entryId),
-    {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
+  return repo.tx(async tx => {
+    // The workout has to still be tonight's log. Another client can finish it
+    // in the moment between switching an `or`-group and this create landing,
+    // and building an entry with a full set of OPEN todo sets under a
+    // completed record leaves them stranded there: the record omits them,
+    // nothing renders them, and a retry adopts the same unusable tree.
+    const workout = await tx.get(workoutId)
+    if (!workout || workout.deleted || workout.properties[FIELD.status] !== 'in-progress') {
+      throw new Error(`materializeExercise: workout ${workoutId} is no longer in progress`)
+    }
+    return writeExercise(repo, tx, workoutId, ex, typeSnapshot, entryId)
+  }, {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
 }
 
 /** Persist the fields of one set that actually changed, merged over what the

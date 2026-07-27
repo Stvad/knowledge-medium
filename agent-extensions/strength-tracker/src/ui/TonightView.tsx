@@ -56,6 +56,15 @@ const SESSION_LABELS: Record<SessionType, string> = {A: 'A · upper', B: 'B · l
  *  it tells the user to tap again, and leaving it up after the tap worked
  *  invites the second, reversing tap. */
 const WRITE_FAILED = 'Could not save that — check the connection and tap it again.'
+
+/** Which session and which workout an operation was started against. Captured
+ *  once, at the tap, and carried — reconstructing it from whatever the view
+ *  happens to be showing when a promise settles is how a write for one
+ *  evening's log ended up reported on another's. */
+interface OpContext {
+  slot: string
+  workout: string | null
+}
 const SHOULDER_CHECK_EVERY = 4
 
 interface Props {
@@ -134,17 +143,24 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  what Finish flushes — it races it. Left unwaited, Finish could finalize
    *  and release the session while that edit was still in the air, and a
    *  failure had nowhere left to be retried. */
-  const pendingRef = useRef(new Map<Promise<unknown>, string>())
-  const track = <T,>(work: Promise<T>): Promise<T> => {
-    // Tagged with the SLOT it belongs to. The coordinator deliberately lets a
-    // write for the session you just left finish on its own, so a Finish on
-    // the session you switched TO must not wait for it — nor be blocked by
-    // its failure, which belongs to a different evening's log.
-    pendingRef.current.set(work, slot)
+  const pendingRef = useRef(new Map<Promise<unknown>, OpContext>())
+  const track = <T,>(work: Promise<T>, forOp: OpContext): Promise<T> => {
+    pendingRef.current.set(work, forOp)
     const done = () => { pendingRef.current.delete(work) }
     work.then(done, done)
     return work
   }
+
+  /** Does this operation belong to what is on screen right now?
+   *
+   *  Slot AND workout, because both can move under an operation in flight:
+   *  switching sessions changes the slot, and a peer finishing ours and
+   *  starting the next one changes the workout while the slot stays put. An
+   *  operation that began before any workout existed (`null`) can only belong
+   *  to the current attempt on its slot, so it matches whatever is there. */
+  const belongsHere = (forOp: OpContext): boolean =>
+    forOp.slot === slotRef.current
+    && (forOp.workout === null || forOp.workout === coordinator.workoutId())
 
   // "Which block does this set write to, and what has to be created first" —
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
@@ -342,8 +358,8 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  on the screen you switched TO, it could never be cleared from there
    *  (the marker is keyed to the other slot) and just sat there inviting a
    *  second, reversing tap. */
-  const reportFor = (forSlot: string) => (error: unknown) => {
-    if (forSlot !== slotRef.current) {
+  const reportFor = (forOp: OpContext) => (error: unknown) => {
+    if (!belongsHere(forOp)) {
       console.error('[strength] write failed on a session no longer shown', error)
       return
     }
@@ -353,7 +369,8 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
-    void track(persist(next, exIdx, setIdx, patch)).catch(reportFor(slot))
+    const forOp: OpContext = {slot, workout: coordinator.workoutId()}
+    void track(persist(next, exIdx, setIdx, patch), forOp).catch(reportFor(forOp))
   }
 
   const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
@@ -391,6 +408,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // found no workout and CREATED one — the screen said "Discarded" while a
     // fresh, fully-accepted workout survived at the next slot.
     const at = coordinator.generation()
+    const forOp: OpContext = {slot, workout: coordinator.workoutId()}
     void track((async () => {
       try {
         let rows: readonly DraftExercise[] = next
@@ -402,7 +420,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       } finally {
         for (const key of batch) endWrite(key)
       }
-    })()).catch(reportFor(slot))
+    })(), forOp).catch(reportFor(forOp))
   }
 
   const finish = async () => {
@@ -427,7 +445,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // only acceptance, so that number is not something it would write
       // itself. Finalizing around it meant the session could be logged and
       // released with the edit still in flight.
-      const mine = [...pendingRef.current].filter(([, forSlot]) => forSlot === slot).map(([work]) => work)
+      const mine = [...pendingRef.current].filter(([, forOp]) => belongsHere(forOp)).map(([work]) => work)
       if (mine.length > 0) await Promise.allSettled(mine)
       const failedHere = [...failedRef.current].filter(
         key => key.startsWith(`${slot}|${coordinator.workoutId() ?? 'new'}|`),
