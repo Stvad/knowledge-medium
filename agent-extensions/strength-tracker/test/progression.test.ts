@@ -21,6 +21,39 @@ const CONFIG = {sets: 3, repMax: 10, freeform: false, increment: 5}
 const at = (weight: number, ...reps: number[]): SetRecord[] =>
   reps.map(r => ({weight, reps: r}))
 
+describe('lastEntryFor with a lift prescribed twice', () => {
+  const twice = (): WorkoutRecord[] => [{
+    id: 'w1', date: '2026-07-20T18:00:00.000Z', session: 'A',
+    exercises: [
+      {exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(225, 5, 5)},
+      {exercise: 'Squat', definitionId: 'def-squat', occurrence: 1, sets: at(185, 8, 8)},
+    ],
+  }]
+
+  it('gives each occurrence its own baseline', () => {
+    // Both rows took the FIRST match, so the back-off row progressed off the
+    // heavy row's weight — and reordering the finished entry blocks swapped
+    // which weight both rows were built on.
+    expect(workingWeight(lastEntryFor(twice(), 'Squat', 'def-squat', 0)!.entry)).toBe(225)
+    expect(workingWeight(lastEntryFor(twice(), 'Squat', 'def-squat', 1)!.entry)).toBe(185)
+  })
+
+  it('is unmoved by the order the entries happen to be in', () => {
+    const reordered = twice()
+    reordered[0].exercises = [...reordered[0].exercises].reverse()
+    expect(workingWeight(lastEntryFor(reordered, 'Squat', 'def-squat', 0)!.entry)).toBe(225)
+    expect(workingWeight(lastEntryFor(reordered, 'Squat', 'def-squat', 1)!.entry)).toBe(185)
+  })
+
+  it('falls back to the first match for records written before the number existed', () => {
+    const legacy: WorkoutRecord[] = [{
+      id: 'w0', date: '2026-07-13T18:00:00.000Z', session: 'A',
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', sets: at(205, 5)}],
+    }]
+    expect(workingWeight(lastEntryFor(legacy, 'Squat', 'def-squat', 1)!.entry)).toBe(205)
+  })
+})
+
 describe('workingWeight', () => {
   it('takes the modal weight', () => {
     expect(workingWeight(bench([...at(135, 10, 10), ...at(115, 12)]))).toBe(135)

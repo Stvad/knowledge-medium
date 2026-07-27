@@ -71,10 +71,20 @@ export const lastEntryFor = (
   history: readonly WorkoutRecord[],
   exercise: string,
   defId?: string,
+  /** Which time in the session this row is, when the caller knows. A session
+   *  can prescribe one lift twice at two different loads, and taking the first
+   *  match gave BOTH of tomorrow's rows the same baseline — so the second
+   *  progressed off the first's weight, and reordering the finished entries
+   *  could swap which. Records written before entries stored the number fall
+   *  back to the first match, which is all there is to go on. */
+  occurrence?: number,
 ): {workout: WorkoutRecord; entry: ExerciseRecord} | undefined => {
   let best: {workout: WorkoutRecord; entry: ExerciseRecord} | undefined
   for (const workout of history) {
-    const entry = workout.exercises.find(e => entryMatches(e, exercise, defId))
+    const candidates = workout.exercises.filter(e => entryMatches(e, exercise, defId))
+    const entry = (occurrence !== undefined
+      ? candidates.find(e => e.occurrence === occurrence)
+      : undefined) ?? candidates[0]
     if (!entry || entry.sets.length === 0) continue
     if (!best || workout.date > best.workout.date) best = {workout, entry}
   }

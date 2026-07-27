@@ -108,6 +108,7 @@ export const buildHistory = (
       exercises: entries.map(entry => ({
         exercise: str(entry, FIELD.exercise),
         definitionId: optStr(entry, FIELD.definition),
+        occurrence: optNum(entry, FIELD.occurrence),
         prescribedWeight: optNum(entry, FIELD.prescribedWeight),
         prescribedSets: optNum(entry, FIELD.prescribedSets),
         sets: (setsByExercise.get(entry.id) ?? [])

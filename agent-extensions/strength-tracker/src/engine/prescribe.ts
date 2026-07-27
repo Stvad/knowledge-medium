@@ -61,10 +61,11 @@ const prescribeExercise = (
   reentry: ReentryStatus | undefined,
   day: string,
   config: ProgramConfig,
+  occurrence: number,
 ): PrescribedExercise => {
   const sets = setsFor(exercise, reentry)
   const {repMin, repMax} = repsFor(exercise, reentry)
-  const last = lastEntryFor(basis, exercise.name, exercise.defId)
+  const last = lastEntryFor(basis, exercise.name, exercise.defId, occurrence)
   const lastWeight = last ? workingWeight(last.entry) : undefined
   const lastTime = last && lastWeight !== undefined
     ? {
@@ -174,9 +175,17 @@ export const prescribe = (input: PrescribeInput): Prescription => {
     return reentry ? d <= cutoff : d < cutoff
   })
 
+  // Counted the same way `buildDraft` counts it, over the same list: a lift
+  // prescribed twice is two rows, and each progresses off ITS OWN history.
+  const seen = new Map<string, number>()
   const exercises = config.exercises
     .filter(e => e.session === session)
-    .map(e => prescribeExercise(e, basis, reentry, day, config))
+    .map(e => {
+      const key = e.defId ?? e.name
+      const occurrence = seen.get(key) ?? 0
+      seen.set(key, occurrence + 1)
+      return prescribeExercise(e, basis, reentry, day, config, occurrence)
+    })
 
   const notes = [
     ...(config.sessionNotes[session] ?? []),

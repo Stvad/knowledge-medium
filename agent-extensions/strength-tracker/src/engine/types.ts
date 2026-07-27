@@ -172,6 +172,10 @@ export interface ExerciseRecord {
   exercise: string
   /** The plan block this was performed from, when known. */
   definitionId?: string
+  /** Which time in ITS session this lift was — the number the entry block
+   *  stores. Absent on entries written before that property existed, where
+   *  there is nothing better than "the first one that matches". */
+  occurrence?: number
   /** What the engine asked for at the time. Kept so progression judges
    *  "all prescribed sets" against the prescription that was actually
    *  live, not against today's config. */
