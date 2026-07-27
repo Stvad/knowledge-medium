@@ -484,7 +484,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         let rows: readonly DraftExercise[] = next
         for (const j of pending) {
           if (coordinator.generation() !== at) break
-          const patch = await persist(rows, exIdx, j, {done: true, completedAt: now}, forOp)
+          // One context per SET, not one for the batch. `persist` writes the
+          // set and fields it is about into the context it is given, so a
+          // shared one ends the loop describing whichever set went last — and
+          // the success recorded for the first then claimed to be about the
+          // last. An earlier failure on a set this batch had just re-saved was
+          // reported as unsaved, and Finish paused over it.
+          const patch = await persist(rows, exIdx, j, {done: true, completedAt: now}, nextOp())
           if (patch) rows = applyIdPatch(rows, patch)
         }
       } finally {

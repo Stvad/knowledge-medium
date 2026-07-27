@@ -11,6 +11,7 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
 
 import {useBlockQuery, useHandle} from '@/hooks/block.js'
+import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 
 import {prescribe} from '../engine/prescribe'
@@ -130,6 +131,17 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     }
   }, [repo, workspaceId, pageId, reloadKey])
 
+  // ONE query for the whole workout tree, not one per type.
+  //
+  // `types` is any-of, so this is a single consistent snapshot of workouts,
+  // entries and sets. Three separate queries were three separate loads that
+  // reload INDEPENDENTLY, and the overlay reads a workout with no entries as
+  // an authoritative deletion — so in the window where the workout query had
+  // published a new (or replacement) workout and the entry query had not yet
+  // published its children, tonight's logged values were replaced on screen
+  // by the prescription's defaults, and a tap could land in that window.
+  // There is no such window to reason about when there is one answer.
+  //
   // `useHandle` rather than `useBlockQuery`, for the one thing the latter
   // throws away: it collapses an UNRESOLVED query to `[]`, which is the same
   // value a resolved-and-empty one gives. Those mean opposite things to a
@@ -137,22 +149,39 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
   // sets any more" — and every attempt to guess between them from the data
   // alone contradicted itself, because there is nothing in `[]` to tell them
   // apart. `undefined` says it outright.
-  const workoutRows = useHandle(repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}))
-  const exerciseRows = useHandle(repo.query.typedBlocks({workspaceId, types: [EXERCISE_ENTRY_TYPE]}))
-  const setRows = useHandle(repo.query.typedBlocks({workspaceId, types: [SET_TYPE]}))
+  const treeRows = useHandle(repo.query.typedBlocks({
+    workspaceId,
+    types: [WORKOUT_TYPE, EXERCISE_ENTRY_TYPE, SET_TYPE],
+  }))
   const layoffRows = useBlockQuery({workspaceId, types: [LAYOFF_TYPE]})
 
-  /** All three block queries behind the live workout have answered at least
-   *  once. Until they have, an absence is silence, not news. */
-  const liveLoaded = workoutRows !== undefined && exerciseRows !== undefined && setRows !== undefined
+  /** The blocks behind the live workout have answered. Until they have, an
+   *  absence is silence, not news. */
+  const liveLoaded = treeRows !== undefined
+
+  // Split by the same predicate the query selected on. Tested where it can be
+  // seen: a set block is deliberately a `todo` as well, so "carries this type"
+  // is the question, never "is only this type".
+  type TreeRow = NonNullable<typeof treeRows>[number]
+  const tree = useMemo(() => {
+    const workouts: TreeRow[] = []
+    const exercises: TreeRow[] = []
+    const sets: TreeRow[] = []
+    for (const row of treeRows ?? []) {
+      if (hasBlockType(row, WORKOUT_TYPE)) workouts.push(row)
+      if (hasBlockType(row, EXERCISE_ENTRY_TYPE)) exercises.push(row)
+      if (hasBlockType(row, SET_TYPE)) sets.push(row)
+    }
+    return {workouts, exercises, sets}
+  }, [treeRows])
 
   const history = useMemo(
-    () => buildHistory(workoutRows ?? [], exerciseRows ?? [], setRows ?? []),
-    [workoutRows, exerciseRows, setRows],
+    () => buildHistory(tree.workouts, tree.exercises, tree.sets),
+    [tree],
   )
   const liveWorkouts = useMemo(
-    () => buildLiveWorkouts(workoutRows ?? [], exerciseRows ?? [], setRows ?? []),
-    [workoutRows, exerciseRows, setRows],
+    () => buildLiveWorkouts(tree.workouts, tree.exercises, tree.sets),
+    [tree],
   )
   const layoffs = useMemo(() => buildLayoffs(layoffRows), [layoffRows])
 

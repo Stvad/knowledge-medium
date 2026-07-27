@@ -668,6 +668,33 @@ describe('TonightView', () => {
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
   })
 
+  it('lets each write in a batch answer for its own set', async () => {
+    // "all ✓" ran every set through ONE operation context, and `persist`
+    // rewrites that context's set as it goes — so by the end of the loop the
+    // success recorded for set 1 claimed to be about set 2. An earlier
+    // failure on set 1, which the batch had just re-saved, was then reported
+    // as unsaved and made Finish pause over it.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    let failFirst: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failFirst = reject }),
+    )
+    fireEvent.click(checkboxes()[0])        // un-tick set 1 — parked, and will fail
+    await act(async () => {})
+
+    fireEvent.click(screen.getByRole('button', {name: 'all ✓'}))
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(3))
+
+    await act(async () => { failFirst(new Error('offline')) })
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+  })
+
   it('does not let one session\'s write settle the other session\'s failure', async () => {
     // Two sessions of the same week can prescribe the SAME lift, and the
     // change a write is about is named by lift and set index — so A's first

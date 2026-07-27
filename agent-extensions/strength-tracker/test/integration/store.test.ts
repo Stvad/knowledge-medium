@@ -28,7 +28,7 @@ import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {toLiveSet, buildLiveWorkouts} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
-import {EXERCISE_ENTRY_TYPE, SET_TYPE} from '../../src/km/fields'
+import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
@@ -888,5 +888,40 @@ describe('materializeExercise — explicit entryId', () => {
     )
 
     expect(repo.block(entryId).peekProperty(definitionProp)).toBe('def-original')
+  })
+})
+
+describe('the workout tree as ONE query', () => {
+  it('answers for workouts, entries and sets together, and each row sorts by the type it carries', async () => {
+    // `useProgram` reads the whole tree through a single `types: [...]` query
+    // so that a workout can never be on screen ahead of its own children —
+    // three independent queries reload independently, and the overlay reads a
+    // workout with no entries as an authoritative deletion, so tonight's
+    // logged values were briefly replaced by the prescription's defaults.
+    //
+    // That rests on two things worth checking against the real query rather
+    // than reading them off the SQL: `types` is ANY-of, and the rows it hands
+    // back still say which types they carry, so they can be sorted after the
+    // fact. A set block is deliberately a `todo` as well — "carries this type"
+    // has to be the question, never "is only this type".
+    const started = await startWorkout(
+      repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 8)])]),
+    )
+    const entryId = started.exercises[0].id
+    const setId = started.exercises[0].setIds[0]
+
+    const rows = (await repo.query.typedBlocks({
+      workspaceId: WORKSPACE_ID,
+      types: [WORKOUT_TYPE, EXERCISE_ENTRY_TYPE, SET_TYPE],
+    }).load()) ?? []
+
+    const idsOf = (typeId: string) => rows.filter(row => hasBlockType(row, typeId)).map(row => row.id)
+    expect(idsOf(WORKOUT_TYPE)).toEqual([started.workoutId])
+    expect(idsOf(EXERCISE_ENTRY_TYPE)).toEqual([entryId])
+    expect(idsOf(SET_TYPE)).toEqual([setId])
+    // …and the set really does carry the second type, so this is a live test
+    // of "carries" rather than an accident of each block having exactly one.
+    expect(hasBlockType(rows.find(row => row.id === setId)!, todoType.id)).toBe(true)
   })
 })
