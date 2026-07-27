@@ -168,6 +168,19 @@ const sameRow = (a: DraftExercise, b: DraftExercise): boolean => {
   return a.sets.length === b.sets.length && a.sets.every((s, i) => sameSet(s, b.sets[i]))
 }
 
+/** A set slot the prescription does not reach.
+ *
+ *  Shaped like the row's prescribed sets — including the L/R alternation,
+ *  which is by index, exactly as `initialSets` lays it out — so it is editable
+ *  and logs like any other. Never marked done: nothing has been performed
+ *  here, and Finish prunes it if nothing ever is. */
+const blankSet = (row: DraftExercise, index: number): DraftSet => ({
+  weight: row.prescribedWeight ?? 0,
+  reps: row.repMax ?? row.repMin ?? 0,
+  done: false,
+  ...(row.perSide ? {side: index % 2 === 0 ? ('L' as const) : ('R' as const)} : {}),
+})
+
 const mergeSets = (
   row: DraftExercise,
   live: LiveExercise | undefined,
@@ -184,7 +197,13 @@ const mergeSets = (
   // for a beat mid-session. Live having MORE than the plan prescribes is just
   // as real — a set logged before the plan's set count was edited down.
   const liveSets = live?.sets ?? []
-  const count = Math.max(row.sets.length, liveSets.length)
+  // The highest set index the blocks claim, which is NOT `liveSets.length`
+  // once the list is sparse: indices [0, 2] are two sets reaching slot 3.
+  // Sizing by the list length instead dropped set 2 off the end — a logged
+  // set, invisible and unreachable — and left the slot it vacated to be filled
+  // from a prescription that no longer reaches it, i.e. with `undefined`.
+  const highest = liveSets.reduce((max, set) => Math.max(max, set.index ?? -1), -1)
+  const count = Math.max(row.sets.length, liveSets.length, highest + 1)
   // Does the live workout have anything to SAY about this lift's sets? An
   // entry that lists sets is authoritative for every index, including the
   // indices it doesn't list — those sets are gone. An entry with none yet (or
@@ -240,7 +259,11 @@ const mergeSets = (
       sets.push(previousSet)
       continue
     }
-    sets.push(row.sets[i])
+    // `?? blankSet` — a slot past the end of the prescription. It exists
+    // because a HIGHER index is live: the plan was shortened, or a set between
+    // here and there was deleted. Pushing `row.sets[i]` alone put `undefined`
+    // in the draft and every renderer downstream read straight through it.
+    sets.push(row.sets[i] ?? blankSet(row, i))
   }
   return sets
 }

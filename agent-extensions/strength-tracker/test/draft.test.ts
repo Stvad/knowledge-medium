@@ -215,6 +215,34 @@ describe('overlayLive', () => {
     expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', undefined, 's2'])
   })
 
+  it('keeps a logged set the prescription no longer reaches, and renders the gap', () => {
+    // The plan was cut to one set AFTER two were logged and the middle one
+    // deleted, so the blocks claim indices 0 and 2 — two sets reaching slot 3.
+    // Sizing the draft by the live LIST length dropped set 2 off the end (a
+    // logged set, invisible and unreachable) and filled the slot it vacated
+    // from a prescription that no longer reaches it, i.e. with `undefined`,
+    // which every renderer downstream read straight through.
+    const merged = overlayLive(buildDraft(prescription({sets: 1}), 'lb'), withMiddleDeleted())
+
+    expect(merged[0].sets).toHaveLength(3)
+    expect(merged[0].sets.every(Boolean)).toBe(true)
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', undefined, 's2'])
+    expect(merged[0].sets[1]).toMatchObject({weight: 135, done: false})
+  })
+
+  it('alternates the sides of a gap slot on a per-side lift', () => {
+    // The L/R rows alternate by index, so a slot the prescription doesn't
+    // reach still has a correct side — it is a real, loggable set.
+    const perSide = prescription({exercise: 'Waiter carry', sets: 1, perSide: true, repMax: undefined, weight: 40})
+    const merged = overlayLive(buildDraft(perSide, 'lb'), {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [{id: 'e1', exercise: 'Waiter carry', unit: 'lb', sets: [
+        {id: 'c3', weight: 40, reps: 8, done: true, side: 'R', index: 3},
+      ]}],
+    })
+    expect(merged[0].sets.map(s => s.side)).toEqual(['L', 'R', 'L', 'R'])
+  })
+
   it('falls back to position for sets written before they carried an index', () => {
     // Pre-property data: a contiguous list is the best guess available, and it
     // is right for every set that has not had a sibling deleted.
