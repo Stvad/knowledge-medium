@@ -94,7 +94,19 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const readOnly = repo.isReadOnly
   const unit = config.unit
 
-  const live = liveWorkouts.find(w => w.day === day && w.session === session)
+  const tonights = liveWorkouts.filter(w => w.day === day && w.session === session)
+  const live = tonights[0]
+  /** More than one unfinished session for tonight. This view can only log into
+   *  one of them, so the others sit there with their sets — possibly open
+   *  todos — reachable from the outline and from nothing here.
+   *
+   *  A repeat session is MINTED rather than derived (see `startWorkout`),
+   *  which is what makes this representable: two devices that both start the
+   *  evening's second session, or an undone delete putting the first one back
+   *  beside its replacement. That trade was taken deliberately — a duplicate
+   *  you can see beats a silent write into someone else's finished record —
+   *  and this is the part that makes "you can see it" true. */
+  const duplicates = tonights.length - 1
 
   const [draft, setDraft] = useState<DraftExercise[]>(() => overlayLive(buildDraft(prescription, unit), live))
   const [busy, setBusy] = useState(false)
@@ -945,6 +957,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
             ))}
           </ul>
         </details>
+      )}
+
+      {duplicates > 0 && (
+        <div className="text-xs text-amber-600 dark:text-amber-400">
+          {duplicates === 1
+            ? 'Another unfinished session for tonight exists — this screen is logging into one of them. '
+            : `${duplicates} other unfinished sessions for tonight exist — this screen is logging into one of them. `}
+          Open the Strength Log page to merge or discard the extras.
+        </div>
       )}
 
       {program.warnings.length > 0 && (

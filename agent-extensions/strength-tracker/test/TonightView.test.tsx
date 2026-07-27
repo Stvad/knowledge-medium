@@ -1054,6 +1054,26 @@ describe('TonightView', () => {
     expect(screen.getByText(/Logged A · upper/)).toBeTruthy()
   })
 
+  it('says so when a second unfinished session for tonight exists', async () => {
+    // A repeat session is MINTED rather than derived, so two of them can be
+    // live at once — two devices both starting the evening's second session,
+    // or an undone delete putting the first back beside its replacement. The
+    // view can only log into one, and the other sits there with its sets,
+    // possibly open todos, reachable from nothing here. The trade was taken
+    // deliberately (a duplicate you can see beats a silent write into someone
+    // else's record) and this is what makes "you can see it" true.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
+    mount(backend)
+    await emit()
+    expect(screen.queryByText(/unfinished session/)).toBeNull()
+
+    backend.startNextWorkout('w2')   // ours stays live; theirs joins it
+    backend.seed('Bench press', [{weight: 245, reps: 3}])
+    await emit()
+
+    expect(screen.getByText(/Another unfinished session for tonight exists/)).toBeTruthy()
+  })
+
   it('does not wipe a session that arrived while the discard was in flight', async () => {
     // Discarding lets go of OUR workout, but a peer's session can be adopted
     // onto the slot before the delete resolves. Resetting the draft to the
