@@ -133,6 +133,10 @@ export interface LiveSet {
   side?: 'L' | 'R'
   done: boolean
   completedAt?: number
+  /** Which set of the lift this is, as the BLOCK states it — absent on sets
+   *  written before the property existed, where the caller falls back to
+   *  position among the siblings. */
+  index?: number
 }
 
 export interface LiveExercise {
@@ -165,6 +169,7 @@ export const toLiveSet = (row: RowLike): LiveSet => ({
   ...(side(row, FIELD.side) !== undefined ? {side: side(row, FIELD.side)} : {}),
   done: isDone(row),
   ...(optNum(row, FIELD.completedAt) !== undefined ? {completedAt: optNum(row, FIELD.completedAt)} : {}),
+  ...(optNum(row, FIELD.setIndex) !== undefined ? {index: optNum(row, FIELD.setIndex)} : {}),
 })
 
 /** What identifies a lift WITHIN one workout: its plan block if it has one
@@ -241,38 +246,37 @@ export const matchLiveExercises = (
   if (!live) return rows.map(() => undefined)
 
   const byKey = new Map<string, LiveExercise>()
-  /** Every entry, by name — what a row with NO plan block falls back to. */
-  const byName = new Map<string, LiveExercise>()
-  /** Only entries carrying no plan block — what a row WITH one falls back to,
-   *  so it can never claim an entry that belongs to a different lift. */
-  const byNameUnplanned = new Map<string, LiveExercise>()
+  /** Entries queued by name, in block order. A QUEUE rather than an
+   *  occurrence-keyed map, because the two sides count occurrences over
+   *  different things: a row counts within `defId ?? name`, an unplanned entry
+   *  only has its name. Two plan blocks sharing a display name, logged while
+   *  the outline was unreadable, gave both rows occurrence 0 — so both asked
+   *  for the same entry, the second was refused, and its next edit split the
+   *  log. Taking the next unclaimed one with that name has no such assumption.
+   */
+  const byName = new Map<string, LiveExercise[]>()
   const occurrences = new Map<string, number>()
-  const nameOccurrences = new Map<string, number>()
-  const unplannedOccurrences = new Map<string, number>()
-  const next = (counts: Map<string, number>, of: string): number => {
-    const n = counts.get(of) ?? 0
-    counts.set(of, n + 1)
-    return n
-  }
   for (const entry of live.exercises) {
     const base = entry.definitionId ?? entry.exercise
-    byKey.set(liftKey(entry.definitionId, entry.exercise, next(occurrences, base)), entry)
-    byName.set(liftKey(undefined, entry.exercise, next(nameOccurrences, entry.exercise)), entry)
-    if (entry.definitionId === undefined) {
-      byNameUnplanned.set(
-        liftKey(undefined, entry.exercise, next(unplannedOccurrences, entry.exercise)),
-        entry,
-      )
-    }
+    const occurrence = occurrences.get(base) ?? 0
+    occurrences.set(base, occurrence + 1)
+    byKey.set(liftKey(entry.definitionId, entry.exercise, occurrence), entry)
+    byName.set(entry.exercise, [...(byName.get(entry.exercise) ?? []), entry])
   }
 
   // Claimed-once: with two ways to match, one entry could otherwise back two
   // rows, which then write over each other set for set.
   const claimed = new Set<string>()
+  const nextByName = (row: LiftRef): LiveExercise | undefined =>
+    (byName.get(row.exercise) ?? []).find(entry =>
+      !claimed.has(entry.id)
+      // A row that HAS a plan block never falls back onto an entry carrying a
+      // different one — those are two genuinely different lifts that happen to
+      // share a name. A row without one is free to take either.
+      && (row.definitionId === undefined || entry.definitionId === undefined))
+
   return rows.map(row => {
-    const nameKey = liftKey(undefined, row.exercise, row.occurrence)
-    const match = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence))
-      ?? (row.definitionId === undefined ? byName.get(nameKey) : byNameUnplanned.get(nameKey))
+    const match = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence)) ?? nextByName(row)
     if (!match || claimed.has(match.id)) return undefined
     claimed.add(match.id)
     return match

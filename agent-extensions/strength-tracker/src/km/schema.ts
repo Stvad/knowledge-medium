@@ -196,6 +196,18 @@ export const repsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** Which set of the lift this is — the same 0-based number the block id was
+ *  derived from, stored because position among siblings stops being identity
+ *  the moment one of them is deleted. See `FIELD.setIndex`. */
+export const setIndexProp = seedProperty({
+  seedKey: extensionPropertySeedKey('set-index'),
+  revision: 1,
+  name: FIELD.setIndex,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 export const rpeProp = seedProperty({
   seedKey: extensionPropertySeedKey('set-rpe'),
   revision: 1,
@@ -574,6 +586,7 @@ export const STRENGTH_PROPS = [
   prescribedSetsProp,
   weightProp,
   repsProp,
+  setIndexProp,
   rpeProp,
   sideProp,
   completedAtProp,

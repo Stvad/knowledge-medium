@@ -38,6 +38,7 @@ import {
   repsProp,
   rpeProp,
   sessionProp,
+  setIndexProp,
   statusProp,
   weightProp,
   workingWeightProp,
@@ -419,6 +420,49 @@ describe('materializeExercise — explicit entryId', () => {
     // …and the two real sets keep what was logged in them.
     expect(repo.block(first).peekProperty(weightProp)).toBe(185)
     expect(repo.block(last).peekProperty(weightProp)).toBe(195)
+    // Each block SAYS which set it is, which is the only thing that survives
+    // a reload — after one, nothing on screen remembers where these sat, and
+    // the compacted child list reads as two sets rather than sets 0 and 2.
+    expect(refilled.setIds.map(id => repo.block(id).peekProperty(setIndexProp))).toEqual([0, 1, 2])
+
+    // …and the reader gets that number off the block rather than counting.
+    // It has to: the replacement block is appended, so the children come back
+    // in order 0, 2, 1 — a reader taking position for index would hand set 2's
+    // block to the row that means set 1, which is the whole bug. Asserted as a
+    // MAP for that reason; the sequence is deliberately not [0, 1, 2].
+    const live = buildLiveWorkouts(
+      [cache.getSnapshot(started.workoutId)!],
+      await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE),
+      await liveChildren(entryId, SET_TYPE),
+    )
+    expect(new Map(live[0].exercises[0].sets.map(s => [s.id, s.index]))).toEqual(new Map([
+      [first, 0], [refilled.setIds[1], 1], [last, 2],
+    ]))
+  })
+
+  it('ignores an attached entry that is no longer in this workout', async () => {
+    // The entry can be dragged out of the session (or deleted) after the
+    // snapshot the caller is holding. Writing sets under it anyway puts them
+    // where `finishWorkout` — which scans the workout's children — never looks,
+    // so the tap silently leaves the session. Deriving instead puts them back
+    // where the workout can see them.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const strayEntryId = started.exercises[0].id
+    await repo.tx(tx => tx.move(strayEntryId, {parentId: PAGE_ID, orderKey: 'z0'}),
+      {scope: ChangeScope.BlockDefault, description: 'drag the lift out of the workout'})
+
+    const refilled = await materializeExercise(
+      repo,
+      started.workoutId,
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+      strayEntryId,
+    )
+
+    expect(refilled.id).not.toBe(strayEntryId)
+    expect(cache.getSnapshot(refilled.id)?.parentId).toBe(started.workoutId)
+    expect(cache.getSnapshot(refilled.setIds[0])?.parentId).toBe(refilled.id)
   })
 
   it('backfills the plan-block ref onto an entry that was logged without one', async () => {

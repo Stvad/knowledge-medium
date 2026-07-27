@@ -66,6 +66,17 @@ export const FIELD = {
   /** Explicit completion time — kept separate rather than inferred from the
    *  row's update time (which is noisy). */
   completedAt: 'strength:completedAt',
+  /** Which set of the lift this is — 0-based, and the same number its block id
+   *  is derived from.
+   *
+   *  Stored rather than inferred from position among the siblings, because
+   *  position is not identity here: delete the second of three sets and the
+   *  survivors are still sets 1 and 3, but a reader counting the compacted
+   *  list sees 1 and 2, hands set 3's block to the row that means set 2, and
+   *  the next edit to set 3 overwrites it. The reader can't recover the
+   *  number from the block id (it's a uuid) and shouldn't re-derive one, so
+   *  the block says what it is. */
+  setIndex: 'strength:setIndex',
   // layoff
   layoffFrom: 'strength:from',
   layoffTo: 'strength:to',

@@ -187,22 +187,42 @@ describe('overlayLive', () => {
     expect(merged[0].sets[2]).toMatchObject({weight: 135, done: false})
   })
 
+  /** A lift whose middle set was deleted: the survivors are still sets 0 and
+   *  2, but `live.sets` is compacted and reads as a list of two. */
+  const withMiddleDeleted = () => liveWith([
+    {id: 's0', weight: 205, reps: 5, done: true, index: 0},
+    {id: 's2', weight: 215, reps: 3, done: true, index: 2},
+  ])
+
   it('keeps every row on its own block when one is deleted from the middle', () => {
-    // `live.sets` is compacted, so a hole shifts everything after it up a
-    // slot. Matched positionally, row 1 took row 2's block while row 2 came up
-    // empty — and the create that fills row 2 in derives from row 2's INDEX,
-    // handing back the block row 1 was already showing. Two rows, one block,
-    // and row 2's next edit overwrites what row 1 logged.
-    const previous = materialized()
-    const merged = overlayLive(base(), liveWith([
-      {id: 's0', weight: 205, reps: 5, done: true},
-      {id: 's2', weight: 215, reps: 3, done: true},
-    ]), previous)
+    // Matched by position, row 1 took row 2's block while row 2 came up empty
+    // — and the create that fills row 2 in derives from row 2's INDEX, handing
+    // back the block row 1 was already showing. Two rows, one block, and row
+    // 2's next edit overwrites what row 1 logged.
+    const merged = overlayLive(base(), withMiddleDeleted(), materialized())
 
     expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', undefined, 's2'])
     expect(merged[0].sets[2]).toMatchObject({weight: 215, reps: 3})
     // The deleted one reads as un-logged rather than borrowing its neighbour.
     expect(merged[0].sets[1]).toMatchObject({weight: 135, done: false})
+  })
+
+  it('still does, on a fresh draft with nothing to remember', () => {
+    // The reload case. Nothing on screen holds a block id, so any rule that
+    // recovers the slot from what the draft was ALREADY showing is unavailable
+    // — the block has to say which set it is, and it does.
+    const merged = overlayLive(base(), withMiddleDeleted())
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', undefined, 's2'])
+  })
+
+  it('falls back to position for sets written before they carried an index', () => {
+    // Pre-property data: a contiguous list is the best guess available, and it
+    // is right for every set that has not had a sibling deleted.
+    const merged = overlayLive(base(), liveWith([
+      {id: 'old0', weight: 205, reps: 5, done: true},
+      {id: 'old1', weight: 205, reps: 5, done: true},
+    ]))
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['old0', 'old1', undefined])
   })
 
   it('lets go of a lift whose entry was deleted, rather than writing at a tombstone', () => {
@@ -254,6 +274,26 @@ describe('overlayLive', () => {
     const merged = overlayLive(base(), undefined, materialized())
     expect(merged[0].blockId).toBe('e1')
     expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', 's2'])
+  })
+
+  it('gives two same-named lifts their own entries when neither entry knows its plan block', () => {
+    // Both were logged while the outline was unreadable, so both entries are
+    // name-keyed; once it resolves, each row carries a DIFFERENT plan block
+    // and so each counts as occurrence 0 of itself. Asking for "occurrence 0
+    // by name" made both rows want the same entry — the second was refused and
+    // its next edit started a parallel log for a lift already being tracked.
+    const twoLifts: Prescription = {
+      ...prescription(),
+      exercises: [exerciseOf({defId: 'def-a'}), exerciseOf({defId: 'def-b'})],
+    }
+    const merged = overlayLive(buildDraft(twoLifts, 'lb'), {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [
+        {id: 'e-first', exercise: 'Bench press', unit: 'lb', sets: [{id: 'f0', weight: 205, reps: 5, done: true}]},
+        {id: 'e-second', exercise: 'Bench press', unit: 'lb', sets: [{id: 's0', weight: 95, reps: 12, done: true}]},
+      ],
+    })
+    expect(merged.map(ex => ex.blockId)).toEqual(['e-first', 'e-second'])
   })
 
   it('drops the blocks of a row that became a different lift', () => {

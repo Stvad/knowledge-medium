@@ -198,32 +198,28 @@ const mergeSets = (
   // device deleted one — and every tap lands somewhere it shouldn't.
   const liveIsAuthoritative = entryGone || liveSets.length > 0
 
-  // A set that already knows its block is matched to it BY ID, never by
-  // position — the same rule the rows above it follow, and for the same
-  // reason. `live.sets` is a compacted list, so deleting one set from the
-  // middle of a lift shifts every set after it up a slot: row 1 would take
-  // row 2's block while row 2 came up empty, and the create that filled row 2
-  // in derives its id from row 2's INDEX — handing back the very block row 1
-  // was already displaying. Two rows, one block, and the second one's edit
-  // silently overwrites the set the first one logged.
-  const byId = new Map(liveSets.map(set => [set.id, set] as const))
-  const spokenFor = new Set(
-    (previous?.sets ?? [])
-      .map(set => set.blockId)
-      .filter((id): id is string => id !== undefined && byId.has(id)),
-  )
-  // What's left over is attached positionally, which is right for exactly the
-  // sets that have no block yet: a freshly materialized lift has a contiguous
-  // run of them, holes only appear later.
-  const spare = liveSets.filter(set => !spokenFor.has(set.id))
-  let spareAt = 0
+  // Which live set belongs at each slot. `live.sets` is a COMPACTED list, so
+  // its position is not the set's index once one has been deleted: drop the
+  // second of three and the survivors are still sets 1 and 3, while the list
+  // reads 1 and 2. Taking position for index handed set 3's block to the row
+  // that means set 2 — and the create filling set 3 in then derived that same
+  // block, leaving two rows on one block whose edits overwrite each other.
+  //
+  // So the block says which set it is (`FIELD.setIndex`). Position is the
+  // fallback only for sets written before that property existed, where a
+  // contiguous list is the best available guess.
+  const bySlot = new Map<number, LiveSet>()
+  const unplaced: LiveSet[] = []
+  for (const [position, set] of liveSets.entries()) {
+    if (set.index !== undefined) bySlot.set(set.index, set)
+    else unplaced.push(liveSets[position])
+  }
+  let unplacedAt = 0
 
   const sets: DraftSet[] = []
   for (let i = 0; i < count; i += 1) {
     const previousSet = previous?.sets[i]
-    const liveSet = previousSet?.blockId !== undefined
-      ? byId.get(previousSet.blockId)
-      : spare[spareAt++]
+    const liveSet = bySlot.get(i) ?? (unplacedAt < unplaced.length ? unplaced[unplacedAt++] : undefined)
     // A write is in flight for this set: the block is momentarily BEHIND what
     // the user just did, so letting it win reverts their own tap in front of
     // them. Everything else here is "the block is the record".

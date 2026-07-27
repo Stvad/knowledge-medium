@@ -42,6 +42,7 @@ import {
   repsProp,
   rpeProp,
   sessionProp,
+  setIndexProp,
   sideProp,
   statusProp,
   unitProp,
@@ -198,6 +199,10 @@ const writeSetBlock = async (
     properties: [
       propertyValue(weightProp, s.weight),
       propertyValue(repsProp, s.reps),
+      // The same number the block id above was derived from, written down so a
+      // reader can tell WHICH set this is without counting its siblings —
+      // which stops being the same thing the moment one of them is deleted.
+      propertyValue(setIndexProp, index),
       ...(s.rpe !== undefined ? [propertyValue(rpeProp, s.rpe)] : []),
       ...(s.side !== undefined ? [propertyValue(sideProp, s.side)] : []),
       ...(s.completedAt !== undefined ? [propertyValue(completedAtProp, s.completedAt)] : []),
@@ -226,9 +231,21 @@ const writeExercise = async (
    *  plan outline was unreadable is keyed on the lift's name, and the same
    *  row keys on its plan block once the plan resolves. Deriving there builds
    *  a second entry beside the one on screen and splits the lift in two. What
-   *  the row is attached to wins; only an unattached row derives. */
+   *  the row is attached to wins; only an unattached row derives — and only
+   *  while it is still a child of this workout. */
   entryId?: string,
 ): Promise<ExerciseEntryIds> => {
+  // An attached entry is only the authority while it is still IN this workout.
+  // It can have been dragged out (or deleted) since the snapshot the caller is
+  // holding, and the shortcut below skips the parent check the derived path
+  // gets from `adoptable` — so the sets would be written under a block
+  // `finishWorkout` never scans, and the tap would vanish from the session.
+  // Fall back to deriving, which puts them where the workout can see them.
+  if (entryId !== undefined) {
+    const attached = await tx.get(entryId)
+    if (!attached || attached.deleted || attached.parentId !== workoutId) entryId = undefined
+  }
+
   if (entryId !== undefined && ex.definitionId !== undefined) {
     // Backfill the plan-block ref, and ONLY when the entry has none.
     //
