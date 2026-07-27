@@ -42,6 +42,15 @@ export interface ResolvedWrite {
    *  on now" gives the one you switched TO. Validating the write against that
    *  rejects a perfectly good set from the session it belongs to. */
   workoutId?: string
+  /** The ENTRY this set's block hangs under, likewise as of resolution.
+   *
+   *  Returned for the same reason as the workout, and because callers cannot
+   *  reliably rebuild it: a set resolved out of the create cache comes back
+   *  with no id patch, so the draft row it belongs to still carries no entry
+   *  id — and `writeSet` skips its parent AND workout-status checks entirely
+   *  when it is handed no parent, which is how a write reached a set in an
+   *  already-finished session. */
+  entryId?: string
   patch?: IdPatch
 }
 
@@ -393,7 +402,7 @@ export const createWriteCoordinator = (
       // landed in the finished session. With no workout, the create path is
       // the right answer — it is what starts the evening's second session.
       if (set.blockId && !deadSets.has(set.blockId) && workoutId !== null) {
-        return {blockId: set.blockId, workoutId}
+        return {blockId: set.blockId, workoutId, ...(exercise.blockId !== undefined ? {entryId: exercise.blockId} : {})}
       }
 
       if (!workoutId) {
@@ -408,6 +417,7 @@ export const createWriteCoordinator = (
         return {
           blockId: value.exercises[exIdx]?.setIds[setIdx],
           workoutId: value.workoutId,
+          ...(value.exercises[exIdx]?.id !== undefined ? {entryId: value.exercises[exIdx].id} : {}),
           ...(stale ? {} : {patch: {kind: 'workout' as const, workout: value}}),
         }
       }
@@ -416,7 +426,9 @@ export const createWriteCoordinator = (
       // those ids, so consult them before concluding anything is missing —
       // otherwise "accept all" creates the exercise a second time.
       const fromCreate = materialized?.exercises[exIdx]?.setIds[setIdx]
-      if (fromCreate && !deadSets.has(fromCreate)) return {blockId: fromCreate, workoutId}
+      if (fromCreate && !deadSets.has(fromCreate)) {
+        return {blockId: fromCreate, workoutId, entryId: materialized?.exercises[exIdx]?.id}
+      }
 
       // The workout exists but this exercise has no blocks: switched in
       // mid-session.
@@ -442,6 +454,7 @@ export const createWriteCoordinator = (
       return {
         blockId: value.setIds[setIdx],
         workoutId: forWorkoutId,
+        entryId: value.id,
         ...(stale ? {} : {patch: {kind: 'exercise' as const, exIdx, entry: value}}),
       }
     },

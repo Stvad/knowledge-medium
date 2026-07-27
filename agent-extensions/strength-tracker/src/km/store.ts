@@ -419,6 +419,14 @@ export const startWorkout = async (
           definitionId: typeof row.properties[FIELD.definition] === 'string'
             ? row.properties[FIELD.definition] as string
             : undefined,
+          // Which occurrence the BLOCK says it is. Without this the adopt path
+          // falls back to sibling order while the live-query path reads the
+          // stored number — and the two disagreeing is worse than either: the
+          // repair below then stamps both blocks with the swapped numbers, so
+          // every later set write lands in the other row's entry.
+          occurrence: typeof row.properties[FIELD.occurrence] === 'number'
+            ? row.properties[FIELD.occurrence] as number
+            : undefined,
         }))
       : undefined
     const matched = matchLiveExercises(

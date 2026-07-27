@@ -325,7 +325,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     forOp.fields = Object.keys(change).sort().join(',')
     beginWrite(writingKey)
     try {
-      const {blockId, workoutId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
+      const {blockId, workoutId, entryId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
       // The operation now knows which workout it is FOR. Until this point it
       // may have had none — the first tap of the night creates one — and a
       // `null` there matches whatever is current, which is right only while
@@ -333,14 +333,6 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // operation belonging to a replaced workout keep matching its successor.
       if (workoutId !== undefined) forOp.workout = workoutId
       if (patch) setDraft(cur => applyIdPatch(cur, patch))
-      // The entry this set belongs under — from the create when there was one,
-      // because on the FIRST write of a blockless row the caller's snapshot
-      // predates it and `next[exIdx].blockId` is still undefined. Passing that
-      // skipped the parent check on exactly the path where the entry was just
-      // materialized.
-      const entryId = patch
-        ? (patch.kind === 'workout' ? patch.workout.exercises[exIdx]?.id : patch.entry.id)
-        : next[exIdx].blockId
       // The CHANGE, not the whole set: the rest of this row may be older than
       // the block (the live query hadn't resolved when the draft was built),
       // and writing it back is how logged reps got replaced by the
@@ -349,6 +341,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // an id for a set that was undone, deleted from the outline, or pruned
       // by a Finish this view hasn't seen. Treating it as success left the
       // checkbox ticked over nothing.
+      // `entryId` and `workoutId` both come from the RESOLVER, which is the
+      // only thing that knows what it resolved against. Rebuilding them here —
+      // from the caller's snapshot, or from whatever workout is current by now
+      // — got them wrong on exactly the paths that matter: a set out of the
+      // create cache carries no id patch, so the row still has no entry id,
+      // and `writeSet` skips its parent AND workout-status checks when handed
+      // no parent.
       const outcome = blockId
         ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId, workoutId)
         : 'written'
@@ -571,16 +570,24 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           // right below, or another device. A set that is done on the block
           // but open here is left alone: `finishPlan` unions both.
           if (!flushed[i].sets[j].done) continue
-          const {blockId, patch} = await coordinator.resolveSet(flushed, i, j, effects)
+          const {blockId, workoutId: forWorkout, entryId, patch} =
+            await coordinator.resolveSet(flushed, i, j, effects)
           if (patch) {
             flushed = applyIdPatch(flushed, patch)
             setDraft(cur => applyIdPatch(cur, patch))
           }
           if (blockId) {
             const {done, completedAt} = flushed[i].sets[j]
+            // The resolver's own answer for both, not the coordinator's
+            // current one: `ResolvedWrite.workoutId` exists precisely because
+            // by now it can be a DIFFERENT workout — a peer replacing this one
+            // mid-flush made every remaining set validate against its
+            // successor. And `flushed[i].blockId` is still undefined for a set
+            // that came out of the create cache, which took the parent and
+            // workout-status checks out of `writeSet` altogether.
             const outcome = await writeSet(
-              repo, blockId, {done, completedAt}, flushed[i].unit, flushed[i].blockId,
-              coordinator.workoutId() ?? undefined,
+              repo, blockId, {done, completedAt}, flushed[i].unit,
+              entryId ?? flushed[i].blockId, forWorkout,
             )
             if (outcome === 'gone') {
               // A set this screen shows as accepted is not there any anymore —

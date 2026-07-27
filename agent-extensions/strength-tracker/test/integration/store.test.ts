@@ -986,3 +986,30 @@ describe('discardWorkout — the one write that destroys', () => {
     expect(await isBlockDeleted(repo, started.workoutId)).toBe(true)
   })
 })
+
+describe('adopting a session with the same lift twice', () => {
+  it('matches each row to the entry that SAYS it is that occurrence, not to sibling order', async () => {
+    const twice = () => workoutDraft([
+      exerciseDraft('Squat', [draftSet(225, 5)], {definitionId: 'def-squat', occurrence: 0}),
+      exerciseDraft('Squat', [draftSet(185, 8)], {definitionId: 'def-squat', occurrence: 1}),
+    ])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, twice())
+    const [a, b] = started.exercises
+
+    // Dragged past each other in the outline: the blocks still say which is
+    // which, their order no longer agrees. The live-query path reads the
+    // stored number; this transactional adopt path has to as well — reading
+    // order here does not merely mis-match, it then "repairs" both blocks to
+    // the swapped numbers and every later set write lands in the other row.
+    await repo.tx(async tx => {
+      await tx.setProperty(a.id, occurrenceProp, 1)
+      await tx.setProperty(b.id, occurrenceProp, 0)
+    }, {scope: ChangeScope.BlockDefault, description: 'reorder entries'})
+
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, twice())
+    expect(again.workoutId).toBe(started.workoutId)
+    expect(again.exercises.map(ex => ex.id)).toEqual([b.id, a.id])
+    expect(repo.block(b.id).peekProperty(occurrenceProp)).toBe(0)
+    expect(repo.block(a.id).peekProperty(occurrenceProp)).toBe(1)
+  })
+})

@@ -109,9 +109,12 @@ describe('resolveSet — workout already exists', () => {
     const {calls, effects} = instantEffects()
     const coord = createWriteCoordinator('w1')
 
-    // …and says which workout that block belongs to, so the caller validates
-    // against the session it resolved against rather than the current one.
-    expect(await coord.resolveSet(draft, 0, 0, effects)).toEqual({blockId: 's1', workoutId: 'w1'})
+    // …and says which workout AND entry that block belongs to, so the caller
+    // validates against the session it resolved against rather than the
+    // current one — and so `writeSet` is never handed a set with no parent,
+    // which is what makes it skip its checks.
+    expect(await coord.resolveSet(draft, 0, 0, effects))
+      .toEqual({blockId: 's1', workoutId: 'w1', entryId: 'e1'})
     expect(calls).toEqual({workouts: 0, exercises: []})
   })
 
@@ -124,6 +127,33 @@ describe('resolveSet — workout already exists', () => {
     expect(calls.exercises).toEqual(['Landmine press'])
     expect(blockId).toBe('w1-Landmine press-s0')
     expect(patch).toMatchObject({kind: 'exercise', exIdx: 0})
+  })
+
+  it('names the entry it resolved against on every path, so the write can be checked', async () => {
+    // `writeSet` skips its parent AND its workout-status checks when it is
+    // handed no parent — so a caller that cannot name the entry silently gets
+    // an unvalidated write, which is how a tap reached a set in a session that
+    // was already finished. Rebuilding it caller-side is not enough: a set
+    // resolved out of the create cache comes back with NO id patch, so the
+    // draft row still has no entry id to rebuild from.
+    const {effects} = instantEffects()
+
+    // …the workout create,
+    const fresh = createWriteCoordinator(null)
+    const two = [exercise('Bench press', 2)]
+    expect((await fresh.resolveSet(two, 0, 0, effects)).entryId).toBe('w1-e0')
+
+    // …the create cache, which is the path that hands back no patch: the
+    // caller's snapshot still has no entry id, so there is nothing to rebuild
+    // it from and the write would go out unvalidated.
+    const cached = await fresh.resolveSet(two, 0, 1, effects)
+    expect(cached.patch).toBeUndefined()
+    expect(cached.entryId).toBe('w1-e0')
+
+    // …and the exercise create, for a lift switched in mid-session.
+    const mid = createWriteCoordinator('w1')
+    expect((await mid.resolveSet([exercise('Landmine press', 2, {defId: 'def-landmine'})], 0, 0, effects)).entryId)
+      .toBe('w1-Landmine press')
   })
 
   it('creates it once for the whole batch, not once per set', async () => {
