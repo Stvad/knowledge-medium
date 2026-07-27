@@ -689,6 +689,29 @@ describe('TonightView', () => {
     expect(screen.queryByText(/^Discarded$/)).toBeNull()
   })
 
+  it('stops waiting on a write once its workout has been replaced', async () => {
+    // Finish waits for writes already in the air, and it selects them ONCE.
+    // A peer replacing the workout afterwards updates the generation and the
+    // contexts correctly, but the promise list is already fixed — so a slow or
+    // hung write for the workout that is gone left the screen on "Saving…"
+    // with the LIVE session unable to finish or discard.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    backend.hold()
+    fireEvent.click(checkboxes()[1])          // a write on w1 — parked, never lands
+    await act(async () => {})
+
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await act(async () => {})
+
+    backend.replaceWorkout('w2')              // the peer's next session arrives
+    await emit()
+
+    await waitFor(() => expect(screen.getByText(/Session changed while saving/)).toBeTruthy())
+  })
+
   it('binds a batch that started before the workout to the workout it made', async () => {
     // "all ✓" on a session with no workout yet: the batch's own context is
     // created before there is a workout to name, and a null workout matches
@@ -710,6 +733,43 @@ describe('TonightView', () => {
 
     await act(async () => { failWrite(new Error('offline')) })
     expect(screen.queryByText(/Could not save that/)).toBeNull()
+  })
+
+  it('remembers a success per workout, not just per session', async () => {
+    // Two workouts can occupy one slot — a peer finishes ours and starts the
+    // next, or a discard is undone. Recording the latest success per CHANGE
+    // alone let W2's success evict W1's, so a W1 failure arriving afterwards
+    // was recorded as unanswered and Finish paused over a set W1 had saved.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    let failW1: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failW1 = reject }),
+    )
+    fireEvent.click(checkboxes()[1])          // W1, parked and doomed
+    await act(async () => {})
+    fireEvent.click(checkboxes()[1])          // W1 again, same set+fields, succeeds
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(2))
+
+    backend.replaceWorkout('w2')
+    await emit()
+    fireEvent.click(checkboxes()[1])          // the same change again, now on W2
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(3))
+
+    // W1's failure lands last, while W2 is on screen — so nothing is shown
+    // for it either way. The marker is what matters.
+    await act(async () => { failW1(new Error('offline')) })
+
+    // …and now W1 comes back: an undone discard, or the peer's finish being
+    // rolled back. Its own success answered that failure long ago, so Finish
+    // must not pause over it.
+    backend.replaceWorkout('w1')
+    await emit()
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    expect(screen.queryByText(/did not save/)).toBeNull()
   })
 
   it('lets each write in a batch answer for its own set', async () => {

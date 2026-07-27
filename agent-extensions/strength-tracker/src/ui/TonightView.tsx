@@ -57,6 +57,12 @@ const SESSION_LABELS: Record<SessionType, string> = {A: 'A · upper', B: 'B · l
  *  it tells the user to tap again, and leaving it up after the tap worked
  *  invites the second, reversing tap. */
 const WRITE_FAILED = 'Could not save that — check the connection and tap it again.'
+/** Finish gave up because the session moved under it. Sets written before that
+ *  point DID land in the workout they belonged to — say so, rather than
+ *  implying nothing was logged and sending the user looking for data that
+ *  exists. */
+const SESSION_MOVED =
+  'Session changed while saving — what you logged is kept, but this session was not finished.'
 
 /** Which session and which workout an operation was started against. Captured
  *  once, at the tap, and carried — reconstructing it from whatever the view
@@ -157,7 +163,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  after it can be recognised as already answered. Keyed by the CHANGE
    *  rather than the operation, so it holds one entry per set-and-fields
    *  instead of growing with every tap. */
-  const succeededRef = useRef(new Map<string, OpContext>())
+  const succeededRef = useRef(new Map<string, Map<string, OpContext>>())
   const changeKey = (op: OpContext): string => [op.slot, op.setKey, op.fields].join('\u0000')
   /** Has a LATER write already saved what this one was trying to save?
    *
@@ -166,16 +172,33 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  success has nothing to retire yet, so the older failure arrived after it
    *  and was recorded anyway: "tap it again" over a set that is saved, and
    *  Finish pausing once for a value the user had already replaced. */
-  const alreadySaved = (forOp: OpContext): boolean => {
-    const won = succeededRef.current.get(changeKey(forOp))
-    return won !== undefined && supersedes(won, forOp)
-  }
+  const alreadySaved = (forOp: OpContext): boolean =>
+    [...(succeededRef.current.get(changeKey(forOp))?.values() ?? [])].some(won => supersedes(won, forOp))
 
   /** Writes still running. Finish reasserts only ACCEPTANCE, so a weight or
    *  reps write started by the blur that a Finish tap causes is not part of
    *  what Finish flushes — it races it. Left unwaited, Finish could finalize
    *  and release the session while that edit was still in the air, and a
    *  failure had nowhere left to be retried. */
+  /** Waits that must end early if the session moves under them.
+   *
+   *  Finish selects the writes it will wait for ONCE, and a promise cannot be
+   *  taken back out of that list — so a write for a workout a peer has since
+   *  replaced went on being waited for, leaving the LIVE session stuck on
+   *  "Saving…" and unable to finish or discard. The query effect releases
+   *  these when the generation it recorded is no longer current. */
+  const waitersRef = useRef(new Set<{at: number; release: () => void}>())
+  const releaseStaleWaiters = () => {
+    for (const waiter of waitersRef.current) {
+      if (waiter.at === coordinator.generation()) continue
+      waitersRef.current.delete(waiter)
+      waiter.release()
+    }
+  }
+  /** Resolves when this wait is no longer about the session on screen. */
+  const untilSessionMoves = (at: number): Promise<void> =>
+    new Promise<void>(release => waitersRef.current.add({at, release}))
+
   const pendingRef = useRef(new Map<Promise<unknown>, OpContext>())
   const track = <T,>(work: Promise<T>, forOp: OpContext): Promise<T> => {
     pendingRef.current.set(work, forOp)
@@ -269,6 +292,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // runs.
       coordinator.completed(seen)
     }
+    releaseStaleWaiters()
     if (live !== undefined) seenLiveRef.current = live.id
     const writing = writingNow()
     // On a session switch, what is on screen is about the OTHER session, so it
@@ -370,8 +394,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       }
       // …and remember it, for the failure that has not arrived yet. Retiring
       // alone only settles what already failed.
-      const won = succeededRef.current.get(changeKey(forOp))
-      if (!won || won.id < forOp.id) succeededRef.current.set(changeKey(forOp), forOp)
+      //
+      // Per WORKOUT, not just per change: two workouts can occupy one slot (a
+      // peer finishes ours and starts the next, a discard is undone), and one
+      // map slot per change let W2's success evict W1's. A W1 failure arriving
+      // afterwards then read as unanswered — invisible until W1 came back, at
+      // which point Finish paused over a set W1 had itself saved.
+      const key = changeKey(forOp)
+      const byWorkout = succeededRef.current.get(key) ?? new Map<string, OpContext>()
+      const seat = forOp.workout ?? ''
+      const won = byWorkout.get(seat)
+      if (!won || won.id < forOp.id) byWorkout.set(seat, forOp)
+      succeededRef.current.set(key, byWorkout)
       // Then take the message down if nothing on this screen is unaccounted
       // for — whether or not THIS write is what settled it. Requiring that it
       // was stranded the warning whenever the failure belonged to a workout a
@@ -535,7 +569,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // itself. Finalizing around it meant the session could be logged and
       // released with the edit still in flight.
       const mine = [...pendingRef.current].filter(([, forOp]) => belongsHere(forOp)).map(([work]) => work)
-      if (mine.length > 0) await Promise.allSettled(mine)
+      // …but not past the point where they stop being ours. The list is fixed
+      // once; a workout replaced while a write hangs would otherwise hold this
+      // open forever. The generation check below is what then reports it.
+      if (mine.length > 0) await Promise.race([Promise.allSettled(mine), untilSessionMoves(at)])
+      // Interrupting the wait is only worth anything if it also STOPS: the
+      // flush below awaits its own writes, so walking into it after the
+      // session moved just hangs there instead, and the live session is still
+      // stuck behind `busy`.
+      if (coordinator.generation() !== at) {
+        setStatus(SESSION_MOVED)
+        return
+      }
       const failedHere = [...failedRef.current.values()].filter(belongsHere)
       if (failedHere.length > 0) {
         // Something genuinely didn't save. Say so before finalizing, but
@@ -610,7 +655,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         // point DID land in the workout they belonged to — say that, rather
         // than the old message's claim that nothing was logged, which sent
         // the user looking for data that exists.
-        setStatus('Session changed while saving — what you logged is kept, but this session was not finished.')
+        setStatus(SESSION_MOVED)
         return
       }
 
