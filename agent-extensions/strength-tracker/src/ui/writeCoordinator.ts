@@ -301,8 +301,12 @@ export const createWriteCoordinator = (
       const set = exercise.sets[setIdx]
       if (!set) return {}
 
-      // Already has a block: the common case after the first edit.
-      if (set.blockId) return {blockId: set.blockId}
+      // Already has a block: the common case after the first edit — unless a
+      // write has told us that block is gone. `persist` stamps the create's
+      // ids into the draft before the write runs, so on a `gone` the very id
+      // we were told to forget is sitting right here, and returning it sent
+      // the retry back to the same tombstone.
+      if (set.blockId && !deadSets.has(set.blockId)) return {blockId: set.blockId}
 
       if (!workoutId) {
         const at = generation

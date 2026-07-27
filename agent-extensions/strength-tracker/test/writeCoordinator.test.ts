@@ -355,6 +355,24 @@ describe('failure and abandonment', () => {
     expect(calls.exercises).toEqual(['Bench press'])   // re-derived, not reused
   })
 
+  it('stops handing it back on the direct path too', async () => {
+    // `persist` stamps the create's ids into the draft BEFORE the write runs,
+    // so by the time one comes back `gone` the id we were told to forget is
+    // sitting on the set itself — and the short path returned it without
+    // asking, sending the retry straight back to the tombstone.
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    const draft = [exercise('Bench press', 1, {defId: 'def-bench'})]
+    draft[0].blockId = 'e1'
+    draft[0].sets[0].blockId = 'dead-set'
+
+    coord.forget('dead-set')
+    const retry = await coord.resolveSet(draft, 0, 0, effects)
+
+    expect(retry.blockId).not.toBe('dead-set')
+    expect(calls.exercises).toEqual(['Bench press'])
+  })
+
   it('retries after a failed create instead of caching the rejection forever', async () => {
     let attempts = 0
     const effects: WriteEffects = {

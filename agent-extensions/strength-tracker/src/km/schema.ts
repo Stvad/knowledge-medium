@@ -206,6 +206,11 @@ export const setIndexProp = seedProperty({
   preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  // Bookkeeping, not something to curate beside weight and reps: it is the
+  // readable copy of an identity the block id already fixes, so an edit to it
+  // is always wrong. `hidden` files it under the panel's Hidden section
+  // rather than offering it for editing next to the numbers that matter.
+  hidden: true,
 })
 
 export const rpeProp = seedProperty({
