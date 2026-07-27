@@ -1506,6 +1506,58 @@ describe('a row whose derived block is gone gets a minted one — once', () => {
     expect(repo.block(replacement).peekProperty(weightProp)).toBe(225)
   })
 
+  it('will not adopt a note that merely claims a set index', async () => {
+    // The index is what the fallback looks a block up BY, so it cannot also be
+    // the evidence that the block IS a set — and `isSetLike` counts it as
+    // exactly that, which makes it the wrong test here. Adopted, a note gets
+    // re-tagged set + todo and renders as a 0 × 0 row it never was; Finish
+    // then keeps or prunes it as if the user had logged it.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const entryId = started.exercises[0].id
+    await repo.tx(async tx => {
+      await tx.delete(started.exercises[0].setIds[0])   // row 0's derived id is now a tombstone
+      await tx.create({
+        id: 'a-note', workspaceId: WORKSPACE_ID, parentId: entryId, orderKey: 'a1',
+        content: 'felt heavy today',
+      })
+      await tx.setProperty('a-note', setIndexProp, 0)   // …hand-annotated with row 0's index
+    }, {scope: ChangeScope.BlockDefault, description: 'delete the set, annotate a note'})
+
+    const refilled = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(refilled.exercises[0].setIds[0]).not.toBe('a-note')
+    expect(hasBlockType(cache.getSnapshot('a-note')!, SET_TYPE)).toBe(false)
+    expect(cache.getSnapshot('a-note')!.content).toBe('felt heavy today')
+    // …and the row still got a real set of its own.
+    expect(repo.block(refilled.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(135)
+  })
+
+  it('still adopts a set that lost its type tag but kept its numbers', async () => {
+    // The other side of that: a real set may prove itself with weight + reps,
+    // which is what a set written before the type tag existed has. Narrowing
+    // the credential must not lose the repair.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const entryId = started.exercises[0].id
+    await repo.tx(async tx => {
+      await tx.delete(started.exercises[0].setIds[0])
+      await tx.create({
+        id: 'untagged-set', workspaceId: WORKSPACE_ID, parentId: entryId, orderKey: 'a1',
+        content: '205lb × 5',
+      })
+      await tx.setProperty('untagged-set', setIndexProp, 0)
+      await tx.setProperty('untagged-set', weightProp, 205)
+      await tx.setProperty('untagged-set', repsProp, 5)
+    }, {scope: ChangeScope.BlockDefault, description: 'a set with no type tag'})
+
+    const refilled = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(refilled.exercises[0].setIds[0]).toBe('untagged-set')
+    expect(hasBlockType(cache.getSnapshot('untagged-set')!, SET_TYPE)).toBe(true)
+    expect(repo.block('untagged-set').peekProperty(weightProp)).toBe(205)   // not overwritten
+  })
+
   it('does not let a hand-edited index pull a block into a second row', async () => {
     // The stray lookup keys on `strength:setIndex`, which is hand-editable —
     // so a block claiming an index it does not own could be handed to a second

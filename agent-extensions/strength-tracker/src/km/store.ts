@@ -296,10 +296,21 @@ const placeStraySets = async (
   for (const child of await tx.childrenOf(exerciseId, undefined, {hidePropertyChildren: true})) {
     if (claimed.has(child.id)) continue
     const at = child.properties[FIELD.setIndex]
+    if (typeof at !== 'number') continue
+    // The index is what we are looking this block up BY, so it cannot also be
+    // the evidence that the block is a set — `isSetLike` counts it as a
+    // signature, which makes it exactly the wrong test here. A note the user
+    // hand-annotated with `strength:setIndex` would otherwise be adopted,
+    // re-tagged as a set + todo, and rendered as a 0 × 0 row it never was.
+    // So the credential has to be something else: the type tag, or the two
+    // numbers a set written before that tag existed still carries.
+    const isSet = hasBlockType(child, SET_TYPE)
+      || (typeof child.properties[FIELD.weight] === 'number'
+        && typeof child.properties[FIELD.reps] === 'number')
     // First one wins, so two blocks claiming an index resolve the same way on
     // every device: `childrenOf` orders by `(order_key, id)`, which is the
     // same order every replica sees.
-    if (typeof at === 'number' && !strays.has(at)) strays.set(at, child)
+    if (isSet && !strays.has(at)) strays.set(at, child)
   }
 
   for (const [index, id] of setIds.entries()) {

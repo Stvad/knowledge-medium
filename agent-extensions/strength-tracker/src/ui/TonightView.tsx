@@ -681,10 +681,16 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         return
       }
 
+      // Decided from the history as it stands BEFORE this session joins it —
+      // but not written yet. `finishWorkout` refuses a tree it cannot finish
+      // (a set buried under a note, an untyped child holding sets), and its
+      // own transaction cannot roll back a layoff committed in a separate one:
+      // the break would be recorded as ending on the day of an attempt that
+      // never completed. `layoffAlreadyRecorded` matches on `from` alone, so
+      // finishing days later would then keep that stale `to` — and the whole
+      // point of the record is the gap it describes, which feeds the load-cut
+      // tier. Written once the session it is derived from actually exists.
       const pending = detectPendingLayoff(history, day, config)
-      if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
-        await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
-      }
       // No plan argument: `finishWorkout` re-reads the tree inside its own
       // transaction, so nothing this view believes can prune a set the blocks
       // say was performed.
@@ -745,6 +751,20 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // — tap it again" over a session that was already logged. Tapping again
       // now starts a second session for tonight, because the coordinator has
       // released this one.
+      //
+      // The layoff record joins that rule rather than preceding the finish:
+      // this session IS the first one back, so the break it describes is only
+      // true once the session exists. A failure here leaves it undetected,
+      // which the NEXT finish re-detects from the same history — the harmless
+      // direction, unlike a break recorded against a session that never
+      // landed.
+      if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
+        try {
+          await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
+        } catch (error) {
+          console.error('[strength] could not record the layoff', error)
+        }
+      }
       const fullBefore = history.filter(w => w.session !== 'mini').length
       const isFull = session !== 'mini'
       const due = isFull && ((fullBefore + 1) % SHOULDER_CHECK_EVERY === 0 || detectLeftRightAsymmetry(history))

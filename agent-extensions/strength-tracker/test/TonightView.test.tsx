@@ -1673,6 +1673,46 @@ describe('TonightView', () => {
     await emit()
     expect((screen.getByRole('button', {name: /Finish/}) as HTMLButtonElement).disabled).toBe(false)
   })
+
+  it('records the break only once the session that ends it exists', async () => {
+    // The layoff is its own transaction, so a `finishWorkout` that REFUSES the
+    // tree — a set buried under a note — cannot roll it back. The break would
+    // stand as ending on the day of an attempt that never completed, and
+    // `layoffAlreadyRecorded` matches on `from` alone, so finishing days later
+    // would keep that stale `to`. The gap it names is the whole point of the
+    // record: it picks the load-cut tier.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
+    mount(backend, {history: pastSessions(1)})     // last trained 2026-07-10; today is the 25th
+    await emit()
+
+    vi.mocked(store.finishWorkout).mockRejectedValueOnce(new Error('a set is buried under a note'))
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    await act(async () => {})
+
+    expect(store.writeLayoff).not.toHaveBeenCalled()
+
+    // …and it IS recorded on a finish that lands, so this is not just an
+    // assertion that the feature is off.
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.writeLayoff).toHaveBeenCalled())
+  })
+
+  it('still reports the session as logged when the layoff write fails', async () => {
+    // It runs inside the "saved from here on" region, so a failure there must
+    // not reach the user as "could not save that — tap it again" over a
+    // session that is already a record. Tapping again would start a second
+    // session for the evening.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
+    mount(backend, {history: pastSessions(1)})
+    await emit()
+
+    vi.mocked(store.writeLayoff).mockRejectedValueOnce(new Error('offline'))
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+
+    await waitFor(() => expect(screen.getByText(/Logged A · upper/)).toBeTruthy())
+    expect(screen.queryByText(/Could not save/)).toBeNull()
+  })
 })
 
 describe('NumberField', () => {
