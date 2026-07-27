@@ -8,7 +8,7 @@
  *  the prescription with no manual refresh.
  */
 
-import {useEffect, useMemo, useState} from 'react'
+import {useEffect, useMemo, useRef, useState} from 'react'
 
 import {useBlockQuery, useHandle} from '@/hooks/block.js'
 import type {Repo} from '@/data/repo.js'
@@ -69,6 +69,9 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
   const [reloadKey, setReloadKey] = useState(0)
   // Capture "now" once so a session that crosses midnight stays on one day.
   const [now] = useState(() => new Date())
+  /** Has the plan outline ever been read successfully? Decides which of two
+   *  quite different situations a failed read is. */
+  const planEverRead = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -86,21 +89,33 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
       try {
         const loaded = await loadConfig(repo, workspaceId, settingsId)
         if (cancelled) return
+        planEverRead.current = true
         setConfig(loaded.config)
         setWarnings(loaded.warnings)
         setPlanRootId(loaded.planRootId)
       } catch (error) {
         console.error('[strength] could not read the plan outline', error)
         // Say so on screen, not just in the console. Logging is deliberately
-        // unlocked below even on failure — blocking it on an unreadable plan is
-        // worse — but that means the session gets logged against the built-in
-        // defaults, or against config left over from an earlier load, and the
-        // user has no way to tell. Progression is derived from what gets
+        // unlocked below even on failure — blocking it on an unreadable plan
+        // is worse — but that means the user has to be told what their session
+        // is being recorded against. Progression is derived from what gets
         // logged, so "which plan was this" is not a detail.
+        //
+        // And WHICH message depends on whether a plan was ever read. A failed
+        // RELOAD leaves the last good plan in `config`, so saying "showing the
+        // built-in defaults" would be false. The config is deliberately not
+        // reset to the defaults either: that would throw away real plan blocks
+        // over what is usually a transient read, and logging without them
+        // derives name-keyed ids for entries that already exist under
+        // plan-keyed ones — the parallel-tree failure this extension has spent
+        // its whole history avoiding. Keep the good data, say what it is.
         if (!cancelled) {
           setWarnings([
-            'Could not read your plan outline — showing the built-in defaults. '
-            + 'Anything you log now is recorded against those, not your plan.',
+            planEverRead.current
+              ? 'Could not re-read your plan outline — still using the copy read earlier. '
+                + 'A change you just made to the plan may not be reflected here yet.'
+              : 'Could not read your plan outline — showing the built-in defaults. '
+                + 'Anything you log now is recorded against those, not your plan.',
           ])
         }
       } finally {
