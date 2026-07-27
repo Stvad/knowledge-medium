@@ -63,8 +63,16 @@ const WRITE_FAILED = 'Could not save that — check the connection and tap it ag
  *  happens to be showing when a promise settles is how a write for one
  *  evening's log ended up reported on another's. */
 interface OpContext {
+  /** Monotonic per view. What makes two writes of the SAME field to the SAME
+   *  set tell each other apart — edit a number twice before the first lands
+   *  and, keyed on the change alone, the older one's success took down the
+   *  newer one's failure. */
+  id: number
   slot: string
   workout: string | null
+  /** Which set, and which of its fields, this write is changing. */
+  setKey: string
+  fields: string
 }
 const SHOULDER_CHECK_EVERY = 4
 
@@ -137,7 +145,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  checkbox succeeding took down a warning that the reps write had put up
    *  and that was still true — and the field reverted with nothing on screen
    *  to explain it. A retry writes the same fields, so it clears its own. */
-  const failedRef = useRef(new Set<string>())
+  const failedRef = useRef(new Map<number, OpContext>())
+  const opSeq = useRef(0)
+  const nextOp = (over: Partial<OpContext> = {}): OpContext => ({
+    id: (opSeq.current += 1), slot, workout: coordinator.workoutId(), setKey: '', fields: '', ...over,
+  })
+  /** Is a write the user made still unaccounted for on this screen? */
+  const anyFailureHere = (): boolean => [...failedRef.current.values()].some(belongsHere)
 
   /** Writes still running. Finish reasserts only ACCEPTANCE, so a weight or
    *  reps write started by the blur that a Finish tap causes is not part of
@@ -268,9 +282,8 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // because two of them can share an evening: a peer finishing ours and
     // starting the next one keeps the slot but changes everything else, and a
     // late rejection from the first was landing on the second's tab.
-    const entryWorkout = forOp.workout
-    const opKey = (workout: string | null) =>
-      `${slot}|${workout ?? 'new'}|${writingKey}|${Object.keys(change).sort().join(',')}`
+    forOp.setKey = writingKey
+    forOp.fields = Object.keys(change).sort().join(',')
     beginWrite(writingKey)
     try {
       const {blockId, workoutId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
@@ -316,12 +329,17 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // Both keys: a first attempt that failed BEFORE any workout existed
       // filed its marker under "new", and the retry that finally creates one
       // has to be able to take that same marker down.
-      const cleared = failedRef.current.delete(opKey(forOp.workout))
-      const clearedPending = failedRef.current.delete(opKey(entryWorkout))
-      if ((cleared || clearedPending)
-        && ![...failedRef.current].some(key => key.startsWith(`${slot}|`))) {
-        setStatus(current => (current === WRITE_FAILED ? null : current))
+      // This write settles every EARLIER attempt at the same change — a
+      // retry, or the first attempt this one superseded. Never a later one:
+      // that write is about a value the user typed after this one, and its
+      // failure is still true.
+      let retired = false
+      for (const [id, failed] of failedRef.current) {
+        if (id > forOp.id || failed.setKey !== forOp.setKey || failed.fields !== forOp.fields) continue
+        failedRef.current.delete(id)
+        retired = true
       }
+      if (retired && !anyFailureHere()) setStatus(current => (current === WRITE_FAILED ? null : current))
       // No overlay on success, deliberately. The block now agrees with what is
       // on screen, and the write's OWN query emission re-runs the overlay a
       // moment later with the news. Asking for one here instead reverted every
@@ -332,7 +350,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
       // value that never reached it.
-      failedRef.current.add(opKey(forOp.workout))
+      failedRef.current.set(forOp.id, forOp)
       setResync(n => n + 1)
       throw error
     } finally {
@@ -373,7 +391,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
-    const forOp: OpContext = {slot, workout: coordinator.workoutId()}
+    const forOp = nextOp()
     void track(persist(next, exIdx, setIdx, patch, forOp), forOp).catch(reportFor(forOp))
   }
 
@@ -412,7 +430,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // found no workout and CREATED one — the screen said "Discarded" while a
     // fresh, fully-accepted workout survived at the next slot.
     const at = coordinator.generation()
-    const forOp: OpContext = {slot, workout: coordinator.workoutId()}
+    const forOp = nextOp()
     void track((async () => {
       try {
         let rows: readonly DraftExercise[] = next
@@ -451,15 +469,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // released with the edit still in flight.
       const mine = [...pendingRef.current].filter(([, forOp]) => belongsHere(forOp)).map(([work]) => work)
       if (mine.length > 0) await Promise.allSettled(mine)
-      const failedHere = [...failedRef.current].filter(
-        key => key.startsWith(`${slot}|${coordinator.workoutId() ?? 'new'}|`),
-      )
+      const failedHere = [...failedRef.current.values()].filter(belongsHere)
       if (failedHere.length > 0) {
         // Something genuinely didn't save. Say so before finalizing, but
         // don't refuse forever: a set that is gone will never write no matter
         // how often it is retried, and the rest of the session still deserves
         // to be logged. Cleared here, so tapping again goes through.
-        for (const key of failedHere) failedRef.current.delete(key)
+        for (const failed of failedHere) failedRef.current.delete(failed.id)
         setStatus('A change did not save — check the numbers, then tap Finish again to log anyway.')
         return
       }
@@ -590,8 +606,8 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // day and session, they outlived the workout and the NEXT session of
       // the same type inherited them — Finish then reported an unsaved change
       // that belonged to a workout the user had thrown away.
-      for (const key of [...failedRef.current]) {
-        if (key.startsWith(`${slot}|`)) failedRef.current.delete(key)
+      for (const [id, failed] of failedRef.current) {
+        if (failed.slot === slot) failedRef.current.delete(id)
       }
       setDraft(buildDraft(prescription, unit))
       setStatus('Discarded')

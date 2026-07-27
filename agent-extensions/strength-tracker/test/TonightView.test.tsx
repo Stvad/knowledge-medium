@@ -933,6 +933,35 @@ describe('TonightView', () => {
     await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
   })
 
+  it('does not let an older write retire a newer one\'s failure', async () => {
+    // The same field edited twice before the first settles. Keyed on the
+    // change alone, both writes look identical — so the older one landing took
+    // down the newer one's warning, and the value actually on screen was the
+    // one that never saved.
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    let settleFirst: () => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise(resolve => { settleFirst = () => resolve('written') }),
+    )
+    const field = weights()[0]
+    act(() => field.focus())
+    fireEvent.change(field, {target: {value: '190'}})
+    fireEvent.blur(field)                            // write A — pending
+    await act(async () => {})
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    act(() => field.focus())
+    fireEvent.change(field, {target: {value: '195'}})
+    fireEvent.blur(field)                            // write B — fails
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    await act(async () => { settleFirst() })         // …and now A succeeds
+    expect(screen.getByText(/Could not save that/)).toBeTruthy()
+  })
+
   it('keeps the warning up when a DIFFERENT write on the same set succeeds', async () => {
     // Typing reps and then ticking the box are two writes for one set. If the
     // reps write fails and the tick succeeds, the set is not "fine" — the

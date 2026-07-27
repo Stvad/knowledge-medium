@@ -264,6 +264,18 @@ export const createWriteCoordinator = (
         ? null
         : nextWorkoutId
 
+      // A DIFFERENT workout on this slot retires whatever we released from it.
+      // Retiring only on an authoritative absence missed the case where one
+      // workout is replaced by the next with no empty result in between — the
+      // old id stayed blacklisted forever, so undoing its finish or its
+      // deletion put the blocks back on screen with the coordinator refusing
+      // to own them.
+      if (offered !== null) {
+        for (const [id, from] of released) {
+          if (from === nextSlot && id !== offered) released.delete(id)
+        }
+      }
+
       if (nextSlot !== slot) {
         // A different day/session: a different workout, so everything here is
         // about something else now.

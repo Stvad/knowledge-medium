@@ -337,6 +337,20 @@ describe('reset — the session was switched', () => {
     expect(coord.workoutId()).toBeNull()
   })
 
+  it('retires a release once the slot shows a different workout', async () => {
+    // W1 finished and W2 took its place with no empty result in between, so
+    // the absence-triggered retirement never ran and W1 stayed blacklisted
+    // forever — undoing its finish put the blocks back on screen with the
+    // coordinator refusing to own them.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.completed()
+    coord.reset('w2', SLOT_A, SHAPE)          // straight to the next workout
+    expect(coord.workoutId()).toBe('w2')
+
+    coord.reset('w1', SLOT_A, SHAPE)          // …and then w1 comes back
+    expect(coord.workoutId()).toBe('w1')
+  })
+
   it('adopts a released workout that turns up under a different slot', async () => {
     // Its date or session was edited, so it left the slot we were watching
     // and reappeared under another. That is a relocation, not a workout we
