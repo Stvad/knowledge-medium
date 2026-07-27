@@ -167,6 +167,36 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(repo.block(bench.id).peekProperty(workingWeightProp)).toBe(145)
   })
 
+  it('empties rather than deletes an entry that holds something other than sets', async () => {
+    // "Nothing was accepted here" is read off the SET type tag, and a tag can
+    // go missing — the same misread the workout-level guard refuses one level
+    // up. Down here the entry is subtree-deleted, which takes the user's own
+    // note (and any set whose tag went with it) permanently. Leaving the entry
+    // costs an empty row in the record; removing it is unrecoverable.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),                     // nothing accepted
+      exerciseDraft('Row', [draftSet(95, 10)], {occurrence: 1}),            // the session's real work
+    ]))
+    const [bench, row] = workout.exercises
+    expect(await writeSet(repo, row.setIds[0], {weight: 95, reps: 10, done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'why-i-skipped', workspaceId: WORKSPACE_ID, parentId: bench.id, orderKey: 'z0',
+        content: 'shoulder was not having it',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a note under the lift I skipped'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(await isBlockDeleted(repo, 'why-i-skipped')).toBe(false)
+    expect(await isBlockDeleted(repo, bench.id)).toBe(false)
+    // Its un-accepted set still goes — that part was never in doubt.
+    expect(await isBlockDeleted(repo, bench.setIds[0])).toBe(true)
+    // …and the rest of the finish is unaffected.
+    expect(repo.block(row.id).peekProperty(workingWeightProp)).toBe(95)
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('done')
+  })
+
   it('refuses to finish when a workout has children but none of them are exercise entries', async () => {
     // Children-but-no-entries reads as a type misread, not an empty session
     // — see the guard's own comment in store.ts. A block directly under the

@@ -77,6 +77,18 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
         setPlanRootId(loaded.planRootId)
       } catch (error) {
         console.error('[strength] could not read the plan outline', error)
+        // Say so on screen, not just in the console. Logging is deliberately
+        // unlocked below even on failure — blocking it on an unreadable plan is
+        // worse — but that means the session gets logged against the built-in
+        // defaults, or against config left over from an earlier load, and the
+        // user has no way to tell. Progression is derived from what gets
+        // logged, so "which plan was this" is not a detail.
+        if (!cancelled) {
+          setWarnings([
+            'Could not read your plan outline — showing the built-in defaults. '
+            + 'Anything you log now is recorded against those, not your plan.',
+          ])
+        }
       } finally {
         // Settled either way — including when the read FAILED and we kept the
         // defaults. This gates writing, and blocking logging forever on an

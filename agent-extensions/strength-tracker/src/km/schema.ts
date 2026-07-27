@@ -525,12 +525,15 @@ export const altGroupType = seedType({
 
 export const setType = seedType({
   seedKey: extensionTypeSeedKey('set'),
-  revision: 1,
+  // 2: `setIndexProp` joined the declared shape. Every set stores it and the
+  // read path places sets by it, so a set type that didn't name it left its
+  // own identity field out of what a set IS.
+  revision: 2,
   id: SET_TYPE,
   label: 'Set',
   description: 'One set within an exercise entry.',
   hideFromCompletion: true,
-  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp],
+  properties: [weightProp, repsProp, setIndexProp, rpeProp, sideProp, completedAtProp],
 })
 
 export const layoffType = seedType({

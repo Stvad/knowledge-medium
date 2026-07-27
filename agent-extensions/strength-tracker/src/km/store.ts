@@ -511,8 +511,13 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
       )
     }
     const exercises: FinishEntry[] = []
+    /** Entries holding a child that is NOT a set — a note the user typed under
+     *  the lift, or a set whose type tag went missing. */
+    const holdsMore = new Set<string>()
     for (const entry of entries) {
-      const sets = (await tx.childrenOf(entry.id)).filter(row => hasBlockType(row, SET_TYPE))
+      const entryChildren = await tx.childrenOf(entry.id)
+      const sets = entryChildren.filter(row => hasBlockType(row, SET_TYPE))
+      if (entryChildren.length > sets.length) holdsMore.add(entry.id)
       exercises.push({
         id: entry.id,
         exercise: typeof entry.properties[FIELD.exercise] === 'string'
@@ -526,7 +531,22 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     // Subtree deletes, not `tx.delete`: a set block is a normal block, so a
     // note typed under it — and, in a child-backed workspace, its own property
     // rows — would otherwise stay live under a tombstone.
-    for (const exId of plan.removeExerciseIds) await tx.run(deleteBlock, {id: exId})
+    //
+    // Which is exactly why an entry holding anything that ISN'T a set is
+    // emptied rather than removed. "No accepted sets" is read off the type
+    // tag, and a tag can go missing — that is the same misread the guard above
+    // refuses at the workout level, and one level down it takes the user's own
+    // notes with it. Leaving the entry costs an empty row in the record;
+    // removing it is unrecoverable.
+    for (const exId of plan.removeExerciseIds) {
+      if (!holdsMore.has(exId)) {
+        await tx.run(deleteBlock, {id: exId})
+        continue
+      }
+      for (const set of exercises.find(entry => entry.id === exId)?.sets ?? []) {
+        await tx.run(deleteBlock, {id: set.id})
+      }
+    }
     for (const ex of plan.keep) {
       for (const setId of ex.removeSetIds) await tx.run(deleteBlock, {id: setId})
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)

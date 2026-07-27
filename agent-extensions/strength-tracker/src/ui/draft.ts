@@ -168,6 +168,11 @@ const sameRow = (a: DraftExercise, b: DraftExercise): boolean => {
   return a.sets.length === b.sets.length && a.sets.every((s, i) => sameSet(s, b.sets[i]))
 }
 
+/** The most sets one lift can plausibly have, and therefore the largest slot a
+ *  stored index is allowed to claim. Not a limit on logging — it exists only
+ *  so a hand-edited number cannot ask the view to render an unbounded list. */
+const MAX_SETS_PER_LIFT = 64
+
 /** A set slot the prescription does not reach.
  *
  *  Shaped like the row's prescribed sets — including the L/R alternation,
@@ -197,13 +202,6 @@ const mergeSets = (
   // for a beat mid-session. Live having MORE than the plan prescribes is just
   // as real — a set logged before the plan's set count was edited down.
   const liveSets = live?.sets ?? []
-  // The highest set index the blocks claim, which is NOT `liveSets.length`
-  // once the list is sparse: indices [0, 2] are two sets reaching slot 3.
-  // Sizing by the list length instead dropped set 2 off the end — a logged
-  // set, invisible and unreachable — and left the slot it vacated to be filled
-  // from a prescription that no longer reaches it, i.e. with `undefined`.
-  const highest = liveSets.reduce((max, set) => Math.max(max, set.index ?? -1), -1)
-  const count = Math.max(row.sets.length, liveSets.length, highest + 1)
   // Does the live workout have anything to SAY about this lift's sets? An
   // entry that lists sets is authoritative for every index, including the
   // indices it doesn't list — those sets are gone. An entry with none yet (or
@@ -229,11 +227,33 @@ const mergeSets = (
   // contiguous list is the best available guess.
   const bySlot = new Map<number, LiveSet>()
   const unplaced: LiveSet[] = []
-  for (const [position, set] of liveSets.entries()) {
-    if (set.index !== undefined) bySlot.set(set.index, set)
-    else unplaced.push(liveSets[position])
+  for (const set of liveSets) {
+    // The index is an ordinary hand-editable number, so it can be fractional,
+    // negative, absurd, or a duplicate of another set's. It sizes the draft,
+    // so an unchecked one is not a wrong row — a set edited to index 1e9 asks
+    // this to render a billion of them and takes the client with it. Anything
+    // that isn't a plausible slot falls back to the positional path, where it
+    // may land in the wrong row but is still SHOWN and still editable.
+    const slot = set.index
+    const usable = slot !== undefined
+      && Number.isSafeInteger(slot) && slot >= 0 && slot < MAX_SETS_PER_LIFT
+      && !bySlot.has(slot)
+    if (usable) bySlot.set(slot, set)
+    else unplaced.push(set)
   }
   let unplacedAt = 0
+
+  // Never fewer rows than either side has. The three block queries behind
+  // `live` emit independently, so an entry can legitimately arrive with none
+  // of its sets yet; taking the live count verbatim made every set row vanish
+  // for a beat mid-session. Live having MORE than the plan prescribes is just
+  // as real — a set logged before the plan's set count was edited down.
+  //
+  // The highest CLAIMED slot, not `liveSets.length`: once the list is sparse,
+  // indices [0, 2] are two sets reaching slot 3, and sizing by the length
+  // dropped set 2 off the end — a logged set, invisible and unreachable.
+  const highest = [...bySlot.keys()].reduce((max, slot) => Math.max(max, slot), -1)
+  const count = Math.max(row.sets.length, liveSets.length, highest + 1)
 
   const sets: DraftSet[] = []
   for (let i = 0; i < count; i += 1) {

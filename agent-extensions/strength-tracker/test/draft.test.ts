@@ -243,6 +243,29 @@ describe('overlayLive', () => {
     expect(merged[0].sets.map(s => s.side)).toEqual(['L', 'R', 'L', 'R'])
   })
 
+  it('will not let a hand-edited index size the draft', () => {
+    // The index is an ordinary editable number on an ordinary block. Used
+    // unchecked it does not produce a wrong row — it asks for a billion of
+    // them and takes the client with it.
+    const merged = overlayLive(base(), liveWith([
+      {id: 'huge', weight: 205, reps: 5, done: true, index: 1_000_000_000},
+    ]))
+    expect(merged[0].sets.length).toBeLessThanOrEqual(64)
+    // …and the set is still shown, in the fallback slot rather than nowhere.
+    expect(merged[0].sets[0].blockId).toBe('huge')
+  })
+
+  it('does not hide a set behind a nonsensical or duplicated index', () => {
+    const merged = overlayLive(base(), liveWith([
+      {id: 'neg', weight: 1, reps: 1, done: true, index: -3},
+      {id: 'frac', weight: 2, reps: 2, done: true, index: 1.5},
+      {id: 'dupe-a', weight: 3, reps: 3, done: true, index: 2},
+      {id: 'dupe-b', weight: 4, reps: 4, done: true, index: 2},
+    ]))
+    const shown = merged[0].sets.map(s => s.blockId).filter(Boolean)
+    expect(new Set(shown)).toEqual(new Set(['neg', 'frac', 'dupe-a', 'dupe-b']))
+  })
+
   it('falls back to position for sets written before they carried an index', () => {
     // Pre-property data: a contiguous list is the best guess available, and it
     // is right for every set that has not had a sibling deleted.
