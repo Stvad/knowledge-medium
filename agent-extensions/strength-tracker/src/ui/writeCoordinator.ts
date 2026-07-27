@@ -255,7 +255,14 @@ export const createWriteCoordinator = (
       // reads `in-progress` well after we let go of it — on THIS slot, and
       // equally on a slot the user switched away from and back to before the
       // workout query caught up.
-      const offered = nextWorkoutId !== null && released.has(nextWorkoutId) ? null : nextWorkoutId
+      // Released FROM THIS SLOT, specifically. A workout whose date or session
+      // was edited leaves the slot we were watching and turns up under
+      // another — that is a relocation, not a workout we are done with, and
+      // refusing it there left the blocks on screen with no workout id behind
+      // them: Finish said the session had changed and Discard did nothing.
+      const offered = nextWorkoutId !== null && released.get(nextWorkoutId) === nextSlot
+        ? null
+        : nextWorkoutId
 
       if (nextSlot !== slot) {
         // A different day/session: a different workout, so everything here is

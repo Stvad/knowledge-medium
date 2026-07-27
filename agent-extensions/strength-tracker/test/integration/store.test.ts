@@ -210,6 +210,29 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(await isBlockDeleted(repo, setId)).toBe(false)
   })
 
+  it('does not promote a note that merely carries a weight', async () => {
+    // One numeric property is not a set signature. Promoting a note on that
+    // basis made Finish read its absent status as un-accepted and delete it —
+    // the repair turning into the data loss it was added to prevent.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const bench = workout.exercises[0]
+    expect(await writeSet(repo, bench.setIds[0], {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'weight-note', workspaceId: WORKSPACE_ID, parentId: bench.id, orderKey: 'z0',
+        content: 'felt like 200 honestly',
+      })
+      await tx.setProperty('weight-note', weightProp, 200)
+    }, {scope: ChangeScope.BlockDefault, description: 'a note that mentions a weight'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(await isBlockDeleted(repo, 'weight-note')).toBe(false)
+    expect(hasBlockType(cache.getSnapshot('weight-note')!, SET_TYPE)).toBe(false)
+  })
+
   it('leaves an untyped set that is not recognizable alone', async () => {
     // A note under the lift carries none of a set's numbers, so it is not
     // silently promoted into the record — it just keeps its entry alive.

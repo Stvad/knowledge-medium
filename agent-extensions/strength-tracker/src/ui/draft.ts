@@ -109,6 +109,19 @@ export const buildDraft = (prescription: Prescription, unit: string): DraftExerc
   })
 }
 
+/** What the coordinator watches to know the session's LIFTS changed — a plan
+ *  edit, an `or`-group switched — as distinct from a value moving.
+ *
+ *  JSON, not a joined string: exercise names are user text, so a joined
+ *  encoding lets one lift called `Bench:100:3:5-5:false,Squat` spell two rows.
+ *  Two different plans reading as one shape means no generation bump and no
+ *  cache clear, and the first edit in the new plan takes the old plan's set
+ *  id. */
+export const prescriptionShape = (exercises: readonly PrescribedExercise[]): string =>
+  JSON.stringify(exercises.map(
+    e => [e.defId ?? e.exercise, e.weight ?? null, e.sets, e.repMin ?? null, e.repMax ?? null, e.perSide],
+  ))
+
 /** This row's identity — stable across a re-prescription, a rename, and every
  *  query emission, because it is the same thing the row's blocks are derived
  *  from. Row POSITION is not identity: an `or`-group switch reorders nothing

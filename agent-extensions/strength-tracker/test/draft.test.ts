@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildDraft, hasAcceptedSets, overlayLive, rowKey, setKey, toMaterializeDraft} from '../src/ui/draft'
+import {
+  buildDraft, hasAcceptedSets, overlayLive, prescriptionShape, rowKey, setKey, toMaterializeDraft,
+} from '../src/ui/draft'
 import type {LiveWorkout} from '../src/km/history'
 import type {Prescription} from '../src/engine/types'
 
@@ -425,5 +427,28 @@ describe('hasAcceptedSets', () => {
     expect(hasAcceptedSets(draft)).toBe(false)
     draft[0].sets[0].done = true
     expect(hasAcceptedSets(draft)).toBe(true)
+  })
+})
+
+describe('prescriptionShape', () => {
+  it('does not let a lift NAME spell another row', () => {
+    // Exercise names are user text. Joined with delimiters, one lift called
+    // `Bench:100:3:5-5:false,Squat` reads as the two rows it imitates — and
+    // two plans with the same shape means the coordinator never bumps its
+    // generation or clears the positional ids it cached for the old one.
+    const imitator = prescriptionShape([
+      exerciseOf({exercise: 'Bench:100:3:5-5:false,Squat', weight: 200, sets: 4, repMin: 8, repMax: 8}),
+    ])
+    const genuine = prescriptionShape([
+      exerciseOf({exercise: 'Bench', weight: 100, sets: 3, repMin: 5, repMax: 5}),
+      exerciseOf({exercise: 'Squat', weight: 200, sets: 4, repMin: 8, repMax: 8}),
+    ])
+    expect(imitator).not.toEqual(genuine)
+  })
+
+  it('still reads a real change as a change', () => {
+    const before = prescriptionShape([exerciseOf()])
+    expect(prescriptionShape([exerciseOf({weight: 145})])).not.toEqual(before)
+    expect(prescriptionShape([exerciseOf()])).toEqual(before)
   })
 })

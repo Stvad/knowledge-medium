@@ -501,6 +501,27 @@ describe('TonightView', () => {
     expect(backend.setById('e:Bench press|0')).toMatchObject({done: true})
   })
 
+  it('suppresses a failure once its workout has been replaced', async () => {
+    // The same first-tap operation, but this time the workout it created has
+    // been replaced by the time the write fails. It belongs to the one it
+    // made, not to whatever is on screen now — treating its initial `null`
+    // as a permanent wildcard put the warning on the successor.
+    let failWrite: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failWrite = reject }),
+    )
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalled())
+    await emit()
+
+    backend.replaceWorkout('w2')
+    await emit()
+
+    await act(async () => { failWrite(new Error('offline')) })
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
+  })
+
   it('still reports a failure from the tap that created the workout', async () => {
     // The first tap of the night starts with no workout at all, and by the
     // time its write fails the create it triggered has produced one. That

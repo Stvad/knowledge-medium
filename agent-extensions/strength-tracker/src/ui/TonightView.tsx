@@ -43,6 +43,7 @@ import {
   buildDraft,
   hasAcceptedSets,
   overlayLive,
+  prescriptionShape,
   rowKey,
   setKey,
   toExerciseDraft,
@@ -166,9 +167,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
   // the React half: applying the ids it hands back.
   const slot = `${day}|${session}`
-  const shape = prescription.exercises
-    .map(e => `${e.defId ?? e.exercise}:${e.weight ?? ''}:${e.sets}:${e.repMin ?? ''}-${e.repMax ?? ''}:${e.perSide}`)
-    .join(',')
+  const shape = prescriptionShape(prescription.exercises)
   const coordinatorRef = useRef<WriteCoordinator | null>(null)
   coordinatorRef.current ??= createWriteCoordinator(live?.id ?? null, slot, shape)
   const coordinator = coordinatorRef.current
@@ -252,6 +251,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     exIdx: number,
     setIdx: number,
     change: Partial<DraftSet>,
+    forOp: OpContext,
   ): Promise<IdPatch | undefined> => {
     // Writing before the plan outline has been read derives ids from exercise
     // NAMES, while the records that exist are keyed on their plan block — a
@@ -268,14 +268,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // because two of them can share an evening: a peer finishing ours and
     // starting the next one keeps the slot but changes everything else, and a
     // late rejection from the first was landing on the second's tab.
-    const entryWorkout = coordinator.workoutId()
-    let forWorkout = entryWorkout
+    const entryWorkout = forOp.workout
     const opKey = (workout: string | null) =>
       `${slot}|${workout ?? 'new'}|${writingKey}|${Object.keys(change).sort().join(',')}`
     beginWrite(writingKey)
     try {
       const {blockId, workoutId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
-      if (workoutId !== undefined) forWorkout = workoutId
+      // The operation now knows which workout it is FOR. Until this point it
+      // may have had none — the first tap of the night creates one — and a
+      // `null` there matches whatever is current, which is right only while
+      // the answer is genuinely unknown. Leaving it null afterwards let an
+      // operation belonging to a replaced workout keep matching its successor.
+      if (workoutId !== undefined) forOp.workout = workoutId
       if (patch) setDraft(cur => applyIdPatch(cur, patch))
       // The entry this set belongs under — from the create when there was one,
       // because on the FIRST write of a blockless row the caller's snapshot
@@ -312,7 +316,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // Both keys: a first attempt that failed BEFORE any workout existed
       // filed its marker under "new", and the retry that finally creates one
       // has to be able to take that same marker down.
-      const cleared = failedRef.current.delete(opKey(forWorkout))
+      const cleared = failedRef.current.delete(opKey(forOp.workout))
       const clearedPending = failedRef.current.delete(opKey(entryWorkout))
       if ((cleared || clearedPending)
         && ![...failedRef.current].some(key => key.startsWith(`${slot}|`))) {
@@ -328,7 +332,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
       // value that never reached it.
-      failedRef.current.add(opKey(forWorkout))
+      failedRef.current.add(opKey(forOp.workout))
       setResync(n => n + 1)
       throw error
     } finally {
@@ -370,7 +374,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     const next = applyPatch(draftRef.current, exIdx, setIdx, patch)
     setDraft(next)
     const forOp: OpContext = {slot, workout: coordinator.workoutId()}
-    void track(persist(next, exIdx, setIdx, patch), forOp).catch(reportFor(forOp))
+    void track(persist(next, exIdx, setIdx, patch, forOp), forOp).catch(reportFor(forOp))
   }
 
   const toggleDone = (exIdx: number, setIdx: number, done: boolean) =>
@@ -414,7 +418,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         let rows: readonly DraftExercise[] = next
         for (const j of pending) {
           if (coordinator.generation() !== at) break
-          const patch = await persist(rows, exIdx, j, {done: true, completedAt: now})
+          const patch = await persist(rows, exIdx, j, {done: true, completedAt: now}, forOp)
           if (patch) rows = applyIdPatch(rows, patch)
         }
       } finally {

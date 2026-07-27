@@ -554,8 +554,13 @@ export const writeSet = async (
  *  the guard and is finished around. */
 const isSetLike = (row: {properties: Record<string, unknown>}): boolean =>
   hasBlockType(row, SET_TYPE)
-  || typeof row.properties[FIELD.weight] === 'number'
-  || typeof row.properties[FIELD.reps] === 'number'
+  // Its own index, which nothing but a set carries — or, for sets written
+  // before that property existed, BOTH numbers. Either one alone is not a
+  // signature: a note annotated with a weight is a note, and promoting it
+  // made Finish read its absent status as un-accepted and delete it.
+  || typeof row.properties[FIELD.setIndex] === 'number'
+  || (typeof row.properties[FIELD.weight] === 'number'
+    && typeof row.properties[FIELD.reps] === 'number')
 
 /** Flip the workout to `done`, stamp each kept exercise's working weight, and
  *  prune the un-accepted sets / empty exercises so the saved record shows only

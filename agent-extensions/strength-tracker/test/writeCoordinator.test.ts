@@ -337,6 +337,18 @@ describe('reset — the session was switched', () => {
     expect(coord.workoutId()).toBeNull()
   })
 
+  it('adopts a released workout that turns up under a different slot', async () => {
+    // Its date or session was edited, so it left the slot we were watching
+    // and reappeared under another. That is a relocation, not a workout we
+    // are done with — refusing it there left the blocks on screen with no
+    // workout id behind them.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.completed()
+
+    coord.reset('w1', SLOT_B, SHAPE)
+    expect(coord.workoutId()).toBe('w1')
+  })
+
   it('lets a released workout come back when the queries say it really did', async () => {
     // Undoing a discard restores the same blocks under the same id. Refusing
     // it for the coordinator's lifetime left Discard a no-op and Finish
