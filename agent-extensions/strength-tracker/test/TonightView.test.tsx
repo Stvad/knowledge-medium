@@ -689,6 +689,34 @@ describe('TonightView', () => {
     expect(screen.queryByText(/^Discarded$/)).toBeNull()
   })
 
+  it('clears only the discarded workout\'s failures, not the whole slot', async () => {
+    // Two workouts can share one evening. Discarding the SECOND wiped the
+    // first's failure marker too, so if that first workout came back — an
+    // undone discard, a rolled-back finish — Finish no longer warned that one
+    // of its changes had never saved, and finalized the stale value.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[1])                       // fails against w1
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    backend.replaceWorkout('w2')
+    await emit()
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await waitFor(() => expect(store.discardWorkout).toHaveBeenCalled())
+
+    // w1 comes back — an undone discard puts the whole subtree back — still
+    // holding a change that never reached a block.
+    backend.replaceWorkout('w1')
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    await emit()
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(screen.getByText(/did not save/)).toBeTruthy())
+    expect(store.finishWorkout).not.toHaveBeenCalled()
+  })
+
   it('stops waiting on a write once its workout has been replaced', async () => {
     // Finish waits for writes already in the air, and it selects them ONCE.
     // A peer replacing the workout afterwards updates the generation and the

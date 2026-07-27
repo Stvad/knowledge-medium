@@ -663,29 +663,26 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
       const sets: typeof entryChildren = []
       let others = 0
       for (const child of entryChildren) {
-        if (hasBlockType(child, SET_TYPE)) {
-          sets.push(child)
+        // Tagged as a set, or carrying a set's own numbers — a set whose tag
+        // went missing is still a set. Excluding it finished the workout
+        // around it: absent from the record `buildHistory` assembles, and — if
+        // it was still open — left as a todo under a completed session,
+        // unreachable forever. Repaired rather than refused, because the tag
+        // is the only thing wrong and the user asked to finish.
+        if (!hasBlockType(child, SET_TYPE) && !isSetLike(child)) {
+          others += 1
           continue
         }
-        // A child carrying a set's own numbers IS a set whose tag went
-        // missing. Excluding it finished the workout around it: absent from
-        // the record `buildHistory` assembles, and — if it was still open —
-        // left as a todo under a completed session, unreachable forever.
-        // Repaired rather than refused, because the tag is the only thing
-        // wrong and the user asked to finish.
-        if (isSetLike(child)) {
-          // BOTH types, as materialization writes them. Done-ness is read off
-          // the raw `status` property, so a set missing `todo` still counts
-          // here and gets kept — and would then sit in the finished record
-          // outside every native todo query, rendering as no checkbox, with
-          // no later pass to repair it.
-          for (const typeId of [SET_TYPE, TODO_TYPE]) {
-            if (!hasBlockType(child, typeId)) await repo.addTypeInTx(tx, child.id, typeId, {}, typeSnapshot)
-          }
-          sets.push(child)
-          continue
+        // BOTH types, as materialization writes them, and for whatever it is
+        // missing — being tagged `strength-set` is no reason to skip the todo
+        // repair. Done-ness is read off the raw `status` property, so a set
+        // that lost only `todo` still counts here and gets KEPT: it would then
+        // sit in the finished record outside every native todo query,
+        // rendering as no checkbox, with no later pass to repair it.
+        for (const typeId of [SET_TYPE, TODO_TYPE]) {
+          if (!hasBlockType(child, typeId)) await repo.addTypeInTx(tx, child.id, typeId, {}, typeSnapshot)
         }
-        others += 1
+        sets.push(child)
       }
       if (others > 0) holdsMore.add(entry.id)
       exercises.push({

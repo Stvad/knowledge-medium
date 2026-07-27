@@ -1013,3 +1013,26 @@ describe('adopting a session with the same lift twice', () => {
     expect(repo.block(a.id).peekProperty(occurrenceProp)).toBe(1)
   })
 })
+
+describe('a set that kept its own type but lost the todo one', () => {
+  it('gets the todo type back at Finish, like an untagged set does', async () => {
+    // Done-ness IS the todo composition, and the tag is hand-editable. A set
+    // that keeps `strength-set` and loses `todo` still reads as done here (the
+    // raw `status` property), so it is KEPT in the finished record — outside
+    // every native todo query, rendering as no checkbox, with no later pass to
+    // repair it. The already-typed branch skipped the repair the inferred one
+    // does.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 5)])]))
+    const setId = workout.exercises[0].setIds[0]
+    expect(await writeSet(repo, setId, {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await repo.tx(tx => tx.setProperty(setId, typesProp, [SET_TYPE]),
+      {scope: ChangeScope.BlockDefault, description: 'lose the todo type tag'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(await isBlockDeleted(repo, setId)).toBe(false)
+    expect(hasBlockType(cache.getSnapshot(setId)!, todoType.id)).toBe(true)
+    expect(hasBlockType(cache.getSnapshot(setId)!, SET_TYPE)).toBe(true)
+  })
+})

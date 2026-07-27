@@ -727,14 +727,21 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     coordinator.abandon()
     try {
       const outcome = await discardWorkout(repo, wid)
-      // The failures belonged to blocks that no longer exist. Keyed only by
-      // day and session, they outlived the workout and the NEXT session of
-      // the same type inherited them — Finish then reported an unsaved change
-      // that belonged to a workout the user had thrown away. (True of a
-      // REFUSED discard too: that session is a finished record now, so a
-      // warning about a write into it is no longer something to act on.)
+      // The failures belonged to blocks that no longer exist. Left behind,
+      // they outlived the workout and the NEXT session of the same type
+      // inherited them — Finish then reported an unsaved change that belonged
+      // to a workout the user had thrown away. (True of a REFUSED discard too:
+      // that session is a finished record now, so a warning about a write into
+      // it is no longer something to act on.)
+      //
+      // THIS workout's, though — not the whole evening's. Two workouts can
+      // share a slot, and clearing by slot took down a failure belonging to
+      // the one that came before: if that one came back, Finish no longer
+      // warned about a change it had never saved. A null-workout failure goes
+      // too — it is the current attempt's, which is the one being discarded.
       for (const [id, failed] of failedRef.current) {
-        if (failed.slot === slot) failedRef.current.delete(id)
+        if (failed.slot !== slot) continue
+        if (failed.workout === wid || failed.workout === null) failedRef.current.delete(id)
       }
       setDraft(buildDraft(prescription, unit))
       // The store refuses to discard a session that is already finished —
