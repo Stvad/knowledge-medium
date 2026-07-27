@@ -190,7 +190,26 @@ export interface WorkoutRecord {
   date: string
   session: SessionType
   exercises: readonly ExerciseRecord[]
+  /** When the session was actually performed — the latest `completedAt` of
+   *  the sets in it. ONLY for telling two sessions of the same day apart:
+   *  `date` is pinned to that day's local noon, so two of them are
+   *  byte-identical and the day alone cannot say which came second.
+   *
+   *  Derived rather than stamped at Finish, because "when you did the work"
+   *  is what a baseline should follow — a morning session finished late in
+   *  the evening is still the morning's. Absent when nothing in the session
+   *  carries a time (hand-entered or imported records). */
+  recordedAt?: number
 }
+
+/** Which of two records is the later training session.
+ *
+ *  The DAY is the primary key and the timestamp only breaks ties inside it —
+ *  never the other way around. Comparing timestamps outright would let a
+ *  session performed at 23:00 outrank one dated the next day but carrying no
+ *  times at all, which is every hand-entered and imported record. */
+export const compareRecords = (a: WorkoutRecord, b: WorkoutRecord): number =>
+  a.date.localeCompare(b.date) || (a.recordedAt ?? 0) - (b.recordedAt ?? 0)
 
 /** A recorded break. `from` is the last pre-break full session, `to` the
  *  first session back — so "sessions since the layoff" counts sessions

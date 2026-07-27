@@ -54,6 +54,50 @@ describe('lastEntryFor with a lift prescribed twice', () => {
   })
 })
 
+describe('two sessions on one day', () => {
+  // Every workout's `date` is pinned to LOCAL NOON of its training day (see
+  // `dayToDate`), so a second session that day carries a byte-identical
+  // timestamp. A strict `>` therefore never prefers it, and which one won was
+  // decided by the order the query happened to return rows in — so tomorrow's
+  // prescription could be built on the morning's warm-up instead of the
+  // evening's real work, and could flip between reloads.
+  const sameDay = (): WorkoutRecord[] => [
+    {
+      id: 'morning', date: '2026-07-20T12:00:00.000Z', session: 'A',
+      recordedAt: Date.parse('2026-07-20T09:30:00.000Z'),
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(185, 5, 5)}],
+    },
+    {
+      id: 'evening', date: '2026-07-20T12:00:00.000Z', session: 'A',
+      recordedAt: Date.parse('2026-07-20T19:15:00.000Z'),
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(245, 5, 5)}],
+    },
+  ]
+
+  it('takes the one performed later, whichever order they arrive in', () => {
+    expect(lastEntryFor(sameDay(), 'Squat', 'def-squat', 0)!.workout.id).toBe('evening')
+    expect(lastEntryFor([...sameDay()].reverse(), 'Squat', 'def-squat', 0)!.workout.id).toBe('evening')
+  })
+
+  it('still lets a later DAY win, however late in the day the earlier one ran', () => {
+    // The day is the primary key and the timestamp only breaks ties within it.
+    // Comparing timestamps outright would let a session finished at 19:15 on
+    // Monday outrank one dated Tuesday but logged with no times at all.
+    const nextDay: WorkoutRecord[] = [...sameDay(), {
+      id: 'tuesday', date: '2026-07-21T12:00:00.000Z', session: 'A',
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(205, 5, 5)}],
+    }]
+    expect(lastEntryFor(nextDay, 'Squat', 'def-squat', 0)!.workout.id).toBe('tuesday')
+  })
+
+  it('leaves records with no times in the order they arrive', () => {
+    // Nothing to order them by, so the answer must at least be stable rather
+    // than turning on an undefined comparison.
+    const untimed: WorkoutRecord[] = sameDay().map(w => ({...w, recordedAt: undefined}))
+    expect(lastEntryFor(untimed, 'Squat', 'def-squat', 0)!.workout.id).toBe('morning')
+  })
+})
+
 describe('lastEntryFor keeps looking for the occurrence it was asked about', () => {
   it('does not take a newer workout\'s other occurrence over an older exact one', () => {
     // Falling back per WORKOUT meant a newer session that only logged the

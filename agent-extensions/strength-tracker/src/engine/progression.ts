@@ -16,6 +16,7 @@
  *    2-set night count as a completed 3-set night once config changes.
  */
 
+import {compareRecords} from './types'
 import type {ExerciseConfig, ExerciseRecord, SetRecord, WorkoutRecord} from './types'
 
 /** Sets that count toward progression: the side-agnostic ones, plus — for
@@ -93,7 +94,7 @@ export const lastEntryFor = (
       : candidates.find(e => e.occurrence === occurrence)
         ?? candidates.find(e => e.occurrence === undefined)
     if (!entry || entry.sets.length === 0) continue
-    if (!best || workout.date > best.workout.date) best = {workout, entry}
+    if (!best || compareRecords(workout, best.workout) > 0) best = {workout, entry}
   }
   return best
 }

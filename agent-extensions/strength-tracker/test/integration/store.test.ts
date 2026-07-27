@@ -26,7 +26,8 @@ import {hasBlockType, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
-import {toLiveSet, buildLiveWorkouts} from '../../src/km/history'
+import {toLiveSet, buildHistory, buildLiveWorkouts} from '../../src/km/history'
+import {lastEntryFor, workingWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {
@@ -1182,6 +1183,39 @@ describe('a set buried under the workout itself', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'bury a set under the workout'})
 
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+})
+
+describe('two finished sessions on one day', () => {
+  it('reads back in the order they were performed, not the order the rows arrive', async () => {
+    // End-to-end for `recordedAt`: both workouts carry the same `date` (local
+    // noon of the training day), so the only thing that can order them is the
+    // `completedAt` stamped on the sets as they were ticked. Without it the
+    // next day's prescription is built on whichever row the query returned
+    // first — the morning's lighter session as often as the evening's.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const morning = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, morning.exercises[0].setIds[0],
+      {weight: 185, reps: 8, done: true, completedAt: Date.parse('2026-07-24T09:30:00Z')}, 'lb')).toBe('written')
+    await finishWorkout(repo, morning.workoutId)
+
+    const evening = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, evening.exercises[0].setIds[0],
+      {weight: 245, reps: 5, done: true, completedAt: Date.parse('2026-07-24T19:15:00Z')}, 'lb')).toBe('written')
+    await finishWorkout(repo, evening.workoutId)
+
+    const rows = await liveChildren(PAGE_ID, WORKOUT_TYPE)
+    const history = buildHistory(
+      [...rows].reverse(), // whichever way round they come back
+      [...await liveChildren(morning.workoutId, EXERCISE_ENTRY_TYPE),
+        ...await liveChildren(evening.workoutId, EXERCISE_ENTRY_TYPE)],
+      [...await liveChildren(morning.exercises[0].id, SET_TYPE),
+        ...await liveChildren(evening.exercises[0].id, SET_TYPE)],
+    )
+
+    expect(history.map(w => w.id)).toEqual([morning.workoutId, evening.workoutId])
+    expect(lastEntryFor(history, 'Bench press')!.workout.id).toBe(evening.workoutId)
+    expect(workingWeight(lastEntryFor(history, 'Bench press')!.entry)).toBe(245)
   })
 })
 

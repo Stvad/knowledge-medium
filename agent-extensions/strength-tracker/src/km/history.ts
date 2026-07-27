@@ -11,6 +11,7 @@
  *  ISO-string → Date for the two date fields.
  */
 
+import {compareRecords} from '../engine/types'
 import type {LayoffRecord, SessionType, SetRecord, WorkoutRecord} from '../engine/types'
 import {dateToDay} from './day'
 import {FIELD} from './fields'
@@ -101,10 +102,21 @@ export const buildHistory = (
     if (str(row, FIELD.status) === 'in-progress') continue
     const entries = (exercisesByWorkout.get(row.id) ?? []).slice().sort(compareByOrderKey)
     const session = str(row, FIELD.session, 'A') as SessionType
+    // When the work was actually done, for telling two sessions of one day
+    // apart — `date` is that day's local noon on both. See `compareRecords`.
+    let recordedAt: number | undefined
+    for (const entry of entries) {
+      for (const set of setsByExercise.get(entry.id) ?? []) {
+        if (!isDone(set)) continue
+        const at = optNum(set, FIELD.completedAt)
+        if (at !== undefined && (recordedAt === undefined || at > recordedAt)) recordedAt = at
+      }
+    }
     workouts.push({
       id: row.id,
       date: d.toISOString(),
       session,
+      ...(recordedAt !== undefined ? {recordedAt} : {}),
       exercises: entries.map(entry => ({
         exercise: str(entry, FIELD.exercise),
         definitionId: optStr(entry, FIELD.definition),
@@ -119,7 +131,7 @@ export const buildHistory = (
       })),
     })
   }
-  return workouts.sort((a, b) => a.date.localeCompare(b.date))
+  return workouts.sort(compareRecords)
 }
 
 // ──── live in-progress workouts (for the logging UI) ────
