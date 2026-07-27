@@ -268,6 +268,20 @@ describe('overlayLive', () => {
     expect(new Set(shown)).toEqual(new Set(['neg', 'frac', 'dupe-a', 'dupe-b']))
   })
 
+  it('does not swap two sets when one is hand-edited onto the other\'s index', () => {
+    // Letting the first of a colliding pair keep the slot and dropping the
+    // second into the gap the first vacated SWAPS them: row 0 then holds set
+    // 2's block and row 1 holds set 1's, so every later edit to either row —
+    // weight, reps, the checkbox — is recorded against the other set. A
+    // duplicated index says the indices cannot be trusted, so neither of them
+    // is used and the pair keeps its sibling order.
+    const merged = overlayLive(base(), liveWith([
+      {id: 'first', weight: 1, reps: 1, done: true, index: 1},
+      {id: 'second', weight: 2, reps: 2, done: true, index: 1},
+    ]))
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['first', 'second', undefined])
+  })
+
   it('falls back to position for sets written before they carried an index', () => {
     // Pre-property data: a contiguous list is the best guess available, and it
     // is right for every set that has not had a sibling deleted.

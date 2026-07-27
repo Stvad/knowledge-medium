@@ -344,13 +344,16 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // It settles every EARLIER attempt this one supersedes — a retry, or a
       // first attempt — and never a later one: that write is about a value the
       // user typed after this one, and its failure is still true.
-      let retired = false
       for (const [id, failed] of failedRef.current) {
-        if (!supersedes(forOp, failed)) continue
-        failedRef.current.delete(id)
-        retired = true
+        if (supersedes(forOp, failed)) failedRef.current.delete(id)
       }
-      if (retired && !anyFailureHere()) setStatus(current => (current === WRITE_FAILED ? null : current))
+      // Then take the message down if nothing on this screen is unaccounted
+      // for — whether or not THIS write is what settled it. Requiring that it
+      // was stranded the warning whenever the failure belonged to a workout a
+      // peer had since replaced: no later write can supersede a failure scoped
+      // to a workout that is gone, so the warning outlived the only thing that
+      // could clear it, over a session where everything was saving.
+      if (!anyFailureHere()) setStatus(current => (current === WRITE_FAILED ? null : current))
       // No overlay on success, deliberately. The block now agrees with what is
       // on screen, and the write's OWN query emission re-runs the overlay a
       // moment later with the news. Asking for one here instead reverted every

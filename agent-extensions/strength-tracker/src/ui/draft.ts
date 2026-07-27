@@ -241,20 +241,34 @@ const mergeSets = (
   // So the block says which set it is (`FIELD.setIndex`). Position is the
   // fallback only for sets written before that property existed, where a
   // contiguous list is the best available guess.
+  // The index is an ordinary hand-editable number, so it can be fractional,
+  // negative, absurd, or a duplicate of another set's. It sizes the draft, so
+  // an unchecked one is not a wrong row — a set edited to index 1e9 asks this
+  // to render a billion of them and takes the client with it. Anything that
+  // isn't a plausible slot falls back to the positional path, where it may
+  // land in the wrong row but is still SHOWN and still editable.
+  const plausible = (set: LiveSet): number | undefined =>
+    set.index !== undefined
+      && Number.isSafeInteger(set.index) && set.index >= 0 && set.index < MAX_SETS_PER_LIFT
+      ? set.index
+      : undefined
+
+  // Two sets claiming one slot means neither claim can be believed, so BOTH
+  // fall back. Letting the first keep the slot swapped them instead: the
+  // second dropped into the gap the first had vacated, so row 0 held set 2's
+  // block and row 1 set 1's, and every later edit to either row — weight,
+  // reps, the checkbox — went to the other set's block.
+  const claims = new Map<number, number>()
+  for (const set of liveSets) {
+    const slot = plausible(set)
+    if (slot !== undefined) claims.set(slot, (claims.get(slot) ?? 0) + 1)
+  }
+
   const bySlot = new Map<number, LiveSet>()
   const unplaced: LiveSet[] = []
   for (const set of liveSets) {
-    // The index is an ordinary hand-editable number, so it can be fractional,
-    // negative, absurd, or a duplicate of another set's. It sizes the draft,
-    // so an unchecked one is not a wrong row — a set edited to index 1e9 asks
-    // this to render a billion of them and takes the client with it. Anything
-    // that isn't a plausible slot falls back to the positional path, where it
-    // may land in the wrong row but is still SHOWN and still editable.
-    const slot = set.index
-    const usable = slot !== undefined
-      && Number.isSafeInteger(slot) && slot >= 0 && slot < MAX_SETS_PER_LIFT
-      && !bySlot.has(slot)
-    if (usable) bySlot.set(slot, set)
+    const slot = plausible(set)
+    if (slot !== undefined && claims.get(slot) === 1) bySlot.set(slot, set)
     else unplaced.push(set)
   }
   let unplacedAt = 0

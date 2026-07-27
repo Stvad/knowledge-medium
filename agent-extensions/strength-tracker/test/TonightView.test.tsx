@@ -562,6 +562,27 @@ describe('TonightView', () => {
     expect(screen.queryByText(/Could not save that/)).toBeNull()
   })
 
+  it('takes down a warning the workout that replaced this one has no failure for', async () => {
+    // The other order: the failure is REPORTED while w1 is still current, and
+    // the peer's replacement arrives after. The warning is about a workout
+    // that is no longer on screen, so no later write can be a retry of it —
+    // and it sat there over a session where everything was saving, which is
+    // what invites the second, reversing tap.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[1])            // fails against w1, and says so
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    backend.replaceWorkout('w2')                // the peer's next session arrives
+    await emit()
+
+    fireEvent.click(checkboxes()[1])            // a write on w2, which works
+    await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
+  })
+
   it('does not put a left session\'s failure on the screen you switched to', async () => {
     // The marker is keyed to the session it failed on, so a warning shown on
     // the other screen could never be cleared from there — it just sat, and
