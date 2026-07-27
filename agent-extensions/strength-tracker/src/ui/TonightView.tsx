@@ -177,6 +177,23 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     forOp.slot === slotRef.current
     && (forOp.workout === null || forOp.workout === coordinator.workoutId())
 
+  /** Does this successful write settle that earlier failure — is it the same
+   *  change, in the same place?
+   *
+   *  The same CHANGE is the set and the fields; the same PLACE is the slot and
+   *  the workout, and both halves are needed. `setKey` names a lift and a set
+   *  index, which two sessions of the same week can share outright — so on the
+   *  change alone, a success on B took down a failure on A, and A's Finish
+   *  then finalized a value that had never reached a block. A failure that
+   *  predates any workout is the exception: it is the first attempt that the
+   *  retry now creating the workout is settling. */
+  const supersedes = (success: OpContext, failed: OpContext): boolean =>
+    failed.id <= success.id
+    && failed.setKey === success.setKey
+    && failed.fields === success.fields
+    && failed.slot === success.slot
+    && (failed.workout === null || failed.workout === success.workout)
+
   // "Which block does this set write to, and what has to be created first" —
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
   // the React half: applying the ids it hands back.
@@ -323,19 +340,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // one that didn't — but only once every set that failed has been
       // retried, and only that message: a "Logged …" confirmation is about
       // something else and must survive.
-      // …and against THIS session's failures. A failure left over from the
-      // session you switched away from kept the warning up on a screen where
-      // everything had saved, which invites the second, reversing tap.
-      // Both keys: a first attempt that failed BEFORE any workout existed
-      // filed its marker under "new", and the retry that finally creates one
-      // has to be able to take that same marker down.
-      // This write settles every EARLIER attempt at the same change — a
-      // retry, or the first attempt this one superseded. Never a later one:
-      // that write is about a value the user typed after this one, and its
-      // failure is still true.
+      //
+      // It settles every EARLIER attempt this one supersedes — a retry, or a
+      // first attempt — and never a later one: that write is about a value the
+      // user typed after this one, and its failure is still true.
       let retired = false
       for (const [id, failed] of failedRef.current) {
-        if (id > forOp.id || failed.setKey !== forOp.setKey || failed.fields !== forOp.fields) continue
+        if (!supersedes(forOp, failed)) continue
         failedRef.current.delete(id)
         retired = true
       }

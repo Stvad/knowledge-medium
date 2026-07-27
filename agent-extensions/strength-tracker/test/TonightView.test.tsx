@@ -616,6 +616,41 @@ describe('TonightView', () => {
     await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
   })
 
+  it('does not let one session\'s write settle the other session\'s failure', async () => {
+    // Two sessions of the same week can prescribe the SAME lift, and the
+    // change a write is about is named by lift and set index — so A's first
+    // set and B's first set have the same name. Settling on that alone let a
+    // success on B take down a failure on A, and A's Finish then finalized a
+    // value that had never reached a block, silently.
+    const both = {
+      A: prescriptionOf([exercise()], 'A'),
+      B: prescriptionOf([exercise()], 'B'),
+    }
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend, {prescriptions: both})
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[1])                       // session A fails
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', {name: 'B · lower'}))
+    backend.setSession('B')
+    await emit()
+
+    fireEvent.click(checkboxes()[1])                       // the same set, on B
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(2))
+
+    fireEvent.click(screen.getByRole('button', {name: 'A · upper'}))
+    backend.setSession('A')
+    await emit()
+
+    // A's failure is still true: nothing on A has been retried.
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(screen.getByText(/did not save/)).toBeTruthy())
+    expect(store.finishWorkout).not.toHaveBeenCalled()
+  })
+
   it('does not make one session wait on another session\'s write', async () => {
     // The coordinator deliberately lets a write for the session you just left
     // finish on its own. A Finish on the session you switched TO must not wait
