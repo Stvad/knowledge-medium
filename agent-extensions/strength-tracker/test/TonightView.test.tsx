@@ -53,9 +53,19 @@ const DAY = '2026-07-25'
  *  Deliberately its own copy of the write-side spelling. Sharing one key
  *  function with the matcher under test makes the two agree by construction,
  *  and "the writer and the reader disagree about which block this row is" is
- *  precisely the class of bug this suite has to be able to see. */
-const entryBlockId = (definitionId: string | undefined, exercise: string, occurrence: number): string =>
-  `e:${definitionId ?? exercise}${occurrence === 0 ? '' : `|${occurrence}`}`
+ *  precisely the class of bug this suite has to be able to see.
+ *
+ *  Scoped by the WORKOUT, as the real `exerciseIdentity` is. Leaving that out
+ *  was harmless while only one session could exist and became a lie the
+ *  moment two could: a peer's session ended up holding blocks with the same
+ *  ids as ours, so a row swapping from one session's block to another's was
+ *  invisible to anything watching block identity. */
+const entryBlockId = (
+  workoutId: string,
+  definitionId: string | undefined,
+  exercise: string,
+  occurrence: number,
+): string => `${workoutId}:e:${definitionId ?? exercise}${occurrence === 0 ? '' : `|${occurrence}`}`
 
 const createBackend = () => {
   /** Sessions that EXIST, not just the one on screen. A peer starting a
@@ -88,7 +98,7 @@ const createBackend = () => {
     // `entryId` wins when the caller has one — the row is attached to an entry
     // whose id need not re-derive. Modelling that is the point: without it the
     // fake would silently make the two spellings the same block.
-    const id = entryId ?? entryBlockId(ex.definitionId, ex.exercise, ex.occurrence)
+    const id = entryId ?? entryBlockId(current.id, ex.definitionId, ex.exercise, ex.occurrence)
     const existing = current.entries.get(id)
     // Adopting: a set that already exists keeps the values it holds. This is
     // the derived-id contract, and the bug it exists to prevent (the caller
@@ -168,7 +178,7 @@ const createBackend = () => {
      *  device. Values here are deliberately NOT the prescription's. */
     seed: (exercise: string, sets: readonly Partial<LiveSet>[], definitionId?: string) => {
       started = true
-      const id = entryBlockId(definitionId, exercise, 0)
+      const id = entryBlockId(current.id, definitionId, exercise, 0)
       current.entries.set(id, {
         id,
         exercise,
@@ -479,7 +489,7 @@ describe('TonightView', () => {
 
     fireEvent.click(checkboxes()[0])
     await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
-    backend.setById('e:Bench press|0')!.done = false
+    backend.setById('w1:e:Bench press|0')!.done = false
     await emit()
     expect(checkboxes()[0].checked).toBe(false)
   })
@@ -498,7 +508,7 @@ describe('TonightView', () => {
     await emit()
 
     expect(vi.mocked(store.writeSet).mock.calls[0][2]).toEqual({done: true, completedAt: expect.any(Number)})
-    expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 205, reps: 5, done: true})
+    expect(backend.setById('w1:e:Bench press|0')).toMatchObject({weight: 205, reps: 5, done: true})
     expect(weights()[0].value).toBe('205')
   })
 
@@ -508,7 +518,7 @@ describe('TonightView', () => {
     await emit()
     expect(checkboxes()[0].checked).toBe(false)
 
-    backend.setById('e:Bench press|0')!.done = true
+    backend.setById('w1:e:Bench press|0')!.done = true
     await emit()
     expect(checkboxes()[0].checked).toBe(true)
   })
@@ -535,7 +545,7 @@ describe('TonightView', () => {
 
     await backend.release()
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
-    expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 195})
+    expect(backend.setById('w1:e:Bench press|0')).toMatchObject({weight: 195})
   })
 
   it('validates a stale write against the session it was resolved for', async () => {
@@ -559,7 +569,7 @@ describe('TonightView', () => {
     const calls = vi.mocked(store.writeSet).mock.calls
     expect(calls).toHaveLength(1)
     expect(calls[0][5]).toBe('w1')               // A's workout, not B's absence
-    expect(backend.setById('e:Bench press|0')).toMatchObject({done: true})
+    expect(backend.setById('w1:e:Bench press|0')).toMatchObject({done: true})
   })
 
   it('suppresses a failure once its workout has been replaced', async () => {
@@ -1266,7 +1276,7 @@ describe('TonightView', () => {
     mount(backend)
     await emit()
 
-    backend.deleteSet('e:Bench press|1')
+    backend.deleteSet('w1:e:Bench press|1')
     fireEvent.click(checkboxes()[1])
     await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
     await waitFor(() => expect(checkboxes()[1].checked).toBe(false))
@@ -1292,7 +1302,7 @@ describe('TonightView', () => {
     fireEvent.click(checkboxes()[1])
     await waitFor(() => expect(store.materializeExercise).toHaveBeenCalled())
     await emit()
-    expect(backend.entryIds()).toEqual(['e:Bench press'])
+    expect(backend.entryIds()).toEqual(['w1:e:Bench press'])
   })
 
   it('re-attaches when the plan is unreadable HERE but was not where the session started', async () => {
@@ -1309,7 +1319,7 @@ describe('TonightView', () => {
     fireEvent.click(checkboxes()[1])
     await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
     await emit()
-    expect(backend.entryIds()).toEqual(['e:def-bench'])
+    expect(backend.entryIds()).toEqual(['w1:e:def-bench'])
   })
 
   it('does not report a finished workout as unsaved when the shoulder check fails', async () => {
@@ -1393,7 +1403,7 @@ describe('TonightView', () => {
     fireEvent.click(checkboxes()[0])
 
     await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
-    expect(vi.mocked(store.writeSet).mock.calls[0][4]).toBe('e:Bench press')
+    expect(vi.mocked(store.writeSet).mock.calls[0][4]).toBe('w1:e:Bench press')
   })
 
   it('takes down "tap it again" once a retry works', async () => {
@@ -1549,7 +1559,7 @@ describe('TonightView', () => {
     mount(backend)
     await emit()
 
-    backend.deleteSet('e:Bench press|1')
+    backend.deleteSet('w1:e:Bench press|1')
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
 
     await waitFor(() => expect(screen.getByText(/Something changed while saving/)).toBeTruthy())
@@ -1587,9 +1597,9 @@ describe('TonightView', () => {
     await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
     await emit()
 
-    expect(backend.setById('e:Bench press|0')).toMatchObject({completedAt: 111})
-    expect(backend.setById('e:Bench press|1')!.completedAt).toBeGreaterThan(111)
-    expect(vi.mocked(store.writeSet).mock.calls.map(call => call[1])).toEqual(['e:Bench press|1'])
+    expect(backend.setById('w1:e:Bench press|0')).toMatchObject({completedAt: 111})
+    expect(backend.setById('w1:e:Bench press|1')!.completedAt).toBeGreaterThan(111)
+    expect(vi.mocked(store.writeSet).mock.calls.map(call => call[1])).toEqual(['w1:e:Bench press|1'])
   })
 
   it('stops an accept-all batch when the session is discarded under it', async () => {
@@ -1741,6 +1751,45 @@ describe('NumberField', () => {
     expect(vi.mocked(store.writeSet).mock.calls[0][2]).toEqual({reps: 7})
   })
 
+  it('abandons half-typed digits when the row starts editing a different block', async () => {
+    // The row does not remount across a workout replacement — same lift, same
+    // set index, so React keeps the input — and "never overwrite text under
+    // the cursor" then held digits meant for the OLD session and committed
+    // them into the new one's set on blur, over whatever the peer logged.
+    backend.seed('Bench press', [{weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    const field = weights()[0]
+    fireEvent.focus(field)
+    fireEvent.change(field, {target: {value: '315'}})
+
+    backend.startNextWorkout('w2')                       // a peer's session takes the slot
+    backend.seed('Bench press', [{weight: 205, reps: 5}])
+    await emit()
+
+    // The field shows the new block's value, not the abandoned keystrokes.
+    expect(weights()[0].value).toBe('205')
+    fireEvent.blur(weights()[0])
+    await act(async () => {})
+    expect(store.writeSet).not.toHaveBeenCalled()
+  })
+
+  it('keeps what is being typed when the create merely hands back an id', async () => {
+    // `undefined -> id` is our OWN create naming the set already being edited.
+    // Treating that as a swap would throw the number away mid-keystroke, and
+    // that transition happens on the first edit of every session.
+    mount(backend)
+    const field = weights()[0]
+    fireEvent.focus(field)
+    fireEvent.change(field, {target: {value: '225'}})
+    fireEvent.click(checkboxes()[0])                     // creates the workout + its blocks
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalled())
+    await emit()
+
+    expect(weights()[0].value).toBe('225')
+  })
+
   it('commits on Enter, which is how a phone keyboard says "done"', async () => {
     // Without it the typed value lives only in the DOM until something else
     // blurs the field — lock the phone first and it is gone.
@@ -1766,7 +1815,7 @@ describe('NumberField', () => {
 
     const field = weights()[0]
     fireEvent.focus(field)
-    backend.setById('e:Bench press|0')!.weight = 195
+    backend.setById('w1:e:Bench press|0')!.weight = 195
     await emit()
     fireEvent.blur(field)
 
@@ -1781,7 +1830,7 @@ describe('NumberField', () => {
     await emit()
     expect(weights()[0].value).toBe('185')
 
-    backend.setById('e:Bench press|0')!.weight = 205
+    backend.setById('w1:e:Bench press|0')!.weight = 205
     await emit()
     expect(weights()[0].value).toBe('205')
   })

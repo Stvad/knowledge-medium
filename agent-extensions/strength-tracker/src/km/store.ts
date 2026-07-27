@@ -312,9 +312,7 @@ const placeStraySets = async (
     // re-tagged as a set + todo, and rendered as a 0 × 0 row it never was.
     // So the credential has to be something else: the type tag, or the two
     // numbers a set written before that tag existed still carries.
-    const isSet = hasBlockType(child, SET_TYPE)
-      || (typeof child.properties[FIELD.weight] === 'number'
-        && typeof child.properties[FIELD.reps] === 'number')
+    const isSet = provenSet(child)
     // First one wins, so two blocks claiming an index resolve the same way on
     // every device: `childrenOf` orders by `(order_key, id)`, which is the
     // same order every replica sees.
@@ -749,20 +747,31 @@ export const writeSet = async (
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
 }
 
-/** A child that IS a set, tag or no tag. Its own numbers are the giveaway,
- *  and the tag is hand-editable — so the guard that refuses a partial read
- *  and the repair that puts the tag back have to agree about what they are
- *  looking at, or a lift whose entry AND sets all lost their tags slips past
- *  the guard and is finished around. */
-const isSetLike = (row: {properties: Record<string, unknown>}): boolean =>
+/** A child that IS a set on evidence it cannot have acquired by accident:
+ *  the type tag, or — for sets written before that tag existed — BOTH of its
+ *  numbers. One number alone is not a signature; a note annotated with a
+ *  weight is a note.
+ *
+ *  `strength:setIndex` is deliberately NOT evidence here, even though only a
+ *  set is meant to carry it. It is the key every fallback looks a set up BY,
+ *  and a property that is both the key and the credential lets a hand-edited
+ *  note pass for a set — which on this side of the fence is not a mis-render
+ *  but a DELETE: Finish tags the note set + todo, reads its absent todo
+ *  status as un-accepted, and prunes it with its whole subtree.
+ *
+ *  So: this one for anything that WRITES — pruning, adopting, re-tagging. */
+const provenSet = (row: {properties: Record<string, unknown>}): boolean =>
   hasBlockType(row, SET_TYPE)
-  // Its own index, which nothing but a set carries — or, for sets written
-  // before that property existed, BOTH numbers. Either one alone is not a
-  // signature: a note annotated with a weight is a note, and promoting it
-  // made Finish read its absent status as un-accepted and delete it.
-  || typeof row.properties[FIELD.setIndex] === 'number'
   || (typeof row.properties[FIELD.weight] === 'number'
     && typeof row.properties[FIELD.reps] === 'number')
+
+/** …and this one for anything that REFUSES. "Might be a set" is the right
+ *  question for a guard whose answer is "stop and let the user look", because
+ *  being wrong costs a message; the narrow question is the right one for a
+ *  guard whose answer is "delete it", because being wrong costs the block.
+ *  A set that lost its tag and kept only its index still stops Finish. */
+const mightBeSet = (row: {properties: Record<string, unknown>}): boolean =>
+  provenSet(row) || typeof row.properties[FIELD.setIndex] === 'number'
 
 /** Flip the workout to `done`, stamp each kept exercise's working weight, and
  *  prune the un-accepted sets / empty exercises so the saved record shows only
@@ -783,20 +792,25 @@ const isSetLike = (row: {properties: Record<string, unknown>}): boolean =>
  *  lists, so it was never considered at all. Both are just "read the tree".
  *
  *  The caller's job is to have flushed its own ticks first. */
-/** Does anything in this block's subtree look like a set?
+/** Could anything in this block's subtree be a set?
  *
  *  All the way down, not one level: a note under a note under the lift hides a
  *  set just as well, and the record only ever mentions sets that are direct
  *  children of an entry. Depth-bounded because the tree is the user's and
- *  nothing stops them nesting further; the bound is far past any real log, and
- *  refusing to finish is the answer either way. */
+ *  nothing stops them nesting further.
+ *
+ *  At the bound the honest answer is "I did not look", and that has to read as
+ *  MIGHT rather than doesn't. Returning false there meant a set nested past it
+ *  was finished around: the workout went `done` with a live, possibly open
+ *  todo sitting in a subtree the record never mentions and history never
+ *  reads. Refusing costs a message on a note tree deeper than any real log. */
 const MAX_BURIED_DEPTH = 8
-const holdsSetLike = async (tx: Tx, blockId: string, depth = 0): Promise<boolean> => {
-  if (depth >= MAX_BURIED_DEPTH) return false
+const mightHoldSet = async (tx: Tx, blockId: string, depth = 0): Promise<boolean> => {
   const children = await tx.childrenOf(blockId, undefined, {hidePropertyChildren: true})
+  if (depth >= MAX_BURIED_DEPTH) return children.length > 0
   for (const child of children) {
-    if (isSetLike(child)) return true
-    if (await holdsSetLike(tx, child.id, depth + 1)) return true
+    if (mightBeSet(child)) return true
+    if (await mightHoldSet(tx, child.id, depth + 1)) return true
   }
   return false
 }
@@ -844,14 +858,14 @@ export const finishWorkout = async (
       // children, so looking only at its descendants missed it entirely and
       // Finish completed around a live, possibly open todo that the record
       // never mentions.
-      if (isSetLike(child)) {
+      if (mightBeSet(child)) {
         untypedWithSets.push(child.id)
         continue
       }
       // All the way down, like the entry-level check: a typed entry beside it
       // keeps the blanket guard quiet, so a set two notes deep under the
       // WORKOUT finished clean and stayed live.
-      if (await holdsSetLike(tx, child.id)) untypedWithSets.push(child.id)
+      if (await mightHoldSet(tx, child.id)) untypedWithSets.push(child.id)
     }
     if (untypedWithSets.length > 0 || (children.length > 0 && entries.length === 0)) {
       throw new Error(
@@ -888,9 +902,9 @@ export const finishWorkout = async (
         // it was still open — left as a todo under a completed session,
         // unreachable forever. Repaired rather than refused, because the tag
         // is the only thing wrong and the user asked to finish.
-        if (!hasBlockType(child, SET_TYPE) && !isSetLike(child)) {
+        if (!provenSet(child)) {
           others += 1
-          if (await holdsSetLike(tx, child.id)) buriedSets.push(child.id)
+          if (await mightHoldSet(tx, child.id)) buriedSets.push(child.id)
           continue
         }
         // BOTH types, as materialization writes them, and for whatever it is
@@ -1142,7 +1156,7 @@ export const migrateLegacyEntries = async (
         // Already migrated (or logged in the current shape). Checked on the
         // BLOCKS rather than on a marker property, because the blocks are the
         // thing a second run would duplicate.
-        if (children.some(isSetLike)) {
+        if (children.some(mightBeSet)) {
           report.skipped.push({entryId: entry.id, reason: 'has-set-blocks'})
           continue
         }
@@ -1168,7 +1182,7 @@ export const migrateLegacyEntries = async (
             // a set at all. Neither is this set, and there is no second id to
             // derive, so the answer is the same as everywhere else in this
             // file: mint.
-            adoptable: block => block.parentId === entry.id && isSetLike(block),
+            adoptable: block => block.parentId === entry.id && provenSet(block),
             ...spec,
           })
           // Counted only for a set that actually landed. Incrementing on an

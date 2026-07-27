@@ -216,6 +216,100 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(await isBlockDeleted(repo, setId)).toBe(false)
   })
 
+  it('does not promote — or delete — a note that merely carries a set index', async () => {
+    // Same shape as the weight case below, one property over, and this is the
+    // side of the fence where being wrong DELETES. `strength:setIndex` is the
+    // key every set fallback looks a block up by, so treating it as evidence
+    // that a block IS a set let a hand-annotated note be tagged set + todo,
+    // read as un-accepted, and pruned with its whole subtree.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const bench = workout.exercises[0]
+    expect(await writeSet(repo, bench.setIds[0], {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'index-note', workspaceId: WORKSPACE_ID, parentId: bench.id, orderKey: 'z0',
+        content: 'superset with rows',
+      })
+      await tx.setProperty('index-note', setIndexProp, 3)
+      await tx.create({
+        id: 'note-child', workspaceId: WORKSPACE_ID, parentId: 'index-note', orderKey: 'a0',
+        content: 'keep the rest short',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a note carrying a set index'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(await isBlockDeleted(repo, 'index-note')).toBe(false)
+    expect(await isBlockDeleted(repo, 'note-child')).toBe(false)   // the subtree went with it
+    expect(hasBlockType(cache.getSnapshot('index-note')!, SET_TYPE)).toBe(false)
+  })
+
+  it('still refuses to finish around a set that kept only its index', async () => {
+    // The other half: narrowing what may be PRUNED must not narrow what stops
+    // Finish. A real set stripped of its tag still carries its index, and
+    // being finished around would leave it live under a completed record.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'orphan-note', workspaceId: WORKSPACE_ID, parentId: workout.workoutId, orderKey: 'z0',
+        content: 'notes',
+      })
+      await tx.create({
+        id: 'stripped-set', workspaceId: WORKSPACE_ID, parentId: 'orphan-note', orderKey: 'a0',
+        content: 'a set that lost everything but its index',
+      })
+      await tx.setProperty('stripped-set', setIndexProp, 0)
+    }, {scope: ChangeScope.BlockDefault, description: 'a stripped set under a note'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+
+  it('still refuses over a stripped set outdented directly under the workout', async () => {
+    // The workout-level guard, reached without a note in between — the case
+    // the sibling above routes around. Narrowing THIS one to the evidence
+    // Finish needs before pruning would let the set be finished around.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'outdented', workspaceId: WORKSPACE_ID, parentId: workout.workoutId, orderKey: 'z0',
+        content: 'a set that lost everything but its index',
+      })
+      await tx.setProperty('outdented', setIndexProp, 0)
+    }, {scope: ChangeScope.BlockDefault, description: 'outdent a stripped set'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+
+  it('refuses rather than finishing around a subtree too deep to check', async () => {
+    // At the depth bound the honest answer is "I did not look", and that has
+    // to read as MIGHT. Reading it as "no set here" finished the workout with
+    // a live, possibly open todo in a subtree the record never mentions.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      let parent = workout.workoutId
+      for (let i = 0; i < 12; i += 1) {
+        const id = `deep-${i}`
+        await tx.create({id, workspaceId: WORKSPACE_ID, parentId: parent, orderKey: 'z0', content: `level ${i}`})
+        parent = id
+      }
+      await tx.setProperty(parent, weightProp, 225)
+      await tx.setProperty(parent, repsProp, 3)
+    }, {scope: ChangeScope.BlockDefault, description: 'a set nested past the scan bound'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+
   it('does not promote a note that merely carries a weight', async () => {
     // One numeric property is not a set signature. Promoting a note on that
     // basis made Finish read its absent status as un-accepted and delete it —

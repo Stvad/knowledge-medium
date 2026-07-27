@@ -1117,11 +1117,15 @@ function NumberField({
   value,
   label,
   disabled,
+  backingId,
   onCommit,
 }: {
   value: number
   label: string
   disabled: boolean
+  /** The block this field is currently editing. Not for reading — only for
+   *  noticing that it became a DIFFERENT block. */
+  backingId?: string
   onCommit: (value: number) => void
 }) {
   const [text, setText] = useState(() => fieldText(value))
@@ -1132,6 +1136,30 @@ function NumberField({
   // block changed underneath a focused field, writing the number the user was
   // merely looking at back over the newer one.
   const enteredRef = useRef('')
+  const backingRef = useRef(backingId)
+
+  // The row is still the same row — same lift, same set index, so React keeps
+  // this input mounted — but it is now editing a different BLOCK. A peer
+  // finishing our session and starting the next one does that: the draft
+  // reseeds onto the replacement's sets while a field is focused, and the
+  // rule below (never overwrite text under the cursor) would hold half-typed
+  // digits meant for the old session and commit them into the new one's set
+  // on blur, over whatever the peer logged there.
+  //
+  // `undefined -> id` is NOT that: it is our own create handing back the id
+  // for the set already being edited, and remounting or reseeding there would
+  // throw away the number the user is in the middle of typing.
+  if (backingId !== backingRef.current) {
+    const swapped = backingRef.current !== undefined && backingId !== undefined
+    backingRef.current = backingId
+    if (swapped) {
+      setText(fieldText(value))
+      setShown(value)
+      // …and make an untouched blur a no-op, so leaving the field cannot
+      // commit the new block's own value back over itself.
+      enteredRef.current = fieldText(value)
+    }
+  }
 
   // Follow the block when the change came from anywhere but this input — but
   // never while it's focused, or a set someone ticks elsewhere would rewrite
@@ -1204,10 +1232,17 @@ function SetRow({
         value={set.weight}
         label="weight"
         disabled={locked}
+        backingId={set.blockId}
         onCommit={weight => onCommit({weight})}
       />
       <span className="shrink-0 text-xs text-muted-foreground">{unit} ×</span>
-      <NumberField value={set.reps} label="reps" disabled={locked} onCommit={reps => onCommit({reps})} />
+      <NumberField
+        value={set.reps}
+        label="reps"
+        disabled={locked}
+        backingId={set.blockId}
+        onCommit={reps => onCommit({reps})}
+      />
       <label className="ml-auto flex cursor-pointer items-center gap-1.5 py-1 pl-2 text-xs text-muted-foreground">
         <span>done</span>
         <input
