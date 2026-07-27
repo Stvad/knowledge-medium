@@ -125,12 +125,29 @@ export const searchAliasLabels = async (
 ): Promise<string[]> => {
   if (!workspaceId) return []
   const trimmed = query.trim()
-  // Empty query falls back to the legacy distinct-alias list (oldest-
-  // first) — there is no per-row recency signal to rank against, and
-  // the existing surfaces (RefPropertyEditor "browse all") expect a
-  // deterministic alphabet-ish order.
+  // Bare `[[` is a suggestion surface, not "browse all aliases". Loading
+  // every workspace alias here made the first request dominate completion
+  // latency, and CodeMirror doesn't start the superseding `[[query` request
+  // until this one settles. The navigation MRU is already bounded (10 ids),
+  // usually cache-hot, and is the useful zero-input ordering anyway.
   if (!trimmed) {
-    return repo.query.aliasesInWorkspace({workspaceId, filter: ''}).load()
+    const blocks = await Promise.all(
+      (recentBlockIds ?? []).map(blockId => repo.block(blockId).load()),
+    )
+    const seen = new Set<string>()
+    const labels: string[] = []
+    for (const block of blocks) {
+      if (!block || block.workspaceId !== workspaceId) continue
+      const aliases = block.properties[aliasesProp.name]
+      if (!Array.isArray(aliases)) continue
+      for (const alias of aliases) {
+        if (typeof alias !== 'string' || alias.trim() === '' || seen.has(alias)) continue
+        seen.add(alias)
+        labels.push(alias)
+        if (labels.length === limit) return labels
+      }
+    }
+    return labels
   }
 
   const rows = await runFuzzyAliasSearch(repo, {

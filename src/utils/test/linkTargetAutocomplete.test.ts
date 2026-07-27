@@ -244,6 +244,40 @@ describe('link target autocomplete helpers', () => {
     })).resolves.toEqual(['Dating', 'Dating pool'])
   })
 
+  it('uses recently-opened page aliases for an empty CodeMirror completion query', async () => {
+    await create({id: 'older', aliases: ['Older page']})
+    await create({id: 'recent', aliases: ['Recent page', 'Recent alternate']})
+    await create({id: 'not-recent', aliases: ['Not recent']})
+
+    await expect(searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['recent', 'older'],
+    })).resolves.toEqual(['Recent page', 'Recent alternate', 'Older page'])
+  })
+
+  it('does not browse every workspace alias for an empty completion query', async () => {
+    await create({id: 'page', aliases: ['Workspace page']})
+
+    await expect(searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: [],
+    })).resolves.toEqual([])
+  })
+
+  it('skips missing recent blocks and limits aliases without falling through to older pages', async () => {
+    await create({id: 'recent', aliases: ['Recent page', 'Recent alternate']})
+    await create({id: 'older', aliases: ['Older page']})
+
+    await expect(searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['recent', 'missing', 'older'],
+      limit: 2,
+    })).resolves.toEqual(['Recent page', 'Recent alternate'])
+  })
+
   it('matches out-of-order tokens (word skip)', async () => {
     await create({id: 'match', aliases: ['PR Review Skill']})
     await create({id: 'no-pr', aliases: ['Book Review']})
