@@ -200,6 +200,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     try {
       const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
       if (patch) setDraft(cur => applyIdPatch(cur, patch))
+      // The entry this set belongs under — from the create when there was one,
+      // because on the FIRST write of a blockless row the caller's snapshot
+      // predates it and `next[exIdx].blockId` is still undefined. Passing that
+      // skipped the parent check on exactly the path where the entry was just
+      // materialized.
+      const entryId = patch
+        ? (patch.kind === 'workout' ? patch.workout.exercises[exIdx]?.id : patch.entry.id)
+        : next[exIdx].blockId
       // The CHANGE, not the whole set: the rest of this row may be older than
       // the block (the live query hadn't resolved when the draft was built),
       // and writing it back is how logged reps got replaced by the
@@ -209,13 +217,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // by a Finish this view hasn't seen. Treating it as success left the
       // checkbox ticked over nothing.
       const outcome = blockId
-        ? await writeSet(repo, blockId, change, next[exIdx].unit, next[exIdx].blockId)
+        ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId)
         : 'written'
-      endWrite(writingKey)
-      if (outcome === 'gone') {
-        setResync(n => n + 1)
-        throw new Error(`writeSet: set block ${blockId} is gone`)
-      }
+      if (outcome === 'gone') throw new Error(`writeSet: set block ${blockId} is gone`)
       // This tap worked, so take down a "tap it again" left over from the last
       // one that didn't. Only that message — a "Logged …" confirmation is
       // about something else and must survive.
@@ -230,9 +234,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
       // value that never reached it.
-      endWrite(writingKey)
       setResync(n => n + 1)
       throw error
+    } finally {
+      // Exactly once per `beginWrite`, whichever way this went. The `gone`
+      // path used to decrement here AND fall into the catch, which released
+      // the exemption while ANOTHER write for the same set was still in
+      // flight — a stale emission then reverted that one's optimistic value.
+      endWrite(writingKey)
     }
   }
 

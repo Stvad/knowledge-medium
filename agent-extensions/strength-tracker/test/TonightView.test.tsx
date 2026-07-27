@@ -612,6 +612,42 @@ describe('TonightView', () => {
     await waitFor(() => expect(checkboxes()[0].checked).toBe(false))
   })
 
+  it('keeps a set exempt while its OTHER write is still going', async () => {
+    // Two writes for one set overlap routinely: typing reps then tapping the
+    // checkbox blurs the field first. If the checkbox write comes back `gone`
+    // and releases the exemption twice — once directly, once via the catch —
+    // the set stops being exempt while the reps write is still in flight, and
+    // the next emission reverts what the user typed.
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    backend.hold()
+    const field = reps()[0]
+    act(() => field.focus())
+    fireEvent.change(field, {target: {value: '7'}})
+    fireEvent.blur(field)                       // write A: reps — parked
+    await act(async () => {})
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[0])             // write B: done — answers `gone`
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    await emit()                                 // the block still says 8
+    expect(reps()[0].value).toBe('7')
+  })
+
+  it('checks the set against the entry its own create just made', async () => {
+    // On the first write of a blockless row the draft has no entry id yet, so
+    // passing `next[exIdx].blockId` skipped the parent check on exactly the
+    // path where the entry had just been materialized.
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    expect(vi.mocked(store.writeSet).mock.calls[0][4]).toBe('e:Bench press')
+  })
+
   it('takes down "tap it again" once a retry works', async () => {
     // The message tells the user to tap again. Leaving it up after the tap
     // succeeded invites a second, reversing tap.
