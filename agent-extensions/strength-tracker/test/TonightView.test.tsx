@@ -156,15 +156,22 @@ const createBackend = () => {
       current.id = nextId
     },
 
-    /** The fuller version: a peer started the NEXT session for this evening,
-     *  which is a different workout with its own blocks — and ours does not
-     *  vanish when theirs appears. Two clients both starting a session while
-     *  one is behind on sync is exactly what a minted (rather than derived)
-     *  repeat-workout id makes possible, so it needs to be drivable.
-     *
-     *  `replaceWorkout` renames ours instead, which is fine while a test only
-     *  reads the id, but cannot show a write landing in the wrong session. */
+    /** A peer FINISHED ours and started the evening's next session. Ours
+     *  leaves the live query (it is a record now) but keeps its blocks, so a
+     *  write already resolved against it still finds them — which
+     *  `replaceWorkout`, renaming ours in place, cannot show. */
     startNextWorkout: (nextId: string) => {
+      current.finished = true
+      current = {id: nextId, entries: new Map(), finished: false}
+      sessions.push(current)
+    },
+
+    /** A second session that COEXISTS with ours — both unfinished, both for
+     *  tonight. Two clients each starting the evening's second session while
+     *  one is behind on sync is exactly what a MINTED (rather than derived)
+     *  repeat-workout id makes possible, so it has to be drivable. Which one
+     *  a client logs into is `preferredLive`'s call, by id. */
+    addLiveWorkout: (nextId: string) => {
       current = {id: nextId, entries: new Map(), finished: false}
       sessions.push(current)
     },
@@ -1067,7 +1074,7 @@ describe('TonightView', () => {
     await emit()
     expect(screen.queryByText(/unfinished session/)).toBeNull()
 
-    backend.startNextWorkout('w2')   // ours stays live; theirs joins it
+    backend.addLiveWorkout('w2')     // ours stays live; theirs joins it
     backend.seed('Bench press', [{weight: 245, reps: 3}])
     await emit()
 
@@ -1181,7 +1188,8 @@ describe('TonightView', () => {
     backend.hold()
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
     await act(async () => {})                   // row 0 resolved; its write parks
-    backend.startNextWorkout('w2')              // …and a peer's session appears now
+    backend.addLiveWorkout('a-peer')            // …and a peer's session appears now
+                                                // (sorts before `w1`, so the view attaches to it)
     await emit()
     await backend.release()
 

@@ -20,6 +20,7 @@ import {detectLeftRightAsymmetry} from '../engine/shoulder'
 import type {ExerciseVideo, SessionType} from '../engine/types'
 import {altOptionKey} from '../engine/types'
 import {SHOULDER_POLICY_BLOCK_ID} from '../km/fields'
+import {preferredLive} from '../km/history'
 import type {LiveWorkout} from '../km/history'
 import {
   discardWorkout,
@@ -95,7 +96,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const unit = config.unit
 
   const tonights = liveWorkouts.filter(w => w.day === day && w.session === session)
-  const live = tonights[0]
+  const live = preferredLive(tonights)
   /** More than one unfinished session for tonight. This view can only log into
    *  one of them, so the others sit there with their sets — possibly open
    *  todos — reachable from the outline and from nothing here.

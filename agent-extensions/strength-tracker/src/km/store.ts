@@ -55,7 +55,7 @@ import {
 import {dateToDay, dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
-import {buildAltChoices, escapeKeyPart, matchLiveExercises, toLiveSet} from './history'
+import {buildAltChoices, escapeKeyPart, matchLiveExercises, preferredLive, toLiveSet} from './history'
 import {LEGACY_SETS_PROP, readLegacySets} from './legacy'
 import {finishPlan, type FinishEntry} from './finish'
 export type {FinishPlan} from './finish'
@@ -541,11 +541,12 @@ export const startWorkout = async (
     // be showing), and only then start a new one.
     const standing = derived.status !== 'taken'
       ? undefined
-      : (await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
-        // Newest first: `startWorkout` files each session at the top, and
-        // `childrenOf` orders by `(order_key, id)` — the same order on every
-        // replica, so two devices resolve a tie identically.
-        .find(block => block.id !== derived.id && isTonightsLog(block, draft))
+      // `preferredLive`, not "the first child": this scan is ordered
+      // `(order_key, id)` while the VIEW reads a query ordered
+      // `(created_at, id)`, so taking either one's first match let the tap
+      // write into one workout while the screen attached to the other.
+      : preferredLive((await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
+        .filter(block => block.id !== derived.id && isTonightsLog(block, draft)))
     const workout = derived.status !== 'taken'
       ? derived
       : standing !== undefined
@@ -1140,14 +1141,29 @@ const legacyLiftKey = (entry: BlockData): string =>
  *  One transaction, so the whole thing is one undo step. */
 export const migrateLegacyEntries = async (
   repo: Repo,
-  pageId: string,
+  workspaceId: string,
 ): Promise<LegacyMigrationReport> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
+  // The SAME population the history path reads, rather than one page's direct
+  // children. A workout indented under a year heading — or filed anywhere else
+  // in the workspace — is readable by every other part of this extension, so a
+  // recovery action that cannot see it reports nothing skipped while quietly
+  // leaving that session's JSON sets unconverted, and therefore absent from
+  // progression.
+  //
+  // Read BEFORE the transaction, because `Tx` has no arbitrary queries. The
+  // window that opens is harmless for a re-runnable one-shot: a workout
+  // created inside it is caught by the next run, one deleted inside it is
+  // dropped by the re-read below, and every per-entry guard still applies.
+  const candidates = await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load()
   return repo.tx(async tx => {
     const report: LegacyMigrationReport = {converted: 0, sets: 0, stamped: 0, numbered: 0, skipped: []}
 
-    for (const workout of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
-      if (!hasBlockType(workout, WORKOUT_TYPE)) continue
+    for (const candidate of candidates) {
+      // Re-read inside the transaction: the list above is a snapshot taken
+      // before it, and everything below writes.
+      const workout = await tx.get(candidate.id)
+      if (!workout || workout.deleted || !hasBlockType(workout, WORKOUT_TYPE)) continue
       const entries = await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true})
       let touched = false
 

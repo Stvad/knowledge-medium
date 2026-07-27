@@ -26,7 +26,7 @@ import {hasBlockType, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
-import {toLiveSet, buildHistory, buildLiveWorkouts} from '../../src/km/history'
+import {toLiveSet, buildHistory, buildLiveWorkouts, preferredLive} from '../../src/km/history'
 import {LEGACY_SETS_PROP} from '../../src/km/legacy'
 import {lastEntryFor, workingWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
@@ -796,6 +796,40 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(repo.block(second.workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 
+  it('picks the same one of two live sessions the view would', async () => {
+    // The writer scans the page's children, ordered `(order_key, id)`; the
+    // view reads a typed query, ordered `(created_at, id)`. Taking either
+    // one's FIRST match meant a tap could write into one workout while the
+    // screen attached itself to the other, and the saved edit vanished from
+    // view. `preferredLive` is the tiebreak both sides share.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await finishWorkout(repo, first.workoutId)
+    const repeat = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    // A peer's second unfinished session for the same slot, filed LAST on the
+    // page so page order and id order disagree.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'aaa-peer-session', workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'z9',
+        content: 'Session A · 2026-07-24',
+      })
+      await tx.setProperty('aaa-peer-session', sessionProp, 'A')
+      await tx.setProperty('aaa-peer-session', dateProp, dayToDate('2026-07-24'))
+      await tx.setProperty('aaa-peer-session', statusProp, 'in-progress')
+      await repo.addTypeInTx(tx, 'aaa-peer-session', WORKOUT_TYPE)
+    }, {scope: ChangeScope.BlockDefault, description: 'a peer session'})
+
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    // Both are live for this slot; the writer must land on the one the view's
+    // `preferredLive` picks — the smaller id — not on page order.
+    const live = buildLiveWorkouts(await liveChildren(PAGE_ID, WORKOUT_TYPE), [], [])
+    expect(preferredLive(live.filter(w => w.day === '2026-07-24' && w.session === 'A'))!.id)
+      .toBe(again.workoutId)
+    expect(again.workoutId).toBe('aaa-peer-session')
+    expect(again.workoutId).not.toBe(repeat.workoutId)
+  })
+
   it('continues the day\'s second session rather than starting a third each time it re-runs', async () => {
     // The repeat session's id is MINTED — there is nothing left to derive it
     // from that means the same thing on two devices (see `startWorkout`). So
@@ -1336,10 +1370,11 @@ describe('migrating the shape this extension first wrote', () => {
     workoutId: string,
     day: string,
     lifts: {entryId: string; exercise: string; sets: unknown[]}[],
+    parentId: string = PAGE_ID,
   ): Promise<void> => {
     await repo.tx(async tx => {
       await tx.create({
-        id: workoutId, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a5',
+        id: workoutId, workspaceId: WORKSPACE_ID, parentId, orderKey: 'a5',
         content: `Session A · ${day}`,
       })
       await tx.setProperty(workoutId, sessionProp, 'A')
@@ -1370,7 +1405,7 @@ describe('migrating the shape this extension first wrote', () => {
       sets: [{weight: 185, reps: 8, rpe: 7}, {weight: 185, reps: 6}],
     }])
 
-    const report = await migrateLegacyEntries(repo, PAGE_ID)
+    const report = await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     expect(report).toMatchObject({converted: 1, sets: 2, stamped: 1})
     const sets = await liveChildren('legacy-e1', SET_TYPE)
@@ -1396,7 +1431,7 @@ describe('migrating the shape this extension first wrote', () => {
     await seedLegacyWorkout('legacy-w1', '2026-06-01', [
       {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
     ])
-    await migrateLegacyEntries(repo, PAGE_ID)
+    await migrateLegacyEntries(repo, WORKSPACE_ID)
     expect(cache.getSnapshot('legacy-e1')!.properties[LEGACY_SETS_PROP]).toBeDefined()
   })
 
@@ -1404,10 +1439,10 @@ describe('migrating the shape this extension first wrote', () => {
     await seedLegacyWorkout('legacy-w1', '2026-06-01', [
       {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}, {weight: 185, reps: 6}]},
     ])
-    await migrateLegacyEntries(repo, PAGE_ID)
+    await migrateLegacyEntries(repo, WORKSPACE_ID)
     const first = (await liveChildren('legacy-e1', SET_TYPE)).map(s => s.id)
 
-    const second = await migrateLegacyEntries(repo, PAGE_ID)
+    const second = await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     expect(second).toMatchObject({converted: 0, sets: 0, stamped: 0})
     expect(second.skipped).toEqual([{entryId: 'legacy-e1', reason: 'has-set-blocks'}])
@@ -1420,7 +1455,7 @@ describe('migrating the shape this extension first wrote', () => {
       {entryId: 'legacy-bad', exercise: 'Squat', sets: [{weight: 'heavy', reps: 5}]},
     ])
 
-    const report = await migrateLegacyEntries(repo, PAGE_ID)
+    const report = await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     expect(report).toMatchObject({converted: 1, sets: 1})
     expect(report.skipped).toEqual([{entryId: 'legacy-bad', reason: 'unreadable'}])
@@ -1435,7 +1470,7 @@ describe('migrating the shape this extension first wrote', () => {
     const live = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
       workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
 
-    const report = await migrateLegacyEntries(repo, PAGE_ID)
+    const report = await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     expect(report).toMatchObject({converted: 0, sets: 0, stamped: 0})
     expect(repo.block(live.workoutId).peekProperty(statusProp)).toBe('in-progress')
@@ -1451,13 +1486,13 @@ describe('migrating the shape this extension first wrote', () => {
     await seedLegacyWorkout('legacy-w1', '2026-06-01', [
       {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}, {weight: 185, reps: 6}]},
     ])
-    await migrateLegacyEntries(repo, PAGE_ID)
+    await migrateLegacyEntries(repo, WORKSPACE_ID)
     const first = await liveChildren('legacy-e1', SET_TYPE)
     await repo.tx(async tx => {
       for (const set of first) await tx.delete(set.id)
     }, {scope: ChangeScope.BlockDefault, description: 'delete every migrated set'})
 
-    const report = await migrateLegacyEntries(repo, PAGE_ID)
+    const report = await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     expect(report).toMatchObject({converted: 1, sets: 2})
     const rebuilt = await liveChildren('legacy-e1', SET_TYPE)
@@ -1480,7 +1515,7 @@ describe('migrating the shape this extension first wrote', () => {
       {entryId: 'legacy-squat-1', exercise: 'Squat', sets: [{weight: 185, reps: 8}]},
     ])
 
-    const report = await migrateLegacyEntries(repo, PAGE_ID)
+    const report = await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     expect(report).toMatchObject({converted: 3, numbered: 2})
     expect(repo.block('legacy-squat-0').peekProperty(occurrenceProp)).toBe(0)
@@ -1503,6 +1538,26 @@ describe('migrating the shape this extension first wrote', () => {
     expect(workingWeight(lastEntryFor(history, 'Bench press', undefined, 1)!.entry)).toBe(185)
   })
 
+  it('finds a workout filed under a heading, not just a direct child of the page', async () => {
+    // Every other part of this extension reads workouts from a workspace-wide
+    // typed query, so a session indented under a year heading is visible
+    // everywhere except a migration that walks the page's direct children —
+    // which then reports nothing skipped and leaves its JSON sets unconverted.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'year-heading', workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a7', content: '2026',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a heading to file under'})
+    await seedLegacyWorkout('filed-away', '2026-06-01', [
+      {entryId: 'filed-entry', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
+    ], 'year-heading')
+
+    const report = await migrateLegacyEntries(repo, WORKSPACE_ID)
+
+    expect(report).toMatchObject({converted: 1, sets: 1})
+    expect(await liveChildren('filed-entry', SET_TYPE)).toHaveLength(1)
+  })
+
   it('leaves a migrated session closed to further logging', async () => {
     // Stamping `done` is not cosmetic: it is what stops tonight's logging
     // from reaching into a historical session — including one dated TODAY,
@@ -1511,7 +1566,7 @@ describe('migrating the shape this extension first wrote', () => {
     await seedLegacyWorkout('legacy-w1', '2026-07-24', [
       {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
     ])
-    await migrateLegacyEntries(repo, PAGE_ID)
+    await migrateLegacyEntries(repo, WORKSPACE_ID)
 
     await expect(materializeExercise(repo, 'legacy-w1',
       exerciseDraft('Bench press', [draftSet(135, 8)]), 'legacy-e1'))

@@ -134,6 +134,21 @@ export const buildHistory = (
   return workouts.sort(compareRecords)
 }
 
+/** Which of several unfinished workouts for one day + session a client logs
+ *  into.
+ *
+ *  WHICH one matters far less than every path picking the same one. The view
+ *  reads `typedBlocks`, ordered `(created_at, id)`; the writer scans the
+ *  page's children, ordered `(order_key, id)`. "The first one" therefore meant
+ *  two different workouts: a tap wrote into one while the screen attached
+ *  itself to the other, and the saved edit vanished from view.
+ *
+ *  The id is the tiebreak neither side can disagree about — order keys are
+ *  hand-editable and creation clocks are per-device, while the id is the same
+ *  string on every replica. */
+export const preferredLive = <T extends {id: string}>(candidates: readonly T[]): T | undefined =>
+  candidates.reduce<T | undefined>((best, w) => (best === undefined || w.id < best.id ? w : best), undefined)
+
 // ──── live in-progress workouts (for the logging UI) ────
 // Distinct from buildHistory: keeps EVERY set (done and not) with its block id
 // so the UI can edit sets in place, and only surfaces in-progress workouts.

@@ -60,8 +60,7 @@ const migrateLegacyLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     const repo = uiStateBlock.repo
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    const page = await getOrCreateStrengthLogPage(repo, workspaceId)
-    const report = await migrateLegacyEntries(repo, page.id)
+    const report = await migrateLegacyEntries(repo, workspaceId)
     console.info('[strength] legacy migration', report)
   },
 }
