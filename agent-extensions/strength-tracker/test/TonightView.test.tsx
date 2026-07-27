@@ -994,6 +994,32 @@ describe('TonightView', () => {
     expect(checkboxes()[2].checked).toBe(false)
   })
 
+  it('leaves the replacement workout\'s values on screen after finishing the old one', async () => {
+    // Same race as the sibling test, one step further on. Releasing only the
+    // workout we finished keeps W2 attached — but the draft was cleared back
+    // to the prescription regardless, and W2 had already been emitted, so
+    // nothing left to re-run the overlay: its logged values and block ids
+    // stayed hidden behind the defaults until the next tree emission.
+    backend.seed('Bench press', [{weight: 205, reps: 5, done: true}, {weight: 205, reps: 5}])
+    mount(backend)
+    await emit()
+
+    let landFinish: () => void = () => {}
+    vi.mocked(store.finishWorkout).mockImplementationOnce(
+      () => new Promise<void>(resolve => { landFinish = () => resolve() }),
+    )
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+
+    backend.replaceWorkout('w2')
+    await emit()
+    await act(async () => { landFinish() })
+
+    // 205 is what the blocks hold; 185 is what the prescription would fill in.
+    await waitFor(() => expect(weights()[0].value).toBe('205'))
+    expect(checkboxes()[0].checked).toBe(true)
+  })
+
   it('lets go of the workout it finished, not the one that replaced it', async () => {
     // A peer can replace the workout while `finishWorkout` is in the air.
     // Releasing "whatever is attached now" detached the LIVE w2 on w1's
@@ -1018,9 +1044,11 @@ describe('TonightView', () => {
 
     await act(async () => { landFinish() })
 
-    // w2 is still ours to write into, so a tap goes to IT.
+    // w2 is still ours to write into, so a tap goes straight to ITS blocks —
+    // the draft keeps them, because only the workout we finished was let go.
     fireEvent.click(checkboxes()[0])
-    await waitFor(() => expect(store.materializeExercise).toHaveBeenCalled())
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    expect(vi.mocked(store.writeSet).mock.calls.at(-1)?.[5]).toBe('w2')
     expect(store.startWorkout).not.toHaveBeenCalled()
   })
 

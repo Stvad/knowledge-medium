@@ -686,8 +686,16 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // to be attached by then detached a live session on a finished one's
       // behalf: its Discard and Finish stopped working, and the next tap
       // opened a third workout for the evening.
+      const wasOnScreen = coordinator.workoutId() === wid
       coordinator.completed(wid)
-      setDraft(buildDraft(prescription, unit))
+      // Clearing the draft is right only when what we finished is what is
+      // being displayed. If a peer replaced it mid-finish, the replacement is
+      // still attached and still ours to log into — and wiping it back to the
+      // prescription hid its logged values behind defaults with nothing left
+      // to bring them back: it had already been emitted, so no dependency of
+      // the overlay effect changes afterwards. Ask for the overlay instead.
+      if (wasOnScreen) setDraft(buildDraft(prescription, unit))
+      else setResync(n => n + 1)
       const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length
       setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
 
