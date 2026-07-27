@@ -114,11 +114,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  overlay wants (`has` is all it uses). */
   const writingNow = (): ReadonlySet<string> => new Set(inFlightRef.current.keys())
 
-  /** Sets whose last write FAILED. The "tap it again" message belongs to
-   *  these, not to the view at large: two writes for one set overlap
-   *  routinely, so an unrelated success was taking down a warning that was
-   *  still true, and the field it belonged to then reverted with nothing on
-   *  screen to explain it. */
+  /** WRITES that failed — the set AND the fields it was changing, not the set
+   *  alone. The "tap it again" message belongs to these, not to the view at
+   *  large. Two writes for one set overlap routinely (typing reps then
+   *  tapping the checkbox blurs the field first), so keyed on the set, the
+   *  checkbox succeeding took down a warning that the reps write had put up
+   *  and that was still true — and the field reverted with nothing on screen
+   *  to explain it. A retry writes the same fields, so it clears its own. */
   const failedRef = useRef(new Set<string>())
 
   // "Which block does this set write to, and what has to be created first" —
@@ -203,6 +205,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // mid-create would otherwise re-derive this set from the prescription and
     // drop the tick that started it all.
     const writingKey = setKey(next[exIdx], setIdx)
+    // The exemption is per SET — the block is what a query emission can be
+    // behind on. The failure marker is per WRITE, because two of them can be
+    // outstanding for one set with different outcomes.
+    const opKey = `${writingKey}|${Object.keys(change).sort().join(',')}`
     beginWrite(writingKey)
     try {
       const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
@@ -231,7 +237,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // one that didn't — but only once every set that failed has been
       // retried, and only that message: a "Logged …" confirmation is about
       // something else and must survive.
-      if (failedRef.current.delete(writingKey) && failedRef.current.size === 0) {
+      if (failedRef.current.delete(opKey) && failedRef.current.size === 0) {
         setStatus(current => (current === WRITE_FAILED ? null : current))
       }
       // No overlay on success, deliberately. The block now agrees with what is
@@ -244,7 +250,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
       // value that never reached it.
-      failedRef.current.add(writingKey)
+      failedRef.current.add(opKey)
       setResync(n => n + 1)
       throw error
     } finally {

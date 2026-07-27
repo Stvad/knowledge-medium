@@ -436,6 +436,29 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(repo.block(secondSet).peekProperty(setIndexProp)).toBe(1)
   })
 
+  it('reconciles an entry that lost its type tag instead of deriving a second one', async () => {
+    // The entry is still the one this lift was logged into. Excluded from
+    // matching because of a missing hand-editable tag, a plan-keyed draft
+    // derives a different id and splits the session in two — and the repair
+    // is the match: `entryId` re-tags what it is handed.
+    const unplanned = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, unplanned)
+    const entryId = first.exercises[0].id
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {weight: 185, reps: 5, done: true}, 'lb'))
+      .toBe('written')
+    await repo.tx(tx => tx.setProperty(entryId, typesProp, []),
+      {scope: ChangeScope.BlockDefault, description: 'lose the entry type tag'})
+
+    const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)], {definitionId: 'def-bench'}),
+    ]))
+
+    expect(second.exercises[0].id).toBe(entryId)
+    expect(hasBlockType(cache.getSnapshot(entryId)!, EXERCISE_ENTRY_TYPE)).toBe(true)
+    expect(await liveChildren(first.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+    expect(repo.block(first.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(185)
+  })
+
   it('does not adopt a workout whose date was edited to another day', async () => {
     // The id derives from workspace|day|session, but the stored date is an
     // ordinary property and can be hand-edited in the outline. Once it names a

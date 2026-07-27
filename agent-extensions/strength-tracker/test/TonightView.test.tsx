@@ -681,6 +681,28 @@ describe('TonightView', () => {
     await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
   })
 
+  it('keeps the warning up when a DIFFERENT write on the same set succeeds', async () => {
+    // Typing reps and then ticking the box are two writes for one set. If the
+    // reps write fails and the tick succeeds, the set is not "fine" — the
+    // reps never landed, and the resync reverts them. Keyed on the set alone,
+    // the tick took the warning down and that revert had no explanation.
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    const field = reps()[0]
+    act(() => field.focus())
+    fireEvent.change(field, {target: {value: '7'}})
+    fireEvent.blur(field)                                   // reps write fails
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(checkboxes()[0])                        // done write succeeds
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(2))
+    await act(async () => {})
+    expect(screen.getByText(/Could not save that/)).toBeTruthy()
+  })
+
   it('gives the workout back when a discard fails', async () => {
     // `abandon` lets go before the delete is known to have worked, and a
     // release retires on an authoritative ABSENCE — which never comes for a

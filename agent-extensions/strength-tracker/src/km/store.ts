@@ -383,8 +383,14 @@ export const startWorkout = async (
     // them — same function, so "the same lift" cannot mean two things — and
     // whatever a row matches becomes the entry it writes into.
     const existing = workout.status === 'adopted'
-      ? (await tx.childrenOf(workout.id))
-        .filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE))
+      ? (await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true}))
+        // Typed OR carrying the exercise property. A tag is hand-editable, and
+        // an entry that lost one is still the entry this lift was logged into
+        // — excluded from matching, a plan-keyed draft derives a different id
+        // and splits the session in two. Matching it repairs it: `entryId`
+        // re-tags what it is handed.
+        .filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE)
+          || typeof row.properties[FIELD.exercise] === 'string')
         .map(row => ({
           id: row.id,
           exercise: typeof row.properties[FIELD.exercise] === 'string'
@@ -519,7 +525,12 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     // A workout's children are not all set blocks: a note the user typed under
     // an entry is one, and in a child-backed workspace so is every property
     // row. Filter on the type before deciding anything.
-    const children = await tx.childrenOf(workoutId)
+    // The DISPLAY-visible view. `childrenOf` returns every row by default,
+    // and in a child-backed workspace that includes each block's property
+    // field rows — so "has children" and "holds something that isn't a set"
+    // would both be true of essentially every block, refusing finishes that
+    // are fine and keeping every skipped lift as an empty entry in the record.
+    const children = await tx.childrenOf(workoutId, undefined, {hidePropertyChildren: true})
     const entries = children.filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE))
     // Children but no entries among them is not "an empty session" — it is a
     // type read that came back wrong, and the plan it produces prunes
@@ -534,7 +545,7 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     const untypedWithSets: string[] = []
     for (const child of children) {
       if (hasBlockType(child, EXERCISE_ENTRY_TYPE)) continue
-      const grandchildren = await tx.childrenOf(child.id)
+      const grandchildren = await tx.childrenOf(child.id, undefined, {hidePropertyChildren: true})
       if (grandchildren.some(row => hasBlockType(row, SET_TYPE))) untypedWithSets.push(child.id)
     }
     if (untypedWithSets.length > 0 || (children.length > 0 && entries.length === 0)) {
@@ -550,7 +561,7 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
      *  the lift, or a set whose type tag went missing. */
     const holdsMore = new Set<string>()
     for (const entry of entries) {
-      const entryChildren = await tx.childrenOf(entry.id)
+      const entryChildren = await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true})
       const sets = entryChildren.filter(row => hasBlockType(row, SET_TYPE))
       if (entryChildren.length > sets.length) holdsMore.add(entry.id)
       exercises.push({
