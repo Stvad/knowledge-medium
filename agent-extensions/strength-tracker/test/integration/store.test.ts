@@ -167,6 +167,49 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(repo.block(bench.id).peekProperty(workingWeightProp)).toBe(145)
   })
 
+  it('repairs a set that lost its type tag instead of finishing around it', async () => {
+    // Excluded from the typed read, the set was omitted from the record and —
+    // being still open — left as a todo under a completed session,
+    // unreachable forever. Its own numbers identify it, and the tag is the
+    // only thing wrong, so Finish puts it back rather than refusing.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)]),
+    ]))
+    const bench = workout.exercises[0]
+    expect(await writeSet(repo, bench.setIds[0], {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    expect(await writeSet(repo, bench.setIds[1], {weight: 185, reps: 4, done: true}, 'lb')).toBe('written')
+    await repo.tx(tx => tx.setProperty(bench.setIds[1], typesProp, [todoType.id]),
+      {scope: ChangeScope.BlockDefault, description: 'lose the set type tag'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(hasBlockType(cache.getSnapshot(bench.setIds[1])!, SET_TYPE)).toBe(true)
+    // Both accepted sets survive, and the working weight saw both of them.
+    expect(await isBlockDeleted(repo, bench.setIds[1])).toBe(false)
+    expect(repo.block(bench.id).peekProperty(workingWeightProp)).toBe(185)
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('done')
+  })
+
+  it('leaves an untyped set that is not recognizable alone', async () => {
+    // A note under the lift carries none of a set's numbers, so it is not
+    // silently promoted into the record — it just keeps its entry alive.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const bench = workout.exercises[0]
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'form-note', workspaceId: WORKSPACE_ID, parentId: bench.id, orderKey: 'z0',
+        content: 'elbows flared on the last one',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a note under the lift'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(hasBlockType(cache.getSnapshot('form-note')!, SET_TYPE)).toBe(false)
+    expect(await isBlockDeleted(repo, 'form-note')).toBe(false)
+  })
+
   it('empties rather than deletes an entry that holds something other than sets', async () => {
     // "Nothing was accepted here" is read off the SET type tag, and a tag can
     // go missing — the same misread the workout-level guard refuses one level

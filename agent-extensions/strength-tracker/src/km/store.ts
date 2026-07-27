@@ -549,6 +549,7 @@ export const writeSet = async (
  *
  *  The caller's job is to have flushed its own ticks first. */
 export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void> => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     // A workout's children are not all set blocks: a note the user typed under
     // an entry is one, and in a child-backed workspace so is every property
@@ -586,12 +587,32 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     }
     const exercises: FinishEntry[] = []
     /** Entries holding a child that is NOT a set — a note the user typed under
-     *  the lift, or a set whose type tag went missing. */
+     *  the lift. */
     const holdsMore = new Set<string>()
     for (const entry of entries) {
       const entryChildren = await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true})
-      const sets = entryChildren.filter(row => hasBlockType(row, SET_TYPE))
-      if (entryChildren.length > sets.length) holdsMore.add(entry.id)
+      const sets: typeof entryChildren = []
+      let others = 0
+      for (const child of entryChildren) {
+        if (hasBlockType(child, SET_TYPE)) {
+          sets.push(child)
+          continue
+        }
+        // A child carrying a set's own numbers IS a set whose tag went
+        // missing. Excluding it finished the workout around it: absent from
+        // the record `buildHistory` assembles, and — if it was still open —
+        // left as a todo under a completed session, unreachable forever.
+        // Repaired rather than refused, because the tag is the only thing
+        // wrong and the user asked to finish.
+        if (typeof child.properties[FIELD.weight] === 'number'
+          || typeof child.properties[FIELD.reps] === 'number') {
+          await repo.addTypeInTx(tx, child.id, SET_TYPE, {}, typeSnapshot)
+          sets.push(child)
+          continue
+        }
+        others += 1
+      }
+      if (others > 0) holdsMore.add(entry.id)
       exercises.push({
         id: entry.id,
         exercise: typeof entry.properties[FIELD.exercise] === 'string'
