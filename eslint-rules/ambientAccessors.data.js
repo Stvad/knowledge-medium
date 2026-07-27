@@ -54,7 +54,7 @@ export const generatedEntries = [
     message: 'getLayoutSessionId is the per-device base id (boot seed only). Use repo.activeLayoutSessionId in imperative code, or the layoutSessionBlockId block context in the render tree (PR 2).',
     allowIn: [
       'src/utils/layoutSessionId.ts',
-      'src/data/repo.ts',
+      'src/data/clientContext.ts',
       'src/bootstrap/workspaceBootstrap.ts',
       'src/utils/test/layoutSessionId.test.ts',
     ],

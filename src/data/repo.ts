@@ -137,7 +137,7 @@ import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
-import { getLayoutSessionId } from '@/utils/layoutSessionId'
+import { ClientContext, type ClientContextReader } from './clientContext'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
@@ -442,7 +442,18 @@ interface ReferenceTargetStampContext {
 export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
-  readonly user: User
+  /** The client's indexical "acting-as" state (user, active workspace
+   *  pin, active layout session) — one per client, 1:1 with this Repo.
+   *  Semantics live in `clientContext.ts`; Repo keeps thin delegation
+   *  shims (`user`, `activeWorkspaceId` + setter, `activeLayoutSessionId`
+   *  + setter) so the public API is unchanged.
+   *
+   *  Held privately as the CONCRETE class — the public `client` getter
+   *  below narrows to {@link ClientContextReader} so a caller reaching
+   *  `repo.client.setActiveWorkspaceId(...)` directly (bypassing this
+   *  Repo's transition) is a compile error, not just a documented
+   *  convention. Repo's own delegating setters use this private field. */
+  private readonly _client: ClientContext
   /** Read-only mode disables `BlockDefault` / `References` writes;
    *  UI-state and UserPrefs writes still pass through and queue to
    *  ps_crud — server-side rejection (RLS) lands in the rejection
@@ -689,12 +700,6 @@ export class Repo {
    *  so the data-integrity plugin's audit runner can reuse the same resolver for
    *  the divergence decrypt-compare (undefined in tests ⇒ cleartext-only). */
   readonly syncObserverDeps?: MaterializeDeps
-  /** Backing field for `activeWorkspaceId` (see getter/setter below). */
-  private _activeWorkspaceId: string | null = null
-  /** Backing field for `activeLayoutSessionId` (see getter/setter below).
-   *  `null` means "no override" — the getter falls back to the per-device
-   *  base id. */
-  private _activeLayoutSessionId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
    *  across Repo instances (e.g. lodash.memoize calls in the panel /
    *  user-page bootstrap). Auto-incremented per construction. */
@@ -760,7 +765,7 @@ export class Repo {
       snapshot,
       workspaceId,
       this._propertySeedNameCounts,
-      this._activeWorkspaceId === null || workspaceId === this._activeWorkspaceId,
+      this.client.activeWorkspaceId === null || workspaceId === this.client.activeWorkspaceId,
     )
   }
 
@@ -776,8 +781,8 @@ export class Repo {
    *  all `'property-schema'` blocks). Created lazily by
    *  `getOrCreatePropertiesPage` during workspace bootstrap. */
   get propertiesPageId(): string | null {
-    if (!this._activeWorkspaceId) return null
-    return propertiesPageBlockId(this._activeWorkspaceId)
+    if (!this.client.activeWorkspaceId) return null
+    return propertiesPageBlockId(this.client.activeWorkspaceId)
   }
 
   /** Registry + driver for definition-block projectors (the
@@ -804,8 +809,8 @@ export class Repo {
    *  `'block-type'` block in the workspace). Created lazily by
    *  `getOrCreateTypesPage` during workspace bootstrap. */
   get typesPageId(): string | null {
-    if (!this._activeWorkspaceId) return null
-    return typesPageBlockId(this._activeWorkspaceId)
+    if (!this.client.activeWorkspaceId) return null
+    return typesPageBlockId(this.client.activeWorkspaceId)
   }
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
@@ -879,7 +884,7 @@ export class Repo {
     )
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
-    this.user = opts.user
+    this._client = new ClientContext({user: opts.user})
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
     this.newId = opts.newId ?? uuidv4
@@ -966,7 +971,7 @@ export class Repo {
         this._propertyDefinitionRegistry = propertyDefinitions
         this._typeDefinitionRegistry = typeDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
-        if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
+        if (seedsChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this.client.activeWorkspaceId) {
           this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
         }
         // Re-arm name-rederive drains parked while this workspace's registry
@@ -1272,23 +1277,51 @@ export class Repo {
     return row !== null
   }
 
-  // ──── Active-workspace getter/setter (UI bookkeeping) ────
+  // ──── Acting-as delegation shims (state lives on `this._client`) ────
 
-  /** UI-visible "active" workspace pin — used by plugin hooks and
-   *  panels that need a default workspace when there's no other
-   *  context. `repo.tx` does NOT consult this; tx workspaces come from
-   *  the first write's row per spec §5.3. */
-  get activeWorkspaceId(): string | null {
-    return this._activeWorkspaceId
+  /** The `ClientContextReader` view of `this._client` — reads + the
+   *  {@link ClientContext.onActingAsChange} subscribe method, but NOT the
+   *  set methods. See {@link ClientContextReader} for why: mutating
+   *  through it would bypass this Repo's transitions. Mutate ONLY via
+   *  `repo.setActiveWorkspaceId` / `repo.setActiveLayoutSessionId`. */
+  get client(): ClientContextReader {
+    return this._client
   }
 
+  /** The authenticated user this client acts as — see
+   *  {@link ClientContext.user} (`repo.client`). A getter (not a field)
+   *  so the state has exactly one home; the read API is unchanged. */
+  get user(): User {
+    return this._client.user
+  }
+
+  // ──── Active-workspace getter/setter (UI bookkeeping) ────
+
+  /** The active workspace pin. State + semantics live on
+   *  {@link ClientContext.activeWorkspaceId} (`repo.client`); this shim
+   *  keeps the existing read API. */
+  get activeWorkspaceId(): string | null {
+    return this._client.activeWorkspaceId
+  }
+
+  /** Pin the active workspace. The STATE lives on `this._client`; the
+   *  side effects of a switch — facet-bridge notification, projector
+   *  pin/rollback, seed-materialization generation turnover — stay
+   *  here, so callers keep going through this method (never
+   *  `client.setActiveWorkspaceId` directly — and, since `repo.client` is
+   *  typed as {@link ClientContextReader}, no longer even compiles).
+   *  Note: `this._client.setActiveWorkspaceId` below fires
+   *  `onActingAsChange` on an effective change BEFORE the facet-bridge /
+   *  projector side effects below run — a subscriber reacting
+   *  synchronously observes the new pin while those are still
+   *  mid-transition (see the doc on {@link ClientContext.setActiveWorkspaceId}). */
   setActiveWorkspaceId(workspaceId: string | null): void {
     if (
-      workspaceId === this._activeWorkspaceId &&
+      workspaceId === this._client.activeWorkspaceId &&
       (!this.facetRuntime || workspaceId === this.projectors.workspaceId)
     ) return
-    const previousWorkspaceId = this._activeWorkspaceId
-    this._activeWorkspaceId = workspaceId
+    const previousWorkspaceId = this._client.activeWorkspaceId
+    this._client.setActiveWorkspaceId(workspaceId)
     if (workspaceId !== previousWorkspaceId) {
       // Cancel any parked seed-materialization access waits bound to the
       // workspace we just left, then open a fresh generation for the incoming
@@ -1306,7 +1339,7 @@ export class Repo {
       // nested rollback also failed, its honest state is null; mirror that
       // rather than claiming the old workspace and suppressing a retry.
       const restoredWorkspaceId = this.projectors.workspaceId
-      this._activeWorkspaceId = restoredWorkspaceId
+      this._client.setActiveWorkspaceId(restoredWorkspaceId)
       this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
       // The failed switch already aborted the outgoing seed-materialization
       // generation. Open a fresh one and re-arm the restored workspace so its
@@ -1320,29 +1353,18 @@ export class Repo {
 
   // ──── Active-layout-session getter/setter (UI bookkeeping) ────
 
-  /** UI-visible "active" layout-session id — which panel-layout tree
-   *  imperative code (actions, navigation helpers) should treat as "the
-   *  session the user is looking at" (mirrors `activeWorkspaceId` above,
-   *  replacing the module-global `getActiveLayoutSessionId` store it used
-   *  to be). Falls back to the per-device BASE session id
-   *  (`getLayoutSessionId()`, the boot seed) when no override has been
-   *  set — so today, with nothing yet calling `setActiveLayoutSessionId`,
-   *  this getter is behavior-identical to reading the base id directly. */
+  /** The active layout-session id, with its base-seed fallback. State +
+   *  semantics live on {@link ClientContext.activeLayoutSessionId}
+   *  (`repo.client`); this shim keeps the existing read API. */
   get activeLayoutSessionId(): string {
-    return this._activeLayoutSessionId ?? getLayoutSessionId()
+    return this._client.activeLayoutSessionId
   }
 
-  /** Override the active layout-session id; `null` restores the
-   *  per-device base id. Nothing on this branch (PR 1) calls this yet —
-   *  it exists so the perspectives host (PR 2), the first caller, has a
-   *  seam to switch sessions without a further Repo change. Unlike
-   *  `setActiveWorkspaceId`, this deliberately does NOT propagate
-   *  anywhere (no facetBridge / runtime notification, no reprime): layout-
-   *  session switching has no reactive consumers yet, so wiring that
-   *  machinery now would be speculative. PR 2 adds both the propagation
-   *  and its first caller together. */
+  /** Override the active layout-session id (`null` restores the base
+   *  id). Pure delegation — see
+   *  {@link ClientContext.setActiveLayoutSessionId} for semantics. */
   setActiveLayoutSessionId(id: string | null): void {
-    this._activeLayoutSessionId = id
+    this._client.setActiveLayoutSessionId(id)
   }
 
   /** Wait until persisted property definitions have produced their first
@@ -1368,7 +1390,7 @@ export class Repo {
    *  (keyed by `NO_ACTIVE_WORKSPACE`) so callers don't have to null-check
    *  — `undo()` / `redo()` still guard on `activeWorkspaceId`. */
   get undoManager(): UndoManager {
-    return this.undoManagerFor(this._activeWorkspaceId ?? NO_ACTIVE_WORKSPACE)
+    return this.undoManagerFor(this.client.activeWorkspaceId ?? NO_ACTIVE_WORKSPACE)
   }
 
   /** Undo manager for a specific workspace, lazily created. `repo.tx`
@@ -1458,7 +1480,7 @@ export class Repo {
    *  is pushed back so a retry once the flag settles succeeds — see
    *  issue #226.) */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this._activeWorkspaceId === null) return false
+    if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
     const entry = manager.popUndo(scope)
     if (entry === null) return false
@@ -1487,7 +1509,7 @@ export class Repo {
    *  workspace. Same defaults + same per-workspace + read-only
    *  semantics as `undo`, mirrored. */
   async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
-    if (this._activeWorkspaceId === null) return false
+    if (this.client.activeWorkspaceId === null) return false
     const manager = this.undoManager
     const entry = manager.popRedo(scope)
     if (entry === null) return false
@@ -1615,7 +1637,11 @@ export class Repo {
     // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
     // assigns `slowestTx` mid-flight; the sync-observer pair assigns
     // `syncObserver` (a shadowed stop would strand the real repo with a
-    // disposed observer it believes is live).
+    // disposed observer it believes is live). `setActiveWorkspaceId`
+    // still reassigns `seedMaterializationGeneration` on a switch.
+    // `setActiveLayoutSessionId`'s state moved onto the shared
+    // ClientContext (interior mutation — safe through the chain), but it
+    // stays delegated so the acting-as setter pair keeps one facade shape.
     const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
       this.setActiveWorkspaceId(id)
     const setActiveLayoutSessionId: Repo['setActiveLayoutSessionId'] = (id) =>
@@ -1665,12 +1691,12 @@ export class Repo {
     // cannot capture declaration-only seed winners during that short window.
     // The wait is generation-bound: a workspace switch rejects it instead of
     // letting the queued transaction drift into a different workspace.
-    const readinessWorkspaceId = this._activeWorkspaceId
+    const readinessWorkspaceId = this.client.activeWorkspaceId
     const readinessGenerationToken = this.projectors.generationToken
     if (readinessWorkspaceId) {
       await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
       if (
-        this._activeWorkspaceId !== readinessWorkspaceId
+        this.client.activeWorkspaceId !== readinessWorkspaceId
         || this.projectors.generationToken !== readinessGenerationToken
       ) {
         throw new Error(
@@ -1706,7 +1732,7 @@ export class Repo {
             capturedPreviousPropertyDefinitions,
             workspaceId,
           ),
-        propertySchemaWorkspaceId: this._activeWorkspaceId,
+        propertySchemaWorkspaceId: this.client.activeWorkspaceId,
         propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
@@ -1989,16 +2015,16 @@ export class Repo {
    *  the static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
     this.facetBridge.setFacetRuntime(runtime)
-    if (this._activeWorkspaceId) {
+    if (this.client.activeWorkspaceId) {
       try {
-        this.projectors.pinWorkspace(this._activeWorkspaceId)
+        this.projectors.pinWorkspace(this.client.activeWorkspaceId)
       } catch (error) {
         // A changed descriptor set can fail both its incoming start and the
         // attempted restoration under this same replacement runtime. Keep the
         // Repo/filter pin honest with the projector runtime so an explicit
         // workspace retry is not suppressed.
         const restoredWorkspaceId = this.projectors.workspaceId
-        this._activeWorkspaceId = restoredWorkspaceId
+        this._client.setActiveWorkspaceId(restoredWorkspaceId)
         this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
         throw error
       }
@@ -2135,7 +2161,7 @@ export class Repo {
     // seed-materialization access gate. A switch DURING the scan is still handled
     // by the per-block frozen-snapshot fallback below and by `repo.tx`'s readiness
     // gate, which cancels a tx parked across an active-workspace flip.
-    if (this._activeWorkspaceId !== workspaceId) return
+    if (this.client.activeWorkspaceId !== workspaceId) return
     const t0 = performance.now()
     let blocksUpdated = 0
     let scanScheduled = false
@@ -2148,7 +2174,7 @@ export class Repo {
       // later takes a *fresh* `liveSchemas` snapshot (after the SELECT), so it
       // still reconciles against a redefine that lands while the scan is in
       // flight (see the `does not let an older … reprojection re-add` test).
-      const liveSchemasAtGate = this._activeWorkspaceId === workspaceId
+      const liveSchemasAtGate = this.client.activeWorkspaceId === workspaceId
         ? this._propertySchemas
         : propertySchemas
 
@@ -2238,7 +2264,7 @@ export class Repo {
       // workspace switch fall back to the scheduled snapshot so the other
       // workspace's schema set can't decide ref-ness for the captured
       // workspace's blocks.
-      const liveSchemas = this._activeWorkspaceId === workspaceId
+      const liveSchemas = this.client.activeWorkspaceId === workspaceId
         ? this._propertySchemas
         : propertySchemas
 
@@ -2353,7 +2379,7 @@ export class Repo {
     // scheduled for the workspace whose schemas actually changed. No active
     // workspace (bootstrap, before any workspace opens) ⇒ nothing to scope, so
     // there's nothing to backfill yet — skip.
-    const workspaceId = this._activeWorkspaceId
+    const workspaceId = this.client.activeWorkspaceId
     if (!workspaceId) return
     this.reprojectionJobs.schedule(() =>
       this.reprojectRefTypedProperties(names, schemas, workspaceId),
@@ -2370,7 +2396,7 @@ export class Repo {
    *  workspace OPEN (not on every raw pin) keeps deferred scans off unrelated
    *  in-session workspace flips. */
   scheduleWorkspaceRefBackfill(workspaceId: string): void {
-    if (this.isReadOnly || !workspaceId || workspaceId !== this._activeWorkspaceId) return
+    if (this.isReadOnly || !workspaceId || workspaceId !== this.client.activeWorkspaceId) return
     const refNames = refTypedSchemaNames(this._propertySchemas)
     if (refNames.length > 0) this.scheduleReprojection(refNames, this._propertySchemas)
   }
