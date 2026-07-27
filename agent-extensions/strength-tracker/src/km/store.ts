@@ -56,6 +56,7 @@ import {dateToDay, dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
 import {buildAltChoices, escapeKeyPart, matchLiveExercises, toLiveSet} from './history'
+import {LEGACY_SETS_PROP, readLegacySets} from './legacy'
 import {finishPlan, type FinishEntry} from './finish'
 export type {FinishPlan} from './finish'
 
@@ -978,6 +979,99 @@ export const readAltChoices = async (
 ): Promise<Record<string, string>> => {
   const children = await repo.block(settingsBlockId).children.load()
   return buildAltChoices((children ?? []).filter(child => !child.deleted))
+}
+
+// ──── one-shot migration of the first version's shape ────
+
+export interface LegacyMigrationReport {
+  /** Entries whose JSON sets became set blocks. */
+  converted: number
+  /** Set blocks written. */
+  sets: number
+  /** Workouts given an explicit `done` status they were missing. */
+  stamped: number
+  /** Entries deliberately left alone, so the report says what was NOT done
+   *  as loudly as what was. `unreadable` is the one worth looking at: the
+   *  cell is there and does not read as a list of sets. */
+  skipped: {entryId: string; reason: 'has-set-blocks' | 'no-legacy-sets' | 'unreadable'}[]
+}
+
+/** Convert the sessions this extension logged in its first shape — a lift's
+ *  sets in one `strength:sets` JSON cell — into the block-per-set tree
+ *  everything reads now.
+ *
+ *  Safe to run twice. An entry that already has set blocks is skipped, and
+ *  the blocks it writes are addressed by the SAME derived identity the live
+ *  path uses, so a later write adopts them rather than building a second set
+ *  of rows beside them.
+ *
+ *  It does NOT delete the legacy cell. That cell is the only other copy of
+ *  this history, and a migration that removes its own source leaves nothing
+ *  to check the result against (or to re-run from, if the conversion turns
+ *  out to be wrong). It costs one stale property per entry and buys a
+ *  recovery path; `audit-extension` will keep mentioning it, which is the
+ *  correct amount of noise for data nothing reads any more.
+ *
+ *  One transaction, so the whole thing is one undo step. */
+export const migrateLegacyEntries = async (
+  repo: Repo,
+  pageId: string,
+): Promise<LegacyMigrationReport> => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  return repo.tx(async tx => {
+    const report: LegacyMigrationReport = {converted: 0, sets: 0, stamped: 0, skipped: []}
+
+    for (const workout of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+      if (!hasBlockType(workout, WORKOUT_TYPE)) continue
+      const entries = await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true})
+      let touched = false
+
+      for (const entry of entries) {
+        if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) continue
+        const children = await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true})
+        // Already migrated (or logged in the current shape). Checked on the
+        // BLOCKS rather than on a marker property, because the blocks are the
+        // thing a second run would duplicate.
+        if (children.some(isSetLike)) {
+          report.skipped.push({entryId: entry.id, reason: 'has-set-blocks'})
+          continue
+        }
+        const sets = readLegacySets(entry.properties[LEGACY_SETS_PROP])
+        if (sets === undefined) {
+          report.skipped.push({
+            entryId: entry.id,
+            reason: entry.properties[LEGACY_SETS_PROP] === undefined ? 'no-legacy-sets' : 'unreadable',
+          })
+          continue
+        }
+
+        const unit = typeof entry.properties[FIELD.unit] === 'string'
+          ? entry.properties[FIELD.unit] as string
+          : 'lb'
+        for (const [index, set] of sets.entries()) {
+          await getOrCreateTypedChild(repo, tx, {
+            identity: setIdentity(entry.id, index),
+            adoptable: block => block.parentId === entry.id,
+            ...setSpec(entry.id, set, index, unit, typeSnapshot),
+          })
+          report.sets += 1
+        }
+        report.converted += 1
+        touched = true
+      }
+
+      // Say outright what every reader already infers. The first version
+      // never wrote a status at all: `buildHistory` takes that as "not
+      // in-progress, so it is history" and `buildLiveWorkouts` takes it as
+      // "not live" — agreeing, but by omission. A record that states it is
+      // done cannot be misread by the next thing that looks at it.
+      if (touched && workout.properties[FIELD.status] === undefined) {
+        await tx.setProperty(workout.id, statusProp, 'done')
+        report.stamped += 1
+      }
+    }
+    return report
+  }, {scope: ChangeScope.BlockDefault, description: 'Migrate legacy strength log'})
 }
 
 // ──── layoff + shoulder writes (unchanged) ────

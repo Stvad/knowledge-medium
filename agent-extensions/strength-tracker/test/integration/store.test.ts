@@ -27,6 +27,7 @@ import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {toLiveSet, buildHistory, buildLiveWorkouts} from '../../src/km/history'
+import {LEGACY_SETS_PROP} from '../../src/km/legacy'
 import {lastEntryFor, workingWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
@@ -36,6 +37,7 @@ import {
   completedAtProp,
   dateProp,
   definitionProp,
+  exerciseProp,
   occurrenceProp,
   repsProp,
   rpeProp,
@@ -48,6 +50,7 @@ import {
 import {
   discardWorkout,
   finishWorkout,
+  migrateLegacyEntries,
   materializeExercise,
   startWorkout,
   writeSet,
@@ -1183,6 +1186,136 @@ describe('a set buried under the workout itself', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'bury a set under the workout'})
 
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+})
+
+describe('migrating the shape this extension first wrote', () => {
+  /** A session exactly as the FIRST version wrote it — reproduced from
+   *  `git show 24732d0d8^`, not from memory: an untyped-status workout whose
+   *  entries hold their sets in one `strength:sets` JSON cell and have no
+   *  child blocks at all. */
+  const seedLegacyWorkout = async (
+    workoutId: string,
+    day: string,
+    lifts: {entryId: string; exercise: string; sets: unknown[]}[],
+  ): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: workoutId, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a5',
+        content: `Session A · ${day}`,
+      })
+      await tx.setProperty(workoutId, sessionProp, 'A')
+      await tx.setProperty(workoutId, dateProp, dayToDate(day))
+      await repo.addTypeInTx(tx, workoutId, WORKOUT_TYPE)
+      for (const lift of lifts) {
+        await tx.create({
+          id: lift.entryId, workspaceId: WORKSPACE_ID, parentId: workoutId, orderKey: 'a0',
+          content: lift.exercise,
+        })
+        await tx.setProperty(lift.entryId, exerciseProp, lift.exercise)
+        await tx.update(lift.entryId, {properties: {[LEGACY_SETS_PROP]: JSON.stringify(lift.sets)}})
+        await repo.addTypeInTx(tx, lift.entryId, EXERCISE_ENTRY_TYPE)
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'seed a legacy session'})
+  }
+
+  it('turns the JSON cell into set blocks the readers can see, and says the workout is done', async () => {
+    await seedLegacyWorkout('legacy-w1', '2026-06-01', [{
+      entryId: 'legacy-e1',
+      exercise: 'Bench press',
+      sets: [{weight: 185, reps: 8, rpe: 7}, {weight: 185, reps: 6}],
+    }])
+
+    const report = await migrateLegacyEntries(repo, PAGE_ID)
+
+    expect(report).toMatchObject({converted: 1, sets: 2, stamped: 1})
+    const sets = await liveChildren('legacy-e1', SET_TYPE)
+    expect(sets).toHaveLength(2)
+    expect(sets.map(s => repo.block(s.id).peekProperty(weightProp))).toEqual([185, 185])
+    expect(sets.map(s => repo.block(s.id).peekProperty(repsProp))).toEqual([8, 6])
+    expect(sets.map(s => repo.block(s.id).peekProperty(setIndexProp))).toEqual([0, 1])
+    expect(repo.block('legacy-w1').peekProperty(statusProp)).toBe('done')
+
+    // The point of the whole conversion: this session is history again.
+    const history = buildHistory(
+      [cache.getSnapshot('legacy-w1')!],
+      await liveChildren('legacy-w1', EXERCISE_ENTRY_TYPE),
+      sets,
+    )
+    expect(history).toHaveLength(1)
+    expect(workingWeight(history[0].exercises[0])).toBe(185)
+  })
+
+  it('keeps the legacy cell, so there is still something to check the result against', async () => {
+    // A migration that deletes its own source leaves nothing to re-run from
+    // if the conversion turns out to be wrong.
+    await seedLegacyWorkout('legacy-w1', '2026-06-01', [
+      {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
+    ])
+    await migrateLegacyEntries(repo, PAGE_ID)
+    expect(cache.getSnapshot('legacy-e1')!.properties[LEGACY_SETS_PROP]).toBeDefined()
+  })
+
+  it('is safe to run twice', async () => {
+    await seedLegacyWorkout('legacy-w1', '2026-06-01', [
+      {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}, {weight: 185, reps: 6}]},
+    ])
+    await migrateLegacyEntries(repo, PAGE_ID)
+    const first = (await liveChildren('legacy-e1', SET_TYPE)).map(s => s.id)
+
+    const second = await migrateLegacyEntries(repo, PAGE_ID)
+
+    expect(second).toMatchObject({converted: 0, sets: 0, stamped: 0})
+    expect(second.skipped).toEqual([{entryId: 'legacy-e1', reason: 'has-set-blocks'}])
+    expect((await liveChildren('legacy-e1', SET_TYPE)).map(s => s.id)).toEqual(first)
+  })
+
+  it('leaves an entry alone when its cell cannot be read, and says which one', async () => {
+    await seedLegacyWorkout('legacy-w1', '2026-06-01', [
+      {entryId: 'legacy-good', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
+      {entryId: 'legacy-bad', exercise: 'Squat', sets: [{weight: 'heavy', reps: 5}]},
+    ])
+
+    const report = await migrateLegacyEntries(repo, PAGE_ID)
+
+    expect(report).toMatchObject({converted: 1, sets: 1})
+    expect(report.skipped).toEqual([{entryId: 'legacy-bad', reason: 'unreadable'}])
+    expect(await liveChildren('legacy-bad', SET_TYPE)).toHaveLength(0)
+    // …and its numbers are still where they were.
+    expect(cache.getSnapshot('legacy-bad')!.properties[LEGACY_SETS_PROP]).toBeDefined()
+  })
+
+  it('does not touch a workout that is currently being logged', async () => {
+    // A live session has no legacy cell to convert, and stamping it `done`
+    // would finish it out from under the user.
+    const live = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+
+    const report = await migrateLegacyEntries(repo, PAGE_ID)
+
+    expect(report).toMatchObject({converted: 0, sets: 0, stamped: 0})
+    expect(repo.block(live.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('leaves a migrated session closed to further logging', async () => {
+    // Stamping `done` is not cosmetic: it is what stops tonight's logging
+    // from reaching into a historical session — including one dated TODAY,
+    // which is the case where the two could collide. The stamp and the
+    // refusal live in different functions and only mean something together.
+    await seedLegacyWorkout('legacy-w1', '2026-07-24', [
+      {entryId: 'legacy-e1', exercise: 'Bench press', sets: [{weight: 185, reps: 8}]},
+    ])
+    await migrateLegacyEntries(repo, PAGE_ID)
+
+    await expect(materializeExercise(repo, 'legacy-w1',
+      exerciseDraft('Bench press', [draftSet(135, 8)]), 'legacy-e1'))
+      .rejects.toThrow(/no longer in progress/)
+
+    const tonight = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    expect(tonight.workoutId).not.toBe('legacy-w1')
+    // …and the migrated session still holds what it held.
+    expect(repo.block((await liveChildren('legacy-e1', SET_TYPE))[0].id).peekProperty(weightProp)).toBe(185)
   })
 })
 
