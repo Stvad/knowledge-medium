@@ -195,10 +195,14 @@ const createBackend = () => {
         finished = true
       }),
 
-    discardWorkout: (): Promise<void> =>
+    /** Refuses a finished session, like the real one: Discard is enabled from
+     *  a render, and a peer's finish can land before the click. */
+    discardWorkout: (): Promise<'discarded' | 'gone'> =>
       settle(() => {
+        if (!started || finished) return 'gone' as const
         entries.clear()
         started = false
+        return 'discarded' as const
       }),
 
     writeSet: (setId: string, patch: Partial<SetDraft>): Promise<'written' | 'gone'> =>
@@ -666,6 +670,23 @@ describe('TonightView', () => {
     // …and nothing is held back from finishing over it either.
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+  })
+
+  it('says so rather than claiming a discard the store refused', async () => {
+    // Discard is enabled from what was last rendered, and a peer's finish can
+    // land before the tap. The store refuses to tombstone a finished record —
+    // so the view must not report "Discarded" over a session that is sitting
+    // safely logged, which would send the user hunting for data that is right
+    // where they left it.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    await backend.finishWorkout()          // a peer finishes it; no emission here
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+
+    await waitFor(() => expect(screen.getByText(/already finished elsewhere/)).toBeTruthy())
+    expect(screen.queryByText(/^Discarded$/)).toBeNull()
   })
 
   it('binds a batch that started before the workout to the workout it made', async () => {

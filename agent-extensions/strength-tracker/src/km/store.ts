@@ -724,11 +724,28 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
  *  longer knows about (the `or`-group option you switched away from), and
  *  those would otherwise stay live — open todo sets under a tombstoned
  *  workout. */
-export const discardWorkout = async (repo: Repo, workoutId: string): Promise<void> => {
-  await repo.tx(async tx => {
+/** Throw tonight's session away — the one write here that destroys, and so
+ *  the one that has to be surest of what it is looking at.
+ *
+ *  `'gone'` means it refused: the workout is not there, or it is no longer
+ *  in progress. Discard is enabled from whatever the view last rendered, and
+ *  a peer's finish can land in the gap between that render and the click —
+ *  deleting unconditionally then tombstoned a COMPLETED session and every set
+ *  recorded in it, from a button that had merely gone stale. Every other write
+ *  in this file re-reads inside its own transaction for the same reason; this
+ *  one had the most to lose by not doing it. The caller says so on screen
+ *  rather than reporting a discard that did not happen. */
+export const discardWorkout = async (
+  repo: Repo,
+  workoutId: string,
+): Promise<'discarded' | 'gone'> =>
+  repo.tx(async tx => {
+    const workout = await tx.get(workoutId)
+    if (!workout || workout.deleted) return 'gone' as const
+    if (workout.properties[FIELD.status] !== 'in-progress') return 'gone' as const
     await tx.run(deleteBlock, {id: workoutId})
+    return 'discarded' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Discard workout'})
-}
 
 const choiceContent = (label: string): string => `Tracking: ${label}`
 

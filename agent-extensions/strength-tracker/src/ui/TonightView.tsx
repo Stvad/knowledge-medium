@@ -674,16 +674,25 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // workout). `abandon` makes those results yield nothing.
     coordinator.abandon()
     try {
-      await discardWorkout(repo, wid)
+      const outcome = await discardWorkout(repo, wid)
       // The failures belonged to blocks that no longer exist. Keyed only by
       // day and session, they outlived the workout and the NEXT session of
       // the same type inherited them — Finish then reported an unsaved change
-      // that belonged to a workout the user had thrown away.
+      // that belonged to a workout the user had thrown away. (True of a
+      // REFUSED discard too: that session is a finished record now, so a
+      // warning about a write into it is no longer something to act on.)
       for (const [id, failed] of failedRef.current) {
         if (failed.slot === slot) failedRef.current.delete(id)
       }
       setDraft(buildDraft(prescription, unit))
-      setStatus('Discarded')
+      // The store refuses to discard a session that is already finished —
+      // someone else finished it between this screen rendering and the tap.
+      // Letting go of it is still right (it is not ours to write into any
+      // more), but saying "Discarded" over a session that is safely logged
+      // would send the user looking for data that is right where they left it.
+      setStatus(outcome === 'discarded'
+        ? 'Discarded'
+        : 'That session was already finished elsewhere — nothing was discarded.')
     } catch (error) {
       // The workout is still there. `abandon` already let go of it — and
       // nothing will hand it back, because the release retires on an

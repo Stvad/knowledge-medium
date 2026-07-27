@@ -45,6 +45,7 @@ import {
   workingWeightProp,
 } from '../../src/km/schema'
 import {
+  discardWorkout,
   finishWorkout,
   materializeExercise,
   startWorkout,
@@ -954,5 +955,34 @@ describe('an entry states which occurrence of its lift it is', () => {
       second.id,
     )
     expect(repo.block(second.id).peekProperty(occurrenceProp)).toBe(0)
+  })
+})
+
+describe('discardWorkout — the one write that destroys', () => {
+  it('refuses a session that has already been finished, rather than tombstoning the record', async () => {
+    // Discard is enabled from what the view last rendered, and a peer's finish
+    // can land between that render and the click. Every other write here
+    // re-checks the workout inside its own transaction; this one deleted the
+    // subtree unconditionally, so the stale button erased a completed session
+    // and every set in it.
+    const started = await startWorkout(
+      repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 8, {done: true})])]),
+    )
+    const setId = started.exercises[0].setIds[0]
+    await finishWorkout(repo, started.workoutId)
+
+    expect(await discardWorkout(repo, started.workoutId)).toBe('gone')
+    expect(await isBlockDeleted(repo, started.workoutId)).toBe(false)
+    expect(await isBlockDeleted(repo, setId)).toBe(false)
+  })
+
+  it('still discards a session that is genuinely in progress', async () => {
+    const started = await startWorkout(
+      repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 8)])]),
+    )
+    expect(await discardWorkout(repo, started.workoutId)).toBe('discarded')
+    expect(await isBlockDeleted(repo, started.workoutId)).toBe(true)
   })
 })
