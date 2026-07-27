@@ -470,6 +470,34 @@ describe('TonightView', () => {
     expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 195})
   })
 
+  it('clears the warning on the screen whose write succeeded', async () => {
+    // A failure left over from the session you switched AWAY from kept the
+    // warning up on a screen where everything had saved — which invites the
+    // second, reversing tap.
+    const both = {
+      A: prescriptionOf([exercise()], 'A'),
+      B: prescriptionOf([exercise({exercise: 'Squat', weight: 225})], 'B'),
+    }
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend, {prescriptions: both})
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[0])                       // session A fails
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', {name: 'B · lower'}))
+    backend.setSession('B')
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[0])                       // …and so does B
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(checkboxes()[0])                       // B's retry works
+    await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
+  })
+
   it('does not make one session wait on another session\'s write', async () => {
     // The coordinator deliberately lets a write for the session you just left
     // finish on its own. A Finish on the session you switched TO must not wait

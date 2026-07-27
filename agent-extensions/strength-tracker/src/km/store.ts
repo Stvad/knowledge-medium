@@ -458,6 +458,11 @@ export const writeSet = async (
   unit: string,
   /** The entry this set is supposed to be under, when the caller knows it. */
   expectedParentId?: string,
+  /** …and the workout that entry is supposed to be under. Checking only the
+   *  set's own parent passes when the WHOLE entry has been moved out of the
+   *  session, and `finishWorkout` scans the workout's children — so the edit
+   *  would be reported as saved and then be absent from the finished record. */
+  expectedWorkoutId?: string,
 ): Promise<'written' | 'gone'> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
@@ -479,6 +484,10 @@ export const writeSet = async (
     if (!before || before.deleted) return 'gone' as const
     if (!hasBlockType(before, SET_TYPE)) return 'gone' as const
     if (expectedParentId !== undefined && before.parentId !== expectedParentId) return 'gone' as const
+    if (expectedParentId !== undefined && expectedWorkoutId !== undefined) {
+      const entry = await tx.get(expectedParentId)
+      if (!entry || entry.deleted || entry.parentId !== expectedWorkoutId) return 'gone' as const
+    }
     // Restore the todo composition if it has been lost. Done-ness IS the todo
     // `status`, so a set that kept `strength-set` but lost `todo` still counts
     // internally while dropping out of every native todo query and rendering

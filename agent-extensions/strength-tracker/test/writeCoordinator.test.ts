@@ -355,6 +355,23 @@ describe('failure and abandonment', () => {
     expect(calls.exercises).toEqual(['Bench press'])   // re-derived, not reused
   })
 
+  it('stops handing it back out of a cached exercise create', async () => {
+    // The cache holds a RESOLVED promise carrying the same ids, so a retry was
+    // handed the dead one straight back out of it without ever consulting the
+    // forgotten list — every write answered `gone` until a shape or session
+    // change cleared the cache.
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    const draft = [exercise('Landmine press', 1, {defId: 'def-lm'})]
+
+    const first = await coord.resolveSet(draft, 0, 0, effects)
+    expect(first.blockId).toBe('w1-Landmine press-s0')
+
+    coord.forget('w1-Landmine press-s0')
+    await coord.resolveSet(draft, 0, 0, effects)
+    expect(calls.exercises).toEqual(['Landmine press', 'Landmine press'])   // re-materialized
+  })
+
   it('stops handing it back on the direct path too', async () => {
     // `persist` stamps the create's ids into the draft BEFORE the write runs,
     // so by the time one comes back `gone` the id we were told to forget is

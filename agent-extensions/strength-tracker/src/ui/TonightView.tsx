@@ -247,7 +247,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // by a Finish this view hasn't seen. Treating it as success left the
       // checkbox ticked over nothing.
       const outcome = blockId
-        ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId)
+        ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId, coordinator.workoutId() ?? undefined)
         : 'written'
       if (outcome === 'gone') {
         // Its cached copy of this id outlives the block. Left in place, every
@@ -259,7 +259,11 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // one that didn't — but only once every set that failed has been
       // retried, and only that message: a "Logged …" confirmation is about
       // something else and must survive.
-      if (failedRef.current.delete(opKey) && failedRef.current.size === 0) {
+      // …and against THIS session's failures. A failure left over from the
+      // session you switched away from kept the warning up on a screen where
+      // everything had saved, which invites the second, reversing tap.
+      if (failedRef.current.delete(opKey)
+        && ![...failedRef.current].some(key => key.startsWith(`${slot}|`))) {
         setStatus(current => (current === WRITE_FAILED ? null : current))
       }
       // No overlay on success, deliberately. The block now agrees with what is
@@ -405,7 +409,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           }
           if (blockId) {
             const {done, completedAt} = flushed[i].sets[j]
-            const outcome = await writeSet(repo, blockId, {done, completedAt}, flushed[i].unit, flushed[i].blockId)
+            const outcome = await writeSet(
+              repo, blockId, {done, completedAt}, flushed[i].unit, flushed[i].blockId,
+              coordinator.workoutId() ?? undefined,
+            )
             if (outcome === 'gone') {
               // A set this screen shows as accepted is not there any anymore —
               // deleted from the outline, or undone, since the last emission.

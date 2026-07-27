@@ -288,6 +288,12 @@ export const createWriteCoordinator = (
 
     forget(setBlockId) {
       deadSets.add(setBlockId)
+      // The cached create is a RESOLVED promise holding the same ids, so a
+      // retry would be handed the dead one straight back out of it without
+      // ever consulting the list above. Dropping the cache costs one extra
+      // create — idempotent, and only on the rare path where a write came
+      // back `gone`.
+      creatingExercises = new Map()
     },
 
     restore(id) {

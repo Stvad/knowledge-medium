@@ -274,6 +274,22 @@ describe('writeSet — gone vs. written', () => {
     expect(repo.block(setId).peekProperty(weightProp)).toBe(135)  // untouched
   })
 
+  it('answers "gone" when the whole lift was moved out of the workout', async () => {
+    // Checking only the set's own parent passes when the ENTRY moved, taking
+    // the set with it — and `finishWorkout` scans the workout's children, so
+    // the edit would be reported as saved and then be absent from the record.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const entryId = workout.exercises[0].id
+    const setId = workout.exercises[0].setIds[0]
+    await repo.tx(tx => tx.move(entryId, {parentId: PAGE_ID, orderKey: 'z0'}),
+      {scope: ChangeScope.BlockDefault, description: 'drag the whole lift out'})
+
+    expect(await writeSet(repo, setId, {weight: 999}, 'lb', entryId, workout.workoutId)).toBe('gone')
+    expect(repo.block(setId).peekProperty(weightProp)).toBe(135)
+  })
+
   it('restores the todo composition when a set has lost it', async () => {
     // Done-ness IS the todo `status`. A set that kept `strength-set` but lost
     // `todo` still counts internally while dropping out of every native todo
