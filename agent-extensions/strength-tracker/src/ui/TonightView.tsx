@@ -102,6 +102,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  once — typing reps and then tapping the checkbox blurs the input first,
    *  so the reps write and the done write overlap. With a set, the first to
    *  finish un-exempts it while the second is still going. */
+  /** The live workout this view has actually SEEN in an emission — as opposed
+   *  to one it has created and is waiting on. That difference is what makes
+   *  an absent workout readable: never seen means the query is behind, seen
+   *  and now gone means it is gone. */
+  const seenLiveRef = useRef<string | null>(null)
+
   const inFlightRef = useRef(new Map<string, number>())
   const beginWrite = (key: string) =>
     inFlightRef.current.set(key, (inFlightRef.current.get(key) ?? 0) + 1)
@@ -180,13 +186,31 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  a tick whose write was still in flight. */
   useEffect(() => {
     const {slotChanged} = coordinator.reset(live?.id ?? null, slot, shape, liveLoaded)
+    if (slotChanged) seenLiveRef.current = null
+    // A workout this view was looking at, now authoritatively absent: someone
+    // else finished it, or it was deleted. Holding on meant `started` stayed
+    // true and Discard stayed live — one tap and the session a peer had just
+    // logged was tombstoned.
+    //
+    // "Was looking at" is the whole trick. An absent workout we have never
+    // seen is a query that hasn't caught up with our own create, and letting
+    // go there is the bug this carry-forward exists to prevent. Seen and then
+    // gone is the opposite, and only the seeing tells them apart.
+    const vanished = live === undefined && liveLoaded && seenLiveRef.current !== null
+    if (vanished) {
+      seenLiveRef.current = null
+      coordinator.completed()
+    }
+    if (live !== undefined) seenLiveRef.current = live.id
     const writing = writingNow()
     // On a session switch, what is on screen is about the OTHER session, so it
     // is not an input. Two sessions can prescribe the same lift and the
     // overlay matches rows BY the lift — so passing the old draft through
     // handed session B session A's block ids, and the first tap in B wrote
     // into A's workout, at A's weights, without ever materializing B.
-    setDraft(cur => overlayLive(buildDraft(prescription, unit), live, slotChanged ? [] : cur, writing, liveLoaded))
+    setDraft(cur => overlayLive(
+      buildDraft(prescription, unit), live, slotChanged || vanished ? [] : cur, writing, liveLoaded,
+    ))
     // Keep a confirmation the user hasn't seen. Finishing makes the workout
     // leave `liveWorkouts`, which lands here — clearing "Logged Session A"
     // the instant it appeared and leaving a screen that looks like nothing

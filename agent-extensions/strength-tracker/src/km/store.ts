@@ -487,6 +487,14 @@ export const writeSet = async (
     if (expectedParentId !== undefined && expectedWorkoutId !== undefined) {
       const entry = await tx.get(expectedParentId)
       if (!entry || entry.deleted || entry.parentId !== expectedWorkoutId) return 'gone' as const
+      // …and the workout itself is still tonight's log. Another client can
+      // finish it while a number is focused here, and the blur that follows
+      // would rewrite a completed record — the entry and set are still right
+      // where they were, so nothing else in this chain notices.
+      const workout = await tx.get(expectedWorkoutId)
+      if (!workout || workout.deleted || workout.properties[FIELD.status] !== 'in-progress') {
+        return 'gone' as const
+      }
       // Repair the entry's own tag while we are here. A set whose block id is
       // already known never goes through `writeExercise`, so this is the only
       // point on the direct path that can put back a type the entry lost —

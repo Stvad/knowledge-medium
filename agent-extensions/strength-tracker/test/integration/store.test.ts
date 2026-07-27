@@ -413,6 +413,23 @@ describe('writeSet — gone vs. written', () => {
     expect(repo.block(setId).peekProperty(todoStatusProp)).toBe('done')
   })
 
+  it('answers "gone" once the workout has been finished', async () => {
+    // Another client can finish while a number is focused here, and the blur
+    // that follows would rewrite a completed record: the entry and the set
+    // are still exactly where they were, so nothing else in the chain
+    // notices.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const entryId = workout.exercises[0].id
+    const setId = workout.exercises[0].setIds[0]
+    expect(await writeSet(repo, setId, {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(await writeSet(repo, setId, {weight: 999}, 'lb', entryId, workout.workoutId)).toBe('gone')
+    expect(repo.block(setId).peekProperty(weightProp)).toBe(185)
+  })
+
   it('answers "gone" for a set dragged out from under its lift', async () => {
     const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
       exerciseDraft('Bench press', [draftSet(135, 8)]),

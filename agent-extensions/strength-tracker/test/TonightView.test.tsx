@@ -596,6 +596,39 @@ describe('TonightView', () => {
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
   })
 
+  it('lets go when someone else finishes the workout', async () => {
+    // The workout leaves `liveWorkouts` exactly as it does for our own
+    // Finish, but nothing local said so — the coordinator kept the id, the
+    // overlay kept the set ids, `started` stayed true, and Discard was one
+    // tap away from tombstoning the session a peer had just logged.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+    expect(screen.getByRole('button', {name: 'Discard'})).toBeTruthy()
+
+    await backend.finishWorkout()             // the peer's finish syncs in
+    await emit()
+
+    expect(screen.queryByRole('button', {name: 'Discard'})).toBeNull()
+    expect(checkboxes().some(box => box.checked)).toBe(false)
+  })
+
+  it('does not let go while its own create is still catching up', async () => {
+    // The other side of the same signal: an absent workout we have NEVER seen
+    // is a query behind our own create, and letting go there is the bug the
+    // carry-forward exists to prevent.
+    backend.hold()
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await act(async () => {})
+    await emit()                              // loaded, and still no workout
+
+    expect(checkboxes()[0].checked).toBe(true)
+    await backend.release()
+    await emit()
+    expect(checkboxes()[0].checked).toBe(true)
+  })
+
   it('lets go of the workout once it is finished', async () => {
     // A finished workout simply leaves `liveWorkouts` — indistinguishable, to
     // the overlay, from a query that hasn't caught up. Holding on left every
