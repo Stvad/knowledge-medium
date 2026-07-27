@@ -186,13 +186,16 @@ const createBackend = () => {
 
     /** Prunes and flips to done, like the real one — so the emission AFTER a
      *  finish is modelled, which is where the finish path actually breaks. */
-    finishWorkout: (): Promise<void> =>
+    finishWorkout: (): Promise<'finished' | 'gone'> =>
       settle(() => {
+        // Refuses a session that is already a record, like the real one.
+        if (!started || finished) return 'gone' as const
         for (const [id, entry] of entries) {
           if (!entry.sets.some(s => s.done)) entries.delete(id)
           else entry.sets = entry.sets.filter(s => s.done)
         }
         finished = true
+        return 'finished' as const
       }),
 
     /** Refuses a finished session, like the real one: Discard is enabled from
@@ -1029,7 +1032,7 @@ describe('TonightView', () => {
 
     let landFinish: () => void = () => {}
     vi.mocked(store.finishWorkout).mockImplementationOnce(
-      () => new Promise<void>(resolve => { landFinish = () => resolve() }),
+      () => new Promise<'finished'>(resolve => { landFinish = () => resolve('finished') }),
     )
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
@@ -1057,7 +1060,7 @@ describe('TonightView', () => {
     // live, so the query must go on reporting a workout for this slot.
     let landFinish: () => void = () => {}
     vi.mocked(store.finishWorkout).mockImplementationOnce(
-      () => new Promise<void>(resolve => { landFinish = () => resolve() }),
+      () => new Promise<'finished'>(resolve => { landFinish = () => resolve('finished') }),
     )
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
@@ -1087,7 +1090,7 @@ describe('TonightView', () => {
     await emit()
 
     // The store finished it; the fake's query deliberately has not heard.
-    vi.mocked(store.finishWorkout).mockResolvedValueOnce(undefined)
+    vi.mocked(store.finishWorkout).mockResolvedValueOnce('finished')
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
     await emit()                          // …still carrying the finished workout

@@ -676,7 +676,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // No plan argument: `finishWorkout` re-reads the tree inside its own
       // transaction, so nothing this view believes can prune a set the blocks
       // say was performed.
-      await finishWorkout(repo, wid)
+      const outcome = await finishWorkout(repo, wid)
+      if (outcome === 'gone') {
+        // Someone else finished it between this view's last check and the
+        // store's transaction. The session IS logged — just not by us — so
+        // letting go of it is right and claiming to have logged it is not.
+        coordinator.completed(wid)
+        setStatus('That session was already finished elsewhere — nothing more to log.')
+        return
+      }
       // Tonight's log is now a RECORD, and this view must stop being attached
       // to it. Nothing else says so: a finished workout simply leaves
       // `liveWorkouts`, which is indistinguishable from a query that hasn't

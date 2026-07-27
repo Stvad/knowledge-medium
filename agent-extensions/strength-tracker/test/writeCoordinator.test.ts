@@ -156,6 +156,24 @@ describe('resolveSet — workout already exists', () => {
       .toBe('w1-Landmine press')
   })
 
+  it('re-materializes a row whose set has a block but whose entry does not', async () => {
+    // The two disagreeing is not a shortcut, it is a row whose ENTRY moved out
+    // of the workout while a write was in flight: the overlay drops the entry
+    // id and the writing exemption keeps the set id. Answering with the set
+    // alone sent the write out with no parent, and `writeSet` skips its parent
+    // AND workout-status checks when handed none — reporting an edit saved
+    // into an entry that Finish can no longer see.
+    const draft = [exercise('Landmine press', 1, {defId: 'def-landmine'})]
+    draft[0].sets[0].blockId = 'orphan-set'      // …and deliberately no entry id
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator('w1')
+
+    const resolved = await coord.resolveSet(draft, 0, 0, effects)
+    expect(calls.exercises).toEqual(['Landmine press'])
+    expect(resolved.entryId).toBe('w1-Landmine press')
+    expect(resolved.blockId).not.toBe('orphan-set')
+  })
+
   it('creates it once for the whole batch, not once per set', async () => {
     const draft = [exercise('Landmine press', 3, {defId: 'def-landmine'})]
     const {calls, effects} = instantEffects()

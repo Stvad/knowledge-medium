@@ -431,7 +431,7 @@ describe('writeSet — gone vs. written', () => {
     expect(await writeSet(repo, setId, {done: true}, 'lb', entryId, workout.workoutId)).toBe('written')
 
     expect(hasBlockType(cache.getSnapshot(entryId)!, EXERCISE_ENTRY_TYPE)).toBe(true)
-    await expect(finishWorkout(repo, workout.workoutId)).resolves.toBeUndefined()
+    await expect(finishWorkout(repo, workout.workoutId)).resolves.toBe('finished')
   })
 
   it('restores the todo composition when a set has lost it', async () => {
@@ -1066,5 +1066,45 @@ describe('a set indented under a note', () => {
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/buried|refusing/i)
     // …and nothing was pruned or flipped on the way to refusing.
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+})
+
+describe('finishWorkout guards its own precondition', () => {
+  it('refuses a workout another client has already finished', async () => {
+    // Finishing PRUNES. The view's generation check happens before this
+    // transaction opens, and a peer can finish in that gap — at which point
+    // re-planning a completed record DELETES from it: a historical set
+    // someone unchecked in the outline since, and its entry with it if that
+    // empties the entry.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 5)])]))
+    const setId = workout.exercises[0].setIds[0]
+    expect(await writeSet(repo, setId, {done: true}, 'lb')).toBe('written')
+    expect(await finishWorkout(repo, workout.workoutId)).toBe('finished')
+
+    // A set unchecked in the outline afterwards — the record is live data.
+    await repo.tx(tx => tx.setProperty(setId, todoStatusProp, 'open'),
+      {scope: ChangeScope.BlockDefault, description: 'uncheck a logged set'})
+
+    expect(await finishWorkout(repo, workout.workoutId)).toBe('gone')
+    expect(await isBlockDeleted(repo, setId)).toBe(false)
+    expect(await isBlockDeleted(repo, workout.exercises[0].id)).toBe(false)
+  })
+
+  it('finds a set buried two notes deep, not just one', async () => {
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 5)])]))
+    const entryId = workout.exercises[0].id
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'note-a', workspaceId: WORKSPACE_ID, parentId: entryId, orderKey: 'z0', content: 'notes'})
+      await tx.create({id: 'note-b', workspaceId: WORKSPACE_ID, parentId: 'note-a', orderKey: 'a0', content: 'more'})
+      await tx.create({id: 'deep-set', workspaceId: WORKSPACE_ID, parentId: 'note-b', orderKey: 'a0', content: '185 x 3'})
+      await tx.setProperty('deep-set', weightProp, 185)
+      await tx.setProperty('deep-set', repsProp, 3)
+    }, {scope: ChangeScope.BlockDefault, description: 'bury a set two levels down'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/buried|refusing/i)
   })
 })

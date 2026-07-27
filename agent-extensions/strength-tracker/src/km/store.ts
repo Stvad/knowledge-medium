@@ -609,9 +609,40 @@ const isSetLike = (row: {properties: Record<string, unknown>}): boolean =>
  *  lists, so it was never considered at all. Both are just "read the tree".
  *
  *  The caller's job is to have flushed its own ticks first. */
-export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void> => {
+/** Does anything in this block's subtree look like a set?
+ *
+ *  All the way down, not one level: a note under a note under the lift hides a
+ *  set just as well, and the record only ever mentions sets that are direct
+ *  children of an entry. Depth-bounded because the tree is the user's and
+ *  nothing stops them nesting further; the bound is far past any real log, and
+ *  refusing to finish is the answer either way. */
+const MAX_BURIED_DEPTH = 8
+const holdsSetLike = async (tx: Tx, blockId: string, depth = 0): Promise<boolean> => {
+  if (depth >= MAX_BURIED_DEPTH) return false
+  const children = await tx.childrenOf(blockId, undefined, {hidePropertyChildren: true})
+  for (const child of children) {
+    if (isSetLike(child)) return true
+    if (await holdsSetLike(tx, child.id, depth + 1)) return true
+  }
+  return false
+}
+
+export const finishWorkout = async (
+  repo: Repo,
+  workoutId: string,
+): Promise<'finished' | 'gone'> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  await repo.tx(async tx => {
+  return repo.tx(async tx => {
+    // Still ours to finish, checked HERE rather than trusted from the caller.
+    // Finishing PRUNES, and another client can finish this workout between the
+    // view's last generation check and this transaction opening — at which
+    // point re-planning a completed record deletes from it: a historical set
+    // someone had since unchecked in the outline goes, and its entry with it
+    // if that empties it. `discardWorkout` re-reads for the same reason; this
+    // one deletes more.
+    const workout = await tx.get(workoutId)
+    if (!workout || workout.deleted) return 'gone' as const
+    if (workout.properties[FIELD.status] !== 'in-progress') return 'gone' as const
     // A workout's children are not all set blocks: a note the user typed under
     // an entry is one, and in a child-backed workspace so is every property
     // row. Filter on the type before deciding anything.
@@ -678,8 +709,7 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
         // is the only thing wrong and the user asked to finish.
         if (!hasBlockType(child, SET_TYPE) && !isSetLike(child)) {
           others += 1
-          const under = await tx.childrenOf(child.id, undefined, {hidePropertyChildren: true})
-          if (under.some(isSetLike)) buriedSets.push(child.id)
+          if (await holdsSetLike(tx, child.id)) buriedSets.push(child.id)
           continue
         }
         // BOTH types, as materialization writes them, and for whatever it is
@@ -737,6 +767,7 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
     await tx.setProperty(workoutId, statusProp, 'done')
+    return 'finished' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Finish workout'})
 }
 

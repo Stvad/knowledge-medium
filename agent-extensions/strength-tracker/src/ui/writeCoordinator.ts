@@ -401,8 +401,16 @@ export const createWriteCoordinator = (
       // in-progress check is the one that refuses a completed record: the tap
       // landed in the finished session. With no workout, the create path is
       // the right answer — it is what starts the evening's second session.
-      if (set.blockId && !deadSets.has(set.blockId) && workoutId !== null) {
-        return {blockId: set.blockId, workoutId, ...(exercise.blockId !== undefined ? {entryId: exercise.blockId} : {})}
+      // …and only when the row still names the ENTRY that set hangs under.
+      // A set id with no entry beside it is not a shortcut, it is a row whose
+      // entry moved out of the workout while a write was in flight: the
+      // overlay drops the entry id and the writing exemption keeps the set id,
+      // so the pair disagree. Answering anyway sent the write out with no
+      // parent, and `writeSet` skips its parent AND workout-status checks when
+      // handed none — reporting an edit saved into an entry that Finish can no
+      // longer see. Falling through re-materializes, which is the repair.
+      if (set.blockId && !deadSets.has(set.blockId) && workoutId !== null && exercise.blockId !== undefined) {
+        return {blockId: set.blockId, workoutId, entryId: exercise.blockId}
       }
 
       if (!workoutId) {
