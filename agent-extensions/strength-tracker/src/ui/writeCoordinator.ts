@@ -117,10 +117,14 @@ export const createWriteCoordinator = (
    *  `in-progress` before the workout query publishes `done` (or the
    *  deletion). Adopting that id again resurrects a session we are done with:
    *  the Discard button comes back for a logged workout, and later edits route
-   *  into released blocks. A released id is never adopted again — the only
-   *  thing that could make it live once more is a different slot, which gets
-   *  a different id. */
-  const released = new Set<string>()
+   *  into released blocks.
+   *
+   *  Keyed by the SLOT each was released from, because that is the only slot
+   *  whose queries can speak for it. Retiring the whole set on any
+   *  authoritative absence let an empty session B vouch for session A: finish
+   *  A, flip to B, flip back before A's workout query publishes, and A came
+   *  straight back — Discard and all. */
+  const released = new Map<string, string>()
   let workoutId = initialWorkoutId
   let slot = initialSlot
   let shape = initialShape
@@ -154,7 +158,7 @@ export const createWriteCoordinator = (
    *  to write to: those blocks now belong to a tombstone or to a completed
    *  record, and either way a write into them is wrong. */
   const release = () => {
-    if (workoutId !== null) released.add(workoutId)
+    if (workoutId !== null) released.set(workoutId, slot)
     abandonedThrough = generation
     generation += 1
     workoutId = null
@@ -194,7 +198,11 @@ export const createWriteCoordinator = (
       // "session changed while saving" until a remount. This is the same
       // authoritative-absence signal the overlay uses; before it existed, a
       // lifetime blacklist was the only way to be safe.
-      if (loaded && nextWorkoutId === null) released.clear()
+      if (loaded && nextWorkoutId === null) {
+        for (const [id, releasedFrom] of released) {
+          if (releasedFrom === nextSlot) released.delete(id)
+        }
+      }
 
       // An id we have RELEASED is not a live id, whatever a lagging query
       // says. Finish and Discard invalidate the workout, entry and set queries

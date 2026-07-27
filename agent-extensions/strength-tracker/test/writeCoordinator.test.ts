@@ -292,6 +292,18 @@ describe('reset — the session was switched', () => {
     expect(coord.workoutId()).toBeNull()
   })
 
+  it('does not let an empty session vouch for a different one', async () => {
+    // Retiring every release on ANY authoritative absence let session B speak
+    // for session A: finish A, flip to B (which is empty, and says so), flip
+    // back before A's workout query publishes the done row, and A came back
+    // with its Discard button and its set ids.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.completed()
+    coord.reset(null, SLOT_B, SHAPE, true)   // B is empty — true of B, not of A
+    coord.reset('w1', SLOT_A, SHAPE, true)   // …back to A, still lagging
+    expect(coord.workoutId()).toBeNull()
+  })
+
   it('lets a released workout come back when the queries say it really did', async () => {
     // Undoing a discard restores the same blocks under the same id. Refusing
     // it for the coordinator's lifetime left Discard a no-op and Finish
