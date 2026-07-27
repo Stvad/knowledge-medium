@@ -315,6 +315,46 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(repo.block(first.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(185)
   })
 
+  it('writes into the entries an adopted workout already has, not a parallel set', async () => {
+    // Adopting happens before the live query resolves, so the caller cannot
+    // have matched anything yet. The session was logged while the outline was
+    // unreadable — name-keyed entries — and now the draft carries plan blocks,
+    // which derive DIFFERENT entry ids. Deriving regardless split the lift
+    // across two entries and scattered the sets.
+    const unplanned = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, unplanned)
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {weight: 185, reps: 5, done: true}, 'lb'))
+      .toBe('written')
+
+    const planned = workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)], {definitionId: 'def-bench'}),
+    ])
+    const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, planned)
+
+    expect(second.workoutId).toBe(first.workoutId)
+    expect(second.exercises[0].id).toBe(first.exercises[0].id)
+    expect(await liveChildren(first.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+    // …and the set logged into it is untouched by the re-run's prescription.
+    expect(repo.block(first.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(185)
+  })
+
+  it('repairs a set index that disagrees with the slot its block id came from', async () => {
+    // `strength:setIndex` is an ordinary hand-editable property, and the read
+    // path now trusts it to place the set. One that disagrees with the
+    // derivation would show the set in another row's slot, or nowhere, while
+    // every write still resolved to this block. The derivation is the
+    // authority; the property is its readable copy, so adopting repairs it.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)])])
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const secondSet = started.exercises[0].setIds[1]
+    await repo.tx(tx => tx.setProperty(secondSet, setIndexProp, 7),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the index'})
+
+    await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(repo.block(secondSet).peekProperty(setIndexProp)).toBe(1)
+  })
+
   it('does not adopt a workout whose date was edited to another day', async () => {
     // The id derives from workspace|day|session, but the stored date is an
     // ordinary property and can be hand-edited in the outline. Once it names a

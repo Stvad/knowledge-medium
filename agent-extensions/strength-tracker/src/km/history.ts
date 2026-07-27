@@ -208,6 +208,15 @@ export interface LiftRef {
   occurrence: number
 }
 
+/** All the matcher reads off a logged entry. Narrower than `LiveExercise` so
+ *  the WRITE path can match too, without inventing the fields it doesn't have
+ *  (a `unit`, a set list) purely to satisfy a type. */
+export interface LiftEntry {
+  id: string
+  exercise: string
+  definitionId?: string
+}
+
 /** Which live entry backs each draft row, keyed on `liftKey`.
  *
  *  The live side counts its own occurrences in block order — a deterministic
@@ -239,13 +248,14 @@ export interface LiftRef {
  *  re-deriving. The one restriction left is that a row WITH a plan block never
  *  falls back onto an entry carrying a DIFFERENT one — those are two genuinely
  *  different lifts that happen to share a name. */
-export const matchLiveExercises = (
+export const matchLiveExercises = <T extends LiftEntry>(
   rows: readonly LiftRef[],
-  live: LiveWorkout | undefined,
-): (LiveExercise | undefined)[] => {
-  if (!live) return rows.map(() => undefined)
+  entries: readonly T[] | undefined,
+): (T | undefined)[] => {
+  if (!entries) return rows.map(() => undefined)
+  const live = {exercises: entries}
 
-  const byKey = new Map<string, LiveExercise>()
+  const byKey = new Map<string, T>()
   /** Entries queued by name, in block order. A QUEUE rather than an
    *  occurrence-keyed map, because the two sides count occurrences over
    *  different things: a row counts within `defId ?? name`, an unplanned entry
@@ -254,7 +264,7 @@ export const matchLiveExercises = (
    *  for the same entry, the second was refused, and its next edit split the
    *  log. Taking the next unclaimed one with that name has no such assumption.
    */
-  const byName = new Map<string, LiveExercise[]>()
+  const byName = new Map<string, T[]>()
   const occurrences = new Map<string, number>()
   for (const entry of live.exercises) {
     const base = entry.definitionId ?? entry.exercise
@@ -267,7 +277,7 @@ export const matchLiveExercises = (
   // Claimed-once: with two ways to match, one entry could otherwise back two
   // rows, which then write over each other set for set.
   const claimed = new Set<string>()
-  const nextByName = (row: LiftRef): LiveExercise | undefined =>
+  const nextByName = (row: LiftRef): T | undefined =>
     (byName.get(row.exercise) ?? []).find(entry =>
       !claimed.has(entry.id)
       // A row that HAS a plan block never falls back onto an entry carrying a

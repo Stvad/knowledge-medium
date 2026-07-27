@@ -52,7 +52,7 @@ import {
 import {dateToDay, dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
-import {buildAltChoices, escapeKeyPart, toLiveSet} from './history'
+import {buildAltChoices, escapeKeyPart, matchLiveExercises, toLiveSet} from './history'
 import {finishPlan, type FinishEntry} from './finish'
 export type {FinishPlan} from './finish'
 
@@ -186,7 +186,7 @@ const writeSetBlock = async (
   unit: string,
   typeSnapshot: TypeSnapshot,
 ): Promise<string> => {
-  const {id} = await getOrCreateTypedChild(repo, tx, {
+  const outcome = await getOrCreateTypedChild(repo, tx, {
     identity: setIdentity(exerciseId, index),
     parentId: exerciseId,
     content: setContent(s, unit),
@@ -210,7 +210,17 @@ const writeSetBlock = async (
     ],
     typeSnapshot,
   })
-  return id
+
+  // Repair the stored index on adopt, the same way the primitive repairs a
+  // missing type tag. It is an ordinary hand-editable property, but the READ
+  // path now trusts it to place the set — so an index that disagrees with the
+  // slot this block's id was derived from would show the set in someone else's
+  // row, or nowhere, while every write still resolved here. The derivation is
+  // the authority; the property is its readable copy.
+  if (outcome.status === 'adopted' && outcome.block.properties[FIELD.setIndex] !== index) {
+    await tx.setProperty(outcome.id, setIndexProp, index)
+  }
+  return outcome.id
 }
 
 /** One exercise entry + its set blocks, inside the caller's transaction.
@@ -353,9 +363,41 @@ export const startWorkout = async (
       typeSnapshot,
     })
 
+    // When the workout was ADOPTED it already has entries, and they are not
+    // necessarily the ones this draft would derive: a session logged while the
+    // plan outline was unreadable is keyed on each lift's NAME, and the same
+    // draft keys on plan blocks once the outline resolves (or the reverse, on a
+    // client whose read failed). Deriving regardless built a second entry tree
+    // beside the first and split the logged sets across the two.
+    //
+    // So the entries that are here get matched the way the READ side matches
+    // them — same function, so "the same lift" cannot mean two things — and
+    // whatever a row matches becomes the entry it writes into.
+    const existing = workout.status === 'adopted'
+      ? (await tx.childrenOf(workout.id))
+        .filter(row => hasBlockType(row, EXERCISE_ENTRY_TYPE))
+        .map(row => ({
+          id: row.id,
+          exercise: typeof row.properties[FIELD.exercise] === 'string'
+            ? row.properties[FIELD.exercise] as string
+            : row.content,
+          definitionId: typeof row.properties[FIELD.definition] === 'string'
+            ? row.properties[FIELD.definition] as string
+            : undefined,
+        }))
+      : undefined
+    const matched = matchLiveExercises(
+      draft.exercises.map(ex => ({
+        definitionId: ex.definitionId,
+        exercise: ex.exercise,
+        occurrence: ex.occurrence,
+      })),
+      existing,
+    )
+
     const exercises: ExerciseEntryIds[] = []
-    for (const ex of draft.exercises) {
-      exercises.push(await writeExercise(repo, tx, workout.id, ex, typeSnapshot))
+    for (const [i, ex] of draft.exercises.entries()) {
+      exercises.push(await writeExercise(repo, tx, workout.id, ex, typeSnapshot, matched[i]?.id))
     }
     return {workoutId: workout.id, exercises}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})

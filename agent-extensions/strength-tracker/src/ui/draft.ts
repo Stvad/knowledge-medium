@@ -311,7 +311,7 @@ export const overlayLive = (
   previous: DraftExercise[] = [],
   writing: ReadonlySet<string> = new Set(),
 ): DraftExercise[] => {
-  const matches = matchLiveExercises(base.map(liftRef), live)
+  const matches = matchLiveExercises(base.map(liftRef), live?.exercises)
   const previousByKey = new Map(previous.map(ex => [rowKey(ex), ex] as const))
 
   const next = base.map((row, i) => {
