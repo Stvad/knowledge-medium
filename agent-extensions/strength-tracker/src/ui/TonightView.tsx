@@ -520,6 +520,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     coordinator.abandon()
     try {
       await discardWorkout(repo, wid)
+      // The failures belonged to blocks that no longer exist. Keyed only by
+      // day and session, they outlived the workout and the NEXT session of
+      // the same type inherited them — Finish then reported an unsaved change
+      // that belonged to a workout the user had thrown away.
+      for (const key of [...failedRef.current]) {
+        if (key.startsWith(`${slot}|`)) failedRef.current.delete(key)
+      }
       setDraft(buildDraft(prescription, unit))
       setStatus('Discarded')
     } catch (error) {

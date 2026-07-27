@@ -179,8 +179,20 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     prescription,
     setAltChoice: (groupKey, optionKey, label) => {
       if (!settingsBlockId) return
+      // Lock writing NOW, not when the reload eventually starts. The
+      // preference write has to land before `reloadKey` moves, and in that gap
+      // the old card is still on screen and still writable — a quick tap
+      // materialized the option the user had just switched away from and left
+      // an extra lift in the session.
+      setConfigLoaded(false)
       void writeAltChoice(repo, settingsBlockId, groupKey, optionKey, label)
         .then(() => setReloadKey(k => k + 1))
+        // The switch never happened, so the prescription on screen is still
+        // the right one to log against. Unlock rather than stranding it.
+        .catch(error => {
+          console.error('[strength] could not record the variant choice', error)
+          setConfigLoaded(true)
+        })
     },
     reload: () => setReloadKey(k => k + 1),
   }

@@ -529,6 +529,16 @@ export const writeSet = async (
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
 }
 
+/** A child that IS a set, tag or no tag. Its own numbers are the giveaway,
+ *  and the tag is hand-editable — so the guard that refuses a partial read
+ *  and the repair that puts the tag back have to agree about what they are
+ *  looking at, or a lift whose entry AND sets all lost their tags slips past
+ *  the guard and is finished around. */
+const isSetLike = (row: {properties: Record<string, unknown>}): boolean =>
+  hasBlockType(row, SET_TYPE)
+  || typeof row.properties[FIELD.weight] === 'number'
+  || typeof row.properties[FIELD.reps] === 'number'
+
 /** Flip the workout to `done`, stamp each kept exercise's working weight, and
  *  prune the un-accepted sets / empty exercises so the saved record shows only
  *  what was actually performed. One transaction.
@@ -575,7 +585,7 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     for (const child of children) {
       if (hasBlockType(child, EXERCISE_ENTRY_TYPE)) continue
       const grandchildren = await tx.childrenOf(child.id, undefined, {hidePropertyChildren: true})
-      if (grandchildren.some(row => hasBlockType(row, SET_TYPE))) untypedWithSets.push(child.id)
+      if (grandchildren.some(isSetLike)) untypedWithSets.push(child.id)
     }
     if (untypedWithSets.length > 0 || (children.length > 0 && entries.length === 0)) {
       throw new Error(
@@ -604,8 +614,7 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
         // left as a todo under a completed session, unreachable forever.
         // Repaired rather than refused, because the tag is the only thing
         // wrong and the user asked to finish.
-        if (typeof child.properties[FIELD.weight] === 'number'
-          || typeof child.properties[FIELD.reps] === 'number') {
+        if (isSetLike(child)) {
           await repo.addTypeInTx(tx, child.id, SET_TYPE, {}, typeSnapshot)
           sets.push(child)
           continue

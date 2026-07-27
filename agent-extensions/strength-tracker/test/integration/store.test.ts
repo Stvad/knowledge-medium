@@ -240,6 +240,27 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('done')
   })
 
+  it('refuses when an untyped lift\'s sets lost their tags too', async () => {
+    // The guard recognized an untyped entry only by its TYPED grandchildren,
+    // so a lift where both the entry and all its sets lost their tags slipped
+    // past it entirely — finished around, omitted from the record, its open
+    // sets stranded under a completed workout.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+      exerciseDraft('Row', [draftSet(95, 10)], {occurrence: 1}),
+    ]))
+    const [bench, row] = workout.exercises
+    expect(await writeSet(repo, bench.setIds[0], {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.setProperty(row.id, typesProp, [])
+      await tx.setProperty(row.setIds[0], typesProp, [])
+    }, {scope: ChangeScope.BlockDefault, description: 'lose the whole branch\'s tags'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
+    expect(await isBlockDeleted(repo, row.setIds[0])).toBe(false)
+  })
+
   it('refuses to finish when only SOME entries lost their type tag', async () => {
     // The dangerous misread is the partial one: `entries` is still non-empty,
     // so the all-missing guard never fires, and Finish marks the workout done

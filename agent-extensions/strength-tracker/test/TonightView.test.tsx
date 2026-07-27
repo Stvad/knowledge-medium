@@ -854,6 +854,32 @@ describe('TonightView', () => {
     expect(screen.getByText(/Could not save that/)).toBeTruthy()
   })
 
+  it('does not carry a discarded workout\'s failure into the next one', async () => {
+    // The marker is keyed by day and session, so it outlived the workout it
+    // belonged to: the next session of the same type inherited it and Finish
+    // reported an unsaved change from a workout the user had thrown away.
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await waitFor(() => expect(screen.getByText('Discarded')).toBeTruthy())
+    await emit()
+
+    // A fresh session for the same slot — and a DIFFERENT set, so its own
+    // success cannot be what clears the old marker.
+    fireEvent.click(checkboxes()[1])
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalled())
+    await emit()
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    expect(screen.queryByText(/did not save/)).toBeNull()
+  })
+
   it('gives the workout back when a discard fails', async () => {
     // `abandon` lets go before the delete is known to have worked, and a
     // release retires on an authoritative ABSENCE — which never comes for a
