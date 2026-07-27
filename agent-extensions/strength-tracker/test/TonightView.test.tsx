@@ -637,6 +637,37 @@ describe('TonightView', () => {
     await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
   })
 
+  it('does not warn about a write a later one has already superseded', async () => {
+    // Type a weight, then type another before the first lands. The second
+    // write saves the number now on screen, so the first's failure is about a
+    // value the user has already replaced — recording it anyway put "tap it
+    // again" over a saved set and made Finish pause once for nothing.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    let failFirst: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failFirst = reject }),
+    )
+    act(() => weights()[0].focus())
+    fireEvent.change(weights()[0], {target: {value: '195'}})
+    fireEvent.blur(weights()[0])
+    await act(async () => {})
+
+    act(() => weights()[0].focus())
+    fireEvent.change(weights()[0], {target: {value: '205'}})
+    fireEvent.blur(weights()[0])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(2))
+
+    await act(async () => { failFirst(new Error('offline')) })
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
+
+    // …and nothing is held back from finishing over it either.
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+  })
+
   it('does not let one session\'s write settle the other session\'s failure', async () => {
     // Two sessions of the same week can prescribe the SAME lift, and the
     // change a write is about is named by lift and set index — so A's first
@@ -772,6 +803,90 @@ describe('TonightView', () => {
     expect(checkboxes().some(box => box.checked)).toBe(false)
     // …and the confirmation the user has not read yet is still there.
     expect(screen.getByText(/Logged A · upper/)).toBeTruthy()
+  })
+
+  it('does not leave a value on screen that a failed discard cancelled', async () => {
+    // Discard cancels the creates whose blocks it is about to tombstone, and
+    // one that resolves in that window yields no block — which `persist`
+    // reads as nothing to do. If the discard then FAILS, the workout is still
+    // there and the draft was left showing a value no block holds: Finish
+    // would log around it without a word.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend, {prescription: prescriptionOf([exercise(), exercise({exercise: 'Squat', weight: 225})])})
+    await emit()
+
+    let failDiscard: (error: Error) => void = () => {}
+    vi.mocked(store.discardWorkout).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failDiscard = reject }),
+    )
+
+    backend.hold()
+    fireEvent.click(checkboxes()[2])      // Squat's first set — it has no block yet
+    await act(async () => {})
+    expect(checkboxes()[2].checked).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await act(async () => {})
+    await backend.release()               // the create lands, already cancelled
+
+    await act(async () => { failDiscard(new Error('offline')) })
+    await act(async () => {})
+
+    expect(checkboxes()[2].checked).toBe(false)
+  })
+
+  it('lets go of the workout it finished, not the one that replaced it', async () => {
+    // A peer can replace the workout while `finishWorkout` is in the air.
+    // Releasing "whatever is attached now" detached the LIVE w2 on w1's
+    // behalf: the session that had just started was reported as logged, its
+    // Discard and Finish stopped working, and the next tap opened a third
+    // workout for the evening.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    // Deliberately not the fake's own `finishWorkout`: the peer's w2 is still
+    // live, so the query must go on reporting a workout for this slot.
+    let landFinish: () => void = () => {}
+    vi.mocked(store.finishWorkout).mockImplementationOnce(
+      () => new Promise<void>(resolve => { landFinish = () => resolve() }),
+    )
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+
+    backend.replaceWorkout('w2')          // the peer's next session, same slot
+    await emit()
+
+    await act(async () => { landFinish() })
+
+    // w2 is still ours to write into, so a tap goes to IT.
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.materializeExercise).toHaveBeenCalled())
+    expect(store.startWorkout).not.toHaveBeenCalled()
+  })
+
+  it('does not write into the finished session through a query that has not caught up', async () => {
+    // Finish releases the workout, but the workout QUERY can go on reporting
+    // it in progress for a beat — and the overlay puts its set ids straight
+    // back into the draft. Resolving a tap against a cached id while detached
+    // sent the write out with NO workout to validate against, and the status
+    // check is the thing that refuses a completed record: the write landed in
+    // the finished session and moved the next one's prescribed weight.
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    // The store finished it; the fake's query deliberately has not heard.
+    vi.mocked(store.finishWorkout).mockResolvedValueOnce(undefined)
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+    await emit()                          // …still carrying the finished workout
+
+    fireEvent.click(checkboxes()[0])
+    await act(async () => {})
+    const unvalidated = vi.mocked(store.writeSet).mock.calls.filter(call => call[5] === undefined)
+    expect(unvalidated).toEqual([])
+    await waitFor(() => expect(store.startWorkout).toHaveBeenCalledTimes(1))
   })
 
   it('starts a second session rather than editing the finished one', async () => {

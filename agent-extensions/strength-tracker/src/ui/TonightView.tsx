@@ -153,6 +153,24 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   /** Is a write the user made still unaccounted for on this screen? */
   const anyFailureHere = (): boolean => [...failedRef.current.values()].some(belongsHere)
 
+  /** The latest write that SUCCEEDED for each change, so a failure arriving
+   *  after it can be recognised as already answered. Keyed by the CHANGE
+   *  rather than the operation, so it holds one entry per set-and-fields
+   *  instead of growing with every tap. */
+  const succeededRef = useRef(new Map<string, OpContext>())
+  const changeKey = (op: OpContext): string => [op.slot, op.setKey, op.fields].join('\u0000')
+  /** Has a LATER write already saved what this one was trying to save?
+   *
+   *  Two writes to one field overlap routinely — type a weight, then type
+   *  another before the first lands — and the newer one can finish first. Its
+   *  success has nothing to retire yet, so the older failure arrived after it
+   *  and was recorded anyway: "tap it again" over a set that is saved, and
+   *  Finish pausing once for a value the user had already replaced. */
+  const alreadySaved = (forOp: OpContext): boolean => {
+    const won = succeededRef.current.get(changeKey(forOp))
+    return won !== undefined && supersedes(won, forOp)
+  }
+
   /** Writes still running. Finish reasserts only ACCEPTANCE, so a weight or
    *  reps write started by the blur that a Finish tap causes is not part of
    *  what Finish flushes — it races it. Left unwaited, Finish could finalize
@@ -242,10 +260,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // seen is a query that hasn't caught up with our own create, and letting
     // go there is the bug this carry-forward exists to prevent. Seen and then
     // gone is the opposite, and only the seeing tells them apart.
-    const vanished = live === undefined && liveLoaded && seenLiveRef.current !== null
+    const seen = seenLiveRef.current
+    const vanished = live === undefined && liveLoaded && seen !== null
     if (vanished) {
       seenLiveRef.current = null
-      coordinator.completed()
+      // By id, like the finish path: what is being let go of is the workout
+      // that VANISHED, not whatever happens to be attached by the time this
+      // runs.
+      coordinator.completed(seen)
     }
     if (live !== undefined) seenLiveRef.current = live.id
     const writing = writingNow()
@@ -347,6 +369,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       for (const [id, failed] of failedRef.current) {
         if (supersedes(forOp, failed)) failedRef.current.delete(id)
       }
+      // …and remember it, for the failure that has not arrived yet. Retiring
+      // alone only settles what already failed.
+      const won = succeededRef.current.get(changeKey(forOp))
+      if (!won || won.id < forOp.id) succeededRef.current.set(changeKey(forOp), forOp)
       // Then take the message down if nothing on this screen is unaccounted
       // for — whether or not THIS write is what settled it. Requiring that it
       // was stranded the warning whenever the failure belonged to a workout a
@@ -363,9 +389,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     } catch (error) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
-      // value that never reached it.
-      failedRef.current.set(forOp.id, forOp)
-      setResync(n => n + 1)
+      // value that never reached it. Unless a later write already saved this
+      // very change — then the block holds the newer value, and a resync here
+      // would show the older one until its emission caught up.
+      if (!alreadySaved(forOp)) {
+        failedRef.current.set(forOp.id, forOp)
+        setResync(n => n + 1)
+      }
       throw error
     } finally {
       // Exactly once per `beginWrite`, whichever way this went. The `gone`
@@ -397,6 +427,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const reportFor = (forOp: OpContext) => (error: unknown) => {
     if (!belongsHere(forOp)) {
       console.error('[strength] write failed on a session no longer shown', error)
+      return
+    }
+    if (alreadySaved(forOp)) {
+      console.error('[strength] write failed, but a later one saved the same change', error)
       return
     }
     reportWriteFailure(error)
@@ -575,7 +609,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // but `abandon` is "this evening is empty again" and this is "this
       // evening holds a finished workout" — the next session of the same type
       // gets a new slot rather than adopting this one.
-      coordinator.completed()
+      // …and the workout it FINISHED, by id. A peer can replace the workout
+      // while `finishWorkout` is in the air, and releasing whatever happened
+      // to be attached by then detached a live session on a finished one's
+      // behalf: its Discard and Finish stopped working, and the next tap
+      // opened a third workout for the evening.
+      coordinator.completed(wid)
       setDraft(buildDraft(prescription, unit))
       const lifts = flushed.filter(ex => ex.sets.some(s => s.done)).length
       setStatus(`Logged ${SESSION_LABELS[session]} — ${lifts} lifts`)
@@ -633,6 +672,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // the only way out was a remount. (It also went unreported: this had no
       // catch at all, so a failed delete was an unhandled rejection.)
       coordinator.restore(wid)
+      // A create that resolved between `abandon` and this rejection yielded
+      // no block, and `persist` reads no block as nothing to do — so a value
+      // the user typed just before discarding is on screen and in no block,
+      // on a workout that survived. Rebuild from the blocks: their answer is
+      // the true one, and the alternative is Finish logging around a value
+      // that nothing holds. Deliberately not re-issued — the tap the user
+      // actually made was Discard, so putting the edit back is not ours to
+      // assume.
+      setResync(n => n + 1)
       reportWriteFailure(error)
     } finally {
       setBusy(false)

@@ -307,7 +307,7 @@ describe('reset — the session was switched', () => {
     // `done`. Adopting that id again brought a logged session back to life —
     // Discard reappears for it, and later edits route into released blocks.
     const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
-    coord.completed()
+    coord.completed('w1')
     expect(coord.workoutId()).toBeNull()
 
     coord.reset('w1', SLOT_A, SHAPE)
@@ -319,7 +319,7 @@ describe('reset — the session was switched', () => {
     // back before the workout query drops A's stale in-progress row, and the
     // slot-change branch was assigning it without consulting `released`.
     const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
-    coord.completed()
+    coord.completed('w1')
     coord.reset(null, SLOT_B, SHAPE)
     coord.reset('w1', SLOT_A, SHAPE)
     expect(coord.workoutId()).toBeNull()
@@ -331,7 +331,7 @@ describe('reset — the session was switched', () => {
     // back before A's workout query publishes the done row, and A came back
     // with its Discard button and its set ids.
     const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
-    coord.completed()
+    coord.completed('w1')
     coord.reset(null, SLOT_B, SHAPE, true)   // B is empty — true of B, not of A
     coord.reset('w1', SLOT_A, SHAPE, true)   // …back to A, still lagging
     expect(coord.workoutId()).toBeNull()
@@ -343,7 +343,7 @@ describe('reset — the session was switched', () => {
     // forever — undoing its finish put the blocks back on screen with the
     // coordinator refusing to own them.
     const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
-    coord.completed()
+    coord.completed('w1')
     coord.reset('w2', SLOT_A, SHAPE)          // straight to the next workout
     expect(coord.workoutId()).toBe('w2')
 
@@ -357,7 +357,7 @@ describe('reset — the session was switched', () => {
     // are done with — refusing it there left the blocks on screen with no
     // workout id behind them.
     const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
-    coord.completed()
+    coord.completed('w1')
 
     coord.reset('w1', SLOT_B, SHAPE)
     expect(coord.workoutId()).toBe('w1')
@@ -501,7 +501,7 @@ describe('failure and abandonment', () => {
 
     const pending = coord.resolveSet([exercise('Bench press', 1)], 0, 0, effects)
     coord.reset('w-b', SLOT_B, SHAPE)   // the user switches to session B…
-    coord.completed()                    // …and finishes THAT one
+    coord.completed('w-b')                    // …and finishes THAT one
     gate.resolve(workoutIds('w-a', [1]))
 
     expect((await pending).blockId).toBe('w-a-e0s0')

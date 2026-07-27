@@ -102,7 +102,7 @@ export interface WriteCoordinator {
    *  same-slot `reset(null, …)` deliberately never falls back to null (no live
    *  workout usually means the query is behind). Every later tap then resolved
    *  against a completed session. */
-  completed(): void
+  completed(finishedWorkoutId: string): void
   /** This set block is gone — a write to it came back `gone`. The cached ids
    *  from our own create outlive the block they name, so the shortcut below
    *  kept handing the same tombstone back: every retry answered `gone`, the
@@ -335,8 +335,18 @@ export const createWriteCoordinator = (
       release()
     },
 
-    completed() {
-      release()
+    completed(finishedWorkoutId) {
+      if (workoutId === finishedWorkoutId) {
+        release()
+        return
+      }
+      // The workout moved while `finishWorkout` was in the air — a peer
+      // replaced it, and the effect adopted the replacement. Only the one
+      // that was FINISHED is let go: releasing whatever happened to be
+      // attached detached a LIVE session on a finished one's behalf, so its
+      // Discard and Finish stopped working and the next tap opened a third
+      // workout for the evening.
+      released.set(finishedWorkoutId, slot)
     },
 
     forget(setBlockId) {
@@ -374,8 +384,16 @@ export const createWriteCoordinator = (
       // ids into the draft before the write runs, so on a `gone` the very id
       // we were told to forget is sitting right here, and returning it sent
       // the retry back to the same tombstone.
-      if (set.blockId && !deadSets.has(set.blockId)) {
-        return {blockId: set.blockId, ...(workoutId !== null ? {workoutId} : {})}
+      // …and only while a workout is actually attached. Detached, the ids in
+      // the draft are whatever a lagging query put back — the overlay reads
+      // `live` directly, so a workout this coordinator has released is still
+      // rendered for a beat after a finish. Handing the set id back without a
+      // workout sent the write out with nothing to validate against, and the
+      // in-progress check is the one that refuses a completed record: the tap
+      // landed in the finished session. With no workout, the create path is
+      // the right answer — it is what starts the evening's second session.
+      if (set.blockId && !deadSets.has(set.blockId) && workoutId !== null) {
+        return {blockId: set.blockId, workoutId}
       }
 
       if (!workoutId) {
