@@ -658,6 +658,13 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     /** Entries holding a child that is NOT a set — a note the user typed under
      *  the lift. */
     const holdsMore = new Set<string>()
+    /** Notes that turn out to have a SET indented under them. The workout
+     *  level already refuses over this shape one level up; the same thing
+     *  under a lift was classified as "not a set" and never looked into, so
+     *  Finish completed around a live set — possibly an open todo — that the
+     *  record never mentions, because `buildHistory` groups sets by their
+     *  direct exercise parent. */
+    const buriedSets: string[] = []
     for (const entry of entries) {
       const entryChildren = await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true})
       const sets: typeof entryChildren = []
@@ -671,6 +678,8 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
         // is the only thing wrong and the user asked to finish.
         if (!hasBlockType(child, SET_TYPE) && !isSetLike(child)) {
           others += 1
+          const under = await tx.childrenOf(child.id, undefined, {hidePropertyChildren: true})
+          if (under.some(isSetLike)) buriedSets.push(child.id)
           continue
         }
         // BOTH types, as materialization writes them, and for whatever it is
@@ -692,6 +701,15 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
           : entry.content,
         sets: sets.map(toLiveSet),
       })
+    }
+    if (buriedSets.length > 0) {
+      // Refuse rather than repair, exactly as the workout level does: where
+      // the user meant a set to sit is a question about their log, and
+      // finishing is the one operation here that PRUNES.
+      throw new Error(
+        `finishWorkout: workout ${workoutId} has ${buriedSets.length} set(s) buried under a note `
+        + '— refusing to finish, since that would leave logged work out of the record.',
+      )
     }
     const plan = finishPlan(workoutId, exercises)
 

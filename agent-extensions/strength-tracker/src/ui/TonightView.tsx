@@ -513,10 +513,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     const at = coordinator.generation()
     const forOp = nextOp()
     void track((async () => {
+      let aborted = false
       try {
         let rows: readonly DraftExercise[] = next
         for (const j of pending) {
-          if (coordinator.generation() !== at) break
+          if (coordinator.generation() !== at) {
+            aborted = true
+            break
+          }
           // One context per SET, not one for the batch. `persist` writes the
           // set and fields it is about into the context it is given, so a
           // shared one ends the loop describing whichever set went last — and
@@ -542,6 +546,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         }
       } finally {
         for (const key of batch) endWrite(key)
+        // The sets this batch never reached are still ticked from the
+        // optimistic update, and dropping their exemption is not enough to
+        // take that back — no emission is coming for a write that never
+        // happened, so the replacement session would show unsaved ticks under
+        // "Saved as you go", and Finish would persist them into it.
+        if (aborted) setResync(n => n + 1)
       }
     })(), forOp).catch(reportFor(forOp))
   }

@@ -1036,3 +1036,35 @@ describe('a set that kept its own type but lost the todo one', () => {
     expect(hasBlockType(cache.getSnapshot(setId)!, SET_TYPE)).toBe(true)
   })
 })
+
+describe('a set indented under a note', () => {
+  it('refuses to finish rather than completing the session around it', async () => {
+    // The workout level already refuses when an untyped child owns sets. One
+    // level down had neither check: a set indented beneath a note under the
+    // lift was classified as "not a set" and its subtree never looked at, so
+    // Finish marked the workout done while that set stayed live — possibly an
+    // open todo — and `buildHistory` omits it, since sets are grouped by their
+    // direct exercise parent.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 5)])]))
+    const entryId = workout.exercises[0].id
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'note-1', workspaceId: WORKSPACE_ID, parentId: entryId,
+        orderKey: 'z0', content: 'felt heavy tonight',
+      })
+      await tx.create({
+        id: 'buried-set', workspaceId: WORKSPACE_ID, parentId: 'note-1',
+        orderKey: 'a0', content: '185 x 3',
+      })
+      await tx.setProperty('buried-set', weightProp, 185)
+      await tx.setProperty('buried-set', repsProp, 3)
+    }, {scope: ChangeScope.BlockDefault, description: 'indent a set under a note'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/buried|refusing/i)
+    // …and nothing was pruned or flipped on the way to refusing.
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+})

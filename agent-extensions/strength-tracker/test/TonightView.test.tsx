@@ -800,6 +800,29 @@ describe('TonightView', () => {
     expect(screen.queryByText(/did not save/)).toBeNull()
   })
 
+  it('re-reads the sets a batch never reached when the workout changes under it', async () => {
+    // "all ✓" ticks every set up front and exempts the whole batch from the
+    // overlay. If the workout is replaced between sets the loop stops — but
+    // the sets it never reached are still ticked on screen, and the exemption
+    // is dropped without asking for another overlay. The replacement then
+    // showed unsaved ticks under "Saved as you go".
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    backend.hold()
+    fireEvent.click(screen.getByRole('button', {name: 'all ✓'}))
+    await act(async () => {})
+    expect(checkboxes()[1].checked).toBe(true)          // optimistic
+
+    backend.replaceWorkout('w2')                        // …and the session moves
+    await emit()
+    await backend.release()
+
+    // Set 1's write never happened, so nothing on any block says it is done.
+    await waitFor(() => expect(checkboxes()[1].checked).toBe(false))
+  })
+
   it('lets each write in a batch answer for its own set', async () => {
     // "all ✓" ran every set through ONE operation context, and `persist`
     // rewrites that context's set as it goes — so by the end of the loop the
