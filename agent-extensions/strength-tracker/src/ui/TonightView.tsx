@@ -153,7 +153,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  about some third case: it skipped an `or`-group switch, or it discarded
    *  a tick whose write was still in flight. */
   useEffect(() => {
-    const {slotChanged} = coordinator.reset(live?.id ?? null, slot, shape)
+    const {slotChanged} = coordinator.reset(live?.id ?? null, slot, shape, liveLoaded)
     const writing = writingNow()
     // On a session switch, what is on screen is about the OTHER session, so it
     // is not an input. Two sessions can prescribe the same lift and the

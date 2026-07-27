@@ -281,6 +281,29 @@ describe('reset — the session was switched', () => {
     expect(coord.workoutId()).toBeNull()
   })
 
+  it('refuses a released id on a slot switched away from and back', async () => {
+    // The lag window is not confined to one slot: finish A, flip to B, flip
+    // back before the workout query drops A's stale in-progress row, and the
+    // slot-change branch was assigning it without consulting `released`.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.completed()
+    coord.reset(null, SLOT_B, SHAPE)
+    coord.reset('w1', SLOT_A, SHAPE)
+    expect(coord.workoutId()).toBeNull()
+  })
+
+  it('lets a released workout come back when the queries say it really did', async () => {
+    // Undoing a discard restores the same blocks under the same id. Refusing
+    // it for the coordinator's lifetime left Discard a no-op and Finish
+    // permanently answering "session changed" until a remount — so a release
+    // is retired once an authoritative absence confirms it.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.abandon()
+    coord.reset(null, SLOT_A, SHAPE, true)   // the queries confirm it is gone
+    coord.reset('w1', SLOT_A, SHAPE, true)   // …and then undo brings it back
+    expect(coord.workoutId()).toBe('w1')
+  })
+
   it('still adopts a different workout for the same slot', async () => {
     // Releasing one id must not stop the NEXT session of the same type that
     // evening from being adopted — it lives at a different derived slot.

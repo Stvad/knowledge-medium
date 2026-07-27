@@ -556,6 +556,31 @@ describe('materializeExercise — explicit entryId', () => {
     expect(cache.getSnapshot(refilled.setIds[0])?.parentId).toBe(refilled.id)
   })
 
+  it('re-tags an attached entry whose type tag went missing', async () => {
+    // The shortcut accepts an entry on liveness and parentage alone, skipping
+    // the re-tag `getOrCreateTypedChild` does for what it adopts. Left
+    // untagged, the typed query drops it, Finish then refuses the session
+    // because an untyped workout child owns sets, and a later materialization
+    // derives a parallel entry beside it.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const entryId = started.exercises[0].id
+    await repo.tx(tx => tx.setProperty(entryId, typesProp, []),
+      {scope: ChangeScope.BlockDefault, description: 'lose the type tag'})
+
+    await materializeExercise(
+      repo,
+      started.workoutId,
+      exerciseDraft('Bench press', [draftSet(135, 8), draftSet(145, 5)]),
+      entryId,
+    )
+
+    expect(hasBlockType(cache.getSnapshot(entryId)!, EXERCISE_ENTRY_TYPE)).toBe(true)
+    // …and the session it belongs to is finishable again.
+    expect(await liveChildren(started.workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+  })
+
   it('backfills the plan-block ref onto an entry that was logged without one', async () => {
     // `strength:definition` is an optional-ref, so it projects a real
     // reference: a definition block's backlinks are that lift's whole logged

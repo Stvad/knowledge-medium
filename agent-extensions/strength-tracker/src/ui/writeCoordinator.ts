@@ -77,7 +77,7 @@ export interface WriteCoordinator {
    *
    *  Idempotent, and reports what changed — the view calls it on every query
    *  emission and reacts to the transition rather than tracking one itself. */
-  reset(workoutId: string | null, slot: string, shape: string): ResetOutcome
+  reset(workoutId: string | null, slot: string, shape: string, loaded?: boolean): ResetOutcome
   /** The workout was discarded. Results from creates already in flight stop
    *  yielding a block to write to — those blocks are about to be (or already
    *  are) tombstoned, and writing into them leaves live todo sets under a
@@ -186,14 +186,31 @@ export const createWriteCoordinator = (
     materialized: () => materialized,
     generation: () => generation,
 
-    reset(nextWorkoutId, nextSlot, nextShape) {
+    reset(nextWorkoutId, nextSlot, nextShape, loaded = false) {
+      // An id stays released only until the queries CONFIRM it is gone. Once
+      // they have, a later reappearance is a genuine restore — undoing a
+      // discard puts the same workout back, with the same id — and refusing
+      // it forever left Discard a no-op and Finish permanently answering
+      // "session changed while saving" until a remount. This is the same
+      // authoritative-absence signal the overlay uses; before it existed, a
+      // lifetime blacklist was the only way to be safe.
+      if (loaded && nextWorkoutId === null) released.clear()
+
+      // An id we have RELEASED is not a live id, whatever a lagging query
+      // says. Finish and Discard invalidate the workout, entry and set queries
+      // independently, so `live` can be rebuilt from a workout row that still
+      // reads `in-progress` well after we let go of it — on THIS slot, and
+      // equally on a slot the user switched away from and back to before the
+      // workout query caught up.
+      const offered = nextWorkoutId !== null && released.has(nextWorkoutId) ? null : nextWorkoutId
+
       if (nextSlot !== slot) {
         // A different day/session: a different workout, so everything here is
         // about something else now.
         generation += 1
         slot = nextSlot
         shape = nextShape
-        workoutId = nextWorkoutId
+        workoutId = offered
         materialized = null
         creatingWorkout = null
         creatingExercises = new Map()
@@ -202,9 +219,7 @@ export const createWriteCoordinator = (
 
       // Same slot. Adopt a live id if one turned up, but never fall back to
       // null: no live workout usually means the query hasn't caught up with
-      // the one we just made, and forgetting it starts a duplicate. An id we
-      // have RELEASED is not a live id, whatever a lagging query says.
-      const offered = nextWorkoutId !== null && released.has(nextWorkoutId) ? null : nextWorkoutId
+      // the one we just made, and forgetting it starts a duplicate.
       workoutId = offered ?? workoutId
       if (nextShape === shape) return {slotChanged: false, shapeChanged: false}
 

@@ -254,6 +254,15 @@ const writeExercise = async (
   if (entryId !== undefined) {
     const attached = await tx.get(entryId)
     if (!attached || attached.deleted || attached.parentId !== workoutId) entryId = undefined
+    // Re-tag it, the way `getOrCreateTypedChild` re-tags what it adopts. This
+    // shortcut skips that, so an entry whose type tag went missing was still
+    // accepted on liveness and parentage alone — and then written into. The
+    // typed query drops it, Finish refuses the session because an untyped
+    // child owns sets, and a later materialization derives a parallel entry
+    // beside it. Bypassing the primitive is not a reason to lose its repair.
+    else if (!hasBlockType(attached, EXERCISE_ENTRY_TYPE)) {
+      await repo.addTypeInTx(tx, entryId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
+    }
   }
 
   if (entryId !== undefined && ex.definitionId !== undefined) {
