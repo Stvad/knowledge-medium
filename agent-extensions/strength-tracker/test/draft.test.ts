@@ -282,6 +282,51 @@ describe('overlayLive', () => {
     expect(merged[0].sets.map(s => s.blockId)).toEqual(['first', 'second', undefined])
   })
 
+  it('keeps a twice-prescribed lift on its own entries however they are ordered', () => {
+    // A session can prescribe one lift twice, and the two entries are two
+    // blocks. Counting them in block order made "which occurrence is this"
+    // depend on their order in the outline — drag them past each other and
+    // row 1 picked up row 2's block, so each displayed and then wrote the
+    // other's weights and ticks. The blocks say which is which.
+    const twice: Prescription = {
+      ...prescription(),
+      exercises: [exerciseOf({defId: 'def-squat'}), exerciseOf({defId: 'def-squat'})],
+    }
+    const reordered: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [
+        // Second in the outline, and it says so — the SECOND row's entry.
+        {id: 'e-second', exercise: 'Bench press', definitionId: 'def-squat', unit: 'lb', occurrence: 1,
+          sets: [{id: 'x1', weight: 999, reps: 1, done: true}]},
+        {id: 'e-first', exercise: 'Bench press', definitionId: 'def-squat', unit: 'lb', occurrence: 0,
+          sets: [{id: 'y1', weight: 111, reps: 2, done: true}]},
+      ],
+    }
+    const merged = overlayLive(buildDraft(twice, 'lb'), reordered)
+    expect(merged.map(ex => ex.blockId)).toEqual(['e-first', 'e-second'])
+    expect(merged[0].sets[0].weight).toBe(111)
+    expect(merged[1].sets[0].weight).toBe(999)
+  })
+
+  it('falls back to order for two entries of one lift making the same claim', () => {
+    // Hand-edited into a collision: neither number can be believed, so both
+    // fall back to block order rather than one winning and displacing the
+    // other — the same rule a duplicated set index gets.
+    const twice: Prescription = {
+      ...prescription(),
+      exercises: [exerciseOf({defId: 'def-squat'}), exerciseOf({defId: 'def-squat'})],
+    }
+    const collided: LiveWorkout = {
+      id: 'w1', day: '2026-07-23', session: 'A',
+      exercises: [
+        {id: 'e-a', exercise: 'Bench press', definitionId: 'def-squat', unit: 'lb', occurrence: 1, sets: []},
+        {id: 'e-b', exercise: 'Bench press', definitionId: 'def-squat', unit: 'lb', occurrence: 1, sets: []},
+      ],
+    }
+    const merged = overlayLive(buildDraft(twice, 'lb'), collided)
+    expect(merged.map(ex => ex.blockId)).toEqual(['e-a', 'e-b'])
+  })
+
   it('falls back to position for sets written before they carried an index', () => {
     // Pre-property data: a contiguous list is the best guess available, and it
     // is right for every set that has not had a sibling deleted.

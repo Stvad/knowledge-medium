@@ -490,8 +490,22 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           // the success recorded for the first then claimed to be about the
           // last. An earlier failure on a set this batch had just re-saved was
           // reported as unsaved, and Finish paused over it.
-          const patch = await persist(rows, exIdx, j, {done: true, completedAt: now}, nextOp())
-          if (patch) rows = applyIdPatch(rows, patch)
+          const opFor = nextOp()
+          try {
+            const patch = await persist(rows, exIdx, j, {done: true, completedAt: now}, opFor)
+            if (patch) rows = applyIdPatch(rows, patch)
+          } finally {
+            // The batch's OWN context is what Finish waits on and what a
+            // rejection is reported against, and it was made before there was
+            // a workout to name it after — a batch that starts the evening
+            // resolves one only here. A null workout matches whatever is
+            // current, so a peer replacing this one mid-batch inherited the
+            // wait and the warning. Bind it to the workout the first set
+            // resolved against — in `finally`, because a set whose WRITE
+            // failed still resolved a workout, and that is exactly the batch
+            // whose warning must not land on a successor.
+            if (forOp.workout === null) forOp.workout = opFor.workout
+          }
         }
       } finally {
         for (const key of batch) endWrite(key)

@@ -53,6 +53,15 @@ export const FIELD = {
   unit: 'strength:unit',
   prescribedWeight: 'strength:prescribedWeight',
   prescribedSets: 'strength:prescribedSets',
+  /** Which time in THIS session this lift is — 0-based, and the same number
+   *  its block id is derived from.
+   *
+   *  Stored for the same reason `setIndex` is: position among siblings is not
+   *  identity. A session can prescribe one lift twice, and counting the
+   *  entries in block order gives the second one occurrence 1 only while
+   *  nobody has reordered them — drag them past each other in the outline and
+   *  the two rows swap blocks, then write each other's weights and ticks. */
+  occurrence: 'strength:occurrence',
   // set (one block per set, child of the exercise entry)
   weight: 'strength:weight',
   reps: 'strength:reps',

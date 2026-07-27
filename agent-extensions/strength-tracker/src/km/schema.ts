@@ -173,6 +173,22 @@ export const prescribedSetsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** Which time in this session the lift is — the same 0-based number the entry
+ *  block id was derived from, stored because position among siblings stops
+ *  being identity as soon as the user reorders them. See `FIELD.occurrence`,
+ *  and `setIndexProp` for the same decision one level down. */
+export const occurrenceProp = seedProperty({
+  seedKey: extensionPropertySeedKey('occurrence'),
+  revision: 1,
+  name: FIELD.occurrence,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  // Bookkeeping, like `setIndexProp`: the readable copy of an identity the
+  // block id already fixes, so editing it is always wrong.
+  hidden: true,
+})
+
 // ──── Set ────
 // One block per set, child of the exercise entry, ordered by block order.
 // Plain props (not a JSON blob) so "all bench sets since June" is a real query
@@ -480,7 +496,10 @@ export const workoutType = seedType({
 
 export const exerciseEntryType = seedType({
   seedKey: extensionTypeSeedKey('exercise'),
-  revision: 1,
+  // 2: `occurrenceProp` joined the declared shape, for the same reason
+  // `setIndexProp` joined the set's — an entry that leaves its own identity
+  // field out of what an entry IS.
+  revision: 2,
   id: EXERCISE_ENTRY_TYPE,
   label: 'Exercise entry',
   description: 'One lift within a workout; its sets are child set blocks.',
@@ -492,6 +511,7 @@ export const exerciseEntryType = seedType({
     unitProp,
     prescribedWeightProp,
     prescribedSetsProp,
+    occurrenceProp,
   ],
 })
 
@@ -592,6 +612,7 @@ export const STRENGTH_PROPS = [
   unitProp,
   prescribedWeightProp,
   prescribedSetsProp,
+  occurrenceProp,
   weightProp,
   repsProp,
   setIndexProp,

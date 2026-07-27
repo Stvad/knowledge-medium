@@ -668,6 +668,29 @@ describe('TonightView', () => {
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
   })
 
+  it('binds a batch that started before the workout to the workout it made', async () => {
+    // "all ✓" on a session with no workout yet: the batch's own context is
+    // created before there is a workout to name, and a null workout matches
+    // whatever is current. Left that way after the batch's first set resolved
+    // one, a peer replacing the workout mid-batch inherited it — the new
+    // session's Finish waited on the old one's writes, and a late rejection
+    // put the old one's warning on the new one's screen.
+    mount(backend)
+
+    let failWrite: (error: Error) => void = () => {}
+    vi.mocked(store.writeSet).mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { failWrite = reject }),
+    )
+    fireEvent.click(screen.getByRole('button', {name: 'all ✓'}))
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())   // w1 exists by now
+
+    backend.replaceWorkout('w2')          // a peer's session takes its place
+    await emit()
+
+    await act(async () => { failWrite(new Error('offline')) })
+    expect(screen.queryByText(/Could not save that/)).toBeNull()
+  })
+
   it('lets each write in a batch answer for its own set', async () => {
     // "all ✓" ran every set through ONE operation context, and `persist`
     // rewrites that context's set as it goes — so by the end of the loop the

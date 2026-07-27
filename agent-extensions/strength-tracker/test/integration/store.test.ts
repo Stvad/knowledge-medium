@@ -35,6 +35,7 @@ import {
   completedAtProp,
   dateProp,
   definitionProp,
+  occurrenceProp,
   repsProp,
   rpeProp,
   sessionProp,
@@ -923,5 +924,35 @@ describe('the workout tree as ONE query', () => {
     // …and the set really does carry the second type, so this is a live test
     // of "carries" rather than an accident of each block having exactly one.
     expect(hasBlockType(rows.find(row => row.id === setId)!, todoType.id)).toBe(true)
+  })
+})
+
+describe('an entry states which occurrence of its lift it is', () => {
+  it('stamps it on create, and repairs it on an entry adopted for a different row', async () => {
+    // The read path places a twice-prescribed lift's rows by this number
+    // rather than by sibling order, so the block has to carry it — and has to
+    // go on carrying the number of the row actually writing into it, however
+    // the block was come by.
+    const started = await startWorkout(
+      repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([
+        exerciseDraft('Squat', [draftSet(225, 5)], {definitionId: 'def-squat', occurrence: 0}),
+        exerciseDraft('Squat', [draftSet(185, 8)], {definitionId: 'def-squat', occurrence: 1}),
+      ]),
+    )
+    const [first, second] = started.exercises
+    expect(repo.block(first.id).peekProperty(occurrenceProp)).toBe(0)
+    expect(repo.block(second.id).peekProperty(occurrenceProp)).toBe(1)
+    expect(first.id).not.toBe(second.id)
+
+    // Hand the SECOND row's block to the first row, the way an entry matched
+    // by name rather than by derivation arrives: the stored number follows the
+    // row that owns it, so the reader and the writer keep agreeing.
+    await materializeExercise(
+      repo, started.workoutId,
+      exerciseDraft('Squat', [draftSet(225, 5)], {definitionId: 'def-squat', occurrence: 0}),
+      second.id,
+    )
+    expect(repo.block(second.id).peekProperty(occurrenceProp)).toBe(0)
   })
 })

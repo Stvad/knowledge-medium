@@ -42,6 +42,7 @@ import {
   repsProp,
   rpeProp,
   sessionProp,
+  occurrenceProp,
   setIndexProp,
   sideProp,
   statusProp,
@@ -283,7 +284,7 @@ const writeExercise = async (
     }
   }
 
-  const {id: exId} = entryId !== undefined ? {id: entryId} : await getOrCreateTypedChild(repo, tx, {
+  const outcome = entryId !== undefined ? undefined : await getOrCreateTypedChild(repo, tx, {
     identity: exerciseIdentity(workoutId, ex.definitionId ?? ex.exercise, ex.occurrence),
     parentId: workoutId,
     content: ex.exercise,
@@ -295,6 +296,11 @@ const writeExercise = async (
       propertyValue(unitProp, ex.unit),
       ...(ex.prescribedWeight !== undefined ? [propertyValue(prescribedWeightProp, ex.prescribedWeight)] : []),
       ...(ex.prescribedSets !== undefined ? [propertyValue(prescribedSetsProp, ex.prescribedSets)] : []),
+      // The same number the block id above was derived from, written down so
+      // a reader can tell WHICH occurrence of the lift this is without
+      // counting siblings — which stops being the same thing the moment the
+      // user drags them past each other.
+      propertyValue(occurrenceProp, ex.occurrence),
     ],
     // Positional records: this entry belongs to THIS workout, so a block the
     // user dragged out of it is not the slot's occupant any more. Adopting
@@ -304,6 +310,20 @@ const writeExercise = async (
     adoptable: block => block.parentId === workoutId,
     typeSnapshot,
   })
+  const exId = outcome?.id ?? (entryId as string)
+
+  // Repair the stored occurrence on any block we did NOT just create — one
+  // adopted by the derivation, or handed to us as the attached entry. The READ
+  // path places rows by this number, so an entry whose copy disagrees with the
+  // row writing into it would show that row's sets under the other one. The
+  // row a block is attached to is the authority: rows are claimed once, so the
+  // numbers stay unique within a workout.
+  if (outcome?.status !== 'created') {
+    const before = await tx.get(exId)
+    if (before && !before.deleted && before.properties[FIELD.occurrence] !== ex.occurrence) {
+      await tx.setProperty(exId, occurrenceProp, ex.occurrence)
+    }
+  }
 
   const setIds: string[] = []
   for (const [i, s] of ex.sets.entries()) {

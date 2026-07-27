@@ -148,6 +148,9 @@ export interface LiveExercise {
   unit: string
   prescribedWeight?: number
   prescribedSets?: number
+  /** Which time in its session this lift is, as the BLOCK states it — see
+   *  `LiftEntry`. Absent on entries written before the property existed. */
+  occurrence?: number
   sets: LiveSet[]
 }
 
@@ -215,15 +218,20 @@ export interface LiftEntry {
   id: string
   exercise: string
   definitionId?: string
+  /** Which time in its session this lift is, as the BLOCK states it. Absent on
+   *  entries written before the property existed, where block order is the
+   *  best guess available. */
+  occurrence?: number
 }
 
 /** Which live entry backs each draft row, keyed on `liftKey`.
  *
- *  The live side counts its own occurrences in block order — a deterministic
- *  total order (`compareByOrderKey` breaks ties on id), so this is stable
- *  against sync arrival order. It is NOT stable against the user reordering
- *  entries by hand in the outline, which only matters for a lift prescribed
- *  twice in one session.
+ *  Each live entry states which occurrence it is (`occurrencesOf`), so a lift
+ *  prescribed twice in one session keeps its rows attached to the right blocks
+ *  however the entries are ordered. Entries written before that property
+ *  existed still fall back to block order — a deterministic total order
+ *  (`compareByOrderKey` breaks ties on id), so stable against sync arrival
+ *  order, but not against hand-reordering.
  *
  *  A row matches its plan block first, then falls back to the lift's NAME —
  *  because whether either side knows a lift's plan block is a property of WHEN
@@ -248,6 +256,65 @@ export interface LiftEntry {
  *  re-deriving. The one restriction left is that a row WITH a plan block never
  *  falls back onto an entry carrying a DIFFERENT one — those are two genuinely
  *  different lifts that happen to share a name. */
+/** Which occurrence each live entry is — what it SAYS it is, falling back to
+ *  its position among the entries for the same lift.
+ *
+ *  The block says so because position is not identity: a session can prescribe
+ *  one lift twice, and dragging the two entries past each other in the outline
+ *  used to swap which prescription row each backed — so the rows displayed,
+ *  and then wrote, each other's weights and ticks.
+ *
+ *  A duplicated claim is no claim: if two entries for one lift both say
+ *  occurrence 1, neither number can be believed and both fall back to order —
+ *  the same rule the set overlay uses for a duplicated index, and for the same
+ *  reason (believing the first would move it AND displace the second).
+ *  Fallbacks fill the numbers a believed claim hasn't taken. */
+const occurrencesOf = <T extends LiftEntry>(entries: readonly T[]): Map<T, number> => {
+  const baseOf = (entry: T): string => entry.definitionId ?? entry.exercise
+  const stated = (entry: T): number | undefined =>
+    entry.occurrence !== undefined
+      && Number.isSafeInteger(entry.occurrence) && entry.occurrence >= 0
+      ? entry.occurrence
+      : undefined
+
+  const claims = new Map<string, number>()
+  for (const entry of entries) {
+    const occurrence = stated(entry)
+    if (occurrence !== undefined) {
+      const key = `${baseOf(entry)}\u0000${occurrence}`
+      claims.set(key, (claims.get(key) ?? 0) + 1)
+    }
+  }
+
+  const believed = new Map<T, number>()
+  const taken = new Map<string, Set<number>>()
+  for (const entry of entries) {
+    const occurrence = stated(entry)
+    if (occurrence === undefined) continue
+    if (claims.get(`${baseOf(entry)}\u0000${occurrence}`) !== 1) continue
+    believed.set(entry, occurrence)
+    const base = baseOf(entry)
+    taken.set(base, (taken.get(base) ?? new Set()).add(occurrence))
+  }
+
+  const nextFree = new Map<string, number>()
+  const result = new Map<T, number>()
+  for (const entry of entries) {
+    const base = baseOf(entry)
+    const claimed = believed.get(entry)
+    if (claimed !== undefined) {
+      result.set(entry, claimed)
+      continue
+    }
+    let occurrence = nextFree.get(base) ?? 0
+    while (taken.get(base)?.has(occurrence)) occurrence += 1
+    nextFree.set(base, occurrence + 1)
+    taken.set(base, (taken.get(base) ?? new Set()).add(occurrence))
+    result.set(entry, occurrence)
+  }
+  return result
+}
+
 export const matchLiveExercises = <T extends LiftEntry>(
   rows: readonly LiftRef[],
   entries: readonly T[] | undefined,
@@ -265,11 +332,7 @@ export const matchLiveExercises = <T extends LiftEntry>(
    *  log. Taking the next unclaimed one with that name has no such assumption.
    */
   const byName = new Map<string, T[]>()
-  const occurrences = new Map<string, number>()
-  for (const entry of live.exercises) {
-    const base = entry.definitionId ?? entry.exercise
-    const occurrence = occurrences.get(base) ?? 0
-    occurrences.set(base, occurrence + 1)
+  for (const [entry, occurrence] of occurrencesOf(live.exercises)) {
     byKey.set(liftKey(entry.definitionId, entry.exercise, occurrence), entry)
     byName.set(entry.exercise, [...(byName.get(entry.exercise) ?? []), entry])
   }
@@ -332,6 +395,7 @@ export const buildLiveWorkouts = (
         unit: str(entry, FIELD.unit, 'lb'),
         prescribedWeight: optNum(entry, FIELD.prescribedWeight),
         prescribedSets: optNum(entry, FIELD.prescribedSets),
+        occurrence: optNum(entry, FIELD.occurrence),
         sets: (setsByExercise.get(entry.id) ?? []).slice().sort(compareByOrderKey).map(toLiveSet),
       })),
     })
