@@ -95,6 +95,11 @@ export interface WriteCoordinator {
    *  workout usually means the query is behind). Every later tap then resolved
    *  against a completed session. */
   completed(): void
+  /** Take a released workout back, because letting go of it turned out to be
+   *  wrong — a discard whose delete failed. The blocks are still there, and
+   *  nothing else will hand them back: a release retires on an authoritative
+   *  ABSENCE, and this workout is present. */
+  restore(workoutId: string): void
   /** Resolve — and create, if needed — the block for one set. */
   resolveSet(
     draft: readonly DraftExercise[],
@@ -270,6 +275,11 @@ export const createWriteCoordinator = (
 
     completed() {
       release()
+    },
+
+    restore(id) {
+      released.delete(id)
+      workoutId = id
     },
 
     async resolveSet(draft, exIdx, setIdx, effects) {

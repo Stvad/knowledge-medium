@@ -660,6 +660,46 @@ describe('TonightView', () => {
     await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
   })
 
+  it('keeps the failure message up while the set that failed is still failing', async () => {
+    // Two writes for one set overlap routinely, so an unrelated success was
+    // taking down a warning that was still true — and the field it belonged
+    // to then reverted with nothing on screen to explain why.
+    backend.seed('Bench press', [{weight: 185, reps: 8}, {weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    vi.mocked(store.writeSet).mockResolvedValueOnce('gone')
+    fireEvent.click(checkboxes()[0])                    // set 0 fails
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(checkboxes()[1])                    // a DIFFERENT set succeeds
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalledTimes(2))
+    await act(async () => {})
+    expect(screen.getByText(/Could not save that/)).toBeTruthy()
+
+    fireEvent.click(checkboxes()[0])                    // …and now set 0 works
+    await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
+  })
+
+  it('gives the workout back when a discard fails', async () => {
+    // `abandon` lets go before the delete is known to have worked, and a
+    // release retires on an authoritative ABSENCE — which never comes for a
+    // workout that is still there. Left released, a second Discard did
+    // nothing and Finish answered "session changed" until a remount.
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(store.writeSet).toHaveBeenCalled())
+    await emit()
+
+    vi.mocked(store.discardWorkout).mockRejectedValueOnce(new Error('offline'))
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    // The second attempt reaches the store rather than silently doing nothing.
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await waitFor(() => expect(store.discardWorkout).toHaveBeenCalledTimes(2))
+  })
+
   it('does not confirm a Finish whose set vanished under it', async () => {
     // A set this screen shows as accepted was deleted since the last emission.
     // Finishing anyway prunes whatever that leaves empty and then reports the

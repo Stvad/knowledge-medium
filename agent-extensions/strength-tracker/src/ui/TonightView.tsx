@@ -114,6 +114,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  overlay wants (`has` is all it uses). */
   const writingNow = (): ReadonlySet<string> => new Set(inFlightRef.current.keys())
 
+  /** Sets whose last write FAILED. The "tap it again" message belongs to
+   *  these, not to the view at large: two writes for one set overlap
+   *  routinely, so an unrelated success was taking down a warning that was
+   *  still true, and the field it belonged to then reverted with nothing on
+   *  screen to explain it. */
+  const failedRef = useRef(new Set<string>())
+
   // "Which block does this set write to, and what has to be created first" —
   // the whole answer, unit-tested in writeCoordinator.ts. The view keeps only
   // the React half: applying the ids it hands back.
@@ -221,9 +228,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         : 'written'
       if (outcome === 'gone') throw new Error(`writeSet: set block ${blockId} is gone`)
       // This tap worked, so take down a "tap it again" left over from the last
-      // one that didn't. Only that message — a "Logged …" confirmation is
-      // about something else and must survive.
-      setStatus(current => (current === WRITE_FAILED ? null : current))
+      // one that didn't — but only once every set that failed has been
+      // retried, and only that message: a "Logged …" confirmation is about
+      // something else and must survive.
+      if (failedRef.current.delete(writingKey) && failedRef.current.size === 0) {
+        setStatus(current => (current === WRITE_FAILED ? null : current))
+      }
       // No overlay on success, deliberately. The block now agrees with what is
       // on screen, and the write's OWN query emission re-runs the overlay a
       // moment later with the news. Asking for one here instead reverted every
@@ -234,6 +244,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // A failure is the case that genuinely needs it: nothing changed on the
       // block, so no emission is coming, and the draft would keep showing a
       // value that never reached it.
+      failedRef.current.add(writingKey)
       setResync(n => n + 1)
       throw error
     } finally {
@@ -440,6 +451,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       await discardWorkout(repo, wid)
       setDraft(buildDraft(prescription, unit))
       setStatus('Discarded')
+    } catch (error) {
+      // The workout is still there. `abandon` already let go of it — and
+      // nothing will hand it back, because the release retires on an
+      // authoritative ABSENCE and this workout is present. Left that way a
+      // second Discard did nothing, Finish answered "session changed", and
+      // the only way out was a remount. (It also went unreported: this had no
+      // catch at all, so a failed delete was an unhandled rejection.)
+      coordinator.restore(wid)
+      reportWriteFailure(error)
     } finally {
       setBusy(false)
     }
