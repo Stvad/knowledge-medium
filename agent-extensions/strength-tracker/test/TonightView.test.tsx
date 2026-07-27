@@ -609,6 +609,34 @@ describe('TonightView', () => {
     await waitFor(() => expect(checkboxes()[0].checked).toBe(false))
   })
 
+  it('takes down "tap it again" once a retry works', async () => {
+    // The message tells the user to tap again. Leaving it up after the tap
+    // succeeded invites a second, reversing tap.
+    vi.mocked(store.startWorkout).mockRejectedValueOnce(new Error('offline'))
+    mount(backend)
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(screen.getByText(/Could not save that/)).toBeTruthy())
+
+    fireEvent.click(checkboxes()[0])
+    await waitFor(() => expect(screen.queryByText(/Could not save that/)).toBeNull())
+  })
+
+  it('does not confirm a Finish whose set vanished under it', async () => {
+    // A set this screen shows as accepted was deleted since the last emission.
+    // Finishing anyway prunes whatever that leaves empty and then reports the
+    // session as logged INCLUDING that set, off a draft that is now fiction.
+    backend.seed('Bench press', [{weight: 205, reps: 5, done: true}, {weight: 205, reps: 5, done: true}])
+    mount(backend)
+    await emit()
+
+    backend.deleteSet('e:Bench press|1')
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+
+    await waitFor(() => expect(screen.getByText(/Something changed while saving/)).toBeTruthy())
+    expect(store.finishWorkout).not.toHaveBeenCalled()
+    expect(screen.queryByText(/Logged A · upper/)).toBeNull()
+  })
+
   it('writes every set of an exercise once when you accept them all', async () => {
     // "all ✓" hands each iteration a snapshot that predates the ids the
     // previous one created; before the coordinator, the later sets concluded

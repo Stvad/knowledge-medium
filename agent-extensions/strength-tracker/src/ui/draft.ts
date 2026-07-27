@@ -173,6 +173,10 @@ const mergeSets = (
   live: LiveExercise | undefined,
   previous: DraftExercise | undefined,
   writing: ReadonlySet<string>,
+  /** The workout is on screen and does not contain this lift, so the entry is
+   *  gone rather than late — and its sets went with it, because deleting a
+   *  block takes its subtree. */
+  entryGone: boolean,
 ): DraftSet[] => {
   // Never fewer rows than either side has. The three block queries behind
   // `live` emit independently, so an entry can legitimately arrive with none
@@ -192,7 +196,7 @@ const mergeSets = (
   // for a beat. Carrying too much means the draft keeps pointing at blocks
   // that are gone — after a Finish pruned them, after an undo, after another
   // device deleted one — and every tap lands somewhere it shouldn't.
-  const liveIsAuthoritative = liveSets.length > 0
+  const liveIsAuthoritative = entryGone || liveSets.length > 0
 
   // A set that already knows its block is matched to it BY ID, never by
   // position — the same rule the rows above it follow, and for the same
@@ -294,10 +298,17 @@ export const overlayLive = (
   const next = base.map((row, i) => {
     const liveEntry = matches[i]
     const previousRow = previousByKey.get(rowKey(row))
+    // Same rule as for a set, one level up: a workout that is on screen and
+    // has no entry for this lift is telling us the entry is GONE — deleted
+    // from the outline, undone, removed by another device — not that a create
+    // is still catching up. Holding the id there pointed every later write at
+    // a tombstone, and because the failure just re-derived the same draft, it
+    // could not recover: every tap failed, forever, until a reload.
+    const entryGone = live !== undefined && liveEntry === undefined
     const merged: DraftExercise = {
       ...row,
-      blockId: liveEntry?.id ?? previousRow?.blockId,
-      sets: mergeSets(row, liveEntry, previousRow, writing),
+      blockId: liveEntry?.id ?? (entryGone ? undefined : previousRow?.blockId),
+      sets: mergeSets(row, liveEntry, previousRow, writing, entryGone),
     }
     return previousRow && sameRow(merged, previousRow) ? previousRow : merged
   })

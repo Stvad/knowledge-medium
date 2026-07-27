@@ -205,6 +205,19 @@ describe('overlayLive', () => {
     expect(merged[0].sets[1]).toMatchObject({weight: 135, done: false})
   })
 
+  it('lets go of a lift whose entry was deleted, rather than writing at a tombstone', () => {
+    // The workout is on screen and has no entry for this lift, which says the
+    // entry is GONE — not that a create is catching up. Holding its id aimed
+    // every later write at a tombstone, and the failure path just re-derived
+    // the same draft, so every tap failed until a reload. Its sets go with it:
+    // deleting a block takes its subtree.
+    const merged = overlayLive(base(), {
+      id: 'w1', day: '2026-07-23', session: 'A', exercises: [],
+    }, materialized())
+    expect(merged[0].blockId).toBeUndefined()
+    expect(merged[0].sets.every(s => s.blockId === undefined)).toBe(true)
+  })
+
   it('holds its ids while the entry is there but its sets have not emitted', () => {
     // The other side of the same rule: the workout, entry and set queries
     // resolve independently, so an entry really can arrive with none of its

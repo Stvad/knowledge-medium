@@ -27,14 +27,17 @@ import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {toLiveSet, buildLiveWorkouts} from '../../src/km/history'
+import {dayToDate} from '../../src/km/day'
 import {EXERCISE_ENTRY_TYPE, SET_TYPE} from '../../src/km/fields'
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
   completedAtProp,
+  dateProp,
   definitionProp,
   repsProp,
   rpeProp,
+  sessionProp,
   statusProp,
   weightProp,
   workingWeightProp,
@@ -309,6 +312,35 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(second.exercises[0].setIds).toEqual(first.exercises[0].setIds)
     // The re-run's prescribed 135/8 must NOT have clobbered the logged 185/5.
     expect(repo.block(first.exercises[0].setIds[0]).peekProperty(weightProp)).toBe(185)
+  })
+
+  it('does not adopt a workout whose date was edited to another day', async () => {
+    // The id derives from workspace|day|session, but the stored date is an
+    // ordinary property and can be hand-edited in the outline. Once it names a
+    // different day, `buildLiveWorkouts` files the workout under THAT day —
+    // so adopting it would log tonight's sets into a block this view can never
+    // render, and Finish would wait forever for a live id that never matches.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await repo.tx(tx => tx.setProperty(first.workoutId, dateProp, dayToDate('2026-07-01')),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the date'})
+
+    const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(second.workoutId).not.toBe(first.workoutId)
+    expect(repo.block(second.workoutId).peekProperty(dateProp)).toEqual(dayToDate('2026-07-24'))
+  })
+
+  it('does not adopt a workout whose session no longer matches', async () => {
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await repo.tx(tx => tx.setProperty(first.workoutId, sessionProp, 'B'),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the session'})
+
+    const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(second.workoutId).not.toBe(first.workoutId)
+    expect(repo.block(second.workoutId).peekProperty(sessionProp)).toBe('A')
   })
 
   it('does not adopt a workout already marked done — a second "start" that day takes the next slot', async () => {

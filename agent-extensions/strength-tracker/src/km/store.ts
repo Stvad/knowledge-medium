@@ -48,7 +48,7 @@ import {
   weightProp,
   workingWeightProp,
 } from './schema'
-import {dayToDate} from './day'
+import {dateToDay, dayToDate} from './day'
 
 export {buildHistory, buildLayoffs, type RowLike} from './history'
 import {buildAltChoices, escapeKeyPart, toLiveSet} from './history'
@@ -103,6 +103,16 @@ export interface MaterializedWorkout {
 
 const sessionLabel = (session: SessionType): string =>
   session === 'mini' ? 'Mini day' : `Session ${session}`
+
+/** Which training day a raw `date` property lands on, read the way
+ *  `buildLiveWorkouts` reads it — the raw bag holds the codec's ISO string,
+ *  and an undecodable one means the row is invisible to the logging view.
+ *  `undefined` for anything that can't be read as a day at all. */
+const liveDay = (raw: unknown): string | undefined => {
+  if (typeof raw !== 'string') return undefined
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) ? undefined : dateToDay(date)
+}
 
 // No ✓ prefix — the composed todo checkbox conveys done-ness.
 const setContent = (set: SetDraft, unit: string): string => {
@@ -303,12 +313,26 @@ export const startWorkout = async (
         propertyValue(dateProp, dayToDate(draft.day)),
         propertyValue(statusProp, 'in-progress'),
       ],
-      // `=== 'in-progress'`, not `!== 'done'`. A workout whose status is
-      // missing or unreadable is not tonight's log either: `buildLiveWorkouts`
-      // shows only `in-progress` rows, so adopting one writes the session into
-      // a block the view can never render, while `buildHistory` counts it as
-      // past. Anything but a live session takes the next slot.
-      adoptable: block => block.properties[FIELD.status] === 'in-progress',
+      // Adopt only a block the LOGGING VIEW would show for this slot, which
+      // means every field `buildLiveWorkouts` filters or files on, not just
+      // the status:
+      //
+      //  - `=== 'in-progress'`, not `!== 'done'` — a missing or unreadable
+      //    status is not tonight's log either;
+      //  - the date has to decode AND land on this day — `buildLiveWorkouts`
+      //    skips an undecodable one and files a valid one under whatever day
+      //    it names;
+      //  - the session has to match, for the same reason.
+      //
+      // Anything else is a block the view can never render, so writing the
+      // session into it means logging into thin air: the sets land, nothing
+      // shows them, and Finish waits forever for a live workout whose id
+      // matches. The date and session can drift from the id that derived them
+      // by an ordinary hand-edit in the outline.
+      adoptable: block =>
+        block.properties[FIELD.status] === 'in-progress'
+        && block.properties[FIELD.session] === draft.session
+        && liveDay(block.properties[FIELD.date]) === draft.day,
       typeSnapshot,
     })
 

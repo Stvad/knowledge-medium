@@ -52,6 +52,10 @@ import {
 } from './draft'
 
 const SESSION_LABELS: Record<SessionType, string> = {A: 'A · upper', B: 'B · lower', mini: 'mini'}
+/** Named, because a successful retry has to be able to take it back down —
+ *  it tells the user to tap again, and leaving it up after the tap worked
+ *  invites the second, reversing tap. */
+const WRITE_FAILED = 'Could not save that — check the connection and tap it again.'
 const SHOULDER_CHECK_EVERY = 4
 
 interface Props {
@@ -210,6 +214,10 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         setResync(n => n + 1)
         throw new Error(`writeSet: set block ${blockId} is gone`)
       }
+      // This tap worked, so take down a "tap it again" left over from the last
+      // one that didn't. Only that message — a "Logged …" confirmation is
+      // about something else and must survive.
+      setStatus(current => (current === WRITE_FAILED ? null : current))
       // No overlay on success, deliberately. The block now agrees with what is
       // on screen, and the write's OWN query emission re-runs the overlay a
       // moment later with the news. Asking for one here instead reverted every
@@ -230,7 +238,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  and the user would have no idea their session is going nowhere. */
   const reportWriteFailure = (error: unknown) => {
     console.error('[strength] write failed', error)
-    setStatus('Could not save that — check the connection and tap it again.')
+    setStatus(WRITE_FAILED)
   }
 
   const commitSet = (exIdx: number, setIdx: number, patch: Partial<DraftSet>) => {
@@ -330,7 +338,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           }
           if (blockId) {
             const {done, completedAt} = flushed[i].sets[j]
-            await writeSet(repo, blockId, {done, completedAt}, flushed[i].unit)
+            const outcome = await writeSet(repo, blockId, {done, completedAt}, flushed[i].unit)
+            if (outcome === 'gone') {
+              // A set this screen shows as accepted is not there any anymore —
+              // deleted from the outline, or undone, since the last emission.
+              // Finishing anyway would prune whatever that leaves empty and
+              // then report the session as logged INCLUDING that set, off a
+              // draft that is now fiction. Stop and re-read instead; the ticks
+              // already flushed have landed, and the workout stays live.
+              setResync(n => n + 1)
+              setStatus('Something changed while saving — the log has been re-read. Check it and tap Finish again.')
+              return
+            }
           }
         }
       }
