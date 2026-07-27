@@ -190,6 +190,26 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('done')
   })
 
+  it('gives a repaired set back BOTH of its types', async () => {
+    // Done-ness is read off the raw `status`, so a set missing `todo` still
+    // counts and is kept — and would then sit in the finished record outside
+    // every native todo query, rendering as no checkbox, with no later pass
+    // to repair it.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const setId = workout.exercises[0].setIds[0]
+    expect(await writeSet(repo, setId, {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await repo.tx(tx => tx.setProperty(setId, typesProp, []),
+      {scope: ChangeScope.BlockDefault, description: 'clear the whole type list'})
+
+    await finishWorkout(repo, workout.workoutId)
+
+    expect(hasBlockType(cache.getSnapshot(setId)!, SET_TYPE)).toBe(true)
+    expect(hasBlockType(cache.getSnapshot(setId)!, todoType.id)).toBe(true)
+    expect(await isBlockDeleted(repo, setId)).toBe(false)
+  })
+
   it('leaves an untyped set that is not recognizable alone', async () => {
     // A note under the lift carries none of a set's numbers, so it is not
     // silently promoted into the record — it just keeps its entry alive.

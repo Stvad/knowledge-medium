@@ -854,6 +854,22 @@ describe('TonightView', () => {
     expect(screen.getByText(/Could not save that/)).toBeTruthy()
   })
 
+  it('still offers Discard when the workout holds only lifts the plan no longer lists', async () => {
+    // Switching an `or`-group to an option with no blocks yet leaves exactly
+    // this: the overlay omits the option switched away from, the new one has
+    // no blocks, so no row carries an id — while a whole workout, with its
+    // open todo subtree, sits there. Discard vanished with the ids, and with
+    // nothing accepted Finish was disabled too, so there was no way to remove
+    // it without switching the plan back.
+    backend.seed('Overhead press', [{weight: 95, reps: 8}], 'def-ohp')
+    mount(backend, {prescription: prescriptionOf([exercise({exercise: 'Landmine press', defId: 'def-lm'})])})
+    await emit()
+
+    expect(checkboxes().every(box => !box.checked)).toBe(true)   // nothing of B is logged
+    fireEvent.click(screen.getByRole('button', {name: 'Discard'}))
+    await waitFor(() => expect(store.discardWorkout).toHaveBeenCalled())
+  })
+
   it('does not carry a discarded workout\'s failure into the next one', async () => {
     // The marker is keyed by day and session, so it outlived the workout it
     // belonged to: the next session of the same type inherited it and Finish

@@ -615,7 +615,14 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
         // Repaired rather than refused, because the tag is the only thing
         // wrong and the user asked to finish.
         if (isSetLike(child)) {
-          await repo.addTypeInTx(tx, child.id, SET_TYPE, {}, typeSnapshot)
+          // BOTH types, as materialization writes them. Done-ness is read off
+          // the raw `status` property, so a set missing `todo` still counts
+          // here and gets kept — and would then sit in the finished record
+          // outside every native todo query, rendering as no checkbox, with
+          // no later pass to repair it.
+          for (const typeId of [SET_TYPE, TODO_TYPE]) {
+            if (!hasBlockType(child, typeId)) await repo.addTypeInTx(tx, child.id, typeId, {}, typeSnapshot)
+          }
           sets.push(child)
           continue
         }

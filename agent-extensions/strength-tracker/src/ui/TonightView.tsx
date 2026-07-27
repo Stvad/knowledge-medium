@@ -550,8 +550,14 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     && (hasAcceptedSets(draft) || (live?.exercises.some(ex => ex.sets.some(s => s.done)) ?? false))
   // Derived from the draft rather than the coordinator: the coordinator lives
   // in a ref, so reading it here wouldn't re-render when the workout appears.
-  // Every materialized row carries a block id, which is the same signal.
-  const started = draft.some(ex => ex.blockId !== undefined)
+  // Every materialized row carries a block id, which is the same signal —
+  // EXCEPT when the workout's entries are all outside the current
+  // prescription, which an `or`-group switch does routinely: the overlay
+  // omits the option switched away from and the new one has no blocks yet, so
+  // no row carries an id while a whole workout sits there. Discard vanished
+  // with it, and with nothing accepted Finish was disabled too, leaving no
+  // way to remove the workout or its open todo subtree.
+  const started = live !== undefined || draft.some(ex => ex.blockId !== undefined)
 
   return (
     <div className="flex flex-col gap-4">
