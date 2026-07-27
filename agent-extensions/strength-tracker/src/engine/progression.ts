@@ -82,9 +82,16 @@ export const lastEntryFor = (
   let best: {workout: WorkoutRecord; entry: ExerciseRecord} | undefined
   for (const workout of history) {
     const candidates = workout.exercises.filter(e => entryMatches(e, exercise, defId))
-    const entry = (occurrence !== undefined
-      ? candidates.find(e => e.occurrence === occurrence)
-      : undefined) ?? candidates[0]
+    // Falling back to "the first match" per WORKOUT let a newer session that
+    // logged only the FIRST Squat outrank an older one that logged both — so
+    // a lookup for the second row took the first row's load again, by a
+    // different route. The only fallback that is not a wrong answer is a
+    // record that states no occurrence at all, which is every record written
+    // before entries stored the number; otherwise keep looking further back.
+    const entry = occurrence === undefined
+      ? candidates[0]
+      : candidates.find(e => e.occurrence === occurrence)
+        ?? candidates.find(e => e.occurrence === undefined)
     if (!entry || entry.sets.length === 0) continue
     if (!best || workout.date > best.workout.date) best = {workout, entry}
   }

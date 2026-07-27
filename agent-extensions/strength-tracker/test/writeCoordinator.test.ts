@@ -174,6 +174,22 @@ describe('resolveSet — workout already exists', () => {
     expect(resolved.blockId).not.toBe('orphan-set')
   })
 
+  it('does not put a released workout back over the one that replaced it', async () => {
+    // A discard whose delete FAILS restores the workout it let go of — but
+    // that can resolve after the live query has already adopted the next
+    // workout for this slot. Reattaching over it detached a live session
+    // whose ids the draft is still holding, so every later write validated
+    // against the wrong workout, came back `gone`, and the session could not
+    // be written to at all.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.abandon()
+    coord.reset('w2', SLOT_A, SHAPE)
+    expect(coord.workoutId()).toBe('w2')
+
+    coord.restore('w1')
+    expect(coord.workoutId()).toBe('w2')
+  })
+
   it('creates it once for the whole batch, not once per set', async () => {
     const draft = [exercise('Landmine press', 3, {defId: 'def-landmine'})]
     const {calls, effects} = instantEffects()

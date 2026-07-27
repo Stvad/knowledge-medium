@@ -674,8 +674,10 @@ export const finishWorkout = async (
         untypedWithSets.push(child.id)
         continue
       }
-      const grandchildren = await tx.childrenOf(child.id, undefined, {hidePropertyChildren: true})
-      if (grandchildren.some(isSetLike)) untypedWithSets.push(child.id)
+      // All the way down, like the entry-level check: a typed entry beside it
+      // keeps the blanket guard quiet, so a set two notes deep under the
+      // WORKOUT finished clean and stayed live.
+      if (await holdsSetLike(tx, child.id)) untypedWithSets.push(child.id)
     }
     if (untypedWithSets.length > 0 || (children.length > 0 && entries.length === 0)) {
       throw new Error(

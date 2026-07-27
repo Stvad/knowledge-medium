@@ -370,6 +370,14 @@ export const createWriteCoordinator = (
 
     restore(id) {
       released.delete(id)
+      // …but only over an empty seat. A discard whose delete failed can
+      // resolve after the live query has already adopted the NEXT workout for
+      // this slot, and putting the old one back over it detached a live
+      // session whose ids the draft still holds — every later write then
+      // validated against the wrong workout, came back `gone`, and left the
+      // replacement unwritable. Un-blacklisted either way, so it can be
+      // adopted again if it does turn up.
+      if (workoutId !== null) return
       workoutId = id
       // …and un-cancel what the release cancelled. Handing the workout back
       // without this left a create still in flight resolving to no block at

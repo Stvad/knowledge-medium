@@ -54,6 +54,29 @@ describe('lastEntryFor with a lift prescribed twice', () => {
   })
 })
 
+describe('lastEntryFor keeps looking for the occurrence it was asked about', () => {
+  it('does not take a newer workout\'s other occurrence over an older exact one', () => {
+    // Falling back per WORKOUT meant a newer session that only logged the
+    // first Squat outranked an older one that logged both — so the back-off
+    // row progressed off the heavy row's load again, by a different route.
+    const history: WorkoutRecord[] = [
+      {
+        id: 'w-old', date: '2026-07-13T18:00:00.000Z', session: 'A',
+        exercises: [
+          {exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(225, 5)},
+          {exercise: 'Squat', definitionId: 'def-squat', occurrence: 1, sets: at(185, 8)},
+        ],
+      },
+      {
+        id: 'w-new', date: '2026-07-20T18:00:00.000Z', session: 'A',
+        exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(235, 5)}],
+      },
+    ]
+    expect(workingWeight(lastEntryFor(history, 'Squat', 'def-squat', 0)!.entry)).toBe(235)
+    expect(workingWeight(lastEntryFor(history, 'Squat', 'def-squat', 1)!.entry)).toBe(185)
+  })
+})
+
 describe('workingWeight', () => {
   it('takes the modal weight', () => {
     expect(workingWeight(bench([...at(135, 10, 10), ...at(115, 12)]))).toBe(135)

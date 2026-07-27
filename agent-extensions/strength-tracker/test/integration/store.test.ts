@@ -1108,3 +1108,24 @@ describe('finishWorkout guards its own precondition', () => {
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/buried|refusing/i)
   })
 })
+
+describe('a set buried under the workout itself', () => {
+  it('is found however deep, even with a healthy entry beside it', async () => {
+    // The workout-level check looked one level down while the entry-level one
+    // recursed. A typed entry alongside keeps the blanket guard quiet, so
+    // `workout -> note -> note -> set` finished clean and left that set live.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(185, 5)])]))
+    expect(await writeSet(repo, workout.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'wnote-a', workspaceId: WORKSPACE_ID, parentId: workout.workoutId, orderKey: 'z0', content: 'notes'})
+      await tx.create({id: 'wnote-b', workspaceId: WORKSPACE_ID, parentId: 'wnote-a', orderKey: 'a0', content: 'more'})
+      await tx.create({id: 'wdeep-set', workspaceId: WORKSPACE_ID, parentId: 'wnote-b', orderKey: 'a0', content: '185 x 3'})
+      await tx.setProperty('wdeep-set', weightProp, 185)
+      await tx.setProperty('wdeep-set', repsProp, 3)
+    }, {scope: ChangeScope.BlockDefault, description: 'bury a set under the workout'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing/i)
+  })
+})
