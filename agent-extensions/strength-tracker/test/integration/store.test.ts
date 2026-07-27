@@ -274,6 +274,26 @@ describe('writeSet — gone vs. written', () => {
     expect(repo.block(setId).peekProperty(weightProp)).toBe(135)  // untouched
   })
 
+  it('restores the todo composition when a set has lost it', async () => {
+    // Done-ness IS the todo `status`. A set that kept `strength-set` but lost
+    // `todo` still counts internally while dropping out of every native todo
+    // query and rendering as no checkbox — the one thing the composition
+    // exists for. The materialization path repairs its types; a write to an
+    // existing set is the other way in.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const setId = workout.exercises[0].setIds[0]
+    await repo.tx(tx => tx.setProperty(setId, typesProp, [SET_TYPE]),
+      {scope: ChangeScope.BlockDefault, description: 'lose the todo composition'})
+
+    expect(await writeSet(repo, setId, {done: true, completedAt: 5}, 'lb')).toBe('written')
+
+    expect(hasBlockType(cache.getSnapshot(setId)!, todoType.id)).toBe(true)
+    expect(hasBlockType(cache.getSnapshot(setId)!, SET_TYPE)).toBe(true)
+    expect(repo.block(setId).peekProperty(todoStatusProp)).toBe('done')
+  })
+
   it('answers "gone" for a set dragged out from under its lift', async () => {
     const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
       exerciseDraft('Bench press', [draftSet(135, 8)]),

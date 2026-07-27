@@ -458,8 +458,9 @@ export const writeSet = async (
   unit: string,
   /** The entry this set is supposed to be under, when the caller knows it. */
   expectedParentId?: string,
-): Promise<'written' | 'gone'> =>
-  repo.tx(async tx => {
+): Promise<'written' | 'gone'> => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  return repo.tx(async tx => {
     const before = await tx.get(setId)
     // NOT a silent no-op. The draft can hold a block id whose block is gone —
     // undone (one transaction is one undo step, so a single Cmd-Z after
@@ -478,6 +479,15 @@ export const writeSet = async (
     if (!before || before.deleted) return 'gone' as const
     if (!hasBlockType(before, SET_TYPE)) return 'gone' as const
     if (expectedParentId !== undefined && before.parentId !== expectedParentId) return 'gone' as const
+    // Restore the todo composition if it has been lost. Done-ness IS the todo
+    // `status`, so a set that kept `strength-set` but lost `todo` still counts
+    // internally while dropping out of every native todo query and rendering
+    // as no checkbox at all — the one thing the composition was for. The
+    // materialization path repairs its types; a write to a set that already
+    // exists is the other way in.
+    if (!hasBlockType(before, TODO_TYPE)) {
+      await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
+    }
     const {id: _id, ...current} = toLiveSet(before)
     const next: SetDraft = {...current, ...patch}
 
@@ -500,6 +510,7 @@ export const writeSet = async (
     if (content !== before.content) await tx.update(setId, {content})
     return 'written' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
+}
 
 /** Flip the workout to `done`, stamp each kept exercise's working weight, and
  *  prune the un-accepted sets / empty exercises so the saved record shows only

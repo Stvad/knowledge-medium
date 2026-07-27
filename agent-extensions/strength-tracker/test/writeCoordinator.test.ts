@@ -337,6 +337,24 @@ describe('reset — the session was switched', () => {
 })
 
 describe('failure and abandonment', () => {
+  it('stops handing back a set block that a write says is gone', async () => {
+    // The ids cached from our own create outlive the blocks they name. Left
+    // in place, every retry named the same tombstone, the write answered
+    // `gone` again, and the row could not be remade until a session or shape
+    // change reset the cache.
+    const {calls, effects} = instantEffects()
+    const coord = createWriteCoordinator(null, SLOT_A, SHAPE)
+    const draft = [exercise('Bench press', 2)]
+
+    const first = await coord.resolveSet(draft, 0, 0, effects)
+    expect(first.blockId).toBe('w1-e0s0')
+
+    coord.forget('w1-e0s0')
+    const retry = await coord.resolveSet(draft, 0, 0, effects)
+    expect(retry.blockId).not.toBe('w1-e0s0')
+    expect(calls.exercises).toEqual(['Bench press'])   // re-derived, not reused
+  })
+
   it('retries after a failed create instead of caching the rejection forever', async () => {
     let attempts = 0
     const effects: WriteEffects = {

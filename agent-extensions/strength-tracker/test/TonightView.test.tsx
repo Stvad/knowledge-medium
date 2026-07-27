@@ -470,6 +470,33 @@ describe('TonightView', () => {
     expect(backend.setById('e:Bench press|0')).toMatchObject({weight: 195})
   })
 
+  it('does not make one session wait on another session\'s write', async () => {
+    // The coordinator deliberately lets a write for the session you just left
+    // finish on its own. A Finish on the session you switched TO must not wait
+    // for it — a slow one left B stuck on "Saving…", and a failing one blocked
+    // B with an error belonging to a different evening's log.
+    const both = {
+      A: prescriptionOf([exercise()], 'A'),
+      B: prescriptionOf([exercise({exercise: 'Squat', weight: 225})], 'B'),
+    }
+    backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
+    mount(backend, {prescriptions: both})
+    await emit()
+
+    backend.hold()
+    fireEvent.click(checkboxes()[1])          // a write on session A — parked
+    await act(async () => {})
+
+    fireEvent.click(screen.getByRole('button', {name: 'B · lower'}))
+    backend.setSession('B')
+    await emit()
+
+    // B's own draft has nothing to flush (different lift), so Finish goes
+    // straight to finalizing — unless it is still waiting on A.
+    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
+  })
+
   it('says so rather than finalizing over a change that did not save', async () => {
     backend.seed('Bench press', [{weight: 185, reps: 8, done: true}, {weight: 185, reps: 8}])
     mount(backend)

@@ -128,9 +128,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  what Finish flushes — it races it. Left unwaited, Finish could finalize
    *  and release the session while that edit was still in the air, and a
    *  failure had nowhere left to be retried. */
-  const pendingRef = useRef(new Set<Promise<unknown>>())
+  const pendingRef = useRef(new Map<Promise<unknown>, string>())
   const track = <T,>(work: Promise<T>): Promise<T> => {
-    pendingRef.current.add(work)
+    // Tagged with the SLOT it belongs to. The coordinator deliberately lets a
+    // write for the session you just left finish on its own, so a Finish on
+    // the session you switched TO must not wait for it — nor be blocked by
+    // its failure, which belongs to a different evening's log.
+    pendingRef.current.set(work, slot)
     const done = () => { pendingRef.current.delete(work) }
     work.then(done, done)
     return work
@@ -221,7 +225,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // The exemption is per SET — the block is what a query emission can be
     // behind on. The failure marker is per WRITE, because two of them can be
     // outstanding for one set with different outcomes.
-    const opKey = `${writingKey}|${Object.keys(change).sort().join(',')}`
+    const opKey = `${slot}|${writingKey}|${Object.keys(change).sort().join(',')}`
     beginWrite(writingKey)
     try {
       const {blockId, patch} = await coordinator.resolveSet(next, exIdx, setIdx, effects)
@@ -245,7 +249,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       const outcome = blockId
         ? await writeSet(repo, blockId, change, next[exIdx].unit, entryId)
         : 'written'
-      if (outcome === 'gone') throw new Error(`writeSet: set block ${blockId} is gone`)
+      if (outcome === 'gone') {
+        // Its cached copy of this id outlives the block. Left in place, every
+        // retry named the same tombstone and the row could never be remade.
+        if (blockId) coordinator.forget(blockId)
+        throw new Error(`writeSet: set block ${blockId} is gone`)
+      }
       // This tap worked, so take down a "tap it again" left over from the last
       // one that didn't — but only once every set that failed has been
       // retried, and only that message: a "Logged …" confirmation is about
@@ -353,13 +362,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // only acceptance, so that number is not something it would write
       // itself. Finalizing around it meant the session could be logged and
       // released with the edit still in flight.
-      if (pendingRef.current.size > 0) await Promise.allSettled([...pendingRef.current])
-      if (failedRef.current.size > 0) {
+      const mine = [...pendingRef.current].filter(([, forSlot]) => forSlot === slot).map(([work]) => work)
+      if (mine.length > 0) await Promise.allSettled(mine)
+      const failedHere = [...failedRef.current].filter(key => key.startsWith(`${slot}|`))
+      if (failedHere.length > 0) {
         // Something genuinely didn't save. Say so before finalizing, but
         // don't refuse forever: a set that is gone will never write no matter
         // how often it is retried, and the rest of the session still deserves
         // to be logged. Cleared here, so tapping again goes through.
-        failedRef.current.clear()
+        for (const key of failedHere) failedRef.current.delete(key)
         setStatus('A change did not save — check the numbers, then tap Finish again to log anyway.')
         return
       }

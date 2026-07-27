@@ -95,6 +95,12 @@ export interface WriteCoordinator {
    *  workout usually means the query is behind). Every later tap then resolved
    *  against a completed session. */
   completed(): void
+  /** This set block is gone — a write to it came back `gone`. The cached ids
+   *  from our own create outlive the block they name, so the shortcut below
+   *  kept handing the same tombstone back: every retry answered `gone`, the
+   *  resync cleared the row again, and the set could not be recreated until a
+   *  session or shape change reset the cache. */
+  forget(setBlockId: string): void
   /** Take a released workout back, because letting go of it turned out to be
    *  wrong — a discard whose delete failed. The blocks are still there, and
    *  nothing else will hand them back: a release retires on an authoritative
@@ -142,6 +148,9 @@ export const createWriteCoordinator = (
    *  A, flip to B, flip back before A's workout query publishes, and A came
    *  straight back — Discard and all. */
   const released = new Map<string, string>()
+  /** Set blocks a write has told us are gone. Kept out of `materialized`'s
+   *  shortcut so a retry re-derives instead of naming the tombstone again. */
+  const deadSets = new Set<string>()
   let workoutId = initialWorkoutId
   let slot = initialSlot
   let shape = initialShape
@@ -277,6 +286,10 @@ export const createWriteCoordinator = (
       release()
     },
 
+    forget(setBlockId) {
+      deadSets.add(setBlockId)
+    },
+
     restore(id) {
       released.delete(id)
       workoutId = id
@@ -310,7 +323,7 @@ export const createWriteCoordinator = (
       // those ids, so consult them before concluding anything is missing —
       // otherwise "accept all" creates the exercise a second time.
       const fromCreate = materialized?.exercises[exIdx]?.setIds[setIdx]
-      if (fromCreate) return {blockId: fromCreate}
+      if (fromCreate && !deadSets.has(fromCreate)) return {blockId: fromCreate}
 
       // The workout exists but this exercise has no blocks: switched in
       // mid-session.
