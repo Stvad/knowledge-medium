@@ -208,7 +208,9 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // an id for a set that was undone, deleted from the outline, or pruned
       // by a Finish this view hasn't seen. Treating it as success left the
       // checkbox ticked over nothing.
-      const outcome = blockId ? await writeSet(repo, blockId, change, next[exIdx].unit) : 'written'
+      const outcome = blockId
+        ? await writeSet(repo, blockId, change, next[exIdx].unit, next[exIdx].blockId)
+        : 'written'
       endWrite(writingKey)
       if (outcome === 'gone') {
         setResync(n => n + 1)
@@ -338,7 +340,7 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           }
           if (blockId) {
             const {done, completedAt} = flushed[i].sets[j]
-            const outcome = await writeSet(repo, blockId, {done, completedAt}, flushed[i].unit)
+            const outcome = await writeSet(repo, blockId, {done, completedAt}, flushed[i].unit, flushed[i].blockId)
             if (outcome === 'gone') {
               // A set this screen shows as accepted is not there any anymore —
               // deleted from the outline, or undone, since the last emission.

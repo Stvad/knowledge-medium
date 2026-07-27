@@ -450,6 +450,8 @@ export const writeSet = async (
   setId: string,
   patch: Partial<SetDraft>,
   unit: string,
+  /** The entry this set is supposed to be under, when the caller knows it. */
+  expectedParentId?: string,
 ): Promise<'written' | 'gone'> =>
   repo.tx(async tx => {
     const before = await tx.get(setId)
@@ -459,7 +461,17 @@ export const writeSet = async (
     // outline, or pruned by a Finish this view hasn't caught up with. Swallowing
     // that left the checkbox ticked, the footer saying "Saved as you go", and
     // every later tap doing nothing. The caller surfaces it and re-derives.
+    //
+    // "Gone" means gone FROM THE SESSION, not merely tombstoned. A block that
+    // lost its `strength-set` tag, or that was dragged out from under its
+    // lift, is one `finishWorkout` will not scan — so writing into it and
+    // reporting success puts a tick on screen for a set the finished record
+    // will not contain. Saying `gone` instead sends the caller back through
+    // the create path, where the derived id finds this very block, re-tags it
+    // and re-homes the write. The repair is the recovery.
     if (!before || before.deleted) return 'gone' as const
+    if (!hasBlockType(before, SET_TYPE)) return 'gone' as const
+    if (expectedParentId !== undefined && before.parentId !== expectedParentId) return 'gone' as const
     const {id: _id, ...current} = toLiveSet(before)
     const next: SetDraft = {...current, ...patch}
 

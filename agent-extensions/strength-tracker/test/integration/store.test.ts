@@ -257,6 +257,36 @@ describe('writeSet — gone vs. written', () => {
     expect(await isBlockDeleted(repo, setId)).toBe(true)
   })
 
+  it('answers "gone" for a set that lost its type tag, rather than reporting a phantom write', async () => {
+    // `finishWorkout` only scans TYPED set children, so an untyped block is
+    // one the finished record will not contain. Writing into it and saying
+    // "written" puts a tick on screen for a set that will not survive the
+    // session. Saying `gone` sends the caller back through the create path,
+    // where the derived id finds this very block and re-tags it.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const setId = workout.exercises[0].setIds[0]
+    await repo.tx(tx => tx.setProperty(setId, typesProp, []),
+      {scope: ChangeScope.BlockDefault, description: 'lose the set type tag'})
+
+    expect(await writeSet(repo, setId, {weight: 999}, 'lb')).toBe('gone')
+    expect(repo.block(setId).peekProperty(weightProp)).toBe(135)  // untouched
+  })
+
+  it('answers "gone" for a set dragged out from under its lift', async () => {
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const entryId = workout.exercises[0].id
+    const setId = workout.exercises[0].setIds[0]
+    await repo.tx(tx => tx.move(setId, {parentId: PAGE_ID, orderKey: 'z0'}),
+      {scope: ChangeScope.BlockDefault, description: 'drag the set out of its lift'})
+
+    expect(await writeSet(repo, setId, {weight: 999}, 'lb', entryId)).toBe('gone')
+    expect(repo.block(setId).peekProperty(weightProp)).toBe(135)
+  })
+
   it('answers "written" for a live set and actually applies the patch', async () => {
     const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
       exerciseDraft('Bench press', [draftSet(135, 8)]),
