@@ -111,6 +111,16 @@ export const createWriteCoordinator = (
 ): WriteCoordinator => {
   let generation = 0
   let abandonedThrough = -1
+  /** Workouts this coordinator has let go of. Finish and Discard invalidate
+   *  the workout, entry and set queries INDEPENDENTLY, so an entry or set
+   *  emission can rebuild `live` from a workout row that still reads
+   *  `in-progress` before the workout query publishes `done` (or the
+   *  deletion). Adopting that id again resurrects a session we are done with:
+   *  the Discard button comes back for a logged workout, and later edits route
+   *  into released blocks. A released id is never adopted again — the only
+   *  thing that could make it live once more is a different slot, which gets
+   *  a different id. */
+  const released = new Set<string>()
   let workoutId = initialWorkoutId
   let slot = initialSlot
   let shape = initialShape
@@ -144,6 +154,7 @@ export const createWriteCoordinator = (
    *  to write to: those blocks now belong to a tombstone or to a completed
    *  record, and either way a write into them is wrong. */
   const release = () => {
+    if (workoutId !== null) released.add(workoutId)
     abandonedThrough = generation
     generation += 1
     workoutId = null
@@ -191,8 +202,10 @@ export const createWriteCoordinator = (
 
       // Same slot. Adopt a live id if one turned up, but never fall back to
       // null: no live workout usually means the query hasn't caught up with
-      // the one we just made, and forgetting it starts a duplicate.
-      workoutId = nextWorkoutId ?? workoutId
+      // the one we just made, and forgetting it starts a duplicate. An id we
+      // have RELEASED is not a live id, whatever a lagging query says.
+      const offered = nextWorkoutId !== null && released.has(nextWorkoutId) ? null : nextWorkoutId
+      workoutId = offered ?? workoutId
       if (nextShape === shape) return {slotChanged: false, shapeChanged: false}
 
       // The exercise list changed under us. `materialized` is positional, so

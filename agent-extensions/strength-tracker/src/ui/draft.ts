@@ -195,6 +195,8 @@ const mergeSets = (
    *  gone rather than late — and its sets went with it, because deleting a
    *  block takes its subtree. */
   entryGone: boolean,
+  /** The blocks behind `live` have answered at least once. */
+  loaded: boolean,
 ): DraftSet[] => {
   // Never fewer rows than either side has. The three block queries behind
   // `live` emit independently, so an entry can legitimately arrive with none
@@ -202,18 +204,19 @@ const mergeSets = (
   // for a beat mid-session. Live having MORE than the plan prescribes is just
   // as real — a set logged before the plan's set count was edited down.
   const liveSets = live?.sets ?? []
-  // Does the live workout have anything to SAY about this lift's sets? An
-  // entry that lists sets is authoritative for every index, including the
-  // indices it doesn't list — those sets are gone. An entry with none yet (or
-  // no entry at all) is simply behind: the workout, entry and set queries emit
-  // independently, so that window is real and short.
+  // Does the live workout have anything to SAY about this lift's sets?
   //
-  // The distinction is the whole reason a set's id is ever carried forward,
-  // and getting it wrong is not symmetric. Carrying too little blanks a lift
-  // for a beat. Carrying too much means the draft keeps pointing at blocks
-  // that are gone — after a Finish pruned them, after an undo, after another
-  // device deleted one — and every tap lands somewhere it shouldn't.
-  const liveIsAuthoritative = entryGone || liveSets.length > 0
+  // Once the queries have ANSWERED, yes — including when the answer is
+  // nothing: an entry that lists no sets has no sets, and every index is
+  // authoritative. Before they answer, no: absence is silence.
+  //
+  // This used to be guessed at with `liveSets.length > 0`, which reads a
+  // resolved-and-empty entry as unresolved — so deleting a lift's last set
+  // left the draft holding tombstoned ids, and the resync after the failed
+  // write rebuilt the same stale draft, leaving the lift unwritable until a
+  // reload. There is nothing in `[]` to tell the two apart, which is why the
+  // signal now comes from the query rather than from its result.
+  const liveIsAuthoritative = entryGone || (loaded && live !== undefined)
 
   // Which live set belongs at each slot. `live.sets` is a COMPACTED list, so
   // its position is not the set's index once one has been deleted: drop the
@@ -330,6 +333,12 @@ export const overlayLive = (
   live: LiveWorkout | undefined,
   previous: DraftExercise[] = [],
   writing: ReadonlySet<string> = new Set(),
+  /** Have the blocks behind `live` answered at least once? Until they have,
+   *  an absent workout / entry / set is silence rather than news — the three
+   *  queries resolve independently, so a workout really can arrive before its
+   *  entries, and reading that as a deletion dropped the ids of blocks that
+   *  were about to show up. */
+  loaded = true,
 ): DraftExercise[] => {
   const matches = matchLiveExercises(base.map(liftRef), live?.exercises)
   const previousByKey = new Map(previous.map(ex => [rowKey(ex), ex] as const))
@@ -343,11 +352,11 @@ export const overlayLive = (
     // is still catching up. Holding the id there pointed every later write at
     // a tombstone, and because the failure just re-derived the same draft, it
     // could not recover: every tap failed, forever, until a reload.
-    const entryGone = live !== undefined && liveEntry === undefined
+    const entryGone = loaded && live !== undefined && liveEntry === undefined
     const merged: DraftExercise = {
       ...row,
       blockId: liveEntry?.id ?? (entryGone ? undefined : previousRow?.blockId),
-      sets: mergeSets(row, liveEntry, previousRow, writing, entryGone),
+      sets: mergeSets(row, liveEntry, previousRow, writing, entryGone, loaded),
     }
     return previousRow && sameRow(merged, previousRow) ? previousRow : merged
   })

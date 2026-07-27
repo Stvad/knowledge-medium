@@ -267,6 +267,29 @@ describe('reset — the session was switched', () => {
     expect(calls.workouts).toBe(1)
   })
 
+  it('never re-adopts a workout it has released', async () => {
+    // Finish and Discard invalidate the workout, entry and set queries
+    // independently, so an entry emission can rebuild `live` from a workout
+    // row that still reads in-progress before the workout query publishes
+    // `done`. Adopting that id again brought a logged session back to life —
+    // Discard reappears for it, and later edits route into released blocks.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.completed()
+    expect(coord.workoutId()).toBeNull()
+
+    coord.reset('w1', SLOT_A, SHAPE)
+    expect(coord.workoutId()).toBeNull()
+  })
+
+  it('still adopts a different workout for the same slot', async () => {
+    // Releasing one id must not stop the NEXT session of the same type that
+    // evening from being adopted — it lives at a different derived slot.
+    const coord = createWriteCoordinator('w1', SLOT_A, SHAPE)
+    coord.abandon()
+    coord.reset('w2', SLOT_A, SHAPE)
+    expect(coord.workoutId()).toBe('w2')
+  })
+
   it('reports which of the three kinds of reseed this was', async () => {
     // The view acts on the transition — clearing a "Logged Session A"
     // confirmation belongs to a session switch and nothing else. It used to

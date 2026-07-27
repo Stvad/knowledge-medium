@@ -10,7 +10,7 @@
 
 import {useEffect, useMemo, useState} from 'react'
 
-import {useBlockQuery} from '@/hooks/block.js'
+import {useBlockQuery, useHandle} from '@/hooks/block.js'
 import type {Repo} from '@/data/repo.js'
 
 import {prescribe} from '../engine/prescribe'
@@ -32,6 +32,13 @@ export interface ProgramState {
   layoffs: readonly LayoffRecord[]
   /** In-progress (unfinished) workouts, block-backed with set ids. */
   liveWorkouts: readonly LiveWorkout[]
+  /** Have the blocks behind the live workout answered at least once?
+   *
+   *  Until they have, an absent workout / entry / set is silence rather than
+   *  news, and the logging view must not read it as a deletion. See the
+   *  `useHandle` comment below: `useBlockQuery` cannot express this, because
+   *  it gives `[]` for both. */
+  liveLoaded: boolean
   /** Has the plan outline been read yet?
    *
    *  `config` is seeded synchronously with plan-faithful defaults so the
@@ -101,17 +108,28 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     }
   }, [repo, workspaceId, pageId, reloadKey])
 
-  const workoutRows = useBlockQuery({workspaceId, types: [WORKOUT_TYPE]})
-  const exerciseRows = useBlockQuery({workspaceId, types: [EXERCISE_ENTRY_TYPE]})
-  const setRows = useBlockQuery({workspaceId, types: [SET_TYPE]})
+  // `useHandle` rather than `useBlockQuery`, for the one thing the latter
+  // throws away: it collapses an UNRESOLVED query to `[]`, which is the same
+  // value a resolved-and-empty one gives. Those mean opposite things to a
+  // logging surface — "the blocks haven't arrived" versus "that lift has no
+  // sets any more" — and every attempt to guess between them from the data
+  // alone contradicted itself, because there is nothing in `[]` to tell them
+  // apart. `undefined` says it outright.
+  const workoutRows = useHandle(repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}))
+  const exerciseRows = useHandle(repo.query.typedBlocks({workspaceId, types: [EXERCISE_ENTRY_TYPE]}))
+  const setRows = useHandle(repo.query.typedBlocks({workspaceId, types: [SET_TYPE]}))
   const layoffRows = useBlockQuery({workspaceId, types: [LAYOFF_TYPE]})
 
+  /** All three block queries behind the live workout have answered at least
+   *  once. Until they have, an absence is silence, not news. */
+  const liveLoaded = workoutRows !== undefined && exerciseRows !== undefined && setRows !== undefined
+
   const history = useMemo(
-    () => buildHistory(workoutRows, exerciseRows, setRows),
+    () => buildHistory(workoutRows ?? [], exerciseRows ?? [], setRows ?? []),
     [workoutRows, exerciseRows, setRows],
   )
   const liveWorkouts = useMemo(
-    () => buildLiveWorkouts(workoutRows, exerciseRows, setRows),
+    () => buildLiveWorkouts(workoutRows ?? [], exerciseRows ?? [], setRows ?? []),
     [workoutRows, exerciseRows, setRows],
   )
   const layoffs = useMemo(() => buildLayoffs(layoffRows), [layoffRows])
@@ -131,6 +149,7 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
     history,
     layoffs,
     liveWorkouts,
+    liveLoaded,
     configLoaded,
     day,
     session: prescription.session,

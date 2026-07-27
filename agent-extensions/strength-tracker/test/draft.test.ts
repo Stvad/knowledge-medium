@@ -289,12 +289,33 @@ describe('overlayLive', () => {
     expect(merged[0].sets.every(s => s.blockId === undefined)).toBe(true)
   })
 
-  it('holds its ids while the entry is there but its sets have not emitted', () => {
-    // The other side of the same rule: the workout, entry and set queries
-    // resolve independently, so an entry really can arrive with none of its
-    // sets. That window must not blank the lift.
-    const merged = overlayLive(base(), liveWith([]), materialized())
+  it('does not read a not-yet-loaded workout as one that lost the lift', () => {
+    // The workout, entry and set queries resolve independently, so a workout
+    // really can arrive before its entries. Read as a deletion, the row drops
+    // its blocks — and a tap in that window re-derives an entry id, which for
+    // a name-keyed session is a SECOND entry tree beside the real one.
+    const emptyWorkout = {id: 'w1', day: '2026-07-23', session: 'A' as const, exercises: []}
+    const merged = overlayLive(base(), emptyWorkout, materialized(), new Set(), false)
+    expect(merged[0].blockId).toBe('e1')
     expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', 's2'])
+  })
+
+  it('holds its ids while the queries have not answered yet', () => {
+    // The workout, entry and set queries resolve independently, so an entry
+    // really can arrive with none of its sets. That window must not blank the
+    // lift — and it is told apart from a real emptiness by the QUERY, not by
+    // the emptiness, because `[]` says nothing about which one it is.
+    const merged = overlayLive(base(), liveWith([]), materialized(), new Set(), false)
+    expect(merged[0].sets.map(s => s.blockId)).toEqual(['s0', 's1', 's2'])
+  })
+
+  it('lets go once they have, even when the answer is nothing', () => {
+    // Every set of this lift was deleted. Guessed at from `[]` this read as
+    // "still loading", so the draft kept the tombstoned ids, the next write
+    // came back `gone`, and the resync rebuilt the very same stale draft —
+    // the lift was unwritable until a reload.
+    const merged = overlayLive(base(), liveWith([]), materialized(), new Set(), true)
+    expect(merged[0].sets.every(set => set.blockId === undefined)).toBe(true)
   })
 
   it('protects the very first tap, whose write is what creates the block', () => {

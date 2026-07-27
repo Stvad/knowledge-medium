@@ -258,7 +258,7 @@ function Harness({
    *  this is the only way to reach the post-Finish follow-up at all. */
   history: readonly WorkoutRecord[]
 }) {
-  const [liveWorkouts, setLiveWorkouts] = useState<readonly LiveWorkout[]>([])
+  const [liveWorkouts, setLiveWorkouts] = useState<readonly LiveWorkout[] | undefined>(undefined)
   const [session, setSession] = useState<SessionType>('A')
   publish = () => setLiveWorkouts(backend.live())
 
@@ -269,7 +269,10 @@ function Harness({
     settingsBlockId: 'settings',
     history,
     layoffs: [],
-    liveWorkouts,
+    liveWorkouts: liveWorkouts ?? [],
+    // Unresolved until the test publishes — the real hook says the same thing
+    // with `undefined` from the query handle.
+    liveLoaded: liveWorkouts !== undefined,
     configLoaded,
     day: DAY,
     session,

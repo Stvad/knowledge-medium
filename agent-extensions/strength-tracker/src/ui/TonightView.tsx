@@ -66,7 +66,7 @@ interface Props {
 }
 
 export function TonightView({repo, workspaceId, pageId, program}: Props) {
-  const {prescription, session, setSession, config, history, layoffs, liveWorkouts, configLoaded, day} = program
+  const {prescription, session, setSession, config, history, layoffs, liveWorkouts, liveLoaded, configLoaded, day} = program
   const readOnly = repo.isReadOnly
   const unit = config.unit
 
@@ -160,13 +160,13 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
     // overlay matches rows BY the lift — so passing the old draft through
     // handed session B session A's block ids, and the first tap in B wrote
     // into A's workout, at A's weights, without ever materializing B.
-    setDraft(cur => overlayLive(buildDraft(prescription, unit), live, slotChanged ? [] : cur, writing))
+    setDraft(cur => overlayLive(buildDraft(prescription, unit), live, slotChanged ? [] : cur, writing, liveLoaded))
     // Keep a confirmation the user hasn't seen. Finishing makes the workout
     // leave `liveWorkouts`, which lands here — clearing "Logged Session A"
     // the instant it appeared and leaving a screen that looks like nothing
     // happened, which invites a second workout for tonight.
     if (slotChanged) setStatus(null)
-  }, [slot, unit, live, prescription, shape, coordinator, resync])
+  }, [slot, unit, live, liveLoaded, prescription, shape, coordinator, resync])
 
   const applyPatch = (
     prev: DraftExercise[],

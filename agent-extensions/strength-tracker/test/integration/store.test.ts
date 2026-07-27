@@ -22,7 +22,7 @@ import type {BlockCache} from '@/data/blockCache'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
-import {hasBlockType} from '@/data/properties'
+import {hasBlockType, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
@@ -197,6 +197,29 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('done')
   })
 
+  it('refuses to finish when only SOME entries lost their type tag', async () => {
+    // The dangerous misread is the partial one: `entries` is still non-empty,
+    // so the all-missing guard never fires, and Finish marks the workout done
+    // having processed only the still-typed lifts. The untyped one and its
+    // open todo sets stay behind — absent from the record, stranded in the
+    // agenda. Only the whole session is worth deciding about.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+      exerciseDraft('Row', [draftSet(95, 10)], {occurrence: 1}),
+    ]))
+    const [bench, row] = workout.exercises
+    expect(await writeSet(repo, bench.setIds[0], {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+    await repo.tx(tx => tx.setProperty(row.id, typesProp, []),
+      {scope: ChangeScope.BlockDefault, description: 'lose the entry type tag'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
+
+    // Refusing has to mean refusing.
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
+    expect(await isBlockDeleted(repo, row.setIds[0])).toBe(false)
+    expect(await isBlockDeleted(repo, bench.setIds[0])).toBe(false)
+  })
+
   it('refuses to finish when a workout has children but none of them are exercise entries', async () => {
     // Children-but-no-entries reads as a type misread, not an empty session
     // — see the guard's own comment in store.ts. A block directly under the
@@ -210,9 +233,7 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
       })
     }, {scope: ChangeScope.BlockDefault, description: 'stray note directly under the workout'})
 
-    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(
-      new RegExp(`no "${EXERCISE_ENTRY_TYPE}" among them`),
-    )
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
 
     // Refusing has to mean refusing — nothing pruned, workout still live.
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')

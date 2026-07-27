@@ -504,10 +504,24 @@ export const finishWorkout = async (repo: Repo, workoutId: string): Promise<void
     // type read that came back wrong, and the plan it produces prunes
     // EVERYTHING. This is the one place in the extension where a misread
     // deletes data rather than showing less, so it refuses instead.
-    if (children.length > 0 && entries.length === 0) {
+    // An untyped child that owns set blocks is an ENTRY whose type tag is
+    // missing, not a note. Finishing around it marks the workout done while
+    // that lift and its open todo sets stay behind — absent from the record
+    // `buildHistory` assembles, stranded in the agenda forever. A partial
+    // misread is the dangerous one precisely because it doesn't look like a
+    // misread; only the whole session is worth deciding about, so refuse.
+    const untypedWithSets: string[] = []
+    for (const child of children) {
+      if (hasBlockType(child, EXERCISE_ENTRY_TYPE)) continue
+      const grandchildren = await tx.childrenOf(child.id)
+      if (grandchildren.some(row => hasBlockType(row, SET_TYPE))) untypedWithSets.push(child.id)
+    }
+    if (untypedWithSets.length > 0 || (children.length > 0 && entries.length === 0)) {
       throw new Error(
-        `finishWorkout: workout ${workoutId} has ${children.length} children but no `
-        + `"${EXERCISE_ENTRY_TYPE}" among them — refusing to finish, since that would prune the session.`,
+        `finishWorkout: workout ${workoutId} has ${children.length} children, `
+        + `${entries.length} typed "${EXERCISE_ENTRY_TYPE}"`
+        + (untypedWithSets.length > 0 ? `, and ${untypedWithSets.length} untyped one(s) holding sets` : '')
+        + ' — refusing to finish, since that would leave logged work out of the record.',
       )
     }
     const exercises: FinishEntry[] = []
