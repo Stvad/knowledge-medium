@@ -26,7 +26,7 @@ import {hasBlockType, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
-import {toLiveSet, buildHistory, buildLiveWorkouts, preferredLive} from '../../src/km/history'
+import {toLiveSet, buildHistory, buildLayoffs, buildLiveWorkouts, preferredLive} from '../../src/km/history'
 import {LEGACY_SETS_PROP} from '../../src/km/legacy'
 import {lastEntryFor, workingWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
@@ -794,6 +794,35 @@ describe('startWorkout — idempotent and adopting', () => {
     expect(second.workoutId).not.toBe(first.workoutId)
     expect(repo.block(first.workoutId).peekProperty(statusProp)).toBe('done')
     expect(repo.block(second.workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('continues a repeat session filed away from the page, instead of minting a second', async () => {
+    // The view reads workouts workspace-wide, so it will happily attach to a
+    // session indented under a year heading. A writer that only walks the
+    // page's direct children misses it and mints another, and the tap then
+    // logs into a workout the screen is not showing.
+    const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    await finishWorkout(repo, first.workoutId)   // slot 0 is now taken
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'year-heading', workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a8', content: '2026',
+      })
+      await tx.create({
+        id: 'filed-repeat', workspaceId: WORKSPACE_ID, parentId: 'year-heading', orderKey: 'a0',
+        content: 'Session A · 2026-07-24',
+      })
+      await tx.setProperty('filed-repeat', sessionProp, 'A')
+      await tx.setProperty('filed-repeat', dateProp, dayToDate('2026-07-24'))
+      await tx.setProperty('filed-repeat', statusProp, 'in-progress')
+      await repo.addTypeInTx(tx, 'filed-repeat', WORKOUT_TYPE)
+    }, {scope: ChangeScope.BlockDefault, description: 'a repeat session filed under a heading'})
+
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(again.workoutId).toBe('filed-repeat')
+    // …and no third workout was minted beside it.
+    expect(await liveChildren(PAGE_ID, WORKOUT_TYPE)).toHaveLength(1)   // just the finished one
   })
 
   it('picks the same one of two live sessions the view would', async () => {
@@ -1577,6 +1606,50 @@ describe('migrating the shape this extension first wrote', () => {
     expect(tonight.workoutId).not.toBe('legacy-w1')
     // …and the migrated session still holds what it held.
     expect(repo.block((await liveChildren('legacy-e1', SET_TYPE))[0].id).peekProperty(weightProp)).toBe(185)
+  })
+})
+
+describe('the layoff record and the finish that justifies it', () => {
+  const layoffOf = () => ({
+    pageId: PAGE_ID,
+    record: {from: '2026-07-01', to: '2026-07-24', days: 23, tierId: 'long', pct: 0.7},
+  })
+
+  it('lands in the same transaction as the finish', async () => {
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    expect(await writeSet(repo, started.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+
+    expect(await finishWorkout(repo, started.workoutId, layoffOf())).toBe('finished')
+
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, 'strength-layoff'))
+    expect(layoffs).toHaveLength(1)
+    expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
+  })
+
+  it('is rolled back with a finish that refuses the tree', async () => {
+    // The reason it moved inside: the finish can REFUSE (a set buried under a
+    // note), and a layoff written in its own transaction cannot be taken back
+    // — the break would stand as ending on a session that never happened.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    expect(await writeSet(repo, started.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'a-note', workspaceId: WORKSPACE_ID, parentId: started.workoutId, orderKey: 'z0',
+        content: 'notes',
+      })
+      await tx.create({
+        id: 'buried', workspaceId: WORKSPACE_ID, parentId: 'a-note', orderKey: 'a0', content: '185 x 3',
+      })
+      await tx.setProperty('buried', weightProp, 185)
+      await tx.setProperty('buried', repsProp, 3)
+    }, {scope: ChangeScope.BlockDefault, description: 'bury a set'})
+
+    await expect(finishWorkout(repo, started.workoutId, layoffOf())).rejects.toThrow(/refusing/i)
+
+    expect(await liveChildren(PAGE_ID, 'strength-layoff')).toHaveLength(0)
+    expect(repo.block(started.workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 })
 

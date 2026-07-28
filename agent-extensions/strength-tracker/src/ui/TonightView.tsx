@@ -27,7 +27,6 @@ import {
   finishWorkout,
   materializeExercise,
   startWorkout,
-  writeLayoff,
   writeSet,
   writeShoulderTodo,
 } from '../km/store'
@@ -694,20 +693,28 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
         return
       }
 
-      // Decided from the history as it stands BEFORE this session joins it —
-      // but not written yet. `finishWorkout` refuses a tree it cannot finish
-      // (a set buried under a note, an untyped child holding sets), and its
-      // own transaction cannot roll back a layoff committed in a separate one:
-      // the break would be recorded as ending on the day of an attempt that
-      // never completed. `layoffAlreadyRecorded` matches on `from` alone, so
-      // finishing days later would then keep that stale `to` — and the whole
-      // point of the record is the gap it describes, which feeds the load-cut
-      // tier. Written once the session it is derived from actually exists.
-      const pending = detectPendingLayoff(history, day, config)
+      // Decided from the history as it stands BEFORE this session joins it,
+      // and handed to `finishWorkout` to write in the SAME transaction.
+      //
+      // Neither side of it survives alone. Written FIRST, a finish that
+      // refuses the tree (a set buried under a note, an untyped child holding
+      // sets) leaves a break recorded as ending on an attempt that never
+      // completed — and `layoffAlreadyRecorded` matches on `from` alone, so
+      // finishing days later keeps that stale `to`. Written AFTER, a failure
+      // loses the record for good: this session is the latest full one by
+      // then, so the gap it describes is no longer detectable on any later
+      // day, and the ramp silently ends after the first session back. The gap
+      // is the whole point of the record — it picks the load-cut tier.
+      const layoff = (() => {
+        const pending = detectPendingLayoff(history, day, config)
+        return pending && !layoffAlreadyRecorded(pending, layoffs)
+          ? {pageId, record: layoffFromPending(pending)}
+          : undefined
+      })()
       // No plan argument: `finishWorkout` re-reads the tree inside its own
       // transaction, so nothing this view believes can prune a set the blocks
       // say was performed.
-      const outcome = await finishWorkout(repo, wid)
+      const outcome = await finishWorkout(repo, wid, layoff)
       if (outcome === 'gone') {
         // Someone else finished it between this view's last check and the
         // store's transaction. The session IS logged — just not by us — so
@@ -764,20 +771,6 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // — tap it again" over a session that was already logged. Tapping again
       // now starts a second session for tonight, because the coordinator has
       // released this one.
-      //
-      // The layoff record joins that rule rather than preceding the finish:
-      // this session IS the first one back, so the break it describes is only
-      // true once the session exists. A failure here leaves it undetected,
-      // which the NEXT finish re-detects from the same history — the harmless
-      // direction, unlike a break recorded against a session that never
-      // landed.
-      if (pending && !layoffAlreadyRecorded(pending, layoffs)) {
-        try {
-          await writeLayoff(repo, workspaceId, pageId, layoffFromPending(pending))
-        } catch (error) {
-          console.error('[strength] could not record the layoff', error)
-        }
-      }
       const fullBefore = history.filter(w => w.session !== 'mini').length
       const isFull = session !== 'mini'
       const due = isFull && ((fullBefore + 1) % SHOULDER_CHECK_EVERY === 0 || detectLeftRightAsymmetry(history))
@@ -1180,7 +1173,16 @@ function NumberField({
   // for the set already being edited, and remounting or reseeding there would
   // throw away the number the user is in the middle of typing.
   if (backingId !== backingRef.current) {
-    const swapped = backingRef.current !== undefined && backingId !== undefined
+    // Any move AWAY from a block we had is abandonment — to another block, or
+    // to none at all. The second case is a peer finishing the session without
+    // starting a replacement: the draft resets to the prescription and the
+    // row loses its id, and holding the text through that meant a blur
+    // afterwards committed the finished session's digits into a workout the
+    // commit itself had to create.
+    //
+    // Only `undefined -> id` is benign: our own create naming the set already
+    // being typed into, which is the first number of every session.
+    const swapped = backingRef.current !== undefined
     backingRef.current = backingId
     if (swapped) {
       setText(fieldText(value))

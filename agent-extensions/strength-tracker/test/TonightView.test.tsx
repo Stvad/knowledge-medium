@@ -166,6 +166,14 @@ const createBackend = () => {
       sessions.push(current)
     },
 
+    /** A peer finished ours and started nothing in its place — the evening
+     *  holds a record and no live session. Distinct from `startNextWorkout`
+     *  because the rows lose their block ids entirely rather than acquiring
+     *  different ones. */
+    finishElsewhere: () => {
+      current.finished = true
+    },
+
     /** A second session that COEXISTS with ours — both unfinished, both for
      *  tonight. Two clients each starting the evening's second session while
      *  one is behind on sync is exactly what a MINTED (rather than derived)
@@ -1728,7 +1736,7 @@ describe('TonightView', () => {
     await emit()
 
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
-    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalledWith(repo, 'w1'))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalledWith(repo, 'w1', undefined))
     expect(screen.getByText(/Logged A · upper/)).toBeTruthy()
   })
 
@@ -1741,44 +1749,37 @@ describe('TonightView', () => {
     expect((screen.getByRole('button', {name: /Finish/}) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('records the break only once the session that ends it exists', async () => {
-    // The layoff is its own transaction, so a `finishWorkout` that REFUSES the
-    // tree — a set buried under a note — cannot roll it back. The break would
-    // stand as ending on the day of an attempt that never completed, and
-    // `layoffAlreadyRecorded` matches on `from` alone, so finishing days later
-    // would keep that stale `to`. The gap it names is the whole point of the
-    // record: it picks the load-cut tier.
+  it('hands the break to the finish rather than writing it beside one', async () => {
+    // Both directions of writing it separately lose data. FIRST, and a finish
+    // that refuses the tree leaves a break recorded against an attempt that
+    // never happened. AFTER, and a failure loses it for good — this session is
+    // the latest full one by then, so the gap is undetectable on any later day
+    // and the ramp ends after its first session. One transaction: both land or
+    // neither does.
     backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
     mount(backend, {history: pastSessions(1)})     // last trained 2026-07-10; today is the 25th
     await emit()
 
-    vi.mocked(store.finishWorkout).mockRejectedValueOnce(new Error('a set is buried under a note'))
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
     await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
-    await act(async () => {})
 
+    expect(vi.mocked(store.finishWorkout).mock.calls[0][2]).toMatchObject({
+      pageId: 'page',
+      record: {from: '2026-07-10', to: DAY},
+    })
+    // …and nothing writes it on its own any more.
     expect(store.writeLayoff).not.toHaveBeenCalled()
-
-    // …and it IS recorded on a finish that lands, so this is not just an
-    // assertion that the feature is off.
-    fireEvent.click(screen.getByRole('button', {name: /Finish/}))
-    await waitFor(() => expect(store.writeLayoff).toHaveBeenCalled())
   })
 
-  it('still reports the session as logged when the layoff write fails', async () => {
-    // It runs inside the "saved from here on" region, so a failure there must
-    // not reach the user as "could not save that — tap it again" over a
-    // session that is already a record. Tapping again would start a second
-    // session for the evening.
+  it('hands over no break when training is on schedule', async () => {
     backend.seed('Bench press', [{weight: 185, reps: 8, done: true}])
-    mount(backend, {history: pastSessions(1)})
+    mount(backend, {history: pastSessions(20)})    // trained right up to today
     await emit()
 
-    vi.mocked(store.writeLayoff).mockRejectedValueOnce(new Error('offline'))
     fireEvent.click(screen.getByRole('button', {name: /Finish/}))
+    await waitFor(() => expect(store.finishWorkout).toHaveBeenCalled())
 
-    await waitFor(() => expect(screen.getByText(/Logged A · upper/)).toBeTruthy())
-    expect(screen.queryByText(/Could not save/)).toBeNull()
+    expect(vi.mocked(store.finishWorkout).mock.calls[0][2]).toBeUndefined()
   })
 })
 
@@ -1830,6 +1831,30 @@ describe('NumberField', () => {
     fireEvent.blur(weights()[0])
     await act(async () => {})
     expect(store.writeSet).not.toHaveBeenCalled()
+  })
+
+  it('abandons half-typed digits when the backing block goes away entirely', async () => {
+    // A peer finishing the session without starting a replacement takes the
+    // row's block id away rather than changing it. Holding the text through
+    // that meant a blur afterwards committed the finished session's digits —
+    // and with the coordinator released, the commit itself had to start a new
+    // workout for the evening to put them in.
+    backend.seed('Bench press', [{weight: 185, reps: 8}])
+    mount(backend)
+    await emit()
+
+    const field = weights()[0]
+    fireEvent.focus(field)
+    fireEvent.change(field, {target: {value: '315'}})
+
+    backend.finishElsewhere()
+    await emit()
+
+    expect(weights()[0].value).not.toBe('315')
+    fireEvent.blur(weights()[0])
+    await act(async () => {})
+    expect(store.writeSet).not.toHaveBeenCalled()
+    expect(store.startWorkout).not.toHaveBeenCalled()
   })
 
   it('keeps what is being typed when the create merely hands back an id', async () => {

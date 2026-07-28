@@ -516,6 +516,18 @@ export const startWorkout = async (
   draft: WorkoutDraft,
 ): Promise<MaterializedWorkout> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
+  // Candidate ids for the repeat-session lookup below, from the SAME
+  // workspace-wide population the logging view reads — a session filed under a
+  // year heading is one the view will happily attach to, so a scan that only
+  // walks this page's children would mint a second workout beside it.
+  //
+  // Ids only, and read before the transaction because `Tx` has no arbitrary
+  // queries. Nothing is decided from this snapshot: every candidate is re-read
+  // and re-checked INSIDE the transaction, so a stale list can only cause a
+  // mint (what would have happened anyway), never an adoption of something
+  // that no longer qualifies.
+  const known = (await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load())
+    .map((row: {id: string}) => row.id)
   return repo.tx(async tx => {
     const workoutSpec = {
       parentId: pageId,
@@ -539,14 +551,27 @@ export const startWorkout = async (
     // or hand-edited out of shape, and this is the second. Continue the one
     // already standing if there is one (the same block the logging view would
     // be showing), and only then start a new one.
-    const standing = derived.status !== 'taken'
-      ? undefined
-      // `preferredLive`, not "the first child": this scan is ordered
+    let standing: BlockData | undefined
+    if (derived.status === 'taken') {
+      // The page's children AND anything the workspace-wide query knew about,
+      // deduped — the first is atomic with this write, the second is what the
+      // view can see. Each is re-read here, inside the transaction.
+      const seen = new Map<string, BlockData>()
+      for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+        seen.set(block.id, block)
+      }
+      for (const id of known) {
+        if (seen.has(id)) continue
+        const block = await tx.get(id)
+        if (block) seen.set(id, block)
+      }
+      // `preferredLive`, not "the first one": this scan is ordered
       // `(order_key, id)` while the VIEW reads a query ordered
       // `(created_at, id)`, so taking either one's first match let the tap
       // write into one workout while the screen attached to the other.
-      : preferredLive((await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
-        .filter(block => block.id !== derived.id && isTonightsLog(block, draft)))
+      standing = preferredLive([...seen.values()]
+        .filter(block => block.id !== derived.id && !block.deleted && isTonightsLog(block, draft)))
+    }
     const workout = derived.status !== 'taken'
       ? derived
       : standing !== undefined
@@ -846,6 +871,18 @@ const mightHoldSet = async (tx: Tx, blockId: string, depth = 0): Promise<boolean
 export const finishWorkout = async (
   repo: Repo,
   workoutId: string,
+  /** A layoff to record in the SAME transaction, when this session is the
+   *  first one back from a break.
+   *
+   *  Atomic with the finish, not a write beside it, because the gap it
+   *  describes stops being detectable the moment the finish lands: this
+   *  session joins `history` as the latest full one, so `detectPendingLayoff`
+   *  reads no gap on any later day. Written separately and failing, the
+   *  record is lost for good — the FIRST session back still ramps (that comes
+   *  from the live detection), but every session after it silently returns to
+   *  full loads. Written first instead, a finish that REFUSES the tree leaves
+   *  a break recorded as ending on a session that never happened. */
+  layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>},
 ): Promise<'finished' | 'gone'> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
@@ -1005,6 +1042,7 @@ export const finishWorkout = async (
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
     await tx.setProperty(workoutId, statusProp, 'done')
+    if (layoff) await writeLayoffInTx(repo, tx, layoff.pageId, layoff.record, typeSnapshot)
     return 'finished' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Finish workout'})
 }
@@ -1261,6 +1299,27 @@ export const migrateLegacyEntries = async (
 
 // ──── layoff + shoulder writes (unchanged) ────
 
+const writeLayoffInTx = async (
+  repo: Repo,
+  tx: Tx,
+  pageId: string,
+  record: Omit<LayoffRecord, 'id'>,
+  typeSnapshot: TypeSnapshot,
+): Promise<string> => {
+  const id = await tx.run(createChild, {
+    parentId: pageId,
+    content: `Layoff · ${record.days}-day gap → ${Math.round(record.pct * 100)}% (${record.tierId})`,
+    position: {kind: 'first'},
+  })
+  await tx.setProperty(id, layoffFromProp, dayToDate(record.from))
+  await tx.setProperty(id, layoffToProp, dayToDate(record.to))
+  await tx.setProperty(id, layoffDaysProp, record.days)
+  await tx.setProperty(id, layoffTierProp, record.tierId)
+  await tx.setProperty(id, layoffPctProp, record.pct)
+  await repo.addTypeInTx(tx, id, 'strength-layoff', {}, typeSnapshot)
+  return id
+}
+
 export const writeLayoff = async (
   repo: Repo,
   workspaceId: string,
@@ -1268,20 +1327,10 @@ export const writeLayoff = async (
   record: Omit<LayoffRecord, 'id'>,
 ): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => {
-    const id = await tx.run(createChild, {
-      parentId: pageId,
-      content: `Layoff · ${record.days}-day gap → ${Math.round(record.pct * 100)}% (${record.tierId})`,
-      position: {kind: 'first'},
-    })
-    await tx.setProperty(id, layoffFromProp, dayToDate(record.from))
-    await tx.setProperty(id, layoffToProp, dayToDate(record.to))
-    await tx.setProperty(id, layoffDaysProp, record.days)
-    await tx.setProperty(id, layoffTierProp, record.tierId)
-    await tx.setProperty(id, layoffPctProp, record.pct)
-    await repo.addTypeInTx(tx, id, 'strength-layoff', {}, typeSnapshot)
-    return id
-  }, {scope: ChangeScope.BlockDefault, description: 'Record layoff'})
+  return repo.tx(
+    tx => writeLayoffInTx(repo, tx, pageId, record, typeSnapshot),
+    {scope: ChangeScope.BlockDefault, description: 'Record layoff'},
+  )
 }
 
 /** Create a todo referencing the shoulder-policy block. `((id))` in the
