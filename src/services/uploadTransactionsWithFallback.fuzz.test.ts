@@ -451,7 +451,42 @@ interface SimulationResult {
 
 const MAX_PASSES = AMBIGUOUS_RETRY_BUDGET + 4
 
+// Every generated failure (transient / ambiguous / permanent) makes the REAL
+// orchestrator log via console.warn/console.error (powersync.ts:660-696) —
+// that's expected, not a bug, and in deep/nightly runs it's thousands of
+// lines of noise. Suppress exactly these known shapes and nothing else: an
+// unrecognised console.warn/error during a run still fails the test (see the
+// `unexpectedLogs` assertion in `runSimulation`) rather than being silently
+// absorbed, so a genuinely new log path still surfaces.
+const EXPECTED_LOG_PATTERNS: readonly RegExp[] = [
+  /^\[powersync\] batch upload failed — isolating \d+ tx\(s\)$/,
+  /^\[powersync\] per-tx upload failed \(transient, will retry\)$/,
+  /^\[powersync\] tx (?:\d+|undefined) ambiguous upload error — retrying$/,
+  /^\[powersync\] tx (?:\d+|undefined) rejected — quarantining$/,
+]
+const isExpectedLog = (args: readonly unknown[]): boolean =>
+  typeof args[0] === 'string' && EXPECTED_LOG_PATTERNS.some(re => re.test(args[0] as string))
+
 const runSimulation = async (scenario: Scenario): Promise<SimulationResult> => {
+  const unexpectedLogs: unknown[][] = []
+  const recordIfUnexpected = (...args: unknown[]): void => {
+    if (!isExpectedLog(args)) unexpectedLogs.push(args)
+  }
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(recordIfUnexpected)
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(recordIfUnexpected)
+
+  try {
+    return await runSimulationUnspied(scenario, unexpectedLogs)
+  } finally {
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  }
+}
+
+const runSimulationUnspied = async (
+  scenario: Scenario,
+  unexpectedLogs: readonly unknown[][],
+): Promise<SimulationResult> => {
   const attemptIndex = new Map<string, number>()
   const ambiguousAttempts = new Map<number, number>()
   const rejectionFailRemaining = new Map<string, number>(
@@ -579,6 +614,8 @@ const runSimulation = async (scenario: Scenario): Promise<SimulationResult> => {
 
     pending = passPending.filter(tx => !completedThisPassSet.has(tx.blockId))
   }
+
+  expect(unexpectedLogs, 'unexpected console.warn/console.error output during simulation').toEqual([])
 
   const finalStatus = new Map<string, 'success' | 'rejected' | 'pending'>()
   for (const tx of scenario.transactions) {
