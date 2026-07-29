@@ -843,6 +843,22 @@ const runSimulationUnspied = async (
   // repeating `tail`, the raw counter keeps climbing every pass even though
   // the STEP it resolves to (and so all downstream behavior) is constant —
   // comparing the unclamped counter would never detect the fixed point.
+  //
+  // RESIDUAL RISK, recorded rather than rediscovered: this function is the
+  // one piece of logic in this whole file that ISN'T cross-checked against
+  // anything (every other property here diffs the real orchestrator
+  // against an independent model). If the array below is ever missing a
+  // piece of state that legitimately still changes pass-to-pass, the loop
+  // could declare a fixed point too early — and that failure mode is
+  // SILENT: a resolvable scenario just becomes "still pending", which
+  // property (a)'s own docblock already treats as a valid terminal fate,
+  // so nothing would fail. Property (a) below carries the one guard against
+  // this: for scenarios where every tx's script tail always succeeds, it
+  // asserts NO tx is left 'pending' — a ground-truth claim derived from the
+  // scenario's own static shape, independent of this function or
+  // `predictPass`. That guard doesn't cover permanent/tracked-ambiguous
+  // tails (which also guarantee eventual draining, by the same argument,
+  // but aren't asserted) — see property (a)'s own comment for why.
   const progressSignature = (): string => {
     const stableAttempt = (tx: TxModel): number =>
       Math.min(attemptIndex.get(tx.blockId) ?? 0, tx.script.steps.length)
@@ -1157,6 +1173,46 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
     await fc.assert(
       fc.asyncProperty(scenarioArb, async scenario => {
         const result = await runSimulation(scenario)
+
+        // Ground-truth guard for the fixed-point pass-cap detector
+        // (`progressSignature` in `runSimulationUnspied` — PR #448 review
+        // comment 3677128006's own follow-up ask). If that detector is ever
+        // missing a piece of relevant state, the loop could stop EARLY —
+        // and nothing else here would catch it, because "still pending" is
+        // already a valid, asserted-nowhere-to-be-wrong terminal fate (this
+        // file's own docblock). That failure mode is silent by
+        // construction: a resolvable scenario quietly degrades to
+        // "pending" and no property complains.
+        //
+        // This check is independent of the stopping mechanism itself — it
+        // never reads `progressSignature`, `predictPass`, or how many
+        // passes ran. It uses only a fact derivable from the SCENARIO's own
+        // static shape: whenever every tx's script eventually settles into
+        // a PERMANENTLY-SUCCEEDING step (`tail.outcome === 'success'`), the
+        // real orchestrator's own documented semantics guarantee it
+        // eventually drains, however many passes that takes — a transient
+        // prefix is bounded (steps.length <= 3), a permanent step
+        // quarantines immediately, a tracked-ambiguous streak is capped by
+        // AMBIGUOUS_RETRY_BUDGET, an untracked-ambiguous step quarantines
+        // on its first hit, and every injected failure mode in this file
+        // (rejectionFailsOnce, completionFailsOnceAfterRejection,
+        // successCompletionFailure, and the cycling batch flags — which
+        // only ever redirect to the per-tx fallback, never block it) is
+        // either one-shot or structurally unable to block the per-tx path
+        // forever. So if such a tx is STILL 'pending' when the simulation
+        // stops, the stopping mechanism gave up too early — independent of
+        // why.
+        //
+        // Residual risk this does NOT cover: a permanent or
+        // tracked-ambiguous TAIL also guarantees eventual draining (via
+        // quarantine) by the identical argument, but isn't asserted here —
+        // deliberately kept to the simplest, most obviously-correct
+        // precondition rather than re-deriving that reasoning into a
+        // second ground-truth claim. A signature bug that only manifests
+        // for permanent/ambiguous-tail scenarios would slip past this
+        // guard.
+        const everyTxTailAlwaysSucceeds = scenario.transactions.every(t => t.script.tail.outcome === 'success')
+
         for (const tx of scenario.transactions) {
           // Never double-completed: this tx's own complete() closure is the
           // DIRECT target of at most one orchestrator call across the whole
@@ -1169,6 +1225,13 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
 
           const status = result.finalStatus.get(tx.blockId)
           expect(status, `tx ${tx.blockId} has no recorded fate`).toBeDefined()
+          if (everyTxTailAlwaysSucceeds) {
+            expect(
+              status,
+              `tx ${tx.blockId}: every tx's script tail always succeeds, so this scenario must fully drain — ` +
+                `"pending" means the pass-cap fixed-point detector stopped too early`,
+            ).not.toBe('pending')
+          }
           if (status === 'rejected') {
             // >= 1, not exactly 1: a completion failure after a successful
             // rejection write (property e) forces a legitimate repeat
