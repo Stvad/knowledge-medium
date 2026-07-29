@@ -187,35 +187,40 @@ const ambiguousErrorArb: fc.Arbitrary<unknown> = fc.oneof(
 // generated error's `bucket` without asking the classifier — these tests are
 // what makes that trust sound. A failure here means a POOL is mislabeled
 // (a finding to report), not that the state-machine model is wrong.
+//
+// DETERMINISTIC, not fuzzed: every pool here is a small finite constant set
+// (`as const` arrays above), so `it.each` over every member is a strictly
+// STRONGER pin than sampling it through `fc.assert` (exhaustive vs. sampled)
+// and costs ~0ms instead of a full fuzz budget per property in deep/nightly
+// runs. `uploadErrorClassifier.test.ts` covers most of these codes already,
+// but not all — e.g. PGRST101/PGRST103 (in `PERMANENT_CODES` below) have no
+// direct assertion there, only shared `Set` membership with PGRST100/102 that
+// happen to be tested — so this stays as the one place that pins every code
+// this suite's OWN pools actually draw from.
 // ──────────────────────────────────────────────────────────────────────
 
 describe('generator pools — ground truth against the real classifier', () => {
-  it('every transient-pool error classifies as transient', () => {
-    fc.assert(
-      fc.property(transientErrorArb, err => {
-        expect(classifyUploadError(err)).toBe('transient')
-      }),
-      fuzzParams(60),
-    )
-  }, fuzzTestTimeout())
+  it.each(TRANSIENT_POSTGREST_CODES)('transient postgrest code %s classifies as transient', code => {
+    expect(classifyUploadError(postgrestError(code))).toBe('transient')
+  })
+  it.each(TRANSIENT_HTTP_STATUSES)('transient HTTP status %d classifies as transient', status => {
+    expect(classifyUploadError(httpError(status))).toBe('transient')
+  })
+  it('a plain network-failure Error classifies as transient', () => {
+    expect(classifyUploadError(new Error('simulated network failure'))).toBe('transient')
+  })
 
-  it('every permanent-pool error classifies as permanent', () => {
-    fc.assert(
-      fc.property(permanentErrorArb, err => {
-        expect(classifyUploadError(err)).toBe('permanent')
-      }),
-      fuzzParams(60),
-    )
-  }, fuzzTestTimeout())
+  it.each(PERMANENT_CODES)('permanent code %s classifies as permanent', code => {
+    expect(classifyUploadError(postgrestError(code))).toBe('permanent')
+  })
 
-  it('every ambiguous-pool error classifies as ambiguous', () => {
-    fc.assert(
-      fc.property(ambiguousErrorArb, err => {
-        expect(classifyUploadError(err)).toBe('ambiguous')
-      }),
-      fuzzParams(60),
-    )
-  }, fuzzTestTimeout())
+  it.each(AMBIGUOUS_HTTP_STATUSES)('ambiguous HTTP status %d (no code) classifies as ambiguous', status => {
+    expect(classifyUploadError(httpError(status))).toBe('ambiguous')
+  })
+  it.each(AMBIGUOUS_HTTP_STATUSES)('ambiguous HTTP status %d with an unrecognised code still classifies as ambiguous', status => {
+    const err = Object.assign(new Error('weird'), {code: 'ZZUNKNOWN_TEST', status})
+    expect(classifyUploadError(err)).toBe('ambiguous')
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────────
