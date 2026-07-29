@@ -85,10 +85,31 @@ const sortedDeltaPairArb: fc.Arbitrary<[number, number]> = fc
 
 type Bucket = { rank: number; n: number | null }
 
+/** Independently derives the EXACT absolute-date string
+ *  `formatRelativeTime`'s fallback branch (relativeTime.ts:22-26) would
+ *  produce for `ts` — the same `toLocaleDateString` call with the same
+ *  options, not a re-derivation of `formatRelativeTime`'s branch/routing
+ *  logic (which is what this suite actually tests). Node's `Intl` is
+ *  deterministic within a process, so calling it here independently
+ *  reproduces production's exact string rather than copying it. */
+const expectedAbsoluteDate = (ts: number): string =>
+  new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+
 /** Classifies a `formatRelativeTime` label into a comparable
  *  (rank, in-bucket-number) pair. Ranks follow the branch order in the
- *  source (:17-26): 'just now' < minutes < hours < days < absolute date. */
-const classify = (label: string): Bucket => {
+ *  source (:17-26): 'just now' < minutes < hours < days < absolute date.
+ *
+ *  STRICT and TOTAL: throws on anything that is neither one of the three
+ *  relative-label shapes nor exactly the expected absolute-date string for
+ *  `ts`. The previous version's catch-all silently bucketed ANY
+ *  unrecognized string (including `''`) as "absolute date" (rank 4) — a
+ *  formatter that returned `''` for every input would satisfy monotonicity
+ *  (both sides rank 4) and this suite's other two properties too, going
+ *  fully green against completely broken output (Codex P2, PR #454
+ *  comment 3677006795). Throwing here — rather than returning some
+ *  sentinel rank — surfaces the ACTUAL unrecognized label in the failure
+ *  message instead of a generic assertion mismatch. */
+const classify = (label: string, ts: number): Bucket => {
   if (label === 'just now') return { rank: 0, n: null }
   let m = /^(\d+)m ago$/.exec(label)
   if (m) return { rank: 1, n: Number(m[1]) }
@@ -96,7 +117,12 @@ const classify = (label: string): Bucket => {
   if (m) return { rank: 2, n: Number(m[1]) }
   m = /^(\d+)d ago$/.exec(label)
   if (m) return { rank: 3, n: Number(m[1]) }
-  return { rank: 4, n: null } // absolute date fallback
+  const expected = expectedAbsoluteDate(ts)
+  if (label === expected) return { rank: 4, n: null }
+  throw new Error(
+    `unrecognized formatRelativeTime label ${JSON.stringify(label)} for ts=${ts} ` +
+    `(expected 'just now', an 'Nm ago'/'Nh ago'/'Nd ago' label, or the absolute date ${JSON.stringify(expected)})`,
+  )
 }
 
 describe('formatRelativeTime — totality', () => {
@@ -138,8 +164,8 @@ describe('formatRelativeTime — bucket monotonicity as (now - ts) grows', () =>
         const ts2 = now - d2 // further from `now` (larger or equal elapsed time)
         fc.pre(ts1 !== 0 && ts2 !== 0)
 
-        const b1 = classify(formatRelativeTime(ts1, now))
-        const b2 = classify(formatRelativeTime(ts2, now))
+        const b1 = classify(formatRelativeTime(ts1, now), ts1)
+        const b2 = classify(formatRelativeTime(ts2, now), ts2)
 
         expect(b1.rank, `${ts1},${ts2},${now}`).toBeLessThanOrEqual(b2.rank)
         if (b1.rank === b2.rank && b1.n !== null && b2.n !== null) {

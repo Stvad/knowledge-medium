@@ -61,9 +61,45 @@
  * lowercase, re-applying `.toLowerCase()` in step 3's check is a no-op
  * (`.toLowerCase()` is idempotent), so step 3's "already correct" branch
  * fires on the second call and returns R itself.
+ *
+ * ──── Downstream-behavior recovery property, not the formula
+ *      (PR #454 review comment 3677006799) ────
+ *
+ * A prior version of this suite's "in-scope recovery" property derived
+ * its expectation with `String.fromCharCode(shape.keyCode).toLowerCase()`
+ * — the exact same expression `withRecoveredLetterKey` uses (utils.ts:76)
+ * — and then branched on `shape.key.toLowerCase() === recovered` to decide
+ * whether the result should be the same event or a Proxy, mirroring
+ * utils.ts:77's own branch. That's a formula-mirror, same defect as the
+ * `clampSelectionToLength` property fixed alongside this one (PR #454
+ * comment 3676886063) — random garbage `key`/`code` values gave no
+ * independent oracle. The lesson from that fix carries a caution, not just
+ * a template: replacing a formula-mirror with SOME other property isn't
+ * automatically progress — that fix's own mutation test showed idempotence
+ * /direction/monotonicity would NOT have caught a dropped lower-bound
+ * clamp; only deterministic examples did. So the replacement below is
+ * deliberately built around a genuinely independent oracle rather than
+ * a plausible-sounding structural property: `withRecoveredLetterKey`
+ * exists so an OS/layout-corrupted event still matches the chord the user
+ * intended (HotkeyReconciler.tsx:473,640 call it immediately before
+ * tinykeys' own `matchKeybindingPress`, utils.ts:850-852) — that downstream
+ * MATCH is the thing to check, not the recovered `.key` value's exact
+ * text. `intentEventArb` generates an intended `Alt+<letter>` /
+ * `Meta+<letter>` chord alongside a KeyboardEvent corrupted in one of the
+ * three ways the module docblock names (utils.ts:42-45: Mac Alt-transform
+ * — key transformed, code still correct; Colemak/Dvorak — key
+ * transformed AND code lies about the physical key; Meta-transform) plus
+ * an already-correct case (recovery is a no-op). The property runs the
+ * corrupted event through `withRecoveredLetterKey` and asserts tinykeys'
+ * `matchKeybindingPress` now matches the INTENDED chord, and does NOT
+ * match a chord for a different letter — using tinykeys' own matcher
+ * (ground truth by construction, same principle as sequenceMatcher's
+ * differential) as the independent oracle, never re-deriving
+ * `String.fromCharCode`/`.toLowerCase()` anywhere in this property.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
+import { matchKeybindingPress, parseKeybinding } from 'tinykeys'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { withRecoveredLetterKey } from '../utils.ts'
 
@@ -164,12 +200,67 @@ const outOfScopeEventArb: fc.Arbitrary<EventShape> = fc.oneof(
     }),
 )
 
-// ──── guaranteed in-scope event: modifier held + letter keyCode, key/code
-//      are pure garbage (may or may not coincidentally already match) ────
+// ──── intended-chord + corrupted-event pairs (downstream-behavior domain) ────
 
-const inScopeEventArb: fc.Arbitrary<EventShape> = fc.tuple(
-  modifierPairArb, letterCodeArb, fc.boolean(), garbageKeyArb, garbageCodeArb,
-).map(([mod, keyCode, shiftKey, key, code]) => ({ ...mod, keyCode, shiftKey, key, code }))
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('')
+const letterArb: fc.Arbitrary<string> = fc.constantFrom(...LETTERS)
+/** Glyphs that never coincide with a-z — stand-ins for whatever an OS
+ *  Alt/Meta transform actually produces (¥, Ω, …); the exact glyph is
+ *  irrelevant to the property, only that it's NOT the intended letter. */
+const TRANSFORM_GLYPHS = ['¥', 'Ω', 'ÿ', '€', '§', '±', '∆', 'ç'] as const
+
+interface IntentEventPair {
+  readonly letter: string // intended logical letter, lowercase
+  readonly modifier: 'Alt' | 'Meta'
+  readonly shiftKey: boolean
+  readonly event: KeyboardEvent
+}
+
+/** Builds (intended chord, corrupted-or-not KeyboardEvent) pairs covering
+ *  the three corruption shapes the module docblock names (utils.ts:42-45)
+ *  plus the no-corruption case, all with `keyCode` set to the intended
+ *  letter's ASCII code — exactly what a real dispatched event carries
+ *  (utils.ts:52-57) regardless of which corruption flavor `.key`/`.code`
+ *  exhibit. */
+const intentEventArb: fc.Arbitrary<IntentEventPair> = fc.record({
+  letter: letterArb,
+  modifier: fc.constantFrom<'Alt' | 'Meta'>('Alt', 'Meta'),
+  flavor: fc.constantFrom(
+    'already-correct', // no corruption: .key already the intended letter
+    'mac-alt-transform', // .key transformed, .code still the correct QWERTY code
+    'colemak-code-lies', // .key transformed AND .code names a DIFFERENT key
+  ),
+  glyph: fc.constantFrom(...TRANSFORM_GLYPHS),
+  lieLetter: letterArb, // only consumed by the colemak-code-lies flavor
+  shiftKey: fc.boolean(),
+}).map(({ letter, modifier, flavor, glyph, lieLetter, shiftKey }): IntentEventPair => {
+  const keyCode = letter.toUpperCase().charCodeAt(0)
+  const correctCode = `Key${letter.toUpperCase()}`
+  let key: string
+  let code: string
+  if (flavor === 'already-correct') {
+    key = letter
+    code = correctCode
+  } else if (flavor === 'mac-alt-transform') {
+    key = glyph
+    code = correctCode
+  } else {
+    key = glyph
+    // A genuinely different key's code, so it "lies" about the physical
+    // key the way Colemak/Dvorak layouts do (utils.ts:47-50).
+    const lie = lieLetter === letter ? LETTERS[(LETTERS.indexOf(letter) + 1) % LETTERS.length]! : lieLetter
+    code = `Key${lie.toUpperCase()}`
+  }
+  const event = mk({
+    altKey: modifier === 'Alt',
+    metaKey: modifier === 'Meta',
+    shiftKey,
+    keyCode,
+    key,
+    code,
+  })
+  return { letter, modifier, shiftKey, event }
+})
 
 // ──── properties ────
 
@@ -212,30 +303,33 @@ describe('withRecoveredLetterKey — out-of-scope (utils.ts:73-75, :77)', () => 
   }, fuzzTestTimeout())
 })
 
-describe('withRecoveredLetterKey — in-scope recovery (utils.ts:76, :89-95)', () => {
-  it('recovers the keyCode-derived logical letter regardless of garbage key/code', () => {
+describe('withRecoveredLetterKey — downstream: tinykeys matches the intended chord after recovery (utils.ts:76, :89-95; PR #454 comment 3677006799)', () => {
+  it('matches the intended Alt/Meta[+Shift]+letter chord after recovery, and does not match a different letter’s chord', () => {
     fc.assert(
-      fc.property(inScopeEventArb, shape => {
-        const event = mk(shape)
-        const recovered = String.fromCharCode(shape.keyCode).toLowerCase()
-        const result = withRecoveredLetterKey(event)
+      fc.property(
+        intentEventArb,
+        fc.constantFrom(...LETTERS), // decoy letter for the negative assertion
+        ({ letter, modifier, shiftKey, event }, decoyLetterRaw) => {
+          const decoyLetter = decoyLetterRaw === letter
+            ? LETTERS[(LETTERS.indexOf(letter) + 1) % LETTERS.length]!
+            : decoyLetterRaw
+          const shiftPrefix = shiftKey ? 'Shift+' : ''
 
-        // Case-insensitive match always holds. The EXACT lowercase form is
-        // only guaranteed via the Proxy path (:89-95) — when step 3's
-        // pass-through fires instead, `result` IS `event`, so `.key` keeps
-        // whatever casing the original had (e.g. an already-correct "F"
-        // stays "F", not forced to "f"). Found via the deep-tier fuzz run
-        // (keyCode 70/'F', key:"F") — a wrong assumption in this test, not
-        // a product bug: utils.ts:77 says "return event", not "return a
-        // lowercased event".
-        expect(result.key.toLowerCase()).toBe(recovered)
-        if (shape.key.toLowerCase() === recovered) {
-          expect(result).toBe(event) // already correct — step 3 short-circuits
-        } else {
-          expect(result).not.toBe(event) // genuinely recovered via the Proxy
-          expect(result.key).toBe(recovered) // Proxy path force-lowercases
-        }
-      }),
+          const recovered = withRecoveredLetterKey(event)
+
+          const intendedPress = parseKeybinding(`${shiftPrefix}${modifier}+${letter}`)[0]!
+          expect(
+            matchKeybindingPress(recovered, intendedPress),
+            `expected recovery of ${JSON.stringify({ key: event.key, code: event.code })} to match the intended chord ${shiftPrefix}${modifier}+${letter}`,
+          ).toBe(true)
+
+          const decoyPress = parseKeybinding(`${shiftPrefix}${modifier}+${decoyLetter}`)[0]!
+          expect(
+            matchKeybindingPress(recovered, decoyPress),
+            `expected recovery to NOT match the unrelated decoy chord ${shiftPrefix}${modifier}+${decoyLetter}`,
+          ).toBe(false)
+        },
+      ),
       fuzzParams(300),
     )
   }, fuzzTestTimeout())
