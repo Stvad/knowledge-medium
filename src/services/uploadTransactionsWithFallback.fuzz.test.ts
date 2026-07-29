@@ -113,7 +113,7 @@ import {
   CrudTransaction,
   UpdateType,
 } from '@powersync/common'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { classifyUploadError, type UploadErrorClass } from '@/services/uploadErrorClassifier'
@@ -489,8 +489,8 @@ const MAX_PASSES = AMBIGUOUS_RETRY_BUDGET + 4
 // that's expected, not a bug, and in deep/nightly runs it's thousands of
 // lines of noise. Suppress exactly these known shapes and nothing else: an
 // unrecognised console.warn/error during a run still fails the test (see the
-// `unexpectedLogs` assertion in `runSimulation`) rather than being silently
-// absorbed, so a genuinely new log path still surfaces.
+// `unexpectedLogs` assertion in `runSimulationUnspied`) rather than being
+// silently absorbed, so a genuinely new log path still surfaces.
 const EXPECTED_LOG_PATTERNS: readonly RegExp[] = [
   /^\[powersync\] batch upload failed — isolating \d+ tx\(s\)$/,
   /^\[powersync\] per-tx upload failed \(transient, will retry\)$/,
@@ -500,20 +500,31 @@ const EXPECTED_LOG_PATTERNS: readonly RegExp[] = [
 const isExpectedLog = (args: readonly unknown[]): boolean =>
   typeof args[0] === 'string' && EXPECTED_LOG_PATTERNS.some(re => re.test(args[0] as string))
 
+// SUITE-scoped, not per-case (PR #448 review comment 3676858226): under
+// FUZZ_TIME_MS, fast-check's `interruptAfterTimeLimit` can let `fc.assert`
+// return while its final async case is still executing (documented in
+// `fuzzTestTimeout`'s own docblock above and `statefulFuzzGuard`'s, both in
+// this file's import from `@/test/fuzz`). A per-case install/restore would
+// let that abandoned case's `finally` restore the REAL console underneath
+// the next property's freshly-installed spy — expected retry logs would
+// escape to CI output, and worse, that next simulation's unexpected-log
+// oracle would go dead (no spy left to feed it). Installing the spies ONCE
+// for this whole describe block's lifetime and only ever swapping which
+// buffer the shared mock implementation writes to removes the interleaving
+// hazard by construction: there's exactly one spy alive for the block's
+// entire run, so there's nothing for a late-arriving abandoned case to
+// clobber. Worst case, a genuinely unexpected log from an abandoned case
+// lands in the wrong scenario's buffer — misattributed, but still surfaced,
+// never silently dropped (still fails SOME test in this describe block).
+let currentUnexpectedLogs: unknown[][] = []
+const recordIfUnexpected = (...args: unknown[]): void => {
+  if (!isExpectedLog(args)) currentUnexpectedLogs.push(args)
+}
+
 const runSimulation = async (scenario: Scenario): Promise<SimulationResult> => {
   const unexpectedLogs: unknown[][] = []
-  const recordIfUnexpected = (...args: unknown[]): void => {
-    if (!isExpectedLog(args)) unexpectedLogs.push(args)
-  }
-  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(recordIfUnexpected)
-  const errorSpy = vi.spyOn(console, 'error').mockImplementation(recordIfUnexpected)
-
-  try {
-    return await runSimulationUnspied(scenario, unexpectedLogs)
-  } finally {
-    warnSpy.mockRestore()
-    errorSpy.mockRestore()
-  }
+  currentUnexpectedLogs = unexpectedLogs
+  return runSimulationUnspied(scenario, unexpectedLogs)
 }
 
 const runSimulationUnspied = async (
@@ -705,6 +716,21 @@ const runSimulationUnspied = async (
 // ──────────────────────────────────────────────────────────────────────
 
 describe('uploadTransactionsWithFallback — retry/classification state machine', () => {
+  // Installed ONCE for this describe block (see the rationale above
+  // `runSimulation`) — never per-case — so an abandoned fast-check case from
+  // a timed-out property can't restore the real console underneath a later
+  // property's spy.
+  let warnSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  beforeAll(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(recordIfUnexpected)
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(recordIfUnexpected)
+  })
+  afterAll(() => {
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
+  })
+
   it('(a) every tx reaches exactly one terminal fate — never double-completed, never silently dropped', async () => {
     await fc.assert(
       fc.asyncProperty(scenarioArb, async scenario => {
