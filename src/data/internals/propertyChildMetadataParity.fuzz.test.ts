@@ -119,12 +119,12 @@ const metaOf = async (id: string): Promise<MetaRow> =>
     [id],
   ))!
 
-const liveFieldRow = async (parentId: string, fieldId: string): Promise<{id: string} | undefined> =>
+const liveFieldRow = async (parentId: string, fieldId: string): Promise<{id: string} | null> =>
   sharedDb.db.getOptional<{id: string}>(
     `SELECT id FROM blocks WHERE parent_id = ? AND reference_target_id = ? AND deleted = 0`,
     [parentId, fieldId],
   )
-const liveValueRow = async (fieldRowId: string): Promise<{id: string} | undefined> =>
+const liveValueRow = async (fieldRowId: string): Promise<{id: string} | null> =>
   sharedDb.db.getOptional<{id: string}>(
     `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [fieldRowId],
   )
@@ -154,9 +154,9 @@ const runCase = async ({kind, v1, v2}: {kind: Kind; v1: string; v2: string}): Pr
     {scope: ChangeScope.BlockDefault})
 
   const skipField = await liveFieldRow('skip', fieldId)
-  expect(skipField, 'skipMetadata: field row exists').toBeDefined()
+  expect(skipField, 'skipMetadata: field row exists').not.toBeNull()
   const skipValue = await liveValueRow(skipField!.id)
-  expect(skipValue, 'skipMetadata: value row exists').toBeDefined()
+  expect(skipValue, 'skipMetadata: value row exists').not.toBeNull()
   expectRealMetadata(await metaOf(skipField!.id), 'skipMetadata field row (create)')
   expectRealMetadata(await metaOf(skipValue!.id), 'skipMetadata value row (create)')
   // The asymmetry this suite does NOT relax: the parent's OWN write stays
