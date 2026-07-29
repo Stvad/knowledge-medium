@@ -201,16 +201,28 @@ interface EventStep {
 }
 
 // Includes the exact boundary (gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS) as its
-// own weighted case — see the docblock's "Found while authoring" note: this
-// used to be excluded as an "unreachable" tie, which was wrong (coarsened
+// own case — see the docblock's "Found while authoring" note: this used to
+// be excluded as an "unreachable" tie, which was wrong (coarsened
 // `event.timeStamp`s make it reachable). It stays in the generator
 // permanently; the first property below treats a hit on this exact value as
-// admissible either way rather than asserting tinykeys-parity there.
+// admissible either way, and — because that step's disagreement can
+// contaminate every later step's comparison in the same scenario (pending
+// state legitimately diverges after an accepted tie, sequenceMatcher.ts) —
+// stops asserting tinykeys-parity for the rest of that scenario once it's
+// hit. That truncation is why the boundary is given a DELIBERATELY LOW
+// weight below (~1.6%, not an even 25% split): at an even split, most
+// generated scenarios (a scenario needs only one boundary-valued step among
+// up to 6) would hit the boundary and run just a short, truncated parity
+// check — silently hollowing out the differential this suite exists to run.
+// Low weight keeps the boundary reachable (still exercised hundreds of
+// times over a deep run) while keeping full end-to-end parity assertion on
+// the large majority of scenarios. Do not rebalance this back toward
+// uniform — that reintroduces the coverage loss.
 const gapMsArb: fc.Arbitrary<number> = fc.oneof(
-  fc.constant(0),
-  fc.integer({ min: 1, max: DEFAULT_SEQUENCE_TIMEOUT_MS - 1 }), // within timeout — neither side expires
-  fc.constant(DEFAULT_SEQUENCE_TIMEOUT_MS), // exact boundary — admissible either way, see docblock
-  fc.integer({ min: DEFAULT_SEQUENCE_TIMEOUT_MS + 1, max: DEFAULT_SEQUENCE_TIMEOUT_MS * 3 }), // past timeout — both expire
+  { weight: 20, arbitrary: fc.constant(0) },
+  { weight: 20, arbitrary: fc.integer({ min: 1, max: DEFAULT_SEQUENCE_TIMEOUT_MS - 1 }) }, // within timeout — neither side expires
+  { weight: 1, arbitrary: fc.constant(DEFAULT_SEQUENCE_TIMEOUT_MS) }, // exact boundary — admissible either way, see docblock; rare and truncating, see comment above
+  { weight: 20, arbitrary: fc.integer({ min: DEFAULT_SEQUENCE_TIMEOUT_MS + 1, max: DEFAULT_SEQUENCE_TIMEOUT_MS * 3 }) }, // past timeout — both expire
 )
 
 const eventStepArb = (alternatives: readonly ChordSpec[]): fc.Arbitrary<EventStep> => {
@@ -309,7 +321,10 @@ describe('createSequenceMatcher ↔ tinykeys per-step differential (generalizes 
         // a downstream echo of this one accepted tie (the two systems'
         // pending state has diverged), not an independently new bug. The
         // OTHER property below (no simultaneous completed+pending) still
-        // runs unconditionally over every step, including these.
+        // runs unconditionally over every step, including these. `gapMsArb`
+        // weights this case low (see its comment) precisely so this
+        // truncation stays rare — measured at ~94-95% of scenarios running
+        // the full, untruncated parity check across several deep-tier runs.
         for (let i = 0; i < results.length; i++) {
           if (scenario.steps[i]!.gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS) break
           const { tinykeysFired, matcherVerdict } = results[i]!
