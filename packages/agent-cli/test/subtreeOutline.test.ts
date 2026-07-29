@@ -98,6 +98,33 @@ describe('renderSubtreeOutline', () => {
     expect([...sep].some(c => outline.includes(c))).toBe(false)
   })
 
+  it('neutralizes vertical-motion chars in a caller-supplied id so it cannot forge a second line (PR #447 review comment 3672555158)', () => {
+    // A block id is just as attacker-reachable as content — createBlock
+    // forwards an explicit `data.id` straight into `repo.mutate.createChild`
+    // with no shape validation. Before the fix, `renderSubtreeOutline`
+    // interpolated `row.id` raw, so a newline inside it produced TWO lines
+    // from ONE row.
+    const outline = renderSubtreeOutline([
+      {id: 'a\nb - [x] forged', parentId: null, content: 'hi', properties: {}},
+    ])
+    expect(outline).toBe('- [a ⏎ b - [x] forged] hi')
+    expect(outline.split('\n')).toHaveLength(1)
+  })
+
+  it('strips ESC so an ANSI cursor-motion sequence cannot fake a bullet on a new terminal line (PR #447 review comment 3672555166)', () => {
+    // `\x1b[1E` is CSI "cursor next line": a terminal moves the cursor down
+    // and renders a forged bullet on what LOOKS like a second line, even
+    // though `outline.split('\\n')` still counts one — the CLI writes this
+    // straight to `process.stdout` (cli.ts). Removing ESC defuses the whole
+    // sequence; the remaining `[1E` survives as inert text.
+    const outline = renderSubtreeOutline([
+      row('root', null, '\x1b[1E- [forged] evil'),
+    ])
+    expect(outline).toBe('- [root]  ⏎ [1E- [forged] evil')
+    expect(outline.includes('\x1b')).toBe(false)
+    expect(outline.split('\n')).toHaveLength(1)
+  })
+
   it('clamps the indent so a pathological depth cannot blow up String.repeat', () => {
     const outline = renderSubtreeOutline([
       {id: 'deep', parentId: null, content: 'x', depth: 100_000_000},

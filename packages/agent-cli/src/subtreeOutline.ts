@@ -46,24 +46,40 @@ const isDepth = (value: unknown): value is number =>
  *  `String.prototype.repeat` (OOM, or RangeError past 2**53). */
 const MAX_OUTLINE_DEPTH = 100
 
-/** Collapse every character a terminal, a `splitlines`-style parser, or an
- *  LLM reading the outline may treat as a vertical break — LF, CR, VT, FF,
- *  the C0 information separators FS/GS/RS/US (U+001C–U+001F), plus
- *  NEL/LS/PS — to a single `⏎` marker, so a value can't spill onto a second
- *  visual line and forge an id-less `- [id]`-shaped bullet. Applied to BOTH
- *  content and the rendered properties. The two paths need the FULL set for
- *  different reasons: properties go through `JSON.stringify`, which escapes
- *  every char < U+0020 (FS/GS/RS/US already inert there) but NOT
- *  U+0085/U+2028/U+2029 (all ≥ U+0080); content is NOT stringified, so the
- *  C0 separators reach the outline literally and must be collapsed here.
- *  Covering everything on both keeps the one-line-per-block invariant on
- *  either path. */
-const collapseVerticalMotion = (text: string): string =>
-  // Matching the C0 separators (U+001C-U+001F) is the whole point:
-  // neutralize control chars that could forge a line break, rather than
-  // treat them as innocent text.
+/**
+ * The single neutralization pass applied to EVERY interpolated field —
+ * `id`, `content`, and the rendered `properties` JSON — so the invariant
+ * this module exists to guarantee holds everywhere at once: what the
+ * terminal (or an LLM reading the raw text) sees is exactly one line per
+ * block, id-first, and nothing an attacker/LLM-controlled field can
+ * contribute is able to forge a different id or an extra bullet.
+ *
+ * Two character families are neutralized in one pass, both collapsed to
+ * the same `⏎` marker:
+ *
+ *  - Vertical motion: LF, CR, VT, FF, the C0 information separators
+ *    FS/GS/RS/US (U+001C–U+001F), plus NEL/LS/PS (U+0085/U+2028/U+2029) —
+ *    every character a terminal, a `splitlines`-style parser, or an LLM
+ *    reading the outline may treat as a line break.
+ *  - ESC (U+001B) and the rest of the C1 control range (U+0080–U+009F,
+ *    which already includes NEL) — ESC introduces every ANSI/VT escape
+ *    sequence in the 7-bit encoding (e.g. `ESC [ 1 E` = "cursor next
+ *    line", which repositions the cursor to fake a second bullet even
+ *    though `outline.split('\n')` still counts one line); the C1 codes
+ *    are its 8-bit-equivalent introducers. Removing the introducer
+ *    defuses the whole sequence — the remaining parameter/final bytes
+ *    (e.g. `[1E`) are left behind as inert text.
+ *
+ * `properties` goes through `JSON.stringify` first, which escapes every
+ * char < U+0020 (so ESC/FS/GS/RS/US are already inert there) but NOT
+ * U+0080 and up; `content` and `id` are never stringified, so all of the
+ * above reach the outline literally and must be collapsed here. */
+const neutralizeOutlineField = (text: string): string =>
+  // Matching ESC, the C0 separators, and the C1 range is the whole point:
+  // neutralize control/escape chars that could forge a line break or a
+  // cursor-motion sequence, rather than treat them as innocent text.
   // eslint-disable-next-line no-control-regex -- intentional control-char match
-  text.replace(/[\r\n\v\f\u001c-\u001f\u0085\u2028\u2029]+/g, ' ⏎ ')
+  text.replace(/[\r\n\v\f\u001b-\u001f\u0080-\u009f\u2028\u2029]+/g, ' ⏎ ')
 
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
@@ -79,10 +95,12 @@ const collapseVerticalMotion = (text: string): string =>
  *   `<indent>- [<id>] <content> <propsJSON>` (with `includeProperties`)
  * — the id comes first (right after the bullet) so arbitrary content can
  * never push it off the line or forge a second id-shaped token where the
- * real id is expected; content (for reading) follows. Every vertical-break
- * character in content AND in the rendered properties is collapsed to a
- * `⏎` marker (see collapseVerticalMotion) so a block can't spill into
- * id-less lines that masquerade as child bullets: line count == block count.
+ * real id is expected; content (for reading) follows. Every field —
+ * `id` included, since a caller-supplied id is just as attacker-reachable
+ * as content (e.g. an explicit `id` forwarded through `createBlock`) — is
+ * passed through `neutralizeOutlineField` before interpolation, so a block
+ * can't spill into id-less lines that masquerade as child bullets or forge
+ * a fake id: line count == block count.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {
@@ -105,12 +123,13 @@ export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptio
     depthById.set(row.id, depth)
     const indent = '  '.repeat(Math.min(depth, MAX_OUTLINE_DEPTH))
     const content = typeof row.content === 'string' ? row.content : ''
-    const oneLine = collapseVerticalMotion(content)
+    const oneLine = neutralizeOutlineField(content)
+    const id = neutralizeOutlineField(row.id)
     const props = options.includeProperties
       && row.properties && typeof row.properties === 'object' && Object.keys(row.properties).length > 0
-      ? ` ${collapseVerticalMotion(JSON.stringify(row.properties))}`
+      ? ` ${neutralizeOutlineField(JSON.stringify(row.properties))}`
       : ''
-    return `${indent}- [${row.id}] ${oneLine}${props}`
+    return `${indent}- [${id}] ${oneLine}${props}`
   })
   return lines.join('\n')
 }
