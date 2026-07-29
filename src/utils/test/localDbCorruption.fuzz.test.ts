@@ -71,6 +71,22 @@
  * directly from the source (:46-47), at a chain depth proven reachable
  * (index < 5) by tracing `messageChainOf`'s recursion above — never by
  * checking what the matcher itself accepts.
+ *
+ * The totality property also feeds in HOSTILE conversion shapes — a
+ * revoked `Proxy` and objects with a throwing `Symbol.toStringTag` getter
+ * and/or throwing/non-callable `toString`/`valueOf` — because `safeString`
+ * (the unexported fallback `messageOf`/`messageChainOf` reach for a
+ * non-Error, non-string-message value) used to have a SECOND throw point:
+ * `String(x)` throwing is caught, but the fallback
+ * `Object.prototype.toString.call(x)` can throw too (a revoked Proxy's
+ * `[[Get]]` trap throws for `Symbol.toStringTag` itself; a throwing
+ * `Symbol.toStringTag` getter propagates the same way, and since there's
+ * no own `toString`/`valueOf` it also makes `String(x)` resolve to the
+ * inherited `Object.prototype.toString` and throw the SAME error first).
+ * PR #447 review comment 3672555155 confirmed this against the real code;
+ * `hostileConversionArb`/`revokedProxyArb` below reproduce both shapes
+ * (and non-callable-`toString`/`valueOf` variants) so the fixed-string
+ * final fallback is exercised, not just asserted.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -183,17 +199,122 @@ const cyclicChainArb: fc.Arbitrary<unknown> = fc.record({
   return nodes[0]
 })
 
+/** A revoked `Proxy`, wrapped in a one-element array — every `[[Get]]`/
+ *  `[[Has]]` trap on a revoked proxy throws (TypeError), including for
+ *  `toString`, `valueOf`, and `Symbol.toStringTag`. That makes BOTH
+ *  `safeString`'s primary `String(x)` conversion AND its
+ *  `Object.prototype.toString.call(x)` fallback throw — the exact shape
+ *  from PR #447 review comment 3672555155.
+ *
+ *  The array wrapper isn't about the classifiers under test — it's so
+ *  fast-check's OWN internals survive generating this value. Every
+ *  arbitrary combinator (`map`, `oneof`, the tuple `fc.property` builds
+ *  from its arguments) wraps its result in an internal `Value`, whose
+ *  constructor eagerly does `Symbol.fastCheckClone in value` — an `in`
+ *  check, which is itself a trap on a Proxy and throws for a REVOKED one,
+ *  crashing fast-check's bookkeeping before our code ever runs. Wrapping
+ *  the proxy in a plain array means every one of those internal checks
+ *  lands on the (harmless) array; the raw proxy is unwrapped only inside
+ *  the property body below, via a plain function call that never
+ *  round-trips through fast-check's internals again. */
+const revokedProxyArb: fc.Arbitrary<[unknown]> = fc.constant(undefined).map(() => {
+  const { proxy, revoke } = Proxy.revocable({}, {})
+  revoke()
+  return [proxy] as [unknown]
+})
+
+type ConversionBehavior = 'default' | 'throws' | 'nonCallable'
+const conversionBehaviorArb: fc.Arbitrary<ConversionBehavior> = fc.constantFrom(
+  'default', 'throws', 'nonCallable',
+)
+
+/** An object with a randomized combination of hostile `toString`/`valueOf`/
+ *  `Symbol.toStringTag` behaviors. A throwing `Symbol.toStringTag` getter
+ *  alone is already enough to make BOTH `String(x)` (which resolves to the
+ *  inherited `Object.prototype.toString` when there's no own
+ *  `toString`/`valueOf`) and the explicit
+ *  `Object.prototype.toString.call(x)` fallback throw — verified directly:
+ *
+ *    const o = {}; Object.defineProperty(o, Symbol.toStringTag, { get() { throw new Error() } })
+ *    String(o)                          // throws
+ *    Object.prototype.toString.call(o)  // throws too
+ *
+ *  This generator also crosses that with throwing/non-callable own
+ *  `toString`/`valueOf` — the "throwing valueOf/toString" shape PR #447
+ *  review comment 3672555155 asked for — so `String(x)` can fail via a
+ *  DIFFERENT path too (e.g. neither method is callable, so `ToPrimitive`
+ *  itself throws "Cannot convert object to primitive value") while the tag
+ *  getter independently breaks the fallback — a second, distinct way to
+ *  reach `safeString`'s double-throw. */
+const hostileConversionArb: fc.Arbitrary<unknown> = fc.record({
+  toStringBehavior: conversionBehaviorArb,
+  valueOfBehavior: conversionBehaviorArb,
+  tagThrows: fc.boolean(),
+  msg: fc.string({ maxLength: 20 }),
+}).map(({ toStringBehavior, valueOfBehavior, tagThrows, msg }) => {
+  const obj: Record<PropertyKey, unknown> = {}
+  // `Object.defineProperty` (its descriptor `value` is untyped) rather than
+  // plain assignment — `obj.toString = msg` fails to typecheck even though
+  // `obj` is a `Record<PropertyKey, unknown>`: named-property access still
+  // resolves through the inherited `Object.prototype.toString: () => string`
+  // signature, not the index signature.
+  if (toStringBehavior === 'throws') {
+    Object.defineProperty(obj, 'toString', { value: () => { throw new Error(msg) }, configurable: true })
+  } else if (toStringBehavior === 'nonCallable') {
+    Object.defineProperty(obj, 'toString', { value: msg, configurable: true })
+  }
+  if (valueOfBehavior === 'throws') {
+    Object.defineProperty(obj, 'valueOf', { value: () => { throw new Error(msg) }, configurable: true })
+  } else if (valueOfBehavior === 'nonCallable') {
+    Object.defineProperty(obj, 'valueOf', { value: msg, configurable: true })
+  }
+  if (tagThrows) {
+    Object.defineProperty(obj, Symbol.toStringTag, { get() { throw new Error(msg) } })
+  }
+  return obj
+})
+
+/** `hostileConversionArb`'s plain objects are safe for fast-check's
+ *  internals to handle directly (an `in` check on a getter-bearing object
+ *  reads property existence without invoking the getter) — only the
+ *  revoked Proxy needs the array-wrapper trick. Wrapped here in the SAME
+ *  one-element-array shape as {@link revokedProxyArb} purely so the two
+ *  can share a single `fc.oneof` with one unwrap point in the property
+ *  body. */
+const hostileErrorArb: fc.Arbitrary<[unknown]> = fc.oneof(
+  revokedProxyArb,
+  hostileConversionArb.map(v => [v] as [unknown]),
+)
+
 // ──── totality ────
 
-describe('totality — never throws for arbitrary error shapes (localDbCorruption.ts:72-160)', () => {
+describe('totality — never throws for arbitrary error shapes (localDbCorruption.ts:69-191)', () => {
   it('isLocalDbCorruptionError / isRuntimeDbCorruptionError / toLocalDbOpenError never throw', () => {
     fc.assert(
-      fc.property(fc.oneof(deepChainArb, primitiveArb), (error) => {
+      fc.property(
+        fc.oneof(
+          deepChainArb.map(v => [v] as [unknown]),
+          primitiveArb.map(v => [v] as [unknown]),
+          hostileErrorArb,
+        ),
+        ([error]) => {
+          expect(() => isLocalDbCorruptionError(error)).not.toThrow()
+          expect(() => isRuntimeDbCorruptionError(error)).not.toThrow()
+          expect(() => toLocalDbOpenError(error, 'user-1')).not.toThrow()
+        },
+      ),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('never throws for a revoked Proxy or a hostile toString/valueOf/Symbol.toStringTag shape (safeString\'s fallback, localDbCorruption.ts:69-79)', () => {
+    fc.assert(
+      fc.property(hostileErrorArb, ([error]) => {
         expect(() => isLocalDbCorruptionError(error)).not.toThrow()
         expect(() => isRuntimeDbCorruptionError(error)).not.toThrow()
         expect(() => toLocalDbOpenError(error, 'user-1')).not.toThrow()
       }),
-      fuzzParams(300),
+      fuzzParams(200),
     )
   }, fuzzTestTimeout())
 
