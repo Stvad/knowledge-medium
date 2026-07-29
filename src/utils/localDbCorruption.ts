@@ -116,7 +116,7 @@ const messageOf = (error: unknown): string => {
   // `safeGet` like every other property read on a not-necessarily-honest
   // `error` in this module.
   if (safeInstanceOf(error, Error)) {
-    const msg = safeGet(error, 'message')
+    const msg = safeGet(error as object, 'message')
     if (typeof msg === 'string') return msg
     return safeString(error)
   }
