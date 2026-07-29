@@ -71,6 +71,18 @@ describe('canonicalizeChord', () => {
     expect(canonicalizeChord('Numpad3')).toBe('Numpad3')
   })
 
+  it('keeps `+` as a key instead of eating it (tinykeys splits on `+` only after \\w or ])', () => {
+    // The settings capture path records pressing `+` as 'Shift++'
+    // (keyCapture.ts pushes event.key after the modifier parts), and
+    // tinykeys parses that as Shift plus the `+` key. A naive `+` split
+    // would leave the bare modifier — and since direct overrides are
+    // INSTALLED through normalizeChordSequence, the action would end up
+    // bound to Shift alone.
+    expect(canonicalizeChord('Shift++')).toBe('Shift++')
+    expect(canonicalizeChord('$mod+Shift++')).toBe('$mod+Shift++')
+    expect(canonicalizeChord('+')).toBe('+')
+  })
+
   it('still folds case for logical keys that dispatch via event.key', () => {
     // Named keys whose event.key equals the code (Enter/ArrowUp/F2/Escape…)
     // match tinykeys' case-INSENSITIVE event.key path, so mis-cased
@@ -171,6 +183,8 @@ describe('normalizeChord (behaviour pinned across the lift)', () => {
     ['k+cmd', '$mod+k'],               // non-modifier before a modifier
     [' cmd + k ', '$mod+k'],           // surrounding whitespace trimmed
     ['', ''],                          // empty input stays empty
+    ['Shift++', 'Shift++'],            // `+` is the key, not a separator
+    ['cmd + +', '$mod++'],             // …even authored with spaces
   ])('normalizeChord(%j) === %j', (input, expected) => {
     expect(normalizeChord(input)).toBe(expected)
   })

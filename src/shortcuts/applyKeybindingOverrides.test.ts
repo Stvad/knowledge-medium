@@ -193,6 +193,22 @@ describe('applyKeybindingOverrides', () => {
     expect(out[1]!.defaultBinding).toEqual({keys: 'Control+x'})
   })
 
+  it('installs a `+` override as the `+` key, not the bare modifier', () => {
+    // Regression pin (Codex, PR #427): rule 1 now installs through
+    // `normalizeChordSequence`, and the settings capture path records
+    // pressing `+` as 'Shift++'. A `+`-split that dropped empty tokens
+    // would install 'Shift' — rebinding the action to Shift alone, and
+    // firing on every shifted keystroke.
+    const actions = [action('a', ActionContextTypes.NORMAL_MODE, 'ctrl+a')]
+    const out = applyKeybindingOverrides(actions, [userOverride({
+      actionId: 'a',
+      context: ActionContextTypes.NORMAL_MODE,
+      binding: {keys: 'Shift++'},
+    })])
+
+    expect(out[0]!.defaultBinding).toEqual({keys: 'Shift++'})
+  })
+
   it('preserves the action’s existing eventOptions through a rewrite', () => {
     const a = action('a', ActionContextTypes.NORMAL_MODE, 'cmd+a')
     a.defaultBinding = {keys: 'cmd+a', eventOptions: {preventDefault: false}}
