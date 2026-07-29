@@ -174,9 +174,19 @@ const encodeOutlineId = (id: string): string =>
 /** Exact inverse of {@link encodeOutlineId}. Takes the id token ITSELF —
  *  everything between the leading `- [` and the first `]` that follows,
  *  per the parsing rule documented on {@link encodeOutlineId} — not a raw
- *  outline line. Exported so a consumer that extracts that token out of
- *  the outline — or this module's own tests — can recover the original id
- *  without re-deriving the encoding scheme. */
+ *  outline line.
+ *
+ *  Exported as the documented inverse for anyone parsing the TEXT outline
+ *  back into ids — but as of PR #447 review comment 3677190043, it has NO
+ *  in-tree caller. `kmagent subtree`'s default output and the `subtree`
+ *  MCP tool both only ever DISPLAY this text; neither they nor the CLI's
+ *  `get-block`/`update-block`/`delete-block` commands or the MCP
+ *  `get_block`/`update_block`/`delete_block` tools call this — those
+ *  forward whatever id string they're given straight to the bridge
+ *  unchanged. See {@link renderSubtreeOutline}'s doc comment for the
+ *  display-vs-addressable-surface split this implies, why decoding is
+ *  deliberately NOT wired in at those command boundaries, and issue #456
+ *  for the durable fix (reject hostile ids at creation). */
 export const decodeOutlineId = (encoded: string): string => decodeURIComponent(encoded)
 
 /**
@@ -202,6 +212,30 @@ export const decodeOutlineId = (encoded: string): string => decodeURIComponent(e
  * reversible, injective percent-encoding) instead of `content`/
  * `properties`'s lossy `neutralizeOutlineField` collapse — see
  * `encodeOutlineId`'s doc comment for why that distinction matters.
+ *
+ * ADDRESSABILITY (PR #447 review comment 3677190043): this text outline
+ * is a DISPLAY surface, hardened against forgery by everything above —
+ * it is NOT wired up to be addressable. Nothing at the CLI/MCP command
+ * boundaries decodes an `[id]` token copied out of it, so for a block
+ * whose id needed encoding, that token cannot be pasted into
+ * `get-block`/`update-block`/`delete-block` (CLI) or `get_block`/
+ * `update_block`/`delete_block` (MCP) — those forward whatever string
+ * they're given straight to the bridge, unchanged. Blanket-decoding at
+ * those boundaries was considered and rejected: a legitimate id
+ * containing a literal `%` is indistinguishable from an encoded token,
+ * so decoding unconditionally would CORRUPT real ids.
+ *
+ * The addressable surface for such a block is `kmagent subtree --json`
+ * (cli.ts), which bypasses this renderer entirely — its `--json` branch
+ * prints the RAW flat array straight from the bridge, never through
+ * `renderSubtreeOutline`, so ids there are exactly what's stored. The
+ * `subtree` MCP tool (mcpServer.ts) has NO equivalent raw/structured
+ * path today — it only ever returns this rendered text — so an
+ * MCP-only consumer currently has no way to address a block whose id
+ * needed encoding here; that gap is tracked in issue #456, not fixed in
+ * this module. The durable fix is rejecting such ids at block-creation
+ * time (also issue #456) — this module only hardens the DISPLAY of ids
+ * that already exist, it doesn't make them addressable.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {
