@@ -111,7 +111,22 @@ const runCase = async (
     // simulates the b0392a7c9 diverged state (live rows, empty cell)
     // without needing to reproduce the exact PROJECT-drop mechanism: the
     // guard's structural-list check doesn't care how the rows got there.
+    //
+    // FIELD_ID must be a REGISTERED property-schema definition: the
+    // VISIBLE-children predicate only excludes a field row when its
+    // `reference_target_id` resolves to a live `block_types`
+    // 'property-schema' entry (`recognizedFieldRowSql`,
+    // treeQueries.ts:285-299). An unregistered FIELD_ID leaves `hand-field`
+    // visible like any ordinary content child, degenerating this axis into
+    // the `contentChild` case and leaving the b0392a7c9 regression (hidden
+    // rows, empty cell) untested — the pre-fix guard would pass this case
+    // too, since it never sees a divergence between the visible and
+    // structural lists (Codex review, comment 3672657052).
     await repo.tx(async tx => {
+      await tx.create({
+        id: FIELD_ID, workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        content: 'field def', properties: {types: ['property-schema']},
+      })
       await tx.create({
         id: 'hand-field', workspaceId: 'ws-1', parentId: 'child',
         referenceTargetId: FIELD_ID, isFieldForm: true, orderKey: 'a0', content: `::((${FIELD_ID}))`,
@@ -120,6 +135,18 @@ const runCase = async (
         id: 'hand-value', workspaceId: 'ws-1', parentId: 'hand-field', orderKey: 'a0', content: noise,
       })
     }, {scope: ChangeScope.BlockDefault})
+  }
+
+  // Non-vacuity check for the `handAuthoredFieldRow` axis: in a flipped
+  // workspace, the row registered above must actually be hidden from the
+  // VISIBLE facade before conversion runs — otherwise the case below isn't
+  // exercising the diverged state (structural rows live, visible list AND
+  // cell both empty) at all. `flip === 'cell'` workspaces recognize no
+  // field rows by design (VISIBLE_CHILD_PREDICATE_SQL short-circuits on the
+  // un-flipped probe), so this only applies once flipped.
+  if (structState === 'handAuthoredFieldRow' && flip === 'children') {
+    const visibleIds = await repo.query.childIds({id: 'child', hidePropertyChildren: true}).load()
+    expect(visibleIds, 'hand-authored field row must be hidden from the visible facade').toEqual([])
   }
 
   const converted = await convertEmptyChildBlockToProperty(repo.block('child'), repo)
