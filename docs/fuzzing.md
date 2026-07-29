@@ -211,6 +211,15 @@ engine (a same-shape hand-built string parses fine). Not a product bug.
   source, a mix of throwing/succeeding sources merges only the
   survivors, and total failure rethrows the FIRST contribution's error
   by registration order regardless of randomized settle order.
+- `src/data/internals/kernelQueries.fuzz.test.ts` — two independent
+  LIKE-pattern properties: (1) `buildFuzzyAliasMatchesSql`'s exact/prefix
+  match survives the alias-autocomplete pre-filter `LIMIT` regardless of
+  same-trigram decoy count/alphabetical/creation order (ground truth by
+  construction — decoy vs. true-match suffixes are structurally
+  disjoint); (2) `escapeLikePattern` differential vs real SQLite —
+  every call site's actual LIKE/ESCAPE fragment, run against a live
+  connection, matches a case-folded JS containment check for arbitrary
+  needle/haystack pairs biased toward `%`/`_`/`\`/case-invariant unicode.
 
 ## Found so far
 
