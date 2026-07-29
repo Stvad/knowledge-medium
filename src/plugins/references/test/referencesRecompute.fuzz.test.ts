@@ -84,10 +84,34 @@ const ROOT = '00000000-0000-4000-8000-000000000000'
 
 // ──── property schemas under test ────
 
-const reviewerProp = refTestSeed('reviewer', 'ref')
-const relatedProp = refTestSeed('related', 'refList')
-const refSchemaExtension = [reviewerProp, relatedProp].map(p =>
-  definitionSeedsFacet.of(p, {source: 'test'}))
+/**
+ * Built fresh per case (`buildEnv`) so the ref/refList fields' declared
+ * `changeScope` can vary (#435 item 6). Ground truth: the merge-retarget
+ * cell path used to gate its value+entry rewrite on
+ * `scopePoliciesEquivalent(field.changeScope, mergeTxScope)`
+ * (`mergeRetargetProcessor.ts` pre-cedcb65c2), so a non-BlockDefault ref
+ * property (e.g. UiState/UserPrefs/Automation) was left un-retargeted on
+ * the cell while the value-CHILD content path retargeted unconditionally —
+ * PROJECT then rebuilt the "protected" cell from the retargeted child
+ * anyway, so the pointer moved via a path the guard didn't control. Fixed
+ * by dropping the gate: `retargetSource` now retargets ref/refList values
+ * "regardless of the field's own scope" (mergeRetargetProcessor.ts:139-153).
+ * Varying the scope here is what makes that fix's actual claim — merge
+ * retarget converges no matter what `reviewerProp`/`relatedProp` declare —
+ * a property this suite exercises, not just the fixed BlockDefault case
+ * every other op already covered. Defaults to `ChangeScope.BlockDefault`
+ * for every call site that doesn't pass an explicit scope (the
+ * deterministic canaries below), unchanged from before this addition.
+ */
+const refSchemasFor = (
+  reviewerScope: ChangeScope = ChangeScope.BlockDefault,
+  relatedScope: ChangeScope = ChangeScope.BlockDefault,
+) => {
+  const reviewerProp = refTestSeed('reviewer', 'ref', reviewerScope)
+  const relatedProp = refTestSeed('related', 'refList', relatedScope)
+  const extension = [reviewerProp, relatedProp].map(p => definitionSeedsFacet.of(p, {source: 'test'}))
+  return {reviewerProp, relatedProp, extension}
+}
 
 // ──── op + content generators ────
 
@@ -171,8 +195,18 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
 // in referencesProcessor.ts). The audit oracle is unaffected: it's a
 // post-flush fixpoint, and flush still runs once per batch (and once
 // more at end-of-case), never mid-batch.
+/** Every declared `ChangeScope` — including ones policy-DIFFERENT from
+ *  BlockDefault (UiState/UserPrefs/Automation are not undoable and are
+ *  read-only-permissive; References shares BlockDefault's policy under a
+ *  separate identity) — is a legal choice for a ref-typed field's own
+ *  scope; #435 item 6 is precisely that the merge retarget must converge
+ *  regardless of which one `reviewerProp`/`relatedProp` declare. */
+const changeScopeArb: fc.Arbitrary<ChangeScope> = fc.constantFrom(...Object.values(ChangeScope))
+
 const caseArb = fc.record({
   batches: fc.array(fc.array(opArb, {minLength: 1, maxLength: 3}), {minLength: 1, maxLength: 12}),
+  reviewerScope: changeScopeArb,
+  relatedScope: changeScopeArb,
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
@@ -189,6 +223,11 @@ interface Env {
   /** Drain reprojections + post-commit processors; advance past the
    *  orphan-cleanup delay when asked (referencesProcessor.test.ts:111). */
   flush(delayMs?: number): Promise<void>
+  /** This env's own schema instances (built by `refSchemasFor` at the scope
+   *  `buildEnv` was called with) — `applyOp` writes through THESE, not a
+   *  module-level const, so the declared scope actually varies per case. */
+  reviewerProp: ReturnType<typeof refSchemasFor>['reviewerProp']
+  relatedProp: ReturnType<typeof refSchemasFor>['relatedProp']
 }
 
 const applyOp = async (env: Env, op: OpSpec, ids: readonly string[]): Promise<string[]> => {
@@ -206,14 +245,14 @@ const applyOp = async (env: Env, op: OpSpec, ids: readonly string[]): Promise<st
     case 'setReviewer':
       await repo.mutate.setProperty({
         id: pick(op.id, ids),
-        schema: reviewerProp,
+        schema: env.reviewerProp,
         value: op.clear ? '' : pick(op.target, ids),
       })
       return []
     case 'setRelated':
       await repo.mutate.setProperty({
         id: pick(op.id, ids),
-        schema: relatedProp,
+        schema: env.relatedProp,
         value: op.targets.map(t => pick(t, ids)),
       })
       return []
@@ -373,7 +412,12 @@ afterAll(async () => {
  *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
 const guard = statefulFuzzGuard()
 
-type CaseArgs = {batches: OpSpec[][]; prngSeed: number}
+type CaseArgs = {
+  batches: OpSpec[][]
+  reviewerScope: ChangeScope
+  relatedScope: ChangeScope
+  prngSeed: number
+}
 
 /** Pull processor-minted ids (alias seats, daily-note targets) into the
  *  op-target pool so later ops can pick them — deletes/restores/merges
@@ -396,8 +440,12 @@ const collectMintedIds = async (db: TestDb['db'], ids: string[]): Promise<void> 
   }
 }
 
-const buildEnv = async (): Promise<Env> => {
+const buildEnv = async (
+  reviewerScope: ChangeScope = ChangeScope.BlockDefault,
+  relatedScope: ChangeScope = ChangeScope.BlockDefault,
+): Promise<Env> => {
   await resetTestDb(sharedDb.db)
+  const {reviewerProp, relatedProp, extension} = refSchemasFor(reviewerScope, relatedScope)
   // UUID-shaped deterministic ids — the block-ref parser only recognises
   // UUIDv4-shaped ids, so createTestRepo's default `gen-N` ids would make
   // every `((id))` frag inert (the canary below pins this can't regress).
@@ -406,7 +454,7 @@ const buildEnv = async (): Promise<Env> => {
     db: sharedDb.db,
     user: {id: 'user-1'},
     newId: () => `00000000-0000-4000-8000-${String(++idCursor).padStart(12, '0')}`,
-    extensions: [dailyNotesDataExtension, referencesDataExtension, ...refSchemaExtension],
+    extensions: [dailyNotesDataExtension, referencesDataExtension, ...extension],
   })
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
@@ -422,10 +470,10 @@ const buildEnv = async (): Promise<Env> => {
       await repo.awaitProcessors()
     }
   }
-  return {repo, flush}
+  return {repo, flush, reviewerProp, relatedProp}
 }
 
-const runCase = async ({batches}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => {
+const runCase = async ({batches, reviewerScope, relatedScope}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => {
   // Fake timers so the 4s orphan-cleanup delay is drivable in-case and
   // can never leak a live timeout into a later case (cleared below).
   // No `shouldAdvanceTime`: that option auto-advances fake time in step
@@ -437,7 +485,7 @@ const runCase = async ({batches}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => 
   vi.useFakeTimers()
   let env: Env | null = null
   try {
-    env = await buildEnv()
+    env = await buildEnv(reviewerScope, relatedScope)
     const ids: string[] = [ROOT]
     for (const batch of batches) {
       // All ops in the batch land before the batch's single flush —
@@ -473,8 +521,8 @@ const runCase = async ({batches}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => 
 describe('references pipeline sequences', () => {
   it('reach a content/property ↔ references fixpoint the full audit certifies', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, ({batches, prngSeed}) =>
-        guard.run(prngSeed, () => runCase({batches}))),
+      fc.asyncProperty(caseArb, ({batches, reviewerScope, relatedScope, prngSeed}) =>
+        guard.run(prngSeed, () => runCase({batches, reviewerScope, relatedScope}))),
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
@@ -508,7 +556,7 @@ describe('references pipeline sequences', () => {
       expect(contentRefs.map(r => r.id).sort(), 'content refs parsed').toEqual(
         [axId, ROOT, dailyId].sort())
 
-      await repo.mutate.setProperty({id: src, schema: reviewerProp, value: ROOT})
+      await repo.mutate.setProperty({id: src, schema: env.reviewerProp, value: ROOT})
       await flush()
       const propRefs = await sharedDb.db.getAll<{n: number}>(
         `SELECT COUNT(*) AS n FROM block_references WHERE source_field = 'reviewer'`)
