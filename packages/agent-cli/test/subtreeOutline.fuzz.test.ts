@@ -109,7 +109,13 @@
  * literal `%`, and fully arbitrary Unicode — per review comment
  * 3672555158's earlier ask to stop restricting ids to `[a-zA-Z0-9_-]` (a
  * shape that could never have exposed the missing-id-neutralization bug
- * in the first place).
+ * in the first place). The anti-forge property's id assertion (and every
+ * injectivity/round-trip property below it) checks the id SEMANTICALLY —
+ * parse the rendered line by the documented delimiter rule, decode, and
+ * compare to the INPUT id (`parseIdFromLine`, defined below) — never by
+ * re-predicting the encoder's output with a copy of its character class
+ * (PR #447 review comment 3677190046, P1: a copied oracle can't catch a
+ * bug or omission shared by both copies).
  */
 import {describe, expect, it} from 'vitest'
 import fc from 'fast-check'
@@ -144,20 +150,35 @@ const CONTROL_CODEPOINTS: readonly number[] = [
 
 const NEUTRALIZED_CHARS: readonly string[] = CONTROL_CODEPOINTS.map(cp => String.fromCodePoint(cp))
 
-/** Independent-but-matching oracle for the `id` field's treatment —
- *  copied verbatim from subtreeOutline.ts's `ID_ENCODE_REGEX`: the SAME
- *  single-character (non-`+`-quantified) class plus `%` (for the
- *  encoding's own injectivity) and `]` (for the surrounding outline
- *  GRAMMAR's injectivity — PR #447 review comment 3677029933), percent-
- *  encoded via `encodeURIComponent`. Used only to PREDICT the expected
- *  `[id]` token in the anti-forge property below; the dedicated
- *  injectivity/round-trip properties further down instead exercise the
- *  REAL `encodeOutlineId` through the public `renderSubtreeOutline`
- *  surface (via `encodedIdToken`), since re-deriving expectations from a
- *  copy of the same logic can't catch a bug shared by both copies. */
-// eslint-disable-next-line no-control-regex -- intentional control-char match, mirrors the source
-const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%\]]/g
-const encodeIdOracle = (id: string): string => id.replace(ID_ENCODE_REGEX, encodeURIComponent)
+/** Recovers the id from a rendered outline LINE by the DOCUMENTED PARSE
+ *  RULE (subtreeOutline.ts's `encodeOutlineId` doc comment): after
+ *  stripping the depth indent and the bullet `- [`, the id token is
+ *  everything up to the FIRST `]` — a first-match scan, NOT
+ *  bracket-matching — then percent-decoded via the REAL, imported
+ *  `decodeOutlineId`. This is the SEMANTIC ground-truth oracle every
+ *  property below relies on: it exercises the documented CONTRACT
+ *  ("render, then decode, recovers the original id") through the actual
+ *  renderer and the actual `decodeOutlineId`, rather than predicting what
+ *  the encoder SHOULD produce with a second copy of `ID_ENCODE_REGEX`'s
+ *  character class and transformation.
+ *
+ *  PR #447 review comment 3677190046 (P1): this replaces an earlier
+ *  version of this oracle that WAS exactly that copy — an
+ *  `ID_ENCODE_REGEX` literal + `encodeURIComponent` call duplicated from
+ *  the source, used only to predict the id token in the anti-forge
+ *  property below. A bug or a future omission mirrored in both copies
+ *  (the real encoder and this one) would have stayed green; AGENTS.md's
+ *  "don't add tests that just restate the code" applies directly.
+ *  `encodeOutlineId`/`ID_ENCODE_REGEX` aren't exported, so there's no
+ *  encode-side helper to import either — this implements only the
+ *  DECODE-side parse rule, which is what any real consumer parsing the
+ *  outline back into ids would also have to implement by hand. */
+const parseIdFromLine = (line: string): string => {
+  const afterIndent = line.replace(/^ */, '')
+  const start = '- ['.length
+  const end = afterIndent.indexOf(']', start)
+  return decodeOutlineId(afterIndent.slice(start, end))
+}
 
 /** A run of 1-3 characters from `NEUTRALIZED_CHARS` — the content/
  *  properties regex is `+`-quantified, so a run must collapse to exactly
@@ -225,11 +246,27 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
  *  `data.id`) reach the renderer with no shape validation, so restricting
  *  the generator to `[a-zA-Z0-9_-]` could never have exposed the
  *  missing-id-neutralization bug. The benign shape stays in the mix so
- *  "ordinary" ids are still exercised too. */
+ *  "ordinary" ids are still exercised too.
+ *
+ *  The `fc.string()` branch explicitly sets `unit: 'binary'` — PR #447
+ *  review comment 3677190053: fast-check 4.9's `fc.string()` DEFAULTS to
+ *  `unit: 'grapheme-ascii'` (printable ASCII only), so an unqualified
+ *  call here would have silently contradicted this comment's own "fully
+ *  arbitrary Unicode" claim — the branch would only ever have emitted
+ *  ASCII, and every non-ASCII codepoint actually exercised would have
+ *  come from the separately hard-coded control-character soup, never
+ *  from "arbitrary Unicode." `'binary'` was chosen (over `'grapheme'`/
+ *  `'grapheme-composite'`) because it produces ANY codepoint in the full
+ *  Unicode range (U+0000-U+10FFFF, excluding lone surrogates) regardless
+ *  of printability or grapheme-combination — the closest match to what a
+ *  truly unrestricted `data.id: string` could contain, including
+ *  combining marks, supplementary-plane characters, and Unicode
+ *  formatting characters, none of which `'grapheme-ascii'` could ever
+ *  produce. */
 const idSuffixArb: fc.Arbitrary<string> = fc.oneof(
   fc.stringMatching(/^[a-zA-Z0-9_-]{0,10}$/),
   contentSoupArb,
-  fc.string({maxLength: 20}),
+  fc.string({maxLength: 20, unit: 'binary'}),
 )
 
 /** One row spec: id, content, and properties may all carry hostile chars;
@@ -315,13 +352,17 @@ describe('renderSubtreeOutline — anti-forge invariant (subtreeOutline.ts:162-1
         // Every line's bullet is the REAL [id] token for that row, first
         // thing after the indent — content can never precede or hide it,
         // and no extra id-less line was forged from spilled content or a
-        // spilled id. `id` is percent-ENCODED (not neutralized like
-        // content), so the oracle here is `encodeIdOracle`, not
-        // `NEUTRALIZE_REGEX`.
+        // spilled id. Checked SEMANTICALLY (parse by the documented
+        // delimiter rule, then decode, then compare to the INPUT id) —
+        // not by re-predicting the encoder's output with a copy of its
+        // character class, which couldn't catch a bug shared by both
+        // copies (PR #447 review comment 3677190046). This is a
+        // SEPARATE assertion from the forbidden-character check above,
+        // not a replacement for it.
         lines.forEach((line, i) => {
           const afterIndent = line.replace(/^ */, '')
-          const expectedId = encodeIdOracle(rows[i].id)
-          expect(afterIndent.startsWith(`- [${expectedId}] `), line).toBe(true)
+          expect(afterIndent.startsWith('- ['), line).toBe(true)
+          expect(parseIdFromLine(line), line).toBe(rows[i].id)
         })
       }),
       fuzzParams(300),
@@ -429,23 +470,9 @@ describe('decodeOutlineId is the exact inverse of encodeOutlineId (PR #447 revie
 //      collides with the grammar's OWN closing delimiter regardless of
 //      whether `encodeOutlineId` is injective in isolation. These
 //      properties exercise the full `- [<id>] <content>` shape, not just
-//      the encoder. ────
-
-/** The parse rule `encodeOutlineId`'s doc comment (subtreeOutline.ts
- *  :113-165) commits every consumer to: the id token is everything
- *  between the leading `- [` and the FIRST `]` that follows — a
- *  first-match scan, NOT bracket-matching. `encodeOutlineId` itself isn't
- *  exported, so there's no parse HELPER to import; this implements the
- *  documented rule directly, as the inverse this suite pins (PR #447
- *  review comment 3677029933's guidance: "If a parse helper doesn't
- *  exist, write the parse rule in the test as the inverse you're
- *  pinning"). Any real consumer parsing the outline back into ids MUST
- *  follow this exact rule. */
-const parseIdFromLine = (line: string): string => {
-  const start = '- ['.length
-  const end = line.indexOf(']', start)
-  return decodeOutlineId(line.slice(start, end))
-}
+//      the encoder, reusing `parseIdFromLine` defined above (it already
+//      handles a leading depth indent, which is a no-op for the
+//      always-unindented single-row lines these properties render). ────
 
 describe('whole-grammar round-trip: the documented first-] parse rule recovers the exact id through the FULL line, not just the encoder (PR #447 review comment 3677029933)', () => {
   it('parseIdFromLine(renderSubtreeOutline([{id, content}])) === id for arbitrary (id, content) pairs, including ids/content containing [ and ]', () => {
