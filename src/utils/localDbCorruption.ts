@@ -107,7 +107,19 @@ const safeString = (error: unknown): string => {
 }
 
 const messageOf = (error: unknown): string => {
-  if (safeInstanceOf(error, Error)) return (error as Error).message
+  // `safeInstanceOf` only guards the `[[GetPrototypeOf]]` walk `instanceof`
+  // does — it says nothing about the `[[Get]]` trap a SUBSEQUENT direct
+  // `.message` read invokes. A proxy that forwards `getPrototypeOf` (so
+  // `instanceof Error` succeeds) but throws from `get` for `message` passes
+  // this check and then throws on the very next line — the exact totality
+  // gap PR #447 review comment 3676752542 found. Route the read through
+  // `safeGet` like every other property read on a not-necessarily-honest
+  // `error` in this module.
+  if (safeInstanceOf(error, Error)) {
+    const msg = safeGet(error, 'message')
+    if (typeof msg === 'string') return msg
+    return safeString(error)
+  }
   // A worker/Comlink-serialized error arrives as a plain object; read its string
   // `.message` so the recovery UI's detail shows the real text, not "[object Object]".
   if (typeof error === 'object' && error !== null) {
@@ -132,10 +144,15 @@ const messageChainOf = (error: unknown, depth = 5): string => {
   if (depth <= 0 || error === null || error === undefined) return ''
   if (safeInstanceOf(error, Error)) {
     const err = error as Error
+    // Same guard as `messageOf`: `instanceof` confirms the prototype chain,
+    // not that a direct `.message`/`.cause` read is safe — both go through
+    // `safeGet` (PR #447 review comment 3676752542).
+    const msg = safeGet(err, 'message')
+    const message = typeof msg === 'string' ? msg : safeString(error)
     const cause = safeGet(err, 'cause')
     return cause === undefined
-      ? err.message
-      : `${err.message}\n${messageChainOf(cause, depth - 1)}`
+      ? message
+      : `${message}\n${messageChainOf(cause, depth - 1)}`
   }
   if (typeof error === 'object') {
     const msg = safeGet(error, 'message')

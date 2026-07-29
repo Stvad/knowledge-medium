@@ -87,6 +87,19 @@
  * `hostileConversionArb`/`revokedProxyArb` below reproduce both shapes
  * (and non-callable-`toString`/`valueOf` variants) so the fixed-string
  * final fallback is exercised, not just asserted.
+ *
+ * A FOURTH hostile shape, `protoForwardingThrowingGetProxyArb`, targets a
+ * DIFFERENT gap: a `Proxy` whose `getPrototypeOf` trap forwards to a real
+ * `Error.prototype` (so `instanceof Error` / `safeInstanceOf(error, Error)`
+ * SUCCEEDS, unlike a revoked proxy where `getPrototypeOf` itself throws and
+ * `safeInstanceOf` fails closed before reaching the `Error` branch at all)
+ * but whose `get` trap throws for every property, including `message` and
+ * `cause`. That reaches the `Error` branch of `messageOf`/`messageChainOf`
+ * and used to read `(error as Error).message` directly — past a
+ * successful `instanceof` check — which still threw. PR #447 review
+ * comment 3676752542 found this; the fix routes that read through
+ * `safeGet` (localDbCorruption.ts:117-127) exactly like every other
+ * property read on a not-necessarily-honest `error` in this module.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -274,15 +287,39 @@ const hostileConversionArb: fc.Arbitrary<unknown> = fc.record({
   return obj
 })
 
+/** A proxy that forwards `getPrototypeOf` to a REAL `Error.prototype` (so
+ *  `instanceof Error` / `safeInstanceOf(error, Error)` SUCCEEDS) but
+ *  throws from its `get` trap for every property, including `message` and
+ *  `cause`. This is the shape a revoked proxy can't reach: a revoked
+ *  proxy's `getPrototypeOf` throws too, so `safeInstanceOf` fails closed
+ *  BEFORE the `Error` branch's direct property reads are ever exercised.
+ *  Here `instanceof` genuinely succeeds and then a subsequent direct
+ *  `.message`/`.cause` read (not routed through `safeGet`) would throw —
+ *  PR #447 review comment 3676752542.
+ *
+ *  Array-wrapped for the same fast-check-internals reason as
+ *  {@link revokedProxyArb} (see its doc comment) — this proxy only
+ *  intercepts `get`/`getPrototypeOf` so fast-check's `in`-based
+ *  bookkeeping wouldn't actually trip on it unwrapped, but wrapping keeps
+ *  the pattern uniform and doesn't rely on that distinction holding. */
+const protoForwardingThrowingGetProxyArb: fc.Arbitrary<[unknown]> = fc.constant(undefined).map(() => {
+  const proxy = new Proxy({}, {
+    getPrototypeOf: () => Error.prototype,
+    get: () => { throw new Error('hostile get trap') },
+  })
+  return [proxy] as [unknown]
+})
+
 /** `hostileConversionArb`'s plain objects are safe for fast-check's
  *  internals to handle directly (an `in` check on a getter-bearing object
  *  reads property existence without invoking the getter) — only the
- *  revoked Proxy needs the array-wrapper trick. Wrapped here in the SAME
- *  one-element-array shape as {@link revokedProxyArb} purely so the two
- *  can share a single `fc.oneof` with one unwrap point in the property
- *  body. */
+ *  revoked Proxy (and the proto-forwarding one) needs the array-wrapper
+ *  trick. Wrapped here in the SAME one-element-array shape as
+ *  {@link revokedProxyArb} purely so all three can share a single
+ *  `fc.oneof` with one unwrap point in the property body. */
 const hostileErrorArb: fc.Arbitrary<[unknown]> = fc.oneof(
   revokedProxyArb,
+  protoForwardingThrowingGetProxyArb,
   hostileConversionArb.map(v => [v] as [unknown]),
 )
 
@@ -315,6 +352,17 @@ describe('totality — never throws for arbitrary error shapes (localDbCorruptio
         expect(() => toLocalDbOpenError(error, 'user-1')).not.toThrow()
       }),
       fuzzParams(200),
+    )
+  }, fuzzTestTimeout())
+
+  it('never throws for a Proxy whose instanceof succeeds but whose get trap throws for message/cause (PR #447 review comment 3676752542, localDbCorruption.ts:117-127)', () => {
+    fc.assert(
+      fc.property(protoForwardingThrowingGetProxyArb, ([error]) => {
+        expect(() => isLocalDbCorruptionError(error)).not.toThrow()
+        expect(() => isRuntimeDbCorruptionError(error)).not.toThrow()
+        expect(() => toLocalDbOpenError(error, 'user-1')).not.toThrow()
+      }),
+      fuzzParams(50),
     )
   }, fuzzTestTimeout())
 
