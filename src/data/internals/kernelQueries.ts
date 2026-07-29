@@ -271,8 +271,11 @@ export const compileBlocksContentSearchQuery = (
  *  (we use backslash as the escape char). Without this a user-typed
  *  `_` or `%` acts as a wildcard — `a_b` would match `axb`, and a bare
  *  `%` filter would match every row. Bound `?` params already block SQL
- *  injection; this only fixes LIKE-pattern semantics. */
-const escapeLikePattern = (value: string): string =>
+ *  injection; this only fixes LIKE-pattern semantics. Exported (only)
+ *  so `kernelQueries.fuzz.test.ts` can differential-test it directly
+ *  against real SQLite — every production call site stays internal to
+ *  this module. */
+export const escapeLikePattern = (value: string): string =>
   value.replace(/[\\%_]/g, c => `\\${c}`)
 
 /** Content search — case-insensitive trigram FTS substring match. */
