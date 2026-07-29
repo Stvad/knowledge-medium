@@ -72,10 +72,18 @@ export const createSequenceMatcher = (
   }
 
   const next = (event: KeyboardEvent): SequenceVerdict => {
-    // Sequence expiry. tinykeys clears via a setTimeout; keying off the event
-    // timestamp is equivalent for dispatch — nothing observes the state
-    // between two events, so an unbounded gap only matters at the next press.
-    if (lastTimeStamp !== null && event.timeStamp - lastTimeStamp > timeoutMs) {
+    // Sequence expiry. tinykeys clears via a `setTimeout(fn, timeout)`
+    // (re-armed on every keydown) rather than a timestamp check; a timer
+    // scheduled for exactly `timeout` ms after the previous press fires
+    // (clearing `pending`) once at least that much wall-clock time has
+    // elapsed, i.e. at gap >= timeout, not gap > timeout — confirmed by
+    // instrumenting the differential in sequenceMatcher.fuzz.test.ts, which
+    // exercises this exact boundary. `>=` here (not `>`) is what makes this
+    // timestamp check equivalent to tinykeys' timer for dispatch purposes:
+    // a gap of EXACTLY the timeout now also ends the sequence, matching
+    // tinykeys rather than the (undocumented, and per tinykeys' own timer
+    // behavior incorrect) reading of its docs as strict "more than 1s".
+    if (lastTimeStamp !== null && event.timeStamp - lastTimeStamp >= timeoutMs) {
       state.clear()
     }
     lastTimeStamp = event.timeStamp

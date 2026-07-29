@@ -92,6 +92,19 @@ describe('createSequenceMatcher verdicts', () => {
     expect(matcher.next(pressAt({key: 'g', code: 'KeyG'}, 2000))).toEqual({completed: false, pending: true})
   })
 
+  it('abandons an in-flight sequence at exactly the timeout gap (boundary; matches tinykeys\' setTimeout(timeout) firing at gap === timeout — see sequenceMatcher.fuzz.test.ts docblock)', () => {
+    const matcher = createSequenceMatcher('g g', {timeoutMs: 1000})
+    expect(matcher.next(pressAt({key: 'g', code: 'KeyG'}, 0)).pending).toBe(true)
+    // Gap of EXACTLY 1000ms — the `>=` boundary — ends the sequence, same as
+    // a gap strictly greater than the timeout would.
+    expect(matcher.next(pressAt({key: 'g', code: 'KeyG'}, 1000))).toEqual({completed: false, pending: true})
+    // A gap of 999 (just under), by contrast, keeps the sequence alive and
+    // completes it.
+    const stillAlive = createSequenceMatcher('g g', {timeoutMs: 1000})
+    stillAlive.next(pressAt({key: 'g', code: 'KeyG'}, 0))
+    expect(stillAlive.next(pressAt({key: 'g', code: 'KeyG'}, 999)).completed).toBe(true)
+  })
+
   it('holds a sequence indefinitely with an infinite timeout (inspector mode)', () => {
     const matcher = createSequenceMatcher('g g', {timeoutMs: Infinity})
     expect(matcher.next(pressAt({key: 'g', code: 'KeyG'}, 0)).pending).toBe(true)
