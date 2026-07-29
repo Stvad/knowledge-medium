@@ -47,39 +47,105 @@ const isDepth = (value: unknown): value is number =>
 const MAX_OUTLINE_DEPTH = 100
 
 /**
- * The single neutralization pass applied to EVERY interpolated field —
- * `id`, `content`, and the rendered `properties` JSON — so the invariant
- * this module exists to guarantee holds everywhere at once: what the
- * terminal (or an LLM reading the raw text) sees is exactly one line per
- * block, id-first, and nothing an attacker/LLM-controlled field can
- * contribute is able to forge a different id or an extra bullet.
+ * The full control-character space this module treats as hostile in an
+ * interpolated field — shared by `neutralizeOutlineField` (below, applied
+ * to CONTENT and the rendered PROPERTIES) and `encodeOutlineId` (further
+ * below, applied to `id`) so "hostile" means the same set of characters on
+ * every field:
  *
- * Two character families are neutralized in one pass, both collapsed to
- * the same `⏎` marker:
+ *  - ALL of C0 (U+0000–U+001F) — every ASCII control code, not an
+ *    enumerated subset of them — EXCEPT TAB (U+0009, see the allowance
+ *    below).
+ *  - DEL (U+007F).
+ *  - ALL of C1 (U+0080–U+009F) — ESC's 8-bit-equivalent introducers,
+ *    which includes NEL (U+0085).
+ *  - The two Unicode line/paragraph separators, U+2028/U+2029, which sit
+ *    outside both ASCII ranges but are still read as a line break by many
+ *    parsers (and left un-escaped by `JSON.stringify`).
  *
- *  - Vertical motion: LF, CR, VT, FF, the C0 information separators
- *    FS/GS/RS/US (U+001C–U+001F), plus NEL/LS/PS (U+0085/U+2028/U+2029) —
- *    every character a terminal, a `splitlines`-style parser, or an LLM
- *    reading the outline may treat as a line break.
- *  - ESC (U+001B) and the rest of the C1 control range (U+0080–U+009F,
- *    which already includes NEL) — ESC introduces every ANSI/VT escape
- *    sequence in the 7-bit encoding (e.g. `ESC [ 1 E` = "cursor next
- *    line", which repositions the cursor to fake a second bullet even
- *    though `outline.split('\n')` still counts one line); the C1 codes
- *    are its 8-bit-equivalent introducers. Removing the introducer
- *    defuses the whole sequence — the remaining parameter/final bytes
- *    (e.g. `[1E`) are left behind as inert text.
+ * INVARIANT: no control character reaches the terminal (or an LLM reading
+ * the raw outline text) through ANY interpolated field. This invariant
+ * used to be a character-by-character deny-list, widened three times as
+ * each round's fix revealed the next character an attacker could still
+ * reach — first LF/CR/VT/FF, then ESC plus the C0 information separators
+ * (FS/GS/RS/US), then the rest of the C1 range — and most recently
+ * backspace (U+0008: PR #447 review comment 3676752551 — enough
+ * backspaces walk the terminal cursor back over the real `- [id] ` prefix
+ * and overwrite it). Enumerating hostile characters one at a time is a
+ * losing game: there is always one more nobody thought to name. Matching
+ * the ENTIRE control-character space by construction closes that gap —
+ * there is no character left to forget.
  *
- * `properties` goes through `JSON.stringify` first, which escapes every
- * char < U+0020 (so ESC/FS/GS/RS/US are already inert there) but NOT
- * U+0080 and up; `content` and `id` are never stringified, so all of the
- * above reach the outline literally and must be collapsed here. */
+ * TAB (U+0009) is the one deliberate exclusion from that space. Unlike
+ * every other character above, a terminal's response to TAB is to advance
+ * the cursor FORWARD to the next tab stop — it can never move the cursor
+ * backward over already-printed text (the backspace/CSI-cursor-motion
+ * hazard this module defends against), and no parser this module defends
+ * against treats it as a line break either.
+ *
+ * Expressed as two regex literals rather than one shared constant:
+ * `CONTROL_CHAR_RUN_REGEX` is `+`-quantified to collapse a RUN of these to
+ * a single marker, while `ID_ENCODE_REGEX` (further below) matches one
+ * character at a time so each can be percent-encoded individually. Both
+ * enumerate the SAME character ranges — keep them in sync if this set
+ * ever changes. */
+// eslint-disable-next-line no-control-regex -- intentional control-char match
+const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029]+/g
+
+/** The lossy neutralization pass applied to CONTENT and the rendered
+ *  `properties` JSON: both are prose, not identifiers, so collapsing every
+ *  run of hostile control characters (see {@link CONTROL_CHAR_RUN_REGEX}
+ *  and the invariant stated in its doc comment above) to a single `⏎`
+ *  marker is an acceptable — if lossy — way to guarantee one block renders
+ *  as exactly one line. `id` does NOT go through this function; see
+ *  `encodeOutlineId` below for why a lossy collapse is wrong for
+ *  identifiers (PR #447 review comment 3676752546). */
 const neutralizeOutlineField = (text: string): string =>
-  // Matching ESC, the C0 separators, and the C1 range is the whole point:
-  // neutralize control/escape chars that could forge a line break or a
-  // cursor-motion sequence, rather than treat them as innocent text.
-  // eslint-disable-next-line no-control-regex -- intentional control-char match
-  text.replace(/[\r\n\v\f\u001b-\u001f\u0080-\u009f\u2028\u2029]+/g, ' ⏎ ')
+  text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
+
+/** Single-character (non-`+`-quantified) variant of
+ *  {@link CONTROL_CHAR_RUN_REGEX}, plus `%` itself — see `encodeOutlineId`
+ *  below for why `%` must also be matched for the encoding to be
+ *  injective. */
+// eslint-disable-next-line no-control-regex -- intentional control-char match
+const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%]/g
+
+/**
+ * Percent-encode the hostile bytes in a block `id` — REVERSIBLY, unlike
+ * `neutralizeOutlineField`'s lossy `⏎` collapse. An id is not prose: it's
+ * the token a CLI user or an MCP-connected agent copies back out of the
+ * outline to address the SAME block via `get-block`/`update-block`/
+ * `delete-block`. Collapsing it lossily (the previous behavior) broke that
+ * in two distinct ways (PR #447 review comment 3676752546):
+ *
+ *  - `a\nb` rendered as `a ⏎ b`, which is not `a\nb` — copying it back out
+ *    no longer addresses the original block at all.
+ *  - Two DISTINCT ids that differ only in which hostile byte they contain
+ *    (e.g. `a\nb` vs. `a\rb`) could collapse to the SAME displayed token
+ *    (`a ⏎ b` either way), making the outline ambiguous about which block
+ *    a given line even refers to.
+ *
+ * Percent-encoding fixes both: it's a byte-for-byte reversible transform
+ * — `decodeOutlineId` is the exact inverse, i.e.
+ * `decodeOutlineId(encodeOutlineId(id)) === id` for every `id` — and it's
+ * INJECTIVE (two distinct ids can never render the same token). That
+ * injectivity is exactly why `%` itself must ALSO be encoded: without
+ * that, an id containing the literal three characters `%0A` and an id
+ * containing an actual LF byte would both render as `%0A`, collapsing two
+ * distinct ids onto one token — the same bug this function exists to fix,
+ * just moved from control characters onto `%`.
+ *
+ * Uses `encodeURIComponent` — standard percent-encoding of a value's UTF-8
+ * bytes — on each matched character rather than a bespoke hex scheme, so
+ * the encoding is the one any consumer already knows how to reverse (e.g.
+ * `a\nb` → `a%0Ab`). */
+const encodeOutlineId = (id: string): string =>
+  id.replace(ID_ENCODE_REGEX, encodeURIComponent)
+
+/** Exact inverse of {@link encodeOutlineId}. Exported so a consumer that
+ *  copies an `[id]` token out of the outline — or this module's own tests
+ *  — can recover the original id without re-deriving the encoding scheme. */
+export const decodeOutlineId = (encoded: string): string => decodeURIComponent(encoded)
 
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
@@ -95,12 +161,15 @@ const neutralizeOutlineField = (text: string): string =>
  *   `<indent>- [<id>] <content> <propsJSON>` (with `includeProperties`)
  * — the id comes first (right after the bullet) so arbitrary content can
  * never push it off the line or forge a second id-shaped token where the
- * real id is expected; content (for reading) follows. Every field —
- * `id` included, since a caller-supplied id is just as attacker-reachable
- * as content (e.g. an explicit `id` forwarded through `createBlock`) — is
- * passed through `neutralizeOutlineField` before interpolation, so a block
- * can't spill into id-less lines that masquerade as child bullets or forge
- * a fake id: line count == block count.
+ * real id is expected; content (for reading) follows. EVERY field is
+ * neutralized before interpolation, so a block can't spill into id-less
+ * lines that masquerade as child bullets or forge a fake id: line count ==
+ * block count. `id` is just as attacker-reachable as content (e.g. an
+ * explicit `id` forwarded through `createBlock`), but since it's an
+ * IDENTIFIER rather than prose it goes through `encodeOutlineId` (a
+ * reversible, injective percent-encoding) instead of `content`/
+ * `properties`'s lossy `neutralizeOutlineField` collapse — see
+ * `encodeOutlineId`'s doc comment for why that distinction matters.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {
@@ -124,7 +193,7 @@ export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptio
     const indent = '  '.repeat(Math.min(depth, MAX_OUTLINE_DEPTH))
     const content = typeof row.content === 'string' ? row.content : ''
     const oneLine = neutralizeOutlineField(content)
-    const id = neutralizeOutlineField(row.id)
+    const id = encodeOutlineId(row.id)
     const props = options.includeProperties
       && row.properties && typeof row.properties === 'object' && Object.keys(row.properties).length > 0
       ? ` ${neutralizeOutlineField(JSON.stringify(row.properties))}`

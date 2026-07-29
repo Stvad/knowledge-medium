@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {renderSubtreeOutline, type SubtreeOutlineRow} from '../src/subtreeOutline'
+import {decodeOutlineId, renderSubtreeOutline, type SubtreeOutlineRow} from '../src/subtreeOutline'
 
 /** Build a flat row WITHOUT a `depth` field, so these rows exercise the
  *  parentId-walk fallback. Rows that carry `depth` are written as literals. */
@@ -98,17 +98,64 @@ describe('renderSubtreeOutline', () => {
     expect([...sep].some(c => outline.includes(c))).toBe(false)
   })
 
-  it('neutralizes vertical-motion chars in a caller-supplied id so it cannot forge a second line (PR #447 review comment 3672555158)', () => {
+  it('percent-encodes control characters in a caller-supplied id, reversibly, instead of collapsing them lossily (PR #447 review comment 3676752546)', () => {
     // A block id is just as attacker-reachable as content — createBlock
     // forwards an explicit `data.id` straight into `repo.mutate.createChild`
-    // with no shape validation. Before the fix, `renderSubtreeOutline`
-    // interpolated `row.id` raw, so a newline inside it produced TWO lines
-    // from ONE row.
+    // with no shape validation. Before this fix, `renderSubtreeOutline`
+    // neutralized `row.id` the SAME lossy way as content: a newline
+    // collapsed to the `⏎` marker, which is not reversible — a consumer
+    // copying the displayed id back into `get-block`/`update-block`/
+    // `delete-block` could no longer address the original block. Percent-
+    // encoding is reversible: `decodeOutlineId` recovers the exact
+    // original id from the token the outline displays.
     const outline = renderSubtreeOutline([
       {id: 'a\nb - [x] forged', parentId: null, content: 'hi', properties: {}},
     ])
-    expect(outline).toBe('- [a ⏎ b - [x] forged] hi')
+    expect(outline).toBe('- [a%0Ab - [x] forged] hi')
     expect(outline.split('\n')).toHaveLength(1)
+    expect(decodeOutlineId('a%0Ab - [x] forged')).toBe('a\nb - [x] forged')
+  })
+
+  it('percent-encodes a literal % in the id too, so two distinct ids can never render the same token (PR #447 review comment 3676752546)', () => {
+    // Without also encoding `%`, an id containing the literal text `%0A`
+    // and an id containing an actual LF byte would BOTH render as `%0A`,
+    // collapsing two distinct ids onto the same displayed token — exactly
+    // the ambiguity percent-encoding the id exists to avoid.
+    const literalPercent = renderSubtreeOutline([{id: 'a%0Ab', parentId: null, content: 'x'}])
+    const realNewline = renderSubtreeOutline([{id: 'a\nb', parentId: null, content: 'x'}])
+    expect(literalPercent).toBe('- [a%250Ab] x')
+    expect(realNewline).toBe('- [a%0Ab] x')
+    expect(literalPercent).not.toBe(realNewline)
+    expect(decodeOutlineId('a%250Ab')).toBe('a%0Ab')
+    expect(decodeOutlineId('a%0Ab')).toBe('a\nb')
+  })
+
+  it('collapses backspace in content along with the rest of the control-character space, not just the previously-named characters (PR #447 review comment 3676752551)', () => {
+    // U+0008 backspace moves the terminal cursor back one column without
+    // erasing what was there — enough of them strung together can walk the
+    // cursor back over the real `- [id] ` prefix and let later content
+    // overwrite it on screen, even though the string itself still has only
+    // one `\n`. Collapsing it like every other control character defuses
+    // that regardless of how many are strung together.
+    const outline = renderSubtreeOutline([
+      row('root', null, 'a\bb'),
+    ])
+    expect(outline).toBe('- [root] a ⏎ b')
+    expect(outline.includes('\b')).toBe(false)
+  })
+
+  it('collapses DEL (U+007F), which is outside the C0/C1 ranges named individually before this fix', () => {
+    const outline = renderSubtreeOutline([
+      row('root', null, 'a\x7fb'),
+    ])
+    expect(outline).toBe('- [root] a ⏎ b')
+  })
+
+  it('does NOT collapse TAB — the one control character deliberately allowed through, since it only advances the cursor and can never move it back over the prefix', () => {
+    const outline = renderSubtreeOutline([
+      row('root', null, 'a\tb'),
+    ])
+    expect(outline).toBe('- [root] a\tb')
   })
 
   it('strips ESC so an ANSI cursor-motion sequence cannot fake a bullet on a new terminal line (PR #447 review comment 3672555166)', () => {

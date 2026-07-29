@@ -1,6 +1,7 @@
 // @vitest-environment node
 /**
- * Fuzz suite for `renderSubtreeOutline` / `neutralizeOutlineField`
+ * Fuzz suite for `renderSubtreeOutline` / `neutralizeOutlineField` /
+ * `encodeOutlineId` / `decodeOutlineId`
  * (packages/agent-cli/src/subtreeOutline.ts). See
  * `packages/agent-cli/test/readonlySql.fuzz.test.ts` for the in-package
  * house style and `docs/fuzzing.md` for tier mechanics.
@@ -12,132 +13,167 @@
  * compile first. Confirmed by running the existing (non-fuzz)
  * `subtreeOutline.test.ts` straight from source with no build step.
  *
- * ──── Why this invariant matters (grounded in subtreeOutline.ts:1-11,84-101) ────
+ * ──── Why this invariant matters (grounded in subtreeOutline.ts:1-11,150-173) ────
  *
  * This renders a flat `get-subtree` payload — which can carry arbitrary,
  * attacker/LLM-influenced block IDS, CONTENT, and PROPERTIES — as an
  * outline an agent (or a human at a terminal) reads back as ground truth
  * about block ids and structure. The anti-spoofing invariant (module doc
- * :96-101: "id comes first... every field... is passed through
- * `neutralizeOutlineField`... so a block can't spill into id-less lines
- * that masquerade as child bullets or forge a fake id") has been broken
- * FOUR times by a missed hazard class, each fixed by widening the same
- * regex in `neutralizeOutlineField` (:77-82):
- *
- *   /[\r\n\v\f\u001b-\u001f\u0080-\u009f\u2028\u2029]+/g  →  ' ⏎ '
+ * :162-172: "the id comes first... EVERY field is neutralized before
+ * interpolation, so a block can't spill into id-less lines... line count
+ * == block count") has now been defended against SIX missed hazard
+ * classes:
  *
  *  - Unicode line separators (34a586e92, U+2028/U+2029 inside
  *    JSON.stringify'd properties)
  *  - the C0 information separators (8fcfafe42, U+001C-U+001F in raw
  *    content)
- *  - the row's OWN `id` never being passed through the helper at all
- *    (PR #447 review comment 3672555158 — a caller-supplied id containing
- *    `\n` forged an extra outline line; ids are attacker-reachable via
- *    `createBlock`'s `data.id`, src/plugins/agent-runtime/commands.ts,
- *    which forwards an explicit id with no shape validation)
+ *  - the row's OWN `id` never being passed through any neutralization at
+ *    all (PR #447 review comment 3672555158 — a caller-supplied id
+ *    containing a raw LF forged an extra outline line; ids are
+ *    attacker-reachable via `createBlock`'s `data.id`,
+ *    src/plugins/agent-runtime/commands.ts, which forwards an explicit id
+ *    with no shape validation)
  *  - ESC (U+001B) and the C1 control range (U+0080-U+009F) surviving
- *    (PR #447 review comment 3672555166 — `\x1b[1E` is a CSI "cursor next
- *    line" sequence: the terminal renders a forged bullet on a new visual
- *    line even though `outline.split('\n')` still counts one line, since
- *    the CLI writes the outline straight to `process.stdout`,
- *    packages/agent-cli/src/cli.ts:727)
+ *    (PR #447 review comment 3672555166 — an ESC-introduced CSI "cursor
+ *    next line" sequence renders a forged bullet on a new visual line even
+ *    though a plain line-split still counts one line, since the CLI writes
+ *    the outline straight to `process.stdout`, packages/agent-cli/src/cli.ts:727)
+ *  - backspace (U+0008) surviving (PR #447 review comment 3676752551 —
+ *    enough backspaces walk the terminal cursor BACK over the real
+ *    `- [id] ` prefix and overwrite it on screen; this is what finally
+ *    ended the enumerate-one-character-at-a-time pattern — the source now
+ *    matches the FULL control-character space by construction
+ *    (`CONTROL_CHAR_RUN_REGEX`/`ID_ENCODE_REGEX`, subtreeOutline.ts:92-111)
+ *    rather than a growing deny-list)
+ *  - lossily collapsing a caller-supplied `id` the SAME way as content
+ *    (PR #447 review comment 3676752546 — an id containing a raw LF
+ *    rendered with the LF replaced by the marker, which is neither
+ *    reversible NOR injective: distinct ids could collapse to the same
+ *    displayed token, and a consumer could no longer recover the id to
+ *    address the block via `get-block`/`update-block`/`delete-block`.
+ *    Fixed by giving `id` its OWN treatment — `encodeOutlineId`, a
+ *    reversible, injective percent-encoding — instead of sharing
+ *    `content`/`properties`'s lossy `neutralizeOutlineField` collapse)
  *
- * `neutralizeOutlineField` isn't exported (an internal helper), so it's
- * exercised only through the public `renderSubtreeOutline` surface below —
- * matching the module's own boundary (:77 has no `export`).
+ * `neutralizeOutlineField`/`encodeOutlineId`/`ID_ENCODE_REGEX`/
+ * `CONTROL_CHAR_RUN_REGEX` aren't exported (internal helpers), so they're
+ * exercised only through the public `renderSubtreeOutline` surface below.
+ * `decodeOutlineId` — the one exported helper among them — is imported
+ * directly, since it's the documented inverse a real consumer would call.
  *
  * ──── What the code actually does (grounded in subtreeOutline.ts) ────
  *
- * Every row becomes exactly one line: `<indent>- [<id>] <content><props?>`
- * (:130) — EVERY interpolated field (`id`, `content`, and the
- * JSON.stringify'd `properties`, :124-128) is passed through the SAME
- * `neutralizeOutlineField` before being embedded, so none of them can push
- * the real id off the line, forge a second id-shaped token, or spill onto
- * a second visual line. The two paths that feed it need the full character
- * set for different reasons (:73-76): JSON.stringify already escapes
- * control chars < U+0020 (so ESC and the C0 separators are inert there)
- * but does NOT escape U+0080 and up, while raw `content`/`id` are never
- * escaped at all, so everything reaches the outline literally.
- * `renderSubtreeOutline` joins one line per (filtered-valid) row with a
- * single `\n` (:132) and never re-sorts (module doc :7-11) or otherwise
- * introduces a line.
+ * Every row becomes exactly one line:
+ * `<indent>- [<id>] <content><props?>` (:201) — `content` and the
+ * JSON.stringify'd `properties` (:194-199) both go through
+ * `neutralizeOutlineField`, which collapses every RUN of hostile control
+ * characters to a single marker (lossy — acceptable for prose). `id`
+ * (:196) instead goes through `encodeOutlineId`, which percent-encodes
+ * each hostile character (and `%` itself, so the mapping stays injective)
+ * INDIVIDUALLY rather than collapsing runs — a lossy collapse is wrong for
+ * an identifier a consumer needs to recover exactly
+ * (subtreeOutline.ts:113-141's doc comment). Both draw from the SAME
+ * control-character space (:49-91's doc comment): all of C0
+ * (U+0000-U+001F) EXCEPT TAB (U+0009, deliberately excluded — a terminal
+ * only ever advances the cursor on TAB, never moves it backward over the
+ * prefix), DEL (U+007F), all of C1 (U+0080-U+009F), and the two Unicode
+ * line/paragraph separators (U+2028/U+2029). `renderSubtreeOutline` joins
+ * one line per (filtered-valid) row with a single LF (:203) and never
+ * re-sorts (module doc :7-11) or otherwise introduces a line.
  *
  * ──── Generator design ────
  *
  * Ground truth is BY CONSTRUCTION: every generated row already satisfies
  * `isSubtreeOutlineRow` (a string `id`, :35-38), so `renderSubtreeOutline`'s
- * `.filter` (:109) never drops one — line count is checked against the
+ * `.filter` (:180) never drops one — line count is checked against the
  * INPUT row count directly, never re-derived from what the renderer
- * produces. `NEUTRALIZED_CHARS` below is copied verbatim (with the C1 range
- * sampled rather than fully enumerated — the regex matches it as one
- * contiguous span, so boundary + interior samples exercise the same code
- * path as any other codepoint in range) from the regex's character class
- * in the source (:82), read directly rather than inferred from behavior.
- * `idSuffixArb` now generates arbitrary strings — including the same
- * hostile-char soup as content, per review comment 3672555158's ask to
- * stop restricting ids to `[a-zA-Z0-9_-]` (a shape that could never have
- * exposed the missing-id-neutralization bug in the first place).
+ * produces. `CONTROL_CODEPOINTS` below is a FULL enumeration (not a
+ * sample) of the control-character space named in subtreeOutline.ts's doc
+ * comment above `CONTROL_CHAR_RUN_REGEX` (:49-91) — used both to build the
+ * hostile-char soup generators AND to assert the invariant directly
+ * (every one of those 66 codepoints, individually, must never survive
+ * into the output) rather than checking a handful of samples, per PR #447
+ * review comment 3676752551's explicit ask. `idSuffixArb` generates
+ * arbitrary strings — including the same hostile-char soup as content,
+ * literal `%`, and fully arbitrary Unicode — per review comment
+ * 3672555158's earlier ask to stop restricting ids to `[a-zA-Z0-9_-]` (a
+ * shape that could never have exposed the missing-id-neutralization bug
+ * in the first place).
  */
 import {describe, expect, it} from 'vitest'
 import fc from 'fast-check'
 import {fuzzParams, fuzzTestTimeout} from '@/test/fuzz'
-import {renderSubtreeOutline, type SubtreeOutlineRow} from '../src/subtreeOutline'
+import {decodeOutlineId, renderSubtreeOutline, type SubtreeOutlineRow} from '../src/subtreeOutline'
 
 // ──── shared building blocks ────
 
-/** A representative sample of every character class
- *  `neutralizeOutlineField`'s regex matches, copied verbatim from
- *  subtreeOutline.ts:82 — LF/CR/VT/FF, ESC, the four C0 information
- *  separators, a sample of the C1 control range (U+0080-U+009F, incl. its
- *  NEL alias and both boundaries), and the two Unicode line/paragraph
- *  separators. */
-const NEUTRALIZED_CHARS = [
-  '\r', '\n', '\v', '\f',
-  '\u001b', // ESC — introduces every ANSI/VT escape sequence
-  '\u001c', '\u001d', '\u001e', '\u001f',
-  '\u0080', '\u0085', '\u008e', '\u009b', '\u009f', // C1 range: both boundaries + NEL + a couple of interior codepoints
-  '\u2028', '\u2029',
-] as const
+const range = (startInclusive: number, endInclusive: number): number[] => {
+  const out: number[] = []
+  for (let cp = startInclusive; cp <= endInclusive; cp++) out.push(cp)
+  return out
+}
 
-/** Same set minus `\n` — the renderer's OWN intentional line-join
- *  character (:132), which is expected to survive (once per row boundary)
- *  and is checked separately via the line-count assertion below. */
-const NON_JOIN_NEUTRALIZED_CHARS = NEUTRALIZED_CHARS.filter(c => c !== '\n')
+/** A FULL enumeration (not a sample) of every codepoint the source's
+ *  control-character space covers — mirrors subtreeOutline.ts's doc
+ *  comment above `CONTROL_CHAR_RUN_REGEX` (:49-91): all of C0
+ *  (U+0000-U+001F) EXCEPT TAB (U+0009), DEL (U+007F), all of C1
+ *  (U+0080-U+009F), and the two Unicode line/paragraph separators
+ *  (U+2028/U+2029). Used both to build the hostile-char soup below AND,
+ *  in the anti-forge property, to assert directly that every one of these
+ *  66 codepoints — individually — never survives into the output, rather
+ *  than checking a handful of samples (PR #447 review comment
+ *  3676752551). */
+const CONTROL_CODEPOINTS: readonly number[] = [
+  ...range(0x00, 0x08), // C0 minus TAB (U+0009 is the deliberate exclusion)
+  ...range(0x0a, 0x1f),
+  0x7f, // DEL
+  ...range(0x80, 0x9f), // C1 (includes NEL, U+0085)
+  0x2028, 0x2029, // LS, PS
+]
 
-/** Copied verbatim from subtreeOutline.ts:82 (the SAME literal quoted in
- *  the module docblock above) — an independent ground-truth oracle for
- *  what a row's `id` becomes after `neutralizeOutlineField`, applied here
- *  only to PREDICT the expected line prefix, never to check what the
- *  renderer itself accepts. */
+const NEUTRALIZED_CHARS: readonly string[] = CONTROL_CODEPOINTS.map(cp => String.fromCodePoint(cp))
+
+/** Independent-but-matching oracle for the `id` field's treatment —
+ *  copied verbatim from subtreeOutline.ts:111/142-143: the SAME
+ *  single-character (non-`+`-quantified) class plus `%`, percent-encoded
+ *  via `encodeURIComponent`. Used only to PREDICT the expected `[id]`
+ *  token in the anti-forge property below; the dedicated
+ *  injectivity/round-trip properties further down instead exercise the
+ *  REAL `encodeOutlineId` through the public `renderSubtreeOutline`
+ *  surface (via `encodedIdToken`), since re-deriving expectations from a
+ *  copy of the same logic can't catch a bug shared by both copies. */
 // eslint-disable-next-line no-control-regex -- intentional control-char match, mirrors the source
-const NEUTRALIZE_REGEX = /[\r\n\v\f\u001b-\u001f\u0080-\u009f\u2028\u2029]+/g
+const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%]/g
+const encodeIdOracle = (id: string): string => id.replace(ID_ENCODE_REGEX, encodeURIComponent)
 
-/** A run of 1-3 characters from `NEUTRALIZED_CHARS` — the regex is
- *  `+`-quantified, so a run must collapse to exactly ONE marker, not one
- *  per character. */
+/** A run of 1-3 characters from `NEUTRALIZED_CHARS` — the content/
+ *  properties regex is `+`-quantified, so a run must collapse to exactly
+ *  ONE marker, not one per character. */
 const neutralizedCharRunArb: fc.Arbitrary<string> =
   fc.array(fc.constantFrom(...NEUTRALIZED_CHARS), {minLength: 1, maxLength: 3}).map(a => a.join(''))
 
 /** A realistic ANSI/VT escape sequence: ESC introducing a CSI command
  *  (`ESC [ <params> <final-byte>`) — the exact shape PR #447 review
- *  comment 3672555166 flagged, `\x1b[1E` ("cursor next line"). Removing
- *  the ESC introducer (which `neutralizeOutlineField` does) is what
- *  defuses it: a terminal never recognizes bare params/final-byte text as
- *  a control sequence without it, so `[1E` survives as inert text while
- *  ESC itself must not. */
+ *  comment 3672555166 flagged, an ESC-`[1E` "cursor next line" sequence.
+ *  Removing the ESC introducer (which `neutralizeOutlineField` does) is
+ *  what defuses it: a terminal never recognizes bare params/final-byte
+ *  text as a control sequence without it, so `[1E` survives as inert text
+ *  while ESC itself must not. */
 const ansiEscapeSequenceArb: fc.Arbitrary<string> = fc.tuple(
   fc.integer({min: 0, max: 9}),
   fc.constantFrom('A', 'B', 'C', 'D', 'E', 'F', 'J', 'K', 'm'),
-).map(([n, final]) => `\u001b[${n}${final}`)
+).map(([n, final]) => `${String.fromCodePoint(0x1b)}[${n}${final}`)
 
 const benignTokenArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 ]{0,6}$/)
 
 /** Text soup: benign tokens interleaved with neutralized-char runs and
  *  ANSI escape sequences at random positions, incl. runs back-to-back and
  *  at the very start/end. Shared by `content`, `properties` string
- *  leaves, AND (below) `id` — all three go through the same
- *  `neutralizeOutlineField` call in the source, so all three need the same
- *  hostile-shape coverage. */
+ *  leaves, AND (below) `id` — all of the SAME hostile characters are
+ *  relevant to every field, even though `id` is now treated differently
+ *  (percent-encoded rather than collapsed) once it reaches the
+ *  renderer. */
 const contentSoupArb: fc.Arbitrary<string> = fc.array(
   fc.oneof(benignTokenArb, neutralizedCharRunArb, ansiEscapeSequenceArb),
   {maxLength: 10},
@@ -164,12 +200,13 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
 )
 
 /** Arbitrary id suffix — including the SAME hostile-char soup as content
- *  (vertical-motion chars, ESC/C1, ANSI sequences) and fully arbitrary
- *  Unicode, per PR #447 review comment 3672555158: caller-supplied ids
- *  (`createBlock`'s `data.id`) reach the renderer with no shape
- *  validation, so restricting the generator to `[a-zA-Z0-9_-]` could never
- *  have exposed the missing-id-neutralization bug. The benign shape stays
- *  in the mix so "ordinary" ids are still exercised too. */
+ *  (vertical-motion chars, ESC/C1, ANSI sequences, backspace, DEL) and
+ *  fully arbitrary Unicode (which can include literal `%`), per PR #447
+ *  review comment 3672555158: caller-supplied ids (`createBlock`'s
+ *  `data.id`) reach the renderer with no shape validation, so restricting
+ *  the generator to `[a-zA-Z0-9_-]` could never have exposed the
+ *  missing-id-neutralization bug. The benign shape stays in the mix so
+ *  "ordinary" ids are still exercised too. */
 const idSuffixArb: fc.Arbitrary<string> = fc.oneof(
   fc.stringMatching(/^[a-zA-Z0-9_-]{0,10}$/),
   contentSoupArb,
@@ -178,7 +215,7 @@ const idSuffixArb: fc.Arbitrary<string> = fc.oneof(
 
 /** One row spec: id, content, and properties may all carry hostile chars;
  *  `hasDepth` toggles between the authoritative-`depth` path and the
- *  `parentId`-walk fallback (subtreeOutline.ts:117-120) — the anti-forge
+ *  `parentId`-walk fallback (subtreeOutline.ts:188-191) — the anti-forge
  *  invariant must hold on BOTH. */
 interface RowSpec {
   idSuffix: string
@@ -212,54 +249,59 @@ const rowsArb: fc.Arbitrary<SubtreeOutlineRow[]> = fc.array(rowSpecArb, {minLeng
 )
 
 // ──── anti-forge invariant: one line per block, id leads every line, no
-//      neutralized character (vertical-motion OR ESC/C1) survives
+//      control character (from the FULL space, not a sample) survives
 //      anywhere in the output ────
 
-describe('renderSubtreeOutline — anti-forge invariant (subtreeOutline.ts:93-101,130)', () => {
-  it('emits exactly one line per row, each starting with that row\'s own (neutralized) [id] token, and no neutralized character anywhere in the output', () => {
+describe('renderSubtreeOutline — anti-forge invariant (subtreeOutline.ts:162-172,201)', () => {
+  it('emits exactly one line per row, each starting with that row\'s own (encoded) [id] token, and no control character anywhere in the output', () => {
     fc.assert(
       fc.property(rowsArb, fc.boolean(), (rows, includeProperties) => {
         const outline = renderSubtreeOutline(rows, {includeProperties})
 
         // Exactly one line per (already-valid) input row: split on the
-        // renderer's OWN join character (:132) — `\n` is expected exactly
+        // renderer's OWN join character (:203) — LF is expected exactly
         // `rows.length - 1` times as the intentional separator, so this
-        // count already proves nothing else contributed an extra `\n`.
+        // count already proves nothing else contributed an extra line
+        // break.
         const lines = outline.split('\n')
         expect(lines.length, outline).toBe(rows.length)
 
-        // No OTHER neutralized character survives inside any single line
-        // — stronger than the `\n`-split above: a consumer that breaks
-        // lines/moves the cursor on \r, U+2028, U+2029, or an ANSI ESC
-        // sequence (none of which JS's `\n`-split reacts to) must never
-        // see one either, so a leaked separator or escape byte can't forge
-        // a visual line break some OTHER consumer (a terminal, an LLM)
-        // honors.
+        // The invariant, asserted DIRECTLY against the FULL space rather
+        // than via samples (PR #447 review comment 3676752551): every one
+        // of the 66 codepoints in `CONTROL_CODEPOINTS` — C0 minus TAB,
+        // DEL, C1, LS/PS — must be absent from EVERY line, individually,
+        // not just checked as a handful of boundary/interior samples.
+        // This is what would have caught backspace (U+0008) before a
+        // reviewer had to name it. Checked PER LINE (not against the
+        // joined `outline`) because LF (U+000A) is itself one of these 66
+        // codepoints — it's the renderer's OWN intentional join character
+        // BETWEEN lines (already pinned by the line-count assertion
+        // above), so it legitimately appears in the joined string; it
+        // must never appear WITHIN a single line, which is what this
+        // checks. A leaked separator or escape byte inside a line could
+        // otherwise forge a visual line break or cursor motion some OTHER
+        // consumer (a terminal, an LLM) honors, even though a plain LF
+        // split still counts one line.
         for (const line of lines) {
-          for (const ch of NON_JOIN_NEUTRALIZED_CHARS) {
-            expect(line.includes(ch), `line unexpectedly contains ${JSON.stringify(ch)}: ${JSON.stringify(line)}`).toBe(false)
+          for (const cp of CONTROL_CODEPOINTS) {
+            const ch = String.fromCodePoint(cp)
+            expect(line.includes(ch), `line unexpectedly contains U+${cp.toString(16).padStart(4, '0')}: ${JSON.stringify(line)}`).toBe(false)
           }
         }
 
-        // Belt-and-suspenders on the ESC/C1 claim specifically (PR #447
-        // review comment 3672555166): check the FULL U+0080-U+009F span,
-        // not just the sampled codepoints above — the source regex matches
-        // it as one contiguous range, so every codepoint in it must be
-        // gone, and ESC (U+001B, a C0 code just outside that range) must
-        // be gone too.
-        expect(outline.includes('\u001b'), `outline unexpectedly contains ESC: ${JSON.stringify(outline)}`).toBe(false)
-        for (let cp = 0x80; cp <= 0x9f; cp++) {
-          const ch = String.fromCharCode(cp)
-          expect(outline.includes(ch), `outline unexpectedly contains U+${cp.toString(16).padStart(4, '0')}: ${JSON.stringify(outline)}`).toBe(false)
-        }
+        // TAB (U+0009) is the one deliberate exclusion from that space —
+        // confirm it's NOT swept up by an overly-broad range.
+        expect(CONTROL_CODEPOINTS.includes(0x09)).toBe(false)
 
-        // Every line's bullet is the REAL (neutralized) id for that row,
-        // first thing after the indent — content can never precede or
-        // hide it, and no extra id-less line was forged from spilled
-        // content or a spilled id.
+        // Every line's bullet is the REAL [id] token for that row, first
+        // thing after the indent — content can never precede or hide it,
+        // and no extra id-less line was forged from spilled content or a
+        // spilled id. `id` is percent-ENCODED (not neutralized like
+        // content), so the oracle here is `encodeIdOracle`, not
+        // `NEUTRALIZE_REGEX`.
         lines.forEach((line, i) => {
           const afterIndent = line.replace(/^ */, '')
-          const expectedId = rows[i].id.replace(NEUTRALIZE_REGEX, ' ⏎ ')
+          const expectedId = encodeIdOracle(rows[i].id)
           expect(afterIndent.startsWith(`- [${expectedId}] `), line).toBe(true)
         })
       }),
@@ -272,7 +314,7 @@ describe('renderSubtreeOutline — anti-forge invariant (subtreeOutline.ts:93-10
 //      no-op (proven through the public renderSubtreeOutline surface,
 //      since neutralizeOutlineField itself isn't exported) ────
 
-describe('neutralizeOutlineField is idempotent (subtreeOutline.ts:77-82)', () => {
+describe('neutralizeOutlineField is idempotent (subtreeOutline.ts:95-104)', () => {
   it('feeding an already-rendered line\'s content back in as new content changes it no further', () => {
     fc.assert(
       fc.property(contentSoupArb, (content) => {
@@ -288,6 +330,98 @@ describe('neutralizeOutlineField is idempotent (subtreeOutline.ts:77-82)', () =>
         expect(secondContent).toBe(firstContent)
       }),
       fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+})
+
+// ──── id encoding: injective + reversible (PR #447 review comment 3676752546) ────
+
+/** Render a single depth-0 row with EMPTY content and no properties, then
+ *  extract the `[id]` token by FIXED-offset slicing rather than searching
+ *  for the `] ` delimiter — the id itself may legitimately render to text
+ *  containing literal `[`, `]`, or spaces (none of those are in the
+ *  control-character space, so `encodeOutlineId` leaves them untouched),
+ *  which would make a search-based extraction ambiguous. With content
+ *  fixed to `''`, the line's exact shape is `- [<id>] ` (a 3-char prefix
+ *  and a 2-char suffix around the encoded id, both fixed lengths), so
+ *  slicing by those fixed lengths is unambiguous regardless of what the
+ *  id itself contains. This exercises the REAL `encodeOutlineId` through
+ *  the public surface (`encodeOutlineId` itself isn't exported). */
+const encodedIdToken = (id: string): string => {
+  const outline = renderSubtreeOutline([{id, parentId: null, content: ''}])
+  return outline.slice('- ['.length, outline.length - '] '.length)
+}
+
+describe('encodeOutlineId is injective — distinct ids never render the same [id] token (PR #447 review comment 3676752546)', () => {
+  it('holds for arbitrary distinct ids drawn from the same hostile-char domain as content', () => {
+    fc.assert(
+      fc.property(
+        fc.tuple(idSuffixArb, idSuffixArb).filter(([a, b]) => a !== b),
+        ([idA, idB]) => {
+          expect(encodedIdToken(idA)).not.toBe(encodedIdToken(idB))
+        },
+      ),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  /** The adversarial near-collision case this property exists to rule
+   *  out: one id contains a REAL hostile byte (or a real `%`), the other
+   *  contains the LITERAL percent-escape text that byte encodes to (e.g.
+   *  an id with an actual LF vs. an id with the literal 3 characters
+   *  `%0A`). These would render to the SAME token if `%` itself weren't
+   *  ALSO percent-encoded — precisely PR #447 review comment 3676752546's
+   *  "Percent-encode % itself too, or the encoding isn't injective." */
+  it('does not collapse a real hostile byte with the LITERAL percent-escape text for that same byte', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom(...CONTROL_CODEPOINTS, 0x25), // 0x25 = '%' itself
+        fc.stringMatching(/^[a-zA-Z0-9]{0,5}$/),
+        fc.stringMatching(/^[a-zA-Z0-9]{0,5}$/),
+        (cp, pre, post) => {
+          const hex = cp.toString(16).toUpperCase().padStart(2, '0')
+          const realByteId = `${pre}${String.fromCodePoint(cp)}${post}`
+          const literalEscapeId = `${pre}%${hex}${post}`
+          // Sanity: the construction actually produced two DISTINCT ids —
+          // otherwise this pair proves nothing about injectivity.
+          expect(realByteId).not.toBe(literalEscapeId)
+          expect(encodedIdToken(realByteId)).not.toBe(encodedIdToken(literalEscapeId))
+        },
+      ),
+      fuzzParams(200),
+    )
+  }, fuzzTestTimeout())
+})
+
+describe('decodeOutlineId is the exact inverse of encodeOutlineId (PR #447 review comment 3676752546)', () => {
+  it('decodeOutlineId(encodeOutlineId(id)) === id for arbitrary ids, including hostile-char and %-bearing ones', () => {
+    fc.assert(
+      fc.property(idSuffixArb, (id) => {
+        expect(decodeOutlineId(encodedIdToken(id))).toBe(id)
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+})
+
+// ──── TAB is the one deliberate allowance — verify it generically, not
+//      just via the pinned unit-test example ────
+
+describe('TAB survives content untouched — the one deliberate exclusion from the control-character space (subtreeOutline.ts:79-84)', () => {
+  it('preserves every TAB in content exactly, unlike every other control character', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom('a', 'b', ' '), {maxLength: 5}),
+        fc.integer({min: 0, max: 5}),
+        (tokens, tabCount) => {
+          const content = tokens.join('') + String.fromCodePoint(0x09).repeat(tabCount)
+          const outline = renderSubtreeOutline([{id: 'x', parentId: null, content, depth: 0}])
+          const renderedContent = outline.slice('- [x] '.length)
+          const renderedTabCount = [...renderedContent].filter(c => c === String.fromCodePoint(0x09)).length
+          expect(renderedTabCount).toBe(tabCount)
+        },
+      ),
+      fuzzParams(100),
     )
   }, fuzzTestTimeout())
 })
