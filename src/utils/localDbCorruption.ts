@@ -47,6 +47,23 @@ const RUNTIME_CORRUPTION_SUBSTRINGS = [
   'disk image is malformed',
 ] as const
 
+// `String(x)` throws "Cannot convert object to primitive value" for a
+// null-prototype object (`Object.create(null)`, or anything else with no
+// reachable `toString`/`valueOf`/`Symbol.toPrimitive`) — there's no
+// guarantee what crosses the DB-open / worker boundary, and this module's
+// whole job is to classify that value without ever throwing itself.
+// `Object.prototype.toString.call` is invoked explicitly rather than
+// resolved through the value's own prototype chain, so it can't fail the
+// same way; it matches what `String(x)` would have returned for any
+// ordinary object anyway ("[object Object]").
+const safeString = (error: unknown): string => {
+  try {
+    return String(error)
+  } catch {
+    return Object.prototype.toString.call(error)
+  }
+}
+
 const messageOf = (error: unknown): string => {
   if (error instanceof Error) return error.message
   // A worker/Comlink-serialized error arrives as a plain object; read its string
@@ -55,7 +72,7 @@ const messageOf = (error: unknown): string => {
     const msg = (error as { message?: unknown }).message
     if (typeof msg === 'string') return msg
   }
-  return String(error)
+  return safeString(error)
 }
 
 // The SQLite corruption text doesn't always reach us on the top-level `.message`
@@ -85,7 +102,7 @@ const messageChainOf = (error: unknown, depth = 5): string => {
         : `${obj.message}\n${messageChainOf(obj.cause, depth - 1)}`
     }
   }
-  return String(error)
+  return safeString(error)
 }
 
 const includesAnySubstring = (error: unknown, substrings: readonly string[]): boolean => {
