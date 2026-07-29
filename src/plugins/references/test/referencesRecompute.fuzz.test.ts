@@ -527,6 +527,64 @@ describe('references pipeline sequences', () => {
     )
   }, fuzzTestTimeout())
 
+  // Non-vacuity canary for the `reviewerScope`/`relatedScope` axis
+  // (#435 item 6, cedcb65c2; Codex review, comment 3672657045). At
+  // fuzzParams(8) with the fixed smoke seed, none of the 8 generated
+  // cases happens to bind a non-BlockDefault reviewer/related value on
+  // a block a later valid `merge` retargets — the sequences containing
+  // `merge` either lack a prior scoped property write or target only
+  // the root before non-root ids exist. So the scope-independence
+  // property this axis exists to cover was only exercised
+  // probabilistically, by the deep tier — the smoke-tier property was
+  // green whether or not scope-independent retargeting actually held.
+  // Deterministic (not the fuzz property) so a UiState/Automation-scoped
+  // property→merge sequence runs every tier. Two DIFFERENT non-default
+  // scopes (not just one) pins the fix's actual claim: convergence
+  // doesn't depend on WHICH non-BlockDefault scope a ref/refList field
+  // declares.
+  it('merge retargets non-BlockDefault-scoped ref/refList properties, not just BlockDefault ones', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const env = await buildEnv(ChangeScope.UiState, ChangeScope.Automation)
+      const {repo, flush} = env
+      const source = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'source',
+      })
+      const holder = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'holder',
+      })
+      const into = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'into',
+      })
+      await flush()
+
+      await repo.mutate.setProperty({id: holder, schema: env.reviewerProp, value: source})
+      await repo.mutate.setProperty({id: holder, schema: env.relatedProp, value: [source]})
+      await flush()
+
+      await repo.mutate.merge({intoId: into, fromId: source})
+      await flush()
+
+      const holderData = await repo.load(holder)
+      expect(holderData?.properties.reviewer, 'UiState-scoped reviewer retargeted to into').toBe(into)
+      expect(holderData?.properties.related, 'Automation-scoped related retargeted to into').toEqual([into])
+      expect(
+        holderData?.references.some(r => r.id === source),
+        `no entry may keep pointing at the tombstoned merge source (refs: ${JSON.stringify(holderData?.references)})`,
+      ).toBe(false)
+
+      // This suite's actual oracle — the full audit + stable-binding
+      // sweep — must also certify the settled state, not just the raw
+      // properties bag.
+      await auditOrFail(sharedDb.db, repo)
+      await sweepAliasBindings(sharedDb.db, WS)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   // Non-vacuity canary: the audit oracle only bites if the op set
   // actually drives every pipeline stage. Pins: content-ref parsing +
   // alias/daily target creation, property-ref projection, rename
