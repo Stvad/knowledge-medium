@@ -522,14 +522,25 @@ export const coreContentSearchSource: SearchSourceContribution = {
 }
 
 /** Of every candidate contributed for the SAME block id, pick which one's
- *  `block` payload should survive the merge. Ranking always uses the max
- *  score across duplicates (see `searchBlocksAcrossSources`), but the
- *  payload itself can come from a stale index copy — e.g. a
- *  semantic-search source's own snapshot of the block lagging live data —
- *  so prefer whichever candidate's `block.userUpdatedAt` (the user-facing
- *  "last edited" timestamp, `src/data/api/blockData.ts`) is newest,
- *  falling back to the higher-scored candidate when no candidate in the
- *  group has a numeric timestamp.
+ *  `block` payload should survive the merge — implements the contract
+ *  documented on `SearchSourceContribution` (`src/data/facets.ts`): "the
+ *  surviving `block` payload is whichever duplicate's `userUpdatedAt` is
+ *  newest (falling back to the higher-scored one on a tie/missing
+ *  timestamp), so a stale index copy can't shadow live data just because
+ *  it scored higher." Generalized to a whole group (not just a pair):
+ *  timestamp comparison only decides the group when EVERY candidate in
+ *  it has one — a single timestamp-less candidate (a stale/legacy index
+ *  copy that never recorded `userUpdatedAt`) hands the WHOLE group's
+ *  decision to score, per the contract's "missing timestamp" fallback,
+ *  not just that one candidate's own comparisons. Concretely:
+ *   - every candidate has a numeric `userUpdatedAt` → newest wins; a
+ *     timestamp tie falls back to higher score; a full tie keeps the
+ *     earliest-encountered candidate (deterministic, arbitrary — group
+ *     order is registration-then-within-source, see
+ *     `searchBlocksAcrossSources`).
+ *   - any candidate lacks a numeric `userUpdatedAt` → highest score wins
+ *     across the WHOLE group (timestamps are ignored entirely, including
+ *     the timed candidates' own), same earliest-encountered tie-break.
  *
  *  Order-independent total order over the WHOLE group at once — not a
  *  pairwise running fold over an already-partially-merged accumulator.
@@ -539,23 +550,27 @@ export const coreContentSearchSource: SearchSourceContribution = {
  *  against that survivor is comparing a real candidate's timestamp
  *  against a score that may belong to a *different*, already-eliminated
  *  candidate — decoupling the payload-selection criteria from the
- *  payload being carried. For a 3+-way duplicate group with mixed/missing
- *  timestamps that made payload selection order-dependent (issue #450):
- *  e.g. candidates A(t=10, score=5), B(t=20, score=0), C(no timestamp,
- *  score=3) folded in order (C, B, A) picked A's stale payload over B's
- *  genuinely-newest one. Operating on the raw group up front avoids that:
- *  only real candidates' own (timestamp, score) pairs are ever compared. */
+ *  payload being carried, AND silently narrowing "missing timestamp" from
+ *  a whole-group fallback to a pairwise one. For a 3+-way duplicate group
+ *  with mixed/missing timestamps that made payload selection
+ *  order-dependent (issue #450): e.g. candidates A(t=10, score=5),
+ *  B(t=20, score=0), C(no timestamp, score=3) — every order must resolve
+ *  to A (highest score; C's missing timestamp sends the whole group to
+ *  score), but some pairwise fold orders picked B instead. Operating on
+ *  the raw group up front avoids that: only real candidates' own
+ *  (timestamp, score) pairs are ever compared, and "any candidate missing
+ *  a timestamp" is checked across the group before any comparison runs. */
 const freshestCandidatePayload = (
   candidates: readonly SearchSourceCandidate[],
 ): SearchSourceCandidate => {
-  const timed = candidates.filter(c => typeof c.block.userUpdatedAt === 'number')
-  const pool = timed.length > 0 ? timed : candidates
-  return pool.reduce((best, candidate) => {
-    if (timed.length > 0) {
-      const bestTime = best.block.userUpdatedAt as number
-      const time = candidate.block.userUpdatedAt as number
-      if (time !== bestTime) return time > bestTime ? candidate : best
-    }
+  const allTimed = candidates.every(c => typeof c.block.userUpdatedAt === 'number')
+  if (!allTimed) {
+    return candidates.reduce((best, candidate) => candidate.score > best.score ? candidate : best)
+  }
+  return candidates.reduce((best, candidate) => {
+    const bestTime = best.block.userUpdatedAt as number
+    const time = candidate.block.userUpdatedAt as number
+    if (time !== bestTime) return time > bestTime ? candidate : best
     return candidate.score > best.score ? candidate : best
   })
 }
@@ -583,12 +598,16 @@ const freshestCandidatePayload = (
  *  source's own ordering exactly. Same block id contributed by two or
  *  more sources survives once, ranked at the MAX score across the whole
  *  duplicate group; its `block` payload is picked by
- *  `freshestCandidatePayload`, evaluated over the WHOLE group at once
+ *  `freshestCandidatePayload` per the contract on `SearchSourceContribution`
+ *  (`src/data/facets.ts`), evaluated over the WHOLE group at once
  *  (order-independent — see that function's docblock and issue #450 for
  *  why a pairwise fold over 3+ duplicates isn't): newest `userUpdatedAt`
- *  wins, falling back to the higher-scored candidate only when no
- *  candidate in the group has a numeric timestamp — so a stale index
- *  copy can't shadow live data just because it scored higher.
+ *  wins when EVERY candidate in the group has one, falling back to the
+ *  highest-scored candidate across the WHOLE group the moment ANY
+ *  candidate is missing one — so a stale index copy can't shadow live
+ *  data just because it scored higher, but also can't SUPPRESS a
+ *  legitimately high-scoring stale-timestamped candidate just because
+ *  some other duplicate happens to carry a timestamp.
  *
  *  A `repo` with no `FacetRuntime` wired (a hand-built test double, or a
  *  `Repo` read before its first `setFacetRuntime`) still gets core
