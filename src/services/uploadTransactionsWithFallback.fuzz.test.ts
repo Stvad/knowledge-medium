@@ -35,7 +35,12 @@
  * without an explicit transaction", CrudTransaction.transactionId?), and
  * optionally has its first `recordRejection` attempt fail once (models the
  * historical bug 267558e29 fixed: a rejection-write failure must not
- * falsely drain the tx).
+ * falsely drain the tx), and optionally has its `complete()` call fail once
+ * right after its FIRST successful `recordRejection` (the exact window
+ * powersync.ts:485-490 documents: the write succeeds, then the separate
+ * `complete()` step fails, so the tx stays pending and legitimately
+ * re-quarantines — calling the idempotent writer again — on the next pass;
+ * PR #448 review comment 3676858232).
  *
  * `runSimulation` drives the REAL `uploadTransactionsWithFallback` across
  * up to `AMBIGUOUS_RETRY_BUDGET + 4` **passes** (mirroring how
@@ -97,6 +102,15 @@
  * rejection record, and a retry (next pass) re-attempts cleanly rather than
  * compounding. That's the property tested below, not literal duplicate-row
  * avoidance.
+ *
+ * `complete()` itself can ALSO fail, right after a successful
+ * `recordRejection` (powersync.ts:485-490's own documented rationale for
+ * making the write idempotent in the first place) — a tx's
+ * `completionFailsOnceAfterRejection` flag models exactly that. The
+ * contract this exercises is the inverse of the write-failure one: repeated
+ * `recordRejection` SUCCESSES are legitimate (bounded by `1 +
+ * completionFailures`, PR #448 review comment 3676858232), while the tx
+ * still only ever drains in exactly one pass.
  *
  * ## Explicit scope exclusion
  *
@@ -377,6 +391,15 @@ interface TxModel {
   readonly transactionId: number | undefined
   readonly script: Script
   readonly rejectionFailsOnce: boolean
+  // Models the exact window powersync.ts:485-490 documents: recordRejection
+  // succeeds (a durable, idempotent write), then `transaction.complete()` —
+  // a SEPARATE step, not wrapped in its own try/catch (powersync.ts:
+  // 700-702) — itself throws. The tx is never marked drained, stays
+  // `pending`, and the next pass legitimately calls the idempotent
+  // rejection writer again (PR #448 review comment 3676858232). Fires at
+  // most once per tx, and only on the FIRST successful recordRejection
+  // call for it.
+  readonly completionFailsOnceAfterRejection: boolean
 }
 interface Scenario {
   readonly transactions: readonly TxModel[]
@@ -395,6 +418,7 @@ const txSpecArb = fc.record({
   hasTransactionId: fc.oneof({arbitrary: fc.constant(true), weight: 5}, {arbitrary: fc.constant(false), weight: 1}),
   script: scriptArb,
   rejectionFailsOnce: fc.oneof({arbitrary: fc.constant(false), weight: 4}, {arbitrary: fc.constant(true), weight: 1}),
+  completionFailsOnceAfterRejection: fc.oneof({arbitrary: fc.constant(false), weight: 4}, {arbitrary: fc.constant(true), weight: 1}),
 })
 
 // Mostly false so the batch behaves as a plain function of the per-tx steps
@@ -416,6 +440,7 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.integer({min: 1, max: 5}).chain(n
       transactionId: spec.hasTransactionId ? index + 1 : undefined,
       script: spec.script,
       rejectionFailsOnce: spec.rejectionFailsOnce,
+      completionFailsOnceAfterRejection: spec.completionFailsOnceAfterRejection,
     })),
     batchExogenousFailures,
   })),
@@ -433,6 +458,10 @@ interface Prediction {
   readonly completedBlockIds: readonly string[]
   readonly rejectedBlockIds: readonly string[]
   readonly rejectionFailureBlockId: string | null
+  // The tx whose `complete()` call failed AFTER its recordRejection
+  // succeeded this pass (PR #448 review comment 3676858232) — a second,
+  // independent way the pass can legitimately stop besides a write failure.
+  readonly completionFailureBlockId: string | null
   readonly passThrows: boolean
   readonly stoppingBlockId: string | null
   readonly finalAmbiguousAttempts: ReadonlyMap<number, number>
@@ -448,10 +477,12 @@ const predictPass = (
   // effect when every pending tx's current step is already 'success' (if
   // one isn't, the batch fails anyway — this flag can't make it succeed).
   forceExogenousBatchFailure: boolean,
+  completionFailRemaining: ReadonlyMap<string, number>,
 ): Prediction => {
   const localAttempt = new Map(attemptIndex)
   const localAmbiguous = new Map(ambiguousAttempts)
   const localRejectFail = new Map(rejectionFailRemaining)
+  const localCompletionFail = new Map(completionFailRemaining)
   const peek = (tx: TxModel) => stepAt(tx.script, localAttempt.get(tx.blockId) ?? 0)
 
   // Batch path (powersync.ts:637-666): one applyOperations call over every
@@ -476,6 +507,7 @@ const predictPass = (
       completedBlockIds: pending.map(tx => tx.blockId),
       rejectedBlockIds: [],
       rejectionFailureBlockId: null,
+      completionFailureBlockId: null,
       passThrows: false,
       stoppingBlockId: null,
       finalAmbiguousAttempts: localAmbiguous,
@@ -483,13 +515,15 @@ const predictPass = (
   }
 
   // Per-tx fallback (powersync.ts:672-704): sequential, stops only on a
-  // re-thrown error (transient, or ambiguous still inside its budget, or a
-  // simulated recordRejection write failure). permanent and
+  // re-thrown error (transient, or ambiguous still inside its budget, a
+  // simulated recordRejection write failure, or a simulated complete()
+  // failure right after a successful rejection write). permanent and
   // budget-exhausted-ambiguous quarantine and CONTINUE (property c).
   const perTxTrace: Array<{blockId: string; classification: 'success' | UploadErrorClass}> = []
   const completedBlockIds: string[] = []
   const rejectedBlockIds: string[] = []
   let rejectionFailureBlockId: string | null = null
+  let completionFailureBlockId: string | null = null
   let stoppingBlockId: string | null = null
 
   for (const tx of pending) {
@@ -538,6 +572,18 @@ const predictPass = (
       break
     }
     rejectedBlockIds.push(tx.blockId)
+    // recordRejection succeeded — complete() runs next, NOT wrapped in its
+    // own try/catch (powersync.ts:700-702), so if IT throws the whole pass
+    // aborts right here too: the tx stays pending, and the rejection
+    // writer's idempotency (267558e29) is exactly what makes a legitimate
+    // re-quarantine on the next pass safe (comment 3676858232).
+    const completionFailRemainingForTx = localCompletionFail.get(tx.blockId) ?? 0
+    if (completionFailRemainingForTx > 0) {
+      localCompletionFail.set(tx.blockId, completionFailRemainingForTx - 1)
+      completionFailureBlockId = tx.blockId
+      stoppingBlockId = tx.blockId
+      break
+    }
     completedBlockIds.push(tx.blockId)
     if (tx.transactionId !== undefined) localAmbiguous.delete(tx.transactionId)
   }
@@ -547,6 +593,7 @@ const predictPass = (
     completedBlockIds,
     rejectedBlockIds,
     rejectionFailureBlockId,
+    completionFailureBlockId,
     passThrows: stoppingBlockId !== null,
     stoppingBlockId,
     finalAmbiguousAttempts: localAmbiguous,
@@ -566,6 +613,7 @@ interface PassRecord {
   readonly actualCompletedBlockIds: readonly string[]
   readonly actualRejectedBlockIds: readonly string[]
   readonly actualRejectionFailureBlockId: string | null
+  readonly actualCompletionFailureBlockId: string | null
   readonly threw: boolean
   readonly ambiguousAttemptsAfter: ReadonlyMap<number, number>
 }
@@ -576,6 +624,7 @@ interface SimulationResult {
   readonly directCompleteInvocationCounts: ReadonlyMap<string, number>
   readonly recordRejectionSuccessCounts: ReadonlyMap<string, number>
   readonly recordRejectionFailureCounts: ReadonlyMap<string, number>
+  readonly completionFailureCounts: ReadonlyMap<string, number>
   readonly applyOperationsTouchLog: ReadonlyArray<{pass: number; blockIds: readonly string[]}>
 }
 
@@ -633,12 +682,16 @@ const runSimulationUnspied = async (
   const rejectionFailRemaining = new Map<string, number>(
     scenario.transactions.filter(tx => tx.rejectionFailsOnce).map(tx => [tx.blockId, 1]),
   )
+  const completionFailRemaining = new Map<string, number>(
+    scenario.transactions.filter(tx => tx.completionFailsOnceAfterRejection).map(tx => [tx.blockId, 1]),
+  )
 
   let pending = [...scenario.transactions]
   const passes: PassRecord[] = []
   const directCompleteInvocationCounts = new Map<string, number>()
   const recordRejectionSuccessCounts = new Map<string, number>()
   const recordRejectionFailureCounts = new Map<string, number>()
+  const completionFailureCounts = new Map<string, number>()
   const applyOperationsTouchLog: Array<{pass: number; blockIds: readonly string[]}> = []
   const drainedBlockIds = new Set<string>()
 
@@ -656,13 +709,27 @@ const runSimulationUnspied = async (
       ambiguousAttempts,
       rejectionFailRemaining,
       forceExogenousBatchFailure,
+      completionFailRemaining,
     )
 
     const completedThisPassSet = new Set<string>()
     const completeCallOrderThisPass: string[] = []
+    // Armed by a successful `recordRejection` call this pass (below) when
+    // that tx's `completionFailsOnceAfterRejection` is still live — the
+    // VERY NEXT `complete()` call for that blockId throws once, instead of
+    // running the drain logic.
+    const pendingCompletionFailure = new Set<string>()
+    let completionFailureBlockIdActual: string | null = null
     const crudTxs = passPending.map((tx, idxInPass) => {
       const entry = new CrudEntry(idxInPass, UpdateType.PUT, 'blocks', tx.blockId, tx.transactionId, {v: 1})
       const complete = async (): Promise<void> => {
+        if (pendingCompletionFailure.has(tx.blockId)) {
+          pendingCompletionFailure.delete(tx.blockId)
+          completionFailRemaining.set(tx.blockId, (completionFailRemaining.get(tx.blockId) ?? 0) - 1)
+          completionFailureCounts.set(tx.blockId, (completionFailureCounts.get(tx.blockId) ?? 0) + 1)
+          completionFailureBlockIdActual = tx.blockId
+          throw new Error('simulated CrudTransaction.complete() failure after a successful rejection write')
+        }
         directCompleteInvocationCounts.set(tx.blockId, (directCompleteInvocationCounts.get(tx.blockId) ?? 0) + 1)
         // Real CrudTransaction.complete() drains every transaction AHEAD of
         // this one too (powersync.ts:622-623 docblock) — model that prefix
@@ -742,6 +809,9 @@ const runSimulationUnspied = async (
       }
       recordRejectionSuccessCounts.set(blockId, (recordRejectionSuccessCounts.get(blockId) ?? 0) + 1)
       rejectedBlockIdsActual.push(blockId)
+      if ((completionFailRemaining.get(blockId) ?? 0) > 0) {
+        pendingCompletionFailure.add(blockId)
+      }
     }
 
     const deps: UploadDeps = {applyOperations, recordRejection}
@@ -763,6 +833,8 @@ const runSimulationUnspied = async (
     expect(rejectedBlockIdsActual, `pass ${passIndex}: rejected`).toEqual(predicted.rejectedBlockIds)
     expect(rejectionFailureBlockIdActual, `pass ${passIndex}: rejection-write failure`)
       .toBe(predicted.rejectionFailureBlockId)
+    expect(completionFailureBlockIdActual, `pass ${passIndex}: completion failure`)
+      .toBe(predicted.completionFailureBlockId)
     expect(new Map(ambiguousAttempts), `pass ${passIndex}: ambiguousAttempts map`)
       .toEqual(predicted.finalAmbiguousAttempts)
     for (const [blockId, errorPassedToRecordRejection] of recordRejectionErrorByBlockId) {
@@ -778,6 +850,7 @@ const runSimulationUnspied = async (
       actualCompletedBlockIds: completeCallOrderThisPass,
       actualRejectedBlockIds: rejectedBlockIdsActual,
       actualRejectionFailureBlockId: rejectionFailureBlockIdActual,
+      actualCompletionFailureBlockId: completionFailureBlockIdActual,
       threw,
       ambiguousAttemptsAfter: new Map(ambiguousAttempts),
     })
@@ -804,6 +877,7 @@ const runSimulationUnspied = async (
     directCompleteInvocationCounts,
     recordRejectionSuccessCounts,
     recordRejectionFailureCounts,
+    completionFailureCounts,
     applyOperationsTouchLog,
   }
 }
@@ -845,7 +919,11 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
           const status = result.finalStatus.get(tx.blockId)
           expect(status, `tx ${tx.blockId} has no recorded fate`).toBeDefined()
           if (status === 'rejected') {
-            expect(result.recordRejectionSuccessCounts.get(tx.blockId) ?? 0).toBe(1)
+            // >= 1, not exactly 1: a completion failure after a successful
+            // rejection write (property e) forces a legitimate repeat
+            // recordRejection call on a later pass — see property (e) for
+            // the precise bound (successes <= 1 + completionFailures).
+            expect(result.recordRejectionSuccessCounts.get(tx.blockId) ?? 0).toBeGreaterThanOrEqual(1)
           }
           if (status === 'success') {
             expect(result.recordRejectionSuccessCounts.get(tx.blockId) ?? 0).toBe(0)
@@ -905,11 +983,13 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
           const attemptedIds = new Set(pass.actualPerTxTrace.map(e => e.blockId))
           pass.actualPerTxTrace.forEach(entry => {
             if (entry.classification !== 'permanent') return
-            // A permanent tx whose OWN recordRejection write fails is a
+            // A permanent tx whose OWN recordRejection write fails, or whose
+            // OWN complete() fails right after a successful write, is a
             // legitimate (and separately-tested, property e) stop — it's
-            // the rejection WRITE that halts the pass there, not the
-            // permanent classification "jamming" anything.
+            // the write or the completion that halts the pass there, not
+            // the permanent classification "jamming" anything.
             if (pass.predicted.rejectionFailureBlockId === entry.blockId) return
+            if (pass.predicted.completionFailureBlockId === entry.blockId) return
             const posInPending = pass.pendingBlockIds.indexOf(entry.blockId)
             const nextId = pass.pendingBlockIds[posInPending + 1]
             if (nextId === undefined) return
@@ -941,9 +1021,10 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
         // actually respected at the moment of the retry/quarantine
         // decision" — this streak reconstructs that moment instead,
         // mirroring forgetAmbiguousAttempts' own reset conditions
-        // (powersync.ts:582-587: success, or a quarantine whose
-        // recordRejection succeeded — never a bare retry, never a failed
-        // recordRejection write).
+        // (powersync.ts:582-587 for the reset; :700-703 for what has to
+        // succeed first — success, or a quarantine whose recordRejection AND
+        // subsequent complete() both succeeded — never a bare retry, never a
+        // failed recordRejection write, never a failed complete()).
         const streakByTxId = new Map<number, number>()
         for (const pass of result.passes) {
           for (const entry of pass.actualPerTxTrace) {
@@ -951,19 +1032,26 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
             if (tx.transactionId === undefined) {
               // Untracked id: ambiguousBudgetExhausted treats it as
               // already-exhausted (powersync.ts:574) — an ambiguous hit can
-              // only stop THIS pass via a recordRejection write failure,
-              // never via "still has budget left".
+              // only stop THIS pass via a recordRejection write failure or a
+              // completion failure, never via "still has budget left".
               if (entry.classification === 'ambiguous' && pass.predicted.stoppingBlockId === entry.blockId) {
                 expect(
-                  pass.predicted.rejectionFailureBlockId,
-                  `untracked tx ${entry.blockId} stopped the pass without a rejection-write failure`,
-                ).toBe(entry.blockId)
+                  pass.predicted.rejectionFailureBlockId === entry.blockId ||
+                    pass.predicted.completionFailureBlockId === entry.blockId,
+                  `untracked tx ${entry.blockId} stopped the pass without a rejection-write or completion failure`,
+                ).toBe(true)
               }
               continue
             }
 
             const txId = tx.transactionId
-            const recordRejectionFailedHere = pass.predicted.rejectionFailureBlockId === entry.blockId
+            // forgetAmbiguousAttempts only runs once BOTH recordRejection
+            // AND the subsequent complete() succeed (powersync.ts:700-703)
+            // — either failing alone is enough to skip it, so the streak
+            // must persist through either.
+            const quarantineDidNotFullyComplete =
+              pass.predicted.rejectionFailureBlockId === entry.blockId ||
+              pass.predicted.completionFailureBlockId === entry.blockId
 
             if (entry.classification === 'success') {
               streakByTxId.delete(txId)
@@ -971,18 +1059,18 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
               // forgetAmbiguousAttempts is not reached on a transient
               // re-throw — the streak persists untouched.
             } else if (entry.classification === 'permanent') {
-              if (!recordRejectionFailedHere) streakByTxId.delete(txId)
+              if (!quarantineDidNotFullyComplete) streakByTxId.delete(txId)
             } else {
               // ambiguous
               const next = (streakByTxId.get(txId) ?? 0) + 1
               streakByTxId.set(txId, next)
-              const stillRetrying = pass.predicted.stoppingBlockId === entry.blockId && !recordRejectionFailedHere
+              const stillRetrying = pass.predicted.stoppingBlockId === entry.blockId && !quarantineDidNotFullyComplete
               if (stillRetrying) {
                 expect(next, `tx ${entry.blockId} retried past its ambiguous budget`).toBeLessThan(AMBIGUOUS_RETRY_BUDGET)
               } else {
                 expect(next, `tx ${entry.blockId} quarantined without exhausting its ambiguous budget`)
                   .toBeGreaterThanOrEqual(AMBIGUOUS_RETRY_BUDGET)
-                if (!recordRejectionFailedHere) streakByTxId.delete(txId)
+                if (!quarantineDidNotFullyComplete) streakByTxId.delete(txId)
               }
             }
           }
@@ -992,7 +1080,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
     )
   }, fuzzTestTimeout())
 
-  it('(e) recordRejection always precedes complete(); a failed rejection write never falsely drains the tx', async () => {
+  it('(e) recordRejection always precedes complete(); a failed write or a failed completion never falsely drains the tx, and a completion failure legitimately re-quarantines next pass', async () => {
     await fc.assert(
       fc.asyncProperty(scenarioArb, async scenario => {
         const result = await runSimulation(scenario)
@@ -1001,19 +1089,53 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
           if (pass.predicted.rejectionFailureBlockId !== null) {
             expect(
               pass.actualCompletedBlockIds,
-              `pass ${pass.passIndex}: tx ${pass.predicted.rejectionFailureBlockId} drained despite a recordRejection failure`,
+              `pass ${pass.passIndex}: tx ${pass.predicted.rejectionFailureBlockId} drained despite a recordRejection write failure`,
             ).not.toContain(pass.predicted.rejectionFailureBlockId)
+          }
+          if (pass.predicted.completionFailureBlockId !== null) {
+            expect(
+              pass.actualCompletedBlockIds,
+              `pass ${pass.passIndex}: tx ${pass.predicted.completionFailureBlockId} drained despite its own completion failure`,
+            ).not.toContain(pass.predicted.completionFailureBlockId)
           }
         }
 
         for (const tx of scenario.transactions) {
           const successes = result.recordRejectionSuccessCounts.get(tx.blockId) ?? 0
-          const failures = result.recordRejectionFailureCounts.get(tx.blockId) ?? 0
-          expect(successes, `tx ${tx.blockId}: recordRejection succeeded more than once`).toBeLessThanOrEqual(1)
-          expect(failures, `tx ${tx.blockId}: more recordRejection failures than injected`)
+          const writeFailures = result.recordRejectionFailureCounts.get(tx.blockId) ?? 0
+          const completionFailures = result.completionFailureCounts.get(tx.blockId) ?? 0
+          expect(writeFailures, `tx ${tx.blockId}: more recordRejection write failures than injected`)
             .toBeLessThanOrEqual(tx.rejectionFailsOnce ? 1 : 0)
+          expect(completionFailures, `tx ${tx.blockId}: more completion failures than injected`)
+            .toBeLessThanOrEqual(tx.completionFailsOnceAfterRejection ? 1 : 0)
+          // Repeated rejection WRITES are allowed and expected — the DB
+          // write is idempotent (267558e29) — but only a completion failure
+          // legitimately explains a repeat: the tx never actually drained,
+          // so the NEXT pass calls the (idempotent) writer again. Without an
+          // injected completion failure, at most one success is possible.
+          expect(
+            successes,
+            `tx ${tx.blockId}: recordRejection succeeded more times than its completion failures explain`,
+          ).toBeLessThanOrEqual(1 + completionFailures)
           if (result.finalStatus.get(tx.blockId) === 'rejected') {
-            expect(successes, `tx ${tx.blockId}: rejected without a successful recordRejection`).toBe(1)
+            expect(successes, `tx ${tx.blockId}: rejected without a successful recordRejection`).toBeGreaterThanOrEqual(1)
+            // ...but the transaction drains in EXACTLY ONE pass no matter how
+            // many times recordRejection had to run first — the other half
+            // of the contract this property pins. NOT
+            // directCompleteInvocationCounts here: that counter only tracks
+            // this tx's OWN complete() closure being the DIRECT target of a
+            // call (property a) — a tx swept up by a LATER tx's prefix-drain
+            // (CrudTransaction.complete() draining everything ahead of it,
+            // powersync.ts:622-623) legitimately drains with that counter
+            // still at 0. `actualCompletedBlockIds` is the observed
+            // per-pass drain trace regardless of which tx's closure carried
+            // it, so membership across passes is the right thing to bound.
+            const passesWhereDrained =
+              result.passes.filter(pass => pass.actualCompletedBlockIds.includes(tx.blockId)).length
+            expect(
+              passesWhereDrained,
+              `tx ${tx.blockId}: rejected tx drained in ${passesWhereDrained} passes, expected exactly 1`,
+            ).toBe(1)
           }
         }
       }),
