@@ -48,6 +48,7 @@ import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/d
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
+import { propertyFieldContent } from '@/data/propertyChildren'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-metadata-parity-fuzz'
@@ -182,6 +183,28 @@ const runCase = async ({kind, v1, v2}: {kind: Kind; v1: string; v2: string}): Pr
   expectRealMetadata(await metaOf(plainField!.id), 'plain field row (create)')
   expectRealMetadata(await metaOf(plainValue!.id), 'plain value row (create)')
 
+  // Seed a NONCANONICAL existing field-row CONTENT (simulating drift — a
+  // forced find-replace, a sync-arrival race, any out-of-band write) via a
+  // RAW column write, bypassing `repo.tx`: going through the engine would
+  // re-derive `is_field_form`/`reference_target_id` from the new text
+  // (`core.deriveReferenceTarget` watches every `content` write), and since
+  // plain text isn't a valid `::`-marked reference span, that would CLEAR
+  // both columns — un-recognizing the row as a field row entirely (it would
+  // no longer match `SELECT_PROPERTY_FIELD_CHILD_SQL`) and defeating the
+  // scenario before it starts. A direct column write leaves those two
+  // columns untouched while drifting `content`, the same shape the b0392a7c9
+  // docblock above describes. Without this, the field row is already
+  // canonical from CREATE, so the second write's field-row branch
+  // (`existing.content !== propertyFieldContent(...)`, txEngine.ts:1318)
+  // NEVER fires in this suite — 7a34b5120 removed inherited skipMetadata
+  // from TWO separate `update()` calls, and this suite exercised only the
+  // value child's (Codex review, comment 3672657061).
+  await sharedDb.db.execute(
+    'UPDATE blocks SET content = ? WHERE id = ?',
+    ['noncanonical field content', skipField!.id],
+  )
+  const fieldBefore = await metaOf(skipField!.id)
+
   // ── UPDATE branch: a SECOND write on `skip`, a DIFFERENT value, again
   //    under {skipMetadata: true}. The existing value row's content update
   //    (:1328) must still ADVANCE to fresh real metadata, not leave the
@@ -200,6 +223,22 @@ const runCase = async ({kind, v1, v2}: {kind: Kind; v1: string; v2: string}): Pr
   expect(after.updated_at, 'updated_at advanced').toBeGreaterThan(before.updated_at)
   expect(after.user_updated_at, 'user_updated_at advanced (not frozen by the parent skipMetadata)')
     .toBeGreaterThan(before.user_updated_at)
+
+  // The FIELD ROW's own update branch (:1318-1319) must equally advance
+  // real metadata rather than inherit the parent's skipMetadata — the other
+  // half of what 7a34b5120 fixed, and the half this suite left unexercised.
+  const fieldRowNow = (await sharedDb.db.get<{content: string}>(
+    'SELECT content FROM blocks WHERE id = ?', [skipField!.id]))!
+  expect(fieldRowNow.content, 'noncanonical field-row content self-healed to canonical')
+    .toBe(propertyFieldContent(fieldId))
+  const fieldAfter = await metaOf(skipField!.id)
+  expectRealMetadata(fieldAfter, 'skipMetadata field row (update, noncanonical→canonical)')
+  expect(fieldAfter.created_at, 'field row update does not re-create').toBe(fieldBefore.created_at)
+  expect(fieldAfter.updated_at, 'field row updated_at advanced').toBeGreaterThan(fieldBefore.updated_at)
+  expect(
+    fieldAfter.user_updated_at,
+    'field row user_updated_at advanced (not frozen by the parent skipMetadata)',
+  ).toBeGreaterThan(fieldBefore.user_updated_at)
 }
 
 describe('writePropertyValueChild: child rows get real metadata regardless of the parent write\'s skipMetadata', () => {
