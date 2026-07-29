@@ -43,20 +43,26 @@
  * label is non-empty, and — for `ts` values `new Date` actually accepts
  * (excludes the wild out-of-range doubles `anyNumberArb` also generates,
  * e.g. `Infinity`, which legitimately format to the literal `'Invalid
- * Date'`, containing no digits) — that it contains a digit and falls in a
- * generous length range. Deliberately NOT: deriving the expectation by
- * calling the same `toLocaleString` the implementation calls (the
- * formula-mirror pattern removed twice already on this PR — comments
- * 3676886063, 3677006799 — would be equally green against a shared bug),
- * and NOT pinning an exact format string (locale/environment-brittle).
- * A round-trip check (parse the label back with `new Date(label)` and
- * compare to `ts`) was considered and rejected: empirically, V8's date
- * parser round-trips `toLocaleString`'s en-US/de-DE/fr-FR output but NOT
- * its ja-JP or ar-EG output (non-Latin digits/scripts) — since the suite
- * runs under `undefined` (environment-default) locale, a round-trip
- * assertion would fail in whatever CI environment defaults to one of
- * those, for a reason unrelated to the code under test. The structural
- * checks below hold regardless of locale.
+ * Date'`, containing no digits) — that it contains a NUMBER character and
+ * falls in a generous length range. Deliberately NOT: deriving the
+ * expectation by calling the same `toLocaleString` the implementation
+ * calls (the formula-mirror pattern removed twice already on this PR —
+ * comments 3676886063, 3677006799 — would be equally green against a
+ * shared bug), and NOT pinning an exact format string (locale/environment-
+ * brittle). A round-trip check (parse the label back with `new
+ * Date(label)` and compare to `ts`) was considered and rejected:
+ * empirically, V8's date parser round-trips `toLocaleString`'s
+ * en-US/de-DE/fr-FR output but NOT its ja-JP or ar-EG output (non-Latin
+ * digits/scripts) — since the suite runs under `undefined`
+ * (environment-default) locale, a round-trip assertion would fail in
+ * whatever CI environment defaults to one of those, for a reason unrelated
+ * to the code under test. The structural checks below hold regardless of
+ * locale — including the digit check itself, fixed once already (see the
+ * property's own comments): the first version used `\d`, which matches
+ * ASCII digits only and rejects a valid label under a process locale using
+ * native numerals (e.g. `ar-EG` renders year/day/hour/minute in
+ * Arabic-Indic digits) — `\p{N}` (Unicode number category) is what's
+ * actually locale-independent.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -221,9 +227,23 @@ describe('formatAbsoluteDateTime — totality + zero guard (relativeTime.ts:31-4
         // also generates (Infinity, MAX_VALUE, …) — the digit/length
         // checks below only make sense for `ts` a real Date accepts.
         if (!Number.isNaN(new Date(ts).getTime())) {
-          expect(label).toMatch(/\d/)
+          // Unicode number class, NOT `\d`: `\d` matches ASCII digits only,
+          // but under a process locale using native numerals (e.g. `ar-EG`,
+          // `fa-IR`, `my-MM`) `toLocaleString` legitimately renders the
+          // year/day/hour/minute in that script's OWN digit characters —
+          // `\d` would reject a perfectly valid label on such a machine
+          // (PR #454 comment 3677334224; found the hard way immediately
+          // after the previous "locale-independent" claim on this same
+          // property turned out not to be, comment 3677245801).
+          expect(label).toMatch(/\p{N}/u)
+          // Empirically checked across 20 diverse locales/calendars — Latin,
+          // CJK, Arabic, Hebrew, Devanagari, Thai, Cyrillic, Ethiopic,
+          // Burmese, Bengali, and non-Gregorian calendars (Buddhist,
+          // Japanese, Persian, Islamic, Hebrew) — observed length range is
+          // 15-31 chars; this 6-200 bound has wide headroom on both sides
+          // rather than being sized tightly around the en-US case.
           expect(label.length).toBeGreaterThanOrEqual(6)
-          expect(label.length).toBeLessThanOrEqual(100)
+          expect(label.length).toBeLessThanOrEqual(200)
         }
       }),
       fuzzParams(300),
