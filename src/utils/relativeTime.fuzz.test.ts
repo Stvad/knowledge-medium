@@ -32,6 +32,31 @@
  * `formatAbsoluteDateTime` (:31-40) gets a lightweight totality + zero-guard
  * check too, since it lives in the same module and shares the `!ts` guard
  * shape — cheap insurance against the same class of regression.
+ *
+ * ──── `formatAbsoluteDateTime`'s truthy path (PR #454 comment 3677245801) ────
+ *
+ * The zero-guard property originally only asserted the FALSY half of its
+ * own title ("returns '' only for a falsy ts") — the truthy path was
+ * covered by "never throws" alone, so a regression returning `''` for
+ * every valid timestamp (silently dropping the absolute stamp shown in
+ * block metadata) went undetected. Fixed by asserting the truthy-path
+ * label is non-empty, and — for `ts` values `new Date` actually accepts
+ * (excludes the wild out-of-range doubles `anyNumberArb` also generates,
+ * e.g. `Infinity`, which legitimately format to the literal `'Invalid
+ * Date'`, containing no digits) — that it contains a digit and falls in a
+ * generous length range. Deliberately NOT: deriving the expectation by
+ * calling the same `toLocaleString` the implementation calls (the
+ * formula-mirror pattern removed twice already on this PR — comments
+ * 3676886063, 3677006799 — would be equally green against a shared bug),
+ * and NOT pinning an exact format string (locale/environment-brittle).
+ * A round-trip check (parse the label back with `new Date(label)` and
+ * compare to `ts`) was considered and rejected: empirically, V8's date
+ * parser round-trips `toLocaleString`'s en-US/de-DE/fr-FR output but NOT
+ * its ja-JP or ar-EG output (non-Latin digits/scripts) — since the suite
+ * runs under `undefined` (environment-default) locale, a round-trip
+ * assertion would fail in whatever CI environment defaults to one of
+ * those, for a reason unrelated to the code under test. The structural
+ * checks below hold regardless of locale.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -178,11 +203,28 @@ describe('formatRelativeTime — bucket monotonicity as (now - ts) grows', () =>
 })
 
 describe('formatAbsoluteDateTime — totality + zero guard (relativeTime.ts:31-40)', () => {
-  it('never throws, and returns "" only for a falsy ts', () => {
+  it('never throws, returns "" only for a falsy ts, and produces a non-empty, digit-bearing label for a valid truthy one', () => {
     fc.assert(
       fc.property(anyNumberArb, ts => {
         expect(() => formatAbsoluteDateTime(ts)).not.toThrow()
-        if (!ts) expect(formatAbsoluteDateTime(ts)).toBe('')
+        const label = formatAbsoluteDateTime(ts)
+        if (!ts) {
+          expect(label).toBe('')
+          return
+        }
+        // Truthy path: '' would silently drop the absolute stamp shown in
+        // block metadata, so assert SOMETHING was produced regardless of
+        // whether `ts` maps to a valid Date (see docblock).
+        expect(label).not.toBe('')
+        // `new Date(ts)` legitimately renders as the digit-free literal
+        // 'Invalid Date' for the wild out-of-range values `anyNumberArb`
+        // also generates (Infinity, MAX_VALUE, …) — the digit/length
+        // checks below only make sense for `ts` a real Date accepts.
+        if (!Number.isNaN(new Date(ts).getTime())) {
+          expect(label).toMatch(/\d/)
+          expect(label.length).toBeGreaterThanOrEqual(6)
+          expect(label.length).toBeLessThanOrEqual(100)
+        }
       }),
       fuzzParams(300),
     )
