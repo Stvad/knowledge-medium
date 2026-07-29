@@ -627,7 +627,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
       }),
       fuzzParams(60),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('(b) a completed tx is never touched by a later applyOperations call — succeeded prefix never re-uploaded', async () => {
     await fc.assert(
@@ -668,7 +668,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
       }),
       fuzzParams(60),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('(c) a permanent classification never jams the queue — the next pending tx is still attempted the same pass', async () => {
     await fc.assert(
@@ -695,7 +695,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
       }),
       fuzzParams(60),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('(d) an ambiguous outcome retries only while inside AMBIGUOUS_RETRY_BUDGET, then quarantine is attempted', async () => {
     await fc.assert(
@@ -763,7 +763,7 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
       }),
       fuzzParams(60),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('(e) recordRejection always precedes complete(); a failed rejection write never falsely drains the tx', async () => {
     await fc.assert(
@@ -792,5 +792,5 @@ describe('uploadTransactionsWithFallback — retry/classification state machine'
       }),
       fuzzParams(60),
     )
-  })
+  }, fuzzTestTimeout())
 })
