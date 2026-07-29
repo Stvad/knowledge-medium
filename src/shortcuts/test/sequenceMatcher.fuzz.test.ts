@@ -307,40 +307,46 @@ describe('createSequenceMatcher ↔ tinykeys per-step differential (generalizes 
     vi.useRealTimers()
   })
 
-  it('completes on exactly the same events tinykeys would fire on, over generated chord specs and event sequences (except at an exact-timeout-boundary gap, which is admissible either way — see docblock)', () => {
+  it('completes on exactly the same events tinykeys would fire on, over generated chord specs and event sequences (except at an exact-timeout-boundary gap, which is admissible either way — see docblock), and never reports completed and pending simultaneously', () => {
     fc.assert(
       fc.property(scenarioArb, scenario => {
         const results = runDifferential(scenario)
-        // Once a step's gap lands EXACTLY on DEFAULT_SEQUENCE_TIMEOUT_MS,
-        // the two systems are comparing an underdetermined input (see the
-        // docblock and sequenceMatcher.ts): tinykeys' fake-timer-driven
-        // clear deterministically resolves the tie as "expired" in THIS
-        // harness, while the port deliberately fails toward "continued".
-        // Neither is wrong, so we stop asserting tinykeys-parity from that
-        // step onward — a later mismatch in the SAME scenario would just be
-        // a downstream echo of this one accepted tie (the two systems'
-        // pending state has diverged), not an independently new bug. The
-        // OTHER property below (no simultaneous completed+pending) still
-        // runs unconditionally over every step, including these. `gapMsArb`
-        // weights this case low (see its comment) precisely so this
-        // truncation stays rare — measured at ~94-95% of scenarios running
-        // the full, untruncated parity check across several deep-tier runs.
         for (let i = 0; i < results.length; i++) {
-          if (scenario.steps[i]!.gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS) break
-          const { tinykeysFired, matcherVerdict } = results[i]!
-          expect(matcherVerdict.completed, `step ${i}: ${JSON.stringify(scenario.steps[i])}`).toBe(tinykeysFired)
-        }
-      }),
-      fuzzParams(200),
-    )
-  }, fuzzTestTimeout())
-
-  it('never reports completed and pending simultaneously (sequenceMatcher.ts:104-108: completed is only set inside `if (!pending)`, immediately followed by break)', () => {
-    fc.assert(
-      fc.property(scenarioArb, scenario => {
-        const results = runDifferential(scenario)
-        for (const { matcherVerdict } of results) {
+          const { matcherVerdict } = results[i]!
+          // Mutual exclusion (sequenceMatcher.ts:119-121: `completed` is set
+          // only inside `if (!pending)`, immediately followed by `break`) is
+          // pure control flow, unaffected by the timeout check above the
+          // loop (which only clears `state`, not these locals) — so it
+          // holds on EVERY step, including boundary-gap ones, and is
+          // checked here before the boundary `break` below so it still runs
+          // on those steps too. This used to be a standalone property
+          // re-running a full separate `fuzzParams` budget over the same
+          // kind of generated scenarios just to re-derive what the control
+          // flow already guarantees — a fuzz-tier restatement of the
+          // implementation (Codex P1, PR #454 comment 3676886057). Folding
+          // it into this loop checks it on every step of every scenario
+          // this property generates anyway, at zero extra cost and with
+          // MORE coverage than the standalone version had (that ran over
+          // its own independently-generated scenarios; this rides the
+          // exact ones already being differential-tested here).
           expect(matcherVerdict.completed && matcherVerdict.pending).toBe(false)
+
+          // Once a step's gap lands EXACTLY on DEFAULT_SEQUENCE_TIMEOUT_MS,
+          // the two systems are comparing an underdetermined input (see the
+          // docblock and sequenceMatcher.ts): tinykeys' fake-timer-driven
+          // clear deterministically resolves the tie as "expired" in THIS
+          // harness, while the port deliberately fails toward "continued".
+          // Neither is wrong, so we stop asserting tinykeys-parity from
+          // that step onward — a later mismatch in the SAME scenario would
+          // just be a downstream echo of this one accepted tie (the two
+          // systems' pending state has diverged), not an independently new
+          // bug. `gapMsArb` weights this case low (see its comment)
+          // precisely so this truncation stays rare — measured at ~94-95%
+          // of scenarios running the full, untruncated parity check across
+          // several deep-tier runs.
+          if (scenario.steps[i]!.gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS) break
+          const { tinykeysFired } = results[i]!
+          expect(matcherVerdict.completed, `step ${i}: ${JSON.stringify(scenario.steps[i])}`).toBe(tinykeysFired)
         }
       }),
       fuzzParams(200),

@@ -52,6 +52,27 @@
  * a doc shrinks but distinct selections stay distinct) is covered by the
  * identity property below, and the mixed-corruption 2-range case from
  * `codemirror.test.ts` remains as a concrete example of it.
+ *
+ * ──── Single-range properties: spec-level, not the formula
+ *      (PR #454 review comment 3676886063) ────
+ *
+ * A third describe block here used to assert
+ * `clamped.ranges[0].anchor === Math.max(0, Math.min(anchor, docLength))`
+ * (and the same for `head`) — character-for-character the implementation
+ * in codemirror.ts, spending a full fuzz budget every deep run to re-derive
+ * a formula the test just copied. Replaced with three properties that hold
+ * for ANY correct clamp implementation without stating the formula
+ * (idempotence, direction preservation, monotonicity — each below explains
+ * why it's genuinely independent) plus a few deterministic examples that
+ * pin the actual numeric boundary behavior the formula produces (negative
+ * anchor → 0, overlong head → docLength, docLength 0 → full collapse).
+ * Note the fuzz properties below do NOT, by design, individually catch
+ * every possible formula bug — e.g. dropping the lower-bound clamp
+ * (`Math.max(0, …)`, keeping only `Math.min(x, docLength)`) stays
+ * idempotent, direction-preserving, AND monotonic (`Math.min` alone has
+ * all three properties), so none of them would flag it. The deterministic
+ * "negative anchor → 0" example is what catches that specific case —
+ * verified by mutation-testing exactly that change.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -99,8 +120,10 @@ const toSelection = (ranges: Array<{ anchor: number; head: number }>, mainIndex:
 /** A single range with a deliberately wild anchor/head — large-magnitude
  *  positive AND negative values, mixed with a modest realistic range — and
  *  an independent `docLength`. Single-range keeps merge semantics out of
- *  scope entirely (a lone range can't overlap itself), isolating the exact
- *  per-endpoint clamp formula and the direction-preservation argument. */
+ *  scope entirely (a lone range can't overlap itself), isolating the
+ *  formula-independent spec properties (idempotence, direction
+ *  preservation, monotonicity — see below) and the deterministic
+ *  boundary pins from CodeMirror's multi-range merge/sort behavior. */
 const wildOffsetArb: fc.Arbitrary<number> = fc.oneof(
   fc.integer({ min: -1_000_000, max: 1_000_000 }),
   fc.constantFrom(0, -1, 1, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
@@ -167,19 +190,81 @@ describe('clampSelectionToLength — identity on an already-in-bounds selection 
   }, fuzzTestTimeout())
 })
 
-describe('clampSelectionToLength — single-range exact clamp formula (negative offsets, direction, mainIndex)', () => {
-  it('clamps anchor/head to Math.max(0, Math.min(x, docLength)) exactly, preserving direction and mainIndex', () => {
+describe('clampSelectionToLength — single-range spec properties (negative offsets, wide range; see docblock for why these are NOT the formula)', () => {
+  it('is idempotent: clamping an already-clamped selection against the same docLength changes nothing further', () => {
     fc.assert(
       fc.property(singleRangeArb, ({ anchor, head, docLength }) => {
         const selection = EditorSelection.create([EditorSelection.range(anchor, head)], 0)
-        const clamped = clampSelectionToLength(selection, docLength)
-
-        expect(clamped.ranges).toHaveLength(1)
-        expect(clamped.mainIndex).toBe(0)
-        expect(clamped.ranges[0].anchor).toBe(Math.max(0, Math.min(anchor, docLength)))
-        expect(clamped.ranges[0].head).toBe(Math.max(0, Math.min(head, docLength)))
+        const once = clampSelectionToLength(selection, docLength)
+        const twice = clampSelectionToLength(once, docLength)
+        expect(twice.eq(once)).toBe(true)
+        expect(twice.mainIndex).toBe(once.mainIndex)
       }),
       fuzzParams(300),
     )
   }, fuzzTestTimeout())
+
+  it('never inverts direction: a forward range (anchor <= head) never comes back reversed, and a reversed one (anchor > head) never comes back forward — collapsing anchor/head to equal is allowed on either side', () => {
+    fc.assert(
+      fc.property(singleRangeArb, ({ anchor, head, docLength }) => {
+        const selection = EditorSelection.create([EditorSelection.range(anchor, head)], 0)
+        const clamped = clampSelectionToLength(selection, docLength)
+        const range = clamped.ranges[0]!
+        if (anchor <= head) expect(range.anchor).toBeLessThanOrEqual(range.head)
+        else expect(range.anchor).toBeGreaterThanOrEqual(range.head)
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('is monotonic: for two raw offsets a <= b clamped against the same docLength, clamp(a) <= clamp(b)', () => {
+    const clampOffset = (x: number, docLength: number): number =>
+      // A single-point range (anchor === head === x) reduces
+      // `clampSelectionToLength` to a one-argument function of `x` for
+      // this comparison, without assuming HOW it maps x — only that
+      // it's some fixed function of x we can call twice.
+      clampSelectionToLength(EditorSelection.create([EditorSelection.range(x, x)], 0), docLength).ranges[0]!.anchor
+
+    fc.assert(
+      fc.property(
+        fc.tuple(wildOffsetArb, wildOffsetArb).map(([x, y]): [number, number] => (x <= y ? [x, y] : [y, x])),
+        fc.integer({ min: 0, max: 10_000 }),
+        ([a, b], docLength) => {
+          expect(clampOffset(a, docLength)).toBeLessThanOrEqual(clampOffset(b, docLength))
+        },
+      ),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+})
+
+describe('clampSelectionToLength — deterministic boundary pins', () => {
+  // Exact examples rather than a fuzz property: cheap, exact, and — unlike
+  // the properties above — these DO catch a dropped lower-bound clamp (see
+  // docblock), which is exactly why they exist alongside them rather than
+  // instead of them.
+  it('clamps a negative anchor to 0', () => {
+    const clamped = clampSelectionToLength(EditorSelection.create([EditorSelection.range(-5, 3)], 0), 10)
+    expect(clamped.ranges[0]!.anchor).toBe(0)
+  })
+
+  it('clamps a head past the document end to docLength', () => {
+    const docLength = 10
+    const clamped = clampSelectionToLength(
+      EditorSelection.create([EditorSelection.range(2, docLength + 10)], 0),
+      docLength,
+    )
+    expect(clamped.ranges[0]!.head).toBe(docLength)
+  })
+
+  it('collapses every range to 0 when docLength is 0', () => {
+    const clamped = clampSelectionToLength(
+      EditorSelection.create([EditorSelection.range(-5, -2), EditorSelection.range(50, 100)], 0),
+      0,
+    )
+    for (const range of clamped.ranges) {
+      expect(range.anchor).toBe(0)
+      expect(range.head).toBe(0)
+    }
+  })
 })
