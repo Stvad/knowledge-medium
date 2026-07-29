@@ -325,25 +325,43 @@ export const coreContentSearchSource: SearchSourceContribution = {
   },
 }
 
-/** Of two candidates for the SAME block id, pick which one's `block`
- *  payload should survive the merge. Ranking always uses the max score
- *  across duplicates (see `searchBlocksAcrossSources`), but the payload
- *  itself can come from a stale index copy — e.g. a semantic-search
- *  source's own snapshot of the block lagging live data — so prefer
- *  whichever candidate's `block.userUpdatedAt` (the user-facing
+/** Of every candidate contributed for the SAME block id, pick which one's
+ *  `block` payload should survive the merge. Ranking always uses the max
+ *  score across duplicates (see `searchBlocksAcrossSources`), but the
+ *  payload itself can come from a stale index copy — e.g. a
+ *  semantic-search source's own snapshot of the block lagging live data —
+ *  so prefer whichever candidate's `block.userUpdatedAt` (the user-facing
  *  "last edited" timestamp, `src/data/api/blockData.ts`) is newest,
- *  falling back to the higher-scored candidate when timestamps tie or
- *  either is missing/non-numeric. */
+ *  falling back to the higher-scored candidate when no candidate in the
+ *  group has a numeric timestamp.
+ *
+ *  Order-independent total order over the WHOLE group at once — not a
+ *  pairwise running fold over an already-partially-merged accumulator.
+ *  A pairwise fold is unsound here: once two candidates are folded, the
+ *  survivor's `score` field gets overwritten with the running max across
+ *  BOTH of them (see `searchBlocksAcrossSources`), so a later comparison
+ *  against that survivor is comparing a real candidate's timestamp
+ *  against a score that may belong to a *different*, already-eliminated
+ *  candidate — decoupling the payload-selection criteria from the
+ *  payload being carried. For a 3+-way duplicate group with mixed/missing
+ *  timestamps that made payload selection order-dependent (issue #450):
+ *  e.g. candidates A(t=10, score=5), B(t=20, score=0), C(no timestamp,
+ *  score=3) folded in order (C, B, A) picked A's stale payload over B's
+ *  genuinely-newest one. Operating on the raw group up front avoids that:
+ *  only real candidates' own (timestamp, score) pairs are ever compared. */
 const freshestCandidatePayload = (
-  a: SearchSourceCandidate,
-  b: SearchSourceCandidate,
+  candidates: readonly SearchSourceCandidate[],
 ): SearchSourceCandidate => {
-  const aTime = a.block.userUpdatedAt
-  const bTime = b.block.userUpdatedAt
-  if (typeof aTime === 'number' && typeof bTime === 'number' && aTime !== bTime) {
-    return aTime > bTime ? a : b
-  }
-  return a.score >= b.score ? a : b
+  const timed = candidates.filter(c => typeof c.block.userUpdatedAt === 'number')
+  const pool = timed.length > 0 ? timed : candidates
+  return pool.reduce((best, candidate) => {
+    if (timed.length > 0) {
+      const bestTime = best.block.userUpdatedAt as number
+      const time = candidate.block.userUpdatedAt as number
+      if (time !== bestTime) return time > bestTime ? candidate : best
+    }
+    return candidate.score > best.score ? candidate : best
+  })
 }
 
 /** Fan out `query` to every contributed `searchSourcesFacet` source (core's
@@ -366,12 +384,15 @@ const freshestCandidatePayload = (
  *  the order candidates were produced in — `Array.prototype.sort` is
  *  stable, and that order is source-registration order then
  *  within-source order — so a single-source call reproduces that
- *  source's own ordering exactly. Same block id from two sources
- *  survives once, ranked at the MAX score across the duplicates; its
- *  `block` payload is picked by `freshestCandidatePayload` (newest
- *  `userUpdatedAt` wins, falling back to the higher-scored candidate on
- *  a tie/missing timestamp) so a stale index copy can't shadow live
- *  data just because it scored higher.
+ *  source's own ordering exactly. Same block id contributed by two or
+ *  more sources survives once, ranked at the MAX score across the whole
+ *  duplicate group; its `block` payload is picked by
+ *  `freshestCandidatePayload`, evaluated over the WHOLE group at once
+ *  (order-independent — see that function's docblock and issue #450 for
+ *  why a pairwise fold over 3+ duplicates isn't): newest `userUpdatedAt`
+ *  wins, falling back to the higher-scored candidate only when no
+ *  candidate in the group has a numeric timestamp — so a stale index
+ *  copy can't shadow live data just because it scored higher.
  *
  *  A `repo` with no `FacetRuntime` wired (a hand-built test double, or a
  *  `Repo` read before its first `setFacetRuntime`) still gets core
@@ -412,21 +433,24 @@ export const searchBlocksAcrossSources = async (
 
   const merged = candidateLists.flat()
 
-  const byId = new Map<string, SearchSourceCandidate>()
+  // Group first, fold second: `freshestCandidatePayload` needs the whole
+  // duplicate-id group's raw candidates at once to stay order-independent
+  // (see its docblock) — a single-pass running fold over the flat list
+  // would re-decouple payload selection from the real per-candidate
+  // (timestamp, score) pairs, same as the bug it replaces.
+  const groups = new Map<string, SearchSourceCandidate[]>()
   for (const candidate of merged) {
-    const existing = byId.get(candidate.block.id)
-    if (!existing) {
-      byId.set(candidate.block.id, candidate)
-      continue
-    }
-    const payload = freshestCandidatePayload(existing, candidate)
-    byId.set(candidate.block.id, {
-      block: payload.block,
-      score: Math.max(existing.score, candidate.score),
-    })
+    const bucket = groups.get(candidate.block.id)
+    if (bucket) bucket.push(candidate)
+    else groups.set(candidate.block.id, [candidate])
   }
 
-  return [...byId.values()]
+  const byId = [...groups.values()].map((group): SearchSourceCandidate => ({
+    block: freshestCandidatePayload(group).block,
+    score: group.reduce((max, c) => Math.max(max, c.score), -Infinity),
+  }))
+
+  return byId
     .sort((a, b) => b.score - a.score)
     .slice(0, args.limit)
     .map(candidate => candidate.block)

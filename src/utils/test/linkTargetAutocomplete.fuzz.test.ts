@@ -1,41 +1,47 @@
 // @vitest-environment node
 /**
  * Fuzz suite for `searchBlocksAcrossSources` + `freshestCandidatePayload`
- * (`../linkTargetAutocomplete.ts:337-433`, docstring at :349-380) — the
- * `searchSourcesFacet` merge point behind quick-find / wikilink
- * autocomplete, block-ref insertion completion, and the agent `search`
- * command. See `src/test/fuzz.ts` for the smoke/deep tier mechanics and
- * `docs/fuzzing.md` for suite conventions. Complements the example-based
- * coverage in `linkTargetAutocomplete.test.ts`'s "searchBlocksAcrossSources
- * (searchSourcesFacet merge point)" describe block.
+ * (`../linkTargetAutocomplete.ts:367-457`, `freshestCandidatePayload` at
+ * :328-365) — the `searchSourcesFacet` merge point behind quick-find /
+ * wikilink autocomplete, block-ref insertion completion, and the agent
+ * `search` command. See `src/test/fuzz.ts` for the smoke/deep tier
+ * mechanics and `docs/fuzzing.md` for suite conventions. Complements the
+ * example-based coverage in `linkTargetAutocomplete.test.ts`'s
+ * "searchBlocksAcrossSources (searchSourcesFacet merge point)" describe
+ * block.
  *
- * ──── Algorithm under test (linkTargetAutocomplete.ts:380-433) ────
+ * ──── Algorithm under test (linkTargetAutocomplete.ts:401-457) ────
  *
- * `limit <= 0` short-circuits to `[]` (:384) WITHOUT invoking any source.
+ * `limit <= 0` short-circuits to `[]` (:405) WITHOUT invoking any source.
  * Otherwise every contributed source's `search` runs concurrently
- * (`Promise.all`, :392-402); a throw is caught, logged, and contributes
+ * (`Promise.all`, :413-423); a throw is caught, logged, and contributes
  * NOTHING (an empty list) — UNLESS every source throws, in which case the
  * FIRST one by registration order (not settle/catch order — `failures`
- * is sorted by `index` before rethrow, :408-411) is rethrown. Surviving
- * candidates are flattened and folded, in registration-then-within-source
- * order, into a `Map<blockId, winner>` (:415-427): the surviving `score`
- * is the MAX across every duplicate, and the surviving `block` payload is
- * picked by `freshestCandidatePayload` (:337-347) — newest `userUpdatedAt`
- * wins when both sides are numeric and differ, else the higher-scored
- * side wins. The result is stable-sorted by score descending and sliced
- * to `limit` (:429-432).
+ * is sorted by `index` before rethrow, :429-432) is rethrown. Surviving
+ * candidates are flattened and grouped by block id in
+ * registration-then-within-source order (:434-446); each group's
+ * surviving `score` is the MAX across every duplicate in the group, and
+ * its surviving `block` payload is picked by `freshestCandidatePayload`
+ * (:328-365) evaluated over the WHOLE group at once — newest
+ * `userUpdatedAt` wins among candidates that have one (ties broken by
+ * higher score), else the higher-scored candidate wins. The result is
+ * sorted by score descending and sliced to `limit` (:453-456).
  *
- * IMPORTANT (fuzz-found, see `pickFresherPayload`'s docblock below): this
- * fold is a SINGLE PASS, so the "existing" side of each payload
- * comparison already carries the running MAX score across every prior
- * duplicate, not that specific candidate's own original score. For a
- * 3+-way duplicate-id group with mixed/missing timestamps this makes
- * PAYLOAD selection (not the final score, which is always the true max
- * regardless of order) order-dependent — confirmed against
- * linkTargetAutocomplete.ts:415-427 by hand-tracing a fuzz counterexample
- * before writing the model below. Treated as a discovered characteristic
- * to model faithfully and report, not a bug to fix here — see this PR's
- * description.
+ * FUZZ-FOUND HISTORY (issue #450): an earlier version of the merge point
+ * built each group's winner via a SINGLE-PASS pairwise fold instead of
+ * operating on the whole group at once, so the "existing" side of each
+ * payload comparison already carried the running MAX score across every
+ * prior duplicate rather than that specific candidate's own original
+ * score — decoupling payload selection from the (timestamp, score) pair
+ * actually being compared. For a 3+-way duplicate-id group with
+ * mixed/missing timestamps this made PAYLOAD selection order-dependent
+ * (the final `score` was always the true max regardless of order — only
+ * the payload pick broke). A fuzz run caught it; the counterexample is
+ * pinned as the deterministic canary below and the fold was replaced with
+ * the whole-group selection this suite now models and additionally
+ * checks for permutation-invariance (below) — see
+ * `freshestCandidatePayload`'s docblock in the product file for the fixed
+ * algorithm and the counterexample.
  *
  * ──── Generator design ────
  *
@@ -46,12 +52,14 @@
  * per-source-identified `Error`) after a random number of microtask
  * ticks, so settle order is randomized independently of registration
  * order on every case. The reference model
- * (`referenceMergeAndRank`/`foldGroup`/`pickFresherPayload` below) is a
- * SEPARATE, differently-structured re-expression of the documented
- * algorithm (group-then-fold over a `Map<id, candidates[]>`, rather than
- * production's single flat `Map` mutated in one pass over the un-grouped,
- * flattened list) — an independent implementation to differential-test
- * against, not a copy of the code under test.
+ * (`referenceMergeAndRank`/`pickFreshestPayload` below) is a SEPARATE,
+ * differently-structured re-expression of the documented algorithm:
+ * group-then-fold over a `Map<id, candidates[]>` (rather than production's
+ * single flat `Map` mutated in one pass over the un-grouped, flattened
+ * list), with each group's winner computed via max-then-filter-then-find
+ * (rather than production's left-to-right `reduce`) — an independent
+ * implementation to differential-test against, not a copy of the code
+ * under test.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
@@ -176,56 +184,42 @@ const makeRepo = (sources: readonly SearchSourceContribution[]): Repo => {
   } as unknown as Repo
 }
 
-/** Independent re-expression of `freshestCandidatePayload`'s documented
- *  rule (linkTargetAutocomplete.ts:337-347): newer numeric
- *  `userUpdatedAt` wins on a genuine difference; otherwise the
- *  higher-scored side wins, and a scored tie keeps `a`. Written as "does
- *  `b` strictly beat `a`?" (flipped from the production `a.score >=
- *  b.score ? a : b`) so it isn't just a renamed copy of the same
- *  expression.
- *
- *  CAUTION (grounded in linkTargetAutocomplete.ts:415-427, confirmed by a
- *  fuzz-found counterexample): the production merge is a SINGLE-PASS
- *  running fold, not a pure pairwise reduce over untouched candidates —
- *  `existing.score` going into this comparison is already the running
- *  MAX across every duplicate folded in so far (`byId.set(..., {block:
- *  payload.block, score: Math.max(existing.score, candidate.score)})`),
- *  not that specific candidate's own original score. So for a 3+-way
- *  duplicate-id group where the middle elimination's timestamp is
- *  unknown/tied, the score this function falls back to comparing can be
- *  an EARLIER, already-eliminated candidate's (higher) score rather than
- *  the currently-compared side's own — i.e. payload selection is
- *  order-dependent (non-associative) in that corner, even though the
- *  final `score` field is always the true group max regardless of fold
- *  order. `foldGroup` below deliberately replicates this exact
- *  running-accumulator shape (not a `.reduce` over raw candidates) so
- *  this suite's model matches the actual algorithm rather than a nicer
- *  one it doesn't implement. Flagged in the PR description as a
- *  discovered characteristic worth a design look — not fixed here (see
- *  house style: order-dependence in an obscure 3+-source tie is
- *  ambiguous/design-y, not a small unambiguous bug). */
-const pickFresherPayload = (a: Candidate, b: Candidate): Candidate => {
-  const at = a.block.userUpdatedAt
-  const bt = b.block.userUpdatedAt
-  if (typeof at === 'number' && typeof bt === 'number' && at !== bt) {
-    return bt > at ? b : a
-  }
-  return b.score > a.score ? b : a
+/** Independent re-expression of `freshestCandidatePayload`'s FIXED,
+ *  order-independent rule (linkTargetAutocomplete.ts:328-365, issue
+ *  #450): among candidates that carry a numeric `userUpdatedAt`, the one
+ *  with the newest timestamp wins (ties broken by higher score); only
+ *  when NONE of the group's candidates has a numeric timestamp does the
+ *  highest-scored candidate win. Deliberately structured differently
+ *  from production's left-to-right `reduce` — max-then-filter-then-find
+ *  over the whole group at once — so this isn't just a renamed copy of
+ *  the same expression, while still being a genuine total order (unlike
+ *  the old pairwise fold this replaces, which wasn't — see the module
+ *  docblock's "FUZZ-FOUND HISTORY"). A tie on BOTH timestamp and score
+ *  between two distinct candidates is the only case where fold/group
+ *  order can legitimately pick either one; `.find` here (like
+ *  production's `reduce`) keeps the earliest such candidate in group
+ *  order, matching production's stable tie-break. */
+const pickFreshestPayload = (candidates: readonly Candidate[]): Candidate => {
+  const timed = candidates.filter(c => typeof c.block.userUpdatedAt === 'number')
+  const pool = timed.length > 0 ? timed : candidates
+  const bestTime = timed.length > 0
+    ? Math.max(...timed.map(c => c.block.userUpdatedAt as number))
+    : undefined
+  const finalists = bestTime === undefined ? pool : pool.filter(c => c.block.userUpdatedAt === bestTime)
+  const bestScore = Math.max(...finalists.map(c => c.score))
+  return finalists.find(c => c.score === bestScore)!
 }
 
-/** Folds one duplicate-id group into its surviving `{block, score}` via a
- *  running single-pass accumulator — see the CAUTION above `pickFresherPayload`
- *  for why this must track the running max score (not each candidate's
- *  own original score) to match linkTargetAutocomplete.ts:415-427. */
-const foldGroup = (candidates: readonly Candidate[]): Candidate => {
-  let acc = candidates[0]!
-  for (let i = 1; i < candidates.length; i++) {
-    const next = candidates[i]!
-    const payload = pickFresherPayload(acc, next)
-    acc = {block: payload.block, score: Math.max(acc.score, next.score)}
-  }
-  return acc
-}
+/** Folds one duplicate-id group into its surviving `{block, score}`:
+ *  payload from `pickFreshestPayload` (order-independent, whole group at
+ *  once), score as the max across every candidate in the group — both
+ *  computed from the group as a whole, not a running accumulator, so
+ *  this can't reintroduce the order-dependence `pickFreshestPayload`
+ *  fixes. */
+const foldGroup = (candidates: readonly Candidate[]): Candidate => ({
+  block: pickFreshestPayload(candidates).block,
+  score: Math.max(...candidates.map(c => c.score)),
+})
 
 type ModelResult =
   | {mode: 'ok'; blocks: BlockData[]}
@@ -256,7 +250,7 @@ const referenceMergeAndRank = (plans: readonly Plan[], limit: number): ModelResu
 
 describe('searchBlocksAcrossSources — model differential over generated async searchSourcesFacet fixtures', () => {
   // The suite deliberately makes sources throw; silence the production
-  // `console.error(...)` log for those (see linkTargetAutocomplete.ts:397)
+  // `console.error(...)` log for those (see linkTargetAutocomplete.ts:418)
   // so the fuzz run's output isn't dominated by expected noise.
   beforeAll(() => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -359,4 +353,81 @@ describe('searchBlocksAcrossSources — model differential over generated async 
       fuzzParams(100),
     )
   }, fuzzTestTimeout())
+
+  // ──── issue #450: duplicate-group payload selection must be order-independent ────
+
+  /** One shared block id, one single-candidate source per tuple — so
+   *  permuting the tuple array is a genuine permutation of
+   *  registration-then-within-source fold order through the REAL merge
+   *  point (`searchBlocksAcrossSources`), not just this suite's model. */
+  const runDupGroup = async (
+    order: readonly {score: number; userUpdatedAt: number | undefined}[],
+  ): Promise<BlockData[]> => {
+    const sources = order.map((t, i): SearchSourceContribution => ({
+      id: `s${i}`,
+      search: async () => [{
+        score: t.score,
+        block: makeBlockData('dup-block', t.userUpdatedAt, `${t.score}:${t.userUpdatedAt}`),
+      }],
+    }))
+    return searchBlocksAcrossSources(makeRepo(sources), {workspaceId: WS, query: 'q', limit: 1})
+  }
+
+  it('the surviving payload for a duplicate-id group is invariant under permutation of source order', async () => {
+    // `userUpdatedAt`/`score` pairs are constrained UNIQUE (as a whole
+    // tuple) so the winner is never ambiguous: a (timestamp, score) tie
+    // between two DISTINCT candidates is the only case where a
+    // different-but-equally-ranked candidate could legitimately survive
+    // under a different order, which isn't what this property targets —
+    // the pinned canary below covers the actual fuzz-found defect.
+    await fc.assert(
+      fc.asyncProperty(
+        fc.uniqueArray(
+          fc.record({
+            score: fc.integer({min: 0, max: 500}),
+            userUpdatedAt: fc.option(fc.integer({min: 0, max: 1000}), {nil: undefined}),
+          }),
+          {minLength: 2, maxLength: 6, selector: (t) => JSON.stringify(t)},
+        ).chain((tuples) => fc.tuple(
+          fc.constant(tuples),
+          fc.shuffledSubarray(tuples, {minLength: tuples.length, maxLength: tuples.length}),
+        )),
+        async ([tuples, shuffled]) => {
+          const original = await runDupGroup(tuples)
+          const permuted = await runDupGroup(shuffled)
+          expect(permuted, JSON.stringify({tuples, shuffled})).toEqual(original)
+        },
+      ),
+      fuzzParams(80),
+    )
+  }, fuzzTestTimeout())
+
+  it('canary: newest-timestamp candidate survives a 3-way duplicate group in every fold order (issue #450)', async () => {
+    // Pinned fuzz-found counterexample. A has an OLDER timestamp than B
+    // but a HIGHER score; C has no timestamp at all. Hand-traced against
+    // the pre-fix single-pass fold: order (C, B, A) first picks C over B
+    // (C's score 3 beats B's score 0, and C has no timestamp to compare),
+    // discarding B's timestamp from the running accumulator — the next
+    // comparison (accumulator-so-far vs A) then falls back to score
+    // (since the accumulator's payload, C, still has no timestamp) and
+    // picks A, so the fold surfaces A(t=10) despite B(t=20) being the
+    // true newest candidate in the group. (B, C, A) fails the same way.
+    // Confirmed by temporarily reverting the `freshestCandidatePayload`
+    // fix locally: this test failed on exactly those two orderings
+    // before the fix, and passes on all six after it.
+    const A = {score: 5, userUpdatedAt: 10}
+    const B = {score: 0, userUpdatedAt: 20}
+    const C = {score: 3, userUpdatedAt: undefined}
+    const orders = [
+      [A, B, C], [A, C, B], [B, A, C], [B, C, A], [C, A, B], [C, B, A],
+    ]
+
+    for (const order of orders) {
+      const result = await runDupGroup(order)
+      expect(result, JSON.stringify(order)).toHaveLength(1)
+      // B is the true newest (t=20) regardless of fold order.
+      expect(result[0].userUpdatedAt, JSON.stringify(order)).toBe(B.userUpdatedAt)
+      expect(result[0].content, JSON.stringify(order)).toBe(`${B.score}:${B.userUpdatedAt}`)
+    }
+  })
 })
