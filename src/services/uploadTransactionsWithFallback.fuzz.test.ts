@@ -982,7 +982,15 @@ const runSimulationUnspied = async (
           successCompletionFailRemaining.set(tx.blockId, 0)
           successCompletionFailureCounts.set(tx.blockId, (successCompletionFailureCounts.get(tx.blockId) ?? 0) + 1)
           const traceEntry = perTxTraceEntryByBlockId.get(tx.blockId)
-          if (traceEntry) traceEntry.classification = tx.successCompletionFailure.bucket
+          // OBSERVED side must observe (PR #448 review comment 3677492553,
+          // the same discipline `classificationOf` follows for every other
+          // path): call the REAL classifyUploadError on the thrown error,
+          // never the generator's own `bucket` label. `predictPass` is the
+          // only place allowed to trust `bucket` directly (that's the
+          // ground truth `expectedClassOf` branches on) — recording it here
+          // too would let predicted and observed agree by construction even
+          // when the real classifier misclassifies this exact error.
+          if (traceEntry) traceEntry.classification = classifyUploadError(tx.successCompletionFailure.err)
           thrownErrorByBlockId.set(tx.blockId, tx.successCompletionFailure.err)
           throw tx.successCompletionFailure.err
         }
