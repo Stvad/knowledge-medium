@@ -40,7 +40,19 @@
  * powersync.ts:485-490 documents: the write succeeds, then the separate
  * `complete()` step fails, so the tx stays pending and legitimately
  * re-quarantines — calling the idempotent writer again — on the next pass;
- * PR #448 review comment 3676858232).
+ * PR #448 review comment 3676858232). `complete()` has TWO further
+ * independent failure sites, injected separately (comment 3677128003):
+ * `Scenario.batchCompletionFailures` fails the BATCH's own `complete()`
+ * (powersync.ts:647) even though the batch upload succeeded — an
+ * unclassified failure that lands in the same generic catch as a batch
+ * upload failure and falls through to the per-tx loop with `attemptIndex`
+ * already advanced (a "prefix re-upload" of transactions the server
+ * already accepted); `TxModel.successCompletionFailure` fails a PER-TX
+ * `complete()` right after ITS OWN successful upload (powersync.ts:676) —
+ * unlike the other two, that thrown error IS classified
+ * (transient/ambiguous/permanent, drawn from the same pools as `Step`), so
+ * it reclassifies what would have been a 'success' entry and is handled by
+ * the SAME quarantine/retry machinery a real upload error would be.
  *
  * `runSimulation` drives the REAL `uploadTransactionsWithFallback` across
  * up to `AMBIGUOUS_RETRY_BUDGET + 4` **passes** (mirroring how
@@ -400,6 +412,20 @@ interface TxModel {
   // most once per tx, and only on the FIRST successful recordRejection
   // call for it.
   readonly completionFailsOnceAfterRejection: boolean
+  // A SECOND, independent completion-failure site (PR #448 review comment
+  // 3677128003): `complete()` right after a successful PER-TX upload
+  // (powersync.ts:676) can ALSO fail — and unlike the post-rejection one,
+  // that thrown error is NOT generic, it goes through the SAME
+  // `classifyUploadError` + transient/ambiguous/permanent decision tree a
+  // real upload error would (powersync.ts:678-702), so it needs its own
+  // classified `err`/`bucket` — ground truth by construction, drawn from
+  // the same pools as `Step`, never re-derived. `null` = never fires. Fires
+  // at most once, on this tx's FIRST successful PER-TX (not batch-drain)
+  // upload. Distinct from the BATCH's own completion failure
+  // (`Scenario.batchCompletionFailures` below, powersync.ts:647), which
+  // lands in the generic batch-fallback catch instead and so needs no
+  // classification.
+  readonly successCompletionFailure: {readonly err: unknown; readonly bucket: UploadErrorClass} | null
 }
 interface Scenario {
   readonly transactions: readonly TxModel[]
@@ -412,6 +438,17 @@ interface Scenario {
   // then every isolated per-tx retry succeeds" (05fe86074's own motivating
   // case) could never be generated — see `predictPass` below.
   readonly batchExogenousFailures: readonly boolean[]
+  // Whether pass N's `complete()` call for the BATCH drain (powersync.ts
+  // :647, `transactions[transactions.length - 1]?.complete()`) fails even
+  // though the batch UPLOAD itself succeeded — cycled the same way as
+  // `batchExogenousFailures`. That failure lands in the SAME generic catch
+  // as a batch upload failure (:654) and falls through to the per-tx loop,
+  // but with `attemptIndex` already advanced for every tx (the upload DID
+  // go through) — a "prefix re-upload" scenario PR #448 review comment
+  // 3677128003 named explicitly. Only takes effect when the batch upload
+  // would otherwise succeed; a no-op otherwise (can't fail the completion
+  // of an upload that never happened).
+  readonly batchCompletionFailures: readonly boolean[]
 }
 
 const txSpecArb = fc.record({
@@ -419,6 +456,17 @@ const txSpecArb = fc.record({
   script: scriptArb,
   rejectionFailsOnce: fc.oneof({arbitrary: fc.constant(false), weight: 4}, {arbitrary: fc.constant(true), weight: 1}),
   completionFailsOnceAfterRejection: fc.oneof({arbitrary: fc.constant(false), weight: 4}, {arbitrary: fc.constant(true), weight: 1}),
+  successCompletionFailure: fc.oneof(
+    {arbitrary: fc.constant(null), weight: 4},
+    {
+      arbitrary: fc.oneof(
+        transientErrorArb.map(err => ({err, bucket: 'transient' as const})),
+        permanentErrorArb.map(err => ({err, bucket: 'permanent' as const})),
+        ambiguousErrorArb.map(err => ({err, bucket: 'ambiguous' as const})),
+      ),
+      weight: 1,
+    },
+  ),
 })
 
 // Mostly false so the batch behaves as a plain function of the per-tx steps
@@ -428,12 +476,19 @@ const batchExogenousFailureArb = fc.oneof(
   {arbitrary: fc.constant(false), weight: 5},
   {arbitrary: fc.constant(true), weight: 1},
 )
+// Same shape and bias as `batchExogenousFailureArb`, for the batch's own
+// completion call (`Scenario.batchCompletionFailures`).
+const batchCompletionFailureArb = fc.oneof(
+  {arbitrary: fc.constant(false), weight: 5},
+  {arbitrary: fc.constant(true), weight: 1},
+)
 
 const scenarioArb: fc.Arbitrary<Scenario> = fc.integer({min: 1, max: 5}).chain(n =>
   fc.record({
     specs: fc.array(txSpecArb, {minLength: n, maxLength: n}),
     batchExogenousFailures: fc.array(batchExogenousFailureArb, {minLength: 1, maxLength: 3}),
-  }).map(({specs, batchExogenousFailures}) => ({
+    batchCompletionFailures: fc.array(batchCompletionFailureArb, {minLength: 1, maxLength: 3}),
+  }).map(({specs, batchExogenousFailures, batchCompletionFailures}) => ({
     transactions: specs.map((spec, index): TxModel => ({
       index,
       blockId: `blk-${index}`,
@@ -441,8 +496,10 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.integer({min: 1, max: 5}).chain(n
       script: spec.script,
       rejectionFailsOnce: spec.rejectionFailsOnce,
       completionFailsOnceAfterRejection: spec.completionFailsOnceAfterRejection,
+      successCompletionFailure: spec.successCompletionFailure,
     })),
     batchExogenousFailures,
+    batchCompletionFailures,
   })),
 )
 
@@ -478,11 +535,18 @@ const predictPass = (
   // one isn't, the batch fails anyway — this flag can't make it succeed).
   forceExogenousBatchFailure: boolean,
   completionFailRemaining: ReadonlyMap<string, number>,
+  // The batch's OWN complete() call (powersync.ts:647) fails, even though
+  // the batch UPLOAD succeeded — see `Scenario.batchCompletionFailures`.
+  // Only takes effect when the upload itself would succeed (mirrors
+  // `forceExogenousBatchFailure`'s gating); a no-op otherwise.
+  forceBatchCompletionFailure: boolean,
+  successCompletionFailRemaining: ReadonlyMap<string, number>,
 ): Prediction => {
   const localAttempt = new Map(attemptIndex)
   const localAmbiguous = new Map(ambiguousAttempts)
   const localRejectFail = new Map(rejectionFailRemaining)
   const localCompletionFail = new Map(completionFailRemaining)
+  const localSuccessCompletionFail = new Map(successCompletionFailRemaining)
   const peek = (tx: TxModel) => stepAt(tx.script, localAttempt.get(tx.blockId) ?? 0)
 
   // Batch path (powersync.ts:637-666): one applyOperations call over every
@@ -497,28 +561,44 @@ const predictPass = (
   // 05fe86074 exists to bound: drain the succeeded prefix on ANY batch
   // error, not just one caused by a specific tx).
   const allStepsSuccess = pending.every(tx => peek(tx).outcome === 'success')
-  if (allStepsSuccess && !forceExogenousBatchFailure) {
+  const batchUploadSucceeds = allStepsSuccess && !forceExogenousBatchFailure
+  if (batchUploadSucceeds) {
+    // The upload itself succeeded regardless of what happens to the batch's
+    // OWN complete() call next — advance attemptIndex unconditionally
+    // (powersync.ts:646-647: applyOperations resolves BEFORE complete() is
+    // even attempted, so a later completion failure can't un-consume the
+    // script step the server already accepted).
     for (const tx of pending) {
       localAttempt.set(tx.blockId, (localAttempt.get(tx.blockId) ?? 0) + 1)
-      if (tx.transactionId !== undefined) localAmbiguous.delete(tx.transactionId)
     }
-    return {
-      perTxTrace: [],
-      completedBlockIds: pending.map(tx => tx.blockId),
-      rejectedBlockIds: [],
-      rejectionFailureBlockId: null,
-      completionFailureBlockId: null,
-      passThrows: false,
-      stoppingBlockId: null,
-      finalAmbiguousAttempts: localAmbiguous,
+    if (!forceBatchCompletionFailure) {
+      for (const tx of pending) {
+        if (tx.transactionId !== undefined) localAmbiguous.delete(tx.transactionId)
+      }
+      return {
+        perTxTrace: [],
+        completedBlockIds: pending.map(tx => tx.blockId),
+        rejectedBlockIds: [],
+        rejectionFailureBlockId: null,
+        completionFailureBlockId: null,
+        passThrows: false,
+        stoppingBlockId: null,
+        finalAmbiguousAttempts: localAmbiguous,
+      }
     }
+    // The batch's own complete() failed — powersync.ts:654's catch treats
+    // this EXACTLY like a batch upload failure (generic, unclassified) and
+    // falls through to the per-tx loop below, but with attemptIndex already
+    // advanced (comment 3677128003's "prefix re-upload" scenario: the
+    // per-tx retry re-sends transactions the server already accepted).
   }
 
   // Per-tx fallback (powersync.ts:672-704): sequential, stops only on a
   // re-thrown error (transient, or ambiguous still inside its budget, a
   // simulated recordRejection write failure, or a simulated complete()
-  // failure right after a successful rejection write). permanent and
-  // budget-exhausted-ambiguous quarantine and CONTINUE (property c).
+  // failure right after a successful rejection write or a successful
+  // upload). permanent and budget-exhausted-ambiguous quarantine and
+  // CONTINUE (property c).
   const perTxTrace: Array<{blockId: string; classification: 'success' | UploadErrorClass}> = []
   const completedBlockIds: string[] = []
   const rejectedBlockIds: string[] = []
@@ -529,7 +609,20 @@ const predictPass = (
   for (const tx of pending) {
     const step = peek(tx)
     localAttempt.set(tx.blockId, (localAttempt.get(tx.blockId) ?? 0) + 1)
-    const cls = expectedClassOf(step)
+    let cls = expectedClassOf(step)
+    // A successful per-tx upload's OWN complete() (powersync.ts:676) can
+    // ALSO fail — and unlike the batch's, that error IS classified
+    // (powersync.ts:678-702 feeds whatever complete() threw through the
+    // SAME classifyUploadError + transient/ambiguous/permanent tree a real
+    // upload error would use), so a 'success' step is reclassified to the
+    // injected bucket here rather than handled as its own branch below.
+    if (cls === 'success' && tx.successCompletionFailure !== null) {
+      const remaining = localSuccessCompletionFail.get(tx.blockId) ?? 0
+      if (remaining > 0) {
+        localSuccessCompletionFail.set(tx.blockId, remaining - 1)
+        cls = tx.successCompletionFailure.bucket
+      }
+    }
     perTxTrace.push({blockId: tx.blockId, classification: cls})
 
     if (cls === 'success') {
@@ -625,6 +718,7 @@ interface SimulationResult {
   readonly recordRejectionSuccessCounts: ReadonlyMap<string, number>
   readonly recordRejectionFailureCounts: ReadonlyMap<string, number>
   readonly completionFailureCounts: ReadonlyMap<string, number>
+  readonly successCompletionFailureCounts: ReadonlyMap<string, number>
   readonly applyOperationsTouchLog: ReadonlyArray<{pass: number; blockIds: readonly string[]}>
 }
 
@@ -702,6 +796,9 @@ const runSimulationUnspied = async (
   const completionFailRemaining = new Map<string, number>(
     scenario.transactions.filter(tx => tx.completionFailsOnceAfterRejection).map(tx => [tx.blockId, 1]),
   )
+  const successCompletionFailRemaining = new Map<string, number>(
+    scenario.transactions.filter(tx => tx.successCompletionFailure !== null).map(tx => [tx.blockId, 1]),
+  )
 
   let pending = [...scenario.transactions]
   const passes: PassRecord[] = []
@@ -709,6 +806,7 @@ const runSimulationUnspied = async (
   const recordRejectionSuccessCounts = new Map<string, number>()
   const recordRejectionFailureCounts = new Map<string, number>()
   const completionFailureCounts = new Map<string, number>()
+  const successCompletionFailureCounts = new Map<string, number>()
   const applyOperationsTouchLog: Array<{pass: number; blockIds: readonly string[]}> = []
   const drainedBlockIds = new Set<string>()
 
@@ -719,6 +817,8 @@ const runSimulationUnspied = async (
     // granularity instead of per-tx-attempt granularity.
     const forceExogenousBatchFailure =
       scenario.batchExogenousFailures[passIndex % scenario.batchExogenousFailures.length]
+    const forceBatchCompletionFailure =
+      scenario.batchCompletionFailures[passIndex % scenario.batchCompletionFailures.length]
 
     const predicted = predictPass(
       passPending,
@@ -727,6 +827,8 @@ const runSimulationUnspied = async (
       rejectionFailRemaining,
       forceExogenousBatchFailure,
       completionFailRemaining,
+      forceBatchCompletionFailure,
+      successCompletionFailRemaining,
     )
 
     const completedThisPassSet = new Set<string>()
@@ -737,15 +839,79 @@ const runSimulationUnspied = async (
     // running the drain logic.
     const pendingCompletionFailure = new Set<string>()
     let completionFailureBlockIdActual: string | null = null
+    // Armed (below, inside `applyOperations`'s batch branch) only when the
+    // BATCH upload is about to succeed AND `forceBatchCompletionFailure` is
+    // set — the batch-drain `complete()` call (powersync.ts:647,
+    // `transactions[transactions.length - 1]?.complete()`) throws once
+    // instead of draining. One-time per pass; consumed on first fire, so a
+    // later per-tx retry of the same (last) tx is unaffected.
+    let pendingBatchCompletionFailure = false
+    // `callIndexInPass`, `perTxTraceActual`, `thrownErrorByBlockId` are read
+    // by `complete` below (site-b gating, trace correction, error
+    // threading), so they're declared BEFORE `crudTxs` even though nothing
+    // reads them until the real orchestrator actually calls in.
+    let callIndexInPass = 0
+    const perTxTraceActual: Array<{blockId: string; classification: 'success' | UploadErrorClass}> = []
+    // Same object references as `perTxTraceActual`'s entries, keyed by
+    // blockId, so a LATER completion failure (site b) can correct an
+    // already-pushed 'success' entry to the classification it reclassifies
+    // to — `applyOperations` only knows the upload succeeded; only
+    // `complete` (below) knows whether the injected completion failure
+    // then fires.
+    const perTxTraceEntryByBlockId = new Map<string, {blockId: string; classification: 'success' | UploadErrorClass}>()
+    // Populated by `applyOperations` (below) the moment a tx's PER-TX
+    // upload attempt succeeds THIS pass — the precise signal for site (b):
+    // `callIndexInPass` alone can't tell a per-tx SUCCESS completion call
+    // (powersync.ts:676) apart from a per-tx QUARANTINE's post-rejection
+    // completion call (:701, site c) — both happen deep in the per-tx loop
+    // with the same callIndexInPass range. Only a tx whose OWN applyOperations
+    // call just returned normally can be site (b)'s target.
+    const succeededThisAttempt = new Set<string>()
+    // The exact error object each per-tx applyOperations call threw for a
+    // block, THIS pass — captured so we can prove `recordRejection` (below)
+    // is handed the SAME error for the SAME tx, not the batch's generic
+    // error or another transaction's (powersync.ts:700: `catch (err) { ...
+    // deps.recordRejection(database, transaction, err) }` — err is always
+    // the error THAT tx's own applyOperations call just threw).
+    const thrownErrorByBlockId = new Map<string, unknown>()
+
     const crudTxs = passPending.map((tx, idxInPass) => {
       const entry = new CrudEntry(idxInPass, UpdateType.PUT, 'blocks', tx.blockId, tx.transactionId, {v: 1})
       const complete = async (): Promise<void> => {
+        // Site (a): the BATCH's own complete() (powersync.ts:647) — only
+        // the LAST tx's closure is ever invoked for this, and only once
+        // (consumed below), so this can never fire for a later per-tx
+        // retry of the same tx.
+        if (idxInPass === passPending.length - 1 && pendingBatchCompletionFailure) {
+          pendingBatchCompletionFailure = false
+          throw new Error('simulated batch complete() failure')
+        }
+        // Site (c, round 3): post-rejection complete() (powersync.ts:701).
         if (pendingCompletionFailure.has(tx.blockId)) {
           pendingCompletionFailure.delete(tx.blockId)
           completionFailRemaining.set(tx.blockId, (completionFailRemaining.get(tx.blockId) ?? 0) - 1)
           completionFailureCounts.set(tx.blockId, (completionFailureCounts.get(tx.blockId) ?? 0) + 1)
           completionFailureBlockIdActual = tx.blockId
           throw new Error('simulated CrudTransaction.complete() failure after a successful rejection write')
+        }
+        // Site (b): complete() after a successful PER-TX upload
+        // (powersync.ts:676) — gated on `succeededThisAttempt`, which is
+        // ONLY set when THIS tx's own applyOperations call just succeeded,
+        // so it can never fire for the batch-drain call (site a, above,
+        // never touches this set) or a quarantine's post-rejection call
+        // (site c, above — reached only when applyOperations THREW, so this
+        // tx was never added).
+        if (
+          succeededThisAttempt.has(tx.blockId) &&
+          tx.successCompletionFailure !== null &&
+          (successCompletionFailRemaining.get(tx.blockId) ?? 0) > 0
+        ) {
+          successCompletionFailRemaining.set(tx.blockId, 0)
+          successCompletionFailureCounts.set(tx.blockId, (successCompletionFailureCounts.get(tx.blockId) ?? 0) + 1)
+          const traceEntry = perTxTraceEntryByBlockId.get(tx.blockId)
+          if (traceEntry) traceEntry.classification = tx.successCompletionFailure.bucket
+          thrownErrorByBlockId.set(tx.blockId, tx.successCompletionFailure.err)
+          throw tx.successCompletionFailure.err
         }
         directCompleteInvocationCounts.set(tx.blockId, (directCompleteInvocationCounts.get(tx.blockId) ?? 0) + 1)
         // Real CrudTransaction.complete() drains every transaction AHEAD of
@@ -762,16 +928,6 @@ const runSimulationUnspied = async (
       return new CrudTransaction([entry], complete, tx.transactionId)
     })
 
-    let callIndexInPass = 0
-    const perTxTraceActual: Array<{blockId: string; classification: 'success' | UploadErrorClass}> = []
-    // The exact error object each per-tx applyOperations call threw for a
-    // block, THIS pass — captured so we can prove `recordRejection` (below)
-    // is handed the SAME error for the SAME tx, not the batch's generic
-    // error or another transaction's (powersync.ts:700: `catch (err) { ...
-    // deps.recordRejection(database, transaction, err) }` — err is always
-    // the error THAT tx's own applyOperations call just threw).
-    const thrownErrorByBlockId = new Map<string, unknown>()
-
     const applyOperations = async (
       _database: AbstractPowerSyncDatabase,
       operations: readonly CompactedBlockOperation[],
@@ -785,6 +941,7 @@ const runSimulationUnspied = async (
         )
         if (allSuccess && !forceExogenousBatchFailure) {
           for (const tx of passPending) attemptIndex.set(tx.blockId, (attemptIndex.get(tx.blockId) ?? 0) + 1)
+          pendingBatchCompletionFailure = forceBatchCompletionFailure
           return
         }
         throw new Error('simulated batch failure')
@@ -797,8 +954,16 @@ const runSimulationUnspied = async (
       attemptIndex.set(blockId, (attemptIndex.get(blockId) ?? 0) + 1)
       applyOperationsTouchLog.push({pass: passIndex, blockIds: [blockId]})
       const classification = classificationOf(step)
-      perTxTraceActual.push({blockId, classification})
-      if (step.outcome === 'success') return
+      const traceEntry = {blockId, classification}
+      perTxTraceActual.push(traceEntry)
+      // Keyed by blockId so `complete` (above) can correct this SAME entry
+      // in place if a success-completion failure (site b) reclassifies it —
+      // see `perTxTraceEntryByBlockId`'s own doc comment.
+      perTxTraceEntryByBlockId.set(blockId, traceEntry)
+      if (step.outcome === 'success') {
+        succeededThisAttempt.add(blockId)
+        return
+      }
       thrownErrorByBlockId.set(blockId, step.err)
       throw step.err
     }
@@ -895,6 +1060,7 @@ const runSimulationUnspied = async (
     recordRejectionSuccessCounts,
     recordRejectionFailureCounts,
     completionFailureCounts,
+    successCompletionFailureCounts,
     applyOperationsTouchLog,
   }
 }
