@@ -72,18 +72,25 @@ export const createSequenceMatcher = (
   }
 
   const next = (event: KeyboardEvent): SequenceVerdict => {
-    // Sequence expiry. tinykeys clears via a `setTimeout(fn, timeout)`
-    // (re-armed on every keydown) rather than a timestamp check; a timer
-    // scheduled for exactly `timeout` ms after the previous press fires
-    // (clearing `pending`) once at least that much wall-clock time has
-    // elapsed, i.e. at gap >= timeout, not gap > timeout — confirmed by
-    // instrumenting the differential in sequenceMatcher.fuzz.test.ts, which
-    // exercises this exact boundary. `>=` here (not `>`) is what makes this
-    // timestamp check equivalent to tinykeys' timer for dispatch purposes:
-    // a gap of EXACTLY the timeout now also ends the sequence, matching
-    // tinykeys rather than the (undocumented, and per tinykeys' own timer
-    // behavior incorrect) reading of its docs as strict "more than 1s".
-    if (lastTimeStamp !== null && event.timeStamp - lastTimeStamp >= timeoutMs) {
+    // Sequence expiry. This port OWNS dispatch timing — tinykeys'
+    // `createKeybindingsHandler` sequence loop (with its real
+    // `setTimeout`-driven clear) never runs in production; only its
+    // per-press primitives (`matchKeybindingPress`/`parseKeybinding`) do
+    // (HotkeyReconciler.tsx, useKeyInspector.ts). So tinykeys' timer is a
+    // spec reference for what "expire" should mean, not a live peer this
+    // code must bit-for-bit agree with at runtime.
+    //
+    // At exactly `gap === timeoutMs` that reference is itself
+    // underdetermined: `event.timeStamp` is privacy-coarsened by browsers,
+    // so a rounded gap of exactly `timeoutMs` can correspond to true
+    // elapsed time on either side of the boundary — tinykeys' timer may or
+    // may not have fired for the real press this event represents, and
+    // nothing observable here can tell which. Given that, we fail toward
+    // KEEPING the sequence alive (strict `>`, not `>=`): wrongly expiring a
+    // sequence silently drops a shortcut the user was mid-way through
+    // typing, while wrongly continuing one just means a chord they were
+    // already pressing completes — the asymmetric-harm direction.
+    if (lastTimeStamp !== null && event.timeStamp - lastTimeStamp > timeoutMs) {
       state.clear()
     }
     lastTimeStamp = event.timeStamp

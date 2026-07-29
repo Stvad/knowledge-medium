@@ -20,13 +20,19 @@
  * from `createKeybindingsHandler`'s loop (tinykeys.cjs:144-166): per-event
  * miss/pending/complete/conflict bookkeeping, the held-modifier-preserves-
  * sequence exception (sequenceMatcher.ts:55-56, tinykeys.cjs:151), and the
- * sequence-timeout equivalence sequenceMatcher.ts:75-77 argues for (tinykeys
- * clears via a real `setTimeout`; the matcher checks the GAP between two
- * `event.timeStamp`s at the next press). The differential below verifies
- * that argument computationally rather than trusting the comment: real
- * `vi` fake timers drive tinykeys' internal timer in lockstep with each
- * generated event's synthetic `timeStamp`, so both systems observe "the
- * same amount of elapsed time" and a disagreement at any step is real.
+ * sequence-timeout logic (tinykeys clears via a real `setTimeout`; the
+ * matcher checks the GAP between two `event.timeStamp`s at the next press).
+ * Note tinykeys' `createKeybindingsHandler` — the thing this differential
+ * runs against — never executes in production: the dispatcher
+ * (HotkeyReconciler.tsx) and the shortcut-help inspector (useKeyInspector.ts)
+ * both import only the per-press primitives and drive `createSequenceMatcher`
+ * directly. So this differential is a SPEC-FIDELITY check (does our
+ * hand-port match the reference implementation's intent) rather than a
+ * live-behavior constraint (there is no runtime tinykeys instance this code
+ * must bit-for-bit agree with) — material for interpreting the exact-boundary
+ * finding below, which is a case where fidelity to tinykeys' literal
+ * timer-firing behavior and the actual desired dispatch behavior turned out
+ * to disagree.
  *
  * ──── Generator design ────
  *
@@ -48,9 +54,10 @@
  * agree on the outcome), and (c) a bare modifier-only press (`Shift`
  * alone), covering the held-modifier exception. Each step also carries a
  * gap drawn from {0, within-timeout, exactly-the-timeout, past-timeout} —
- * see the "found while authoring, then fixed" note below for how the
- * exact-boundary case was found, and why it's included rather than
- * excluded.
+ * see the "found while authoring" note below for how the exact-boundary
+ * case was found, why it's included in the generator rather than excluded,
+ * and why the first property treats it as admissible either way instead of
+ * asserting strict tinykeys-parity there.
  *
  * Not covered (by design, not oversight): parenthesized-regex key tokens
  * and optional-modifier (`[Mod]`) chord syntax — grepped for real usage
@@ -58,34 +65,45 @@
  * blockActions.ts, colemak-keybindings, …) and found neither; adding them
  * would fuzz a tinykeys grammar corner this app never authors.
  *
- * ──── Found while authoring, then fixed — the exact-boundary gap
- *      (see PR #454 review thread, comment 3672710450) ────
+ * ──── Found while authoring — the exact-boundary gap, and why it stays
+ *      admissible-either-way rather than "fixed" (PR #454 review thread,
+ *      comments 3672710450 and 3676646931) ────
  *
  * The first deep-tier-shaped run (smoke seed, chord `"ArrowUp a"`, two
  * events each with `gapMs = DEFAULT_SEQUENCE_TIMEOUT_MS` exactly) went RED:
  * `matcher.next(event1).completed === true` but tinykeys never fired. This
  * suite originally excluded `gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS` from
  * `gapMsArb` to work around it, reasoning the tie was an unreachable
- * fake-clock artifact. That reasoning doesn't hold: browsers coarsen
- * `event.timeStamp` for privacy (integer- or larger-quantized), so two real
- * keypresses landing exactly `timeoutMs` apart IS reachable, not
- * measure-zero — so the boundary is restored to the generator permanently.
+ * fake-clock artifact. That reasoning didn't hold — browsers coarsen
+ * `event.timeStamp` for privacy, so two real keypresses landing exactly
+ * `timeoutMs` apart IS reachable — so the boundary was restored to the
+ * generator permanently.
  *
- * Root cause, confirmed by instrumenting the run: tinykeys re-arms a
- * `setTimeout(() => pending.clear(), timeout)` on every keydown
- * (tinykeys.cjs's `createKeybindingsHandler`, not a timestamp comparison).
- * A timer scheduled for exactly `timeout` ms fires once AT LEAST that much
- * wall-clock time has elapsed — i.e. at gap >= timeout — while the matcher
- * was comparing with a strict `>` (sequenceMatcher.ts), which does not
- * expire at gap === timeout. Fix: sequenceMatcher.ts's expiry check now
- * uses `>=`, matching tinykeys' actual (timer-firing) behavior rather than
- * a strict reading of its docs' "more than 1s apart" — re-verified by
- * multiple 2000+ run deep-tier passes (fixed and random seeds) with the
- * boundary value included, no residual divergence found anywhere else in
- * the swept space. User-visible behavior change: a gap of EXACTLY the
- * timeout now ENDS an in-flight sequence instead of continuing it (was:
- * only a gap strictly greater than the timeout did); pinned deterministically
- * in sequenceMatcher.test.ts.
+ * First fix attempt: switch sequenceMatcher.ts's strict `>` to `>=`, to
+ * match tinykeys' own timer, which (confirmed by instrumenting the run)
+ * re-arms a `setTimeout(() => pending.clear(), timeout)` on every keydown
+ * and — under this harness's fake timers — fires once AT LEAST `timeout`
+ * ms have elapsed, i.e. at gap >= timeout, not gap > timeout. That
+ * initially looked like the fix (re-verified clean across several 2000+
+ * run deep-tier passes). It was reverted: `createKeybindingsHandler` (the
+ * thing whose timer we'd be matching) never runs in production — only
+ * `matchKeybindingPress`/`parseKeybinding` do (HotkeyReconciler.tsx,
+ * useKeyInspector.ts) — so "match tinykeys' timer" isn't actually a
+ * live-behavior requirement, just one reading of the reference
+ * implementation's intent. And `event.timeStamp` coarsening cuts both
+ * ways: a rounded gap of exactly `timeoutMs` can correspond to true
+ * elapsed time on either side of the boundary, so neither `>` nor `>=` is
+ * the objectively correct reading of an already-ambiguous input — the
+ * choice is a harm-asymmetry call (sequenceMatcher.ts's comment), and
+ * `>` (fail toward keeping a sequence alive, never silently drop a
+ * shortcut) wins that call.
+ *
+ * Consequence for this suite: the exact-boundary gap is a genuinely
+ * admissible-either-way case, not a bug to fix or hide. The first property
+ * below stops asserting tinykeys-parity once a scenario hits that gap
+ * (comment there explains why); the boundary is pinned deterministically
+ * instead in sequenceMatcher.test.ts, against the port's OWN chosen
+ * behavior rather than against tinykeys.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -183,14 +201,15 @@ interface EventStep {
 }
 
 // Includes the exact boundary (gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS) as its
-// own weighted case — see the docblock's "Found while authoring, then
-// fixed" note: this used to be excluded, which hid a real divergence at
-// that value. Now that sequenceMatcher.ts's expiry check is `>=`, the
-// boundary agrees with tinykeys same as the two surrounding regions.
+// own weighted case — see the docblock's "Found while authoring" note: this
+// used to be excluded as an "unreachable" tie, which was wrong (coarsened
+// `event.timeStamp`s make it reachable). It stays in the generator
+// permanently; the first property below treats a hit on this exact value as
+// admissible either way rather than asserting tinykeys-parity there.
 const gapMsArb: fc.Arbitrary<number> = fc.oneof(
   fc.constant(0),
   fc.integer({ min: 1, max: DEFAULT_SEQUENCE_TIMEOUT_MS - 1 }), // within timeout — neither side expires
-  fc.constant(DEFAULT_SEQUENCE_TIMEOUT_MS), // exact boundary — both expire (tinykeys' timer fires, matcher's `>=` fires)
+  fc.constant(DEFAULT_SEQUENCE_TIMEOUT_MS), // exact boundary — admissible either way, see docblock
   fc.integer({ min: DEFAULT_SEQUENCE_TIMEOUT_MS + 1, max: DEFAULT_SEQUENCE_TIMEOUT_MS * 3 }), // past timeout — both expire
 )
 
@@ -276,11 +295,23 @@ describe('createSequenceMatcher ↔ tinykeys per-step differential (generalizes 
     vi.useRealTimers()
   })
 
-  it('completes on exactly the same events tinykeys would fire on, over generated chord specs and event sequences', () => {
+  it('completes on exactly the same events tinykeys would fire on, over generated chord specs and event sequences (except at an exact-timeout-boundary gap, which is admissible either way — see docblock)', () => {
     fc.assert(
       fc.property(scenarioArb, scenario => {
         const results = runDifferential(scenario)
+        // Once a step's gap lands EXACTLY on DEFAULT_SEQUENCE_TIMEOUT_MS,
+        // the two systems are comparing an underdetermined input (see the
+        // docblock and sequenceMatcher.ts): tinykeys' fake-timer-driven
+        // clear deterministically resolves the tie as "expired" in THIS
+        // harness, while the port deliberately fails toward "continued".
+        // Neither is wrong, so we stop asserting tinykeys-parity from that
+        // step onward — a later mismatch in the SAME scenario would just be
+        // a downstream echo of this one accepted tie (the two systems'
+        // pending state has diverged), not an independently new bug. The
+        // OTHER property below (no simultaneous completed+pending) still
+        // runs unconditionally over every step, including these.
         for (let i = 0; i < results.length; i++) {
+          if (scenario.steps[i]!.gapMs === DEFAULT_SEQUENCE_TIMEOUT_MS) break
           const { tinykeysFired, matcherVerdict } = results[i]!
           expect(matcherVerdict.completed, `step ${i}: ${JSON.stringify(scenario.steps[i])}`).toBe(tinykeysFired)
         }
