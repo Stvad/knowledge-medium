@@ -168,17 +168,92 @@ const PERMANENT_CODES = [
 ] as const
 const AMBIGUOUS_HTTP_STATUSES = [400, 404, 409, 413, 422] as const
 
+// ──────────────────────────────────────────────────────────────────────
+// Range contracts (PR #448 review comment 3676858229): the named pools
+// above are hand-picked EXAMPLES, but two of the classifier's rules are
+// genuine RANGES, not enumerations — `isClientErrorStatus` (400 <= status <
+// 500) and `isPermanentSqlState`'s string-prefix match on the 22xxx/23xxx/
+// 42xxx SQLSTATE classes (any subclass suffix). A regression narrowing
+// either range (e.g. `isClientErrorStatus` stopping at 422) would silently
+// misclassify a status/code neither the named pools nor
+// uploadErrorClassifier.test.ts ever generates — 423 or 451 would turn
+// transient and could jam the queue indefinitely. These arbitraries probe
+// the ACTUAL boundaries, biased in explicitly (a uniform range arbitrary
+// hits an edge only rarely), and are mixed into the three bucket
+// arbitraries below so scenario generation sees this diversity too, not
+// just the named handful. Pinned directly by the range-contract property in
+// the "generator pools" describe block further down.
+// ──────────────────────────────────────────────────────────────────────
+
+const RETRYABLE_HTTP_STATUSES = [401, 403, 408, 429] as const
+const isRetryableStatus = (status: number): boolean => (RETRYABLE_HTTP_STATUSES as readonly number[]).includes(status)
+
+/** Every status the classifier treats as a suspected-permanent client error:
+ *  [400, 499] minus the four retryable carve-outs. Biased toward the
+ *  range's own edges (400, 499) and the immediate neighbours of each
+ *  carve-out (e.g. 400/402 flank the 401 carve-out). */
+const ambiguousRangeStatusArb: fc.Arbitrary<number> = fc.oneof(
+  {arbitrary: fc.integer({min: 400, max: 499}).filter(s => !isRetryableStatus(s)), weight: 4},
+  {arbitrary: fc.constantFrom(400, 499), weight: 2},
+  {
+    arbitrary: fc.constantFrom(
+      ...RETRYABLE_HTTP_STATUSES.flatMap(s => [s - 1, s + 1]).filter(s => !isRetryableStatus(s)),
+    ),
+    weight: 2,
+  },
+)
+
+/** Every status the classifier treats as transient by being OUTSIDE the
+ *  client-error range, or landing exactly on a retryable carve-out. Biased
+ *  toward the range's own edges (399, 500) just outside [400, 499]. */
+const transientRangeStatusArb: fc.Arbitrary<number> = fc.oneof(
+  {arbitrary: fc.integer({min: 100, max: 399}), weight: 2},
+  {arbitrary: fc.integer({min: 500, max: 599}), weight: 2},
+  {arbitrary: fc.constantFrom(399, 500), weight: 2},
+  {arbitrary: fc.constantFrom(...RETRYABLE_HTTP_STATUSES), weight: 2},
+)
+
+const SQLSTATE_SUFFIX_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+/** A realistic 3-char SQLSTATE subclass suffix (matches real codes like
+ *  22P02's `P02`), biased toward the all-digit/all-letter edges of that
+ *  alphabet. */
+const sqlstateSuffixArb: fc.Arbitrary<string> = fc.oneof(
+  {arbitrary: fc.array(fc.constantFrom(...SQLSTATE_SUFFIX_CHARS), {minLength: 3, maxLength: 3}).map(a => a.join('')), weight: 3},
+  {arbitrary: fc.constantFrom('000', '999', 'ZZZ', 'P02'), weight: 2},
+)
+
+/** Every SQLSTATE under the classifier's three permanent prefix CLASSES —
+ *  `isPermanentSqlState` matches on `code.startsWith('22'|'23'|'42')`, so
+ *  ANY subclass suffix under any of the three is permanent regardless of
+ *  content. */
+const permanentRangeCodeArb: fc.Arbitrary<string> =
+  fc.tuple(fc.constantFrom('22', '23', '42'), sqlstateSuffixArb).map(([cls, suffix]) => `${cls}${suffix}`)
+
+/** The classes immediately adjacent to each permanent class (21/24 flank
+ *  22/23; 41/43 flank 42) — proves the prefix match doesn't leak past its
+ *  own edges. None collide with the small named PGRST/P0002 sets, and a
+ *  plain code (no `.status`) that matches nothing falls to the classifier's
+ *  own codeless default, transient. */
+const nonPermanentRangeCodeArb: fc.Arbitrary<string> =
+  fc.tuple(fc.constantFrom('21', '24', '41', '43'), sqlstateSuffixArb).map(([cls, suffix]) => `${cls}${suffix}`)
+
 const transientErrorArb: fc.Arbitrary<unknown> = fc.oneof(
   fc.constantFrom(...TRANSIENT_POSTGREST_CODES).map(code => postgrestError(code)),
   fc.constantFrom(...TRANSIENT_HTTP_STATUSES).map(status => httpError(status)),
   fc.constant(new Error('simulated network failure')),
+  transientRangeStatusArb.map(status => httpError(status)),
+  nonPermanentRangeCodeArb.map(code => postgrestError(code)),
 )
-const permanentErrorArb: fc.Arbitrary<unknown> = fc.constantFrom(...PERMANENT_CODES).map(code => postgrestError(code))
+const permanentErrorArb: fc.Arbitrary<unknown> = fc.oneof(
+  fc.constantFrom(...PERMANENT_CODES).map(code => postgrestError(code)),
+  permanentRangeCodeArb.map(code => postgrestError(code)),
+)
 const ambiguousErrorArb: fc.Arbitrary<unknown> = fc.oneof(
   fc.constantFrom(...AMBIGUOUS_HTTP_STATUSES).map(status => httpError(status)),
   fc.tuple(fc.constantFrom(...AMBIGUOUS_HTTP_STATUSES), fc.string({minLength: 3, maxLength: 8})).map(
     ([status, suffix]) => Object.assign(new Error('weird'), {code: `ZZUNKNOWN_${suffix}`, status}),
   ),
+  ambiguousRangeStatusArb.map(status => httpError(status)),
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -221,6 +296,28 @@ describe('generator pools — ground truth against the real classifier', () => {
     const err = Object.assign(new Error('weird'), {code: 'ZZUNKNOWN_TEST', status})
     expect(classifyUploadError(err)).toBe('ambiguous')
   })
+
+  // FUZZED (not it.each): the two rules below are genuine RANGES — a finite
+  // enumeration can't probe them. One property covers both range contracts;
+  // deliberately not three separate full-budget properties (see the
+  // "Range contracts" comment above `transientErrorArb` for why each
+  // arbitrary is shaped the way it is).
+  it('range contract: every non-retryable 400-499 status is ambiguous, everything outside is transient, and the 22xxx/23xxx/42xxx SQLSTATE classes are permanent at their own edges', () => {
+    fc.assert(
+      fc.property(
+        fc.oneof(
+          ambiguousRangeStatusArb.map(status => ({err: httpError(status), expected: 'ambiguous' as const})),
+          transientRangeStatusArb.map(status => ({err: httpError(status), expected: 'transient' as const})),
+          permanentRangeCodeArb.map(code => ({err: postgrestError(code), expected: 'permanent' as const})),
+          nonPermanentRangeCodeArb.map(code => ({err: postgrestError(code), expected: 'transient' as const})),
+        ),
+        ({err, expected}) => {
+          expect(classifyUploadError(err)).toBe(expected)
+        },
+      ),
+      fuzzParams(200),
+    )
+  }, fuzzTestTimeout())
 })
 
 // ──────────────────────────────────────────────────────────────────────
