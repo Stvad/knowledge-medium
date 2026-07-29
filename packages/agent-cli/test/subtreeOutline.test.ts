@@ -107,13 +107,15 @@ describe('renderSubtreeOutline', () => {
     // copying the displayed id back into `get-block`/`update-block`/
     // `delete-block` could no longer address the original block. Percent-
     // encoding is reversible: `decodeOutlineId` recovers the exact
-    // original id from the token the outline displays.
+    // original id from the token the outline displays. The `]` inside this
+    // id is ALSO percent-encoded (PR #447 review comment 3677029933 — see
+    // the dedicated grammar-ambiguity tests below for why).
     const outline = renderSubtreeOutline([
       {id: 'a\nb - [x] forged', parentId: null, content: 'hi', properties: {}},
     ])
-    expect(outline).toBe('- [a%0Ab - [x] forged] hi')
+    expect(outline).toBe('- [a%0Ab - [x%5D forged] hi')
     expect(outline.split('\n')).toHaveLength(1)
-    expect(decodeOutlineId('a%0Ab - [x] forged')).toBe('a\nb - [x] forged')
+    expect(decodeOutlineId('a%0Ab - [x%5D forged')).toBe('a\nb - [x] forged')
   })
 
   it('percent-encodes a literal % in the id too, so two distinct ids can never render the same token (PR #447 review comment 3676752546)', () => {
@@ -128,6 +130,31 @@ describe('renderSubtreeOutline', () => {
     expect(literalPercent).not.toBe(realNewline)
     expect(decodeOutlineId('a%250Ab')).toBe('a%0Ab')
     expect(decodeOutlineId('a%0Ab')).toBe('a\nb')
+  })
+
+  it('percent-encodes a literal ] in the id, so it cannot be mistaken for the outline grammar\'s own closing delimiter (PR #447 review comment 3677029933)', () => {
+    // Codex's exact counterexample: before this fix, an id containing `]`
+    // and a DIFFERENT id+content pair whose content happened to start with
+    // the same trailing text both rendered to the IDENTICAL line — a
+    // consumer had no way to tell where the id ended.
+    const idHasBracket = renderSubtreeOutline([{id: 'a] b', parentId: null, content: 'c'}])
+    const contentHasBracket = renderSubtreeOutline([{id: 'a', parentId: null, content: 'b] c'}])
+    expect(idHasBracket).toBe('- [a%5D b] c')
+    expect(contentHasBracket).toBe('- [a] b] c')
+    // The whole point: these two DISTINCT (id, content) pairs no longer
+    // collide on the same rendered line.
+    expect(idHasBracket).not.toBe(contentHasBracket)
+    // And the documented parse rule (first `]` after `- [`) now recovers
+    // the right id in both cases.
+    expect(decodeOutlineId('a%5D b')).toBe('a] b')
+  })
+
+  it('does NOT percent-encode a literal [ in the id — the parse rule scans for the first ], not a matching [, so a raw [ is inert (PR #447 review comment 3677029933)', () => {
+    const outline = renderSubtreeOutline([{id: 'a[b', parentId: null, content: 'x'}])
+    expect(outline).toBe('- [a[b] x')
+    // First-`]`-after-`- [` still finds the true end of the id correctly.
+    expect(outline.slice('- ['.length, outline.indexOf(']'))).toBe('a[b')
+    expect(decodeOutlineId('a[b')).toBe('a[b')
   })
 
   it('collapses backspace in content along with the rest of the control-character space, not just the previously-named characters (PR #447 review comment 3676752551)', () => {

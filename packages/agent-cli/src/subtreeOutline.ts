@@ -104,11 +104,14 @@ const neutralizeOutlineField = (text: string): string =>
   text.replace(CONTROL_CHAR_RUN_REGEX, ' ⏎ ')
 
 /** Single-character (non-`+`-quantified) variant of
- *  {@link CONTROL_CHAR_RUN_REGEX}, plus `%` itself — see `encodeOutlineId`
- *  below for why `%` must also be matched for the encoding to be
- *  injective. */
+ *  {@link CONTROL_CHAR_RUN_REGEX}, plus TWO characters that aren't
+ *  control characters at all but are still hostile in an id
+ *  specifically — see `encodeOutlineId` below for why each is needed:
+ *  `%` (for the encoding itself to be injective) and `]` (for the
+ *  surrounding OUTLINE GRAMMAR — `- [<id>] <content>` — to stay
+ *  unambiguous; PR #447 review comment 3677029933). */
 // eslint-disable-next-line no-control-regex -- intentional control-char match
-const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%]/g
+const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%\]]/g
 
 /**
  * Percent-encode the hostile bytes in a block `id` — REVERSIBLY, unlike
@@ -135,6 +138,32 @@ const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%]/
  * distinct ids onto one token — the same bug this function exists to fix,
  * just moved from control characters onto `%`.
  *
+ * `]` MUST be encoded too, for a related but DISTINCT reason: injectivity
+ * of this function ALONE doesn't make the surrounding OUTLINE GRAMMAR
+ * unambiguous. `renderSubtreeOutline` embeds the encoded id as
+ * `- [<id>] <content>`, so a raw `]` inside the id is indistinguishable
+ * from the delimiter that closes it — PR #447 review comment 3677029933:
+ * `id: "a] b", content: "c"` and `id: "a", content: "b] c"` both used to
+ * render `- [a] b] c`, so a consumer had no way to tell where the id
+ * token ends, and therefore no way to even extract the right substring
+ * to hand to `decodeOutlineId`.
+ *
+ * THE PARSING RULE THIS MODULE COMMITS TO, and which encoding `]` is what
+ * makes well-defined: the id token is everything between the leading
+ * `- [` and the FIRST `]` that follows — a first-match scan, NOT
+ * bracket-matching. That rule is unambiguous once every literal `]` that
+ * could appear IN the id is guaranteed encoded away, since the first raw
+ * `]` byte on the line is then guaranteed to be the structural delimiter.
+ * Any consumer that parses the outline back into ids MUST follow this
+ * exact rule (see the whole-grammar round-trip/injectivity fuzz
+ * properties in subtreeOutline.fuzz.test.ts, which pin it).
+ *
+ * `[` is deliberately NOT encoded: under the first-`]` rule above, a
+ * literal `[` inside the id is inert — it's never treated as an opening
+ * delimiter to match, so it can't shift where the id token ends.
+ * Encoding it would only matter for a bracket-MATCHING parser, which
+ * this module does not assume and does not ask consumers to implement.
+ *
  * Uses `encodeURIComponent` — standard percent-encoding of a value's UTF-8
  * bytes — on each matched character rather than a bespoke hex scheme, so
  * the encoding is the one any consumer already knows how to reverse (e.g.
@@ -142,9 +171,12 @@ const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%]/
 const encodeOutlineId = (id: string): string =>
   id.replace(ID_ENCODE_REGEX, encodeURIComponent)
 
-/** Exact inverse of {@link encodeOutlineId}. Exported so a consumer that
- *  copies an `[id]` token out of the outline — or this module's own tests
- *  — can recover the original id without re-deriving the encoding scheme. */
+/** Exact inverse of {@link encodeOutlineId}. Takes the id token ITSELF —
+ *  everything between the leading `- [` and the first `]` that follows,
+ *  per the parsing rule documented on {@link encodeOutlineId} — not a raw
+ *  outline line. Exported so a consumer that extracts that token out of
+ *  the outline — or this module's own tests — can recover the original id
+ *  without re-deriving the encoding scheme. */
 export const decodeOutlineId = (encoded: string): string => decodeURIComponent(encoded)
 
 /**

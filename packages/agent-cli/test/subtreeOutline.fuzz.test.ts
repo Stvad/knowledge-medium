@@ -21,7 +21,7 @@
  * about block ids and structure. The anti-spoofing invariant (module doc
  * :162-172: "the id comes first... EVERY field is neutralized before
  * interpolation, so a block can't spill into id-less lines... line count
- * == block count") has now been defended against SIX missed hazard
+ * == block count") has now been defended against SEVEN missed hazard
  * classes:
  *
  *  - Unicode line separators (34a586e92, U+2028/U+2029 inside
@@ -55,6 +55,16 @@
  *    Fixed by giving `id` its OWN treatment — `encodeOutlineId`, a
  *    reversible, injective percent-encoding — instead of sharing
  *    `content`/`properties`'s lossy `neutralizeOutlineField` collapse)
+ *  - `]` inside a hostile id colliding with the outline GRAMMAR's own
+ *    closing delimiter (PR #447 review comment 3677029933 — injectivity
+ *    of `encodeOutlineId` ALONE wasn't enough: `id: "a] b", content: "c"`
+ *    and `id: "a", content: "b] c"` both rendered `- [a] b] c`, so a
+ *    consumer had no way to tell where the id token ended. Fixed by also
+ *    percent-encoding `]` in `ID_ENCODE_REGEX`, which makes the
+ *    documented parse rule — id is everything between the leading `- [`
+ *    and the FIRST `]` — unambiguous. `[` is deliberately left alone:
+ *    under a first-`]` scan it's inert, not an opening delimiter to
+ *    match.)
  *
  * `neutralizeOutlineField`/`encodeOutlineId`/`ID_ENCODE_REGEX`/
  * `CONTROL_CHAR_RUN_REGEX` aren't exported (internal helpers), so they're
@@ -135,16 +145,18 @@ const CONTROL_CODEPOINTS: readonly number[] = [
 const NEUTRALIZED_CHARS: readonly string[] = CONTROL_CODEPOINTS.map(cp => String.fromCodePoint(cp))
 
 /** Independent-but-matching oracle for the `id` field's treatment —
- *  copied verbatim from subtreeOutline.ts:111/142-143: the SAME
- *  single-character (non-`+`-quantified) class plus `%`, percent-encoded
- *  via `encodeURIComponent`. Used only to PREDICT the expected `[id]`
- *  token in the anti-forge property below; the dedicated
+ *  copied verbatim from subtreeOutline.ts's `ID_ENCODE_REGEX`: the SAME
+ *  single-character (non-`+`-quantified) class plus `%` (for the
+ *  encoding's own injectivity) and `]` (for the surrounding outline
+ *  GRAMMAR's injectivity — PR #447 review comment 3677029933), percent-
+ *  encoded via `encodeURIComponent`. Used only to PREDICT the expected
+ *  `[id]` token in the anti-forge property below; the dedicated
  *  injectivity/round-trip properties further down instead exercise the
  *  REAL `encodeOutlineId` through the public `renderSubtreeOutline`
  *  surface (via `encodedIdToken`), since re-deriving expectations from a
  *  copy of the same logic can't catch a bug shared by both copies. */
 // eslint-disable-next-line no-control-regex -- intentional control-char match, mirrors the source
-const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%]/g
+const ID_ENCODE_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029%\]]/g
 const encodeIdOracle = (id: string): string => id.replace(ID_ENCODE_REGEX, encodeURIComponent)
 
 /** A run of 1-3 characters from `NEUTRALIZED_CHARS` — the content/
@@ -167,15 +179,22 @@ const ansiEscapeSequenceArb: fc.Arbitrary<string> = fc.tuple(
 
 const benignTokenArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 ]{0,6}$/)
 
-/** Text soup: benign tokens interleaved with neutralized-char runs and
- *  ANSI escape sequences at random positions, incl. runs back-to-back and
- *  at the very start/end. Shared by `content`, `properties` string
- *  leaves, AND (below) `id` — all of the SAME hostile characters are
- *  relevant to every field, even though `id` is now treated differently
- *  (percent-encoded rather than collapsed) once it reaches the
- *  renderer. */
+/** `[`/`]` specifically — PR #447 review comment 3677029933's hazard class
+ *  is NOT a control character at all, so nothing above guarantees it shows
+ *  up often; `idSuffixArb`/`contentSoupArb`'s fully-arbitrary-Unicode
+ *  branch could produce it, but only by chance. Mixed into the soup below
+ *  so id/content bracket collisions are exercised deliberately. */
+const bracketArb: fc.Arbitrary<string> = fc.constantFrom('[', ']', '][', '[]', ']]', '[[', '] ')
+
+/** Text soup: benign tokens interleaved with neutralized-char runs,
+ *  brackets, and ANSI escape sequences at random positions, incl. runs
+ *  back-to-back and at the very start/end. Shared by `content`,
+ *  `properties` string leaves, AND (below) `id` — all of the SAME hostile
+ *  characters are relevant to every field, even though `id` is now
+ *  treated differently (percent-encoded rather than collapsed) once it
+ *  reaches the renderer. */
 const contentSoupArb: fc.Arbitrary<string> = fc.array(
-  fc.oneof(benignTokenArb, neutralizedCharRunArb, ansiEscapeSequenceArb),
+  fc.oneof(benignTokenArb, neutralizedCharRunArb, ansiEscapeSequenceArb, bracketArb),
   {maxLength: 10},
 ).map(parts => parts.join(''))
 
@@ -402,6 +421,89 @@ describe('decodeOutlineId is the exact inverse of encodeOutlineId (PR #447 revie
       fuzzParams(300),
     )
   }, fuzzTestTimeout())
+})
+
+// ──── whole-grammar round-trip + injectivity (PR #447 review comment
+//      3677029933): id-alone injectivity (above) is NOT the same claim as
+//      the outline GRAMMAR being unambiguous — a raw `]` inside the id
+//      collides with the grammar's OWN closing delimiter regardless of
+//      whether `encodeOutlineId` is injective in isolation. These
+//      properties exercise the full `- [<id>] <content>` shape, not just
+//      the encoder. ────
+
+/** The parse rule `encodeOutlineId`'s doc comment (subtreeOutline.ts
+ *  :113-165) commits every consumer to: the id token is everything
+ *  between the leading `- [` and the FIRST `]` that follows — a
+ *  first-match scan, NOT bracket-matching. `encodeOutlineId` itself isn't
+ *  exported, so there's no parse HELPER to import; this implements the
+ *  documented rule directly, as the inverse this suite pins (PR #447
+ *  review comment 3677029933's guidance: "If a parse helper doesn't
+ *  exist, write the parse rule in the test as the inverse you're
+ *  pinning"). Any real consumer parsing the outline back into ids MUST
+ *  follow this exact rule. */
+const parseIdFromLine = (line: string): string => {
+  const start = '- ['.length
+  const end = line.indexOf(']', start)
+  return decodeOutlineId(line.slice(start, end))
+}
+
+describe('whole-grammar round-trip: the documented first-] parse rule recovers the exact id through the FULL line, not just the encoder (PR #447 review comment 3677029933)', () => {
+  it('parseIdFromLine(renderSubtreeOutline([{id, content}])) === id for arbitrary (id, content) pairs, including ids/content containing [ and ]', () => {
+    fc.assert(
+      fc.property(idSuffixArb, contentSoupArb, (id, content) => {
+        const outline = renderSubtreeOutline([{id, parentId: null, content, depth: 0}])
+        expect(parseIdFromLine(outline), outline).toBe(id)
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('Codex\'s exact counterexample: an id-side ] and a content-side ] parse back to their own distinct ids', () => {
+    const idHasBracket = renderSubtreeOutline([{id: 'a] b', parentId: null, content: 'c', depth: 0}])
+    const contentHasBracket = renderSubtreeOutline([{id: 'a', parentId: null, content: 'b] c', depth: 0}])
+    expect(idHasBracket).not.toBe(contentHasBracket)
+    expect(parseIdFromLine(idHasBracket)).toBe('a] b')
+    expect(parseIdFromLine(contentHasBracket)).toBe('a')
+  })
+})
+
+/** Content free of the control-character space `neutralizeOutlineField`
+ *  collapses (the same `CONTROL_CODEPOINTS` used above) — so
+ *  `neutralizeOutlineField` is the IDENTITY on it and no lossy
+ *  content-side collapse can create an independent collision. Used ONLY
+ *  for the whole-LINE injectivity property below, to isolate the id/
+ *  grammar fix (PR #447 review comment 3677029933) from content's
+ *  separately-accepted, INTENTIONAL lossiness: two different raw content
+ *  strings CAN legitimately collapse to the same neutralized text (e.g.
+ *  `"x\ny"` and `"x\r\ny"` both -> `"x ⏎ y"`) — that's by design (content
+ *  is prose, not an identifier), not a bug, and isn't what this property
+ *  is about. May still contain `[`/`]` — those are not control characters
+ *  and are never neutralized, so they don't need to be excluded here. */
+const controlCharFreeContentArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 .,!?[\]-]{0,15}$/)
+
+describe('whole-line injectivity: distinct (id, content) pairs never render the same line, with content-side lossiness controlled for (PR #447 review comment 3677029933)', () => {
+  it('holds for arbitrary distinct (id, content) pairs — id from the full hostile domain (incl. [ and ]), content control-char-free so only the id/grammar fix is under test', () => {
+    fc.assert(
+      fc.property(
+        fc.tuple(
+          fc.tuple(idSuffixArb, controlCharFreeContentArb),
+          fc.tuple(idSuffixArb, controlCharFreeContentArb),
+        ).filter(([a, b]) => a[0] !== b[0] || a[1] !== b[1]),
+        ([[idA, contentA], [idB, contentB]]) => {
+          const lineA = renderSubtreeOutline([{id: idA, parentId: null, content: contentA, depth: 0}])
+          const lineB = renderSubtreeOutline([{id: idB, parentId: null, content: contentB, depth: 0}])
+          expect(lineA).not.toBe(lineB)
+        },
+      ),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('Codex\'s exact counterexample no longer collides', () => {
+    const idHasBracket = renderSubtreeOutline([{id: 'a] b', parentId: null, content: 'c', depth: 0}])
+    const contentHasBracket = renderSubtreeOutline([{id: 'a', parentId: null, content: 'b] c', depth: 0}])
+    expect(idHasBracket).not.toBe(contentHasBracket)
+  })
 })
 
 // ──── TAB is the one deliberate allowance — verify it generically, not
