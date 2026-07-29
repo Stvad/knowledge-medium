@@ -283,6 +283,15 @@ interface TxModel {
 }
 interface Scenario {
   readonly transactions: readonly TxModel[]
+  // Whether pass N's batch `applyOperations` call is forced to fail EVEN
+  // WHEN every pending tx's current step is 'success' — cycled by
+  // `passIndex % length`, mirroring how `Script.tail` repeats. Models a
+  // batch-level failure with a cause independent of any tx's own payload
+  // (a network blip, a timeout under load): without this, batch failure and
+  // per-tx failure are both derived from the SAME `Step`, so "batch fails,
+  // then every isolated per-tx retry succeeds" (05fe86074's own motivating
+  // case) could never be generated — see `predictPass` below.
+  readonly batchExogenousFailures: readonly boolean[]
 }
 
 const txSpecArb = fc.record({
@@ -291,8 +300,19 @@ const txSpecArb = fc.record({
   rejectionFailsOnce: fc.oneof({arbitrary: fc.constant(false), weight: 4}, {arbitrary: fc.constant(true), weight: 1}),
 })
 
+// Mostly false so the batch behaves as a plain function of the per-tx steps
+// most of the time; occasionally true so the exogenous-failure path (see
+// `Scenario.batchExogenousFailures` above) actually gets exercised.
+const batchExogenousFailureArb = fc.oneof(
+  {arbitrary: fc.constant(false), weight: 5},
+  {arbitrary: fc.constant(true), weight: 1},
+)
+
 const scenarioArb: fc.Arbitrary<Scenario> = fc.integer({min: 1, max: 5}).chain(n =>
-  fc.array(txSpecArb, {minLength: n, maxLength: n}).map(specs => ({
+  fc.record({
+    specs: fc.array(txSpecArb, {minLength: n, maxLength: n}),
+    batchExogenousFailures: fc.array(batchExogenousFailureArb, {minLength: 1, maxLength: 3}),
+  }).map(({specs, batchExogenousFailures}) => ({
     transactions: specs.map((spec, index): TxModel => ({
       index,
       blockId: `blk-${index}`,
@@ -300,6 +320,7 @@ const scenarioArb: fc.Arbitrary<Scenario> = fc.integer({min: 1, max: 5}).chain(n
       script: spec.script,
       rejectionFailsOnce: spec.rejectionFailsOnce,
     })),
+    batchExogenousFailures,
   })),
 )
 
@@ -325,6 +346,11 @@ const predictPass = (
   attemptIndex: ReadonlyMap<string, number>,
   ambiguousAttempts: ReadonlyMap<number, number>,
   rejectionFailRemaining: ReadonlyMap<string, number>,
+  // This pass's batch call has its OWN scripted outcome, independent of the
+  // per-tx steps below — see `Scenario.batchExogenousFailures`. Only takes
+  // effect when every pending tx's current step is already 'success' (if
+  // one isn't, the batch fails anyway — this flag can't make it succeed).
+  forceExogenousBatchFailure: boolean,
 ): Prediction => {
   const localAttempt = new Map(attemptIndex)
   const localAmbiguous = new Map(ambiguousAttempts)
@@ -335,8 +361,15 @@ const predictPass = (
   // pending tx's compacted ops. Any failure — including transient — drops
   // into the per-tx loop untouched (05fe86074); the mock never tells us
   // WHICH tx would have failed at this granularity, only whether they'd
-  // all succeed.
-  if (pending.every(tx => peek(tx).outcome === 'success')) {
+  // all succeed. `forceExogenousBatchFailure` can additionally fail the
+  // batch call even when every per-tx step below is 'success' — the batch
+  // attempt is a real, separate call in the product code, so it can fail
+  // for a reason that has nothing to do with any individual tx's payload
+  // and then have every isolated per-tx retry succeed (the scenario
+  // 05fe86074 exists to bound: drain the succeeded prefix on ANY batch
+  // error, not just one caused by a specific tx).
+  const allStepsSuccess = pending.every(tx => peek(tx).outcome === 'success')
+  if (allStepsSuccess && !forceExogenousBatchFailure) {
     for (const tx of pending) {
       localAttempt.set(tx.blockId, (localAttempt.get(tx.blockId) ?? 0) + 1)
       if (tx.transactionId !== undefined) localAmbiguous.delete(tx.transactionId)
@@ -504,8 +537,18 @@ const runSimulationUnspied = async (
   for (let passIndex = 0; passIndex < MAX_PASSES && pending.length > 0; passIndex++) {
     const passPending = pending
     const byBlockId = new Map(passPending.map(tx => [tx.blockId, tx]))
+    // Same cycling scheme as `Script.tail` (index % length), just at pass
+    // granularity instead of per-tx-attempt granularity.
+    const forceExogenousBatchFailure =
+      scenario.batchExogenousFailures[passIndex % scenario.batchExogenousFailures.length]
 
-    const predicted = predictPass(passPending, attemptIndex, ambiguousAttempts, rejectionFailRemaining)
+    const predicted = predictPass(
+      passPending,
+      attemptIndex,
+      ambiguousAttempts,
+      rejectionFailRemaining,
+      forceExogenousBatchFailure,
+    )
 
     const completedThisPassSet = new Set<string>()
     const completeCallOrderThisPass: string[] = []
@@ -548,7 +591,7 @@ const runSimulationUnspied = async (
         const allSuccess = passPending.every(
           tx => stepAt(tx.script, attemptIndex.get(tx.blockId) ?? 0).outcome === 'success',
         )
-        if (allSuccess) {
+        if (allSuccess && !forceExogenousBatchFailure) {
           for (const tx of passPending) attemptIndex.set(tx.blockId, (attemptIndex.get(tx.blockId) ?? 0) + 1)
           return
         }
