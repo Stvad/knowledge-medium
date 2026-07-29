@@ -1,0 +1,2 @@
+import{PROPERTIES_PAGE_TYPE as e}from"./blockTypes.js";import{getOrCreateKernelPage as t,kernelPageBlockId as n}from"./kernelPage.js";var r=`94f9a6d9-c651-4b75-aef3-a5c1bbef0e1a`,i=`Properties`,a=e=>n(e,r),o=(n,a)=>t(n,a,{namespace:r,alias:i,markerType:e});export{o as getOrCreatePropertiesPage,a as propertiesPageBlockId};
+//# sourceMappingURL=propertiesPage.js.map
