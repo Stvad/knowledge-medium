@@ -529,6 +529,13 @@ const runSimulationUnspied = async (
 
     let callIndexInPass = 0
     const perTxTraceActual: Array<{blockId: string; classification: 'success' | UploadErrorClass}> = []
+    // The exact error object each per-tx applyOperations call threw for a
+    // block, THIS pass — captured so we can prove `recordRejection` (below)
+    // is handed the SAME error for the SAME tx, not the batch's generic
+    // error or another transaction's (powersync.ts:700: `catch (err) { ...
+    // deps.recordRejection(database, transaction, err) }` — err is always
+    // the error THAT tx's own applyOperations call just threw).
+    const thrownErrorByBlockId = new Map<string, unknown>()
 
     const applyOperations = async (
       _database: AbstractPowerSyncDatabase,
@@ -557,16 +564,24 @@ const runSimulationUnspied = async (
       const classification = classificationOf(step)
       perTxTraceActual.push({blockId, classification})
       if (step.outcome === 'success') return
+      thrownErrorByBlockId.set(blockId, step.err)
       throw step.err
     }
 
     let rejectionFailureBlockIdActual: string | null = null
     const rejectedBlockIdsActual: string[] = []
+    // What `recordRejection` was actually called with, per blockId — diffed
+    // against `thrownErrorByBlockId` below so a refactor that forwards the
+    // wrong error (the batch's, or another tx's) fails the oracle instead of
+    // passing silently (PR #448 review comment 3676698835).
+    const recordRejectionErrorByBlockId = new Map<string, unknown>()
     const recordRejection = async (
       _database: AbstractPowerSyncDatabase,
       transaction: CrudTransaction,
+      error: unknown,
     ): Promise<void> => {
       const blockId = transaction.crud[0].id
+      recordRejectionErrorByBlockId.set(blockId, error)
       const remaining = rejectionFailRemaining.get(blockId) ?? 0
       if (remaining > 0) {
         rejectionFailRemaining.set(blockId, remaining - 1)
@@ -599,6 +614,10 @@ const runSimulationUnspied = async (
       .toBe(predicted.rejectionFailureBlockId)
     expect(new Map(ambiguousAttempts), `pass ${passIndex}: ambiguousAttempts map`)
       .toEqual(predicted.finalAmbiguousAttempts)
+    for (const [blockId, errorPassedToRecordRejection] of recordRejectionErrorByBlockId) {
+      expect(errorPassedToRecordRejection, `pass ${passIndex}: recordRejection error for ${blockId}`)
+        .toBe(thrownErrorByBlockId.get(blockId))
+    }
 
     passes.push({
       passIndex,
