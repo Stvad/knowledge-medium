@@ -54,14 +54,23 @@
  * it reclassifies what would have been a 'success' entry and is handled by
  * the SAME quarantine/retry machinery a real upload error would be.
  *
- * `runSimulation` drives the REAL `uploadTransactionsWithFallback` across
- * up to `AMBIGUOUS_RETRY_BUDGET + 4` **passes** (mirroring how
- * `runUploadLoop`/PowerSync repeatedly re-invokes it on a throw, feeding
- * back only the still-pending transactions — draining is real
- * `CrudTransaction.complete()` semantics: completing the tail of a
+ * `runSimulation` drives the REAL `uploadTransactionsWithFallback` pass by
+ * pass (mirroring how `runUploadLoop`/PowerSync repeatedly re-invokes it on
+ * a throw, feeding back only the still-pending transactions — draining is
+ * real `CrudTransaction.complete()` semantics: completing the tail of a
  * successful batch drains every transaction ahead of it too, powersync.ts
- * doc at :622-623). Running out of passes with a tx still undrained is not
- * a failure — "still pending" is a valid terminal fate per property (a).
+ * doc at :622-623) until every transaction is drained OR the simulation
+ * detects a genuine fixed point — no pending tx's state changed at all this
+ * pass, which (since every piece of state here is monotonic) proves no
+ * FUTURE pass could change anything either (comment 3677128006; see the
+ * `progressSignature` doc comment in `runSimulationUnspied` for the full
+ * argument). That's deliberately NOT a fixed numeric pass cap: one went
+ * stale the moment this file's own round 3 added a new injectable failure
+ * mode, and a hand-derived replacement has the same risk for whatever gets
+ * added next. Running out of *possible* progress with a tx still undrained
+ * is not a failure — "still pending" is a valid terminal fate per property
+ * (a) (a script whose repeating `tail` is always 'transient' retries
+ * forever in the real system too).
  *
  * Each pass, an INDEPENDENT reference model (`predictPass`) re-derives —
  * from its own snapshot of the shared `attemptIndex`/`ambiguousAttempts`/
@@ -722,8 +731,6 @@ interface SimulationResult {
   readonly applyOperationsTouchLog: ReadonlyArray<{pass: number; blockIds: readonly string[]}>
 }
 
-const MAX_PASSES = AMBIGUOUS_RETRY_BUDGET + 4
-
 // Every generated failure (transient / ambiguous / permanent) makes the REAL
 // orchestrator log via console.warn/console.error (powersync.ts:660-696) —
 // that's expected, not a bug, and in deep/nightly runs it's thousands of
@@ -810,7 +817,57 @@ const runSimulationUnspied = async (
   const applyOperationsTouchLog: Array<{pass: number; blockIds: readonly string[]}> = []
   const drainedBlockIds = new Set<string>()
 
-  for (let passIndex = 0; passIndex < MAX_PASSES && pending.length > 0; passIndex++) {
+  // Fixed-point detector (PR #448 review comment 3677128006): a hand-derived
+  // numeric pass cap has to be re-verified every time a new injectable
+  // failure mode is added — which is exactly how this file's PREVIOUS cap
+  // (AMBIGUOUS_RETRY_BUDGET + 4) went stale the moment round 3 added
+  // completion-failure injection: 3 transient prefix steps + 5 ambiguous
+  // attempts to exhaust the budget + a rejection-write-failure retry + a
+  // completion-failure retry = 10 passes needed, 9 allowed. Every mutable
+  // piece of per-simulation state below is MONOTONIC — `attemptIndex` only
+  // grows, `ambiguousAttempts` only grows until reset-on-full-success, and
+  // each "remaining" one-time-failure map only ever decrements once fired —
+  // so if a pass changes NONE of them for the still-pending transactions,
+  // no FUTURE pass ever could either: `predictPass` and the mocks are pure
+  // functions of this state, so an unchanged snapshot reproduces the
+  // identical unchanged result forever. That is the ONLY way a scenario can
+  // genuinely need unbounded passes (an always-transient tail — the "still
+  // pending" terminal fate property (a) already documents as valid);
+  // everything else (a bounded script prefix, the ambiguous retry budget,
+  // and each one-time injected failure) is finite by construction, so this
+  // terminates for any actually-resolvable scenario with NO formula to keep
+  // in sync as new failure modes are added later.
+  //
+  // `attemptIndex` is clamped to each tx's own script prefix length before
+  // comparing: once a tx is past its scripted `steps` and into the
+  // repeating `tail`, the raw counter keeps climbing every pass even though
+  // the STEP it resolves to (and so all downstream behavior) is constant —
+  // comparing the unclamped counter would never detect the fixed point.
+  const progressSignature = (): string => {
+    const stableAttempt = (tx: TxModel): number =>
+      Math.min(attemptIndex.get(tx.blockId) ?? 0, tx.script.steps.length)
+    return JSON.stringify(
+      pending.map(tx => [
+        tx.blockId,
+        stableAttempt(tx),
+        tx.transactionId !== undefined ? (ambiguousAttempts.get(tx.transactionId) ?? 0) : -1,
+        rejectionFailRemaining.get(tx.blockId) ?? 0,
+        completionFailRemaining.get(tx.blockId) ?? 0,
+        successCompletionFailRemaining.get(tx.blockId) ?? 0,
+      ]),
+    )
+  }
+  // Generous and never expected to bind — a pure backstop against an
+  // actual infinite loop if the fixed-point detection above turns out to
+  // miss some piece of state; each pass is a cheap in-memory operation.
+  const HARD_SAFETY_CEILING_PASSES = 200
+
+  for (
+    let passIndex = 0;
+    pending.length > 0 && passIndex < HARD_SAFETY_CEILING_PASSES;
+    passIndex++
+  ) {
+    const signatureBeforePass = progressSignature()
     const passPending = pending
     const byBlockId = new Map(passPending.map(tx => [tx.blockId, tx]))
     // Same cycling scheme as `Script.tail` (index % length), just at pass
@@ -1038,6 +1095,13 @@ const runSimulationUnspied = async (
     })
 
     pending = passPending.filter(tx => !completedThisPassSet.has(tx.blockId))
+
+    if (pending.length > 0 && progressSignature() === signatureBeforePass) {
+      // Nothing about any still-pending tx's state changed this pass — by
+      // the monotonic-state argument above, no future pass ever could
+      // either. Stop here rather than burning through the safety ceiling.
+      break
+    }
   }
 
   expect(unexpectedLogs, 'unexpected console.warn/console.error output during simulation').toEqual([])
