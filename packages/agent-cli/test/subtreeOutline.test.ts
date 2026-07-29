@@ -259,4 +259,63 @@ describe('renderSubtreeOutline', () => {
       expect(outline).toContain('⏎')     // …to the marker, so the row stays one visual line
     }
   })
+
+  it('percent-encodes a bidi override in an id (PR #447 review comment 3677343389, the "Trojan Source" class) and decodeOutlineId reverses it', () => {
+    // U+202E (RLO) is category Cf, not a C0/C1 control character, so the
+    // OLD enumerated ID_ENCODE_REGEX let it through unchanged. The
+    // categorical \p{{C}} boundary now catches it like any other
+    // format/control/surrogate/private-use/unassigned codepoint.
+    const rlo = String.fromCodePoint(0x202e)
+    const outline = renderSubtreeOutline([{id: `a${rlo}b`, parentId: null, content: 'x'}])
+    expect(outline).toBe('- [a%E2%80%AEb] x')
+    expect(outline.includes(rlo)).toBe(false)
+    expect(decodeOutlineId('a%E2%80%AEb')).toBe(`a${rlo}b`)
+  })
+
+  it('neutralizes a bidi override in CONTENT to the ⏎ marker — the exact Trojan-Source shape: reordering the real id/content boundary without touching a byte', () => {
+    // Before this fix, "- [real-id] " + RLO + "evil" could DISPLAY with
+    // "evil" and "real-id" visually swapped in a bidi-aware terminal, even
+    // though `outline` itself never re-orders anything at the byte level.
+    const rlo = String.fromCodePoint(0x202e)
+    const outline = renderSubtreeOutline([row('real-id', null, `${rlo}evil`)])
+    expect(outline).toBe('- [real-id]  ⏎ evil')
+    expect(outline.includes(rlo)).toBe(false)
+  })
+
+  it('preserves ZWJ/ZWNJ in content — the deliberate exception to bidi/format-character neutralization (PR #447 review comment 3677343389)', () => {
+    // ZWJ (U+200D) and ZWNJ (U+200C) are ALSO Cf, like the bidi controls
+    // above, but neither REORDERS anything — stripping them would corrupt
+    // real text (ZWJ builds compound emoji; ZWNJ is required orthography
+    // in Persian/Hindi/etc.) to defend against a risk they don't create.
+    const zwj = String.fromCodePoint(0x200d)
+    const zwnj = String.fromCodePoint(0x200c)
+    const outline = renderSubtreeOutline([row('x', null, `a${zwj}b${zwnj}c`)])
+    expect(outline).toBe(`- [x] a${zwj}b${zwnj}c`)
+  })
+
+  it('ZWJ/ZWNJ in an id, unlike in content, ARE percent-encoded — id has no content-style exception (PR #447 review comment 3677343389)', () => {
+    const zwj = String.fromCodePoint(0x200d)
+    const outline = renderSubtreeOutline([{id: `a${zwj}b`, parentId: null, content: 'x'}])
+    expect(outline).toBe('- [a%E2%80%8Db] x')
+    expect(decodeOutlineId('a%E2%80%8Db')).toBe(`a${zwj}b`)
+  })
+
+  it('percent-encodes a LONE (unpaired) UTF-16 surrogate in an id via the %uXXXX fallback, and decodeOutlineId reverses it', () => {
+    // encodeURIComponent CANNOT represent an unpaired surrogate as UTF-8
+    // (it throws URIError: URI malformed) — encodeOutlineId falls back to
+    // a %uXXXX raw-code-unit escape (the deprecated global escape()'s
+    // convention for exactly this) instead of throwing.
+    const loneSurrogate = String.fromCharCode(0xd800)
+    const outline = renderSubtreeOutline([{id: `a${loneSurrogate}b`, parentId: null, content: 'x'}])
+    expect(outline).toBe('- [a%uD800b] x')
+    expect(decodeOutlineId('a%uD800b')).toBe(`a${loneSurrogate}b`)
+  })
+
+  it('percent-encodes private-use and unassigned codepoints in an id — the Co/Cn slices of \\p{C} that an enumerated C0/C1 list never covered', () => {
+    const privateUse = String.fromCodePoint(0xe000) // Co
+    const unassigned = String.fromCodePoint(0x0378) // Cn
+    const outline = renderSubtreeOutline([{id: `${privateUse}${unassigned}`, parentId: null, content: 'x'}])
+    expect(outline).toBe('- [%EE%80%80%CD%B8] x')
+    expect(decodeOutlineId('%EE%80%80%CD%B8')).toBe(`${privateUse}${unassigned}`)
+  })
 })

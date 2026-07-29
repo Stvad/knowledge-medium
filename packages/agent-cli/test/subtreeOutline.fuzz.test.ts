@@ -21,7 +21,7 @@
  * about block ids and structure. The anti-spoofing invariant (module doc
  * :162-172: "the id comes first... EVERY field is neutralized before
  * interpolation, so a block can't spill into id-less lines... line count
- * == block count") has now been defended against SEVEN missed hazard
+ * == block count") has now been defended against EIGHT missed hazard
  * classes:
  *
  *  - Unicode line separators (34a586e92, U+2028/U+2029 inside
@@ -65,6 +65,23 @@
  *    and the FIRST `]` — unambiguous. `[` is deliberately left alone:
  *    under a first-`]` scan it's inert, not an opening delimiter to
  *    match.)
+ *  - Unicode BIDI FORMATTING CONTROLS (LRM/RLM, the embedding/override
+ *    formers LRE/RLE/PDF/LRO/RLO, the isolate formers LRI/RLI/FSI/PDI)
+ *    surviving — PR #447 review comment 3677343389, the "Trojan
+ *    Source" class (CVE-2021-42574): these reorder DISPLAYED text in a
+ *    bidi-aware terminal without changing a single byte, so the `[id]`
+ *    token, its closing delimiter, and adjacent content could be made
+ *    to visually swap. This is why `id`'s fix stopped being an
+ *    enumerated range: bidi controls are Unicode category Cf (format),
+ *    a category the C0/C1 enumeration never covered — the FOURTH time
+ *    this exact surface needed widening. `id` now percent-encodes the
+ *    full `\p{C}` Unicode category (Cc/Cf/Cs/Co/Cn) instead of an
+ *    enumerated list; content keeps an enumerated list (now including
+ *    the bidi set) because a categorical `\p{C}` cut would also strip
+ *    ZWJ/ZWNJ (U+200D/U+200C) — Cf, but harmless (they don't reorder
+ *    anything) and semantically necessary (ZWJ builds compound emoji;
+ *    ZWNJ is required orthography in Persian/Hindi/etc.) — corrupting
+ *    real content to defend against a risk those two don't create.)
  *
  * `neutralizeOutlineField`/`encodeOutlineId`/`ID_ENCODE_REGEX`/
  * `CONTROL_CHAR_RUN_REGEX` aren't exported (internal helpers), so they're
@@ -83,12 +100,20 @@
  * each hostile character (and `%` itself, so the mapping stays injective)
  * INDIVIDUALLY rather than collapsing runs — a lossy collapse is wrong for
  * an identifier a consumer needs to recover exactly
- * (subtreeOutline.ts:113-141's doc comment). Both draw from the SAME
- * control-character space (:49-91's doc comment): all of C0
- * (U+0000-U+001F) EXCEPT TAB (U+0009, deliberately excluded — a terminal
- * only ever advances the cursor on TAB, never moves it backward over the
- * prefix), DEL (U+007F), all of C1 (U+0080-U+009F), and the two Unicode
- * line/paragraph separators (U+2028/U+2029). `renderSubtreeOutline` joins
+ * (subtreeOutline.ts:113-141's doc comment). `content`/`properties` and
+ * `id` draw from DIFFERENT hazard definitions as of PR #447 review
+ * comment 3677343389: content's `CONTROL_CHAR_RUN_REGEX` is still an
+ * ENUMERATED list — all of C0 (U+0000-U+001F) EXCEPT TAB (U+0009,
+ * deliberately excluded — a terminal only ever advances the cursor on
+ * TAB, never moves it backward over the prefix), DEL (U+007F), all of C1
+ * (U+0080-U+009F), the two Unicode line/paragraph separators
+ * (U+2028/U+2029), and now the bidi-reordering set (LRM/RLM,
+ * LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI) — with ZWJ/ZWNJ (U+200D/U+200C)
+ * DELIBERATELY excluded (harmless, semantically required in real text).
+ * `id`'s `ID_ENCODE_REGEX` is instead CATEGORICAL: the full Unicode
+ * `\p{C}` General_Category "Other" (Cc/Cf/Cs/Co/Cn) plus U+2028/
+ * U+2029 (category Zl/Zp, sibling to "Other", not covered by `\p{C}`)
+ * plus the grammar characters `%`/`]`. `renderSubtreeOutline` joins
  * one line per (filtered-valid) row with a single LF (:203) and never
  * re-sorts (module doc :7-11) or otherwise introduces a line.
  *
@@ -99,23 +124,29 @@
  * `.filter` (:180) never drops one — line count is checked against the
  * INPUT row count directly, never re-derived from what the renderer
  * produces. `CONTROL_CODEPOINTS` below is a FULL enumeration (not a
- * sample) of the control-character space named in subtreeOutline.ts's doc
- * comment above `CONTROL_CHAR_RUN_REGEX` (:49-91) — used both to build the
- * hostile-char soup generators AND to assert the invariant directly
- * (every one of those 66 codepoints, individually, must never survive
- * into the output) rather than checking a handful of samples, per PR #447
- * review comment 3676752551's explicit ask. `idSuffixArb` generates
- * arbitrary strings — including the same hostile-char soup as content,
- * literal `%`, and fully arbitrary Unicode — per review comment
- * 3672555158's earlier ask to stop restricting ids to `[a-zA-Z0-9_-]` (a
- * shape that could never have exposed the missing-id-neutralization bug
- * in the first place). The anti-forge property's id assertion (and every
- * injectivity/round-trip property below it) checks the id SEMANTICALLY —
- * parse the rendered line by the documented delimiter rule, decode, and
- * compare to the INPUT id (`parseIdFromLine`, defined below) — never by
- * re-predicting the encoder's output with a copy of its character class
- * (PR #447 review comment 3677190046, P1: a copied oracle can't catch a
- * bug or omission shared by both copies).
+ * sample) of content's hostile-character space named in subtreeOutline.ts's
+ * doc comment above `CONTROL_CHAR_RUN_REGEX` (:49-91, now including the
+ * bidi-reordering set) — used both to build the hostile-char soup
+ * generators AND to assert the invariant directly (every one of those 77
+ * codepoints, individually, must never survive into the output) rather
+ * than checking a handful of samples, per PR #447 review comment
+ * 3676752551's explicit ask. `id`'s hazard space is DIFFERENT as of PR
+ * #447 review comment 3677343389 — categorical (`\p{C}`) rather than
+ * enumerated — so it gets its own generators (`idCategoryHazardArb` and
+ * friends, below) and its own semantic assertion (`/\p{C}/u`, matching
+ * the invariant `id`'s doc comment states, not a copy of `ID_ENCODE_
+ * REGEX`). `idSuffixArb` generates arbitrary strings — including the same
+ * hostile-char soup as content, literal `%`, and fully arbitrary Unicode —
+ * per review comment 3672555158's earlier ask to stop restricting ids to
+ * `[a-zA-Z0-9_-]` (a shape that could never have exposed the
+ * missing-id-neutralization bug in the first place). The anti-forge
+ * property's id assertion (and every injectivity/round-trip property
+ * below it) checks the id SEMANTICALLY — parse the rendered line by the
+ * documented delimiter rule, decode, and compare to the INPUT id
+ * (`parseIdFromLine`, defined below) — never by re-predicting the
+ * encoder's output with a copy of its character class (PR #447 review
+ * comment 3677190046, P1: a copied oracle can't catch a bug or omission
+ * shared by both copies).
  */
 import {describe, expect, it} from 'vitest'
 import fc from 'fast-check'
@@ -130,22 +161,30 @@ const range = (startInclusive: number, endInclusive: number): number[] => {
   return out
 }
 
-/** A FULL enumeration (not a sample) of every codepoint the source's
- *  control-character space covers — mirrors subtreeOutline.ts's doc
+/** A FULL enumeration (not a sample) of every codepoint CONTENT's
+ *  hostile-character space covers — mirrors subtreeOutline.ts's doc
  *  comment above `CONTROL_CHAR_RUN_REGEX` (:49-91): all of C0
  *  (U+0000-U+001F) EXCEPT TAB (U+0009), DEL (U+007F), all of C1
- *  (U+0080-U+009F), and the two Unicode line/paragraph separators
- *  (U+2028/U+2029). Used both to build the hostile-char soup below AND,
- *  in the anti-forge property, to assert directly that every one of these
- *  66 codepoints — individually — never survives into the output, rather
+ *  (U+0080-U+009F), the two Unicode line/paragraph separators
+ *  (U+2028/U+2029), and the bidi-reordering set added by PR #447 review
+ *  comment 3677343389 (LRM/RLM, LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI) —
+ *  ZWJ/ZWNJ (U+200D/U+200C) are DELIBERATELY excluded, see `zwjZwnjArb`
+ *  below. Used both to build the hostile-char soup below AND, in the
+ *  anti-forge property, to assert directly that every one of these 77
+ *  codepoints — individually — never survives into the output, rather
  *  than checking a handful of samples (PR #447 review comment
- *  3676752551). */
+ *  3676752551). This is CONTENT's hazard space only — `id`'s is the
+ *  categorical `\p{C}` boundary, a fundamentally different shape (see
+ *  `idCategoryHazardArb` and the module docblock above). */
 const CONTROL_CODEPOINTS: readonly number[] = [
   ...range(0x00, 0x08), // C0 minus TAB (U+0009 is the deliberate exclusion)
   ...range(0x0a, 0x1f),
   0x7f, // DEL
   ...range(0x80, 0x9f), // C1 (includes NEL, U+0085)
+  0x200e, 0x200f, // LRM, RLM (NOT 0x200c/0x200d — those are ZWNJ/ZWJ)
   0x2028, 0x2029, // LS, PS
+  ...range(0x202a, 0x202e), // LRE, RLE, PDF, LRO, RLO
+  ...range(0x2066, 0x2069), // LRI, RLI, FSI, PDI
 ]
 
 const NEUTRALIZED_CHARS: readonly string[] = CONTROL_CODEPOINTS.map(cp => String.fromCodePoint(cp))
@@ -207,15 +246,79 @@ const benignTokenArb: fc.Arbitrary<string> = fc.stringMatching(/^[a-zA-Z0-9 ]{0,
  *  so id/content bracket collisions are exercised deliberately. */
 const bracketArb: fc.Arbitrary<string> = fc.constantFrom('[', ']', '][', '[]', ']]', '[[', '] ')
 
+/** Bidi formatting controls that REORDER displayed text — PR #447 review
+ *  comment 3677343389, the "Trojan Source" class (CVE-2021-42574). The
+ *  SAME codepoints `CONTROL_CODEPOINTS` above already folds in for
+ *  content, kept as their own list so the dedicated bidi-specific
+ *  properties further down can name exactly what they're testing,
+ *  independent of anything else `CONTROL_CODEPOINTS` happens to contain.
+ *  Also mixed into `idSuffixArb` below — for `id` these are just more
+ *  `\p{C}` (Cf) characters to encode, no different from any other. */
+const BIDI_CODEPOINTS: readonly number[] = [
+  0x200e, 0x200f, // LRM, RLM
+  ...range(0x202a, 0x202e), // LRE, RLE, PDF, LRO, RLO
+  ...range(0x2066, 0x2069), // LRI, RLI, FSI, PDI
+]
+const bidiControlArb: fc.Arbitrary<string> = fc.constantFrom(...BIDI_CODEPOINTS).map(cp => String.fromCodePoint(cp))
+
+/** ZWJ (U+200D) / ZWNJ (U+200C) — Cf, like the bidi controls above, but
+ *  the DELIBERATE OPPOSITE case: subtreeOutline.ts's
+ *  `CONTROL_CHAR_RUN_REGEX` doc comment explains why content must NOT
+ *  neutralize these (they don't reorder anything; ZWJ builds compound
+ *  emoji, ZWNJ is required orthography in Persian/Hindi/etc. — PR #447
+ *  review comment 3677343389). Used both as the must-survive case for
+ *  content (below) and, mixed into `idSuffixArb`, as the CONTRAST case
+ *  for `id` — unlike content, `id` has no such exception and encodes
+ *  these like any other `\p{C}` character. */
+const zwjZwnjArb: fc.Arbitrary<string> = fc.constantFrom(
+  String.fromCodePoint(0x200d), // ZWJ
+  String.fromCodePoint(0x200c), // ZWNJ
+)
+
+/** A LONE (unpaired) UTF-16 surrogate — Unicode category Cs, one of the
+ *  five `\p{C}` sub-categories `id`'s `ID_ENCODE_REGEX` now covers
+ *  (subtreeOutline.ts's doc comment above it). Built with `fromCharCode`
+ *  (a raw UTF-16 code UNIT), not `fromCodePoint` (which throws for a
+ *  value in the surrogate range) — the whole point is this is
+ *  deliberately NOT a valid standalone codepoint; JS strings are
+ *  unvalidated UTF-16, so a caller-supplied id can genuinely contain
+ *  one. */
+const loneSurrogateArb: fc.Arbitrary<string> = fc.integer({min: 0xd800, max: 0xdfff}).map(cp => String.fromCharCode(cp))
+
+/** Private-use (Co) and unassigned (Cn) codepoints — the other two
+ *  `\p{C}` sub-categories `id` covers that nothing above exercises.
+ *  U+E000-U+F8FF is the BMP Private Use Area, permanently reserved and
+ *  never assigned a public meaning by the Unicode Consortium. U+0378/
+ *  U+0379 have been unassigned since Unicode's very first version with
+ *  no pending allocation — confirmed directly against this repo's
+ *  installed Node/ICU version — `/\p{Cn}/u.test(String.fromCodePoint(0x378))`
+ *  is `true` — not assumed
+ *  from the Unicode spec alone, since "currently unassigned" is a moving
+ *  target across Unicode versions. */
+const privateUseArb: fc.Arbitrary<string> = fc.integer({min: 0xe000, max: 0xf8ff}).map(cp => String.fromCodePoint(cp))
+const unassignedArb: fc.Arbitrary<string> = fc.constantFrom(0x0378, 0x0379).map(cp => String.fromCodePoint(cp))
+
+/** The `\p{C}` hazard surface `id` must encode away that the existing
+ *  control-character soup doesn't reach: bidi controls, lone surrogates,
+ *  private-use, and unassigned codepoints (PR #447 review comment
+ *  3677343389). ZWJ/ZWNJ are deliberately a SEPARATE arbitrary
+ *  (`zwjZwnjArb`) rather than folded in here — for `id` they'd be fine
+ *  either way (no content-style exception applies), but keeping them
+ *  separate is what lets the id-side "ZWJ/ZWNJ gets encoded, unlike in
+ *  content" contrast property (below) name exactly what it draws from. */
+const idCategoryHazardArb: fc.Arbitrary<string> = fc.oneof(bidiControlArb, loneSurrogateArb, privateUseArb, unassignedArb)
+
 /** Text soup: benign tokens interleaved with neutralized-char runs,
- *  brackets, and ANSI escape sequences at random positions, incl. runs
- *  back-to-back and at the very start/end. Shared by `content`,
- *  `properties` string leaves, AND (below) `id` — all of the SAME hostile
- *  characters are relevant to every field, even though `id` is now
- *  treated differently (percent-encoded rather than collapsed) once it
- *  reaches the renderer. */
+ *  brackets, bidi controls, ZWJ/ZWNJ, and ANSI escape sequences at random
+ *  positions, incl. runs back-to-back and at the very start/end. Shared
+ *  by `content`, `properties` string leaves, AND (below) `id` — all of
+ *  the SAME hostile characters are relevant to every field, even though
+ *  `id` is now treated differently (percent-encoded rather than
+ *  collapsed) once it reaches the renderer, and content's bidi/ZWJ/ZWNJ
+ *  handling differs from `id`'s (see `BIDI_CODEPOINTS`/`zwjZwnjArb`
+ *  above). */
 const contentSoupArb: fc.Arbitrary<string> = fc.array(
-  fc.oneof(benignTokenArb, neutralizedCharRunArb, ansiEscapeSequenceArb, bracketArb),
+  fc.oneof(benignTokenArb, neutralizedCharRunArb, ansiEscapeSequenceArb, bracketArb, bidiControlArb, zwjZwnjArb),
   {maxLength: 10},
 ).map(parts => parts.join(''))
 
@@ -262,11 +365,22 @@ const jsonSafePropertiesArb: fc.Arbitrary<Record<string, unknown>> = fc.dictiona
  *  truly unrestricted `data.id: string` could contain, including
  *  combining marks, supplementary-plane characters, and Unicode
  *  formatting characters, none of which `'grapheme-ascii'` could ever
- *  produce. */
+ *  produce. It still excludes LONE surrogates by construction (fast-check's
+ *  own `'binary'` doc: "except half surrogate pairs"), which is exactly
+ *  why `idCategoryHazardArb` (below) generates them deliberately — `id`'s
+ *  `\p{C}` boundary must cover Cs too (PR #447 review comment 3677343389).
+ *
+ *  `idCategoryHazardArb` and `zwjZwnjArb` are mixed in explicitly (rather
+ *  than left to chance from the `'binary'` branch above) so bidi
+ *  controls, lone surrogates, private-use, unassigned codepoints, and
+ *  ZWJ/ZWNJ are exercised with real weight, not just whatever the random
+ *  binary-unit sampler happens to land on. */
 const idSuffixArb: fc.Arbitrary<string> = fc.oneof(
   fc.stringMatching(/^[a-zA-Z0-9_-]{0,10}$/),
   contentSoupArb,
   fc.string({maxLength: 20, unit: 'binary'}),
+  idCategoryHazardArb,
+  zwjZwnjArb,
 )
 
 /** One row spec: id, content, and properties may all carry hostile chars;
@@ -551,6 +665,110 @@ describe('TAB survives content untouched — the one deliberate exclusion from t
         },
       ),
       fuzzParams(100),
+    )
+  }, fuzzTestTimeout())
+})
+
+// ──── Trojan-Source hardening (PR #447 review comment 3677343389): id's
+//      \p{C} categorical boundary, content's bidi neutralization, and the
+//      ZWJ/ZWNJ preservation exception — asserted SEMANTICALLY against the
+//      Unicode-standard `\p{C}` property and named codepoints, never by
+//      re-deriving what `ID_ENCODE_REGEX`/`CONTROL_CHAR_RUN_REGEX` should
+//      produce (the same P1 lesson as `parseIdFromLine` above: a copied
+//      oracle can't catch a bug or omission shared by both copies). ────
+
+describe('id: the categorical \\p{C} boundary — no control/format/surrogate/private-use/unassigned character survives in a rendered id (PR #447 review comment 3677343389)', () => {
+  it('/\\p{C}/u never matches the rendered [id] token, for ids drawn from bidi controls, lone surrogates, private-use, and unassigned codepoints', () => {
+    fc.assert(
+      fc.property(idSuffixArb, (id) => {
+        const token = encodedIdToken(id)
+        expect(/\p{C}/u.test(token), token).toBe(false)
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  /** Non-vacuous sanity: the construction actually produces ids that DO
+   *  contain a `\p{C}` character, so the property above isn't trivially
+   *  true because the generator never exercises the hazard. */
+  it('sanity: idCategoryHazardArb really does generate \\p{C} characters', () => {
+    fc.assert(
+      fc.property(idCategoryHazardArb, (hazard) => {
+        expect(/\p{C}/u.test(hazard), JSON.stringify(hazard)).toBe(true)
+      }),
+      fuzzParams(100),
+    )
+  }, fuzzTestTimeout())
+})
+
+describe('no bidi formatting control survives anywhere in the rendered outline, whether it came from id or content (PR #447 review comment 3677343389)', () => {
+  it('holds for arbitrary rows whose id and/or content carry bidi controls', () => {
+    fc.assert(
+      fc.property(rowsArb, fc.boolean(), (rows, includeProperties) => {
+        const outline = renderSubtreeOutline(rows, {includeProperties})
+        for (const cp of BIDI_CODEPOINTS) {
+          const ch = String.fromCodePoint(cp)
+          expect(outline.includes(ch), `outline unexpectedly contains bidi control U+${cp.toString(16).padStart(4, '0')}: ${JSON.stringify(outline)}`).toBe(false)
+        }
+      }),
+      fuzzParams(300),
+    )
+  }, fuzzTestTimeout())
+
+  it('the exact Trojan-Source shape: an RLO in content can no longer visually swap the id and content halves of the line', () => {
+    // U+202E (RLO) forces everything after it to render right-to-left
+    // until a PDF/end-of-string — in a bidi-aware viewer this could make
+    // "- [real-id] evil" DISPLAY with "evil" and "real-id" visually
+    // swapped, even though the bytes never moved. Neutralizing it (like
+    // any other content-side hazard) collapses it to the inert marker
+    // instead.
+    const outline = renderSubtreeOutline([
+      {id: 'real-id', parentId: null, content: `${String.fromCodePoint(0x202e)}evil`, depth: 0},
+    ])
+    expect(outline).toBe('- [real-id]  ⏎ evil')
+    expect(outline.includes(String.fromCodePoint(0x202e))).toBe(false)
+  })
+})
+
+describe('ZWJ/ZWNJ survive in content untouched — the deliberate exception to bidi neutralization (PR #447 review comment 3677343389)', () => {
+  it('preserves every ZWJ/ZWNJ occurrence in content exactly, at any count/position', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom('a', 'b', ' '), {maxLength: 5}),
+        fc.array(zwjZwnjArb, {maxLength: 5}),
+        (tokens, zwChars) => {
+          const content = tokens.join('') + zwChars.join('')
+          const outline = renderSubtreeOutline([{id: 'x', parentId: null, content, depth: 0}])
+          const renderedContent = outline.slice('- [x] '.length)
+          for (const zw of [String.fromCodePoint(0x200d), String.fromCodePoint(0x200c)]) {
+            const expectedCount = zwChars.filter(c => c === zw).length
+            const actualCount = [...renderedContent].filter(c => c === zw).length
+            expect(actualCount, renderedContent).toBe(expectedCount)
+          }
+        },
+      ),
+      fuzzParams(150),
+    )
+  }, fuzzTestTimeout())
+
+  it('preserves ZWJ inside a realistic compound emoji sequence (family emoji) — the concrete case over-stripping would break', () => {
+    // Man + ZWJ + Woman + ZWJ + Girl = one family emoji. Stripping either
+    // ZWJ turns this into three SEPARATE emoji rendered side by side.
+    const familyEmoji = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'
+    const outline = renderSubtreeOutline([{id: 'x', parentId: null, content: familyEmoji, depth: 0}])
+    expect(outline).toBe(`- [x] ${familyEmoji}`)
+  })
+})
+
+describe('id treats ZWJ/ZWNJ like any other \\p{C} character — encoded, unlike the content-side exception above (PR #447 review comment 3677343389)', () => {
+  it('percent-encodes ZWJ/ZWNJ when they appear in an id (no content-style carve-out for identifiers)', () => {
+    fc.assert(
+      fc.property(zwjZwnjArb, (zw) => {
+        const token = encodedIdToken(`a${zw}b`)
+        expect(token.includes(zw), token).toBe(false)
+        expect(decodeOutlineId(token)).toBe(`a${zw}b`)
+      }),
+      fuzzParams(50),
     )
   }, fuzzTestTimeout())
 })
