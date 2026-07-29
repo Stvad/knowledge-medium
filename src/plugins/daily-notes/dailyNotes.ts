@@ -7,7 +7,7 @@ import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
-import { createOrRestoreTargetBlock } from '@/data/targets'
+import { createOrRestoreTargetBlock, restorePropertiesStrippingAliases } from '@/data/targets'
 import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -228,7 +228,13 @@ export const getOrCreateDailyNote = async (
     if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
-      await tx.restore(id, {content: longLabel})
+      // The tombstone's stored alias bag can hold an entry a different
+      // live block claimed while the daily note was dead (issue #378) —
+      // restoring it as-is would re-insert that stale claim and abort
+      // the whole tx. Strip it here; the setProperty below re-claims
+      // exactly the canonical long-form + ISO aliases.
+      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
+      await tx.restore(id, {content: longLabel, properties: restoredProperties})
       await tx.setProperty(id, aliasesProp, dailyAliases)
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
       await repo.addTypeInTx(
