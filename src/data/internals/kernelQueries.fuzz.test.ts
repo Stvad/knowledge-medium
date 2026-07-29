@@ -73,11 +73,17 @@ afterAll(async () => {
   await sharedDb.cleanup()
 })
 
-/** Interrupt-barrier for suite 1's per-case `resetTestDb` — see
- *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). No
- *  `Math.random` pin needed: every block's `orderKey` here is an
- *  explicit, non-jittered literal (`k${n}`), so `seed: null` below skips
- *  the pin and keeps only the barrier. */
+/** Interrupt-barrier shared by both suites below — they both read/write
+ *  the same `sharedDb`, so both must wrap every case in `guard.run` (see
+ *  `statefulFuzzGuard`, `@/test/fuzz`, docs/fuzzing.md §6: "Adding a
+ *  suite" point 6), not just the one with the per-case `resetTestDb`.
+ *  Without it, an abandoned case from either suite (left running past a
+ *  deep-tier `interruptAfterTimeLimit` interrupt) could still be
+ *  querying `sharedDb.db` when the other suite's cases start, or when
+ *  `afterAll` closes it. No `Math.random` pin is needed for either
+ *  suite — suite 1's block `orderKey`s are explicit, non-jittered
+ *  literals (`k${n}`) and suite 2 has no randomness to pin — so
+ *  `seed: null` below skips the pin and keeps only the barrier. */
 const guard = statefulFuzzGuard()
 
 // ──── Suite 1: fuzzy-alias exact/prefix match survives the LIMIT ────
@@ -250,11 +256,12 @@ const SHAPES: readonly Shape[] = [
 describe('escapeLikePattern — differential vs real SQLite for every call-site LIKE/ESCAPE shape', () => {
   it('matches a case-folded JS containment check for arbitrary needle/haystack, including % _ \\ and case-invariant unicode', async () => {
     await fc.assert(
-      fc.asyncProperty(fc.constantFrom(...SHAPES), needleHaystackArb, async (shape, {haystack, needle}) => {
-        const row = await sharedDb.db.get<{m: number}>(shape.sql, shape.params(haystack, needle))
-        expect(row.m === 1, JSON.stringify({shape: shape.name, haystack, needle}))
-          .toBe(shape.expected(haystack, needle))
-      }),
+      fc.asyncProperty(fc.constantFrom(...SHAPES), needleHaystackArb, async (shape, {haystack, needle}) =>
+        guard.run(null, async () => {
+          const row = await sharedDb.db.get<{m: number}>(shape.sql, shape.params(haystack, needle))
+          expect(row.m === 1, JSON.stringify({shape: shape.name, haystack, needle}))
+            .toBe(shape.expected(haystack, needle))
+        })),
       fuzzParams(300),
     )
   }, fuzzTestTimeout())
