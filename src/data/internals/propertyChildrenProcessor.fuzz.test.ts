@@ -203,12 +203,40 @@ const runCase = async ({kind, values}: {kind: Kind; values: unknown[]}): Promise
   expect(fieldRows).toHaveLength(1)
   const fieldRowId = fieldRows[0]!.id
   const converged = await childrenRows(fieldRowId)
+  expect(converged, 'exactly one live primary value child in a converged row').toHaveLength(1)
+  const valueRowId = converged[0]!.id
 
   // ── MATERIALIZE re-run: an already-converged row is untouched ──
+  // The docblock's contract above (:22-27) is LITERAL — "writes NOTHING",
+  // not just "no observable diff": the `primary.content !== fieldContent` /
+  // `primaryValue.content !== content` guards
+  // (propertyChildrenProcessor.ts:400-409) skip the `tx.update` call
+  // entirely when nothing changed, so a converged re-run must emit zero
+  // row_events for EITHER row. `childrenRows` below only compares SELECTED
+  // structural columns (content/deleted/is_field_form/reference_target_id)
+  // — a regression that rewrites the field or value row WITHOUT changing
+  // those (e.g. one of the two guards above dropped, so the call goes
+  // through unconditionally) would pass it silently UNLESS the write also
+  // happens to be a true no-op the engine's own generic
+  // `updatePatchChangesBlock` short-circuit (txEngine.ts:106) catches first
+  // — this assertion doesn't assume that second layer holds, since a
+  // regression could just as easily swap in a write primitive that isn't
+  // gated by it. The event baselines further down are no substitute
+  // either way: they're captured AFTER this call, so a leak here is
+  // invisible to them. Snapshot both rows' update-event counts BEFORE the
+  // call instead (Codex review, comment 3676658264).
+  const beforeMaterialize = {
+    field: await updateEventCount(fieldRowId),
+    value: await updateEventCount(valueRowId),
+  }
   await repo.tx(async tx => {
     const row = await tx.get('p')
     await materializePropertyChildrenForExistingRow(tx, row!, lookups, [schema.name])
   }, {scope: ChangeScope.BlockDefault})
+  expect(await updateEventCount(fieldRowId), 'MATERIALIZE re-run: field row gets no write')
+    .toBe(beforeMaterialize.field)
+  expect(await updateEventCount(valueRowId), 'MATERIALIZE re-run: value row gets no write')
+    .toBe(beforeMaterialize.value)
   expect(await childrenRows(fieldRowId)).toEqual(converged)
   expect(await cellValue('p')).toEqual({[schema.name]: lastValue})
 
