@@ -1,0 +1,362 @@
+// @vitest-environment node
+/**
+ * Fuzz suite for `searchBlocksAcrossSources` + `freshestCandidatePayload`
+ * (`../linkTargetAutocomplete.ts:337-433`, docstring at :349-380) — the
+ * `searchSourcesFacet` merge point behind quick-find / wikilink
+ * autocomplete, block-ref insertion completion, and the agent `search`
+ * command. See `src/test/fuzz.ts` for the smoke/deep tier mechanics and
+ * `docs/fuzzing.md` for suite conventions. Complements the example-based
+ * coverage in `linkTargetAutocomplete.test.ts`'s "searchBlocksAcrossSources
+ * (searchSourcesFacet merge point)" describe block.
+ *
+ * ──── Algorithm under test (linkTargetAutocomplete.ts:380-433) ────
+ *
+ * `limit <= 0` short-circuits to `[]` (:384) WITHOUT invoking any source.
+ * Otherwise every contributed source's `search` runs concurrently
+ * (`Promise.all`, :392-402); a throw is caught, logged, and contributes
+ * NOTHING (an empty list) — UNLESS every source throws, in which case the
+ * FIRST one by registration order (not settle/catch order — `failures`
+ * is sorted by `index` before rethrow, :408-411) is rethrown. Surviving
+ * candidates are flattened and folded, in registration-then-within-source
+ * order, into a `Map<blockId, winner>` (:415-427): the surviving `score`
+ * is the MAX across every duplicate, and the surviving `block` payload is
+ * picked by `freshestCandidatePayload` (:337-347) — newest `userUpdatedAt`
+ * wins when both sides are numeric and differ, else the higher-scored
+ * side wins. The result is stable-sorted by score descending and sliced
+ * to `limit` (:429-432).
+ *
+ * IMPORTANT (fuzz-found, see `pickFresherPayload`'s docblock below): this
+ * fold is a SINGLE PASS, so the "existing" side of each payload
+ * comparison already carries the running MAX score across every prior
+ * duplicate, not that specific candidate's own original score. For a
+ * 3+-way duplicate-id group with mixed/missing timestamps this makes
+ * PAYLOAD selection (not the final score, which is always the true max
+ * regardless of order) order-dependent — confirmed against
+ * linkTargetAutocomplete.ts:415-427 by hand-tracing a fuzz counterexample
+ * before writing the model below. Treated as a discovered characteristic
+ * to model faithfully and report, not a bug to fix here — see this PR's
+ * description.
+ *
+ * ──── Generator design ────
+ *
+ * No DB: `repo` is a hand-built stub whose `facetRuntime.read(...)`
+ * returns a `ReadonlyMap` of generated `SearchSourceContribution`s (per
+ * the issue's "generated Maps of async fixtures" framing) — each one's
+ * `search` resolves (with generated candidates) or rejects (with a
+ * per-source-identified `Error`) after a random number of microtask
+ * ticks, so settle order is randomized independently of registration
+ * order on every case. The reference model
+ * (`referenceMergeAndRank`/`foldGroup`/`pickFresherPayload` below) is a
+ * SEPARATE, differently-structured re-expression of the documented
+ * algorithm (group-then-fold over a `Map<id, candidates[]>`, rather than
+ * production's single flat `Map` mutated in one pass over the un-grouped,
+ * flattened list) — an independent implementation to differential-test
+ * against, not a copy of the code under test.
+ */
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import fc from 'fast-check'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import type { BlockData } from '@/data/api'
+import type { Repo } from '@/data/repo'
+import type { SearchSourceContribution } from '@/data/facets.js'
+import { searchBlocksAcrossSources } from '../linkTargetAutocomplete.ts'
+
+const WS = 'ws-1'
+
+// ──── shared fixtures ────
+
+/** Microtask-only delay (no real timers) so settle order can be randomized
+ *  across a fast-check case without adding wall-clock cost. */
+const tick = async (n: number): Promise<void> => {
+  for (let i = 0; i < n; i++) await Promise.resolve()
+}
+
+/** A minimal-but-valid `BlockData`. `content` carries a per-occurrence tag
+ *  (`sourceId#candidateIndex`) so payload survival can be asserted by
+ *  more than just `id`. `userUpdatedAt` is deliberately allowed to carry
+ *  a non-number (via the `as number` cast) to exercise
+ *  `freshestCandidatePayload`'s defensive `typeof aTime === 'number'`
+ *  branch — real rows can't have this, but the check exists for a
+ *  reason (a stale/legacy index copy), so the oracle has to cover it. */
+const makeBlockData = (id: string, userUpdatedAt: number | undefined, tag: string): BlockData => ({
+  id,
+  workspaceId: WS,
+  parentId: null,
+  orderKey: `key-${id}`,
+  content: tag,
+  properties: {},
+  references: [],
+  createdAt: 1,
+  updatedAt: 1,
+  userUpdatedAt: userUpdatedAt as number,
+  createdBy: 'u',
+  updatedBy: 'u',
+  deleted: false,
+})
+
+interface Candidate {
+  block: BlockData
+  score: number
+}
+
+interface Plan {
+  id: string
+  ticks: number
+  ok: boolean
+  candidates: Candidate[] | undefined
+  error: Error
+}
+
+const BLOCK_IDS = ['b0', 'b1', 'b2', 'b3', 'b4', 'b5'] as const
+
+interface CandidateSpec {
+  blockId: typeof BLOCK_IDS[number]
+  score: number
+  userUpdatedAt: number | undefined
+}
+
+const candidateSpecArb: fc.Arbitrary<CandidateSpec> = fc.record({
+  blockId: fc.constantFrom(...BLOCK_IDS),
+  score: fc.integer({min: 0, max: 500}),
+  userUpdatedAt: fc.option(fc.integer({min: 0, max: 1000}), {nil: undefined}),
+})
+
+interface SourceSpec {
+  ticks: number
+  ok: boolean
+  candidates: CandidateSpec[]
+}
+
+/** `alwaysOk`: when true, `ok` is pinned to `true` (used by the pure-merge
+ *  property below, which isolates dedup/rank from failure handling). */
+const sourceSpecArb = (alwaysOk: boolean): fc.Arbitrary<SourceSpec> => fc.record({
+  ticks: fc.integer({min: 0, max: 4}),
+  ok: alwaysOk ? fc.constant(true) : fc.boolean(),
+  candidates: fc.array(candidateSpecArb, {maxLength: 4}),
+})
+
+/** Materializes generated specs into `Plan`s: real `BlockData`/`Error`
+ *  object identities, assigned ONCE, shared between the production-facing
+ *  source (built by {@link buildSource}) and the reference model — so a
+ *  payload-identity assertion (`toEqual`, or `toBe` on the error) is
+ *  meaningful rather than tautologically comparing freshly-constructed
+ *  duplicates. */
+const specsToPlans = (specs: readonly SourceSpec[]): Plan[] =>
+  specs.map((spec, i) => {
+    const id = `s${i}`
+    return {
+      id,
+      ticks: spec.ticks,
+      ok: spec.ok,
+      candidates: spec.ok
+        ? spec.candidates.map((c, ci): Candidate => ({
+            score: c.score,
+            block: makeBlockData(c.blockId, c.userUpdatedAt, `${id}#${ci}`),
+          }))
+        : undefined,
+      error: new Error(`boom:${id}`),
+    }
+  })
+
+const buildSource = (plan: Plan): SearchSourceContribution => ({
+  id: plan.id,
+  search: async () => {
+    await tick(plan.ticks)
+    if (!plan.ok) throw plan.error
+    return plan.candidates!.map(c => ({block: c.block, score: c.score}))
+  },
+})
+
+const makeRepo = (sources: readonly SearchSourceContribution[]): Repo => {
+  const map = new Map(sources.map(s => [s.id, s]))
+  return {
+    facetRuntime: {
+      read: () => map,
+    },
+  } as unknown as Repo
+}
+
+/** Independent re-expression of `freshestCandidatePayload`'s documented
+ *  rule (linkTargetAutocomplete.ts:337-347): newer numeric
+ *  `userUpdatedAt` wins on a genuine difference; otherwise the
+ *  higher-scored side wins, and a scored tie keeps `a`. Written as "does
+ *  `b` strictly beat `a`?" (flipped from the production `a.score >=
+ *  b.score ? a : b`) so it isn't just a renamed copy of the same
+ *  expression.
+ *
+ *  CAUTION (grounded in linkTargetAutocomplete.ts:415-427, confirmed by a
+ *  fuzz-found counterexample): the production merge is a SINGLE-PASS
+ *  running fold, not a pure pairwise reduce over untouched candidates —
+ *  `existing.score` going into this comparison is already the running
+ *  MAX across every duplicate folded in so far (`byId.set(..., {block:
+ *  payload.block, score: Math.max(existing.score, candidate.score)})`),
+ *  not that specific candidate's own original score. So for a 3+-way
+ *  duplicate-id group where the middle elimination's timestamp is
+ *  unknown/tied, the score this function falls back to comparing can be
+ *  an EARLIER, already-eliminated candidate's (higher) score rather than
+ *  the currently-compared side's own — i.e. payload selection is
+ *  order-dependent (non-associative) in that corner, even though the
+ *  final `score` field is always the true group max regardless of fold
+ *  order. `foldGroup` below deliberately replicates this exact
+ *  running-accumulator shape (not a `.reduce` over raw candidates) so
+ *  this suite's model matches the actual algorithm rather than a nicer
+ *  one it doesn't implement. Flagged in the PR description as a
+ *  discovered characteristic worth a design look — not fixed here (see
+ *  house style: order-dependence in an obscure 3+-source tie is
+ *  ambiguous/design-y, not a small unambiguous bug). */
+const pickFresherPayload = (a: Candidate, b: Candidate): Candidate => {
+  const at = a.block.userUpdatedAt
+  const bt = b.block.userUpdatedAt
+  if (typeof at === 'number' && typeof bt === 'number' && at !== bt) {
+    return bt > at ? b : a
+  }
+  return b.score > a.score ? b : a
+}
+
+/** Folds one duplicate-id group into its surviving `{block, score}` via a
+ *  running single-pass accumulator — see the CAUTION above `pickFresherPayload`
+ *  for why this must track the running max score (not each candidate's
+ *  own original score) to match linkTargetAutocomplete.ts:415-427. */
+const foldGroup = (candidates: readonly Candidate[]): Candidate => {
+  let acc = candidates[0]!
+  for (let i = 1; i < candidates.length; i++) {
+    const next = candidates[i]!
+    const payload = pickFresherPayload(acc, next)
+    acc = {block: payload.block, score: Math.max(acc.score, next.score)}
+  }
+  return acc
+}
+
+type ModelResult =
+  | {mode: 'ok'; blocks: BlockData[]}
+  | {mode: 'error'; error: Error}
+
+/** Reference model: group-then-fold over a `Map<blockId, Candidate[]>`
+ *  built from every SUCCEEDING plan's candidates in registration order,
+ *  rather than production's single flat `Map` mutated in one pass over
+ *  the un-grouped, flattened candidate list. */
+const referenceMergeAndRank = (plans: readonly Plan[], limit: number): ModelResult => {
+  if (limit <= 0) return {mode: 'ok', blocks: []}
+  const succeeded = plans.filter(p => p.ok)
+  if (succeeded.length === 0) return {mode: 'error', error: plans[0]!.error}
+
+  const groups = new Map<string, Candidate[]>()
+  for (const plan of succeeded) {
+    for (const candidate of plan.candidates!) {
+      const bucket = groups.get(candidate.block.id) ?? []
+      bucket.push(candidate)
+      groups.set(candidate.block.id, bucket)
+    }
+  }
+
+  const merged = [...groups.values()].map(group => foldGroup(group))
+  merged.sort((x, y) => y.score - x.score)
+  return {mode: 'ok', blocks: merged.slice(0, limit).map(m => m.block)}
+}
+
+describe('searchBlocksAcrossSources — model differential over generated async searchSourcesFacet fixtures', () => {
+  // The suite deliberately makes sources throw; silence the production
+  // `console.error(...)` log for those (see linkTargetAutocomplete.ts:397)
+  // so the fuzz run's output isn't dominated by expected noise.
+  beforeAll(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterAll(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('merges/dedupes/ranks candidates from N always-succeeding async sources exactly like an independent reference model — exact ids/order/payload, no dup ids', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(sourceSpecArb(true), {minLength: 1, maxLength: 4}),
+        fc.integer({min: 1, max: 8}),
+        async (specs, limit) => {
+          const plans = specsToPlans(specs)
+          const repo = makeRepo(plans.map(buildSource))
+
+          const result = await searchBlocksAcrossSources(repo, {workspaceId: WS, query: 'q', limit})
+          const model = referenceMergeAndRank(plans, limit)
+
+          expect(model.mode).toBe('ok')
+          if (model.mode !== 'ok') return
+          expect(result, JSON.stringify({specs, limit})).toEqual(model.blocks)
+          const ids = result.map(b => b.id)
+          expect(new Set(ids).size).toBe(ids.length)
+        },
+      ),
+      fuzzParams(200),
+    )
+  }, fuzzTestTimeout())
+
+  it('returns [] for limit<=0 without invoking any source', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(sourceSpecArb(true), {minLength: 1, maxLength: 4}),
+        fc.integer({min: -5, max: 0}),
+        async (specs, limit) => {
+          const plans = specsToPlans(specs)
+          let invoked = false
+          const sources = plans.map((plan): SearchSourceContribution => ({
+            id: plan.id,
+            search: async () => {
+              invoked = true
+              return []
+            },
+          }))
+          const repo = makeRepo(sources)
+
+          const result = await searchBlocksAcrossSources(repo, {workspaceId: WS, query: 'q', limit})
+          expect(result).toEqual([])
+          expect(invoked).toBe(false)
+        },
+      ),
+      fuzzParams(30),
+    )
+  }, fuzzTestTimeout())
+
+  it('drops a mix of throwing sources and merges only the succeeding ones — no exception escapes while >=1 source succeeds', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(sourceSpecArb(false), {minLength: 1, maxLength: 4}).map(specs => {
+          // Force at least one success — this property isolates partial
+          // failure from the all-fail case (covered separately below).
+          if (!specs.some(s => s.ok)) specs[0]!.ok = true
+          return specs
+        }),
+        fc.integer({min: 1, max: 8}),
+        async (specs, limit) => {
+          const plans = specsToPlans(specs)
+          const repo = makeRepo(plans.map(buildSource))
+
+          const result = await searchBlocksAcrossSources(repo, {workspaceId: WS, query: 'q', limit})
+          const model = referenceMergeAndRank(plans, limit)
+
+          expect(model.mode).toBe('ok')
+          if (model.mode !== 'ok') return
+          expect(result, JSON.stringify({specs, limit})).toEqual(model.blocks)
+        },
+      ),
+      fuzzParams(150),
+    )
+  }, fuzzTestTimeout())
+
+  it('rethrows the FIRST contribution\'s error by registration order when every source fails, regardless of randomized settle order', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(
+          fc.record({ticks: fc.integer({min: 0, max: 6})}),
+          {minLength: 1, maxLength: 5},
+        ),
+        async (failSpecs) => {
+          const plans = specsToPlans(failSpecs.map(({ticks}) => ({ticks, ok: false, candidates: []})))
+          const repo = makeRepo(plans.map(buildSource))
+
+          await expect(
+            searchBlocksAcrossSources(repo, {workspaceId: WS, query: 'q', limit: 10}),
+          ).rejects.toBe(plans[0]!.error)
+        },
+      ),
+      fuzzParams(100),
+    )
+  }, fuzzTestTimeout())
+})

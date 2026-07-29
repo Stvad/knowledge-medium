@@ -203,6 +203,14 @@ engine (a same-shape hand-built string parses fine). Not a product bug.
   atomicity under poisoning, bag code-ownership through every tx
   primitive, restore-preserves-bag, and a registry-resolution tie-in
   after each sequence.
+- `src/utils/test/linkTargetAutocomplete.fuzz.test.ts` — the
+  `searchSourcesFacet` merge point (`searchBlocksAcrossSources`): model
+  differential against an independent group-then-fold reference over
+  generated async source fixtures (no DB) — exact id/order/payload
+  equality, no dup ids, `limit<=0` short-circuits without invoking any
+  source, a mix of throwing/succeeding sources merges only the
+  survivors, and total failure rethrows the FIRST contribution's error
+  by registration order regardless of randomized settle order.
 
 ## Found so far
 
