@@ -59,16 +59,27 @@
  * deliberately DUMB — they only translate "current script step" into a
  * return/throw, never decide retry/quarantine — so the REAL orchestrator's
  * classification (via the REAL `classifyUploadError`) and retry/budget
- * logic is exercised, not re-implemented by the mock. Errors are drawn
- * from the exact code/status pools `uploadErrorClassifier.ts` and its own
- * test file document — the harness never invents a "kind" the classifier
- * has to trust.
+ * logic is exercised, not re-implemented by the mock. Errors are drawn from
+ * the exact code/status pools `uploadErrorClassifier.ts` and its own test
+ * file document, and each pool assigns its own error a `bucket` — the
+ * GENERATED ground truth for what that error should classify as.
+ * `predictPass` branches on that `bucket` (`expectedClassOf`), never on a
+ * call to `classifyUploadError` — so a classification regression can't be
+ * silently adopted by the model as the "expected" answer. What actually
+ * happened when the REAL classifier saw the same error is recorded
+ * separately (`classificationOf`, used only in `runSimulation`'s mock) and
+ * diffed against the model's prediction below; the pools themselves are
+ * pinned against the real classifier directly by the "generator ground
+ * truth" tests earlier in this file.
  *
  * Every pass, `runSimulation` asserts predicted === observed (per-tx trace,
  * completed/rejected sets, throw-vs-resolve, and the real post-call
  * `ambiguousAttempts` map) — this differential check is the load-bearing
- * oracle; the five `it`s below each pull a named, issue-aligned slice out
- * of the same verified trace for clear failure diagnostics.
+ * oracle, and (since predicted is bucket-derived while observed is
+ * classifier-derived) it doubles as a classification-regression detector for
+ * every error a scenario actually exercises; the five `it`s below each pull
+ * a named, issue-aligned slice out of the same verified trace for clear
+ * failure diagnostics.
  *
  * ## Contract delta: property (e)
  *
@@ -104,7 +115,7 @@ import {
 } from '@powersync/common'
 import { describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { classifyUploadError, type UploadErrorClass } from '@/services/uploadErrorClassifier'
 
 const supabaseRef = vi.hoisted(() => ({
@@ -128,10 +139,14 @@ const fakeDatabase = {} as unknown as AbstractPowerSyncDatabase
 
 // ──────────────────────────────────────────────────────────────────────
 // Real error shapes — mirrors uploadErrorClassifier.ts's own buckets and
-// uploadErrorClassifier.test.ts's helpers, so generated "attempts" are
-// classified by calling the REAL classifyUploadError, never by a label the
-// harness invents. See uploadErrorClassifier.ts for the citations these
-// pools are drawn from.
+// uploadErrorClassifier.test.ts's helpers. Each pool's own membership IS
+// the ground truth for what that error should classify as — the model
+// below (`predictPass`) branches on that generated bucket, never on a call
+// to `classifyUploadError`, so a regression in the classifier can't be
+// silently adopted by the oracle as the "expected" answer. The pools are
+// pinned against the real classifier directly by the dedicated
+// "generator ground truth" tests further down — a mismatch there is a
+// FINDING (a mislabeled pool), not a model bug.
 // ──────────────────────────────────────────────────────────────────────
 
 const postgrestError = (code: string, message = 'test'): Error => {
@@ -167,35 +182,87 @@ const ambiguousErrorArb: fc.Arbitrary<unknown> = fc.oneof(
 )
 
 // ──────────────────────────────────────────────────────────────────────
+// Generator ground truth: pins each pool against the REAL classifyUploadError
+// directly, independent of the scenario model below. `predictPass` trusts a
+// generated error's `bucket` without asking the classifier — these tests are
+// what makes that trust sound. A failure here means a POOL is mislabeled
+// (a finding to report), not that the state-machine model is wrong.
+// ──────────────────────────────────────────────────────────────────────
+
+describe('generator pools — ground truth against the real classifier', () => {
+  it('every transient-pool error classifies as transient', () => {
+    fc.assert(
+      fc.property(transientErrorArb, err => {
+        expect(classifyUploadError(err)).toBe('transient')
+      }),
+      fuzzParams(60),
+    )
+  }, fuzzTestTimeout())
+
+  it('every permanent-pool error classifies as permanent', () => {
+    fc.assert(
+      fc.property(permanentErrorArb, err => {
+        expect(classifyUploadError(err)).toBe('permanent')
+      }),
+      fuzzParams(60),
+    )
+  }, fuzzTestTimeout())
+
+  it('every ambiguous-pool error classifies as ambiguous', () => {
+    fc.assert(
+      fc.property(ambiguousErrorArb, err => {
+        expect(classifyUploadError(err)).toBe('ambiguous')
+      }),
+      fuzzParams(60),
+    )
+  }, fuzzTestTimeout())
+})
+
+// ──────────────────────────────────────────────────────────────────────
 // Scripts: a per-tx sequence of scripted attempt outcomes.
 // ──────────────────────────────────────────────────────────────────────
 
-type Step = {readonly outcome: 'success'} | {readonly outcome: 'error'; readonly err: unknown}
+type Step =
+  | {readonly outcome: 'success'}
+  | {readonly outcome: 'error'; readonly err: unknown; readonly bucket: UploadErrorClass}
 type Script = {readonly steps: readonly Step[]; readonly tail: Step}
 
 const successStep: Step = {outcome: 'success'}
-const errorStep = (err: unknown): Step => ({outcome: 'error', err})
+/** `bucket` is the GENERATED ground truth — which pool `err` was drawn from
+ *  — carried alongside the error rather than re-derived later. */
+const errorStep = (err: unknown, bucket: UploadErrorClass): Step => ({outcome: 'error', err, bucket})
 
 const stepAt = (script: Script, idx: number): Step => (idx < script.steps.length ? script.steps[idx] : script.tail)
 
-/** The step's real classification — always derived by calling the actual
- *  `classifyUploadError`, never trusted from generation intent. */
+/** The step's REAL (observed) classification — calls the actual
+ *  `classifyUploadError`. Used only to record what actually happened during
+ *  a run, for differencing against `expectedClassOf` below — never to
+ *  derive the model's own expectation, which would let a classifier
+ *  regression sneak past undetected (the model would adopt the same wrong
+ *  answer the code under test produced). */
 const classificationOf = (step: Step): 'success' | UploadErrorClass =>
   step.outcome === 'success' ? 'success' : classifyUploadError(step.err)
 
+/** The step's EXPECTED classification, by construction — the generated
+ *  `bucket`, never a call to `classifyUploadError`. This is what
+ *  `predictPass` branches on, so the oracle's expectation is independent of
+ *  the code under test. */
+const expectedClassOf = (step: Step): 'success' | UploadErrorClass =>
+  step.outcome === 'success' ? 'success' : step.bucket
+
 const stepArb: fc.Arbitrary<Step> = fc.oneof(
   {arbitrary: fc.constant(successStep), weight: 5},
-  {arbitrary: transientErrorArb.map(errorStep), weight: 2},
-  {arbitrary: permanentErrorArb.map(errorStep), weight: 2},
-  {arbitrary: ambiguousErrorArb.map(errorStep), weight: 2},
+  {arbitrary: transientErrorArb.map(err => errorStep(err, 'transient')), weight: 2},
+  {arbitrary: permanentErrorArb.map(err => errorStep(err, 'permanent')), weight: 2},
+  {arbitrary: ambiguousErrorArb.map(err => errorStep(err, 'ambiguous')), weight: 2},
 )
 // Tail is biased toward 'ambiguous' relative to the prefix so budget
 // exhaustion (property d) shows up often without needing very long scripts.
 const tailArb: fc.Arbitrary<Step> = fc.oneof(
   {arbitrary: fc.constant(successStep), weight: 6},
-  {arbitrary: transientErrorArb.map(errorStep), weight: 2},
-  {arbitrary: permanentErrorArb.map(errorStep), weight: 1},
-  {arbitrary: ambiguousErrorArb.map(errorStep), weight: 3},
+  {arbitrary: transientErrorArb.map(err => errorStep(err, 'transient')), weight: 2},
+  {arbitrary: permanentErrorArb.map(err => errorStep(err, 'permanent')), weight: 1},
+  {arbitrary: ambiguousErrorArb.map(err => errorStep(err, 'ambiguous')), weight: 3},
 )
 const scriptArb: fc.Arbitrary<Script> = fc.record({
   steps: fc.array(stepArb, {maxLength: 3}),
@@ -293,7 +360,7 @@ const predictPass = (
   for (const tx of pending) {
     const step = peek(tx)
     localAttempt.set(tx.blockId, (localAttempt.get(tx.blockId) ?? 0) + 1)
-    const cls = classificationOf(step)
+    const cls = expectedClassOf(step)
     perTxTrace.push({blockId: tx.blockId, classification: cls})
 
     if (cls === 'success') {
