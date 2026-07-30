@@ -28,7 +28,12 @@ import {
 } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { getOrCreateDailyNote, resolveDailyNoteOwner } from '@/plugins/daily-notes'
+import {
+  getOrCreateDailyNote,
+  isValidDateAlias,
+  predictDailyNoteId,
+  resolveDailyNoteOwner,
+} from '@/plugins/daily-notes'
 import {
   roamTodoStateProp,
   statusProp,
@@ -210,7 +215,6 @@ export const importRoam = async (
     plan.diagnostics,
     log,
   )
-  const reparentMap = buildReparentMap(reconciliations)
   log(`Reconciled ${reconciliations.length} pages ` +
     `(${reconciliations.filter(r => r.merging).length} merge into existing) (${sinceLastPhase()})`)
 
@@ -403,7 +407,12 @@ export const importRoam = async (
   for (let i = 0; i < dailyIsos.length; i++) {
     const iso = dailyIsos[i]
     try {
-      await getOrCreateDailyNote(repo, options.workspaceId, iso)
+      // Feed the ACTUAL resolved id back into the reconciliations — the
+      // prediction `reconcilePages` made can have gone stale, and everything
+      // downstream (aliases, promoted attrs, descendant parents) has to agree
+      // with the row that actually exists. See `retargetDailyReconciliations`.
+      const note = await getOrCreateDailyNote(repo, options.workspaceId, iso)
+      retargetDailyReconciliations(reconciliations, iso, note.id, plan.diagnostics)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       plan.diagnostics.push(`Failed to materialise daily note for ${iso}: ${message}`)
@@ -414,6 +423,12 @@ export const importRoam = async (
     }
   }
   if (dailyIsos.length > 0) log(`Materialised ${dailyIsos.length} daily notes (${sinceLastPhase()})`)
+
+  // Built HERE, after step 4 — not right after `reconcilePages` — so it sees
+  // any `finalId` that `retargetDailyReconciliations` corrected above. A map
+  // built before the daily notes were materialised can't know which of them got
+  // adopted at another id, and the descendant phase (5d) is its only consumer.
+  const reparentMap = buildReparentMap(reconciliations)
 
   // 5. Write the import in two phases — one frontmatter tx (alias
   //    seats + placeholders + pages) followed by chunked descendant
@@ -905,9 +920,31 @@ const reconcilePages = async (
 
     const aliasesToApply = aliasRule.aliasesByRootTitle.get(rootTitle) ?? [page.title]
     if (page.isDaily) {
+      // Predict alias-first, exactly as step 4's `getOrCreateDailyNote` will
+      // resolve (issue #378): if a live block already claims this date's
+      // long-form or ISO alias, that block IS the day's note and NOTHING is
+      // ever minted at the raw `dailyNoteBlockId`. This used to be an
+      // unconditional `finalId: page.blockId`, which then silently mis-targeted
+      // the note three ways at once — see the
+      // "lands an imported daily page on the ADOPTED note" test.
+      //
+      // `isValidDateAlias` gate: `predictDailyNoteId` throws on a
+      // calendar-invalid iso, and a single malformed daily page must not abort
+      // the whole import (same reason `collectDailyIsos` filters). Falling back
+      // to `page.blockId` leaves such a page exactly where it was pre-#378.
+      // Note this gate is STRICTER than `collectDailyIsos`' shape-only
+      // `VALID_ISO`: a shape-valid but calendar-invalid iso ("2026-02-30")
+      // still reaches step 4, where `getOrCreateDailyNote` throws and the
+      // per-iso catch records a diagnostic. That page then has no note row at
+      // all — its aliases/attrs/descendants are lost the same way they were
+      // before this fix. Pre-existing degradation for malformed input, called
+      // out here so it isn't mistaken for something this gate introduced.
+      const finalId = page.iso && isValidDateAlias(page.iso)
+        ? await predictDailyNoteId(repo, workspaceId, page.iso)
+        : page.blockId
       rootRecons.set(rootTitle, {
         plannedId: page.blockId,
-        finalId: page.blockId,
+        finalId,
         page,
         merging: false,
         aliasRuleMerged: false,
@@ -964,6 +1001,45 @@ const buildReparentMap = (recons: PageReconciliation[]): Map<string, string> => 
     if (r.plannedId !== r.finalId) map.set(r.plannedId, r.finalId)
   }
   return map
+}
+
+/** Re-point `iso`'s daily-page reconciliations at the id
+ *  `getOrCreateDailyNote` ACTUALLY resolved, correcting
+ *  `reconcilePages`' prediction where the two disagree.
+ *
+ *  The prediction is taken during the reconcile read phase; the world can move
+ *  before step 4 runs (a sync-applied write claims or frees the date's alias),
+ *  and the adoption guard can refuse a claimant the plain alias lookup would
+ *  have accepted. Both leave `finalId` naming a row step 4 never materialised —
+ *  which is exactly the silent triple-loss the alias-first prediction exists to
+ *  prevent, so re-assert it against ground truth rather than trusting the
+ *  prediction.
+ *
+ *  Only the daily reconciliations themselves need updating, with no walk over
+ *  their `rootTitle` group: `skipDailyAliasMerge` refuses every `page_alias::`
+ *  merge that touches a daily page, so a daily page is never the root of a
+ *  merge group and never holds members whose `finalId` copies its own (pinned
+ *  by the "does not merge daily pages through page_alias properties" test).
+ *
+ *  Must run before the reparent map is built and before the write phase. Note
+ *  it cannot retroactively fix `references[]`, which step 3 already patched
+ *  from `resolveAliases`' own independent prediction — hence the diagnostic. */
+const retargetDailyReconciliations = (
+  recons: PageReconciliation[],
+  iso: string,
+  resolvedId: string,
+  diagnostics: string[],
+): void => {
+  for (const r of recons) {
+    if (!r.page.isDaily || r.page.iso !== iso || r.finalId === resolvedId) continue
+    diagnostics.push(
+      `Daily page "${r.page.title}" (${iso}) resolved to block ${resolvedId}, not the ` +
+      `predicted ${r.finalId}; retargeted its aliases, promoted attributes and ` +
+      `descendants. References to this date written during this import may still ` +
+      `point at ${r.finalId}.`,
+    )
+    r.finalId = resolvedId
+  }
 }
 
 const applyReparent = (data: BlockData, reparent: Map<string, string>): BlockData => {

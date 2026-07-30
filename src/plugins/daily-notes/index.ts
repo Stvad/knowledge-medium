@@ -9,7 +9,14 @@
  *     `srsNextReviewDateProp` ref targets.
  *   - `dailyNoteBlockId(workspaceId, iso)` — deterministic id for a
  *     daily note. Used by the Roam importer and the backlinks
- *     references-processor for date-shaped alias routing.
+ *     references-processor for date-shaped alias routing. NOT
+ *     necessarily the live note: since #378 a daily note resolves
+ *     alias-first and can be ADOPTED at another block's id — reach for
+ *     `predictDailyNoteId` whenever the answer feeds a write or a plan.
+ *   - `predictDailyNoteId(repo, ws, iso)` — read-only alias-first
+ *     resolution of which block currently IS that day's note, for
+ *     planning steps that must predict its identity before
+ *     materializing it (the Roam importer's page reconciliation).
  *   - `journalBlockId(workspaceId)` — deterministic id for the
  *     workspace's Journal page.
  *   - `todayIso()` / `addDaysIso(iso, days)` — date math used by
@@ -244,6 +251,7 @@ export {
   isDateAlias,
   isValidDateAlias,
   journalBlockId,
+  predictDailyNoteId,
   resolveDailyNoteOwner,
   todayIso,
 } from './dailyNotes.ts'

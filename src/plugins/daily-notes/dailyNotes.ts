@@ -220,13 +220,18 @@ export const dailyNoteAdoptionGuard = (dateValue: Date): CanonicalAdoptionGuard 
     : `claimant ${claimant.id} is itself a daily note for a different date — ambiguous identity, left unchanged pending an owner decision (issue #378)`
 }
 
-/** Which block currently owns `iso`'s daily-note identity, read-only. The
- *  prediction half of `getOrCreateDailyNote`, extracted so read-only callers
- *  (the agent `daily-note` command) answer with the SAME aliases and the SAME
- *  date-aware guard rather than rebuilding both — rebuilding them is how the
- *  command came to use the plain `refuseTypedClaimant`, which rejects every
- *  adopted note because an adopted note necessarily carries `DAILY_NOTE_TYPE`.
- *  Not authoritative for writes: a writer must re-resolve inside its tx. */
+/** Which block currently owns `iso`'s daily-note identity, read-only: the
+ *  claimant of either canonical alias if one is eligible, else the
+ *  deterministic id. Applies the SAME aliases and the SAME date-aware guard
+ *  `getOrCreateDailyNote` uses, so the two always agree on eligibility —
+ *  rebuilding either separately is how the agent command came to reject every
+ *  adopted note, and how Roam import came to miss a claimant holding only the
+ *  counterpart alias.
+ *
+ *  Writes nothing, and the returned id may name a tombstone or no row at all.
+ *  A prediction also goes stale: anything that WRITES must re-resolve inside
+ *  its own tx (see `canonicalAliasReaderFromTx`), or reconcile against the
+ *  Block `getOrCreateDailyNote` actually returns. */
 export const resolveDailyNoteOwner = (
   repo: Repo,
   workspaceId: string,
@@ -238,6 +243,14 @@ export const resolveDailyNoteOwner = (
   dailyNoteBlockId(workspaceId, iso),
   dailyNoteAdoptionGuard(dailyNoteDateValue(iso)),
 )
+
+/** `resolveDailyNoteOwner` when only the id is wanted — the common case for
+ *  planning steps that key a map on it. */
+export const predictDailyNoteId = async (
+  repo: Repo,
+  workspaceId: string,
+  iso: string,
+): Promise<string> => (await resolveDailyNoteOwner(repo, workspaceId, iso)).id
 
 /** Apply the daily-note's full canonical shape — both aliases (added to,
  *  never replacing, whatever the target already has), `PAGE_TYPE` +
