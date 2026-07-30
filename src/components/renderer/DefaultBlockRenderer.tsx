@@ -6,6 +6,7 @@ import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
 import type { ComponentType, FunctionComponent, RefObject } from 'react'
 import {
+  aliasesProp,
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -528,6 +529,13 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
+  // Does this block carry a page name (`[[Inbox]]`)? Every top-level block
+  // currently renders as the same 1.5rem heading, so a real named page and
+  // a plain bullet you happened to zoom into are typographically identical.
+  // Only the FOCAL title is distinguished (see `.page-title-content`);
+  // inline `[[links]]` to the page are deliberately left alone.
+  const [aliases] = usePropertyValue(block, aliasesProp)
+  const isAliasedPage = isTopLevel && aliases.length > 0
 
   // The block's READ content, bare: the per-type read renderer in an error
   // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
@@ -638,13 +646,16 @@ export function DefaultBlockRenderer(
       )
       // Top-of-panel content renders as a title: larger font, less bullet-list
       // weight. The Controls slot already returns null for top-level so there's
-      // no inline bullet to suppress here.
+      // no inline bullet to suppress here. A focal block that is also a named
+      // page gets the extra `page-title-content` marker so it reads as a page
+      // title rather than as a zoomed-in bullet.
       const topLevelClass = isTopLevel ? ' top-level-content' : ''
+      const pageTitleClass = isAliasedPage ? ' page-title-content' : ''
       return (
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
-          className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
+          className={`block-content${topLevelClass}${pageTitleClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
           <ErrorBoundary FallbackComponent={FallbackComponent}>
@@ -653,7 +664,7 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
+  }, [block, resolveContext, runtime, isTopLevel, isAliasedPage, DefaultContentRenderer, contentContainerRef])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null

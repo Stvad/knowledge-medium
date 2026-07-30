@@ -14,7 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
-import { focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
+import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -371,5 +371,103 @@ describe('DefaultBlockRenderer slot identity', () => {
       expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
     )
     expect(contentMountCount).toBe(1)
+  })
+})
+
+describe('DefaultBlockRenderer page-title styling', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    // No blockLayoutFacet contribution — this exercises DefaultBlockLayout,
+    // which is what actually mounts the `block-content` wrapper under test.
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [defaultEditorInteractionExtension],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'page', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Inbox',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Inbox'])},
+      })
+      await tx.create({
+        id: 'plain', workspaceId: 'ws-1', parentId: null, orderKey: 'a1', content: 'just a bullet',
+      })
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a2',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'page-title fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderFocal = (blockId: string) =>
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: blockId}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block(blockId)} ContentRenderer={TestContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const contentClasses = async (blockId: string): Promise<string> => {
+    await screen.findByText(blockId)
+    const content = document.querySelector('.block-content')
+    expect(content).toBeTruthy()
+    return content!.className
+  }
+
+  it('marks a focal block that is a named page as a page title', async () => {
+    renderFocal('page')
+
+    const classes = await contentClasses('page')
+    expect(classes).toContain('top-level-content')
+    expect(classes).toContain('page-title-content')
+  })
+
+  it('leaves a focal block with no alias as a plain top-level heading', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderFocal('plain')
+
+    const classes = await contentClasses('plain')
+    // Still a top-level heading — zooming into a bullet must keep working.
+    expect(classes).toContain('top-level-content')
+    expect(classes).not.toContain('page-title-content')
+  })
+
+  it('does not restyle a named page rendered inline, only the focal title', async () => {
+    // 'page' has an alias but isn't the focal block here, so it renders as an
+    // ordinary bullet. This is what scopes the treatment to the page's OWN
+    // title rather than every appearance of the page.
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderFocal('page')
+
+    const classes = await contentClasses('page')
+    expect(classes).not.toContain('top-level-content')
+    expect(classes).not.toContain('page-title-content')
   })
 })
