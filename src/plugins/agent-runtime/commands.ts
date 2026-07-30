@@ -51,6 +51,7 @@ import {
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import { lintExtensionSource } from './extensionLint.ts'
 import { auditExtensionData, writeWarnings, type GrainWarning } from './grainAudit.ts'
+import { auditPropertyRegistration, type PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   extensionsOverridesProp,
@@ -406,6 +407,14 @@ const auditRuntimeExtension = async (
   }
 }
 
+/** Workspace-wide counterpart to `audit-extension`'s `unknown-property`
+ *  rule: every key in the data, not just the ones on one extension's types. */
+const auditRuntimeProperties = async (
+  repo: Repo,
+  input: {workspaceId?: string},
+): Promise<PropertyRegistrationAudit> =>
+  auditPropertyRegistration(repo, input.workspaceId?.trim() || resolveWorkspaceId(repo))
+
 const mapPosition = (
   position: BlockPosition | undefined,
 ): {kind: 'first'} | {kind: 'last'} | undefined => {
@@ -756,7 +765,9 @@ const extensionBlockProperties = (
 
 const resolveWorkspaceId = (repo: Repo): string => {
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
-  throw new Error('install-extension requires an active workspace')
+  // Shared by the extension verbs and the property audit — keep the message
+  // verb-agnostic rather than naming whichever caller came first.
+  throw new Error('this command requires an active workspace')
 }
 
 const installRuntimeExtension = async (
@@ -1521,6 +1532,7 @@ export const createAgentRuntimeContext = ({
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
     auditExtension: input => auditRuntimeExtension(repo, input),
+    auditProperties: input => auditRuntimeProperties(repo, input),
     actions: readRuntimeActions(runtime),
     renderers: runtime.read(blockRenderersFacet),
     refreshAppRuntime,
@@ -1704,6 +1716,13 @@ export const executeCommand = async (
       return context.auditExtension({
         id: command.id === undefined ? undefined : requireString(command.id, 'id'),
         label: command.label === undefined ? undefined : requireString(command.label, 'label'),
+      })
+
+    case 'audit-properties':
+      return context.auditProperties({
+        workspaceId: command.workspaceId === undefined
+          ? undefined
+          : requireString(command.workspaceId, 'workspaceId'),
       })
 
     case 'run-action':

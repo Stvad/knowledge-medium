@@ -9,6 +9,7 @@ import type { ActionConfig } from '@/shortcuts/types.js'
 import type { BlockProperties } from '@/types.js'
 import type { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import type { GrainWarning, TypeAuditSummary } from './grainAudit.ts'
+import type { PropertyRegistrationAudit } from './propertyRegistrationAudit.ts'
 
 export type SqlMode = 'all' | 'get' | 'optional' | 'execute'
 export type BlockPosition = 'first' | 'last' | number
@@ -219,6 +220,16 @@ export interface AuditExtensionResult {
   lint: ExtensionLintWarning[]
 }
 
+export interface AuditPropertiesInput {
+  /** Workspace to audit. Defaults to the active one, and in practice only
+   *  the active workspace can be audited: classification runs on the
+   *  property-definition registry, which is loaded for the active (and
+   *  immediately-previous) workspace only. Passing anything else is refused
+   *  rather than answered with a report that calls every key unregistered.
+   *  Useful as an assertion when a script must not audit the wrong graph. */
+  workspaceId?: string
+}
+
 export interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
@@ -241,6 +252,7 @@ export interface AgentRuntimeContext {
   setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>
   auditExtension: (input: AuditExtensionInput) => Promise<AuditExtensionResult>
+  auditProperties: (input: AuditPropertiesInput) => Promise<PropertyRegistrationAudit>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime
