@@ -33,10 +33,14 @@
  *     against `block_aliases_workspace_alias_unique` — so a pre-existing alias
  *     that another block latently co-claims (cross-client dupes sync in
  *     trigger-free; V1 leaves their merge latent) would abort a claim we never
- *     asked for. `RAISE(ABORT)` is statement-scoped, so swallowing only
- *     `alias.collision` keeps the tx open and the rest of the batch intact.
- *     Without it one poisoned row costs every type in the graph — the run
- *     throws, no marker is recorded, and it re-throws on every open forever.
+ *     asked for, and one poisoned row would cost every type in the graph: the
+ *     run throws, no marker is recorded, and it re-throws on every open forever.
+ *     Every entry the write re-inserts is therefore PREFLIGHTED, not caught.
+ *     Catching is not enough — in a `properties_migration = 'children'`
+ *     workspace `setProperty` writes the value children first and the parent-bag
+ *     collision surfaces later, from the children projection, outside any local
+ *     try/catch (verified: the rejection arrives from `repo.tx`, not from
+ *     `setProperty`).
  *   - **skips seed-owned rows.** `materializeTypeSeeds` mints code-authored
  *     `block-type` blocks at deterministic ids, and those were never pages.
  *     This one isn't cosmetic: `assertNoSeedDefinitionWrites` (`txEngine.ts`)
@@ -168,35 +172,54 @@ export const blockTypeNameAliasBackfill: WorkspaceBackfill = {
             }
             if (aliases.includes(name)) continue
 
-            // Sees this tx's own writes, so two same-named types in one batch
-            // resolve here (the second is skipped) rather than tripping the
-            // uniqueness trigger. A self-claim can't reach this point — the
-            // decoded list is authoritative and was checked just above.
-            const claimants = await t.aliasClaimants(name, workspaceId)
-            if (claimants.length > 0) {
+            // Preflight EVERY entry the write will re-insert, not just `name`.
+            // `blocks_alias_update` deletes and re-inserts the row's WHOLE alias
+            // list, so a latent cross-client duplicate on one of its EXISTING
+            // aliases aborts a claim we never asked for. Catching that abort is
+            // not sufficient: in a `properties_migration = 'children'` workspace
+            // `setProperty` writes the value children first and the parent-bag
+            // collision is raised later, by the children projection, OUTSIDE any
+            // try/catch here — taking the whole batch (and the marker) with it.
+            // Preflighting is the only form that holds in both storage modes.
+            //
+            // `aliasClaimants` sees this tx's own writes, so two same-named
+            // types in one batch resolve here (the second is skipped) rather
+            // than tripping the uniqueness trigger. Self is a legitimate
+            // claimant of the row's existing aliases, hence `!== id`.
+            const contested: string[] = []
+            for (const alias of [...aliases, name]) {
+              const rivals = (await t.aliasClaimants(alias, workspaceId))
+                .filter(claimant => claimant.id !== id)
+              if (rivals.length > 0) {
+                contested.push(`${JSON.stringify(alias)} (claimed by ${rivals.map(r => r.id).join(', ')})`)
+              }
+            }
+            if (contested.length > 0) {
               console.warn(
                 `[blockTypeNameAliasBackfill] type ${id} ("${name}") left alias-less: ` +
-                `${claimants.map(c => c.id).join(', ')} already claim(s) that name in ` +
-                `workspace ${workspaceId}. This pass is one-shot per workspace, so ` +
-                `freeing the name later will NOT re-claim it — rename the type via the ` +
-                `type editor, or add the alias to it by hand.`,
+                `${contested.join('; ')} in workspace ${workspaceId}. This pass is ` +
+                `one-shot per workspace, so freeing the name later will NOT re-claim it ` +
+                `— rename the type via the type editor, or add the alias to it by hand.`,
               )
               continue
             }
 
             try {
-              await t.setProperty(id, aliasesProp, [...aliases, name])
+              // `skipMetadata`: deferred machine maintenance, not a user edit.
+              // Without it every migrated type is stamped `user_updated_at = now`
+              // + `updated_by = <current user>`, and `core.recentBlocks` sorts on
+              // exactly that — Recents would fill with type pages "edited" the
+              // moment the backfill ran, burying the user's real work.
+              await t.setProperty(id, aliasesProp, [...aliases, name], {skipMetadata: true})
             } catch (err) {
-              // Only an alias collision. It can't be `name` (just checked
-              // in-tx) — it's a latent cross-client duplicate on one of the
-              // row's OTHER aliases, re-inserted by `blocks_alias_update`.
-              // ABORT is statement-scoped, so the tx and the rest of the batch
-              // survive; the claim degrades to unclaimed for this row only.
+              // Defence in depth only — the preflight above is what actually
+              // prevents this, and no test can reach here through the public
+              // path. Left in for the race the preflight can't close (a
+              // sync-applied co-claim landing between preflight and write).
               if (parseAliasCollisionError(err) === null) throw err
               console.warn(
                 `[blockTypeNameAliasBackfill] type ${id} ("${name}") left alias-less: ` +
-                `another of its existing aliases is latently claimed by a second block, ` +
-                `so re-writing the list aborts. Resolve that duplicate first.`,
+                `an alias collision landed between the preflight and the write.`,
               )
             }
           }

@@ -254,7 +254,7 @@ describe('blockTypeNameAliasBackfill', () => {
     // type's own aliases.
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain(pageId)
-    expect(warnings[0]).toContain('already claim(s) that name')
+    expect(warnings[0]).toContain('"Author" (claimed by')
   })
 
   it('survives a latent duplicate on one of the row’s OTHER aliases', async () => {
@@ -278,6 +278,43 @@ describe('blockTypeNameAliasBackfill', () => {
     expect(markers.map(m => m.key)).toContain(`workspace_backfill:${WS}:${blockTypeNameAliasBackfill.id}`)
   })
 
+  it('survives that latent duplicate in a properties_migration = children workspace too', async () => {
+    // The sibling test above passes even with the claim merely WRAPPED in a
+    // try/catch, because in cell mode the collision is raised by the
+    // `setProperty` statement itself. In a flipped workspace it isn't: the
+    // value children are written first and the parent-bag collision surfaces
+    // later, from the children projection, OUTSIDE any try/catch in the pass —
+    // it arrives from `repo.tx`. Catching is therefore not a fix here; only the
+    // preflight is. This is the shape live graphs are migrating to.
+    await sharedDb.db.execute(
+      `INSERT INTO workspaces
+         (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+       VALUES (?, ?, ?, 1, 1, 'none', NULL, ?)
+       ON CONFLICT(id) DO UPDATE SET properties_migration = excluded.properties_migration`,
+      [WS, 'test ws', 'user-1', 'children'],
+    )
+    // Assert the precondition rather than trusting it — an un-flipped
+    // workspace would make this test a duplicate of the one above.
+    const flip = await sharedDb.db.get<{properties_migration: string | null}>(
+      'SELECT properties_migration FROM workspaces WHERE id = ?', [WS],
+    )
+    expect(flip.properties_migration).toBe('children')
+
+    const typeId = await makeLegacyType(repo, 'Author', {[aliasesProp.name]: ['Foo']})
+    await seedRow({id: 'rival-foo', content: 'Foo', properties: {[aliasesProp.name]: ['Foo']}})
+    const bystanderId = await makeLegacyType(repo, 'Publisher')
+
+    await runBackfill(repo)
+
+    expect(await aliasesOf(repo, typeId)).toEqual(['Foo'])
+    expect(await indexedAliases(typeId)).toEqual(['Foo'])
+    expect(await aliasesOf(repo, bystanderId)).toEqual(['Publisher'])
+    const markers = await sharedDb.db.getAll<{key: string}>(
+      "SELECT key FROM client_schema_state WHERE key LIKE 'workspace_backfill:%'",
+    )
+    expect(markers.map(m => m.key)).toContain(`workspace_backfill:${WS}:${blockTypeNameAliasBackfill.id}`)
+  })
+
   it('skips a malformed alias list rather than wiping the claims it still holds', async () => {
     // `getAliases` degrades a codec throw to `[]` while the `block_aliases`
     // trigger indexes every string element, so `["Scribe", 1]` is a LIVE claim
@@ -291,6 +328,26 @@ describe('blockTypeNameAliasBackfill', () => {
 
     expect(await indexedAliases(id)).toEqual(['Scribe'])
     expect(await uploadOps(id)).toEqual([])
+  })
+
+  it('doesn’t stamp the migrated type as freshly user-edited', async () => {
+    // `core.recentBlocks` sorts on `user_updated_at`. Without `skipMetadata`
+    // every type in the graph is stamped with the moment the backfill ran, so
+    // Recents fills with type pages the user never touched — and `updated_by`
+    // falsely attributes the edit to whoever happened to open the app.
+    const id = await makeLegacyType(repo, 'Author')
+    const before = await sharedDb.db.get<{user_updated_at: number; updated_by: string | null}>(
+      'SELECT user_updated_at, updated_by FROM blocks WHERE id = ?', [id],
+    )
+
+    await runBackfill(repo)
+
+    expect(await aliasesOf(repo, id)).toEqual(['Author'])
+    const after = await sharedDb.db.get<{user_updated_at: number; updated_by: string | null}>(
+      'SELECT user_updated_at, updated_by FROM blocks WHERE id = ?', [id],
+    )
+    expect(after.user_updated_at).toBe(before.user_updated_at)
+    expect(after.updated_by).toBe(before.updated_by)
   })
 
   it('claims for the oldest of two same-named legacy types', async () => {
