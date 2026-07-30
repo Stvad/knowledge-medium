@@ -117,6 +117,26 @@ describe('scoreCandidate', () => {
       expect(chain('Autocomplete', 'atcmp')).toBeNull()
     })
 
+    it('takes at most one chunk from any single word', () => {
+      // The DP walks reachable offsets high-to-low precisely so a word
+      // cannot extend an offset it just wrote. Walking low-to-high
+      // instead accepts all three of these, and nothing else in the
+      // suite notices — so this is the only thing pinning that walk.
+      expect(chain('Alpha Bravo', 'alal')).toBeNull()
+      expect(chain('Alpha Bravo', 'alphalpha')).toBeNull()
+      expect(chain('Meeting Notes', 'meetmeet')).toBeNull()
+    })
+
+    it('still matches using only the words it can afford on a very long title', () => {
+      // Titles past CHAIN_MAX_WORDS degrade to "consider the first N
+      // words" rather than refusing outright — punctuation splits push
+      // real titles over the cap sooner than the word count suggests.
+      // Three run-together chunks, so the typo tier (one edit) cannot
+      // rescue it — this only passes via the chain.
+      const long = 'Notes from the 2026 Q3 Planning Offsite in San Francisco with the Team'
+      expect(chain(long, 'notesfromthe')).not.toBeNull()
+    })
+
     it('ranks below a literal substring and above a typo', () => {
       const substring = scoreCandidate('Strength Training', 'training', tokens('training'))!
       const chained = scoreCandidate('Strength Training', 'strtrain', tokens('strtrain'))!

@@ -130,12 +130,13 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       const matches = await searchAliasLabels(repo, {workspaceId, query: filter, recentBlockIds})
       // `repo.types` is the in-memory registry snapshot — a synchronous
       // map read, so naming each row's type costs nothing beyond the
-      // bounded `block_types` lookup `searchAliasLabels` already did.
+      // bounded per-id type lookup `searchAliasLabels` already did.
       const typeRegistry = repo.types
+      // No `type` — `backlinkCompletionSource` already defaults alias
+      // candidates to 'class'.
       const aliases = matches.map(match => ({
         label: match.label,
         detail: completionTypeHint(match.typeIds, typeRegistry),
-        type: 'class',
       }))
       const dateCompletions = relativeDateCandidates(filter).map(candidate => {
         const label = formatRoamDate(candidate.date)

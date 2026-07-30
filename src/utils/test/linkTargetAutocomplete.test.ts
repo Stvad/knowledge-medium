@@ -367,6 +367,134 @@ describe('link target autocomplete helpers', () => {
     expect(out).toEqual([{label: 'Shared name', typeIds: ['page']}])
   })
 
+  /** Raw insert, bypassing `repo.tx` — a malformed `types` value cannot be
+   *  written through the typed path, and going raw also keeps the row out
+   *  of the block cache so the MRU read actually parses what is on disk. */
+  const insertRaw = async (id: string, properties: Record<string, unknown>) => {
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, ?, '', ?, '[]', 1, 1, 1, 'u', 'u', 0)`,
+      [id, WS, `key-${id}`, JSON.stringify(properties)],
+    )
+  }
+
+  it('survives a malformed types value on the MRU path', async () => {
+    // The `types` column's on-disk contract is "ignore malformed
+    // entries" — the maintenance trigger filters on
+    // `typeof(je.value)='text'` and the invalidation rule filters
+    // non-strings. A raw properties-bag write (agent-runtime
+    // `updateBlock`, the MCP verb, an importer, a sync-applied row) can
+    // land a non-array here. Running the string-list codec instead
+    // throws a CodecError that rejects out through `getAliases` — which
+    // has no try/catch above it — emptying the ENTIRE `[[` dropdown,
+    // relative-date completions included.
+    await insertRaw('bad', {alias: ['Malformed page'], types: 'person'})
+    const {repo} = createTestRepo({db: env.h.db, user: {id: 'user-1'}})
+
+    await expect(searchAliasLabels(repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['bad'],
+    })).resolves.toEqual([{label: 'Malformed page', typeIds: []}])
+  })
+
+  it('keeps the good entries of a partly-malformed types list, matching the trigger', async () => {
+    // Per-entry filtering, not all-or-nothing: the `block_types` trigger
+    // behind the search path keeps `page`/`person` out of this list, so
+    // the MRU path has to agree or the hint would flip between the
+    // zero-input and typed states.
+    await insertRaw('badlist', {alias: ['Malformed list'], types: ['page', null, 'person']})
+    const {repo} = createTestRepo({db: env.h.db, user: {id: 'user-1'}})
+
+    await expect(searchAliasLabels(repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['badlist'],
+    })).resolves.toEqual([{label: 'Malformed list', typeIds: ['page', 'person']}])
+  })
+
+  it('reports types in authored order on BOTH paths, so the hint cannot flip', async () => {
+    // `completionTypeHint` shows the FIRST display-worthy type, so the
+    // two paths have to agree on order. Reading `block_types` returns
+    // PK order (type-ascending), which would show "Author" for a typed
+    // query and "Person" for the zero-input MRU list — the hint visibly
+    // changing as you type the first character.
+    await create({id: 'ada', aliases: ['Ada Lovelace'], types: ['person', 'author']})
+
+    const typed = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'ada'})
+    const mru = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['ada'],
+    })
+
+    expect(typed[0].typeIds).toEqual(['person', 'author'])
+    expect(mru[0].typeIds).toEqual(['person', 'author'])
+  })
+
+  it('suppresses the hint when several live blocks claim the same alias', async () => {
+    // The dropdown inserts an alias STRING; `core.aliasLookup` later
+    // resolves it to the OLDEST claimant. Ranking can put a younger,
+    // recently-opened claimant first, so showing that row's type would
+    // advertise a type belonging to a different destination. Co-claims
+    // are a documented latent state: the alias-uniqueness trigger is
+    // skipped for sync-applied rows, which is what the raw insert below
+    // imitates (it maintains block_aliases but fires no processor).
+    await create({id: 'older', aliases: ['Ada'], types: ['page', 'location']})
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('newer', ?, NULL, 'key-newer', '', ?, '[]', 9, 9, 9, 'u', 'u', 0)`,
+      [WS, JSON.stringify({alias: ['Ada'], types: ['page', 'person']})],
+    )
+
+    const claimants = await env.h.db.getAll<{c: number}>(
+      `SELECT count(*) AS c FROM block_aliases WHERE workspace_id = ? AND alias = 'Ada'`,
+      [WS],
+    )
+    expect(claimants[0].c).toBe(2)
+
+    const out = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'ada',
+      recentBlockIds: ['newer'],
+    })
+    expect(out).toEqual([{label: 'Ada', typeIds: []}])
+  })
+
+  describe('word-prefix-chain matching through the REAL SQL pipeline', () => {
+    // fuzzyRank's chain tier is only ever offered candidates the SQL
+    // pre-filter returned, and that pre-filter ANDs `alias_lower LIKE
+    // '%<first 3 chars of each token>%'`. So a chain survives end-to-end
+    // only when its FIRST chunk is at least 3 characters — which the
+    // unit tests on `scoreCandidate` cannot see, because they never go
+    // through SQL. These pin the difference.
+    beforeEach(async () => {
+      await create({id: 'meet', aliases: ['Meeting Notes']})
+      await create({id: 'prod', aliases: ['Product Requirements Document']})
+      await create({id: 'stren', aliases: ['Strength Training Program']})
+      await create({id: 'sanfr', aliases: ['San Francisco']})
+    })
+
+    it('finds run-together word prefixes', async () => {
+      expect(await labelsOf({query: 'meetnotes'})).toContain('Meeting Notes')
+      expect(await labelsOf({query: 'prodreq'})).toContain('Product Requirements Document')
+      expect(await labelsOf({query: 'strtrain'})).toContain('Strength Training Program')
+    })
+
+    it('does NOT find initialisms — the 3-char pre-filter drops them before ranking', async () => {
+      // `scoreCandidate('Product Requirements Document', 'prd', ['prd'])`
+      // scores these fine; `aliasMatchesFuzzy` requires a contiguous
+      // "prd" in the alias and returns nothing to rank. Serving them
+      // needs a pre-filter change, not a ranker change — see the note on
+      // `matchesWordPrefixChain`.
+      expect(await labelsOf({query: 'prd'})).not.toContain('Product Requirements Document')
+      expect(await labelsOf({query: 'stp'})).not.toContain('Strength Training Program')
+      expect(await labelsOf({query: 'sf'})).not.toContain('San Francisco')
+    })
+  })
+
   it('boosts recently-opened pages ahead of older matches', async () => {
     await create({id: 'older', aliases: ['Apple Tarte']})
     await create({id: 'recent', aliases: ['Apple Strudel']})

@@ -10,21 +10,37 @@
  * literal substring match (case-insensitive), a substring at edit
  * distance 1 (tokens of length >= 4 only), or a word-prefix chain —
  * the token cut into consecutive chunks that are each a prefix of a
- * later word in the label ("prodreq" / "prd" → "Product Requirements
+ * later word in the label ("prodreq" → "Product Requirements
  * Document"). Each token contributes its own score (word-start beats
  * substring beats chain beats typo); whole-query exact / prefix /
  * substring matches add a large bonus on top so the "I typed exactly
  * the page name" path stays at the top regardless of recency. Recency
  * is layered last (MRU > recent edit > nothing).
+ *
+ * REACH: this file only ranks what the pre-filter fetched, and the
+ * pre-filter needs each token's first {@link PREFIX_FILTER_LEN} chars
+ * CONTIGUOUS in the alias. A chain whose opening chunk is shorter than
+ * that puts a chunk boundary inside those chars, so pure initialisms
+ * ("prd", "sf") score here but never arrive — `scoreCandidate` accepts
+ * them, `[[` completion does not surface them. Serving those needs a
+ * pre-filter change (see the alias-search SQL in kernelQueries), not a
+ * ranker change. Callers that hand `rankCandidates` an unfiltered set
+ * do get the full behaviour.
  */
 
 const PREFIX_FILTER_LEN = 3
 const TYPO_MIN_TOKEN_LEN = 4
 
-/** Guards on the word-prefix-chain DP below. Both are far above any
- *  real page title / typed query, and exist so a pathological label
+/** Work caps on the word-prefix-chain DP below, so a pathological label
  *  (a pasted paragraph that ended up as an alias) can't turn an
- *  autocomplete keystroke into a long scan. */
+ *  autocomplete keystroke into a long scan.
+ *
+ *  `CHAIN_MAX_WORDS` is NOT above every real title — `splitWords` breaks
+ *  on punctuation, so "Don't Ask, Don't Tell — A Policy Retrospective"
+ *  is already 11 words from 8 readable ones. It therefore bounds how
+ *  many words the DP *considers* rather than rejecting the label: a long
+ *  title still matches on its opening words, which is where people
+ *  abbreviate from anyway. */
 const CHAIN_MAX_WORDS = 12
 const CHAIN_MAX_TOKEN_LEN = 24
 
@@ -148,6 +164,10 @@ const hasTypoSubstring = (text: string, token: string): boolean => {
  *  accent. */
 const WORD_SPLIT_RE = /[\s\p{P}\p{S}]+/u
 
+/** Single-character form of the same class, for "does a word start
+ *  here?" tests that have an index rather than a string to split. */
+const WORD_BOUNDARY_CHAR_RE = /[\s\p{P}\p{S}]/u
+
 const splitWords = (lowerText: string): string[] =>
   lowerText.split(WORD_SPLIT_RE).filter(word => word.length > 0)
 
@@ -157,12 +177,14 @@ const splitWords = (lowerText: string): string[] =>
  *
  * This is the shape people type when they drop the spaces out of a page
  * title they already know: run-together prefixes ("meetnotes" →
- * "Meeting Notes", "prodreq" → "Product Requirements …") and
- * initialisms ("prd" → "Product Requirements Document"). Words may be
- * skipped between chunks ("pd" → "Product … Document"); chunk order may
- * not be. Every chunk must start at a word start, which is what keeps
- * this far tighter than a plain subsequence match — "lphabravocharlie"
- * does not match "Alpha Bravo Charlie".
+ * "Meeting Notes", "prodreq" → "Product Requirements …") and, for
+ * callers that skip the pre-filter, initialisms ("prd" → "Product
+ * Requirements Document" — see REACH in the file header for why `[[`
+ * completion never sees those). Words may be skipped between chunks
+ * ("proddoc" → "Product … Document"); chunk order may not be. Every
+ * chunk must start at a word start, which is what keeps this far
+ * tighter than a plain subsequence match — "lphabravocharlie" does not
+ * match "Alpha Bravo Charlie".
  *
  * Single-word labels bow out: with nothing to chain, the rule would
  * degenerate into "is a prefix of", which `indexOf` already scored.
@@ -178,12 +200,13 @@ const splitWords = (lowerText: string): string[] =>
 const matchesWordPrefixChain = (words: readonly string[], token: string): boolean => {
   const target = token.length
   if (target === 0 || words.length < 2) return false
-  if (words.length > CHAIN_MAX_WORDS || target > CHAIN_MAX_TOKEN_LEN) return false
 
   const reachable = new Uint8Array(target + 1)
   reachable[0] = 1
   let highWater = 0
-  for (const word of words) {
+  const considered = Math.min(words.length, CHAIN_MAX_WORDS)
+  for (let w = 0; w < considered; w++) {
+    const word = words[w]
     // Walk offsets high-to-low so extensions added for THIS word are not
     // themselves extended by it — a chunk comes from one word only.
     for (let start = highWater; start >= 0; start--) {
@@ -215,23 +238,30 @@ const scoreToken = (
   const idx = lowerText.indexOf(token)
   if (idx === 0) return SCORE_TOKEN_WORD_START
   if (idx > 0) {
-    const prev = lowerText.charCodeAt(idx - 1)
-    const isWordBoundary = !(
-      (prev >= 97 && prev <= 122) || // a-z
-      (prev >= 48 && prev <= 57)     // 0-9
-    )
+    // Same separator class `splitWords` uses. An ASCII-only test here
+    // (the previous `a-z` / `0-9` ranges) called any non-ASCII letter a
+    // word boundary, so "ve" scored a full word-start inside "Naïve"
+    // but a mid-word substring inside "Naive" — a 15-point swing that
+    // turned entirely on the preceding letter's alphabet.
+    const isWordBoundary = WORD_BOUNDARY_CHAR_RE.test(lowerText[idx - 1])
     return isWordBoundary ? SCORE_TOKEN_WORD_START : SCORE_TOKEN_SUBSTRING
   }
   // Chain before typo: it scores higher (a deliberate abbreviation beats
   // a slip), so it has to win when a token satisfies both — and it is
   // also the cheaper of the two checks.
   //
-  // Necessary condition, checked before splitting the label: a chain's
-  // first chunk starts with the token's first character, so that
-  // character has to appear somewhere. This is what keeps a query that
-  // matches nothing ("zzz") from splitting and running the DP over every
-  // candidate the pre-filter returned.
-  if (lowerText.includes(token[0]) && matchesWordPrefixChain(words(), token)) {
+  // Both conditions are checked before `words()` so neither pays for the
+  // split it is about to discard. The length cap depends only on the
+  // query, so without this it would reject once per candidate having
+  // already split every one of them. The first-character test is a
+  // necessary condition for a chain (its opening chunk starts there),
+  // and is what stops a query matching nothing ("zzz") from splitting
+  // and running the DP across the whole pre-filtered pool.
+  if (
+    token.length <= CHAIN_MAX_TOKEN_LEN &&
+    lowerText.includes(token[0]) &&
+    matchesWordPrefixChain(words(), token)
+  ) {
     return SCORE_TOKEN_WORD_CHAIN
   }
   if (hasTypoSubstring(lowerText, token)) return SCORE_TOKEN_TYPO

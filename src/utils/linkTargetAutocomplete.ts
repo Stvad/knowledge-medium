@@ -109,9 +109,28 @@ export const completionTypeHint = (
   return undefined
 }
 
-const decodeTypeIds = (data: BlockData): readonly string[] => {
+/** The block's type ids, tolerant of a malformed stored value.
+ *
+ *  Deliberately NOT `getBlockTypes` (`@/data/properties`), which runs
+ *  the string-list codec and THROWS a `CodecError` on a non-array or a
+ *  non-string entry. A raw properties-bag write — the agent-runtime
+ *  `updateBlock` verb, an importer, a sync-applied row — can land
+ *  either, and a throw here rejects out through `getAliases` with no
+ *  try/catch above it, emptying the whole `[[` dropdown (relative-date
+ *  completions included) rather than just dropping one hint.
+ *
+ *  Nor would a try/catch around `getBlockTypes` be right: it is
+ *  all-or-nothing, so `['page', null, 'person']` would yield NO types,
+ *  while the `block_types` trigger backing the other path keeps
+ *  `page` and `person`. Filtering per entry is what makes the two
+ *  paths agree — same rule as the trigger's
+ *  `WHERE typeof(je.value) = 'text'` (`clientSchema.ts`) and the
+ *  invalidation rule's `Array.isArray` + `typeof` filter
+ *  (`kernelInvalidation.ts`). */
+const readTypeIds = (data: BlockData): readonly string[] => {
   const raw = data.properties[typesProp.name]
-  return raw === undefined ? typesProp.defaultValue : typesProp.codec.decode(raw)
+  if (!Array.isArray(raw)) return []
+  return raw.filter((typeId): typeId is string => typeof typeId === 'string')
 }
 
 const aliasMatchesFromRows = (
@@ -204,7 +223,7 @@ export const searchAliasLabels = async (
       // These rows are whole blocks already (the MRU path loads them to
       // read aliases), so their types come along for free — no
       // `block_types` round trip on the zero-input path.
-      const typeIds = decodeTypeIds(block)
+      const typeIds = readTypeIds(block)
       for (const alias of aliases) {
         if (typeof alias !== 'string' || alias.trim() === '' || seen.has(alias)) continue
         seen.add(alias)
@@ -222,24 +241,36 @@ export const searchAliasLabels = async (
     limit,
   })
 
-  // De-dupe by alias BEFORE reading types, so the type lookup is sized
-  // by what actually renders rather than by the candidate pool.
-  const seen = new Set<string>()
-  const surviving: FuzzyAliasRow[] = []
+  // One row per alias STRING, since that string is what gets inserted.
+  // Where several live blocks claim the same alias, keep the top-ranked
+  // row for ordering but remember that the alias was contested.
+  const firstByAlias = new Map<string, FuzzyAliasRow>()
+  const contested = new Set<string>()
   for (const row of rows) {
-    if (seen.has(row.alias)) continue
-    seen.add(row.alias)
-    surviving.push(row)
+    const existing = firstByAlias.get(row.alias)
+    if (!existing) {
+      firstByAlias.set(row.alias, row)
+      continue
+    }
+    if (existing.blockId !== row.blockId) contested.add(row.alias)
   }
 
+  const surviving = [...firstByAlias.values()]
   const typeIdsByBlock = await loadTypeIdsByBlock(
     repo,
     workspaceId,
-    [...new Set(surviving.map(row => row.blockId))],
+    [...new Set(surviving.filter(row => !contested.has(row.alias)).map(row => row.blockId))],
   )
   return surviving.map(row => ({
     label: row.alias,
-    typeIds: typeIdsByBlock.get(row.blockId) ?? [],
+    // A contested alias gets NO hint. Accepting the completion inserts
+    // the alias text, which `core.aliasLookup` resolves to the OLDEST
+    // claimant — not necessarily the row ranking put on top. Showing the
+    // top row's type would then describe a different block than the link
+    // actually goes to, and co-claims are a documented latent state (the
+    // alias-uniqueness trigger is skipped for sync-applied rows). Saying
+    // nothing is the only answer that can't be wrong.
+    typeIds: contested.has(row.alias) ? [] : typeIdsByBlock.get(row.blockId) ?? [],
   }))
 }
 
