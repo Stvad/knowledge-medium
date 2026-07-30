@@ -1,2 +1,2 @@
-var e=e=>`block:${e}`,t=new Map,n=(e,n)=>(t.set(e,n),()=>{t.get(e)===n&&t.delete(e)}),r=e=>{let n=t.get(e);return n?(n(),!0):!1},i=()=>{t.clear()};export{i as __resetLazyMountRegistryForTesting,e as lazyBlockCacheKey,n as registerPendingLazyMount,r as requestLazyMount};
+var e=e=>`block:${e}`,t=new Map,n=new Set,r=(e,r)=>{if(n.has(e))return r(),()=>{};let i=t.get(e)??new Set;return i.add(r),t.set(e,i),()=>{let n=t.get(e);n&&(n.delete(r),n.size===0&&t.delete(e))}},i=e=>{n.add(e);let r=t.get(e);if(r){t.delete(e);for(let e of r)e()}return()=>{n.delete(e)}},a=()=>{t.clear(),n.clear()};export{a as __resetLazyMountRegistryForTesting,e as lazyBlockCacheKey,r as registerPendingLazyMount,i as requestLazyMount};
 //# sourceMappingURL=lazyMountRegistry.js.map
