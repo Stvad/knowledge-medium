@@ -14,7 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { computeAliasSeatId } from '@/data/targets'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
-import { referencesDataExtension, referencesRenameDataExtension } from '../dataExtension.ts'
+import { referencesDataExtension } from '../dataExtension.ts'
 import { pinnedSpanReplacement } from '../referenceParser.ts'
 import { retargetReferences } from '../mergeRetargetProcessor.ts'
 import { refTestSeed } from './refTestSeeds.ts'
@@ -33,7 +33,7 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    extensions: [referencesDataExtension, aliasDataExtension, referencesRenameDataExtension],
+    extensions: [referencesDataExtension, aliasDataExtension],
   })
   return {
     h,
@@ -353,7 +353,6 @@ describe('references.retargetMergedBlockReferences', () => {
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
           definitionSeedsFacet.of(relatedProp, {source: 'test'}),
-          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -384,7 +383,6 @@ describe('references.retargetMergedBlockReferences', () => {
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
           definitionSeedsFacet.of(relatedProp, {source: 'test'}),
-          referencesRenameDataExtension,
         ],
       })
       seeder.repo.setActiveWorkspaceId(WS)
@@ -397,7 +395,7 @@ describe('references.retargetMergedBlockReferences', () => {
       const {repo, cache} = createTestRepo({
         db: sharedDb.db,
         user: {id: 'user-1'},
-        extensions: [referencesDataExtension, aliasDataExtension, referencesRenameDataExtension],
+        extensions: [referencesDataExtension, aliasDataExtension],
         newTxSeq: () => ++txSeq,
         now: () => ++time,
         newId: () => `second-${++txSeq}`,
@@ -432,7 +430,6 @@ describe('references.retargetMergedBlockReferences', () => {
           referencesDataExtension,
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
-          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -476,7 +473,6 @@ describe('references.retargetMergedBlockReferences', () => {
           referencesDataExtension,
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
-          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -532,7 +528,6 @@ describe('references.retargetMergedBlockReferences', () => {
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
           definitionSeedsFacet.of(pinnedProp, {source: 'test'}),
-          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)

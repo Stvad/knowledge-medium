@@ -15,7 +15,7 @@ import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
-import { referencesDataExtension, referencesRenameDataExtension } from '../dataExtension.ts'
+import { referencesDataExtension } from '../dataExtension.ts'
 
 const WS = 'ws-1'
 
@@ -37,7 +37,7 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    extensions: [referencesDataExtension, aliasDataExtension, referencesRenameDataExtension],
+    extensions: [referencesDataExtension, aliasDataExtension],
   })
   // Undo/redo are scoped to the active workspace (issue #186).
   repo.setActiveWorkspaceId(WS)

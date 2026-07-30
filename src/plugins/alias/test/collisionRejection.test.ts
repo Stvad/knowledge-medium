@@ -25,7 +25,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { referencesDataExtension, referencesRenameDataExtension } from '@/plugins/references/dataExtension.js'
+import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { computeAliasSeatId } from '@/data/targets'
 import { aliasDataExtension } from '../dataExtension.ts'
 
@@ -47,7 +47,6 @@ const setup = async (): Promise<Harness> => {
       dailyNotesDataExtension,
       referencesDataExtension,
       aliasDataExtension,
-      referencesRenameDataExtension,
     ],
   })
   // Undo/redo are scoped to the active workspace (issue #186).

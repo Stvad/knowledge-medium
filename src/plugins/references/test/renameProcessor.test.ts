@@ -7,11 +7,11 @@
  * processor also runs, since composition (sync writes a swap, rename
  * acts on it in the same pass) is part of the spec.
  *
- * `referencesRenameDataExtension` is listed LAST in `setup` on purpose —
- * same-tx processors run in facet insertion order and rename has to see
- * the alias diff `alias.sync` writes. Move it before `aliasDataExtension`
- * and every content-rename test in this file fails, which is the point:
- * the ordering is load-bearing, not incidental.
+ * Rename must run AFTER `alias.sync` — it reacts to the alias diff sync
+ * writes for a title edit — and says so with an explicit facet PRECEDENCE
+ * (`RENAME_BACKLINKS_PRECEDENCE`), not by extension position. Drop that
+ * precedence and every content-rename test in this file fails, which is
+ * the point: the ordering is load-bearing, not incidental.
  *
  * Source-rewrite shapes:
  *   - R1 (1-for-1 swap):           `[[α]] → [[new]]`
@@ -28,10 +28,7 @@ import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
-import {
-  referencesDataExtension,
-  referencesRenameDataExtension,
-} from '../dataExtension.ts'
+import { referencesDataExtension } from '../dataExtension.ts'
 import {
   applyRefRewrites,
   splitBySurvivingSpan,
@@ -55,8 +52,6 @@ const setup = async (): Promise<Harness> => {
       dailyNotesDataExtension,
       referencesDataExtension,
       aliasDataExtension,
-      // LAST — after `alias.sync`. See the file header.
-      referencesRenameDataExtension,
     ],
   })
   // Property child-backing is workspace-scoped and reads the ACTIVE

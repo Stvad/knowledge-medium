@@ -335,7 +335,15 @@
 </nav>
 
 <aside class="doc-status">
-  <strong>Status: current (planning).</strong> Rewritten 2026-07-01 against master
+  <strong>Status: current (planning), with one §9 correction.</strong>
+  The rename-rewrite requirements in §9 were reconciled 2026-07-30 against
+  <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
+  (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):
+  the local read&rarr;write window and everything built for it &mdash; the
+  seat-target disjunction, the window-seat predicate, later-edit-wins &mdash;
+  are marked superseded in place; the sync-arrival window and the
+  references-parse fence are unaffected and still open. Rest of the document
+  as below. Rewritten 2026-07-01 against master
   <code>8a6f22cd</code> and the spike merge in
   <a href="https://github.com/Stvad/knowledge-medium/pull/285">PR #285</a>
   (<code>props-as-childrent-spike-merge</code> — mechanism claims verified at
@@ -1886,7 +1894,9 @@ affordance, not a classification prerequisite (§11 AC).
     review — this bullet predated the live <code>::[[name]]</code> form):
     they follow the rename by <em>content rewrite</em>, the §9 rename case
     (<code>renameBacklinks</code> rewriting <code>::[[status]]</code> →
-    <code>::[[state]]</code> in its post-commit References tx). No B2 step
+    <code>::[[state]]</code> &mdash; in the rename's OWN tx, as a same-tx
+    processor, since <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>;
+    it was a follow-up References tx when this bullet was written). No B2 step
     and no race: the cell re-key is fieldId-keyed and a name row's target
     column is rename-invariant, so projection converges whichever seam lands
     first — B2's rename contract lists the span rewrite as a companion
@@ -2175,29 +2185,45 @@ supabase skill if it's kept.
     reference swap drops the last reference to a target, it re-enqueues the
     same orphan job for that target, restricted to provably-untouched
     machine seats (the §7 <code>aliasSeatSeed</code> predicate — never a real
-    page whose last backlink happened to be rewritten). The rewrite must
-    also still <em>find</em> a window-bound span (PR #417 review): the
-    as-built plan enumerates sources by
-    <code>(target_id, alias)</code> (<code>SELECT_BACKLINK_SOURCES_SQL</code>),
-    so a span whose reference edge already swapped to the window seat — a
-    concurrent references pass on another edit of the same block, or the
-    swap arriving over sync before the plan's read phase — matches the alias
-    but not the target and would be silently skipped, leaving a permanently
-    seat-bound <code>::[[old]]</code> that no later pass owns. The pinned
-    contract: the plan's source enumeration is <em>alias-keyed with a target
-    disjunction</em> — the renaming claimant OR a provably-untouched machine
-    α-keyed seat (the same §7 seat predicate) — so window-bound spans
-    rewrite with the rest; and it runs behind the same
-    <em>references-parse fence</em> as the delete/merge/AC enumerations
-    (PR #417 review: <code>block_references</code> is written post-commit
-    and the processors launch asynchronously, so a <code>::[[old]]</code>
-    row edited or pasted just before the rename can have <em>no edge at
-    all</em> — the missing-edge case, distinct from the seat-swapped one —
-    and an unfenced scan never plans its rewrite; drain the parse queue
-    before the read phase, the same-tx bit/content scan as audit). A user edit landing in the window keeps its
-    content (the rewrite's later-edit-wins skip) — the row then reads as an
-    unbound marked row with the create/rebind affordance, the standard
-    honest state, never silent reinterpretation.
+    page whose last backlink happened to be rewritten).
+    <strong>The rewrite-side requirements that stood here are SUPERSEDED by
+    <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>
+    (2026-07-30).</strong> Note the scope carefully: everything <em>above</em>
+    about the SYNC-ARRIVAL window &mdash; a peer's rename arriving with the
+    alias already moved, ahead of its rewrite rows &mdash; still stands, and
+    deliberately has no local counterpart (owner decision on #461: we trust
+    the device that performed the rename). What is superseded is the set of
+    requirements that existed only because the LOCAL rewrite read outside a
+    transaction and wrote in a later one: a source enumeration that was
+    <em>alias-keyed with a target disjunction</em> (the renaming claimant OR
+    a provably-untouched machine α-seat), so a span whose edge had already
+    swapped onto a seat minted in that local gap still got rewritten; and a
+    <em>later-edit-wins skip</em> for a user edit landing in the same gap.
+    The rewrite is now a same-tx processor, so neither gap exists: seats are
+    minted by the post-commit <code>parseReferences</code>, strictly after
+    it runs, and no user write can interleave. Enumeration is keyed on
+    <code>(workspace, alias, target)</code> against the renaming block
+    alone; a live claimant of the released name &mdash; seat or page &mdash;
+    simply means &ldquo;not ours to re-key&rdquo;, and the span keeps
+    late-binding to it while its stale edge is invalidated for the re-parse
+    to rebind. The seat-target disjunction had already been severed one
+    round earlier on its own merits: it could not distinguish a pre-existing
+    span that a re-derive had moved onto the seat from a
+    <code>[[old]]</code> the user deliberately typed at the new seat after
+    the release.
+    <br><br>
+    What SURVIVES from them is the
+    <em>references-parse fence</em> requirement, unchanged and still open
+    (§11 group 4): <code>block_references</code> is written by a post-commit
+    processor, so a <code>::[[old]]</code> row edited or pasted in a
+    <em>previous</em> tx whose parse has not drained yet can have <em>no
+    edge at all</em> when the rename enumerates &mdash; and an unfenced scan
+    never plans its rewrite. Same-tx does not fix this: it makes the
+    rename's read see everything committed plus its own tx's staged writes,
+    which is precisely not the undrained-queue case. The delete/merge/AC
+    enumerations need the same fence. (The distinct &ldquo;edge already
+    swapped to a seat&rdquo; case that used to sit beside it is gone with
+    the window.)
     <em>(2)</em> Its parent is non-null (root half:
     a workspace-root row has no owner to be a field <em>of</em> — its marker is just
     content; the SQL twins carry the same <code>parent_id IS NOT NULL</code>

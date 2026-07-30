@@ -76,7 +76,7 @@ import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
 import type { Repo } from '@/data/repo'
-import { referencesDataExtension, referencesRenameDataExtension } from '../dataExtension.ts'
+import { referencesDataExtension } from '../dataExtension.ts'
 
 const WS = 'ws-1'
 // UUID-shaped so `((ROOT))` in generated content parses as a block ref.
@@ -406,7 +406,7 @@ const buildEnv = async (): Promise<Env> => {
     db: sharedDb.db,
     user: {id: 'user-1'},
     newId: () => `00000000-0000-4000-8000-${String(++idCursor).padStart(12, '0')}`,
-    extensions: [dailyNotesDataExtension, referencesDataExtension, ...refSchemaExtension, referencesRenameDataExtension],
+    extensions: [dailyNotesDataExtension, referencesDataExtension, ...refSchemaExtension],
   })
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {

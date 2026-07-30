@@ -20,7 +20,7 @@ import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { referencesDataExtension, referencesRenameDataExtension } from '@/plugins/references/dataExtension'
+import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { geoDataExtension } from '@/plugins/geo/dataExtension'
@@ -46,7 +46,6 @@ const setup = async (): Promise<Harness> => {
       aliasDataExtension,
       dailyNotesDataExtension,
       geoDataExtension,
-      referencesRenameDataExtension,
     ],
   })
   repo.setActiveWorkspaceId(WS)

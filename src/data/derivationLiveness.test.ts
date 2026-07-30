@@ -19,7 +19,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { aliasesProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { referencesDataExtension, referencesRenameDataExtension } from '@/plugins/references/dataExtension.js'
+import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 
 const WS = 'ws-derivation-liveness'
@@ -85,7 +85,7 @@ const setup = async (): Promise<Repo> => {
   const {repo} = createTestRepo({
     db: sharedDb.db,
     user: {id: 'user-1'},
-    extensions: [referencesDataExtension, aliasDataExtension, referencesRenameDataExtension],
+    extensions: [referencesDataExtension, aliasDataExtension],
   })
   repo.setActiveWorkspaceId(WS)
   repo.setRuntimeContributions(

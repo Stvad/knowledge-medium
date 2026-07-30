@@ -47,19 +47,18 @@
  *     right way round: a rename whose backlinks silently didn't follow
  *     is worse than a rename that visibly didn't happen.
  *
- * ORDERING — this processor must run AFTER `alias.sync`, which is why it
- * is registered from its own extension (`referencesRenameDataExtension`)
- * placed after `aliasDataExtension` rather than from
- * `referencesDataExtension` with its siblings. The primary rename
- * gesture is editing a page's TITLE, which writes `content`; the alias
- * property is then amended by `alias.sync` later in the same pass. Run
- * before it and there is no alias diff to react to at all — the rename
- * silently never fires. Running in pass ONE (rather than reaching for
- * `rerunOnDirtyRows`) is also what keeps the kernel's derivation re-run
- * downstream of our writes: `core.projectPropertyChildren` re-projects
- * the owner cell of any property value child we rewrite. From pass two
- * that re-run is already behind us, and a stale cell would be pushed
- * back DOWN by the next tx's projection — reverting the rename.
+ * ORDERING — this processor must run AFTER `alias.sync`, and says so with
+ * an explicit facet PRECEDENCE (`RENAME_BACKLINKS_PRECEDENCE`) rather than
+ * by where it is registered. The primary rename gesture is editing a
+ * page's TITLE, which writes `content`; the alias property is then amended
+ * by `alias.sync` later in the same pass. Run before it and there is no
+ * alias diff to react to at all — the rename silently never fires.
+ *
+ * Running in pass ONE (rather than reaching for `rerunOnDirtyRows`) is
+ * also what keeps the kernel's derivation re-run downstream of our
+ * writes: `core.projectPropertyChildren` re-projects the owner cell of
+ * any property value child we rewrite. From pass two that re-run is
+ * already behind us and the cell commits stale.
  *
  * Sync arrival has no counterpart, deliberately: same-tx processors are
  * bypassed for sync-applied rows, and a rename that arrives from another
@@ -94,6 +93,29 @@ import {
 import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
+
+/** Facet precedence for this processor's same-tx slot — see the ORDERING
+ *  note above. `combineFacetContributions` sorts ascending by precedence
+ *  (stable, so equal precedence keeps registration order), so any value
+ *  above the default 0 puts this after every other same-tx processor
+ *  registered today: the kernel trio, `core.normalizeReferences`,
+ *  `core.migratePropertyRename`, the references plugin's own merge/inline
+ *  processors, and — the one that matters — `alias.sync`.
+ *
+ *  Deliberately a precedence and not a registration position. Position
+ *  would mean lifting this contribution out of `referencesDataExtension`
+ *  so a composition root could place it after `aliasDataExtension` by
+ *  hand, in every runtime that has both. That is the shape this shipped as
+ *  first, and it is wrong for a reason unrelated to ordering: the
+ *  extension is also the plugin's `systemToggle` boundary, so a bare
+ *  contribution outside it keeps running when the user disables
+ *  References — rewriting spans and invalidating edges with
+ *  `parseReferences` gone and nothing left to rebuild them (Codex on
+ *  PR #444). A precedence orders it without moving it.
+ *
+ *  Room deliberately left below: a processor that must run after
+ *  `alias.sync` but BEFORE this one can take any value in 1..9. */
+export const RENAME_BACKLINKS_PRECEDENCE = 10
 
 /** Sources holding a CONTENT `[[alias]]` span bound to `targetId`.
  *

@@ -9,10 +9,7 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { findReplaceDataExtension } from '@/plugins/find-replace/dataExtension.js'
 import { geoDataExtension } from '@/plugins/geo/dataExtension.js'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension.js'
-import {
-  referencesDataExtension,
-  referencesRenameDataExtension,
-} from '@/plugins/references/dataExtension.js'
+import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension.js'
 import { todoDataExtension } from '@/plugins/todo/dataExtension.js'
 
@@ -30,11 +27,6 @@ export const staticDataExtensions: AppExtension[] = [
   findReplaceDataExtension,
   referencesDataExtension,
   aliasDataExtension,
-  // MUST stay after `aliasDataExtension`: same-tx processors run in facet
-  // insertion order, and the rename rewriter reacts to the alias diff that
-  // `alias.sync` writes when a page's title is edited. Registered ahead of
-  // it, it would see no diff and never fire. See `renameProcessor.ts`.
-  referencesRenameDataExtension,
   backlinksDataExtension,
   groupedBacklinksDataExtension,
   srsReschedulingDataExtension,

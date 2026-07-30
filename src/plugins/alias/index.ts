@@ -8,10 +8,12 @@
  * source blocks.
  *
  * The two compose inside ONE commit: sync writes the alias diff for a
- * title edit, and `references.renameBacklinks` — same-tx as of #461, and
- * registered immediately AFTER this plugin for exactly that reason —
- * reads it from the staged state in the same pass. Registering rename
- * ahead of sync would leave it with no diff to act on.
+ * title edit, and `references.renameBacklinks` — same-tx as of #461 —
+ * reads it from the staged state later in the same pass. That "later" is
+ * not incidental: rename carries an explicit facet precedence
+ * (`RENAME_BACKLINKS_PRECEDENCE`) to sort after every default-precedence
+ * same-tx processor, this one included. Run it ahead of sync and it finds
+ * no alias diff and silently does nothing.
  */
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
