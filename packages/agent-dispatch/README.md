@@ -241,7 +241,22 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
 
-Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `agent:*` properties.
+Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention, use the chip's **Retry** action (or delete its `agent:*` properties).
+
+## "Out of credits" is not a failed task
+
+A run that never reached the model — spent credits, subscription usage limit, expired `claude`/`codex` login, rate limit, network down, the executor binary not on the daemon's `PATH`, the bridge or channel listener unreachable — is classified **retryable** (`runFailure.ts`, matched only against text the CLI itself produced: its stderr and the structured error message of a failed transcript, never the assistant's answer). Such a run does **not** park the task:
+
+- the task goes back to `agent:status=queued` with `agent:retry-after` (epoch ms) and the reason in `agent:error`, and its reply block says `⏳ … retrying automatically` instead of `⚠️ … failed`;
+- **the attempt is handed back** (`agent:attempts` is decremented). Attempts cap a task that keeps *crashing*; counting an outage against them would park the queue after three ticks;
+- the `runsPerHour` slot is refunded — the run billed nothing, and spending budget on doomed launches would defer real work for an hour once the outage lifts;
+- the whole daemon enters a **cooldown** (30 s → 60 s → 2 min → 5 min, reset by any run that reaches the model). This is the half that matters: without it the daemon just picks up the next item and chews it into the same state a second later. During a cooldown no new run launches; when it lapses exactly one probe goes out. A query watcher additionally **rolls its cursor back**, since it has no graph-side task state to sweep and would otherwise drop the rows silently.
+
+The same classification applies to a failure that **throws** instead of returning a result (spawn error, bridge blip, channel listener down) — but only when it lands *before* `runTask` returns. Past that point a throw is about delivering an answer that was already billed, so it stays terminal rather than paying for the run twice. Nothing re-attempts on its own until the next poll sweep notices, so keep `pollIntervalMs` at or below the shortest backoff step you care about (the 30 s default sweep is fine).
+
+Retryable deferral is deliberately **unbounded** — an outage can outlast any attempt cap, and a probe every ≤5 min costs a process spawn and no tokens. The escape hatches are the chip's **Stop retrying** (parks the task `error: cancelled`) and **Retry now** (skips the wait). A cause the classifier does not recognise stays a terminal `error`, i.e. exactly the behaviour that predates this.
+
+**Retrying by hand.** The chip menu offers **Retry task** on a failed task; the command palette's **Retry all failed Agent tasks** re-queues every `agent:status=error` block in the active workspace in one transaction (one undo entry), which is the shape an outage leaves behind. Neither touches block content — the mention that triggered the task is already there and need not be `[[claude]]`. Both keep `agent:session`, so a retry resumes the thread.
 
 **One daemon per fleet.** A pidfile prevents two daemons on one machine (launchd + a manual run would double-claim and double-bill). Across machines there is no claim atomicity over LWW sync — install the LaunchAgent on exactly one device.
 
@@ -327,7 +342,7 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 
 3. Mark watchers `"delivery": "channel"` in the daemon config.
 
-The daemon then claims the task (`agent:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `agent:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are marked `error`; query rows keep their cursor and re-fire when it's back.
+The daemon then claims the task (`agent:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `agent:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are **deferred** like any other infrastructure failure (see "Out of credits" above) rather than marked `error`; query rows keep their cursor and re-fire when it's back.
 
 **Listener auth:** loopback is not an auth boundary (any local process — or a browser page POSTing at `127.0.0.1` — could otherwise inject prompts into a write-capable session). Requests must carry `x-km-channel-secret` from `~/.config/knowledge-medium/agent-dispatch-channel.secret` (0600, auto-generated; the daemon sends it automatically) and be `application/json` with no `Origin` header.
 

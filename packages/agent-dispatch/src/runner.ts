@@ -69,6 +69,11 @@ export interface AgentRunResult {
   exitCode: number | null
   timedOut: boolean
   stderr: string
+  /** The executor's OWN error message for a FAILED run (empty on success,
+   *  and empty when the failure produced none). Kept separate from
+   *  `resultText` so runFailure.ts can classify credits/auth/rate-limit/
+   *  network causes without ever reading the assistant's answer. */
+  failureText: string
   /** Parsed --output-format json envelope (null if unparseable). */
   raw: Record<string, unknown> | null
 }
@@ -333,6 +338,12 @@ export const runClaude = async (
     exitCode,
     timedOut,
     stderr,
+    // On a FAILED run the `result` line carries claude's own error text
+    // rather than an answer ("Claude AI usage limit reached|…", "Credit
+    // balance is too low", …), which is exactly what the failure
+    // classifier needs. Gated on !ok so a successful reply can never be
+    // mistaken for a CLI error message.
+    failureText: ok ? '' : (parsed?.resultText ?? ''),
     raw: parsed?.raw ?? null,
   }
 }

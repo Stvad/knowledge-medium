@@ -24,7 +24,8 @@ export const createGraph = (client: BridgeClient) => {
     args: {
       status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
       resumeOptions?: AgentResumeOptions | null,
-      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+      attempts?: number, activity?: string | null, cancel?: string | null,
+      retryAfter?: number | null, nowMs: number,
     },
   ): Promise<void> => {
     const properties: Record<string, unknown> = {
@@ -41,6 +42,9 @@ export const createGraph = (client: BridgeClient) => {
     // Clear the cancel REQUEST on terminal writes (merged, like activity)
     // so a satisfied/stale cancel never re-cancels a later rerun.
     if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
+    // 0 (not '') is the cleared form: the app seeds agent:retry-after with
+    // the `number` codec, and a string would not round-trip through it.
+    if (args.retryAfter !== undefined) properties[PROPS.retryAfter] = args.retryAfter ?? 0
     await bridgeGraph.updateBlock(id, {properties})
   }
 
@@ -121,7 +125,8 @@ export type Graph = DispatchBridgeGraph & {
     args: {
       status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
       resumeOptions?: AgentResumeOptions | null,
-      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
+      attempts?: number, activity?: string | null, cancel?: string | null,
+      retryAfter?: number | null, nowMs: number,
     },
   ) => Promise<void>
   createReply: (parentId: string, content: string) => Promise<BlockData>

@@ -64,6 +64,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
         ...(args.error !== undefined ? {[PROPS.error]: args.error ?? ''} : {}),
         ...(args.activity !== undefined ? {[PROPS.activity]: args.activity ?? ''} : {}),
         ...(args.cancel !== undefined ? {[PROPS.cancel]: args.cancel ?? ''} : {}),
+        ...(args.retryAfter !== undefined ? {[PROPS.retryAfter]: args.retryAfter ?? 0} : {}),
       }
       blocks.set(id, target)
       propWrites.push({id, status: args.status, activity: args.activity})
@@ -142,7 +143,20 @@ const memoryState = (
 }
 
 const okRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => ({
-  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '', raw: {},
+  ok: true, resultText: 'Reply text', sessionId: 'sess-1', exitCode: 0, timedOut: false, stderr: '',
+  failureText: '', raw: {},
+  ...overrides,
+})
+
+/** A run that never reached the model: out of credits. The shape
+ *  `claude -p` produces when a subscription is spent. */
+const outOfCreditsRun = (overrides: Partial<AgentRunResult> = {}): AgentRunResult => okRun({
+  ok: false,
+  resultText: '',
+  sessionId: null,
+  exitCode: 1,
+  stderr: 'Claude AI usage limit reached|1800003600',
+  failureText: 'Claude AI usage limit reached|1800003600',
   ...overrides,
 })
 
@@ -1482,7 +1496,10 @@ describe('channel delivery (experimental)', () => {
     expect(replies).toHaveLength(0)
   })
 
-  it('marks the task error when the channel listener is unreachable', async () => {
+  it('DEFERS the task when the channel listener is unreachable', async () => {
+    // A listener that isn't up is infrastructure, not a bad task — and it
+    // is down for every task at once, so parking them was the same
+    // whole-queue kill as a credit outage.
     const {graph, blocks} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] ambient task'}},
@@ -1490,6 +1507,26 @@ describe('channel delivery (experimental)', () => {
     const engine = engineWith({
       graph,
       deliverToChannel: vi.fn(async () => { throw new Error('connection refused') }),
+      config: channelConfig(),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const props = blocks.get('b-1')!.properties!
+    expect(props[PROPS.status]).toBe('queued')
+    expect(props[PROPS.retryAfter]).toBeGreaterThan(NOW)
+    expect(props[PROPS.attempts]).toBe(0)
+  })
+
+  it('still parks a task whose failure is not an infrastructure one', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const engine = engineWith({
+      graph,
+      deliverToChannel: vi.fn(async () => { throw new Error('channel listener rejected the event body') }),
       config: channelConfig(),
     })
 
@@ -1613,5 +1650,291 @@ describe('query watcher lifecycle', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(state.cursors.has('inbox')).toBe(false)
     expect(logs.some(line => line.includes('rows'))).toBe(true)
+  })
+})
+
+describe('retryable infrastructure failures (out of credits, expired login, network)', () => {
+  /** Mutable clock — these tests step past cooldowns/retry-after windows. */
+  const clock = (startMs = NOW) => {
+    let nowMs = startMs
+    return {now: () => nowMs, advance: (ms: number) => { nowMs += ms }}
+  }
+
+  it('leaves the task PENDING instead of parking it — "we could not try" is not "it failed"', async () => {
+    const {graph, blocks, propWrites, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const state = memoryState()
+    const time = clock()
+    const engine = engineWith({graph, state, now: time.now, runTask: vi.fn(async () => outOfCreditsRun())})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(propWrites.map(write => write.status)).toEqual(['running', 'queued'])
+    const props = blocks.get('b-1')!.properties!
+    // Attempts are handed BACK: they cap a task that keeps CRASHING, and
+    // counting an outage against them parks the queue after three ticks.
+    expect(props[PROPS.attempts]).toBe(0)
+    expect(props[PROPS.error]).toContain('out of credits')
+    expect(props[PROPS.retryAfter]).toBeGreaterThan(NOW)
+    // A run that never reached the model billed nothing, so the hourly
+    // spend budget must not be spent on it either.
+    expect(state.launches).toEqual([])
+    // The visible trace says "waiting", not "failed", and collapses to one
+    // block so the retry's real answer converges onto it.
+    expect(reconciles.at(-1)).toMatchObject({markdown: expect.stringContaining('retrying automatically'), shape: 'block'})
+  })
+
+  it('does not chew the rest of the queue into the same state', async () => {
+    // The reported bug: one credit outage marked every queued task failed,
+    // because the daemon kept picking work up and each pickup burned a task.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+      blocks: {
+        'b-1': {content: '[[claude]] one'},
+        'b-2': {content: '[[claude]] two'},
+        'b-3': {content: '[[claude]] three'},
+      },
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+
+    // Cooldown: further ticks claim NOTHING, so the untouched tasks keep
+    // their pristine (unclaimed) state instead of being spent one per tick.
+    await engine.tick()
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(blocks.get('b-2')?.properties).toEqual({})
+    expect(blocks.get('b-3')?.properties).toEqual({})
+
+    // Once it lapses exactly one probe goes out — not the whole backlog.
+    time.advance(30_000)
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('never exhausts MAX_ATTEMPTS while the outage lasts', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] do the thing'}},
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => outOfCreditsRun())
+    const engine = engineWith({graph, runTask, now: time.now, config: mentionConfig({runsPerHour: 100})})
+
+    for (let round = 0; round < MAX_ATTEMPTS + 3; round += 1) {
+      await engine.tick()
+      await engine.drain()
+      time.advance(10 * 60_000)   // past both the cooldown and retry-after
+      const props = blocks.get('b-1')!.properties!
+      expect(props[PROPS.status]).toBe('queued')
+      // The counter itself must not creep: `queued` is re-fired without an
+      // attempts check, so a task that merely never PARKS would pass while
+      // silently spending its real retry budget — the next genuine crash
+      // after the outage would then park it immediately.
+      expect(props[PROPS.attempts]).toBe(0)
+    }
+    expect(runTask.mock.calls.length).toBeGreaterThan(MAX_ATTEMPTS)
+  })
+
+  it('runs the deferred task normally once the outage lifts', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
+    })
+    const time = clock()
+    let credits = false
+    const engine = engineWith({
+      graph, now: time.now,
+      runTask: vi.fn(async () => credits ? okRun() : outOfCreditsRun()),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('queued')
+
+    credits = true
+    time.advance(60_000)
+    await engine.tick()
+    await engine.drain()
+
+    const props = blocks.get('b-1')!.properties!
+    expect(props[PROPS.status]).toBe('done')
+    expect(props[PROPS.attempts]).toBe(1)     // the deferral cost nothing
+    expect(props[PROPS.retryAfter]).toBe(0)   // and the clock is cleared
+    // Same reply subtree throughout: the answer REPLACES the waiting note
+    // rather than stacking under it.
+    expect(new Set(reconciles.map(reconcile => reconcile.replyKey))).toEqual(new Set(['reply:b-1:1']))
+    expect(reconciles.at(-1)?.markdown).toBe('Reply text')
+  })
+
+  it('backs off further while the outage persists, and resets once a run gets through', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}],
+      blocks: {'b-1': {content: '[[claude]] one'}, 'b-2': {content: '[[claude]] two'}},
+    })
+    const time = clock()
+    let succeed = false
+    const engine = engineWith({
+      graph, now: time.now,
+      runTask: vi.fn(async () => succeed ? okRun() : outOfCreditsRun()),
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.retryAfter]).toBe(NOW + 30_000)
+
+    // Same task comes due, fails again — second failure in a row, so the
+    // next wait is longer.
+    time.advance(30_000)
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.retryAfter]).toBe(NOW + 30_000 + 60_000)
+
+    // A run that reaches the model proves the infrastructure is back, so a
+    // later blip starts the schedule over instead of inheriting the ramp.
+    succeed = true
+    time.advance(60_000)
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+
+    succeed = false
+    const afterReset = time.now()
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-2')?.properties?.[PROPS.retryAfter]).toBe(afterReset + 30_000)
+  })
+
+  it('a genuine run failure still parks the task and does not arm a cooldown', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}],
+      blocks: {'b-1': {content: '[[claude]] one'}, 'b-2': {content: '[[claude]] two'}},
+    })
+    const time = clock()
+    const runTask = vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'the tool blew up'}))
+    const engine = engineWith({
+      graph, runTask, now: time.now,
+      config: mentionConfig({maxConcurrent: 1, runsPerHour: 100}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+
+    // No cooldown: the next task launches on the very next tick.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('honors Stop on a deferred task — the automatic retry loop has an exit', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {
+        'b-1': {
+          content: '[[claude]] one',
+          properties: {
+            [PROPS.status]: 'queued',
+            [PROPS.retryAfter]: NOW + 300_000,
+            [PROPS.cancel]: NOW,
+          },
+        },
+      },
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    const props = blocks.get('b-1')!.properties!
+    expect(props[PROPS.status]).toBe('error')
+    expect(props[PROPS.error]).toBe('cancelled')
+    expect(props[PROPS.cancel]).toBe('')
+    expect(runTask).not.toHaveBeenCalled()
+  })
+
+  it('defers when the executor binary cannot be spawned at all', async () => {
+    // launchd hands the daemon a different PATH than a login shell, so a
+    // missing `claude` is a real way to lose an entire queue: runTask
+    // THROWS, so this never becomes a run result to classify.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] one'}},
+    })
+    const engine = engineWith({
+      graph,
+      now: clock().now,
+      runTask: vi.fn(async () => { throw new Error('spawn claude ENOENT') }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const props = blocks.get('b-1')!.properties!
+    expect(props[PROPS.status]).toBe('queued')
+    expect(props[PROPS.error]).toContain('executor CLI could not be started')
+    expect(props[PROPS.attempts]).toBe(0)
+  })
+
+  it('still parks a throw that happens AFTER the run — its answer was already billed', async () => {
+    // The distinction the catch keys on: failing to START a run is free to
+    // retry, failing to DELIVER a finished one is not.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] one'}},
+    })
+    // Reply reconcile fails with a network-shaped error — retryable-looking
+    // text, but the answer behind it has already been paid for.
+    graph.reconcileReplyTree = vi.fn(async () => { throw new Error('fetch failed: ECONNRESET') })
+    const engine = engineWith({graph, now: clock().now, runTask: vi.fn(async () => okRun())})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('query watcher: rolls the cursor back so the rows are not silently dropped', async () => {
+    const config = parseConfig({
+      watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}],
+    })
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const time = clock()
+    let credits = false
+    const runTask = vi.fn(async () => credits ? okRun() : outOfCreditsRun())
+    const engine = engineWith({graph, runTask, state, config, now: time.now})
+
+    await engine.tick()
+    await engine.drain()
+    // The cursor advances BEFORE the run, so an un-attempted run must put
+    // it back — a query watcher has no graph-side task state to sweep.
+    expect(state.cursors.get('inbox')).toEqual([])
+    expect(state.launches).toEqual([])
+
+    credits = true
+    time.advance(60_000)
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+    expect(state.cursors.get('inbox')).toEqual(['a'])
   })
 })

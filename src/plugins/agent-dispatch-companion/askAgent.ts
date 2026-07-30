@@ -7,23 +7,14 @@
  * window entirely — the daemon reacts in bridge-round-trip time.
  */
 import type { Block } from '@/data/block'
-import { ChangeScope, propertyValue } from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import {
   ActionContextTypes,
   type ActionConfig,
 } from '@/shortcuts/types.js'
 import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { AGENT_PROPS } from './chipState.ts'
-import {
-  agentActivityProp,
-  agentAskedAtProp,
-  agentAttemptsProp,
-  agentCancelProp,
-  agentErrorProp,
-  agentStatusProp,
-  agentUpdatedAtProp,
-  agentWatcherProp,
-} from './schema.ts'
+import { isRequeueableStatus, requeueAgentTask } from './requeue.ts'
 import { markAskedAgent } from './askedStore.ts'
 
 export const ASK_AGENT_ACTION_ID = 'agent-dispatch.ask'
@@ -33,23 +24,6 @@ export const EDIT_MODE_ASK_AGENT_ACTION_ID = 'edit.cm.agent-dispatch.ask'
  *  content — the reference projection turns it into the backlink the
  *  watcher sees. */
 const DEFAULT_AGENT_MENTION = '[[claude]]'
-
-/** Re-queueing clears the terminal lifecycle props but KEEPS
- *  agent:session — the retry resumes the thread — and agent:reply
- *  markers on children are untouched. Schema handles (not bare names) so the
- *  clear goes through the typed `unset` path and materializes correctly. */
-const REQUEUE_CLEARED_PROPS = [
-  agentStatusProp,
-  agentUpdatedAtProp,
-  agentAttemptsProp,
-  agentErrorProp,
-  agentActivityProp,
-  // A retry starts clean: never inherit a stale Stop request (the daemon
-  // clears agent:cancel on every terminal write, but drop it here too so
-  // a re-queue can't hand a leftover flag to the fresh run).
-  agentCancelProp,
-  agentWatcherProp,
-] as const
 
 export const contentWithAgentMention = (content: string): string => {
   if (content.toLowerCase().includes(DEFAULT_AGENT_MENTION)) return content
@@ -85,16 +59,8 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
     // change. Combining them would require a whole-bag replace for the clear,
     // reintroducing the clobber setProperties exists to avoid.
     await tx.update(block.id, {content: contentWithAgentMention(liveContent ?? fresh.content ?? '')})
-    // Clear lifecycle props only from TERMINAL states. An in-flight claim
-    // (queued/running) is the daemon already doing what this gesture asks for
-    // — clearing it would orphan the running task. setProperties applies a
-    // DELTA (set asked-at, unset the terminal props), never a whole-bag
-    // replace, so a claim the daemon synced in mid-gesture is preserved.
-    const status = fresh.properties[AGENT_PROPS.status]
-    const terminal = status !== 'queued' && status !== 'running'
-    await tx.setProperties(block.id, {
-      set: [propertyValue(agentAskedAtProp, Date.now())],
-      unset: terminal ? REQUEUE_CLEARED_PROPS : [],
+    await requeueAgentTask(tx, block.id, {
+      clearTerminalState: isRequeueableStatus(fresh.properties[AGENT_PROPS.status]),
     })
     wrote = true
   }, {scope: ChangeScope.BlockDefault, description: 'ask agent'})

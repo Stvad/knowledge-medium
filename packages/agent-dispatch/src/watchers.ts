@@ -26,6 +26,11 @@ export interface PendingDecision {
     | 'stale-running'
     | 'attempts-exhausted'
     | 'pre-baseline'
+    /** A retryable infrastructure failure deferred this task and its
+     *  `agent:retry-after` has come due. */
+    | 'retry-due'
+    /** Deferred, but still inside its `agent:retry-after` window. */
+    | 'retry-waiting'
 }
 
 const prop = (block: BlockView | undefined, key: string): unknown =>
@@ -74,6 +79,9 @@ export interface PendingArgs {
  *   NESTED under a reply are user-authored follow-ups and DO fire — loop
  *   safety comes from replies themselves being marked plus the MCP write
  *   tools refusing watcher-target links/ids, not from a blanket subtree ban;
+ * - re-fire a `queued` task once its `agent:retry-after` is due. That's the
+ *   deferral state a retryable infrastructure failure leaves behind, so it
+ *   is pending-with-a-clock, NOT processed;
  * - skip anything already claimed, except a stale `running` (crashed or
  *   dropped run) which re-queues until MAX_ATTEMPTS, then parks;
  * - skip unclaimed blocks that predate the watcher baseline — pointing a
@@ -90,6 +98,16 @@ export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExem
     if (age < STALE_RUNNING_MS) return {pending: false, reason: 'already-processed'}
     if (taskAttempts(source) >= MAX_ATTEMPTS) return {pending: false, reason: 'attempts-exhausted'}
     return {pending: true, reason: 'stale-running'}
+  }
+  if (status === 'queued') {
+    // A deferred task, waiting out an infrastructure outage. Missing/
+    // unreadable retry-after counts as DUE: the alternative is a task
+    // stuck in `queued` with nothing that will ever move it.
+    const retryAfter = prop(source, PROPS.retryAfter)
+    if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && nowMs < retryAfter) {
+      return {pending: false, reason: 'retry-waiting'}
+    }
+    return {pending: true, reason: 'retry-due'}
   }
   if (status) return {pending: false, reason: 'already-processed'}
 
