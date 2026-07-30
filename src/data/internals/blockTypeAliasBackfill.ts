@@ -77,8 +77,24 @@
  *   - the marker is recorded after any non-throwing run, so a device still
  *     downloading its graph can burn it having seen few candidates (the
  *     daily-note:date regression shape). The marker is per-device and local,
- *     so any fully-synced device still completes the job for the fleet; the
- *     general fix is gating `scheduleWorkspaceBackfills` on `onFirstSync`.
+ *     so any fully-synced device still completes the job for the fleet.
+ *   - worse than missing rows: on a STALE device the claim can drop a
+ *     concurrent remote edit. `apply_block_patches` assigns `properties_json`
+ *     wholesale (column-LWW; per-key merge is deliberately out of scope, #51),
+ *     so uploading an alias amendment ships the whole LOCAL bag — including a
+ *     `block-type:label` / `color` / `block-type:properties` that another
+ *     device changed and this one hasn't downloaded yet. Every local property
+ *     write has this shape; what's specific here is that the pass touches
+ *     EVERY type block unattended within ~10-30s of open, which is exactly the
+ *     catch-up window. Bounded by being one-shot per device+workspace.
+ *
+ * `onFirstSync` does NOT gate any of this, despite being the obvious reach:
+ * PowerSync's `hasSynced` persists across sessions, so on every warm client it
+ * fires synchronously and decides nothing (the same vacuous-gate trap
+ * documented in `extensions/PanelContentRecovery.tsx`). A real gate needs a
+ * catch-up signal — `dataFlowStatus.downloading` draining — applied in
+ * `Repo.scheduleWorkspaceBackfills` so it covers every backfill, not just this
+ * one.
  */
 
 import { ChangeScope } from '@/data/api'
