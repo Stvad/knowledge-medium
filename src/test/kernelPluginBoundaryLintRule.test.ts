@@ -14,11 +14,16 @@ const ruleTester = new RuleTester({
 })
 
 // Every case names a real-ish file, because the rule decides core-vs-plugin
-// from the linted file's path. RuleTester's default filename has no `src`
-// segment at all, so an accidentally-unset filename would make a case pass
-// vacuously — hence the explicit `filename` everywhere below.
-const core = (name: string) => `/repo/src/${name}`
-const plugin = (name: string) => `/repo/src/plugins/${name}`
+// from the linted file's path. RuleTester's default filename is outside `src/`
+// entirely, so an accidentally-unset filename would make a case pass vacuously
+// — hence the explicit `filename` everywhere below.
+//
+// Rooted at the real cwd because the rule resolves paths against `context.cwd`
+// (which RuleTester defaults to `process.cwd()`), not against a `src` path
+// segment — see `srcRelativePath` for why the segment heuristics were wrong.
+const repoPath = (name: string) => `${process.cwd()}/${name}`
+const core = (name: string) => repoPath(`src/${name}`)
+const plugin = (name: string) => repoPath(`src/plugins/${name}`)
 
 const rule = kernelPluginBoundary.rules['no-core-to-plugin-imports']
 
@@ -34,8 +39,11 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/appUpdateMount.tsx'),
         code: `import { repo } from '../data/repo.js'`,
       },
-      // The other half of the principle: a plugin MAY depend on another
-      // plugin (123 files in src/plugins do), by alias or by relative path.
+      // The other half of the principle: a plugin MAY depend on another plugin
+      // (113 files in src/plugins do). Both cases hit the same `isInsidePlugin`
+      // early return — the rule registers no visitors at all for a file inside
+      // a plugin — so the second is a statement of intent about relative-path
+      // sibling imports, not extra branch coverage.
       {
         filename: plugin('backlinks/index.ts'),
         code: `import { backlinksViewFacet } from '@/plugins/backlinks-view/facet.js'`,
@@ -43,6 +51,44 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
       {
         filename: plugin('backlinks/index.ts'),
         code: `import { backlinksViewFacet } from '../backlinks-view/facet.js'`,
+      },
+      // Outside `src/` entirely (scripts/, packages/) the rule has nothing to
+      // say — it isn't in either layer. Pins the `importerSrcRelative ===
+      // undefined` early return, which the rule self-checks rather than
+      // relying on the eslint.config.js `files` scope.
+      {
+        filename: repoPath('scripts/attachments-rls-verify.ts'),
+        code: `import { isAlreadyExists } from '@/plugins/attachments/blobStore'`,
+      },
+      // A `src` directory nested INSIDE a plugin is still the plugin layer, so
+      // its sibling-plugin imports stay legal. The `lastIndexOf('src')` segment
+      // heuristic reduced this path to `index.ts`, read it as core, and denied
+      // the plugin an import the principle explicitly grants it.
+      {
+        filename: plugin('foo/src/index.ts'),
+        code: `import { backlinksViewFacet } from '@/plugins/backlinks-view/facet.js'`,
+      },
+      // (The mirror hazard — a repo checked out under a directory literally
+      // named `src` — is handled by construction, since `posix.relative`
+      // against the cwd never inspects segment names. RuleTester can't vary
+      // the cwd per case, so there is deliberately no test claiming to cover
+      // it.)
+      // `@/plugins/../data/repo.js` resolves to pure core. Before the alias
+      // branch was normalized this was reported as importing a plugin named
+      // `..` — a false positive on a path with no plugin in it at all.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { x } from '@/plugins/../data/repo.js'`,
+      },
+      // A glob that doesn't reach the plugin layer is fine, and a negated
+      // pattern is an exclusion rather than a dependency.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/components/ui/*.tsx', { eager: true })`,
+      },
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob(['/src/components/**', '!/src/plugins/**'])`,
       },
       // A plugin depending on core (the sanctioned direction).
       {
@@ -167,6 +213,109 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo' },
+        }],
+      },
+      // `allowIn` matches the src-relative path EXACTLY. A suffix test isn't
+      // anchored to a path boundary, so a directory merely ending in "src"
+      // used to satisfy the allowlist entry and silently exempt this file.
+      {
+        filename: core('xsrc/extensions/staticAppExtensions.ts'),
+        code: `import { todoPlugin } from '@/plugins/todo'`,
+        options: [{ allowIn: ['src/extensions/staticAppExtensions.ts'] }],
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo' },
+        }],
+      },
+      // A loose file directly under src/plugins/ is shared plugin-system infra,
+      // not a plugin, so it stays CORE. Without the trailing-slash requirement
+      // in `isInsidePlugin` it would exempt itself from the boundary it helps
+      // define.
+      {
+        filename: plugin('registry.ts'),
+        code: `import { todoPlugin } from '@/plugins/todo'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo' },
+        }],
+      },
+      // The alias branch is normalized like the relative branch: both of these
+      // resolve to the real `todo` plugin and used to slip through untouched.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from '@/./plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/./plugins/todo/schema.js' },
+        }],
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from '@/plugins//todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins//todo/schema.js' },
+        }],
+      },
+      // An alias carrying a `..` segment. Not a contrived shape here — the repo
+      // already imports `@/../vite-plugins/…` in three files — so an alias that
+      // climbs sideways into the plugin layer is a route a real author could
+      // take without noticing they crossed the boundary.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from '@/extensions/../plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/extensions/../plugins/todo/schema.js' },
+        }],
+      },
+      // Root-relative `/src/…`: not hypothetical — it is the form
+      // `import.meta.glob` patterns use.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from '/src/plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '/src/plugins/todo/schema.js' },
+        }],
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from 'src/plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: 'src/plugins/todo/schema.js' },
+        }],
+      },
+      // Glob-based discovery of the whole plugin layer — the strongest form of
+      // the violation, and idiomatic enough in this repo
+      // (plugins/agent-runtime/authoringCatalog.ts) to be the shape a core
+      // module would reach for. Gets its own message.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/plugins/*/index.ts', { eager: true })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { plugin: '*', specifier: '/src/plugins/*/index.ts' },
+        }],
+      },
+      // ...including the array form, where only the plugin-layer pattern fires.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob(['/src/components/**', '/src/plugins/*/facet.ts'])`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { plugin: '*', specifier: '/src/plugins/*/facet.ts' },
+        }],
+      },
+      // Bare `require()` is not an import node, so it needs its own handler.
+      // Low practical risk in this pure-ESM app, but it was a silent hole.
+      {
+        filename: core('data/repo.ts'),
+        code: `declare const require: (s: string) => unknown; const x = require('@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
         }],
       },
     ],

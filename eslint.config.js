@@ -253,15 +253,22 @@ export default tseslint.config(
     // Scoped to `src/` — `scripts/` and `packages/` are top-level consumers
     // sitting ABOVE both layers (like an entry point), so their plugin imports
     // are not core→plugin edges. The rule additionally self-scopes: a file
-    // under `src/plugins/` is never a violator, so plugin→plugin (123 files
-    // today) stays allowed even if this `files` glob is later widened.
+    // inside `src/plugins/<name>/` is never a violator, so plugin→plugin (113
+    // files today) stays allowed even if this `files` glob is later widened.
+    //
+    // `.js`/`.mjs`/`.cjs` are in the glob even though every other block in this
+    // config is `{ts,tsx}`-only. That gap is real, not theoretical:
+    // `src/data/syncedTableSqlRecognizer.js` is shipped core code that NO rule
+    // in this config currently lints, so renaming a file to `.js` was a
+    // one-step way out of this boundary. Widening the whole config is a
+    // separate call; widening this one rule is not.
     //
     // See eslint-rules/kernel-plugin-boundary.js for where the boundary is
     // derived from and what counts as a dependency (static import, `export …
     // from`, dynamic `import()`, type-position `import('…')` — type-only
     // imports included, since a contract core NAMES is a contract that belongs
     // in core).
-    files: ['src/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx,js,mjs,cjs}'],
     plugins: {boundary: kernelPluginBoundary},
     rules: {
       'boundary/no-core-to-plugin-imports': ['error', {
