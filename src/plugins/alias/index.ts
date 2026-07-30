@@ -2,12 +2,16 @@
  * Alias plugin — owns same-block content↔aliases reconciliation.
  *
  * The `aliasDataExtension` (in `dataExtension.ts`) registers the
- * `alias.sync` post-commit processor. Cross-block alias-rename
- * backlink rewriting lives in the references plugin
- * (`@/plugins/references`), which already owns the
- * `block_references` projection needed to find source blocks; the
- * two processors compose via the field-watcher (sync's alias write
- * re-fires the watcher and lets rename act on the swap diff).
+ * `alias.sync` SAME-TX processor. Cross-block alias-rename backlink
+ * rewriting lives in the references plugin (`@/plugins/references`),
+ * which already owns the `block_references` projection needed to find
+ * source blocks.
+ *
+ * The two compose inside ONE commit: sync writes the alias diff for a
+ * title edit, and `references.renameBacklinks` — same-tx as of #461, and
+ * registered immediately AFTER this plugin for exactly that reason —
+ * reads it from the staged state in the same pass. Registering rename
+ * ahead of sync would leave it with no diff to act on.
  */
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'

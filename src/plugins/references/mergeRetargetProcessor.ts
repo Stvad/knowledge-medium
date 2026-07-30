@@ -87,14 +87,15 @@ const retargetReference = (
   fromId: string,
   intoId: string,
   aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
+  strandedAliases: ReadonlySet<string>,
 ): BlockReference | null => {
   if (ref.id !== fromId) return ref
-  // An alias this merge MEANT to rewrite but could not render leaves the
-  // content saying `[[fromAlias]]`. Moving its edge to `intoId` writes an
-  // entry the content does not support: the merge strips `fromAlias` from
-  // the surviving block, so a re-parse of that span binds it to a fresh
-  // seat, not to `intoId`. Neither target is right, and only a re-parse
-  // can say what is — so DROP the entry and hand ownership over.
+  // An alias whose span this merge left STANDING — see `strandedAliases`
+  // at the call site. Moving its edge to `intoId` writes an entry the
+  // content does not support: the merge strips `fromAlias` from the
+  // surviving block, so a re-parse of that span binds it to a fresh seat,
+  // not to `intoId`. Neither target is right, and only a re-parse can say
+  // what is — so DROP the entry and hand ownership over.
   //
   // Dropping rather than keeping it verbatim is the load-bearing part.
   // Keeping it leaves `nextReferences` byte-identical, `retargetSource`
@@ -104,11 +105,7 @@ const retargetReference = (
   // pinned to the tombstoned `fromId` permanently. `parseReferences`
   // watches `references` as well as `content`, so removing the entry is
   // itself the trigger that gets it rebuilt.
-  //
-  // (Reachable whenever both ladder rungs fail — e.g. a surviving alias
-  // containing `[[`, which the wikilink form cannot carry and the pinned
-  // form refuses as a delimiter-smuggling label.)
-  if (ref.alias !== fromId && aliasReplacements.get(ref.alias) === null) return null
+  if (ref.alias !== fromId && strandedAliases.has(ref.alias)) return null
   // `refAlias`, not the bare `toAlias`: when the rewrite fell back to
   // the pinned form the content now reads `[toAlias](((intoId)))`,
   // which re-parses to a blockref edge whose alias IS the id. Keying
@@ -130,32 +127,28 @@ const retargetReference = (
  *  The window BEFORE that re-parse is the point — a backlink query or a
  *  rename landing inside it reads what this wrote.
  *
- *  Three outcomes per entry: dropped (the rewrite could not be rendered,
- *  so only a re-parse can say what the span means now), retained
- *  ALONGSIDE its replacement (a page embed survived the rewrite and
- *  shares this one normalized entry), or replaced. */
+ *  Two outcomes per entry: dropped (a span for this alias is still
+ *  standing, so only a re-parse can say what it means now — see
+ *  `strandedAliases`), or replaced. */
 export const retargetReferences = (
   refs: ReadonlyArray<BlockReference>,
   fromId: string,
   intoId: string,
   aliasReplacements: ReadonlyMap<string, SpanReplacement | null>,
-  retainedAliases: ReadonlySet<string>,
+  strandedAliases: ReadonlySet<string>,
   retargetableFields: ReadonlySet<string>,
 ): BlockReference[] =>
   normalizeReferences(refs.flatMap(ref => {
     if (ref.sourceField !== undefined && !retargetableFields.has(ref.sourceField)) return [ref]
-    const retargeted = retargetReference(ref, fromId, intoId, aliasReplacements)
-    if (retargeted === null) return []
-    // Retention is a CONTENT concern only: it exists because one
-    // normalized entry serves both `[[a]]` and a `![[a]]` the rewrite
-    // stepped over. A property-derived edge projects from the property
-    // VALUE, which has already been rewritten to `intoId` above — keeping
-    // its old entry would leave a `sourceField` edge pointing at the
-    // tombstoned block until the next reprojection, with no surviving
-    // span to justify it.
-    const retain = ref.sourceField === undefined && retainedAliases.has(ref.alias)
-    return retain ? [ref, retargeted] : [retargeted]
+    // Content edges only for the stranding rule: a property-derived edge
+    // projects from the property VALUE, which has already been rewritten
+    // to `intoId`, so it retargets unconditionally.
+    const stranded = ref.sourceField === undefined ? strandedAliases : EMPTY_ALIAS_SET
+    const retargeted = retargetReference(ref, fromId, intoId, aliasReplacements, stranded)
+    return retargeted === null ? [] : [retargeted]
   }))
+
+const EMPTY_ALIAS_SET: ReadonlySet<string> = new Set()
 
 /** Rewrite `fromId` → `intoId` inside a ref/refList property's RAW encoded
  *  value (string or string array — matching what `decodeRefId` /
@@ -291,22 +284,28 @@ const retargetSource = async (
     event.intoId,
     aliasReplacements,
   )
-  // A pinned replacement steps over `![[alias]]` page embeds, so an alias
-  // can still have a live span after its own rewrite ran — while
-  // `normalizeReferences` gives every occurrence ONE shared entry.
-  // Retarget that entry outright and the surviving embed vanishes from
-  // `block_references` until the async re-parse rebuilds it. Same
-  // compensation the rename path makes (`applyRefRewrites`).
+  // Aliases this merge MEANT to rewrite whose span is still standing in
+  // the rewritten content. Two ways in, one treatment:
+  //   - the replacement could not be rendered at all (`null`), so the span
+  //     still reads `[[alias]]`;
+  //   - the replacement is the PINNED form, which deliberately steps over
+  //     `![[alias]]` page embeds (splicing it under a leading `!` yields a
+  //     markdown image — see `rewriteWikilinks`), so the embed survives.
+  // Either way `normalizeReferences` gives every occurrence of one alias a
+  // SINGLE entry, and no single entry can describe both a span pinned to
+  // `intoId` and a surviving embed that now late-binds to a fresh seat.
+  // Retargeting it announces a backlink the content does not support;
+  // retaining it alongside the retargeted one (which this used to do)
+  // announces both, one of them onto the tombstoned merge source. Drop it
+  // and let the re-parse own the rebind — dropping the entry is itself
+  // what schedules that re-parse (PR #444 round 7, P2).
   const remaining = new Set(parseReferences(nextContent).map(mark => mark.alias))
-  const retainedAliases = new Set(
-    [...aliasReplacements]
-      .filter(([alias, replacement]) =>
-        replacement !== null && replacement.toTargetId !== null && remaining.has(alias))
-      .map(([alias]) => alias),
+  const strandedAliases = new Set(
+    [...aliasReplacements.keys()].filter(alias => remaining.has(alias)),
   )
   const nextReferences = retargetReferences(
     current.references, event.fromId, event.intoId,
-    aliasReplacements, retainedAliases, retargetableFields,
+    aliasReplacements, strandedAliases, retargetableFields,
   )
 
   const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references' | 'referenceTargetId' | 'isFieldForm'>> = {}

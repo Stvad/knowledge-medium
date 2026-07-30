@@ -21,15 +21,26 @@
  *
  * Placement (same-tx vs post-commit):
  *   Sync runs inside the user's writeTransaction so content + alias
- *   writes commit atomically. Rename remains post-commit (see
- *   `@/plugins/references/renameProcessor.ts`) — the cross-block
- *   rewrites are too expensive to inline on the typing path, and
- *   eventual consistency is fine for backlink display text.
+ *   writes commit atomically. Rename (`references.renameBacklinks`) is
+ *   same-tx too as of #461, and is registered to run AFTER this
+ *   processor: the ordinary rename gesture is a title edit, so the alias
+ *   diff rename reacts to is the one written HERE by rule 1. Both halves
+ *   of a rename therefore land in one commit and one undo entry.
  *
  *   The "stale plan" guard that the post-commit version needed
  *   (re-read row at apply time, skip on divergence) is gone here —
  *   we're inside the same tx, so the snapshot we plan against IS
  *   the live state.
+ *
+ *   Not `rerunOnDirtyRows`: rename's own content rewrites can land on an
+ *   ALIASED source whose title embeds the renamed wikilink (`See [[Foo]]`
+ *   as a page title), and this processor no longer gets a second look at
+ *   it — the block keeps its old alias text until its next edit. The
+ *   post-commit rename got that reconciliation for free by writing in a
+ *   tx of its own. Left alone deliberately: opting into the re-run means
+ *   taking on the merged-baseline `before` semantics for a
+ *   content↔alias reconciliation, which is a bigger change than the
+ *   obscure case it fixes.
  */
 
 import {

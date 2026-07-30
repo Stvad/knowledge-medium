@@ -1,6 +1,6 @@
 /**
  * Alias-rename backlink rewriter (spec: docs/alias-rename-cases.html
- * — rename ladder).
+ * — rename ladder). SAME-TX processor.
  *
  * Watches alias-property diffs on `blocks`. For each removed alias α
  * with live backlinks (found via the `block_references` projection):
@@ -17,43 +17,75 @@
  * because it needs the `block_references` projection to find source
  * blocks.
  *
- * Two-phase shape mirrors parseReferences: read phase outside any tx
- * builds a plan describing per-source rewrites AND records the source
- * content observed at decision time. Write phase opens one tx,
- * re-reads source content via `tx.get`, and skips the source entirely
- * if content has changed (later user edit wins — see `applyPlan`).
- * Otherwise applies the rewrites via parser-aware span splicing
- * (`rewriteWikilinks`) AND surgically swaps the matching `references`
- * entries in the same tx so the `block_references` trigger refreshes
- * in lockstep. Without that, a second rapid rename's SELECT would
- * race the separate parseReferences processor and miss the source —
- * leaving the backlink stuck on an alias the target no longer carries.
+ * WHY SAME-TX (#461). This ran post-commit until then: a read phase
+ * outside any transaction built a plan, then a second transaction
+ * applied it. Everything hard about this processor lived in that gap.
+ * A concurrent write could claim α, hand it off, mint an α-seat that a
+ * re-derive then bound a span to, or edit the source — none of it
+ * visible to the plan. Guarding it needed a process-wide rename queue,
+ * a stale-content veto, an in-tx re-assert of the claimant check, and a
+ * timestamp heuristic ("was this seat minted by MY window?") that no
+ * available signal can actually answer: `skipMetadata` still ratchets
+ * `updated_at`, so a re-derived span and a user-typed one are
+ * indistinguishable. Six review rounds each found a new leak in that
+ * heuristic. Running inside the user's transaction deletes the gap, and
+ * with it all of that machinery — the claimant check becomes the plain
+ * question "does anything still claim α?", asked once, atomically.
+ *
+ * Costs, accepted deliberately (Vlad, #461):
+ *   - LATENCY. The cross-source rewrites are now on the user's commit
+ *     path, one `tx.get` per source under the write lock, unbounded in
+ *     the number of backlinks. Renames are rare and not on the typing
+ *     path, so this is paid by a deliberate gesture rather than by
+ *     keystrokes. The `sameTxProcessor.ts` header used to name this
+ *     processor as the canonical thing same-tx is NOT for; that note is
+ *     updated there.
+ *   - BLAST RADIUS. A throw here rolls back the user's rename, where
+ *     post-commit would have failed the rewrite alone and left the
+ *     rename committed. That is the same trade `mergeRetargetProcessor`
+ *     and `inlineDeletedBlockRefsProcessor` already make, and it is the
+ *     right way round: a rename whose backlinks silently didn't follow
+ *     is worse than a rename that visibly didn't happen.
+ *
+ * ORDERING — this processor must run AFTER `alias.sync`, which is why it
+ * is registered from its own extension (`referencesRenameDataExtension`)
+ * placed after `aliasDataExtension` rather than from
+ * `referencesDataExtension` with its siblings. The primary rename
+ * gesture is editing a page's TITLE, which writes `content`; the alias
+ * property is then amended by `alias.sync` later in the same pass. Run
+ * before it and there is no alias diff to react to at all — the rename
+ * silently never fires. Running in pass ONE (rather than reaching for
+ * `rerunOnDirtyRows`) is also what keeps the kernel's derivation re-run
+ * downstream of our writes: `core.projectPropertyChildren` re-projects
+ * the owner cell of any property value child we rewrite. From pass two
+ * that re-run is already behind us, and a stale cell would be pushed
+ * back DOWN by the next tx's projection — reverting the rename.
+ *
+ * Sync arrival has no counterpart, deliberately: same-tx processors are
+ * bypassed for sync-applied rows, and a rename that arrives from another
+ * device arrives with that device's backlink rewrites alongside it.
  *
  * Idempotency: the rewrite produces source content that no longer
- * contains `[[α]]`, so a second pass over the same source content is
- * a no-op (no matching span). Rename doesn't re-fire on the source
- * content edit because its watcher is `properties`-only.
+ * contains `[[α]]`, so a second pass over the same source content is a
+ * no-op (no matching span). Rename doesn't re-fire on the source content
+ * edit because its watcher is `properties`-only.
  */
 
 import {
-  ChangeScope,
-  definePostCommitProcessor,
+  defineSameTxProcessor,
   normalizeReferences,
-  type AnyPostCommitProcessor,
+  type AnySameTxProcessor,
   type BlockData,
   type BlockReference,
-  type CommittedEvent,
-  type ProcessorCtx,
+  type SameTxCtx,
+  type SameTxEvent,
   type Tx,
 } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
-import { readIsChildBackedWorkspace } from '@/data/workspaceSchema'
+import { aliasesProp, getAliases } from '@/data/properties'
 import {
-  ALIAS_SEAT_PROBE_SLOTS,
-  computeAliasSeatId,
-  generatedSeatFieldIds,
-  matchesAliasSeatSeed,
-} from '@/data/targets'
+  deriveReferenceColumns,
+  sameTxReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor'
 import {
   parseReferences,
   rewriteWikilinksMulti,
@@ -63,334 +95,33 @@ import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
-/** The seat-classification columns, projected identically by both
- *  queries below so one predicate can read either. `blockingChildren`
- *  subtracts the seat's own generated property children — the two
- *  `generatedSeatFieldIds` bind params — which is what keeps the
- *  children signal from inverting after the workspace flip. In an
- *  UN-flipped workspace the caller passes ids that match nothing, so any
- *  live child blocks: there, a `reference_target_id` match under a seat
- *  is by construction user-authored content, not machinery.
+/** Sources holding a CONTENT `[[alias]]` span bound to `targetId`.
  *
- *  The subtraction requires `is_field_form = 1` as well as the target
- *  match, because `reference_target_id` alone does not say "generated
- *  field row": `core.deriveReferenceTarget` stamps the column on ANY
- *  whole-block reference, so a child the user wrote as a bare
- *  `((alias-property-definition))` ref carries the same target id with
- *  the `::` marker bit unset. Subtracting on the id alone would read
- *  that hand-written child as machinery and let a seat the user has
- *  already adopted be re-keyed (and later reaped). `IS NOT 1` rather
- *  than `= 0` per the column's convention — it is nullable, and `= 0`
- *  would drop every untouched row to SQL NULL. */
-const SEAT_COLUMNS_SQL = (t: string, generatedFieldIdCount: number) => `
-         ${t}.id AS targetId,
-         ${t}.content AS targetContent,
-         ${t}.properties_json AS targetProperties,
-         ${t}.created_at AS targetCreatedAt,
-         ${t}.user_updated_at AS targetUserUpdatedAt,
-         EXISTS(
-           SELECT 1 FROM blocks child
-           WHERE child.parent_id = ${t}.id
-             AND child.deleted = 0
-             AND (child.is_field_form IS NOT 1
-                  OR child.reference_target_id IS NULL
-                  OR child.reference_target_id NOT IN (${
-                    Array.from({length: generatedFieldIdCount}, () => '?').join(', ')
-                  }))
-         ) AS targetBlockingChildren`
-
-export interface SeatCandidateRow {
-  targetId: string
-  targetContent: string
-  targetProperties: string
-  targetCreatedAt: number
-  targetUserUpdatedAt: number | null
-  targetBlockingChildren: 0 | 1
-}
-
-/** When this row was last MATERIALIZED as a seat. `created_at` alone is
- *  wrong: `resolveAliasSeatId` deliberately reuses a slot holding a
- *  pristine tombstone (so a hot name doesn't burn a fresh slot every
- *  reap cycle), and `tx.restore` refreshes `user_updated_at` but never
- *  `created_at` — that column is immutable by contract. A restored seat
- *  would therefore read as ancient and be rejected, skipping the rename
- *  entirely and stranding the span. Both mint paths stamp
- *  `user_updated_at`, so the max covers fresh insert and restore alike;
- *  the shape/slot/children signals already exclude a seat a user
- *  touched, so the looser stamp doesn't widen the exemption. */
-const seatMaterializedAt = (row: SeatCandidateRow): number =>
-  Math.max(row.targetCreatedAt, row.targetUserUpdatedAt ?? 0)
-
-/** Wall-clock floor for "materialized after the commit we are reacting
- *  to". NOT `userUpdatedAt` alone: that is the DISPLAY stamp, and
- *  `metadataPatch` leaves it untouched on a `{skipMetadata}` write while
- *  still advancing `updatedAt`. Several paths write the alias cell that
- *  way — `core.projectPropertyChildren` (the post-flip rename gesture,
- *  where a user edits the `alias::` field row and the projection writes
- *  the parent bag), `rekeyParentPropertyCell`, `alias.sync`, the merge
- *  retarget — so the display stamp can be days stale. Stale means a
- *  LOWER floor, which is the unsafe direction: an older pre-existing
- *  seat starts passing the recency gate and its backlinks get hijacked.
+ *  Keyed on all three of `(workspace, alias, target)`. The alias alone is
+ *  not enough — a span bound to some other block is not ours to rewrite —
+ *  and the target alone is not enough, since one source can reference the
+ *  renaming block under several names.
  *
- *  `updatedAt` is the row-version and always ratchets
- *  (`Math.max(now, before.updatedAt + 1)`); the `systemMint` 0-sentinel
- *  is insert-only, and a rename is always an UPDATE. Taking the max errs
- *  HIGH — a server-ratcheted version from sync can overshoot wall clock,
- *  which only makes us skip a rename. Fails closed. */
-const renameCommitStamp = (after: BlockData): number =>
-  Math.max(after.updatedAt, after.userUpdatedAt ?? 0)
-
-/** Per-alias classification context, built once instead of per row.
- *  `slotIds` is the whole probe window precomputed — `isAliasSeatSlotId`
- *  is 64 uuidv5 hashes (~0.29ms) on a miss, and the alias-keyed
- *  enumeration made the row count workspace-wide, so calling it per row
- *  is O(rows x 64) hashing for an O(1) question. */
-interface SeatClassificationCtx {
-  slotIds: ReadonlySet<string>
-  /** Wall-clock floor: a seat older than this predates the commit we're
-   *  reacting to, so it is not this rename's window artifact. */
-  mintedAfter: number
-  /** The seat's own generated property field-row targets, or empty in an
-   *  un-flipped workspace. Carried so the write phase can repeat the
-   *  same children subtraction the read phase's SQL does. */
-  generatedFieldIds: readonly string[]
-}
-
-export const seatClassificationCtx = (
-  alias: string,
-  workspaceId: string,
-  mintedAfter: number,
-  generatedFieldIds: readonly string[],
-): SeatClassificationCtx => {
-  const slotIds = new Set<string>()
-  for (let i = 0; i < ALIAS_SEAT_PROBE_SLOTS; i++) {
-    slotIds.add(computeAliasSeatId(alias, workspaceId, i))
-  }
-  return {slotIds, mintedAfter, generatedFieldIds}
-}
-
-/** Does user content hide BENEATH one of the seat's generated field
- *  rows? The direct-children signal cannot see it: the field row is
- *  subtracted wholesale as machinery, so a comment thread parked under
- *  its value child makes the seat read as pristine — and then its
- *  backlinks are re-keyed and the orphan reaper deletes the thread with
- *  the seat.
- *
- *  Same rule and same reasoning as the reaper's own deep guard
- *  (`referencesProcessor.ts`, PR #428 adversarial review): a machine
- *  seat's generated subtree is exactly field row → at most ONE leaf
- *  value child, so a second live grandchild, or a grandchild with
- *  children of its own, is user data. Kept as a separate pass rather
- *  than folded into the projection SQL because it only has to run for
- *  rows that already passed every cheap signal — typically none.
- *
- *  Un-flipped workspaces have no generated rows at all, so there is
- *  nothing to look under and this is a no-op.
- *
- *  Defence in depth, deliberately: `isWindowMintedSeatInTx` runs the
- *  same walk over every alias CLAIMANT under the write lock, and a row
- *  matching `aliasSeatSeed` necessarily claims its alias, so no case
- *  could be constructed where only this copy decides. Kept anyway
- *  because the two run over different populations — source-row targets
- *  here, alias claimants there — and a read phase that answers
- *  "pristine machinery" for a page the user has adopted is wrong on its
- *  own terms, whoever catches it next. Pinned by a direct unit test
- *  rather than through the processor for exactly that reason. */
-export const hasDeepUserContent = async (
-  db: ProcessorCtx['db'],
-  seatId: string,
-  generatedFieldIds: readonly string[],
-): Promise<boolean> => {
-  if (generatedFieldIds.length === 0) return false
-  const placeholders = generatedFieldIds.map(() => '?').join(', ')
-  const fieldRows = await db.getAll<{id: string; reference_target_id: string}>(
-    `SELECT id, reference_target_id FROM blocks
-     WHERE parent_id = ? AND deleted = 0 AND is_field_form = 1
-       AND reference_target_id IN (${placeholders})`,
-    [seatId, ...generatedFieldIds],
-  )
-  // `ensureAliasTarget` writes each generated property exactly ONCE, so a
-  // second field row addressing the same definition is user-authored —
-  // whatever its subtree looks like. Without this, a duplicate `alias::`
-  // row with its own single leaf value passes the per-row shape test
-  // below just as the generated one does, and (while the original stays
-  // the projection winner, so the seat's bag still matches the seed) the
-  // seat reads as untouched machinery.
-  const seenTargets = new Set<string>()
-  for (const fieldRow of fieldRows) {
-    if (seenTargets.has(fieldRow.reference_target_id)) return true
-    seenTargets.add(fieldRow.reference_target_id)
-  }
-  for (const fieldRow of fieldRows) {
-    const grandchildren = await db.getAll<{id: string}>(
-      `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [fieldRow.id],
-    )
-    if (grandchildren.length > 1) return true
-    if (grandchildren.length === 1) {
-      const deeper = await db.getOptional<{one: number}>(
-        `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
-        [grandchildren[0]!.id],
-      )
-      if (deeper !== null && deeper !== undefined) return true
-    }
-  }
-  return false
-}
-
-/** Backlink sources for one removed alias — keyed on the ALIAS alone,
- *  with the target row joined so the caller can apply the
- *  claimant-or-provable-seat disjunction in JS (§11 group 2).
- *
- *  Keying on `(target_id, alias)` — as this did — silently skipped
- *  spans whose reference edge had already moved off the renaming
- *  claimant. That happens in the rename window: the rename case is
- *  necessarily outside the "rewrite content before alias surgery"
- *  ordering invariant (the rewrite CONSUMES the alias diff, and a
- *  synced-in rename arrives with the alias already moved), so a
- *  concurrent re-derive of `[[α]]` can bind the span to a freshly
- *  minted α-seat first. Such an edge matches the alias but not the
- *  target, and no later pass owns it — leaving a permanently
- *  seat-bound span. Enumerating by alias and filtering by target in
- *  JS lets those window-bound spans rewrite with the rest.
- *
- *  Rides `idx_block_references_ws_alias` (`localSchema.ts`), added with
- *  this query — no pre-existing index leads with `workspace_id`/`alias`,
- *  so without it this is a full scan of every edge on the device.
- *
- *  `source_field = ''` restricts to CONTENT edges. Property-derived
- *  edges carry `alias === targetId` so they could only collide with a
+ *  `source_field = ''` restricts to CONTENT edges. Property-derived edges
+ *  carry `alias === targetId` so they could only collide with a
  *  UUID-shaped alias, and `applyRefRewrites` skips them anyway — but
  *  enumerating them still costs a `tx.get` per bogus source.
  *
- *  `target.deleted = 0` keeps this no wider than the old key was. A
- *  tombstoned pristine seat would otherwise satisfy the disjunction and
- *  get its edges re-pointed — plausibly desirable (the seat is dead, so
- *  the span is stranded either way), but it is not what this change set
- *  out to do and nothing tests it. */
-const selectBacklinkSourcesSql = (generatedFieldIdCount: number) => `
-  SELECT br.source_id AS sourceId,
-         source.content AS sourceContent,
-         br.target_id AS targetId,
-         ${SEAT_COLUMNS_SQL('target', generatedFieldIdCount)}
+ *  Read through `ctx.db` (the active transaction's read surface), so the
+ *  trigger-maintained projection already reflects anything this tx has
+ *  staged. Rides `idx_block_references_ws_alias` (`localSchema.ts`).
+ *  Ordered for determinism, like the sibling same-tx processors. */
+const SELECT_BACKLINK_SOURCE_IDS_SQL = `
+  SELECT DISTINCT br.source_id AS sourceId
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
-  JOIN blocks target ON target.id = br.target_id
   WHERE br.workspace_id = ?
     AND br.alias = ?
+    AND br.target_id = ?
     AND br.source_field = ''
     AND source.deleted = 0
-    AND target.deleted = 0
+  ORDER BY source.order_key, source.id
 `
-
-interface BacklinkSourceRow extends SeatCandidateRow {
-  sourceId: string
-  sourceContent: string
-}
-
-/** Live claimants of `alias`. Deliberately NOT `tx.aliasLookup` /
- *  `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL`: those return the single
- *  oldest claimant, and the uniqueness trigger only fires for local user
- *  txs (`clientSchema.ts`), so sync-applied rows can leave several live
- *  blocks claiming one alias. We need to classify ALL of them. */
-const selectAliasClaimantsSql = (generatedFieldIdCount: number) => `
-  SELECT ${SEAT_COLUMNS_SQL('b', generatedFieldIdCount)}
-  FROM block_aliases ba
-  JOIN blocks b ON b.id = ba.block_id
-  WHERE ba.workspace_id = ?
-    AND ba.alias = ?
-    AND b.deleted = 0
-`
-
-/** Is `row` a machine-minted, never-touched seat for `alias` that this
- *  rename's own window created?
- *
- *  FOUR signals, none sufficient alone.
- *
- *  SHAPE (`aliasSeatSeed`) says nothing drifted — no rename, no user
- *  property, no extra alias — but quick-find's create-page writes
- *  exactly that shape too. SLOT ID separates them: only
- *  `ensureAliasTarget` mints rows at `computeAliasSeatId(alias, ws, i)`,
- *  so a user's page carrying the same shape still has a random uuid.
- *
- *  CHILDREN mean a user treated it as a real page — but only after
- *  subtracting the seat's OWN generated property children, and only in a
- *  flipped workspace. Post-flip `ensureAliasTarget`'s two `setProperty`
- *  calls route through `writePropertyValueChild`, so every seat is born
- *  with children: a bare "has live children?" test doesn't merely fail to
- *  refine there, it INVERTS — no seat is ever recognized, the window
- *  disjunction below no-ops, and worse, the seat then counts as a real
- *  claimant and suppresses the rewrite entirely. `generatedSeatFieldIds`
- *  is the same subtraction the reaper does (`referencesProcessor.ts`).
- *
- *  RECENCY is the one that keeps this honest. The other three describe a
- *  pristine seat, not a seat THIS rename produced, and a seat that has
- *  owned α since long before the renaming block existed satisfies them
- *  identically. Exempting that one from "claimant" — and then following
- *  its edges — re-points every `[[α]]` bound to it onto a block that
- *  never owned the name here. Reachable without any race: the alias
- *  uniqueness trigger is skipped for sync-applied rows, so a synced
- *  block can co-claim an alias a local seat already holds, and releasing
- *  it would hijack the seat's backlinks. A window seat is materialized
- *  AFTER the commit we are reacting to, so it cannot predate it.
- *
- *  Both sides of that comparison are picked to fail CLOSED — too-recent
- *  a floor, or too-old a seat, means "treat it as a real claimant and
- *  skip", which leaves `[[α]]` late-binding to the seat. The opposite
- *  error is an irreversible content splice. See `seatMaterializedAt`
- *  for the seat side and `renameCommitStamp` for the floor.
- *
- *  This is a heuristic on timestamps, not a structural signal: nothing
- *  in current state records WHICH rename minted a seat. It is bounded
- *  by failing closed, but if it keeps springing leaks the honest answer is to
- *  drop the seat leg entirely (the window span then stays bound to the
- *  seat — a working link to a stub, and the pre-existing behaviour). */
-export const isWindowMintedAliasSeat = (
-  row: SeatCandidateRow,
-  alias: string,
-  ctx: SeatClassificationCtx,
-): boolean => {
-  if (row.targetContent !== alias) return false
-  // STRICTLY newer. The invariant is "materialized AFTER the commit we
-  // are reacting to", and a tie does not say that: `seatMaterializedAt`
-  // can take `user_updated_at` straight off a synced row, whose clock is
-  // another device's, so an equal stamp is coincidence rather than
-  // evidence. Rejecting a tie only ever skips a rewrite (the span stays
-  // late-bound to the seat); accepting one on a seat that predates us
-  // hijacks its backlinks.
-  if (seatMaterializedAt(row) <= ctx.mintedAfter) return false
-  if (row.targetBlockingChildren === 1) return false
-  if (!ctx.slotIds.has(row.targetId)) return false
-  let properties: Record<string, unknown>
-  try {
-    properties = JSON.parse(row.targetProperties) as Record<string, unknown>
-  } catch {
-    return false
-  }
-  return matchesAliasSeatSeed({content: row.targetContent, properties})
-}
-
-/** `isWindowMintedAliasSeat` plus the deep-content guard. Every call
- *  site wants this one; the sync predicate above is just the cheap half,
- *  kept separate so the extra queries only run for rows that already
- *  passed it. */
-const isWindowMintedSeat = async (
-  db: ProcessorCtx['db'],
-  row: SeatCandidateRow,
-  alias: string,
-  ctx: SeatClassificationCtx,
-): Promise<boolean> =>
-  isWindowMintedAliasSeat(row, alias, ctx)
-  && !(await hasDeepUserContent(db, row.targetId, ctx.generatedFieldIds))
-
-const decodeAliases = (block: BlockData): readonly string[] => {
-  const encoded = block.properties[aliasesProp.name]
-  if (encoded === undefined) return []
-  try {
-    return aliasesProp.codec.decode(encoded)
-  } catch {
-    return []
-  }
-}
 
 /** Replacement form for a single removed alias α — the rename ladder,
  *  composed from the shared `preferredSpanReplacement` policy.
@@ -430,210 +161,116 @@ export const replacementFor = (
  *  matching `(fromTargetId, alias, sourceField:'')` becomes
  *  `(toTargetId, refAlias, sourceField:'')`. Multiple rewrites per
  *  source accumulate when several aliases on the same target are
- *  removed in one commit. Order matters: applied in collection order. */
+ *  removed in one commit. */
 export interface Rewrite {
   alias: string
   replacement: string
-  /** The edge's CURRENT target — what the stored `references` entry
-   *  says today. Usually the renaming block; a window-bound span
-   *  carries the α-seat instead. Matching key for the entry swap. */
+  /** The edge's current target — the renaming block. Matching key for
+   *  the entry swap, carried explicitly so `applyRefRewrites` needs no
+   *  ambient knowledge of which block is being renamed. */
   fromTargetId: string
   /** Where the replacement text points — always the renaming block,
    *  and always its id EXACTLY. The wikilink branch stores `after.id`
    *  directly; the pinned branch stores what a re-parse of the spliced
-   *  span yields, and `pinnedSpanReplacement` now refuses any target
-   *  whose id does not survive that round trip character-for-character.
-   *  `aliasStillReleased` leans on this to recognize the renaming block
-   *  among α's claimants, so the two must not drift apart. */
+   *  span yields, and `pinnedSpanReplacement` refuses any target whose
+   *  id does not survive that round trip character-for-character. */
   toTargetId: string
   refAlias: string
-  /** This alias's classification context, carried so the write phase can
-   *  re-assert the release without recomputing 64 uuidv5 hashes — and
-   *  can apply the SAME seat test the read phase did, not a weaker one. */
-  seat: SeatClassificationCtx
   /** True when `replacement` is the PINNED form `[label](((id)))`.
    *  Drives the embed guard at the splice — see `rewriteWikilinks`. */
   pinned: boolean
 }
 
-/** Per-source plan. Stores rewrites plus the source content observed
- *  during the read phase. Write phase re-reads the source via
- *  `tx.get`; if content has diverged at all, the rewrite is skipped
- *  entirely so the user's later edit wins strictly. Without this
- *  guard, a `[[α]]` the user typed in the race window between read
- *  and write would also be rewritten — they didn't exist at decision
- *  time and shouldn't be touched. */
+/** Per-source plan: spans to rewrite, plus edges to invalidate. */
 interface SourcePlan {
   sourceId: string
-  originalContent: string
   rewrites: Rewrite[]
-  /** Edges onto the renaming block that this pass decided NOT to rewrite
-   *  and must therefore INVALIDATE. Dropping them is a `references`
-   *  write, which is what schedules `references.parseReferences` to
-   *  rebuild the binding from content — see `collectStaleEdges`. */
+  /** Edges onto the renaming block that this pass decided NOT to
+   *  rewrite and must therefore INVALIDATE. Dropping them is a
+   *  `references` write, which is what schedules
+   *  `references.parseReferences` to rebuild the binding from content. */
   staleEdges: Array<{alias: string; targetId: string}>
 }
 
 const planFor = (
   plansBySourceId: Map<string, SourcePlan>,
   sourceId: string,
-  originalContent: string,
 ): SourcePlan => {
   const existing = plansBySourceId.get(sourceId)
   if (existing !== undefined) return existing
-  const created: SourcePlan = {sourceId, originalContent, rewrites: [], staleEdges: []}
+  const created: SourcePlan = {sourceId, rewrites: [], staleEdges: []}
   plansBySourceId.set(sourceId, created)
   return created
 }
 
-/** Record every edge still pointing at the renaming block for `alias`,
- *  for a case where the CONTENT is deliberately left alone.
- *
- *  Leaving the content is right; leaving the edge is not. The renderer
- *  resolves `[[alias]]` through the block's STORED references
- *  (`wikilinkMarkdownExtension` builds its alias→id map from them), so a
- *  stale edge keeps navigating the span to the block that no longer owns
- *  the name — and because this pass writes nothing in these cases, no
- *  watched field changes and `parseReferences` is never scheduled to
- *  notice. The wrong destination is permanent.
- *
- *  Dropped rather than re-pointed at the current winner: the re-parse
- *  that the drop itself schedules resolves the alias the same way the
- *  renderer does, so computing the answer here could only disagree with
- *  it. */
-const collectStaleEdges = async (
-  ctx: ProcessorCtx,
-  after: BlockData,
-  alias: string,
-  generatedFieldIdCount: number,
-  generatedFieldIds: readonly string[],
-  plansBySourceId: Map<string, SourcePlan>,
-): Promise<void> => {
-  const sources = await ctx.db.getAll<BacklinkSourceRow>(
-    selectBacklinkSourcesSql(generatedFieldIdCount),
-    [...generatedFieldIds, after.workspaceId, alias],
-  )
-  for (const row of sources) {
-    if (row.targetId !== after.id) continue
-    planFor(plansBySourceId, row.sourceId, row.sourceContent)
-      .staleEdges.push({alias, targetId: row.targetId})
-  }
-}
-
 /** Pull source plans for one target's alias diff and merge into the
- *  per-event `plansBySourceId` map. Reads via committed-state SQL —
- *  no tx open. */
+ *  per-event `plansBySourceId` map. All reads go through the active tx,
+ *  so they see this commit's staged state. */
 const collectTargetPlans = async (
-  ctx: ProcessorCtx,
+  ctx: SameTxCtx,
   before: BlockData,
   after: BlockData,
   plansBySourceId: Map<string, SourcePlan>,
 ): Promise<void> => {
-  const beforeAliases = decodeAliases(before)
-  const afterAliases = decodeAliases(after)
+  const beforeAliases = getAliases(before)
+  const afterAliases = getAliases(after)
   const removed = beforeAliases.filter(a => !afterAliases.includes(a))
   if (removed.length === 0) return
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
 
-  // Generated-children subtraction is FLIP-GATED, per
-  // `generatedSeatFieldIds`' own contract: in an un-flipped workspace a
-  // `reference_target_id` match under a seat is by construction
-  // user-authored content (`core.deriveReferenceTarget` stamps the
-  // column on a hand-written `::` row too), not machinery's to ignore.
-  // Subtracting unconditionally would let a user who typed `alias:: …`
-  // under a seat page have that page classified as pristine machinery.
-  const generatedFieldIds = await readIsChildBackedWorkspace(ctx.db, after.workspaceId)
-    ? [...generatedSeatFieldIds(after.workspaceId)]
-    : []
   for (const alias of removed) {
-    const seatCtx = seatClassificationCtx(
-      alias, after.workspaceId, renameCommitStamp(after), generatedFieldIds,
+    const sourceIds = await ctx.db.getAll<{sourceId: string}>(
+      SELECT_BACKLINK_SOURCE_IDS_SQL,
+      [after.workspaceId, alias, after.id],
     )
-    // Consult α's POST-TX claimant before deciding anything (§11
-    // group 2). A live claimant means α is not ours to re-key:
+    if (sourceIds.length === 0) continue
+    // Consult α's claimants (§11 group 2). This is the whole check —
+    // one read, inside the tx that performed the release, so there is no
+    // window for a competing claim to land in and no seat-exemption
+    // heuristic to get wrong. A live claimant means α is not ours to
+    // re-key:
     //   - handoff — some other block owns the name now, so `[[α]]`
-    //     already resolves where the author would expect. Rewriting
-    //     it (to the new alias, or pinned to the block that just gave
-    //     α up) would steal the span from its rightful target.
-    //   - re-claim — a later tx put α back on this same block, so the
-    //     removal we're reacting to no longer holds.
-    // Only a genuine RELEASE falls through to the rename ladder. The one
-    // claim that doesn't count is a seat THIS window minted: that's the
-    // artifact this pass exists to rewrite past, not a successor to
-    // defer to. Re-asserted inside the write tx (`applyPlan`), because
-    // this read is outside any transaction.
-    const claimants = await ctx.db.getAll<SeatCandidateRow>(
-      selectAliasClaimantsSql(generatedFieldIds.length),
-      [...generatedFieldIds, after.workspaceId, alias],
-    )
-    let claimed = false
-    for (const row of claimants) {
-      if (!(await isWindowMintedSeat(ctx.db, row, alias, seatCtx))) {
-        claimed = true
-        break
+    //     already resolves where the author would expect. Rewriting it
+    //     (to the new alias, or pinned to the block that just gave α up)
+    //     would steal the span from its rightful target.
+    //   - co-claim — the alias uniqueness trigger only fires for local
+    //     user txs (`clientSchema.ts`), so sync-applied rows can leave
+    //     several live blocks claiming one alias. Releasing one of them
+    //     changes nothing about where `[[α]]` points (#460).
+    // The renaming block itself can never appear here: `removed` is
+    // computed from its own before/after, so by definition it no longer
+    // claims α in this tx's staged state.
+    //
+    // Only a genuine RELEASE falls through to the rename ladder.
+    const claimants = await ctx.tx.aliasClaimants(alias, after.workspaceId)
+    // `replacementFor` REPORTS when it returns null, so it is called only
+    // on the release path — a handoff is not a rendering failure.
+    const replacement = claimants.length === 0
+      ? replacementFor(alias, removed, added, after.id)
+      : null
+    for (const {sourceId} of sourceIds) {
+      const plan = planFor(plansBySourceId, sourceId)
+      if (replacement === null) {
+        // Two ways to get here, one treatment. Either α was handed off /
+        // co-claimed, or no rendering could carry the span (already
+        // reported). Both leave the source's CONTENT alone — but the
+        // stored edge still names the block that gave α up, and the
+        // renderer resolves `[[α]]` through those stored edges
+        // (`wikilinkMarkdownExtension` builds its alias→id map from
+        // them), so leaving it would navigate the span to the wrong
+        // block permanently. Dropping the edge is itself the write that
+        // schedules `parseReferences` to rebind it, which resolves the
+        // alias exactly as the renderer does — so computing the answer
+        // here could only disagree with it.
+        plan.staleEdges.push({alias, targetId: after.id})
+        continue
       }
-    }
-    if (claimed) {
-      // Handoff or re-claim: the span stays as written, but its stored
-      // edge still names the block that gave the alias up.
-      await collectStaleEdges(
-        ctx, after, alias, generatedFieldIds.length, generatedFieldIds, plansBySourceId)
-      continue
-    }
-
-    const replacement = replacementFor(alias, removed, added, after.id)
-    // No rendering could carry this span — leave every source's CONTENT
-    // alone (already reported by `replacementFor`). The edges still have
-    // to be invalidated: the alias was released, so `[[α]]` no longer
-    // means the block the edge names. (Round 4 deferred this as needing
-    // a new write path; the handoff case above needs the same one, so
-    // they share it.)
-    if (replacement === null) {
-      await collectStaleEdges(
-        ctx, after, alias, generatedFieldIds.length, generatedFieldIds, plansBySourceId)
-      continue
-    }
-    const sources = await ctx.db.getAll<BacklinkSourceRow>(
-      selectBacklinkSourcesSql(generatedFieldIds.length),
-      [...generatedFieldIds, after.workspaceId, alias],
-    )
-    for (const row of sources) {
-      // ONLY the renaming block. A span whose edge points anywhere else
-      // is not ours to rewrite.
-      //
-      // This deliberately does NOT follow spans onto a window-minted
-      // α-seat, which an earlier version of this pass did (that is what
-      // the alias-keyed enumeration was built for). The leg cannot be
-      // made safe: it admits a source because its edge sits on a seat
-      // younger than the rename, and it cannot tell a PRE-EXISTING span
-      // that a concurrent re-derive moved onto that seat from a `[[α]]`
-      // the USER TYPED after the release — the second is a link they
-      // deliberately pointed at the new seat, and rewriting it hands
-      // their link to the block that just gave the name up.
-      //
-      // The one signal that would separate them is the source's own
-      // stamp, and it cannot: the re-derive writes the source's
-      // `references` (`referencesProcessor`), and `skipMetadata` still
-      // ratchets `updated_at`, so both paths bump it identically. The
-      // content guard cannot help either — the user's edit precedes the
-      // read phase, so it is already baked into `originalContent`.
-      //
-      // Dropping the leg costs a window-bound span its rename: it stays
-      // `[[α]]` late-binding to the seat, a working link to a stub, and
-      // the behaviour that predates this pass. That is strictly better
-      // than silently re-pointing a link the user just wrote.
-      if (row.targetId !== after.id) continue
-      // First sighting of this source pins `originalContent`. If a
-      // later target rename hits the same source within this event,
-      // both reads are inside the same committed snapshot so the
-      // pinned value still matches what the second SELECT would see.
-      planFor(plansBySourceId, row.sourceId, row.sourceContent).rewrites.push({
+      plan.rewrites.push({
         alias,
         replacement: replacement.text,
-        fromTargetId: row.targetId,
+        fromTargetId: after.id,
         toTargetId: replacement.toTargetId ?? after.id,
         refAlias: replacement.refAlias,
-        seat: seatCtx,
         pinned: replacement.toTargetId !== null,
       })
     }
@@ -642,32 +279,23 @@ const collectTargetPlans = async (
 
 /** Apply rewrites to a source's `references` list. Content edges
  *  matching `(fromTargetId, oldAlias)` are re-pointed at
- *  `(toTargetId, refAlias)`. BOTH halves move: a window-bound span's
- *  edge names the α-seat while the replacement text pins to the
- *  renaming block, so swapping only the alias would leave the entry
- *  naming a target the content no longer references.
- *  Property-typed refs (`sourceField !== ''`) are untouched — wikilink
- *  rewrites never affect them. Returned list is run through
- *  `normalizeReferences` so duplicates introduced by the swap (e.g.
- *  source already had `[[β]]` before we rewrote `[[α]] → [[β]]`)
- *  collapse, and the on-disk JSON stays canonical. */
+ *  `(toTargetId, refAlias)`. Property-typed refs (`sourceField !== ''`)
+ *  are untouched — wikilink rewrites never affect them. Returned list is
+ *  run through `normalizeReferences` so duplicates introduced by the
+ *  swap (e.g. source already had `[[β]]` before we rewrote
+ *  `[[α]] → [[β]]`) collapse, and the on-disk JSON stays canonical.
+ *
+ *  Callers pass only the rewrites whose span actually went away — see
+ *  `applyPlan`. An alias with a span still standing after its own
+ *  rewrite is invalidated there instead, never swapped here. */
 export const applyRefRewrites = (
   refs: ReadonlyArray<BlockReference>,
   rewrites: ReadonlyArray<Rewrite>,
-  /** Aliases that still have a live span in the rewritten content — a
-   *  page embed the pinned form deliberately stepped over. Their old
-   *  edge is KEPT alongside the new one: `normalizeReferences` has
-   *  already collapsed both occurrences into a single entry, so swapping
-   *  it outright would drop the surviving embed out of the
-   *  `block_references` projection until the async re-parse rebuilds it,
-   *  and a rename or backlink query landing in that window would not see
-   *  the embed at all. */
-  retainedAliases: ReadonlySet<string> = new Set(),
 ): BlockReference[] => {
-  if (rewrites.length === 0) return [...refs]
+  if (rewrites.length === 0) return normalizeReferences([...refs])
   // (fromTargetId, oldAlias) → (toTargetId, newRefAlias). Last-write-
-  // wins across rewrites — mirrors the content rewrite order (each
-  // `rewriteWikilinks` pass operates on the prior pass's output).
+  // wins across rewrites, matching the content splice's own per-alias
+  // last-wins map.
   const swaps = new Map<string, {id: string; alias: string}>()
   const key = (targetId: string, alias: string) => `${targetId}\u0000${alias}`
   for (const rw of rewrites) {
@@ -675,234 +303,123 @@ export const applyRefRewrites = (
   }
   const next: BlockReference[] = []
   for (const ref of refs) {
-    const sourceField = ref.sourceField ?? ''
-    if (sourceField !== '') { next.push(ref); continue }
-    let swapped = swaps.get(key(ref.id, ref.alias))
-    if (swapped === undefined) {
-      // The edge may have MOVED since the plan recorded `fromTargetId`.
-      // `references.parseReferences` can re-derive this source's
-      // unchanged `[[α]]` onto a freshly minted α-seat in the gap between
-      // the read phase and this write tx, and nothing upstream catches
-      // that: `applyPlan`'s guard compares CONTENT, which a re-derive
-      // does not touch, and the claimant re-assert deliberately permits a
-      // pristine seat. Keying the swap on the stale `fromTargetId` alone
-      // would then rewrite the content while leaving the stored edge on
-      // the seat — self-healing at the next re-parse, but until then a
-      // rapid second rename enumerating by that edge misses this source
-      // and strands the span on an intermediate name.
-      //
-      // The seat slots are the same window the read phase already treats
-      // as this rename's own artifacts, and by this point
-      // `aliasStillReleased` has confirmed no non-seat claimant holds α —
-      // so an edge parked at one of them is machinery to follow, not a
-      // third party to leave alone. Checked only as a FALLBACK so an
-      // exact `(fromTargetId, alias)` hit keeps its existing precedence.
-      const moved = rewrites.find(rw => rw.alias === ref.alias && rw.seat.slotIds.has(ref.id))
-      if (moved !== undefined) swapped = {id: moved.toTargetId, alias: moved.refAlias}
-    }
-    if (swapped === undefined) { next.push(ref); continue }
-    if (retainedAliases.has(ref.alias)) next.push(ref)
-    next.push({...ref, id: swapped.id, alias: swapped.alias})
+    if ((ref.sourceField ?? '') !== '') { next.push(ref); continue }
+    const swapped = swaps.get(key(ref.id, ref.alias))
+    next.push(swapped === undefined ? ref : {...ref, id: swapped.id, alias: swapped.alias})
   }
   return normalizeReferences(next)
 }
 
-/** Re-assert, INSIDE the write tx, that every alias a plan rewrites is
- *  still unclaimed (or claimed only by a window seat).
+/** Split a source's rewrites by whether their span actually WENT AWAY.
  *
- *  The read-phase check is a committed-state read outside any
- *  transaction, and `serializeRename` only serializes rename against
- *  rename — sync materialization, the alias plugin and ordinary user
- *  writes all commit freely in the gap. `applyPlan`'s content guard is
- *  structurally blind to this: a third party claiming α doesn't touch
- *  the SOURCE, so the source's content is unchanged and the rewrite
- *  proceeds, pinning the span to the block that just gave the name up.
+ *  An alias whose span survives its own rewrite gets its edge invalidated,
+ *  not swapped. The pinned form deliberately steps over `![[α]]` page
+ *  embeds (splicing it under a leading `!` yields a markdown image — see
+ *  `rewriteWikilinks`), so α can still have a live span afterwards, and in
+ *  the extreme the source is embed-only and the content does not change at
+ *  all. Swapping the entry there is wrong twice over: it announces a
+ *  backlink for a span the content does not contain, and the surviving
+ *  embed no longer belongs to the renaming block — α was released, so
+ *  `![[α]]` late-binds elsewhere now. `normalizeReferences` collapses
+ *  every occurrence of one alias into a SINGLE entry, so there is no way
+ *  to say "the pinned span points here, the embed points there" in the
+ *  stored list; only a re-parse can. Drop the entry and let it own the
+ *  rebind (PR #444 round 7, P2).
  *
- *  Uses `tx.aliasClaimants`, NOT `tx.aliasLookup`. The single-row form
- *  is `ORDER BY created_at LIMIT 1`, so when a window seat is OLDER than
- *  a claimant that landed in the gap — the normal ordering, since the
- *  competitor is newly created or newly synced — it returns the seat,
- *  the seat check passes, and the rewrite proceeds anyway. That is the
- *  very hijack this re-assert exists to stop, surviving in a narrower
- *  configuration. Every claimant has to be classified, exactly as the
- *  read phase does. (`block_aliases` IS reachable in-tx; the residual
- *  documented on the reaper is about `block_references`, which the `Tx`
- *  surface genuinely cannot read.)
- *
- *  Memoized per alias for the tx's lifetime: the answer depends only on
- *  `(workspaceId, alias)`, and `applyPlan` writes only `content` /
- *  `references`, never the `aliases` property, so `block_aliases` cannot
- *  change mid-tx. Without this the check ran once per rewrite PER
- *  SOURCE — hundreds of identical reads held under the write lock, where
- *  nothing else in the app can write. */
-type ReleaseCache = Map<string, Promise<boolean>>
-
-/** The read phase's seat test, re-run in-tx against a whole `BlockData`.
- *
- *  This deliberately mirrors `isWindowMintedSeat` signal for signal.
- *  An earlier version tested only the slot id, on the reasoning that a
- *  stricter predicate than the hazard needs would be wrong for a
- *  data-loss guard. That had it backwards twice over. Stricter here
- *  means MORE vetoes, and a veto just leaves `[[α]]` late-binding to the
- *  seat — the pre-existing behaviour — while a missed veto splices
- *  content irreversibly. And the gap is exactly where the unusual
- *  claimants arrive: sync can materialize a long-lived pristine seat
- *  from another device between the read phase and here, and on the slot
- *  id alone it read as this rename's own machinery.
- *
- *  The renaming block is never exempt, whatever shape it has. Seats are
- *  adopted IN PLACE, so it is routinely a member of its own alias's slot
- *  window; if it claims α again — an undo, a synced-in revert — then α
- *  was not released and there is nothing here to re-key. */
-const isWindowMintedSeatInTx = async (
-  tx: Tx,
-  claimant: BlockData,
-  rewrite: Rewrite,
-): Promise<boolean> => {
-  if (claimant.id === rewrite.toTargetId) return false
-  if (!rewrite.seat.slotIds.has(claimant.id)) return false
-  if (claimant.content !== rewrite.alias) return false
-  if (!matchesAliasSeatSeed(claimant)) return false
-  // Same stamp rule as `seatMaterializedAt` / `isWindowMintedAliasSeat`:
-  // a restore refreshes `user_updated_at` but never `created_at`, and a
-  // tie is not evidence of having been minted after us.
-  if (Math.max(claimant.createdAt, claimant.userUpdatedAt) <= rewrite.seat.mintedAfter) {
-    return false
+ *  Exported for a DIRECT unit test. Asserting it through the processor
+ *  cannot work: the write is what schedules `parseReferences`, which
+ *  re-derives the whole list from content and launders the phantom edge
+ *  before any integration assertion can see it. The interval before that
+ *  re-parse is the point — a backlink query or a second rename landing in
+ *  it reads what this wrote. */
+export const splitBySurvivingSpan = (
+  rewrites: readonly Rewrite[],
+  nextContent: string,
+): {swapped: Rewrite[]; stranded: Rewrite[]} => {
+  const remaining = new Set(parseReferences(nextContent).map(mark => mark.alias))
+  return {
+    swapped: rewrites.filter(rw => !remaining.has(rw.alias)),
+    stranded: rewrites.filter(rw => remaining.has(rw.alias)),
   }
-  return !(await hasBlockingChildrenInTx(tx, claimant.id, rewrite.seat.generatedFieldIds))
 }
 
-/** In-tx twin of the read phase's `targetBlockingChildren` column plus
- *  its deep guard: any live child that is not one of the seat's own
- *  generated field rows blocks, and so does user content nested under
- *  one of those rows. */
-const hasBlockingChildrenInTx = async (
-  tx: Tx,
-  seatId: string,
-  generatedFieldIds: readonly string[],
-): Promise<boolean> => {
-  const seenTargets = new Set<string>()
-  for (const child of await tx.childrenOf(seatId)) {
-    const target = child.referenceTargetId ?? null
-    const generated = child.isFieldForm === true
-      && target !== null
-      && generatedFieldIds.includes(target)
-    if (!generated) return true
-    // One generated row per definition — a second is the user's. Same
-    // reasoning as `hasDeepUserContent`.
-    if (seenTargets.has(target)) return true
-    seenTargets.add(target)
-    const grandchildren = await tx.childrenOf(child.id)
-    if (grandchildren.length > 1) return true
-    if (grandchildren.length === 1
-      && (await tx.childrenOf(grandchildren[0]!.id)).length > 0) return true
-  }
-  return false
-}
-
-const aliasStillReleased = (
-  tx: Tx,
-  workspaceId: string,
-  rewrite: Rewrite,
-  cache: ReleaseCache,
-): Promise<boolean> => {
-  // Keyed on everything `isWindowMintedSeatInTx` actually reads, not
-  // just `(workspace, alias)`. One committed event can carry several
-  // sync-created co-claimants releasing the SAME alias, and their
-  // rewrites differ in `toTargetId` and `mintedAfter` — both of which
-  // change the verdict. The narrower key handed the first rewrite's
-  // answer to the rest, so a claimant that is a valid window seat for
-  // one of them could bypass another's veto. (`slotIds` and
-  // `generatedFieldIds` derive from workspace + alias, so they need no
-  // key of their own.)
-  const key = [
-    workspaceId, rewrite.alias, rewrite.toTargetId, rewrite.seat.mintedAfter,
-  ].join('\u0000')
-  const cached = cache.get(key)
-  if (cached !== undefined) return cached
-  const pending = (async () => {
-    const claimants = await tx.aliasClaimants(rewrite.alias, workspaceId)
-    for (const claimant of claimants) {
-      if (!(await isWindowMintedSeatInTx(tx, claimant, rewrite))) return false
-    }
-    // A gap-arriving claimant is exempt only if it is provably this
-    // rename's own machinery — see `isWindowMintedSeatInTx`. Anything
-    // else vetoes.
-    return true
-  })()
-  cache.set(key, pending)
-  return pending
-}
-
-const applyPlan = async (
-  tx: Tx,
-  plan: SourcePlan,
-  releaseCache: ReleaseCache,
-): Promise<void> => {
-  // Strict "later user edit wins": if source content has changed
-  // between our read phase and this write tx, skip entirely. Without
-  // this we'd also rewrite `[[α]]` spans the user typed in the race
-  // window — they didn't exist when we decided to rewrite, and the
-  // user's typing should take precedence. The cost: a single
-  // unrelated keystroke to the source between event and apply will
-  // cancel this source's rewrite (acceptable — the next deliberate
-  // rename of α catches it, or the user reconciles manually).
+const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   const current = await tx.get(plan.sourceId)
   if (current === null || current.deleted) return
-  if (current.content !== plan.originalContent) return
-  // Re-assert the release per alias, now under the write lock (see
-  // `aliasStillReleased`). Drop just the rewrites whose alias got
-  // claimed in the gap — the rest of the plan is still good.
-  const live: Rewrite[] = []
-  for (const rewrite of plan.rewrites) {
-    if (await aliasStillReleased(tx, current.workspaceId, rewrite, releaseCache)) {
-      live.push(rewrite)
-    }
-  }
-  if (live.length === 0 && plan.staleEdges.length === 0) return
   // ONE pass over the original spans, not one pass per alias. Sequential
   // passes re-parse the previous pass's output, so with `α → β` and
-  // `β → γ` in a single synced commit an original `[[α]]` becomes `[[β]]`
-  // and is then consumed again into `[[γ]]` — stealing α's link, while
+  // `β → γ` in a single commit an original `[[α]]` becomes `[[β]]` and is
+  // then consumed again into `[[γ]]` — stealing α's link, while
   // `applyRefRewrites` still maps α's entry to β's block.
   // (`skipEmbeds` is per-alias: it tracks whether THAT replacement is the
   // pinned form. Last rewrite wins on a duplicate alias, matching the
   // entry swap's own last-write-wins map.)
   const nextContent = rewriteWikilinksMulti(
     current.content,
-    new Map(live.map(rw => [rw.alias, {text: rw.replacement, skipEmbeds: rw.pinned}])),
+    new Map(plan.rewrites.map(rw => [rw.alias, {text: rw.replacement, skipEmbeds: rw.pinned}])),
   )
 
+  const {swapped, stranded} = splitBySurvivingSpan(plan.rewrites, nextContent)
+  const invalidated = [
+    ...plan.staleEdges,
+    ...stranded.map(rw => ({alias: rw.alias, targetId: rw.fromTargetId})),
+  ]
+
   // Surgically swap the matching `references` entries in lockstep with
-  // the content rewrite so the `block_references` trigger refreshes
-  // the projection inside this same SQL tx. parseReferences will fire
-  // on the content change and re-emit the same list (idempotent), but
-  // by then the next rename's SELECT already sees the up-to-date
-  // index — no race window.
-  // A pinned rewrite steps over `![[α]]` page embeds, so α can still have
-  // a live span after its own rewrite ran. `normalizeReferences` gives
-  // both occurrences one shared entry, so that entry has to survive.
-  const remaining = new Set(parseReferences(nextContent).map(mark => mark.alias))
-  const retained = new Set(
-    live.filter(rw => rw.pinned && remaining.has(rw.alias)).map(rw => rw.alias),
-  )
-  let nextRefs = applyRefRewrites(current.references, live, retained)
-  if (plan.staleEdges.length > 0) {
+  // the content rewrite so the `block_references` trigger refreshes the
+  // projection inside this same SQL tx — and so the post-commit
+  // `parseReferences` that fires on our content change re-derives the
+  // same list and writes nothing (one undo entry for the whole rename,
+  // not two).
+  let nextRefs = applyRefRewrites(current.references, swapped)
+  if (invalidated.length > 0) {
     // Content edges only (`sourceField === ''`): a property-derived entry
     // projects from its property value, which no rename touched.
     nextRefs = normalizeReferences(nextRefs.filter(ref =>
       (ref.sourceField ?? '') !== ''
-      || !plan.staleEdges.some(s => s.alias === ref.alias && s.targetId === ref.id)))
+      || !invalidated.some(s => s.alias === ref.alias && s.targetId === ref.id)))
   }
-  const contentChanged = nextContent !== current.content
-  const refsChanged =
-    JSON.stringify(nextRefs) !== JSON.stringify(normalizeReferences([...current.references]))
-  if (!contentChanged && !refsChanged) return
-  await tx.update(
-    plan.sourceId,
-    contentChanged ? {content: nextContent, references: nextRefs} : {references: nextRefs},
-    {skipMetadata: true},
-  )
+
+  const patch: Partial<Pick<
+    BlockData, 'content' | 'references' | 'referenceTargetId' | 'isFieldForm'
+  >> = {}
+  if (nextContent !== current.content) {
+    patch.content = nextContent
+    // `core.deriveReferenceTarget` already ran earlier in this same tx
+    // pass (kernel processors precede plugin ones) and stamped both local
+    // columns from the PRE-rewrite content. A whole-block `[[α]]` row —
+    // a property field row addressing its definition by name, or a value
+    // child whose value IS a page reference — would otherwise keep
+    // pointing at the target the removed alias resolved to. Recompute
+    // from the rewritten content, the same contract `mergeRetargetProcessor`,
+    // `inlineDeletedBlockRefsProcessor` and `alias.sync` follow. The
+    // kernel's re-run pass would also catch this, but only for processors
+    // downstream of it — and the column is what makes a row a field row,
+    // so anything reading it in between must not see the stale value.
+    const derived = await deriveReferenceColumns(
+      nextContent, current.workspaceId, sameTxReferenceTargetLookups(tx),
+    )
+    // Always an update of an existing row (never a create), so an
+    // unresolvable alias (`undefined`) clears the column rather than
+    // preserving a caller-provided id the way the derive processor's
+    // create path does.
+    const nextTargetId = derived.targetId ?? null
+    if ((current.referenceTargetId ?? null) !== nextTargetId) {
+      patch.referenceTargetId = nextTargetId
+    }
+    if ((current.isFieldForm ?? false) !== derived.isFieldForm) {
+      patch.isFieldForm = derived.isFieldForm
+    }
+  }
+  if (JSON.stringify(nextRefs)
+    !== JSON.stringify(normalizeReferences([...current.references]))) {
+    patch.references = nextRefs
+  }
+  if (Object.keys(patch).length === 0) return
+  // skipMetadata: rewriting someone else's backlink is bookkeeping
+  // triggered by the target's rename, not a user edit of the source —
+  // don't float it to the top of "recent".
+  await tx.update(plan.sourceId, patch, {skipMetadata: true})
 }
 
 /** True iff the alias-encoded value differs between before/after.
@@ -914,78 +431,43 @@ const aliasFieldChanged = (before: BlockData, after: BlockData): boolean => {
   return JSON.stringify(b ?? null) !== JSON.stringify(a ?? null)
 }
 
-/** Process-wide FIFO queue for rename invocations.
- *
- *  Rapid back-to-back title edits (e.g. cmd-Z + retype, or two
- *  setContent calls in quick succession) produce one rename event
- *  per user tx. Each event reads `block_references` to find sources,
- *  then opens a writeTransaction to rewrite. The READ phase runs
- *  outside the tx (cheap, doesn't hold a writer slot) — which means
- *  rename-N+1's SELECT can race ahead of rename-N's write commit,
- *  miss the source, and leave the backlink stuck on an alias the
- *  target no longer carries.
- *
- *  SQLite serializes writeTransactions, so rename-N+1's tx waits for
- *  rename-N's tx to commit — but by then rename-N+1 has already
- *  taken its (stale) read snapshot. The serializer-at-write boundary
- *  is too late; we have to serialize the whole read-plan-write
- *  cycle. Module-level FIFO queue does that with one promise chain.
- *
- *  Cost: at most one rename runs at a time process-wide. Acceptable
- *  because rename is post-commit and not on the typing path; the
- *  alternative (in-tx SELECT, or per-source mutex keyed on resolved
- *  source ids that we don't know pre-read) is more complex for the
- *  same end-state.
- *
- *  Errors swallowed at the chain level (re-thrown to the original
- *  caller) so a single rename failure doesn't block subsequent
- *  renames. */
-let renameQueue: Promise<void> = Promise.resolve()
-const serializeRename = <T>(fn: () => Promise<T>): Promise<T> => {
-  const next = renameQueue.then(fn)
-  // Continue the chain regardless of this fn's outcome — failures
-  // are surfaced to the caller via the returned promise (which we
-  // don't intercept), not the chain anchor.
-  renameQueue = next.then(() => {}, () => {})
-  return next
-}
-
-export const renameBacklinksProcessor = definePostCommitProcessor({
+export const renameBacklinksProcessor = defineSameTxProcessor({
   name: RENAME_BACKLINKS_PROCESSOR,
-  // Properties-only: alias diffs ride this field. parseReferences
-  // watches content separately and refreshes the references column on
-  // the rewrites we issue, closing the loop.
-  watches: { kind: 'field', table: 'blocks', fields: ['properties'] },
-  // Soft-deleted targets are skipped. The doc's sibling item — "the
-  // delete flow triggers the release rewrite explicitly (a bare
-  // tombstone leaves no properties diff)" — is deliberately NOT here:
-  // it needs the definition-delete surface and a scope decision (§11
-  // group 2 on #443, overlapping #383). Watching `deleted` from this
-  // processor would generalize the release rewrite to every page
-  // deletion, which is exactly the call that issue defers.
-  apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) =>
-    serializeRename(async () => {
-      const plansBySourceId = new Map<string, SourcePlan>()
-      for (const row of event.changedRows) {
-        if (row.before === null || row.after === null) continue
-        if (row.after.deleted) continue
-        if (!aliasFieldChanged(row.before, row.after)) continue
-        await collectTargetPlans(ctx, row.before, row.after, plansBySourceId)
-      }
-      if (plansBySourceId.size === 0) return
-
-      await ctx.repo.tx(async tx => {
-        const releaseCache: ReleaseCache = new Map()
-        for (const plan of plansBySourceId.values()) {
-          await applyPlan(tx, plan, releaseCache)
-        }
-      }, {
-        scope: ChangeScope.References,
-        description: `processor: ${RENAME_BACKLINKS_PROCESSOR}`,
-      })
-    }),
+  // Properties-only: alias diffs ride this field. The source content and
+  // `references` we write are watched by the post-commit
+  // `parseReferences`, which re-derives the same list and writes nothing.
+  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  // Deliberately NOT `rerunOnDirtyRows` — see the ORDERING note in the
+  // header. This processor is placed after `alias.sync` so the alias diff
+  // is already settled when it fires in pass one, which keeps the
+  // kernel's own re-run pass (project-property-children in particular)
+  // downstream of the content we rewrite.
+  //
+  // The delete flow's release rewrite is deliberately NOT here. The doc's
+  // sibling item — "the delete flow triggers the release rewrite
+  // explicitly (a bare tombstone leaves no properties diff)" — needs the
+  // definition-delete surface and a scope decision (§11 group 2 on #443,
+  // overlapping #383). Watching `deleted` from this processor would
+  // generalize the release rewrite to every page deletion, which is
+  // exactly the call that issue defers (Vlad: don't change the current
+  // rule beyond what props-as-blocks needs).
+  apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
+    const plansBySourceId = new Map<string, SourcePlan>()
+    for (const row of event.changedRows) {
+      if (row.before === null || row.after === null) continue
+      if (row.after.deleted) continue
+      if (!aliasFieldChanged(row.before, row.after)) continue
+      await collectTargetPlans(ctx, row.before, row.after, plansBySourceId)
+    }
+    // Collect every target's plans BEFORE applying any: one commit can
+    // rename several targets that share a source, and the content splice
+    // has to see all of that source's rewrites in one pass.
+    for (const plan of plansBySourceId.values()) {
+      await applyPlan(ctx.tx, plan)
+    }
+  },
 })
 
-export const renamePostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
+export const renameSameTxProcessors: ReadonlyArray<AnySameTxProcessor> = [
   renameBacklinksProcessor,
 ]

@@ -3301,9 +3301,12 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
         implicit side effect of the re-key. Name-form rows need <em>no rewrite</em>
         (PR #417 review corrected the previous revision here:
         <code>renameBacklinks</code> plans per <em>losing</em> target — its
-        rewrite would pin spans to tombstoned A, not B — and runs post-commit
-        in a References tx, not the merge tx; wrong on direction <em>and</em>
-        timing): a definition merge is the §9 <em>handoff</em> case — A's
+        rewrite would pin spans to tombstoned A, not B — so it is wrong on
+        direction here whatever its timing; it was also post-commit in a
+        References tx at the time, and is same-tx in the user's tx as of
+        <a href="https://github.com/Stvad/knowledge-medium/issues/461">#461</a>,
+        which changes nothing about the direction argument): a definition
+        merge is the §9 <em>handoff</em> case — A's
         alias moves to live B, so name spans keep following the name to B via
         late-binding, with §9's lifecycle re-keying making the processor
         recognize the handoff instead of pinning to the loser. The merge tx

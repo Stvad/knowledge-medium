@@ -34,7 +34,7 @@ import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes
 import { definitionSeedsFacet, projectedPropertyDefinitionsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
-import { referencesDataExtension } from '../dataExtension.ts'
+import { referencesDataExtension, referencesRenameDataExtension } from '../dataExtension.ts'
 import { refTestSeed } from './refTestSeeds.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
@@ -64,6 +64,7 @@ const setup = async (
       dailyNotesDataExtension,
       referencesDataExtension,
       ...extraExtensions,
+      referencesRenameDataExtension,
     ],
   })
   // Reprojection is workspace-scoped: it only scans + marks the active
@@ -292,12 +293,14 @@ describe('parseReferences — schema-swap reprojection', () => {
     dailyNotesDataExtension,
     referencesDataExtension,
     definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+    referencesRenameDataExtension,
   ])
   const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
     definitionSeedsFacet.of(reviewerStringProp, {source: 'test'}),
+    referencesRenameDataExtension,
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -305,11 +308,13 @@ describe('parseReferences — schema-swap reprojection', () => {
     referencesDataExtension,
     definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
     definitionSeedsFacet.of(approverProp, {source: 'test'}),
+    referencesRenameDataExtension,
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
+    referencesRenameDataExtension,
   ])
 
   it('projects existing blocks when a property becomes ref-typed', async () => {

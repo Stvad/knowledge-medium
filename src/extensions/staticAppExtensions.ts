@@ -35,6 +35,7 @@ import { attachmentsPlugin } from '@/plugins/attachments'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { referencesPlugin } from '@/plugins/references'
+import { referencesRenameDataExtension } from '@/plugins/references/dataExtension.js'
 import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
@@ -129,6 +130,15 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   characterCounterPlugin,
   supertagsPlugin,
   aliasPlugin,
+  // `references.renameBacklinks`, deliberately NOT bundled inside
+  // `referencesPlugin`: it is a same-tx processor that must run after the
+  // alias plugin's `alias.sync`, and same-tx order is facet insertion
+  // order. Placed here rather than up with `referencesPlugin` for that
+  // reason — see the ORDERING note in
+  // `plugins/references/renameProcessor.ts`. Pinned by the order test in
+  // `staticAppExtensions.test.ts` (and its twin over
+  // `staticDataExtensions` in the references plugin's dataExtension test).
+  referencesRenameDataExtension,
   mergeBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only

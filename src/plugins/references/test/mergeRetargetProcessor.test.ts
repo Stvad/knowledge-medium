@@ -14,7 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { computeAliasSeatId } from '@/data/targets'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
-import { referencesDataExtension } from '../dataExtension.ts'
+import { referencesDataExtension, referencesRenameDataExtension } from '../dataExtension.ts'
 import { pinnedSpanReplacement } from '../referenceParser.ts'
 import { retargetReferences } from '../mergeRetargetProcessor.ts'
 import { refTestSeed } from './refTestSeeds.ts'
@@ -33,7 +33,7 @@ const setup = async (): Promise<Harness> => {
   const { repo, cache } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
-    extensions: [referencesDataExtension, aliasDataExtension],
+    extensions: [referencesDataExtension, aliasDataExtension, referencesRenameDataExtension],
   })
   return {
     h,
@@ -353,6 +353,7 @@ describe('references.retargetMergedBlockReferences', () => {
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
           definitionSeedsFacet.of(relatedProp, {source: 'test'}),
+          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -383,6 +384,7 @@ describe('references.retargetMergedBlockReferences', () => {
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
           definitionSeedsFacet.of(relatedProp, {source: 'test'}),
+          referencesRenameDataExtension,
         ],
       })
       seeder.repo.setActiveWorkspaceId(WS)
@@ -395,7 +397,7 @@ describe('references.retargetMergedBlockReferences', () => {
       const {repo, cache} = createTestRepo({
         db: sharedDb.db,
         user: {id: 'user-1'},
-        extensions: [referencesDataExtension, aliasDataExtension],
+        extensions: [referencesDataExtension, aliasDataExtension, referencesRenameDataExtension],
         newTxSeq: () => ++txSeq,
         now: () => ++time,
         newId: () => `second-${++txSeq}`,
@@ -430,6 +432,7 @@ describe('references.retargetMergedBlockReferences', () => {
           referencesDataExtension,
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -473,6 +476,7 @@ describe('references.retargetMergedBlockReferences', () => {
           referencesDataExtension,
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
+          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -528,6 +532,7 @@ describe('references.retargetMergedBlockReferences', () => {
           aliasDataExtension,
           definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
           definitionSeedsFacet.of(pinnedProp, {source: 'test'}),
+          referencesRenameDataExtension,
         ],
       })
       repo.setActiveWorkspaceId(WS)
@@ -619,37 +624,39 @@ describe('retargetReferences — entry mapping', () => {
   // what a backlink query or a concurrent rename actually reads.
   const INTO = '44444444-4444-4444-8444-444444444444'
 
-  it('keeps the old edge when a page embed survived the pinned rewrite', () => {
+  it('drops the shared entry when a page embed survived the pinned rewrite', () => {
     // `[[Partial]]` was pinned; `![[Partial]]` was stepped over. Both
-    // occurrences share ONE normalized entry, so replacing it outright
-    // drops the surviving embed out of the projection.
-    const out = retargetReferences(
+    // occurrences share ONE normalized entry, so it cannot describe the
+    // pinned span's target and the surviving embed's new binding at once.
+    // Retargeting it announces a backlink the content does not support;
+    // keeping it alongside the retargeted one (which this used to do)
+    // announces both, one of them onto the tombstoned merge source. Drop
+    // it — the drop is itself what re-fires the parse that can decide
+    // (PR #444 round 7, P2).
+    expect(retargetReferences(
       [{id: 'source', alias: 'Partial'}], 'source', INTO,
       new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
       new Set(['Partial']), new Set(),
-    )
-    expect(out).toHaveLength(2)
-    expect(out).toEqual(expect.arrayContaining([
-      {id: 'source', alias: 'Partial'},
-      {id: INTO, alias: INTO},
-    ]))
-  })
-
-  it('drops an entry whose rewrite could not be rendered', () => {
-    // Neither `source` nor `into` is what the span means now, and the
-    // removal is itself what re-fires the parse that can decide.
-    expect(retargetReferences(
-      [{id: 'source', alias: 'Partial'}], 'source', INTO,
-      new Map([['Partial', null]]), new Set(), new Set(),
     )).toEqual([])
   })
 
-  it('never retains a property-derived edge', () => {
-    // Retention answers a CONTENT problem — one normalized entry serving
+  it('drops an entry whose rewrite could not be rendered', () => {
+    // The same channel: an unrenderable replacement leaves `[[Partial]]`
+    // standing, so the call site puts it in the stranded set too. Neither
+    // `source` nor `into` is what the span means now.
+    expect(retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', null]]), new Set(['Partial']), new Set(),
+    )).toEqual([])
+  })
+
+  it('retargets a property-derived edge even when its alias is stranded', () => {
+    // Stranding answers a CONTENT problem — one normalized entry serving
     // both `[[a]]` and a skipped `![[a]]`. A property-derived edge
     // projects from the property VALUE, which the merge has already
-    // rewritten to `into`, so keeping its old entry would strand a
-    // `sourceField` edge on the tombstoned block with no span behind it.
+    // rewritten to `into`, so dropping it would leave the cell pointing at
+    // `into` with no entry, and keeping the old one would strand a
+    // `sourceField` edge on the tombstoned block.
     const out = retargetReferences(
       [{id: 'source', alias: 'Partial', sourceField: 'reviewer'}], 'source', INTO,
       new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),

@@ -21,7 +21,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
+import { referencesDataExtension, referencesRenameDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'
 
 interface Harness {
@@ -41,6 +41,7 @@ const setup = async (): Promise<Harness> => {
       dailyNotesDataExtension,
       referencesDataExtension,
       aliasDataExtension,
+      referencesRenameDataExtension,
     ],
   })
   return {
