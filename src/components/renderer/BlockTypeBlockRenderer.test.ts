@@ -7,6 +7,7 @@ import { aliasesProp, blockTypeLabelProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
 describe('writeBlockTypeLabel', () => {
@@ -144,5 +145,90 @@ describe('writeBlockTypeLabel', () => {
       .aliasLookup({ workspaceId: 'ws-1', alias: 'Author' })
       .load()
     expect(resolved).toBeNull()
+  })
+})
+
+/** The rename path against the REAL `alias.sync` processor. The suite above
+ *  runs without the alias plugin on purpose — it pins what
+ *  `writeBlockTypeLabel` itself writes — but "does the old name actually stop
+ *  being claimed" is a property of the two together, and that is where the
+ *  drift bug lived. */
+describe('writeBlockTypeLabel + alias.sync — the old name must stop being claimed', () => {
+  // Same shared-DB shape as the suite above: one DB per file, reset per test.
+  let h: TestDb
+  beforeAll(async () => { h = await createTestDb() })
+  afterAll(async () => { await h.cleanup() })
+  beforeEach(async () => { await resetTestDb(h.db) })
+
+  const setupTypeBlock = async (
+    initial: { label: string; content: string; aliases: readonly string[] },
+  ): Promise<Repo> => {
+    const { repo } = createTestRepo({
+      db: h.db,
+      user: {id: 'user-1'},
+      startSyncObserver: false,
+      extensions: [aliasDataExtension],
+    })
+    repo.setActiveWorkspaceId('ws-1')
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'type-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0',
+        content: initial.content,
+      })
+      await repo.addTypeInTx(tx, 'type-1', BLOCK_TYPE_TYPE, {})
+      await tx.setProperty('type-1', blockTypeLabelProp, initial.label)
+      await tx.setProperty('type-1', aliasesProp, [...initial.aliases])
+    }, {scope: ChangeScope.BlockDefault, description: 'create type'})
+    return repo
+  }
+
+  const claimantOf = async (repo: Repo, alias: string): Promise<string | null> =>
+    (await repo.query.aliasLookup({workspaceId: 'ws-1', alias}).load())?.id ?? null
+
+  it('replaces the alias on a content-anchored rename (unchanged behaviour)', async () => {
+    // content == label == alias: `alias.sync` rule 1 owns this, and still does.
+    const repo = await setupTypeBlock({label: 'Author', content: 'Author', aliases: ['Author']})
+    await writeBlockTypeLabel(repo.block('type-1'), 'Author', 'Author', 'Writer')
+    await repo.awaitProcessors()
+
+    expect(repo.block('type-1').peekProperty(aliasesProp)).toEqual(['Writer'])
+    expect(await claimantOf(repo, 'Author')).toBeNull()
+    expect(await claimantOf(repo, 'Writer')).toBe('type-1')
+  })
+
+  it('replaces the alias when it tracks the LABEL and content has drifted', async () => {
+    // The bug: `alias.sync` matches the entry equal to the block's OLD CONTENT.
+    // Here the alias is the old LABEL and content is something else, so rule 1
+    // misses and rule 2 only appends — leaving "Author" claimed forever, which
+    // both mis-resolves `[[Author]]` and blocks re-creating a type by that name.
+    const repo = await setupTypeBlock({label: 'Author', content: 'scratch', aliases: ['Author']})
+    await writeBlockTypeLabel(repo.block('type-1'), 'Author', 'scratch', 'Writer')
+    await repo.awaitProcessors()
+
+    expect(repo.block('type-1').peekProperty(aliasesProp)).toEqual(['Writer'])
+    expect(await claimantOf(repo, 'Author')).toBeNull()
+    expect(await claimantOf(repo, 'Writer')).toBe('type-1')
+  })
+
+  it('keeps user-added aliases when healing the drifted one', async () => {
+    const repo = await setupTypeBlock({
+      label: 'Author', content: 'scratch', aliases: ['Scribe', 'Author'],
+    })
+    await writeBlockTypeLabel(repo.block('type-1'), 'Author', 'scratch', 'Writer')
+    await repo.awaitProcessors()
+
+    expect(repo.block('type-1').peekProperty(aliasesProp)).toEqual(['Scribe', 'Writer'])
+    expect(await claimantOf(repo, 'Scribe')).toBe('type-1')
+  })
+
+  it('leaves a deliberately un-claimed type un-claimed', async () => {
+    // The alias list is non-empty but holds neither the old label nor the old
+    // content — the type's name is simply not claimed by this block. Healing
+    // must not invent a claim; that stays `alias.sync`'s rule-2 drift heal.
+    const repo = await setupTypeBlock({label: 'Author', content: 'Author', aliases: ['Scribe']})
+    await writeBlockTypeLabel(repo.block('type-1'), 'Author', 'Author', 'Writer')
+    await repo.awaitProcessors()
+
+    expect(repo.block('type-1').peekProperty(aliasesProp)).not.toContain('Author')
   })
 })
