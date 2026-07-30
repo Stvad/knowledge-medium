@@ -1269,31 +1269,6 @@ describe('runAnalyzeIfStale — index-set drift', () => {
     expect(keys.filter(k => k.startsWith('analyze_index_set:'))).toHaveLength(1)
   })
 
-  it('defers a warranted ANALYZE while the sync observer is still materializing', async () => {
-    // PowerSync's hasSynced fires when the DOWNLOAD finishes; the observer
-    // then drains blocks_synced_changes into `blocks`. Analyzing mid-drain
-    // bakes a baseline from a half-built table and records the schema marker,
-    // settling both axes on a state about to change.
-    seedBlocks(opts.minBlocks)
-    h.db.prepare(
-      "INSERT INTO blocks_synced_changes (id, op) VALUES ('pending-1', 'upsert')",
-    ).run()
-
-    const held = buildRecordingDb()
-    const result = await runAnalyzeIfStale(held.db, opts)
-    expect(result).toMatchObject({analyzed: false, deferred: true})
-    expect(held.ranAnalyze()).toBe(false)
-    // No marker recorded, so a later run re-evaluates from scratch.
-    expect(
-      h.db.prepare("SELECT key FROM client_schema_state WHERE key LIKE 'analyze%'").get(),
-    ).toBeUndefined()
-
-    h.db.exec('DELETE FROM blocks_synced_changes')
-    const after = buildRecordingDb()
-    expect((await runAnalyzeIfStale(after.db, opts)).analyzed).toBe(true)
-    expect(after.ranAnalyze()).toBe(true)
-  })
-
   it('still respects the too-small-to-matter floor when the index set changes', async () => {
     h.insertBlock({id: 'only-block'})
     h.db.exec('CREATE INDEX idx_test_tiny ON blocks (created_at)')

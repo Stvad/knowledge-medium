@@ -69,6 +69,7 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
           // Deep idle, matching the boot check in repoProvider: ANALYZE is a
           // multi-second park of the single SQLite worker, and scheduleIdle's
           // 2s cap would land it right as the freshly-imported tree renders.
+          // Fire-and-forget: if this one no-ops, the next boot's check covers it.
           scheduleDeepIdle(() => {
             void runAnalyzeIfStale(repo.db).catch(error => {
               console.warn('[roam-import] ANALYZE check failed:', error)

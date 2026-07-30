@@ -450,23 +450,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // Parking the single SQLite worker for seconds IS the freeze this whole
   // change is about, so it must not land on first paint.
   //
-  // Deferred far enough that it can now overlap the sync observer's
-  // materialization drain, which is what actually fills `blocks`.
-  // `runAnalyzeIfStale` refuses to analyze mid-drain and reports `deferred`;
-  // re-arm on that, bounded.
-  const MAX_DRAIN_WAITS = 6
-  const scheduleAnalyzeCheck = (reason: string, drainWaits = 0) => {
+  const scheduleAnalyzeCheck = (reason: string) => {
     scheduleDeepIdle(() => {
-      void (async () => {
-        const result = await runAnalyzeIfStale(backfillDb)
-        // Held back because the observer is still materializing. Re-arm —
-        // bounded, because a drain that never finishes must not mean stats
-        // never get built; on exhaustion we simply leave it to the next boot,
-        // which is correct-by-default since no marker was recorded.
-        if (result.deferred && drainWaits < MAX_DRAIN_WAITS) {
-          scheduleAnalyzeCheck(reason, drainWaits + 1)
-        }
-      })().catch(error => {
+      void runAnalyzeIfStale(backfillDb).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
     }, CATCHUP_DEEP_IDLE)

@@ -1088,15 +1088,31 @@ export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
 
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
-/** Is the sync observer still materializing? PowerSync's `hasSynced` fires
- *  when the DOWNLOAD finishes; the observer then drains
- *  `blocks_synced_changes` into `blocks` in bounded windows, so `blocks` keeps
- *  growing well after "synced". ANALYZE mid-drain bakes a baseline from a
- *  half-built table AND records the schema marker, settling both axes on a
- *  state that is about to change — and the row-count rule only re-corrects if
- *  the remaining drain is more than 4x what landed. Cheap existence probe, not
- *  a COUNT. */
-export const SELECT_MATERIALIZE_PENDING_SQL = `SELECT 1 AS pending FROM blocks_synced_changes LIMIT 1`
+/** Deliberately NOT gated on "is the sync observer still materializing?".
+ *
+ *  Tried and reverted. The worry was that on a fresh device the check fires
+ *  mid-drain (PowerSync's `hasSynced` marks the DOWNLOAD; the observer fills
+ *  `blocks` afterwards), baking a baseline from a half-built table. Two
+ *  reasons it isn't worth gating on:
+ *
+ *  1. A partial baseline is FINE for what stats are for here. Per
+ *     {@link ANALYZE_GROWTH_FACTOR}, join order turns on order-of-magnitude
+ *     differences, and the row-count axis re-corrects anything worse than 4x.
+ *     A proportionally-low-but-present estimate is nothing like the failure
+ *     this whole rule exists for — a MISSING stat row, where SQLite
+ *     substitutes "~10 rows" for 75,198 and inverts the join.
+ *  2. Every cheap probe for "still materializing" is wrong. The
+ *     `blocks_synced_changes` queue only covers the queue-driven drain;
+ *     `observer.materializeWorkspace` reads `blocks_synced` DIRECTLY and never
+ *     touches the queue — and that is the BIG path (the fresh-device e2ee
+ *     re-pass over a 320k workspace). And "staged rows not yet in `blocks`"
+ *     stays true forever for a permanently-undecryptable workspace, which
+ *     would wedge the gate shut.
+ *
+ *  A gate that misses the largest case while risking "this session gets no
+ *  stats at all" is worse than no gate. If this is ever revisited, thread the
+ *  observer's own in-flight state in rather than proxying one of its inputs,
+ *  and fall through to ANALYZE on exhaustion instead of skipping. */
 
 /** The second staleness axis: the SCHEMA changed, not the row count.
  *
@@ -1201,8 +1217,9 @@ const assertInlinableFingerprint = (fingerprint: string): string => {
  *  DIFFERENT fingerprints can interleave as upsert(A) upsert(B)
  *  clearOthers(A) clearOthers(B) and
  *  leave the family EMPTY. Divergent fingerprints are narrow — two tabs on the
- *  same device read the same physical `sqlite_master`, and `CREATE INDEX IF
- *  NOT EXISTS` makes the index set monotonic — so it takes one tab's bootstrap
+ *  same device read the same physical `sqlite_master`, and index creation is
+ *  `IF NOT EXISTS` almost everywhere (the one exception, the marker-gated
+ *  `block_references` rebuild, runs once) — so it takes one tab's bootstrap
  *  creating an index mid-flight of the other's check. Cost is one redundant
  *  ANALYZE on the next boot,
  *  which then records a marker again — self-healing, and strictly better than
@@ -1604,11 +1621,6 @@ export const analyzeIsWarranted = (
 export interface AnalyzeResult {
   /** Whether `ANALYZE` was run this call. */
   analyzed: boolean
-  /** True when a warranted ANALYZE was held back because the sync observer is
-   *  still materializing (see {@link SELECT_MATERIALIZE_PENDING_SQL}). The
-   *  caller should re-check later rather than treat this as "nothing to do";
-   *  no marker is recorded, so a later run re-evaluates from scratch. */
-  deferred?: boolean
   /** Live `blocks` count observed (drives the decision + any toast). */
   count: number
   /** Recorded estimate before this call (`null` = never analyzed). */
@@ -1679,10 +1691,6 @@ export const runAnalyzeIfStale = async (
     count >= minBlocks && !(await analyzeMarkerMatches(db, await readAnalyzeFingerprint(db)))
   if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor) && !schemaDrifted) {
     return {analyzed: false, count, previousEstimate}
-  }
-  // Warranted — but not while `blocks` is still filling underneath us.
-  if (await db.getOptional<{pending: number}>(SELECT_MATERIALIZE_PENDING_SQL) !== null) {
-    return {analyzed: false, deferred: true, count, previousEstimate}
   }
   await analyzeAndRecord(db)
   return {analyzed: true, count, previousEstimate}

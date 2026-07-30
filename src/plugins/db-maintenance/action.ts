@@ -13,9 +13,9 @@ import { DatabaseZap } from 'lucide-react'
  *  hatch for the cases neither axis models: stats that are present and
  *  schema-current but wrong for the current query mix.
  *
- *  ANALYZE is a multi-second scan on a large DB that holds the single SQLite
- *  worker, so it is deliberately NOT wired to anything automatic here — the
- *  user asked, so always run. */
+ *  No drift gate — the user asked, so always run. ANALYZE is a multi-second
+ *  scan holding the single SQLite worker, which is why the handler wraps it in
+ *  a `showProgress` toast rather than running it silently. */
 export const rebuildQueryStatsAction = ({repo}: {repo: Repo}): ActionConfig => ({
   id: 'rebuild_query_stats',
   description: 'Rebuild query statistics (ANALYZE)',
