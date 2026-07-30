@@ -285,10 +285,26 @@ const moveVertical = async (
     const modelNext = direction === 'down'
       ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
       : await previousVisibleBlock(block, deps.scopeRootId)
-    // The outline continues, so the only acceptable neighbour is that row, in
-    // this panel. Anything else — a trailing surface, a stack sibling, or a
-    // far-away outline row across a hole — would skip what's in between.
-    if (modelNext && (destPanelId !== uiStateBlock.id || modelNext.id !== destLocation.blockId)) {
+    // A second keystroke or a click can land while the walk above is waiting
+    // on an uncached `childIds`. Everything from here is computed from a row
+    // that no longer holds focus, so hand the panel to whoever moved it
+    // rather than writing a move the user has already superseded.
+    if (
+      expectedLocation &&
+      !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
+    ) return true
+
+    // The outline continues, so the only acceptable neighbour is that row, as
+    // an OUTLINE row, in this panel. Anything else — a trailing surface, a
+    // stack sibling, a far-away outline row across a hole, or a backlink /
+    // embed copy of that same block (one block renders under many scopes, and
+    // landing on the nested copy strands `j` in that surface) — would skip
+    // what's in between.
+    if (modelNext && (
+      destPanelId !== uiStateBlock.id ||
+      !isOutlineSurface(next) ||
+      modelNext.id !== destLocation.blockId
+    )) {
       return false
     }
     // No model row left: the outline is genuinely done, so the DOM's answer

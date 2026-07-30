@@ -641,6 +641,84 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // One block renders under many scopes, so "same block id" is not agreement:
+  // the mounted neighbour here IS the model's next row, but as a backlink
+  // occurrence. Landing on that copy would strand `j` in the nested surface
+  // instead of continuing down the outline.
+  it('declines when the mounted copy of the next model row is on another surface', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      // Same block the model wants next — but the backlink occurrence of it.
+      {blockId: 'B', renderScopeId: 'panel:backlink:B', surface: 'backlink'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:A',
+    })
+  })
+
+  // The model walk can await an uncached `childIds`, and a click or a second
+  // keystroke can land in that window. Everything after the await is computed
+  // from a row that no longer holds focus, so the invocation must bow out.
+  // (This pins the CONDITION — deps describing the old row while the panel's
+  // focus has already moved — not the exact placement of the check.)
+  it('bows out when focus moved while the model walk was in flight', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      {blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'},
+      {blockId: 'C', renderScopeId: 'panel:C', surface: 'outline'},
+    ])
+    const panel = env.repo.block('panel')
+    // Focus has already moved on — as it would have during the await.
+    await focusBlock(panel, 'C', {renderScopeId: 'panel:C'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    // ...but this invocation still carries the row the keystroke started on.
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    // The same-panel step writes fire-and-forget (`void focusBlock`), so a
+    // bare assertion here would pass before a stale write could even land.
+    // Fence on a write we CAN await: transactions commit in order, so once
+    // this one is through, any focus write queued ahead of it has landed too.
+    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
+
+    // Not 'B': that would be the superseded keystroke overwriting the newer one.
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'C',
+      renderScopeId: 'panel:C',
+    })
+  })
+
   // ...and the ordinary step is untouched: DOM and model agree, so spatial nav
   // handles it without deferring to the model handler.
   it('takes the mounted neighbour when it is the model row', async () => {
