@@ -1,0 +1,2 @@
+var e=`onboarding:tutorial-banner-dismissed`,t=()=>{try{return window.localStorage?.getItem(e)===`true`}catch{return!1}},n=()=>{try{window.localStorage?.setItem(e,`true`)}catch{}};export{n as dismissTutorialBanner,t as isTutorialBannerDismissed};
+//# sourceMappingURL=bannerDismissal.js.map
