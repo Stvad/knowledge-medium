@@ -38,6 +38,16 @@ export const isImeKeyEvent = (event: {isComposing?: boolean; keyCode?: number}):
  * `PROPERTY_EDITING` carries as its dependency and what its actions blur.
  * Shared by the context's dependency validator and the activation hook so
  * "which elements count" is answered in one place.
+ *
+ * Deliberately NARROWER than `hasEditableTarget`, which also counts
+ * `contentEditable`. The row activates from the value cell, and that cell can
+ * contain a whole embedded block: a `ref` property renders `BlockEmbed`, which
+ * mounts a real CodeMirror editor when the user edits it. CodeMirror's surface
+ * is contenteditable, so accepting it here would activate this MODAL context
+ * for a block editor — shadowing `EDIT_MODE_CM` and handing Escape and the
+ * arrow keys to property editing while the user is typing in the embed. A
+ * contenteditable-based property editor would need activation scoped to
+ * itself, not this predicate widened.
  */
 export const isPropertyEditingField = (value: unknown): value is PropertyEditingField =>
   value instanceof HTMLInputElement ||

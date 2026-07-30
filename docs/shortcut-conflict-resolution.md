@@ -1,6 +1,6 @@
 # Shortcut conflict resolution — proposal
 
-> **Status:** implemented — last verified against code 2026-07-30. All three recommended steps shipped: the `isTypingKeyEvent` filter tighten, `modal: true` on `ActionContextConfig`, and `PROPERTY_EDITING` activation at the property-input sites (`usePropertyEditingActivation`). The survey table and "no property-editing actions registered" note below are a dated 2026-05-25 snapshot: the context now carries `exit_property_editing` (Escape → blur the field) plus an `eventFilter` that claims Escape, since the tightened typing filter otherwise drops it inside an `<input>`.
+> **Status:** implemented — last verified against code 2026-07-30. All three recommended steps shipped: the `isTypingKeyEvent` filter tighten, `modal: true` on `ActionContextConfig`, and `PROPERTY_EDITING` activation (now at the property ROW, so editors a plugin registered are covered too). **Everything below the banner is a dated snapshot, not current mechanism** — including "Current model in one paragraph", which describes the hotkeys-js runtime that tinykeys replaced, filters OR-ing across active contexts, and every colliding handler firing. None of those hold now: completed candidates are collected, each is admitted by ITS OWN context's filter (additive over the editable-target heuristic, never a veto), `resolve` orders them, and exactly one winner runs. The context also carries `exit_property_editing` (Escape → blur the field) plus an `eventFilter` claiming non-text keys, and the coordinator drops IME-composition keydowns outright. Read the code in `src/shortcuts/HotkeyReconciler.tsx` for the mechanism; read this document for why the modal/filter design was chosen.
 
 Design doc for fixing cross-context shortcut collisions in `src/shortcuts/`. Written 2026-05-25 against the state of master at `9ed4f4ae` (revert of the date-scrub action migration).
 
@@ -24,7 +24,7 @@ So the bug is two compounding gaps:
 
 Recommendation in this doc: fix Gap A as a small one-liner now and address Gap B + the modal-shadowing case with the broader model below.
 
-## Current model in one paragraph
+## Current model in one paragraph (HISTORICAL — 2026-05-25, superseded)
 
 `hotkeys-js` is the runtime. `HotkeyReconciler` installs every action whose `context` is currently active and tears it down when that context deactivates. Multiple contexts can be active simultaneously. The only cross-context filter is `hotkeys.filter`, which iterates active contexts and returns `true` (process the event) if any context's `eventFilter` returns `true`, otherwise falls back to `defaultEventFilter`. Each action keeps its own keybinding registered; collisions between contexts result in both handlers firing. `getActiveActionById` ([effectiveActions.ts:77](src/shortcuts/effectiveActions.ts:77)) — used only by `runActionById` (external dispatch, e.g. command palette) — picks last-activated context wins, but the keyboard-event path doesn't go through it.
 
