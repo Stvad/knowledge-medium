@@ -272,6 +272,35 @@ describe('Escape in a property editor', () => {
     expect(document.activeElement).not.toBe(input)
   })
 
+  it('still outranks a global bound to the same chord', () => {
+    // Admission runs BEFORE `resolve`, so dropping a candidate doesn't just
+    // lose its binding — it hands the chord to whatever ranked below it. A
+    // property-editing action declined for the wrong reason would let the
+    // GLOBAL command palette open from inside the field on `$mod+k`. Modal
+    // tier must still win, which requires both candidates to reach `resolve`.
+    const globalHandler = vi.fn()
+    const propertyHandler = vi.fn()
+    renderWith([
+      {
+        ...propertyEditingAction('exit_property_editing'),
+        handler: propertyHandler,
+        defaultBinding: {keys: 'Control+k'},
+      },
+      {
+        id: 'test.global_same_chord',
+        description: 'stands in for the command palette',
+        context: ActionContextTypes.GLOBAL,
+        handler: globalHandler,
+        defaultBinding: {keys: 'Control+k'},
+      } as ActionConfig,
+    ])
+
+    pressKeyInInput('k', {ctrlKey: true})
+
+    expect(propertyHandler).toHaveBeenCalledTimes(1)
+    expect(globalHandler).not.toHaveBeenCalled()
+  })
+
   it('leaves Escape to the IME while a composition is in flight', () => {
     // Mid-composition Escape cancels the candidate; blurring here would end
     // the composition and let the field's blur commit the half-composed text.

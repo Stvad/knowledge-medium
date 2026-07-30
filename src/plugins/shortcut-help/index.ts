@@ -29,15 +29,17 @@ export const shortcutHelpMount: AppMountContribution = {
  *  first leaving the note you're editing.
  *
  *  The handler DECLINES (sync `false`) when a BARE `?` (no primary
- *  modifier) arrives from an editable target. The coordinator's default
- *  typing filter alone does not cover this: an active context's
- *  `eventFilter` (EDIT_MODE_CM opts in every keydown inside `.cm-editor`)
- *  green-lights the WHOLE dispatch, so without the decline, typing `?` in
- *  a note would open the overlay and eat the character. Declining falls
- *  through to no candidate, the event keeps its default, and the `?` is
- *  typed. `$mod+/` holds a primary modifier, so it is a deliberate
- *  command rather than typed text — it opens the overlay from edit mode
- *  too. */
+ *  modifier) arrives from an editable target. This is defence in depth on
+ *  the keyboard path rather than the load-bearing guard it once was: each
+ *  candidate is now admitted by its OWN context, and GLOBAL declares no
+ *  `eventFilter`, so a bare `?` from an editable target is already dropped
+ *  by the default typing filter. It used to be reachable because a
+ *  neighbouring context's opt-in (EDIT_MODE_CM admits every keydown inside
+ *  `.cm-editor`) green-lit the whole dispatch, and typing `?` in a note
+ *  would open the overlay and eat the character. Declining falls through to
+ *  no candidate, the event keeps its default, and the `?` is typed. `$mod+/`
+ *  holds a primary modifier, so it is a deliberate command rather than typed
+ *  text — it opens the overlay from edit mode too. */
 export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: SHORTCUT_HELP_ACTION_ID,
   description: 'Show keyboard shortcuts',

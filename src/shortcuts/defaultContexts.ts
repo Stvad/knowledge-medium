@@ -76,9 +76,8 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     // does not exit edit mode").
     //
     // Scoped to keys that produce no text, rather than EDIT_MODE_CM's "every
-    // key inside my DOM subtree": the filter green-lights the WHOLE dispatch,
-    // so claiming typing keys would also re-open bare-key GLOBAL chords
-    // (shortcut-help's `?`) to the field the user is typing in.
+    // key inside my DOM subtree": what's claimed here stops being typing, and
+    // the field is where the user is typing.
     //
     // `key.length > 1` is exactly that split — named keys ('Escape', 'F2',
     // 'Tab') produce nothing, single-character ones ('p', '?', ' ') are text.
@@ -88,22 +87,13 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     // a modifier chord needs no opt-in — those clear `defaultEventFilter`
     // already.
     //
-    // Admitting the wider set is safe because only INSTALLABLE contexts get a
-    // filter vote (`shouldHandleEvent`), and this one is modal: when it votes,
-    // the installed set is exactly {this, GLOBAL}. So the reachable actions
-    // are its own plus GLOBAL's, and every GLOBAL binding ships as a modifier
-    // chord except that printable `?` (declined here as text). Bare
-    // Enter/Tab/arrows still reach the field's own React handlers either way —
-    // admitting an event only lets a *bound* action match it, and this
-    // context's binding opts out of preventDefault.
-    //
-    // Two caveats, both deliberate: a user CAN rebind a GLOBAL action onto a
-    // bare named key through the keybindings UI (which imposes no modifier
-    // requirement), and it would then fire while typing here — the same
-    // accepted exposure EDIT_MODE_CM already has for the main editor. And this
-    // stays sound only while the vote is installable-scoped: consulting merely
-    // *active* contexts let a shadowed vote hand keys to whatever shadowed it
-    // (Escape → `clear_selection`, Delete → the multi-select delete).
+    // Admitting the wider set costs nothing elsewhere: this widening applies
+    // to this context's own candidates only, so no other context's bindings
+    // become reachable through it — not GLOBAL's, and not those of a modal
+    // that shadowed this one. Bare Enter/Tab/arrows still reach the field's
+    // own React handlers either way, since admitting an event only lets a
+    // *bound* action match it, and this context's binding opts out of
+    // preventDefault.
     // Not while an IME composition is in flight: those keys belong to the
     // input method, and Escape there means "cancel the candidate", not "leave
     // the field". Blurring would end the composition synchronously and let

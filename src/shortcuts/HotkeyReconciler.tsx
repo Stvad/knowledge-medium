@@ -876,7 +876,7 @@ const applyEventOptions = (
  * compose setups corrupt for letter chords; the wrapper restores the logical
  * letter from event.keyCode, and works on Colemak/Dvorak where event.code
  * lies about layout. The matcher carries no editable-target filter — the
- * coordinator runs the context-aware cascade (`shouldHandleEvent`) itself, so
+ * coordinator applies it per completed candidate (`contextAdmitsEvent`), so
  * contexts like property-editing can opt into events tinykeys would drop.
  */
 const makeMatcher = (
