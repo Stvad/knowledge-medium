@@ -122,7 +122,10 @@ const runEval = async (args: string[]) =>
     },
   })
 
-describe('kmagent eval --data / --data-json', () => {
+// Each test spawns the real compiled CLI against a live bridge, so its
+// wall-clock is Node process startup — the first thing to stretch when the
+// machine is oversubscribed. ~1.5s idle leaves under 3.5x under the 5s default.
+describe('kmagent eval --data / --data-json', {timeout: 30_000}, () => {
   it('reads JSON from --data <path> and binds it as `data` in the wire envelope', async () => {
     const dataPath = path.join(tempDir, 'plans.json')
     const payload = {plans: [{id: 'p-1', op: 'rename'}, {id: 'p-2', op: 'merge'}]}

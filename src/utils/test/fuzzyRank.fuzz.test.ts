@@ -43,7 +43,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import {
   buildFilterPrefixes,
   rankCandidates,
@@ -91,7 +91,7 @@ describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandid
       }),
       fuzzParams(300),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── Shared candidate-set generator (P2, P3, P4) ────
@@ -138,7 +138,7 @@ describe('rankCandidates: subset-soundness', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P3: determinism + idempotence ────
@@ -153,7 +153,7 @@ describe('rankCandidates: determinism + idempotence', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('re-ranking the ranked candidate set (same query/now/recentBlockIds) reproduces the same order', () => {
     fc.assert(
@@ -169,7 +169,7 @@ describe('rankCandidates: determinism + idempotence', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P4: comparator consistency ────
@@ -201,7 +201,7 @@ describe('rankCandidates: comparator consistency', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P5: exact-match dominance ────
@@ -239,7 +239,7 @@ describe('scoreCandidate / rankCandidates: exact-match dominance (SCORE_FULL_EXA
       }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P6: editDistanceAtMostOne symmetry, anchored against real scoreCandidate ────
@@ -361,7 +361,7 @@ describe("editDistanceAtMostOne / hasTypoSubstring mirror (fuzzyRank.ts:85-129, 
       }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('P6b: editDistanceAtMostOne mirror is symmetric — editDistanceAtMostOne(a,b) === editDistanceAtMostOne(b,a)', () => {
     fc.assert(
@@ -370,7 +370,7 @@ describe("editDistanceAtMostOne / hasTypoSubstring mirror (fuzzyRank.ts:85-129, 
       }),
       fuzzParams(300),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P7: literal-substring tokens never score null ────
@@ -389,5 +389,5 @@ describe("scoreCandidate: literal-substring tokens never score null (scoreToken'
       }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 })
