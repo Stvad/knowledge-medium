@@ -5,41 +5,45 @@
  * conventions. Example-based coverage lives in `./fuzzyRank.test.ts`.
  *
  * `now` is always injected explicitly (never `Date.now()`), matching the
- * `RankInputs.now` contract at fuzzyRank.ts:51.
+ * `RankInputs.now` contract.
  *
  * ──── Properties ────
  * P1 totality — `tokenize` / `buildFilterPrefixes` / `scoreCandidate` /
  *    `rankCandidates` never throw on arbitrary unicode (incl. unpaired
  *    surrogates), empty, or long labels/queries.
  * P2 subset-soundness — `rankCandidates` output blockIds are a subset of the
- *    input blockIds (fuzzyRank.ts:208-230: one `push` per surviving
+ *    input blockIds (one `push` per surviving
  *    candidate, `blockId` carried through unchanged from the input object),
  *    with no duplicates given a unique-blockId input.
  * P3 determinism + idempotence with injected `now` — identical inputs
  *    produce identical output, and re-ranking the ranked candidates with the
  *    same query/now/recentBlockIds reproduces the same order (the function
- *    is pure over the candidate *set*, not sensitive to input order —
- *    fuzzyRank.ts:213-239).
+ *    is pure over the candidate *set*, not sensitive to input order).
  * P4 comparator consistency — an independent reimplementation of the
  *    documented tie-break (score desc, then label length asc, then
- *    `localeCompare` — fuzzyRank.ts:232-238) orders the real output
+ *    `localeCompare`) orders the real output
  *    (adjacent-pair check against a valid total preorder).
- * P5 exact-match dominance (`SCORE_FULL_EXACT`, fuzzyRank.ts:21,195) —
+ * P5 exact-match dominance (`SCORE_FULL_EXACT`) —
  *    `lowerLabel === lowerQuery` outranks a same-token, equal-recency
  *    non-exact (prefix) rival.
- * P6 `editDistanceAtMostOne` symmetry (fuzzyRank.ts:85-117). Not exported,
+ * P6 `editDistanceAtMostOne` symmetry. Not exported,
  *    and every real call site invokes it with a fixed argument order
- *    (`editDistanceAtMostOne(textSlice, token)` inside `hasTypoSubstring`,
- *    fuzzyRank.ts:125) — so pure symmetry isn't observable through the
+ *    (`editDistanceAtMostOne(textSlice, token)` inside `hasTypoSubstring`)
+ *    — so pure symmetry isn't observable through the
  *    public API by itself. P6a first anchors a verbatim mirror of
- *    `editDistanceAtMostOne` + `hasTypoSubstring` (fuzzyRank.ts:85-129)
+ *    `editDistanceAtMostOne` + `hasTypoSubstring`
  *    against the REAL `scoreCandidate`'s observable typo-match decision, so
  *    the mirror is checked to behave like the shipped code in the same
  *    suite run, not just internally consistent. P6b then tests the
  *    now-anchored mirror's symmetry as a pure algebraic law.
  * P7 literal-substring tokens never score null (`scoreToken`'s `indexOf`
- *    branch, fuzzyRank.ts:133-146) — a token literally present in the label
+ *    branch) — a token literally present in the label
  *    always contributes a non-null score.
+ * P8 word-prefix-chain soundness (`matchesWordPrefixChain`) — a token
+ *    BUILT as a chain (concatenated prefixes of an in-order subset of the
+ *    label's words) always scores non-null. Constructed rather than
+ *    mirrored: the generator knows the answer by construction, so there is
+ *    no reimplementation of the DP to drift from the shipped one.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -91,7 +95,16 @@ describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandid
       }),
       fuzzParams(300),
     )
-  })
+    // Explicit budget: this property asserts only that nothing THROWS on
+    // adversarial unicode, so wall-clock is not what it is testing. It
+    // sits at ~3.2s of real work against vitest's 5s default (300 runs x
+    // `hasTypoSubstring`, which is O(label x token) with a slice per
+    // probe), and tips over on a loaded machine — verified failing on an
+    // unmodified ranker, so it is not a regression signal when it does.
+    // Making `hasTypoSubstring` allocation-free would earn the headroom
+    // back and speed up the real completion path; until then, don't let a
+    // busy CPU read as a code failure.
+  }, 30_000)
 })
 
 // ──── Shared candidate-set generator (P2, P3, P4) ────
@@ -127,7 +140,7 @@ const rankInputsArb = candidatesArb.chain(candidates => {
 // ──── P2: subset-soundness ────
 
 describe('rankCandidates: subset-soundness', () => {
-  it('output blockIds are a subset of the input, with no duplicates (fuzzyRank.ts:208-230)', () => {
+  it('output blockIds are a subset of the input, with no duplicates', () => {
     fc.assert(
       fc.property(rankInputsArb, ({candidates, query, recentBlockIds, now}) => {
         const result = rankCandidates({candidates, query, recentBlockIds, now})
@@ -162,7 +175,7 @@ describe('rankCandidates: determinism + idempotence', () => {
         const rerankedCandidates = ranked.map(r => r.candidate)
         const reranked = rankCandidates({candidates: rerankedCandidates, query, recentBlockIds, now})
         // rankCandidates is a pure function of the candidate SET plus
-        // query/now/recentBlockIds (fuzzyRank.ts:213-239) — reordering the
+        // query/now/recentBlockIds — reordering the
         // input (as ranking already did) must not change the output order.
         expect(reranked.map(r => r.candidate.blockId)).toEqual(ranked.map(r => r.candidate.blockId))
         expect(reranked.map(r => r.score)).toEqual(ranked.map(r => r.score))
@@ -175,7 +188,7 @@ describe('rankCandidates: determinism + idempotence', () => {
 // ──── P4: comparator consistency ────
 
 /** Independent reimplementation of the documented tie-break
- *  (fuzzyRank.ts:232-238): score desc, then label length asc, then
+ *  score desc, then label length asc, then
  *  `localeCompare` — using the same `String.prototype.localeCompare` call
  *  (no re-derivation of locale semantics, only the ordering LAW is
  *  reimplemented). */
@@ -188,7 +201,7 @@ const documentedComparator = <C extends RankableCandidate>(a: RankedCandidate<C>
 }
 
 describe('rankCandidates: comparator consistency', () => {
-  it('output is sorted under the documented tie-break law (fuzzyRank.ts:232-238)', () => {
+  it('output is sorted under the documented tie-break law', () => {
     fc.assert(
       fc.property(rankInputsArb, ({candidates, query, recentBlockIds, now}) => {
         const result = rankCandidates({candidates, query, recentBlockIds, now})
@@ -210,7 +223,7 @@ const asciiWordArb = fc
   .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')), {minLength: 1, maxLength: 10})
   .map(cs => cs.join(''))
 
-describe('scoreCandidate / rankCandidates: exact-match dominance (SCORE_FULL_EXACT, fuzzyRank.ts:21,195)', () => {
+describe('scoreCandidate / rankCandidates: exact-match dominance (SCORE_FULL_EXACT)', () => {
   it('an exact lowerLabel===lowerQuery candidate outranks a same-token prefix rival at equal (zero) recency', () => {
     fc.assert(
       fc.property(asciiWordArb, asciiWordArb, fc.boolean(), (word, suffix, upperCase) => {
@@ -244,12 +257,12 @@ describe('scoreCandidate / rankCandidates: exact-match dominance (SCORE_FULL_EXA
 
 // ──── P6: editDistanceAtMostOne symmetry, anchored against real scoreCandidate ────
 
-// Mirrors fuzzyRank.ts:19 (not exported by the source).
+// Mirrors fuzzyRank.ts (not exported by the source).
 const TYPO_MIN_TOKEN_LEN = 4
-// Mirrors fuzzyRank.ts:26 (not exported by the source).
+// Mirrors fuzzyRank.ts (not exported by the source).
 const SCORE_TOKEN_TYPO = 4
 
-// Verbatim port of fuzzyRank.ts:85-117 (not exported by the source) — see
+// Verbatim port of fuzzyRank.ts (not exported by the source) — see
 // suite docblock P6 for why this is anchored against the real exported
 // surface rather than trusted as a standalone reimplementation.
 const mirrorEditDistanceAtMostOne = (a: string, b: string): boolean => {
@@ -286,7 +299,7 @@ const mirrorEditDistanceAtMostOne = (a: string, b: string): boolean => {
   return true
 }
 
-// Verbatim port of fuzzyRank.ts:119-129 (not exported by the source).
+// Verbatim port of fuzzyRank.ts (not exported by the source).
 const mirrorHasTypoSubstring = (text: string, token: string): boolean => {
   if (token.length < TYPO_MIN_TOKEN_LEN) return false
   for (let i = 0; i <= text.length; i++) {
@@ -338,21 +351,27 @@ const p6aCaseArb = tokenArb.chain(token =>
   }),
 )
 
-describe("editDistanceAtMostOne / hasTypoSubstring mirror (fuzzyRank.ts:85-129, not exported)", () => {
+describe("editDistanceAtMostOne / hasTypoSubstring mirror (not exported by the source)", () => {
   it('P6a: mirror agrees with the REAL scoreCandidate typo-match decision', () => {
     fc.assert(
       fc.property(p6aCaseArb, ({token, prefix, suffix, core}) => {
         const label = prefix + core + suffix
         const lowerLabel = label.toLowerCase()
         // Isolate the typo-only branch: when the token is NOT a literal
-        // substring of the label, scoreToken (fuzzyRank.ts:133-146) falls
+        // substring of the label, `scoreToken` falls
         // through past both indexOf branches to hasTypoSubstring, and — for
         // a single-token query equal to the token — the whole-query
-        // exact/prefix/substring bonus (fuzzyRank.ts:194-198) is
+        // exact/prefix/substring bonus is
         // structurally 0 too (exact/prefix/substring all imply the same
         // `indexOf !== -1` fact this `fc.pre` excludes). So scoreCandidate
         // reduces exactly to `hasTypoSubstring(lowerLabel, token) ? 4 : null`.
         fc.pre(lowerLabel.indexOf(token) === -1)
+        // …provided the word-prefix-chain tier can't also fire, which it
+        // can't here: it needs a label of >= 2 words, and this generator's
+        // alphabet is [a-z0-9] with no separators. Assert that rather than
+        // depending on it silently — widening the alphabet later must
+        // break this line, not quietly invalidate the reduction above.
+        expect(/[\s\p{P}\p{S}]/u.test(label)).toBe(false)
 
         const real = scoreCandidate(label, token, [token])
         const mirrored = mirrorHasTypoSubstring(lowerLabel, token)
@@ -375,19 +394,67 @@ describe("editDistanceAtMostOne / hasTypoSubstring mirror (fuzzyRank.ts:85-129, 
 
 // ──── P7: literal-substring tokens never score null ────
 
-describe("scoreCandidate: literal-substring tokens never score null (scoreToken's indexOf branch, fuzzyRank.ts:133-146)", () => {
+describe("scoreCandidate: literal-substring tokens never score null (scoreToken's indexOf branch)", () => {
   it('a token literally present in the label always contributes a non-null score', () => {
     fc.assert(
       fc.property(tokenArb, typoNoiseArb, typoNoiseArb, (token, prefix, suffix) => {
         const label = prefix + token + suffix
         const result = scoreCandidate(label, token, [token])
         // scoreToken can only return null via the hasTypoSubstring/no-match
-        // path (fuzzyRank.ts:144-145), which is unreachable once
+        // path, which is unreachable once
         // `lowerText.indexOf(token)` is >= 0 — one of the two `idx`
         // branches (133-142) always fires instead.
         expect(result).not.toBeNull()
       }),
       fuzzParams(150),
+    )
+  })
+})
+
+// ──── P8: word-prefix-chain soundness ────
+
+/** A lowercase word of 2-10 letters — the building block of a multi-word
+ *  label. Kept alphabetic so `splitWords`' separator class never cuts
+ *  inside one. */
+const wordArb = fc
+  .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), {minLength: 2, maxLength: 10})
+  .map(cs => cs.join(''))
+
+/** A multi-word label plus a token built to BE a valid word-prefix chain
+ *  over it: pick an in-order, non-empty subset of the words and
+ *  concatenate a non-empty prefix of each. Bounded by the shipped
+ *  CHAIN_MAX_WORDS / CHAIN_MAX_TOKEN_LEN caps (12 words / 24 chars) so a
+ *  generated case is never rejected by a guard rather than by the rule. */
+const chainCaseArb = fc
+  .array(wordArb, {minLength: 2, maxLength: 6})
+  .chain(words =>
+    fc
+      .array(
+        fc.record({
+          take: fc.boolean(),
+          prefixLen: fc.integer({min: 1, max: 10}),
+        }),
+        {minLength: words.length, maxLength: words.length},
+      )
+      .map(picks => {
+        const chunks: string[] = []
+        words.forEach((word, i) => {
+          if (!picks[i].take) return
+          chunks.push(word.slice(0, Math.min(picks[i].prefixLen, word.length)))
+        })
+        return {words, token: chunks.join('')}
+      })
+      .filter(({token}) => token.length > 0 && token.length <= 24),
+  )
+
+describe('scoreCandidate: word-prefix-chain soundness (matchesWordPrefixChain)', () => {
+  it('a token built as a chain of in-order word prefixes always scores non-null', () => {
+    fc.assert(
+      fc.property(chainCaseArb, ({words, token}) => {
+        const label = words.join(' ')
+        expect(scoreCandidate(label, token, [token])).not.toBeNull()
+      }),
+      fuzzParams(300),
     )
   })
 })
