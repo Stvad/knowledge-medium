@@ -7,6 +7,7 @@ import {
   BlockShortcutDependencies,
   MultiSelectModeDependencies,
   CodeMirrorEditModeDependencies,
+  PropertyEditingDependencies,
   ActionTrigger,
 } from './types'
 import { Block } from '@/data/block'
@@ -1130,6 +1131,38 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     extendSelectionUpEdit,
   ]
 
+  // Property-panel field actions. PROPERTY_EDITING is activated (and
+  // deactivated) by `usePropertyEditingActivation` around a focused property
+  // `<input>`, so `deps.input` is exactly the field the user is typing in.
+  const propertyEditingActions: ActionConfig<typeof ActionContextTypes.PROPERTY_EDITING>[] = [
+    {
+      id: 'exit_property_editing',
+      description: 'Exit property editing',
+      context: ActionContextTypes.PROPERTY_EDITING,
+      icon: KeyboardOff,
+      // Blurring IS the exit: the input's own onBlur commits the pending
+      // value and the activation hook deactivates this context. Committing
+      // (rather than reverting) matches `exit_edit_mode_cm`, which likewise
+      // leaves the typed content in place.
+      //
+      // Deliberately no `setIsEditing(false)`: every route into a property
+      // field already left block edit mode — the arrow-key routes clear it
+      // explicitly (`move_up_from_cm_start` / `move_down_from_cm_end`) and a
+      // click into the field trips the editor's blur exit
+      // (`shouldExitEditModeAfterBlur` treats a property input as "not an
+      // editor"). A clear here would be dead code dressed as load-bearing.
+      handler: (deps: PropertyEditingDependencies) => { deps.input.blur() },
+      defaultBinding: {
+        keys: 'Escape',
+        // Same stance as `exit_edit_mode_cm` (whose context defaults to
+        // preventDefault: false): leave the field's own native Escape
+        // handling alone — an open autofill/date popup, a pending IME
+        // composition. The blur happens either way.
+        eventOptions: {preventDefault: false},
+      },
+    },
+  ]
+
   // Multi-select mode actions
   const extendSelectionUpMultiAction = {
     ...makeMultiSelect(extendSelectionUpAction),
@@ -1318,6 +1351,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     globalActions,
     normalModeActions,
     editModeCMActions,
+    propertyEditingActions,
     multiSelectModeActions,
   }
 }
@@ -1327,6 +1361,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
     globalActions,
     normalModeActions,
     editModeCMActions,
+    propertyEditingActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
@@ -1334,6 +1369,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
     ...globalActions,
     ...normalModeActions,
     ...editModeCMActions,
+    ...propertyEditingActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
 }
@@ -1350,6 +1386,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     globalActions,
     normalModeActions,
     editModeCMActions,
+    propertyEditingActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
@@ -1357,6 +1394,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     ...globalActions,
     ...normalModeActions,
     ...editModeCMActions,
+    ...propertyEditingActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
 

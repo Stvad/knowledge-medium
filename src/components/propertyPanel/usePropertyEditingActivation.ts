@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type FocusEvent } from 'react'
+import { useCallback, useMemo, useState, type FocusEvent, type SyntheticEvent } from 'react'
 import { usePropertyEditingShortcuts } from '@/shortcuts/useActionContext.js'
 import { Block } from '@/data/block'
 
@@ -40,4 +40,23 @@ export function usePropertyEditingActivation(block: unknown): PropertyEditingFoc
   const onBlur = useCallback(() => setInput(null), [])
 
   return {onFocus, onBlur}
+}
+
+/**
+ * Claim an Escape keypress for a property field's own dismissable UI — an
+ * open suggestion dropdown, an add-row that can be cancelled — so it does
+ * NOT also reach `exit_property_editing`, which blurs the field.
+ *
+ * `stopPropagation` is the load-bearing half: the shortcut coordinator
+ * listens on `window`, below which React's synthetic handlers run, and it
+ * does not consult `defaultPrevented`. Stopping the native event there is
+ * what keeps "Escape closes the dropdown, focus stays in the field" from
+ * also becoming "…and the field blurs".
+ *
+ * Call this ONLY when there was something to dismiss. With nothing open,
+ * let the event through — Escape exiting the field is the point.
+ */
+export const consumeFieldEscape = (event: SyntheticEvent): void => {
+  event.preventDefault()
+  event.stopPropagation()
 }

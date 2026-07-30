@@ -20,6 +20,10 @@ import {
 } from '@/utils/linkTargetAutocomplete.js'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import {
+  consumeFieldEscape,
+  usePropertyEditingActivation,
+} from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -191,6 +195,7 @@ export function ReferenceSearch({
   placeholder,
   selectionMode,
   onPick,
+  propertyField = false,
 }: {
   owner: Block
   excludeIds: readonly string[]
@@ -198,8 +203,16 @@ export function ReferenceSearch({
   placeholder: string
   selectionMode: 'single' | 'multiple'
   onPick: (blockId: string) => void
+  /** True when this search IS a property field (the ref / refList editors in
+   *  the property panel), as opposed to a picker embedded in some other
+   *  surface. Property fields activate the modal `PROPERTY_EDITING` context
+   *  while focused, so block-scoped chords stay shadowed and Escape exits
+   *  the field. Off by default — a picker inside a dialog has its own owner
+   *  for those keys. */
+  propertyField?: boolean
 }) {
   const listboxId = useId()
+  const propertyEditingFocus = usePropertyEditingActivation(propertyField ? owner : null)
   const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null)
   const workspaceId = useWorkspaceId(owner, owner.repo.activeWorkspaceId ?? '')
   const [query, setQuery] = useState('')
@@ -277,14 +290,26 @@ export function ReferenceSearch({
           aria-expanded={open}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          onFocus={() => setOpen(true)}
+          onFocus={event => {
+            propertyEditingFocus.onFocus(event)
+            setOpen(true)
+          }}
+          onBlur={propertyEditingFocus.onBlur}
           onChange={event => {
             setQuery(event.target.value)
             setOpen(true)
           }}
           onKeyDown={event => {
             if (event.key === 'Escape') {
-              setOpen(false)
+              // The dropdown always shows something while `open` (results, or
+              // a "no matching blocks" row), so closing it is a real dismiss:
+              // claim the key and keep the caret here. With it already closed
+              // the event falls through to `exit_property_editing`, which
+              // blurs the field (property fields only — see `propertyField`).
+              if (open) {
+                consumeFieldEscape(event)
+                setOpen(false)
+              }
               return
             }
             onKeyDown(event)
@@ -364,6 +389,7 @@ function RefPropertyEditorInner({
       placeholder="Search blocks"
       selectionMode="single"
       onPick={onChange}
+      propertyField
     />
   )
 }
@@ -410,6 +436,7 @@ function RefListPropertyEditorInner({
           placeholder={blockIds.length > 0 ? 'Add block' : 'Search blocks'}
           selectionMode="multiple"
           onPick={add}
+          propertyField
         />
       )}
       {readOnly && blockIds.length === 0 && <EmptyReference />}

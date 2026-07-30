@@ -8,6 +8,10 @@ import { useTypes } from '@/hooks/typeRegistry.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { TypeChip } from '@/components/typeChip/TypeChip'
+import {
+  consumeFieldEscape,
+  usePropertyEditingActivation,
+} from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 export interface TypeOption {
   id: string
@@ -63,6 +67,7 @@ export function TypesPropertyEditor({
   block,
 }: PropertyEditorProps<readonly string[]>) {
   const listboxId = useId()
+  const propertyEditingFocus = usePropertyEditingActivation(block)
   const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null)
   const typedBlock = block instanceof Block ? block : null
   const readOnly = typedBlock?.repo.isReadOnly ?? true
@@ -165,7 +170,14 @@ export function TypesPropertyEditor({
     }
 
     if (event.key === 'Escape') {
-      setOpen(false)
+      // The dropdown always shows something while `open` (matches, or a "no
+      // matching types" row), so closing it is a real dismiss: claim the key
+      // and keep the caret here. Already closed → the event falls through to
+      // `exit_property_editing`, which blurs the field.
+      if (open) {
+        consumeFieldEscape(event)
+        setOpen(false)
+      }
     }
   }
 
@@ -202,7 +214,11 @@ export function TypesPropertyEditor({
           aria-controls={listboxId}
           aria-autocomplete="list"
           aria-activedescendant={open && !readOnly ? listbox.activeDescendantId : undefined}
-          onFocus={() => setOpen(true)}
+          onFocus={event => {
+            propertyEditingFocus.onFocus(event)
+            setOpen(true)
+          }}
+          onBlur={propertyEditingFocus.onBlur}
           onChange={event => {
             setQuery(event.target.value)
             listbox.setActiveIndex(0)

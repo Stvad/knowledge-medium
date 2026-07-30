@@ -1,5 +1,7 @@
 # Shortcut conflict resolution — proposal
 
+> **Status:** implemented — last verified against code 2026-07-30. All three recommended steps shipped: the `isTypingKeyEvent` filter tighten, `modal: true` on `ActionContextConfig`, and `PROPERTY_EDITING` activation at the property-input sites (`usePropertyEditingActivation`). The survey table and "no property-editing actions registered" note below are a dated 2026-05-25 snapshot: the context now carries `exit_property_editing` (Escape → blur the field) plus an `eventFilter` that claims Escape, since the tightened typing filter otherwise drops it inside an `<input>`.
+
 Design doc for fixing cross-context shortcut collisions in `src/shortcuts/`. Written 2026-05-25 against the state of master at `9ed4f4ae` (revert of the date-scrub action migration).
 
 ## Diagnosis of the reported "P activates paste" bug
