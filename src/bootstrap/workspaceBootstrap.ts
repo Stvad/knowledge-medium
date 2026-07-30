@@ -237,9 +237,10 @@ export const bootstrapWorkspace = async ({
   // access gate otherwise performs.
   //
   // Kept after `ensureSystemPages` so the pages already exist when the pass runs:
-  // the materializer parents each definition block to `propertiesPageBlockId` /
-  // `typesPageBlockId`, and `tx.create` enforces `requireParentInWorkspace`. The
-  // pass now ensures its own parent (`config.ensureParent`), so an earlier fire —
+  // the materializer parents each definition block under the Properties / Types
+  // page that `config.ensureParent` RESOLVES (alias-first since #378, so not
+  // necessarily the deterministic id), and `tx.create` enforces
+  // `requireParentInWorkspace`. The pass ensures its own parent, so an earlier fire —
   // e.g. the `setActiveWorkspaceId` reschedule, which for type seeds has no priming
   // gate and can precede this — no longer throws on a missing parent; scheduling
   // here just means that ensure is a cheap no-op rather than the page-creating path.
