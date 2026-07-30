@@ -87,6 +87,37 @@ export interface KernelPageSpec {
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
+/** The types `getOrCreateKernelPage` tags a page with. Shared with
+ *  `predictKernelPageId` so its adoption guard allows exactly the types the
+ *  get-or-create applies — otherwise a page this module itself adopted would
+ *  be judged ineligible on the next call. */
+const kernelPageTypes = (spec: KernelPageSpec): readonly string[] =>
+  spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
+
+/** Which block currently IS this kernel page, resolved alias-first — the same
+ *  id `getOrCreateKernelPage` would return, but writing NOTHING. It neither
+ *  creates, restores nor repairs, so the id may name a tombstone or no row.
+ *
+ *  For callers that need the page's IDENTITY without bringing it into
+ *  existence. Anything that needs the page to EXIST must call
+ *  `getOrCreateKernelPage` and use its returned block's `.id`; a prediction
+ *  taken outside a write tx is only a hint, and must be re-resolved inside one
+ *  before any dependent write (see `canonicalAliasReaderFromTx`). */
+export const predictKernelPageId = async (
+  repo: Repo,
+  workspaceId: string,
+  spec: KernelPageSpec,
+): Promise<string> => {
+  const resolved = await resolveCanonicalAliasOwner(
+    canonicalAliasReaderFromRepo(repo),
+    [spec.alias],
+    workspaceId,
+    kernelPageBlockId(workspaceId, spec.namespace),
+    refuseTypedClaimant(kernelPageTypes(spec)),
+  )
+  return resolved.id
+}
+
 /** Get-or-create a per-workspace kernel page. Resolves ALIAS-FIRST: if a live
  *  block already owns `spec.alias`, THAT block is this kernel page and gains
  *  the types, instead of a second page being minted at the derived id.
@@ -135,8 +166,7 @@ export const getOrCreateKernelPage = async (
       'KernelPageSpec.markerType is required — pass a marker block-type to query the page by, or null for a page reached only by its id and alias.',
     )
   }
-  const types: readonly string[] =
-    spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
+  const types = kernelPageTypes(spec)
 
   const tagTypes = async (tx: Tx, targetId: string, snapshot: TypeRegistrySnapshot): Promise<void> => {
     for (const type of types) {

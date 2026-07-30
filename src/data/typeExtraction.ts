@@ -50,7 +50,7 @@ import {
   assertRoundTrippableReferenceLabel,
 } from '@/data/referenceBlock'
 import { pickLeastUsedTypeColor } from '@/data/typeColors'
-import { typesPageBlockId } from '@/data/typesPage'
+import { resolveTypesPageId } from '@/data/typesPage'
 
 // ──── Error classes ─────────────────────────────────────────────────
 
@@ -117,7 +117,10 @@ export interface CreateTypeBlockArgs {
   registrationTimeoutMs?: number
 }
 
-/** Create a fresh `block-type` block on the workspace's Types page.
+/** Create a fresh `block-type` block on the workspace's Types page —
+ *  whichever block currently IS that page (`resolveTypesPageId`, alias-first
+ *  since #378). Requires the workspace to have been bootstrapped; throws if
+ *  the page is missing rather than creating it (see the call site).
  *  Returns the new block id (== type id once registered). The
  *  returned id is in the live `repo.types` registry by the time the
  *  promise resolves. The block also claims its label as an `alias`, so
@@ -147,7 +150,7 @@ export async function createTypeBlock(
   assertRoundTrippableReferenceLabel(trimmedLabel, 'createTypeBlock: label')
 
   // The Types page must exist in `args.workspaceId` before we can
-  // parent the new type block under it. We resolve the id from
+  // parent the new type block under it. We resolve it from
   // `args.workspaceId` directly — `repo.typesPageId` is derived from
   // `repo.activeWorkspaceId`, which can differ when callers operate
   // on a workspace other than the user's current one (e.g. an import
@@ -155,7 +158,21 @@ export async function createTypeBlock(
   // block under the wrong workspace's Types page and either register
   // in the wrong workspace or leave a partial block after the
   // registration timeout.
-  const typesPageId = typesPageBlockId(args.workspaceId)
+  //
+  // `resolveTypesPageId`, not `typesPageBlockId`: since issue #378 the Types
+  // page resolves ALIAS-FIRST, so when its canonical row was deleted and a
+  // user page claims 'Types', THAT page is the Types page and the
+  // deterministic id is a tombstone. Computing the raw id and `repo.load`ing
+  // it (which filters tombstones) made this throw the misleading error below
+  // — blocking type creation entirely — even though a live Types page existed.
+  //
+  // Resolution only, deliberately NOT `getOrCreateTypesPage`: this path
+  // requires a bootstrapped workspace and says so. Creating the page here
+  // would also let a cross-workspace call past this guard and on to
+  // `waitForTypeRegistrationBounded`, which observes `repo.types` — the ACTIVE
+  // workspace's registry only — so it could never settle: a 10s hang leaving
+  // an orphaned definition block, instead of this immediate error.
+  const typesPageId = await resolveTypesPageId(repo, args.workspaceId)
   const typesPage = await repo.load(typesPageId)
   if (!typesPage || typesPage.workspaceId !== args.workspaceId) {
     throw new Error(
@@ -163,6 +180,8 @@ export async function createTypeBlock(
       `Call getOrCreateTypesPage during workspace bootstrap.`,
     )
   }
+
+  args.signal?.throwIfAborted()
 
   // Pre-tx validation: each property-schema ref must survive every
   // invariant tryBuildType applies. Validating upfront surfaces the
