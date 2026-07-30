@@ -371,21 +371,29 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  re-renders with the same blocks (stable identity) hit the same
  *  cached handle. Block facade identity is stable per id, so the
  *  returned arrays compare equal across re-fires when the chain is
- *  unchanged. Empty entries land for ids whose row is missing.
+ *  unchanged. A resolved result holds one (possibly empty) entry per
+ *  input id; the carried result below can be partial.
  *
- *  Sticky across id-set changes: because the key IS the id set, every
- *  add/remove mints a COLD handle (`peek() === undefined`). Reporting
- *  that as "nobody has ancestors" is what made a live backlinks refresh
- *  jump — `BreadcrumbList` renders null for an empty chain, so every
- *  visible entry lost its breadcrumb line for the duration of the load
- *  and the section collapsed by a line per entry, then sprang back. So
- *  while the new key loads we keep serving the previously resolved
- *  chains, projected onto the ids currently asked for. Ids that are new
- *  in this set have no entry until the load lands (they're new rows
- *  anyway). A plain move keeps the id set — and therefore the key — so
- *  it re-resolves in place and never reads a carried chain; only a tx
- *  that moves a block AND changes the set in one commit shows that
- *  block's old chain, for the length of one load. */
+ *  Sticky across id-set changes: the key IS the id set, so an add or a
+ *  remove usually lands on an unresolved handle (`peek() === undefined`
+ *  — a recently used key can still be warm). Reporting that as "nobody
+ *  has ancestors" is what made a live backlinks refresh jump:
+ *  `BreadcrumbList` renders null for an empty chain, so every visible
+ *  entry lost its breadcrumb line until the load landed, and the
+ *  section collapsed by a line per entry then sprang back. While an
+ *  unresolved handle loads we therefore keep serving the last resolved
+ *  chains; a resolved value always wins outright.
+ *
+ *  What that deliberately does NOT cover: ids ENTERING the set have no
+ *  carried chain — a new backlink, or every id re-added when a filter
+ *  is switched off — so those entries still gain their breadcrumb line
+ *  a load late. And "last resolved" can be several id-set changes old
+ *  under rapid churn (one load is a floor, not a bound), so a tx that
+ *  moves a block AND changes the set at once shows that block's old
+ *  chain until the load lands. A plain move keeps the key, so it
+ *  re-resolves in place and never reads a carried chain — though
+ *  `LoaderHandle.peek()` serves its own stale value over that window
+ *  regardless of anything here. */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Sort the ids so logically-equal block sets in different orders
@@ -416,26 +424,44 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
     },
     [repo],
   )
-  const resolved = useHandle(repo.query.manyAncestors({ids}), {selector: selectParents})
+  const handle = repo.query.manyAncestors({ids})
+  const resolved = useHandle(handle, {selector: selectParents})
 
   // Remember the last resolved chains with the "adjust state during
   // render" pattern (as `usePromotableBreadcrumb` does) rather than an
   // effect: the carry-over has to be available in the SAME render that
   // first sees the cold handle, or the blank frame it exists to prevent
-  // paints anyway.
+  // paints anyway. The structural check keeps that update terminating
+  // even if React ever drops `useHandle`'s memo (documented as a hint,
+  // not a guarantee) and hands back an equal-but-fresh map.
   const [lastResolved, setLastResolved] =
     useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
-  if (resolved && resolved !== lastResolved) setLastResolved(resolved)
+  if (
+    resolved &&
+    resolved !== lastResolved &&
+    !areSelectedValuesEqual(resolved, lastResolved)
+  ) setLastResolved(resolved)
 
-  return useMemo(() => {
-    if (resolved) return resolved
-    const carried = new Map<string, Block[]>()
+  // Projected onto the current ids so the map's keys stay the ids you
+  // asked for. Both call sites only `.get(id)`, so this is contract
+  // hygiene rather than something they can observe.
+  const carried = useMemo(() => {
+    const out = new Map<string, Block[]>()
     for (const id of ids) {
       const parents = lastResolved.get(id)
-      if (parents) carried.set(id, parents)
+      if (parents) out.set(id, parents)
     }
-    return carried.size === 0 ? EMPTY_PARENT_MAP : carried
-  }, [resolved, lastResolved, ids])
+    return out.size === 0 ? EMPTY_PARENT_MAP : out
+  }, [lastResolved, ids])
+
+  if (resolved) return resolved
+  // A FAILED load also leaves `peek()` undefined, and permanently:
+  // `LoaderHandle` rolls its deps back on error (so no commit can
+  // invalidate it) and `useHandle` only ensure-loads from 'idle'.
+  // Carrying there would pin stale breadcrumbs for the rest of the
+  // session, so drop them instead. The error path fires no notify, so
+  // this takes effect on the next render rather than immediately.
+  return handle.status() === 'error' ? EMPTY_PARENT_MAP : carried
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
