@@ -155,7 +155,11 @@ const extendSelectionVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
-  if (!next) return true
+  // Same "the DOM ran out, the outline didn't" case `moveVertical` handles:
+  // decline on an outline row so the structural base (`extendSelectionDown`,
+  // model-based) can extend onto a row that isn't mounted yet. Without this,
+  // `Shift+j` would stop at the last mounted row while plain `j` kept going.
+  if (!next) return !isOutlineSurface(current)
   await extendSelectionToSpatialTarget(deps, next)
   return true
 }
@@ -169,12 +173,15 @@ const extendSelectionVertical = async (
  * off the same prop. Adding our own DOM mutations would just race.
  *
  * Return contract (intentionally different from "did we move?"):
- *   - `false` → "please fall through to the underlying vim handler",
- *     for either of two reasons: (a) no anchor at all — neither a
- *     live focused instance nor a recovery anchor exists; (b) an
- *     outline-surface row with no rendered neighbour, where the DOM
- *     has run out but the data model may not have (lazily mounted
- *     rows below the fold aren't in the DOM to be found).
+ *   - `false` → "spatial nav declines; the model walk is the better
+ *     answer here". Three live cases: (a) no usable anchor — no live
+ *     focused instance, no recovery anchor, and no expected location
+ *     to keep us in this panel; (b) an outline-surface row with no
+ *     rendered neighbour, where the DOM has run out but the data
+ *     model may not have (lazily mounted rows below the fold aren't
+ *     in the DOM to be found); (c) an outline-surface row whose only
+ *     rendered neighbour is in another panel of the stack while the
+ *     model still has rows in this one.
  *   - `true` → "spatial nav handled this keystroke". Includes the
  *     no-neighbor case on every surface EXCEPT outline. We must NOT
  *     fall through to vim's `nextVisibleBlock` for a panel-boundary
@@ -261,7 +268,10 @@ const moveVertical = async (
   // MOUNTED row, so `j` would leap into the next panel and silently skip the
   // rest of this page. Ask the model whether this outline has more first;
   // only the genuine end of the outline crosses the boundary. Costs an
-  // O(depth) walk on the cross-panel keystroke alone, not on ordinary steps.
+  // O(depth) walk on the cross-panel keystroke alone, not on ordinary steps
+  // — twice over, since declining means vim's handler repeats it. Cheap at
+  // that frequency, and keeping the walk here read-only preserves the
+  // "spatial nav never writes what the model handler would" contract.
   if (isOutlineSurface(current) && deps.scopeRootId) {
     const modelNext = direction === 'down'
       ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
@@ -350,6 +360,13 @@ const crossPanelFocus = async (
  * can still `j` into. Same return contract as `moveVertical`: `false`
  * means "no live panel DOM — fall through to vim's data-model handler"
  * (SSR/headless, or the panel hasn't mounted); `true` means handled.
+ *
+ * Known divergence from `moveVertical`: the sequence this bounds is the
+ * MOUNTED one, so `Shift+G` lands on the last mounted row rather than the
+ * last row of the page, while `j` now walks past it via the model. Left
+ * as-is deliberately — declining here would hand the edges to a data-tree
+ * walk that skips the trailing surfaces this exists to include, and picking
+ * the right answer per surface needs its own change and tests.
  */
 const jumpToPanelEdge = async (
   deps: BlockShortcutDependencies,

@@ -84,10 +84,9 @@ describe('FocusedRowLazyMount', () => {
     })
   })
 
-  // A restored session can point focus at a nested row whose ANCESTOR is
-  // deferred: the target has no placeholder to reach, because a child's lazy
-  // wrapper only renders once its parent mounts. Wanting the ancestors makes
-  // the cascade resolve itself.
+  // Focus can move to a nested row whose ANCESTOR is deferred: the target has
+  // no placeholder to reach, because a child's lazy wrapper only renders once
+  // its parent mounts. Wanting the ancestors makes the cascade resolve itself.
   it('mounts the ancestor chain when the focused row has no placeholder yet', async () => {
     const panel = repo.block(PANEL_ID)
     // Only the ancestor is rendered; `nested` has no wrapper at all, exactly
@@ -113,5 +112,86 @@ describe('FocusedRowLazyMount', () => {
     await waitFor(() => {
       expect(screen.getByTestId('ancestor-row')).toBeInTheDocument()
     }, {timeout: 3000})
+  })
+
+  // The row is already rendered in THIS panel, so nothing needs forcing —
+  // the ancestor walk must not run and drag unrelated rows in with it.
+  it('leaves ancestors alone when the focused row is already rendered here', async () => {
+    const panel = repo.block(PANEL_ID)
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <div data-block-id="nested" data-render-scope-id="panel:nested"/>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('off-screen')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="ancestor-row">ancestor</div>
+        </LazyViewportMount>
+      </>,
+    )
+
+    await focusBlock(panel, 'nested', {renderScopeId: 'panel:nested'})
+    await new Promise(resolve => setTimeout(resolve, 400))
+
+    expect(screen.getByTestId('placeholder')).toBeInTheDocument()
+    expect(screen.queryByTestId('ancestor-row')).not.toBeInTheDocument()
+  })
+
+  // `data-block-id` is also on other panels' rows, on inline reference links
+  // and on property rows, so the "already rendered" probe has to match THIS
+  // panel's render scope — otherwise another panel's copy suppresses the
+  // cascade for a row that genuinely isn't here.
+  it('walks anyway when the only rendered copy belongs to another scope', async () => {
+    const panel = repo.block(PANEL_ID)
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <div data-block-id="nested" data-render-scope-id="some-other-panel"/>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('off-screen')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="ancestor-row">ancestor</div>
+        </LazyViewportMount>
+      </>,
+    )
+
+    await focusBlock(panel, 'nested', {renderScopeId: 'panel:nested'})
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ancestor-row')).toBeInTheDocument()
+    }, {timeout: 3000})
+  })
+
+  // Mounting a row makes the focus decorator scroll it into view, so acting on
+  // the value the panel MOUNTS with would yank the panel away from the scroll
+  // position it just restored.
+  it('ignores the focus value the panel mounts with', async () => {
+    const panel = repo.block(PANEL_ID)
+    await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
+
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('off-screen')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="row">off-screen row</div>
+        </LazyViewportMount>
+      </>,
+    )
+
+    await new Promise(resolve => setTimeout(resolve, 400))
+
+    expect(screen.getByTestId('placeholder')).toBeInTheDocument()
+    expect(screen.queryByTestId('row')).not.toBeInTheDocument()
   })
 })

@@ -29,25 +29,40 @@
  *     fans out to a set and a request mounts all of them. Keeping one slot
  *     per key would let a second copy evict the first, stranding a
  *     placeholder that can never be reached again (its effect won't re-run).
- *     Fanning out also means the key needs no render scope: whichever copy
- *     the focused location refers to is necessarily among the ones mounted.
+ *     Fanning out is also why the key needs no render scope: every copy
+ *     whose own `LazyBlockComponent` wrapper is rendered gets mounted, so
+ *     the one the focused location names is among them.
+ *
+ * Known gaps, both handled a level up in `FocusedRowLazyMount` rather than
+ * here: a copy nested under a still-deferred ancestor has no wrapper yet, so
+ * there is nothing to register (its ancestors have to be wanted first); and
+ * surfaces that mint their own keys — backlink entries key
+ * `backlink:<scope>:<id>` — are not reachable through `lazyBlockCacheKey` at
+ * all.
  *
  * Registration is keyed, so a request costs a lookup rather than a
  * broadcast, and no `LazyViewportMount` has to subscribe to focus state —
  * subscribing per-row is exactly the fan-out the spatial-navigation shell
  * decorator documents as the pitfall to avoid.
  *
- * A key with no registration and no want is simply nothing pending: either
- * the row is already mounted, or it isn't rendered at all (deleted,
- * collapsed away, on a page nobody has open). Both are correctly no-ops.
+ * A key with no registration and no want is usually nothing to do: the row is
+ * already mounted, or isn't rendered at all (deleted, collapsed away, on a
+ * page nobody has open). The exception is "no wrapper YET" — see the gaps
+ * above, which is what makes a request a standing want rather than a probe.
  */
+
+import { CallbackSet } from '@/utils/callbackSet.js'
 
 /** Cache key for a lazily-mounted block row. Shared by the component that
  *  registers under it (`LazyBlockComponent`) and the callers that request a
  *  mount by block id, so the two can't drift apart. */
 export const lazyBlockCacheKey = (blockId: string): string => `block:${blockId}`
 
-const pendingMounts = new Map<string, Set<() => void>>()
+// Listener fan-out per key — `CallbackSet` snapshots on notify and isolates
+// listener exceptions, both of which this needs (a mount re-renders its row,
+// which mutates the registry from inside the notify loop).
+
+const pendingMounts = new Map<string, CallbackSet>()
 /** key -> how many callers currently want it. Counted, not a flag: two panels
  *  can focus the same block, and one withdrawing must not cancel the other's
  *  standing want (which would leave the second panel's row deferred forever
@@ -64,14 +79,15 @@ export const registerPendingLazyMount = (cacheKey: string, mount: () => void): (
     mount()
     return () => {}
   }
-  const mounts = pendingMounts.get(cacheKey) ?? new Set<() => void>()
-  mounts.add(mount)
-  pendingMounts.set(cacheKey, mounts)
+  let mounts = pendingMounts.get(cacheKey)
+  if (!mounts) {
+    mounts = new CallbackSet(`lazy-mount:${cacheKey}`)
+    pendingMounts.set(cacheKey, mounts)
+  }
+  const remove = mounts.add(mount)
   return () => {
-    const current = pendingMounts.get(cacheKey)
-    if (!current) return
-    current.delete(mount)
-    if (current.size === 0) pendingMounts.delete(cacheKey)
+    remove()
+    if (pendingMounts.get(cacheKey)?.size === 0) pendingMounts.delete(cacheKey)
   }
 }
 
@@ -83,11 +99,15 @@ export const requestLazyMount = (cacheKey: string): (() => void) => {
   wantedKeys.set(cacheKey, (wantedKeys.get(cacheKey) ?? 0) + 1)
   const mounts = pendingMounts.get(cacheKey)
   if (mounts) {
-    // Drop the registrations before invoking: each `mount()` re-renders its
-    // row, whose cleanup would otherwise mutate the set being iterated.
+    // Drop the bucket before notifying: each mount re-renders its row, whose
+    // cleanup runs against the registry. (`CallbackSet.notify` snapshots, so
+    // the iteration itself is already safe.)
     pendingMounts.delete(cacheKey)
-    for (const mount of mounts) mount()
+    mounts.notify()
   }
+  // Idempotence here is defence in depth: the one caller pushes each withdraw
+  // exactly once and drains the list once. It's cheap insurance against a
+  // future caller double-calling and silently decrementing someone else's want.
   let withdrawn = false
   return () => {
     if (withdrawn) return

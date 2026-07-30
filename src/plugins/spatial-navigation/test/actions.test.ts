@@ -89,49 +89,52 @@ const seedPanelAndBlocks = async (repo: Repo): Promise<void> => {
   }, {scope: ChangeScope.UiState})
 }
 
-const buildPanelDom = (
-  instances: Array<{blockId: string; renderScopeId: string; surface?: string}>,
-): void => {
-  const panel = document.createElement('div')
-  panel.dataset.panelId = 'panel'
+interface NavInstance {blockId: string; renderScopeId: string; surface?: string}
+
+const appendInstances = (panelEl: HTMLElement, instances: readonly NavInstance[]): void => {
   for (const {blockId, renderScopeId, surface} of instances) {
     const el = document.createElement('div')
     el.dataset.blockNavItem = 'true'
     el.dataset.blockId = blockId
     el.dataset.renderScopeId = renderScopeId
     if (surface) el.dataset.blockSurface = surface
-    panel.appendChild(el)
+    panelEl.appendChild(el)
   }
+}
+
+const buildPanelDom = (instances: NavInstance[]): void => {
+  const panel = document.createElement('div')
+  panel.dataset.panelId = 'panel'
+  appendInstances(panel, instances)
   document.body.appendChild(panel)
 }
 
 /** Two panels stacked in one layout column, so `verticalNeighbor` can fall
  *  through from the end of the upper panel's MOUNTED rows into the lower one. */
-const buildStackedColumnDom = (
-  upper: Array<{blockId: string; renderScopeId: string; surface?: string}>,
-  lower: Array<{blockId: string; renderScopeId: string; surface?: string}>,
-): void => {
+const buildStackedColumnDom = (upper: NavInstance[], lower: NavInstance[]): void => {
   const column = document.createElement('div')
   column.dataset.layoutColumnId = 'col-1'
-  const addPanel = (
-    panelId: string,
-    instances: Array<{blockId: string; renderScopeId: string; surface?: string}>,
-  ) => {
+  for (const [panelId, instances] of [['panel', upper], ['panel-below', lower]] as const) {
     const panelEl = document.createElement('div')
     panelEl.dataset.panelId = panelId
-    for (const {blockId, renderScopeId, surface} of instances) {
-      const el = document.createElement('div')
-      el.dataset.blockNavItem = 'true'
-      el.dataset.blockId = blockId
-      el.dataset.renderScopeId = renderScopeId
-      if (surface) el.dataset.blockSurface = surface
-      panelEl.appendChild(el)
-    }
+    appendInstances(panelEl, instances)
     column.appendChild(panelEl)
   }
-  addPanel('panel', upper)
-  addPanel('panel-below', lower)
   document.body.appendChild(column)
+}
+
+/** The lower panel as a real UI-state block, so "focus did NOT move there"
+ *  is a claim about behaviour rather than about a missing row. */
+const seedPanelBelow = async (repo: Repo): Promise<void> => {
+  await repo.tx(async tx => {
+    await tx.create({
+      id: 'panel-below',
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'a1',
+      properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('X')},
+    })
+  }, {scope: ChangeScope.UiState})
 }
 
 // The spatial behaviour is now an action-dispatch decorator, so build a handler
@@ -166,6 +169,30 @@ afterEach(async () => {
 })
 
 describe('spatial navigation selection actions', () => {
+  // Same lazily-mounted boundary `moveVertical` handles: without the decline,
+  // `Shift+j` would stop at the last mounted row while plain `j` walked on.
+  it('declines at the end of the mounted outline rows so the model can extend', async () => {
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'extend_selection_down',
+      description: 'Extend selection down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+  })
+
   it('extends normal-mode selection through DOM order instead of structural order', async () => {
     buildPanelDom([
       {blockId: 'A', renderScopeId: 'panel:A'},
@@ -567,6 +594,7 @@ describe('spatial navigation vertical actions', () => {
       [{blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'}],
       [{blockId: 'X', renderScopeId: 'below:X', surface: 'outline'}],
     )
+    await seedPanelBelow(env.repo)
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
     const fallback = vi.fn()
@@ -594,15 +622,7 @@ describe('spatial navigation vertical actions', () => {
       [{blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'}],
       [{blockId: 'X', renderScopeId: 'below:X', surface: 'outline'}],
     )
-    await env.repo.tx(async tx => {
-      await tx.create({
-        id: 'panel-below',
-        workspaceId: WS,
-        parentId: null,
-        orderKey: 'a1',
-        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('X')},
-      })
-    }, {scope: ChangeScope.UiState})
+    await seedPanelBelow(env.repo)
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
     const fallback = vi.fn()
@@ -619,6 +639,8 @@ describe('spatial navigation vertical actions', () => {
       renderScopeId: 'panel:B',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    // (`panel-below` is seeded in both tests, so the negative assertion in the
+    // sibling test can actually be false.)
 
     expect(fallback).not.toHaveBeenCalled()
     await vi.waitFor(() => {

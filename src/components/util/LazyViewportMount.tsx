@@ -15,7 +15,10 @@ const mountedCacheKeys = new Set<string>()
  *
  * Overscan exists so scrolling (and keyboard navigation) doesn't run into
  * placeholders, and both of those overwhelmingly move DOWN — upward rows are
- * usually mounted already, since mounting is sticky. Pre-mounting far above
+ * usually mounted already, since mounting is sticky. (Not after a scroll
+ * restore, where nothing above the landing point has ever mounted; moving up
+ * there goes through the model fall-through instead, which is exactly what
+ * that path is for.) Pre-mounting far above
  * costs on both sides: it roughly doubles the mounted set at rest, and each
  * row that mounts above the fold swaps its height estimate for its real
  * height, pushing visible content down on engines without scroll anchoring
