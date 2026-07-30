@@ -81,6 +81,25 @@ describe('pasteMultilineText', () => {
     expect(await childContents('root')).toEqual(['Alpha', 'Beta', 'Next'])
   })
 
+  it('keeps the later roots siblings when a blank target WITH children absorbs the first', async () => {
+    // A blank target absorbs pasted root #1 — so it IS root #1, and roots #2..N
+    // are its SIBLINGS. The "paste after an expanded block lands as its first
+    // visible children" rule is about pasting *around* a pre-existing block and
+    // must not fire here: it used to reparent Beta under Alpha (and above the
+    // pre-existing child), so the same clipboard produced a different tree
+    // depending only on whether the blank target happened to have children.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('empty', '', 'root', 'a1')
+    await createBlock('kid', 'Kid', 'empty', 'a0')
+    await createBlock('next', 'Next', 'root', 'a2')
+
+    await pasteMultilineText('Alpha\nBeta', env.repo.block('empty'), env.repo, {scopeRootId: 'root'})
+
+    expect(env.repo.block('empty').peek()?.content).toBe('Alpha')
+    expect(await childContents('empty')).toEqual(['Kid'])
+    expect(await childContents('root')).toEqual(['Alpha', 'Beta', 'Next'])
+  })
+
   it('inserts a multi-block paste between tied siblings without losing content (#198)', async () => {
     // The insertion neighbours (the target and its next sibling) share an
     // order_key. The old keysBetween(lower, upper) threw "<key> >= <key>" on the
