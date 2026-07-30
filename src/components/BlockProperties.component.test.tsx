@@ -43,6 +43,7 @@ const uiStateBlockRef = vi.hoisted(() => ({
 const navigateCallsRef = vi.hoisted(() => ({
   current: [] as unknown[],
 }))
+const useUserPageMock = vi.hoisted(() => vi.fn((userId: string) => ({name: userId})))
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -56,10 +57,11 @@ vi.mock('@/data/globalState.ts', () => ({
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
     return uiStateBlockRef.current
   },
-  // Attribution name resolution is exercised in globalState's own tests;
-  // here it's identity (and reports no page) so the metadata row stays
-  // deterministic and renders as plain text.
-  useUserPage: (userId: string) => ({name: userId}),
+  // Attribution name resolution is exercised end-to-end in
+  // `data/test/useUserPage.test.tsx`; here it's identity (and reports no
+  // page) so the metadata row stays deterministic and renders as plain
+  // text. Kept as a spy so the workspace it's called WITH can be asserted.
+  useUserPage: useUserPageMock,
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
@@ -154,6 +156,7 @@ describe('BlockProperties component', () => {
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
     navigateCallsRef.current = []
+    useUserPageMock.mockClear()
 
     await repo.tx(async tx => {
       await tx.create({
@@ -181,6 +184,27 @@ describe('BlockProperties component', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
+  })
+
+  it('resolves the "Changed by" author in the block\'s workspace, not the active one', async () => {
+    // A panel can show a block from another workspace (a side panel left open
+    // across a workspace switch). The user page id is derived from
+    // (workspace, userId), so resolving against the active workspace finds no
+    // page and the row falls back to rendering the raw user id.
+    await repo.tx(async tx => {
+      await tx.create({id: 'block-elsewhere', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block'})
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={repo.block('block-elsewhere')}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => expect(useUserPageMock).toHaveBeenCalledWith('user-1', 'ws-2'))
   })
 
   it('keeps primitive value edits local until blur commits them', async () => {
