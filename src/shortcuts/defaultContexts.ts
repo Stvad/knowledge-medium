@@ -68,15 +68,26 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     // reaches dispatch and `exit_property_editing` can't fire (the bug:
     // "Esc in property editor does not exit edit mode").
     //
-    // Scoped to Escape rather than EDIT_MODE_CM's "every key inside my DOM
-    // subtree": the filter green-lights the WHOLE dispatch, so claiming
-    // typing keys would also re-open bare-key GLOBAL chords (shortcut-help's
-    // `?`) to the field the user is typing in. Escape is the one key here
-    // that produces no text, so claiming it costs nothing. A future
-    // property-editing action on another non-text key (Tab-to-next-field,
-    // say) extends this list; a rebinding onto a modifier chord needs no
-    // change, since those clear `defaultEventFilter` already.
-    eventFilter: (event: KeyboardEvent) => event.key === 'Escape',
+    // Scoped to keys that produce no text, rather than EDIT_MODE_CM's "every
+    // key inside my DOM subtree": the filter green-lights the WHOLE dispatch,
+    // so claiming typing keys would also re-open bare-key GLOBAL chords
+    // (shortcut-help's `?`) to the field the user is typing in.
+    //
+    // `key.length > 1` is exactly that split — named keys ('Escape', 'F2',
+    // 'Tab') produce nothing, single-character ones ('p', '?', ' ') are text.
+    // Not keyed to the literal 'Escape': a filter can't see bindings, so that
+    // would silently kill a REBINDING of `exit_property_editing` onto another
+    // bare non-text key, with no error to explain the dead key. Rebinding onto
+    // a modifier chord needs no opt-in — those clear `defaultEventFilter`
+    // already.
+    //
+    // Admitting the wider set is safe because this context is modal: while a
+    // property input is focused the only installed contexts are this one and
+    // GLOBAL, and every GLOBAL binding is a modifier chord except that
+    // printable `?`. Bare Enter/Tab/arrows still reach the field's own React
+    // handlers either way — admitting an event only lets a *bound* action
+    // match it, and this context's binding opts out of preventDefault.
+    eventFilter: (event: KeyboardEvent) => event.key.length > 1,
     validateDependencies: isPropertyEditingDependencies,
   },
   {
