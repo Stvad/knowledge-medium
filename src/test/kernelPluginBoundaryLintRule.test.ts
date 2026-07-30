@@ -101,11 +101,25 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/apiCatalog.ts'),
         code: `const m = import.meta.glob(['/src/components/**', '!/src/plugins/**'])`,
       },
+      // A BROAD positive that a whole-subtree exclusion makes safe. The case
+      // above passes on its positive pattern alone, so it never proved the
+      // exclusion was honoured — this one does: drop the negation handling and
+      // `/src/**` fires.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob(['/src/**', '!/src/plugins/**'])`,
+      },
       // `new URL` against something other than `import.meta.url` is an ordinary
       // runtime URL, not a build-time module reference.
       {
         filename: core('data/repo.ts'),
         code: `const u = new URL('@/plugins/todo/worker.ts', base)`,
+      },
+      // `new.target` is a MetaProperty as well, so matching the node type alone
+      // flagged an ordinary runtime base that Vite emits no chunk for.
+      {
+        filename: core('data/repo.ts'),
+        code: `class C { constructor() { new URL('@/plugins/todo/worker.ts', new.target.url) } }`,
       },
       // A loose file directly under `src/plugins/` is CORE (see isInsidePlugin),
       // so importing one from core is a core→core edge. `owningPlugin` has to
@@ -467,6 +481,27 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/src/{components/ui,plugins}/**' },
+        }],
+      },
+      // A narrower exclusion still leaves every OTHER plugin in the expansion,
+      // so it must not clear the call the way `!/src/plugins/**` does.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob(['/src/**', '!/src/plugins/todo/**'])`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/**' },
+        }],
+      },
+      // `@//plugins/x` — TS and the Vite alias both resolve this to the todo
+      // plugin, but an alias suffix starting with `/` is ABSOLUTE, so resolving
+      // it discarded the source root and sent it out of the tree.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from '@//plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@//plugins/todo/schema.js' },
         }],
       },
       // A no-substitution template literal is exactly as static as a quoted

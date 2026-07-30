@@ -104,7 +104,13 @@ export default tseslint.config(
   { ignores: ['dist', '**/dist/**', '.claude/**', '.codex/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
-    files: ['**/*.{ts,tsx}'],
+    // `.mts`/`.cts`/`.jsx` are here so the TypeScript parser actually covers
+    // every extension the boundary gate below claims: without it a
+    // toolchain-valid `const x: number = 1` in a `.mts` file is handed to
+    // espree and dies with a parse error before any rule runs. None exist
+    // today — this keeps the two globs from drifting apart the first time one
+    // does.
+    files: ['**/*.{ts,tsx,mts,cts,jsx}'],
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,

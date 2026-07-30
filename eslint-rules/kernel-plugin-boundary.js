@@ -168,7 +168,10 @@ const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
   const specifier = normalizePath(source)
   const repoRoot = posix.dirname(sourceRoot)
   const absolute =
-    specifier.startsWith('@/') ? posix.resolve(sourceRoot, specifier.slice(2))
+    // `slice(2)` then strip leading separators: `@//plugins/x` would otherwise
+    // hand `posix.resolve` an ABSOLUTE suffix, which discards sourceRoot and
+    // sends a real plugin import off to a filesystem path outside the tree.
+    specifier.startsWith('@/') ? posix.resolve(sourceRoot, specifier.slice(2).replace(/^\/+/, ''))
     : specifier.startsWith('/src/') ? posix.resolve(repoRoot, specifier.slice(1))
     : specifier.startsWith('src/') ? posix.resolve(repoRoot, specifier)
     : specifier.startsWith('./') || specifier.startsWith('../')
@@ -192,13 +195,14 @@ const staticString = (node) => {
 
 /** The static string specifiers a node contributes — one, or an array of them
  *  (`import.meta.glob([...])` takes either). Array holes (`['a', , 'b']`) and
- *  non-static elements drop out. Negated glob patterns (`!…`) are exclusions,
- *  not dependencies, so they drop out too. */
+ *  non-static elements drop out. Negated glob patterns (`!…`) are KEPT — a
+ *  caller that only wants dependencies can skip them, but `checkGlob` has to
+ *  see them, since an exclusion can be what makes a broad pattern safe. */
 const specifierLiterals = (node) => {
   const elements = node?.type === 'ArrayExpression' ? node.elements : [node]
   return elements
     .map(staticString)
-    .filter(value => value !== undefined && !value.startsWith('!'))
+    .filter(value => value !== undefined)
 }
 
 /** Whether a resolved `import.meta.glob` PATTERN can expand into the plugin
@@ -249,6 +253,10 @@ const isImportMetaUrl = (node) =>
   && node.callee?.name === 'URL'
   && node.arguments[1]?.type === 'MemberExpression'
   && node.arguments[1].object?.type === 'MetaProperty'
+  // `new.target` is a MetaProperty too, so match the names — `new.target.url`
+  // is an ordinary runtime base and Vite emits no chunk for it.
+  && node.arguments[1].object.meta?.name === 'import'
+  && node.arguments[1].object.property?.name === 'meta'
   && node.arguments[1].property?.name === 'url'
 
 const isImportMetaGlob = (callee) =>
@@ -318,8 +326,18 @@ const noCoreToPluginImports = {
     /** Globs need their own classifier — see `globReachesPluginLayer`. A
      *  pattern names no single plugin, so the message names the layer. */
     const checkGlob = (node, sourceNode) => {
-      for (const specifier of specifierLiterals(sourceNode)) {
-        if (!globReachesPluginLayer(resolveSpecifier(specifier, importerSrcRelative, sourceRoot))) continue
+      const patterns = specifierLiterals(sourceNode)
+      const resolve = (pattern) => resolveSpecifier(pattern, importerSrcRelative, sourceRoot)
+      // `import.meta.glob(['/src/**', '!/src/plugins/**'])` reaches no plugin at
+      // all — the exclusion is the whole point. Only the canonical
+      // whole-subtree spelling clears the call: a narrower exclusion
+      // (`!/src/plugins/todo/**`) still leaves every OTHER plugin in the
+      // expansion, so it is deliberately not honoured and the author opts out
+      // inline instead.
+      if (patterns.some(p => p.startsWith('!') && resolve(p.slice(1)) === 'plugins/**')) return
+      for (const specifier of patterns) {
+        if (specifier.startsWith('!')) continue
+        if (!globReachesPluginLayer(resolve(specifier))) continue
         context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier}})
       }
     }
