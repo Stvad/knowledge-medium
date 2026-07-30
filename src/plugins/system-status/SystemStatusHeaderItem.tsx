@@ -5,6 +5,7 @@ import {
   CloudOff,
   CloudUpload,
   HardDrive,
+  RefreshCcw,
   RefreshCw,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -32,6 +33,10 @@ import {
 import { RejectionDialog } from './RejectionDialog.tsx'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
 import { runActionById } from '@/shortcuts/runAction.js'
+import {
+  APP_CHECK_FOR_UPDATES_ACTION_ID,
+  canCheckForAppUpdates,
+} from '@/extensions/appUpdateStatus.js'
 
 interface UploadQueueCountRow {
   count: number
@@ -122,6 +127,58 @@ const iconByName = {
 const formatLastSyncedAt = (date: Date | undefined): string => {
   if (!date) return 'Not synced yet'
   return date.toLocaleString()
+}
+
+// Fire-and-forget dispatch of a global action by id — the same indirection
+// every control in this dropdown uses (a diagnostic's Inspect/Reload, the
+// update check). Rejections are logged, never surfaced into render.
+const dispatchAction = (actionId: string): Promise<void> => {
+  try {
+    return Promise.resolve(runActionById(actionId, new CustomEvent('run-diagnostic-action')))
+      .catch(e => {
+        console.error('Failed to run action', actionId, e)
+      })
+  } catch (e) {
+    console.error('Failed to run action', actionId, e)
+    return Promise.resolve()
+  }
+}
+
+/**
+ * Proactive "is there a new build?" control.
+ *
+ * The check has always existed as a global action (`app.checkForUpdates`),
+ * but only in the command palette — a poor discovery route on mobile, and
+ * the chip itself said nothing about updates until one had *already* been
+ * found. This puts the action where a user goes to see what build they're
+ * on. A found update then surfaces in this same dropdown as the ordinary
+ * app-update diagnostic row, with its Reload button.
+ *
+ * Hidden when there's no service worker to ask, mirroring the action's own
+ * `isVisible` via the shared predicate so the two can't drift.
+ */
+function CheckForUpdatesRow() {
+  const [checking, setChecking] = useState(false)
+  if (!canCheckForAppUpdates()) return null
+  return (
+    <div className="border-t pt-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-7 w-full justify-start gap-2 px-2 text-xs"
+        disabled={checking}
+        onClick={() => {
+          setChecking(true)
+          void dispatchAction(APP_CHECK_FOR_UPDATES_ACTION_ID)
+            .finally(() => setChecking(false))
+        }}
+      >
+        <RefreshCcw className={cn('h-3.5 w-3.5', checking && 'animate-spin')}/>
+        Check for updates
+      </Button>
+    </div>
+  )
 }
 
 // The build the client is running — the committer-date version (e.g.
@@ -287,16 +344,6 @@ function SyncStatusHeaderContent({
   // already reddens the whole chip (diagnosticAlert), so it doesn't also dot.
   const nudge = diagnosticItems.find((it) => it.snapshot.nudge)
   const showStatusDot = Boolean(nudge) && !errorDiagnostic
-  // Run a diagnostic's inspect action (e.g. re-run the audit + open its dialog).
-  const runDiagnosticAction = (actionId: string): void => {
-    try {
-      void Promise.resolve(
-        runActionById(actionId, new CustomEvent('run-diagnostic-action')),
-      ).catch((e) => console.error('Failed to run diagnostic action', e))
-    } catch (e) {
-      console.error('Failed to run diagnostic action', e)
-    }
-  }
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
@@ -419,7 +466,7 @@ function SyncStatusHeaderContent({
                       size="sm"
                       variant="outline"
                       className="h-7 shrink-0 text-xs"
-                      onClick={() => runDiagnosticAction(item.snapshot.actionId!)}
+                      onClick={() => void dispatchAction(item.snapshot.actionId!)}
                     >
                       {item.snapshot.actionLabel ?? 'Inspect'}
                     </Button>
@@ -432,6 +479,7 @@ function SyncStatusHeaderContent({
                 )}
               </div>
             ))}
+            <CheckForUpdatesRow/>
           </div>
         </DropdownMenuContent>
       </DropdownMenu>

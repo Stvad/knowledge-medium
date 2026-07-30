@@ -121,6 +121,14 @@ const setDeviceOnline = (online: boolean) => {
   Object.defineProperty(navigator, 'onLine', {configurable: true, value: online})
 }
 
+// `canCheckForAppUpdates` keys on this; happy-dom ships no serviceWorker.
+const setServiceWorkerPresent = (present: boolean) => {
+  Object.defineProperty(navigator, 'serviceWorker', {
+    configurable: true,
+    value: present ? {} : undefined,
+  })
+}
+
 describe('SystemStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
@@ -140,6 +148,7 @@ describe('SystemStatusHeaderItem', () => {
   afterEach(() => {
     cleanup()
     setDeviceOnline(true)
+    setServiceWorkerPresent(false)
     resetConsistencyAuditStore()
   })
 
@@ -445,5 +454,33 @@ describe('SystemStatusHeaderItem', () => {
     expect(await screen.findByText('App update: A new version is available')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
     expect(mocks.runActionById).toHaveBeenCalledWith('app.reload', expect.anything())
+  })
+
+  it('offers a proactive update check before any update has been found', async () => {
+    setServiceWorkerPresent(true)
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+
+    render(<SystemStatusHeaderItem/>)
+
+    // No update pending — the chip is calm and shows no Reload row, but the
+    // check must still be reachable (it's the only way to *find* an update
+    // on a long-lived mobile tab that never navigates).
+    fireEvent.pointerDown(screen.getByRole('button'))
+    expect(screen.queryByRole('button', {name: 'Reload'})).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByRole('button', {name: /Check for updates/}))
+    expect(mocks.runActionById)
+      .toHaveBeenCalledWith('app.checkForUpdates', expect.anything())
+  })
+
+  it('hides the update check where there is no service worker to ask', async () => {
+    setServiceWorkerPresent(false)
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+
+    render(<SystemStatusHeaderItem/>)
+    fireEvent.pointerDown(screen.getByRole('button'))
+
+    expect(await screen.findByText('Last sync')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /Check for updates/})).not.toBeInTheDocument()
   })
 })
