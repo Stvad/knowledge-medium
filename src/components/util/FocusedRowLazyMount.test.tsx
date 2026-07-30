@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { ChangeScope, type User } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { focusBlock } from '@/data/properties'
+import { focusBlock, focusedBlockLocationProp, topLevelBlockIdProp } from '@/data/properties'
+import { usePropertyValue } from '@/hooks/block.js'
 import { FocusedRowLazyMount } from './FocusedRowLazyMount.tsx'
 import {
   LazyViewportMount,
@@ -55,6 +57,11 @@ beforeEach(async () => {
     await tx.create({id: 'fence-parent', workspaceId: WS, parentId: 'top', orderKey: 'b2', content: 'fence parent'})
     await tx.create({id: 'fence-nested', workspaceId: WS, parentId: 'fence-parent', orderKey: 'c1', content: 'fence nested'})
     await tx.create({id: PANEL_ID_2, workspaceId: WS, parentId: null, orderKey: 'a2'})
+    // A second page, for the back/forward content-swap case: the panel keeps
+    // this component and only swaps `scopeRootId`.
+    await tx.create({id: 'top2', workspaceId: WS, parentId: null, orderKey: 'a3', content: 'page 2'})
+    await tx.create({id: 'page2-row', workspaceId: WS, parentId: 'top2', orderKey: 'd0', content: 'page 2 row'})
+    await tx.create({id: 'page2-control', workspaceId: WS, parentId: 'top2', orderKey: 'd1', content: 'page 2 control'})
   }, {scope: ChangeScope.UiState})
 })
 
@@ -207,12 +214,16 @@ describe('FocusedRowLazyMount', () => {
   // Mounting a row makes the focus decorator scroll it into view, so acting on
   // the value the panel MOUNTS with would yank the panel away from the scroll
   // position it just restored.
+  //
+  // Under `StrictMode` deliberately, matching `main.tsx`: it double-invokes
+  // the effect, so the second run re-enters with the arrival already recorded
+  // — which is the only path that reaches the "same scope, same id" guard.
   it('ignores the focus value the panel mounts with', async () => {
     const panel = repo.block(PANEL_ID)
     await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
 
     render(
-      <>
+      <StrictMode>
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
@@ -230,7 +241,7 @@ describe('FocusedRowLazyMount', () => {
         >
           <div data-testid="control-row">control</div>
         </LazyViewportMount>
-      </>,
+      </StrictMode>,
     )
 
     // Fence: a focus MOVE is honoured, and it's issued after the arrival
@@ -244,6 +255,69 @@ describe('FocusedRowLazyMount', () => {
 
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
     expect(screen.queryByTestId('row')).not.toBeInTheDocument()
+  })
+
+  // Back/forward keeps this component and swaps `scopeRootId` — the restored
+  // page's focus arrives the same way a reload's does (one tx with the new
+  // top-level block), so it must be exempt too. Otherwise it reads as an
+  // ordinary move and scrolls away from the position the history effect is
+  // about to restore.
+  it('re-arms the exemption when the panel swaps to another page', async () => {
+    const panel = repo.block(PANEL_ID)
+    await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
+    await panel.set(topLevelBlockIdProp, 'top')
+
+    // Take `scopeRootId` from the panel block, as `PanelRenderer` does, so the
+    // swap below lands both props in ONE commit — which is what makes the
+    // arrival value visible on the same render as the new scope.
+    const PanelHarness = () => {
+      const [topLevelBlockId] = usePropertyValue(panel, topLevelBlockIdProp)
+      return <FocusedRowLazyMount block={panel} scopeRootId={topLevelBlockId ?? 'top'}/>
+    }
+    const tree = () => (
+      <>
+        <PanelHarness/>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('page2-row')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="page2-placeholder"/>}
+        >
+          <div data-testid="page2-row">page 2 row</div>
+        </LazyViewportMount>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('page2-control')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="page2-control-placeholder"/>}
+        >
+          <div data-testid="page2-control-row">page 2 control</div>
+        </LazyViewportMount>
+      </>
+    )
+    render(tree())
+
+    // The swap itself: new top-level block AND that page's restored focus in
+    // one tx, exactly as `writePanelContent` writes them.
+    await act(async () => {
+      await repo.tx(async tx => {
+        await tx.setProperty(PANEL_ID, topLevelBlockIdProp, 'top2')
+        await tx.setProperty(PANEL_ID, focusedBlockLocationProp, {
+          blockId: 'page2-row',
+          renderScopeId: 'panel:page2-row',
+        })
+      }, {scope: ChangeScope.UiState})
+    })
+
+    // Fence: a real move under the NEW scope is honoured, proving the
+    // component is live there and that the arrival value alone was skipped.
+    await focusBlock(panel, 'page2-control', {renderScopeId: 'panel:page2-control'})
+    await waitFor(() => {
+      expect(screen.getByTestId('page2-control-row')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('page2-placeholder')).toBeInTheDocument()
+    expect(screen.queryByTestId('page2-row')).not.toBeInTheDocument()
   })
 
   // ...but only on arrival. A permanent exemption would mean focus returning
