@@ -357,7 +357,12 @@ export default tseslint.config(
     // name every type the catalog advertises — including the two the catalog
     // sources from plugins. Enforcing here would mean ~24 disable comments
     // saying "this is a test", which teaches nothing.
-    files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
+    // The extension list matches the boundary rule's `files` glob above (which
+    // includes `.js`/`.mjs`/`.cjs`): a `{ts,tsx}`-only exemption would leave a
+    // JavaScript test that legitimately imports a plugin failing the gate as if
+    // it were shipped core code. The other rules turned off here never applied
+    // to JavaScript in the first place, so widening costs them nothing.
+    files: ['**/test/**/*.{ts,tsx,js,mjs,cjs}', '**/*.test.{ts,tsx,js,mjs,cjs}'],
     rules: {
       'no-restricted-syntax': 'off',
       'callback-set/prefer-callback-set': 'off',

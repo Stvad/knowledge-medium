@@ -90,6 +90,20 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/apiCatalog.ts'),
         code: `const m = import.meta.glob(['/src/components/**', '!/src/plugins/**'])`,
       },
+      // `new URL` against something other than `import.meta.url` is an ordinary
+      // runtime URL, not a build-time module reference.
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new URL('@/plugins/todo/worker.ts', base)`,
+      },
+      // A loose file directly under `src/plugins/` is CORE (see isInsidePlugin),
+      // so importing one from core is a core→core edge. `owningPlugin` has to
+      // agree with `isInsidePlugin` here, or the rule would forbid an import
+      // whose target it simultaneously treats as core.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { registry } from '@/plugins/registry.js'`,
+      },
       // A plugin depending on core (the sanctioned direction).
       {
         filename: plugin('todo/schema.ts'),
@@ -296,7 +310,7 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         code: `const m = import.meta.glob('/src/plugins/*/index.ts', { eager: true })`,
         errors: [{
           messageId: 'coreGlobsPluginLayer',
-          data: { plugin: '*', specifier: '/src/plugins/*/index.ts' },
+          data: { specifier: '/src/plugins/*/index.ts' },
         }],
       },
       // ...including the array form, where only the plugin-layer pattern fires.
@@ -305,7 +319,66 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         code: `const m = import.meta.glob(['/src/components/**', '/src/plugins/*/facet.ts'])`,
         errors: [{
           messageId: 'coreGlobsPluginLayer',
-          data: { plugin: '*', specifier: '/src/plugins/*/facet.ts' },
+          data: { specifier: '/src/plugins/*/facet.ts' },
+        }],
+      },
+      // A glob does not have to NAME the plugin layer to reach it. Vite expands
+      // both of these into src/plugins, but reading the pattern as a literal
+      // path said "no plugin here" — so the BROADEST globs were the ones that
+      // got through while the explicit one was caught.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/**/*.ts', { eager: true })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/**/*.ts' },
+        }],
+      },
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/{components,plugins}/**/*.ts')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/{components,plugins}/**/*.ts' },
+        }],
+      },
+      // `new URL('…', import.meta.url)` is Vite's idiom for a worker/wasm/asset
+      // reference. Not an import node, but Vite emits a chunk for it, so the
+      // build-time edge is just as real and just as non-removable.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const u = new URL('@/plugins/todo/worker.ts', import.meta.url)`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/worker.ts' },
+        }],
+      },
+      // ...including wrapped in `new Worker(...)`, which is the same inner node.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const w = new Worker(new URL('../plugins/todo/worker.ts', import.meta.url), { type: 'module' })`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../plugins/todo/worker.ts' },
+        }],
+      },
+      // A no-substitution template literal is exactly as static as a quoted
+      // string — it resolves to one module. Only an INTERPOLATED template is
+      // genuinely dynamic (see the valid case above).
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: 'const m = await import(`@/plugins/todo/schema.js`)',
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: 'declare const require: (s: string) => unknown; const x = require(`@/plugins/todo/schema.js`)',
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
         }],
       },
       // Bare `require()` is not an import node, so it needs its own handler.

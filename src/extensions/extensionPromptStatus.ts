@@ -26,8 +26,9 @@
 // in core", which can't both be true while core contributes to it. Resolving
 // that is a layer move (facet down into core, or these projections up into the
 // plugin layer), not something to smuggle into the commit that adds the lint
-// rule. The disables are per-import on purpose: a NEW plugin import here still
-// fails the gate.
+// rule. Keep these as `-next-line`: each covers exactly one import, so a NEW
+// plugin import here still fails the gate. A block-form
+// `/* eslint-disable boundary/... */` would silently cover the whole file.
 // eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
 import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/plugins/extensions-settings/actions.js'
 // eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above

@@ -49,10 +49,16 @@
  * `src/data/internals/` are both caught, while `../../scripts/plugins/x` —
  * which climbs out of `src/` — is not.
  *
- * Known gap, deliberate: a specifier that isn't a static string
- * (`` import(`@/plugins/${id}/index.js`) ``) can't be resolved, so it is dropped
- * rather than guessed at — the same "give up on the dynamic part" contract as
- * no-raw-synced-table-writes. Nothing in `src/` loads a plugin that way today.
+ * Known gaps, deliberate:
+ *   - a specifier that isn't statically known (`` import(`@/plugins/${id}/x.js`) ``
+ *     — a template with INTERPOLATIONS; a no-substitution template is static and
+ *     is checked) can't be resolved, so it is dropped rather than guessed at —
+ *     the same "give up on the dynamic part" contract as
+ *     no-raw-synced-table-writes. Nothing in `src/` loads a plugin that way.
+ *   - a static specifier passed to a helper that does the `import()` one call
+ *     frame away (`load('@/plugins/todo/x.js')`) — the literal never reaches an
+ *     import node, and chasing it needs interprocedural analysis a single-file
+ *     AST rule doesn't have. No such loader exists in `src/` today.
  */
 
 import { posix } from 'node:path'
@@ -79,13 +85,30 @@ const srcRelativePath = (filename, cwd) => {
   return relative.startsWith('src/') ? relative.slice('src/'.length) : undefined
 }
 
+/** A module-file extension, used to tell `plugins/registry.js` (a loose FILE)
+ *  from `plugins/todo` (a plugin BARREL — the form the composition root
+ *  imports). */
+const MODULE_EXTENSION = /\.[cm]?[jt]sx?$/
+
 /** The plugin a src-relative path belongs to, or undefined. `plugins` must be
  *  a whole leading segment, so `pluginIds.ts` and `pluginValuePresets` don't
  *  match. The `^` anchor is also what rejects a path that climbed out of `src/`
  *  (`../scripts/plugins/x`) — the `../../scripts/plugins/` case in the test
  *  suite pins exactly that, so don't drop the anchor thinking a separate
- *  out-of-tree guard covers it. There isn't one; this is it. */
-const owningPlugin = (srcRelative) => srcRelative?.match(/^plugins\/([^/]+)(?:\/|$)/)?.[1]
+ *  out-of-tree guard covers it. There isn't one; this is it.
+ *
+ *  A bare `plugins/<name>` with no further segment is the plugin's barrel
+ *  (`import { todoPlugin } from '@/plugins/todo'` — how every registration in
+ *  the composition root is written), so it counts. A bare `plugins/<name>.ts`
+ *  does NOT: that is a loose file directly under `src/plugins/`, which
+ *  `isInsidePlugin` already classifies as CORE, so importing one from core is a
+ *  core→core edge. The two functions have to agree, or the rule would forbid an
+ *  import while treating its target as core. */
+const owningPlugin = (srcRelative) => {
+  const [, name, separator] = srcRelative?.match(/^plugins\/([^/]+)(\/|$)/) ?? []
+  if (name === undefined) return undefined
+  return separator === '' && MODULE_EXTENSION.test(name) ? undefined : name
+}
 
 /** Whether the LINTED FILE lives inside a plugin. Deliberately stricter than
  *  `owningPlugin`: a loose file directly under `src/plugins/` is shared
@@ -130,16 +153,62 @@ const resolveSpecifier = (source, importerSrcRelative) => {
   return undefined
 }
 
-/** The string literals a node contributes as module specifiers — one literal,
- *  or an array of them (`import.meta.glob([...])` takes either). Negated glob
- *  patterns (`!…`) are exclusions, not dependencies, so they drop out. */
-const specifierLiterals = (node) => {
-  const literals = node?.type === 'ArrayExpression' ? node.elements : [node]
-  return literals
-    .map(el => (el?.type === 'TSLiteralType' ? el.literal : el))
-    .filter(el => el?.type === 'Literal' && typeof el.value === 'string' && !el.value.startsWith('!'))
-    .map(el => el.value)
+/** The static string a node contributes, or undefined. A no-substitution
+ *  template literal — `` import(`@/plugins/todo/index.js`) `` — is every bit as
+ *  static as a quoted string and resolves to exactly one module, so it counts;
+ *  only a template with interpolations is genuinely dynamic and drops out. */
+const staticString = (node) => {
+  const el = node?.type === 'TSLiteralType' ? node.literal : node
+  if (el?.type === 'Literal') return typeof el.value === 'string' ? el.value : undefined
+  if (el?.type === 'TemplateLiteral' && el.expressions.length === 0) {
+    return el.quasis[0].value.cooked
+  }
+  return undefined
 }
+
+/** The static string specifiers a node contributes — one, or an array of them
+ *  (`import.meta.glob([...])` takes either). Array holes (`['a', , 'b']`) and
+ *  non-static elements drop out. Negated glob patterns (`!…`) are exclusions,
+ *  not dependencies, so they drop out too. */
+const specifierLiterals = (node) => {
+  const elements = node?.type === 'ArrayExpression' ? node.elements : [node]
+  return elements
+    .map(staticString)
+    .filter(value => value !== undefined && !value.startsWith('!'))
+}
+
+/** Whether a resolved `import.meta.glob` PATTERN can expand into the plugin
+ *  layer. `owningPlugin` is the wrong test for a glob: it reads the pattern as
+ *  a literal path, so `**` + `/*.ts` and `{components,plugins}/**` — both of
+ *  which Vite expands into `src/plugins` — came back "not a plugin" and the
+ *  broadest globs sailed through while only the explicitly-`plugins/`-prefixed
+ *  one was caught.
+ *
+ *  Only the FIRST segment decides whether `src/plugins` is reachable at all, so
+ *  that is all this inspects. Deliberately conservative: a `*` in the first
+ *  segment matches the `plugins` directory like any other, so it counts even
+ *  though the rest of the pattern might exclude every real plugin file. A glob
+ *  is a coarse dependency by nature; a false alarm here is cheap to silence
+ *  inline, a miss is invisible. */
+const globReachesPluginLayer = (pattern) => {
+  const first = pattern?.split('/')[0]
+  if (first === undefined) return false
+  return first === 'plugins'
+    || first.includes('*')
+    || /\{[^}]*\bplugins\b[^}]*\}/.test(first)
+}
+
+/** `new URL('…', import.meta.url)` — Vite's idiom for referencing a worker,
+ *  wasm module or asset by path. It is not an import node, but Vite's static
+ *  analysis turns it into an emitted chunk, so it creates exactly the same
+ *  non-removable build-time edge. Also covers `new Worker(new URL(…))`, whose
+ *  inner expression is this same node. */
+const isImportMetaUrl = (node) =>
+  node?.type === 'NewExpression'
+  && node.callee?.name === 'URL'
+  && node.arguments[1]?.type === 'MemberExpression'
+  && node.arguments[1].object?.type === 'MetaProperty'
+  && node.arguments[1].property?.name === 'url'
 
 const isImportMetaGlob = (callee) =>
   callee?.type === 'MemberExpression'
@@ -186,11 +255,20 @@ const noCoreToPluginImports = {
     /** `node` is what gets reported — always the whole statement/expression, so
      *  an `eslint-disable-next-line` sits above a multi-line import rather than
      *  inside its braces. */
-    const check = (node, sourceNode, messageId = 'coreImportsPlugin') => {
+    const check = (node, sourceNode) => {
       for (const specifier of specifierLiterals(sourceNode)) {
         const plugin = owningPlugin(resolveSpecifier(specifier, importerSrcRelative))
         if (plugin === undefined) continue
-        context.report({node, messageId, data: {plugin, specifier}})
+        context.report({node, messageId: 'coreImportsPlugin', data: {plugin, specifier}})
+      }
+    }
+
+    /** Globs need their own classifier — see `globReachesPluginLayer`. A
+     *  pattern names no single plugin, so the message names the layer. */
+    const checkGlob = (node, sourceNode) => {
+      for (const specifier of specifierLiterals(sourceNode)) {
+        if (!globReachesPluginLayer(resolveSpecifier(specifier, importerSrcRelative))) continue
+        context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier}})
       }
     }
 
@@ -217,9 +295,11 @@ const noCoreToPluginImports = {
       // (plugins/agent-runtime/authoringCatalog.ts), which makes it the shape a
       // core module is most likely to reach for to "find all the plugins".
       CallExpression: (node) => {
-        if (isImportMetaGlob(node.callee)) check(node, node.arguments[0], 'coreGlobsPluginLayer')
+        if (isImportMetaGlob(node.callee)) checkGlob(node, node.arguments[0])
         else if (node.callee?.name === 'require') check(node, node.arguments[0])
       },
+      // `new URL('…', import.meta.url)`, incl. inside `new Worker(...)`.
+      NewExpression: (node) => isImportMetaUrl(node) && check(node, node.arguments[0]),
     }
   },
 }
