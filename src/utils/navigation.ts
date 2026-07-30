@@ -872,11 +872,16 @@ export const openAsyncBlockFromEvent = (
   void (async () => {
     try {
       const target = await resolveTarget(resolvedWorkspaceId)
-      const resolved = mapNavigate(decision, input => ({
-        ...input,
-        blockId: target.blockId,
-        workspaceId: target.workspaceId ?? input.workspaceId,
-      }))
+      // Fill in the placeholder ONLY if the policy left it in place. A
+      // `navigationIntentVerb` decorator is free to redirect the gesture to a
+      // block of its own choosing, and the sync opener honours that because the
+      // policy saw the real id; overwriting here unconditionally would make this
+      // surface the one place a redirect is silently ignored.
+      const resolved = mapNavigate(decision, input => (
+        input.blockId === NAVIGATOR_TARGET_PROBE_BLOCK_ID
+          ? {...input, blockId: target.blockId, workspaceId: target.workspaceId ?? input.workspaceId}
+          : input
+      ))
       if (resolved.kind === 'navigate') await navigate(repo, resolved.input)
     } catch (error) {
       console.error('[navigation] async open target failed', error)
