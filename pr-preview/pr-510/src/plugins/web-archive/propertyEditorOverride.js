@@ -1,0 +1,2 @@
+import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{archiveEnabledProp as t}from"./prefs.js";import{WebArchiveConsentEditor as n}from"./ui/WebArchiveConsentEditor.js";import{createElement as r}from"react";var i=e(t,{label:`Archive links I save`,Editor:e=>r(n,e)});export{i as webArchiveConsentUi};
+//# sourceMappingURL=propertyEditorOverride.js.map

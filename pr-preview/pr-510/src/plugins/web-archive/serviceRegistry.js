@@ -1,0 +1,2 @@
+import{archiveServicesFacet as e}from"./service.js";var t=t=>t.facetRuntime?.read(e)??new Map,n=(e,n)=>t(e).get(n);export{t as readArchiveServices,n as resolveArchiveService};
+//# sourceMappingURL=serviceRegistry.js.map
