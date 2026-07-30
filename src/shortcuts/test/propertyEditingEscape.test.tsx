@@ -257,6 +257,30 @@ describe('Escape in a property editor', () => {
     expect(document.activeElement).toBe(input)
   })
 
+  it('does not lend its opt-in to a global bound to a bare named key', () => {
+    // The opt-in admits non-text keys so a REBOUND exit key still works. That
+    // must not also hand those keys to GLOBAL, which declares no filter: the
+    // keybindings UI imposes no modifier requirement, so a user can put any
+    // global on bare F2/Enter/Delete, and it would then fire while they type
+    // here. Each candidate is judged by its own context, so this stays put.
+    const handler = vi.fn()
+    renderWith([
+      propertyEditingAction('exit_property_editing'),
+      {
+        id: 'test.rebound_global',
+        description: 'global rebound onto a bare named key',
+        context: ActionContextTypes.GLOBAL,
+        handler,
+        defaultBinding: {keys: 'F2'},
+      } as ActionConfig,
+    ])
+
+    pressKeyInInput('F2')
+
+    expect(handler).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(input)
+  })
+
   it('leaves bare-key global chords blocked while the input has focus', () => {
     // `test.bare_global` stands in for shortcut-help's bare `?`: a GLOBAL
     // chord that modal shadowing keeps installed. Typing must not reach it.
