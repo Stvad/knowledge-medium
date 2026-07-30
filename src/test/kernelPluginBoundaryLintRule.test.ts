@@ -136,6 +136,13 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `import { z } from 'zod'`,
       },
+      // A glob whose first segment expands to plain literals, none of them the
+      // plugin layer, stays clean — the conservative metacharacter check must
+      // not swallow every brace pattern.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/{components,hooks}/**/*.ts')`,
+      },
       // An alias that climbs OUT of `src/` — a real idiom here, three files
       // import `@/../vite-plugins/…`. Pins `withinSrc`'s out-of-tree branch,
       // which is what rejects these (not the anchor in `owningPlugin`).
@@ -390,6 +397,53 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '../plugins/todo/worker.ts' },
+        }],
+      },
+      // Leaving the source root and coming back. Both of these resolve to the
+      // todo plugin, but reasoning in src-relative space reduced them to a
+      // `../…` string that read as "escaped" — so the round trip was a way out.
+      // `@/../vite-plugins/…` (valid, above) proves the escape check still works.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { TODO_TYPE } from '@/../src/plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/../src/plugins/todo/schema.js' },
+        }],
+      },
+      {
+        filename: core('data/internals/kernelQueries.ts'),
+        code: `import { TODO_TYPE } from '../../../src/plugins/todo/schema.js'`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../../../src/plugins/todo/schema.js' },
+        }],
+      },
+      // Glob dialects that reach the plugin tree without spelling it: a
+      // character class, a partial brace, and an extglob alternation. Vite's
+      // glob engine expands all three into src/plugins.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/[p]lugins/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/[p]lugins/**' },
+        }],
+      },
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/plugin{s,}/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/plugin{s,}/**' },
+        }],
+      },
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/@(plugins|components)/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/@(plugins|components)/**' },
         }],
       },
       // A no-substitution template literal is exactly as static as a quoted

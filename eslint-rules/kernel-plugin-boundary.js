@@ -14,13 +14,13 @@
  *
  * Where the boundary is (derived from the layout, not asserted):
  *
- *   - PLUGIN = `src/plugins/<name>/**`. One directory per plugin; of the 604
- *     files under it, 113 import a SIBLING plugin (measured by resolving alias,
- *     relative and dynamic specifiers and excluding self-references — a naive
- *     substring count says 123, but 382 of those files reference only their OWN
- *     plugin via the `@/plugins/<self>/…` alias). Sibling imports are exactly
- *     what the principle permits, so a file inside a plugin is never a violator
- *     here. A loose file directly under `src/plugins/` is NOT a plugin — see
+ *   - PLUGIN = `src/plugins/<name>/**`. One directory per plugin, and well over
+ *     a hundred of the files under it import a SIBLING plugin — exactly what the
+ *     principle permits — so a file inside a plugin is never a violator here.
+ *     (Deliberately not a precise tally: it drifts with every commit, and a
+ *     grep for `@/plugins/` badly overcounts, since most files there reference
+ *     only their OWN plugin through the `@/plugins/<self>/…` self-alias.)
+ *     A loose file directly under `src/plugins/` is NOT a plugin — see
  *     `isInsidePlugin`.
  *   - CORE / KERNEL = everything else under `src/` — `src/facets` (the facet
  *     kernel), `src/data` (`kernelDataExtension` and friends), `src/components`,
@@ -39,15 +39,17 @@
  * — see the eslint.config.js overrides for why.
  *
  * What counts as depending: a static import, an `export … from`, a dynamic
- * `import()`, and a type-position `import('…')`. Type-only imports are flagged
- * too: `import type` still makes core's typecheck fail without the plugin
- * present, and a contract core names is a contract that belongs in core.
+ * `import()`, a type-position `import('…')`, `require()`, `import.meta.glob`
+ * over the plugin layer, and `new URL('…', import.meta.url)`. Type-only imports
+ * are flagged too: `import type` still makes core's typecheck fail without the
+ * plugin present, and a contract core names is a contract that belongs in core.
  *
- * Relative specifiers are RESOLVED against the linted file's directory (posix
- * join, same approach as ambient-accessors.js) rather than pattern-matched, so
- * `../plugins/x` from `src/extensions/` and `../../plugins/x` from
- * `src/data/internals/` are both caught, while `../../scripts/plugins/x` —
- * which climbs out of `src/` — is not.
+ * Specifiers are RESOLVED, not pattern-matched — see `resolveSpecifier`. So
+ * `../plugins/x` from `src/extensions/`, `../../plugins/x` from
+ * `src/data/internals/`, and a path that leaves and re-enters the tree
+ * (`@/../src/plugins/x`) are all caught, while `../../scripts/plugins/x` and
+ * `@/plugins/../data/repo.js` — which genuinely land outside the plugin layer —
+ * are not.
  *
  * Known gaps, deliberate:
  *   - a specifier that isn't statically known (`` import(`@/plugins/${id}/x.js`) ``
@@ -70,6 +72,10 @@ import { posix } from 'node:path'
 
 const normalizePath = (value) => value.replaceAll('\\', '/')
 
+// Under the pinned eslint, `context.filename` is always a string, so the
+// fallbacks are unreachable — kept only to match the identical helper in the
+// sibling rule files (ambient-accessors, block-subscriptions, child-view).
+// Defence in depth, not load-bearing.
 const getFilename = (context) =>
   normalizePath(context.filename ?? context.getFilename?.() ?? '')
 
@@ -106,7 +112,7 @@ const MODULE_EXTENSION = /\.[cm]?[jt]sx?$/
  *  a whole LEADING segment: `pluginIds.ts` doesn't match, and neither does a
  *  core directory that merely contains one (`markdown/plugins/remarkFoo.ts` —
  *  no such directory today, but that is an obvious name for one). Out-of-tree
- *  paths are rejected earlier, by `withinSrc`, not here.
+ *  paths are rejected earlier, by `srcRelativePath`, not here.
  *
  *  A bare `plugins/<name>` with no further segment is the plugin's barrel
  *  (`import { todoPlugin } from '@/plugins/todo'` — how every registration in
@@ -137,31 +143,30 @@ const isInsidePlugin = (srcRelative) => /^plugins\/[^/]+\//.test(srcRelative)
 const isAllowedFile = (importerSrcRelative, allowIn = []) =>
   allowIn.some(allowed => normalizePath(allowed) === `src/${importerSrcRelative}`)
 
-/** A src-relative path, normalized, or undefined if it escapes `src/`. Every
- *  branch of `resolveSpecifier` goes through this: the relative branch used to
- *  get normalization for free from `posix.join` while the alias branch did raw
- *  string slicing, which meant `@/./plugins/x` and `@/plugins//x` (both of
- *  which the bundler resolves into the plugin layer) slipped through, and
- *  `@/plugins/../data/repo.js` — pure core — was reported as importing a plugin
- *  named `..`. */
-const withinSrc = (path) => {
-  const normalized = posix.normalize(path)
-  return normalized === '..' || normalized.startsWith('../') ? undefined : normalized
-}
-
 /** Resolve an import specifier to a src-relative path, or undefined when it
- *  can't point inside `src/` (a bare package name, or a relative climb out of
- *  the tree). The `/src/…` form is not hypothetical — it is what
- *  `import.meta.glob` patterns use (see `plugins/agent-runtime/authoringCatalog.ts`). */
-const resolveSpecifier = (source, importerSrcRelative) => {
+ *  can't point inside `src/` (a bare package name, or a path that really does
+ *  leave the tree). The `/src/…` form is not hypothetical — it is what
+ *  `import.meta.glob` patterns use (see `plugins/agent-runtime/authoringCatalog.ts`).
+ *
+ *  Every form is resolved in ABSOLUTE space and only then made src-relative.
+ *  Slicing the prefix off and reasoning in src-relative space looks equivalent
+ *  and isn't: a specifier that leaves the source root and comes back —
+ *  `@/../src/plugins/todo/schema.js`, or `../../src/plugins/todo/schema.js`
+ *  from `src/data/` — reduces to a `../…` string and reads as "escaped", while
+ *  the bundler resolves both to the todo plugin. Absolute resolution collapses
+ *  the round trip, so leaving and re-entering lands where it actually lands.
+ *  Glob metacharacters survive this untouched — it is pure path arithmetic. */
+const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
   const specifier = normalizePath(source)
-  if (specifier.startsWith('@/')) return withinSrc(specifier.slice(2))
-  if (specifier.startsWith('/src/')) return withinSrc(specifier.slice('/src/'.length))
-  if (specifier.startsWith('src/')) return withinSrc(specifier.slice('src/'.length))
-  if (specifier.startsWith('./') || specifier.startsWith('../')) {
-    return withinSrc(posix.join(posix.dirname(importerSrcRelative), specifier))
-  }
-  return undefined
+  const repoRoot = posix.dirname(sourceRoot)
+  const absolute =
+    specifier.startsWith('@/') ? posix.resolve(sourceRoot, specifier.slice(2))
+    : specifier.startsWith('/src/') ? posix.resolve(repoRoot, specifier.slice(1))
+    : specifier.startsWith('src/') ? posix.resolve(repoRoot, specifier)
+    : specifier.startsWith('./') || specifier.startsWith('../')
+      ? posix.resolve(posix.dirname(posix.resolve(sourceRoot, importerSrcRelative)), specifier)
+      : undefined
+  return absolute === undefined ? undefined : srcRelativePath(absolute, sourceRoot)
 }
 
 /** The static string a node contributes, or undefined. A no-substitution
@@ -201,12 +206,29 @@ const specifierLiterals = (node) => {
  *  though the rest of the pattern might exclude every real plugin file. A glob
  *  is a coarse dependency by nature; a false alarm here is cheap to silence
  *  inline, a miss is invisible. */
+const GLOB_METACHARACTER = /[*?[\]()!+@]/
+
+/** Expand the simple brace alternations in a glob segment into the literal
+ *  candidates it can produce: `plugin{s,}` -> `plugins`, `plugin`, and
+ *  `{components,plugins}` -> `components`, `plugins`. Only the first brace group
+ *  is expanded, which is all a single path segment realistically carries. */
+const expandBraces = (segment) => {
+  const [, before, alternatives, after] = segment.match(/^([^{]*)\{([^{}]*)\}(.*)$/) ?? []
+  if (alternatives === undefined) return [segment]
+  return alternatives.split(',').map(alternative => `${before}${alternative}${after}`)
+}
+
 const globReachesPluginLayer = (pattern) => {
   const first = pattern?.split('/')[0]
   if (first === undefined) return false
-  return first === 'plugins'
-    || first.includes('*')
-    || /\{[^}]*\bplugins\b[^}]*\}/.test(first)
+  return expandBraces(first).some(candidate =>
+    // A literal `plugins`, or anything still holding a glob metacharacter.
+    // Conservative on purpose: `[p]lugins`, `@(plugins|components)` and `**`
+    // all expand into the plugin tree, and enumerating every glob dialect to
+    // decide which ones can't is not worth it — a false alarm costs one inline
+    // disable, a miss is invisible. `{components,ui}` expands to plain
+    // literals and is correctly left alone.
+    candidate === 'plugins' || GLOB_METACHARACTER.test(candidate))
 }
 
 /** `new URL('…', import.meta.url)` — Vite's idiom for referencing a worker,
@@ -275,7 +297,7 @@ const noCoreToPluginImports = {
      *  inside its braces. */
     const check = (node, sourceNode) => {
       for (const specifier of specifierLiterals(sourceNode)) {
-        const plugin = owningPlugin(resolveSpecifier(specifier, importerSrcRelative))
+        const plugin = owningPlugin(resolveSpecifier(specifier, importerSrcRelative, sourceRoot))
         if (plugin === undefined) continue
         context.report({node, messageId: 'coreImportsPlugin', data: {plugin, specifier}})
       }
@@ -285,7 +307,7 @@ const noCoreToPluginImports = {
      *  pattern names no single plugin, so the message names the layer. */
     const checkGlob = (node, sourceNode) => {
       for (const specifier of specifierLiterals(sourceNode)) {
-        if (!globReachesPluginLayer(resolveSpecifier(specifier, importerSrcRelative))) continue
+        if (!globReachesPluginLayer(resolveSpecifier(specifier, importerSrcRelative, sourceRoot))) continue
         context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier}})
       }
     }

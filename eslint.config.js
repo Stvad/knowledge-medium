@@ -256,14 +256,15 @@ export default tseslint.config(
     // it was, and the duplicated prose (down to a file count) is two copies to
     // keep in sync by hand.
     //
-    // Config-specific, with no home in the rule file: `.js`/`.mjs`/`.cjs` are
-    // in this glob even though every other block in this config is
-    // `{ts,tsx}`-only. That gap is real, not theoretical —
+    // Config-specific, with no home in the rule file: this glob covers every
+    // module extension the toolchain accepts, not just the ones present today,
+    // while every other block in this config is `{ts,tsx}`-only. That gap is
+    // real, not theoretical —
     // `src/data/syncedTableSqlRecognizer.js` is shipped core code that NO rule
     // in this config currently lints, so renaming a file to `.js` was a
     // one-step way out of this boundary. Widening the whole config is a
     // separate call; widening this one rule is not.
-    files: ['src/**/*.{ts,tsx,js,mjs,cjs}'],
+    files: ['src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
     plugins: {boundary: kernelPluginBoundary},
     rules: {
       'boundary/no-core-to-plugin-imports': ['error', {
@@ -356,12 +357,15 @@ export default tseslint.config(
     // name every type the catalog advertises — including the two the catalog
     // sources from plugins. Enforcing here would mean ~24 disable comments
     // saying "this is a test", which teaches nothing.
-    // The extension list matches the boundary rule's `files` glob above (which
-    // includes `.js`/`.mjs`/`.cjs`): a `{ts,tsx}`-only exemption would leave a
-    // JavaScript test that legitimately imports a plugin failing the gate as if
-    // it were shipped core code. The other rules turned off here never applied
-    // to JavaScript in the first place, so widening costs them nothing.
-    files: ['**/test/**/*.{ts,tsx,js,mjs,cjs}', '**/*.test.{ts,tsx,js,mjs,cjs}'],
+    // Mirrors the boundary rule's `files` glob above, and vitest's own
+    // `include` (`**/*.{test,spec}.{ts,tsx}` — note `spec`, which this override
+    // used to miss): an exemption narrower than the gate leaves a real test
+    // failing as if it were shipped core code. The other rules turned off here
+    // never applied to these extensions anyway, so widening costs them nothing.
+    files: [
+      '**/test/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+      '**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+    ],
     rules: {
       'no-restricted-syntax': 'off',
       'callback-set/prefer-callback-set': 'off',
