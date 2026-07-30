@@ -63,6 +63,12 @@ const collectHtml = (tree: Root): string[] => {
   return out
 }
 
+const collectLinkUrls = (tree: Root): string[] => {
+  const out: string[] = []
+  visit(tree, 'link', (node) => { out.push(node.url) })
+  return out
+}
+
 const collectEmbeds = (tree: Root) => {
   const out: Array<{alias: string; blockId: string; raw: string}> = []
   visit(tree, (node) => {
@@ -318,21 +324,13 @@ describe('remarkWikilinks', () => {
       const tree = transformWithGfm('[[a [foo](foo) b]]', {})
       expect(collectWikilinks(tree)).toHaveLength(0)
       // The inline `[foo](foo)` link should survive intact.
-      const linkUrls: string[] = []
-      visit(tree, 'link', (node) => {
-        linkUrls.push((node as {url: string}).url)
-      })
-      expect(linkUrls).toEqual(['foo'])
+      expect(collectLinkUrls(tree)).toEqual(['foo'])
     })
 
     it('does not reassemble across a `<…>` markdown autolink inside [[…]]', () => {
       const tree = transformWithGfm('[[before <https://example.com> after]]', {})
       expect(collectWikilinks(tree)).toHaveLength(0)
-      const linkUrls: string[] = []
-      visit(tree, 'link', (node) => {
-        linkUrls.push((node as {url: string}).url)
-      })
-      expect(linkUrls).toEqual(['https://example.com'])
+      expect(collectLinkUrls(tree)).toEqual(['https://example.com'])
     })
 
     it('marks bare [[…]] wikilinks with hasCustomDisplay=false', () => {
@@ -366,12 +364,7 @@ describe('remarkWikilinks', () => {
       const tree = transformWithGfm('contact foo@example.com here', {})
       expect(collectWikilinks(tree)).toHaveLength(0)
       // The autolink itself should still be present.
-      const links: Array<{url: string}> = []
-      visit(tree, 'link', (node) => {
-        links.push({url: (node as {url: string}).url})
-      })
-      expect(links).toHaveLength(1)
-      expect(links[0].url).toBe('mailto:foo@example.com')
+      expect(collectLinkUrls(tree)).toEqual(['mailto:foo@example.com'])
     })
   })
 
@@ -421,9 +414,18 @@ describe('remarkWikilinks', () => {
     })
 
     it('agrees with the canonical grammar about the alias', () => {
-      // `parseReferences` runs over the RAW content to build the stored edge,
-      // and it has no notion of html nodes — it already reports this span as
-      // a reference. The renderer refusing to draw it was the divergence.
+      // DOCUMENTS the renderer↔index invariant; it does not check it
+      // independently. `parseReferences` runs over RAW content to build the
+      // stored edge and already reported this span as a reference — the
+      // renderer refusing to draw it was the whole bug — so asserting both
+      // sides here states the agreement in one place for a future reader.
+      // It cannot fail on its own: the renderer half duplicates the first
+      // test in this block, and the grammar half has its own suite.
+      //
+      // Note the invariant is not universal — it is agreement on THIS input,
+      // not a general property. Entity and backslash escapes still diverge
+      // (`[[a&amp;b]]` renders alias `a&b`, the index stores `a&amp;b`);
+      // see the source-FAITHFUL vs source-EXACT note in remark-wikilinks.ts.
       const content = '[[<taglike page>]]'
       expect(parseReferences(content).map(r => r.alias)).toEqual(['<taglike page>'])
       expect(collectWikilinks(transformWithGfm(content)).map(l => l.data.hProperties.alias))
@@ -450,17 +452,29 @@ describe('remarkWikilinks', () => {
       expect(collectHtml(tree)).toEqual(['<!-- [[foo]] -->'])
     })
 
-    it('does not bridge when the span would cut an html node in half', () => {
+    // The containment check has two halves that fire on different shapes.
+    // They get a test each: a single fixture pins only one, and the other
+    // then reverts green.
+    it('does not bridge when the span would cut an html OPENER in half', () => {
       // `[[` lives INSIDE the tag's attribute value, so the span the scan
       // finds (`">x`) starts mid-node. Bridging would slice the raw tag
       // source in two and emit `<a href="` as a text node beside a bogus
       // wikilink; an html child must be swallowed whole or not at all.
-      // The trailing `<b>bold</b>` is load-bearing for the test, not
-      // decoration: with fewer than three children the reassembly pass
-      // bails before the containment check is ever consulted.
-      const tree = transformWithGfm('Paste <a href="[[">x]] and <b>bold</b> here', {})
+      const tree = transformWithGfm('Paste <a href="[[">x]] and here', {})
       expect(collectWikilinks(tree)).toHaveLength(0)
-      expect(collectHtml(tree)).toEqual(['<a href="[[">', '<b>', '</b>'])
+      expect(collectHtml(tree)).toEqual(['<a href="[[">'])
+    })
+
+    it('does not bridge when the span would cut an html CLOSER in half', () => {
+      // Mirror image: the `]]` lives inside the comment, so the span ENDS
+      // mid-node. Bridging would emit the comment's ` -->` tail as a plain
+      // text node beside a wikilink aliased `a <!-- b`. The trailing `<x>`
+      // is load-bearing — it is what carries the paragraph past the
+      // `kids.length < 3` early return, so the check is actually consulted.
+      const tree = transformWithGfm('[[a <!-- b]] --> c <x>', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      expect(collectHtml(tree)).toEqual(['<!-- b]] -->', '<x>'])
+      expect(collectText(tree)).toContain('[[a ')
     })
   })
 })
@@ -478,9 +492,13 @@ describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
       .use(remarkBlockrefs)
     return processor.runSync(processor.parse(md) as Root) as Root
   }
+  // Braced body: see the note on `collectText` — an expression body returns
+  // `push`'s length, which `visit` reads as "resume at this index" and which
+  // here SKIPS whole subtrees (`a **b** c` loses the `strong`). That would
+  // quietly weaken the `not.toContain('blockref')` assertion below.
   const nodeTypes = (tree: Root): string[] => {
     const out: string[] = []
-    visit(tree, (n) => out.push((n as {type: string}).type))
+    visit(tree, (n) => { out.push((n as {type: string}).type) })
     return out
   }
 
