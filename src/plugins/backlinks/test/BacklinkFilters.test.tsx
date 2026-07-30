@@ -311,4 +311,32 @@ describe('BacklinkFilters', () => {
       exclude: [],
     })
   })
+
+  // Escape has two jobs in the reference-filter field and they must not both
+  // run on one press: dismiss the typed query (its own dismissable state), or
+  // — with nothing to dismiss — fall through to `exit_property_editing`,
+  // which blurs the field and listens on `window`. A window listener stands
+  // in for that coordinator here, mirroring PropertyPicker's "Escape
+  // ownership" tests.
+  describe('Escape ownership', () => {
+    it('dismisses a typed query first, then lets Escape exit the field', () => {
+      const reachedShortcuts = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        render(<BacklinkFilters workspaceId="ws-1" filter={{}} onChange={vi.fn()} />)
+        const input = screen.getByPlaceholderText('Include reference') as HTMLInputElement
+        fireEvent.focus(input)
+        fireEvent.change(input, {target: {value: 'ab'}})
+
+        fireEvent.keyDown(input, {key: 'Escape'})
+        expect(input.value).toBe('')
+        expect(reachedShortcuts).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(input, {key: 'Escape'})
+        expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+  })
 })

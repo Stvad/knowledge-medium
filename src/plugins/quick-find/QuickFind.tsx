@@ -57,6 +57,7 @@ import {
   quickFindSelectionAction,
   type QuickFindOpenTarget,
 } from './selection.ts'
+import { isImeKeyEvent } from '@/shortcuts/utils.js'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
@@ -165,7 +166,7 @@ export function QuickFindList({
 
   const handleRootKeyDown = (event: KeyboardEvent) => {
     onKeyDown?.(event)
-    if (event.defaultPrevented || event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (event.defaultPrevented || isImeKeyEvent(event.nativeEvent) || isImeKeyEvent(event)) return
 
     if ((event.key === 'n' || event.key === 'j') && event.ctrlKey) {
       event.preventDefault()

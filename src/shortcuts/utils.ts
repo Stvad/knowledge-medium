@@ -23,6 +23,17 @@ export const hasEditableTarget = (event: KeyboardEvent) => {
 }
 
 /**
+ * True when a keydown belongs to an in-flight IME composition, so the app
+ * must not treat it as a shortcut. `isComposing` is the standard signal;
+ * some IME/browser combinations only report the legacy `keyCode === 229`
+ * for the same keystroke, so both are checked. Accepts a native or React
+ * keyboard event (pass `event.nativeEvent` for the React one when you want
+ * the native flags).
+ */
+export const isImeKeyEvent = (event: {isComposing?: boolean; keyCode?: number}): boolean =>
+  event.isComposing === true || event.keyCode === 229
+
+/**
  * A focusable field a property editor can put the caret in — what
  * `PROPERTY_EDITING` carries as its dependency and what its actions blur.
  * Shared by the context's dependency validator and the activation hook so

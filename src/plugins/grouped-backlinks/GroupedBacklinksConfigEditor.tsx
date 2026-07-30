@@ -26,6 +26,7 @@ import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
 } from './config.ts'
+import { dismissOnFieldEscape } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
@@ -184,8 +185,13 @@ const ConfigTagInput = ({
             onBlur={() => setFocused(false)}
             onKeyDown={event => {
               if (event.key === 'Escape') {
-                setQuery('')
-                resetResults()
+                // Dismiss-first — see BacklinkFilters: claim the key only when
+                // there is typed text to clear, else fall through to
+                // `exit_property_editing` so Escape exits the field.
+                dismissOnFieldEscape(event, query !== '' && (() => {
+                  setQuery('')
+                  resetResults()
+                }))
                 return
               }
               // Mid-debounce the visible results still belong to the previous

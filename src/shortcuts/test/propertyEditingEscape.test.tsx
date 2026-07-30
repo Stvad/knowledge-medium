@@ -331,6 +331,19 @@ describe('Escape in a property editor', () => {
     expect(document.activeElement).not.toBe(input)
   })
 
+  it('treats a legacy keyCode 229 keydown as composing too', () => {
+    // Some IME/browser combinations report the composition keydown only as
+    // `keyCode === 229`, with `isComposing` false. Keying the guard to
+    // `isComposing` alone leaves those users exiting the field mid-candidate.
+    renderWith([propertyEditingAction('exit_property_editing')])
+
+    pressKeyInInput('Escape', {keyCode: 229})
+    expect(document.activeElement).toBe(input)
+
+    pressKeyInInput('Escape')
+    expect(document.activeElement).not.toBe(input)
+  })
+
   it('runs nothing at all during a composition, not even the next candidate', () => {
     // Declining per action was the wrong shape: a decline means "not handled,
     // try the next candidate", so a global sharing the chord ran while the

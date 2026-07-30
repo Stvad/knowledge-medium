@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, type FocusEvent, type SyntheticEvent } from 'react'
 import { usePropertyEditingShortcuts } from '@/shortcuts/useActionContext.js'
 import type { PropertyEditingField } from '@/shortcuts/types.js'
-import { isPropertyEditingField } from '@/shortcuts/utils.js'
+import { isImeKeyEvent, isPropertyEditingField } from '@/shortcuts/utils.js'
 import { Block } from '@/data/block'
 
 interface PropertyEditingFocusHandlers {
@@ -99,7 +99,7 @@ export const dismissOnFieldEscape = (
   dismiss: (() => void) | false | undefined,
 ): boolean => {
   if (!dismiss) return false
-  if ((event.nativeEvent as Partial<KeyboardEvent>)?.isComposing) return false
+  if (isImeKeyEvent(event.nativeEvent as Partial<KeyboardEvent>)) return false
   consumeFieldEscape(event)
   dismiss()
   return true

@@ -51,7 +51,7 @@ import {
   ShortcutBindingDefaults,
 } from '@/shortcuts/types.js'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
-import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
+import { hasEditableTarget, isImeKeyEvent, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
 import { registerArmedHold } from '@/shortcuts/holdRegistry.js'
 
 /**
@@ -493,7 +493,7 @@ export function HotkeyReconciler(): null {
       // must not become the first half of `g g`. Declining per action was
       // not enough: a decline means "not handled, try the next candidate",
       // which handed the chord to whatever ranked below.
-      if (event.isComposing) return
+      if (isImeKeyEvent(event)) return
       const completed = completedRef.current
       completed.length = 0
       // Feed every candidate of this phase so each advances its own sequence
@@ -667,7 +667,7 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
   const onKeydown = (rawEvent: Event): void => {
     const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
     // Same rule as the keydown coordinator: don't arm off an IME's keys.
-    if (event.isComposing) return
+    if (isImeKeyEvent(event)) return
     if (event.repeat) {
       if (pending) applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
       return
