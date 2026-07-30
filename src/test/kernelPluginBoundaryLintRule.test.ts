@@ -18,8 +18,8 @@ const ruleTester = new RuleTester({
 // entirely, so an accidentally-unset filename would make a case pass vacuously
 // — hence the explicit `filename` everywhere below.
 //
-// Rooted at the real cwd because the rule resolves paths against `context.cwd`
-// (which RuleTester defaults to `process.cwd()`), not against a `src` path
+// Rooted at the real cwd so these line up with the `sourceRoot` injected
+// below: the rule resolves against that explicit root, not against a `src` path
 // segment — see `srcRelativePath` for why the segment heuristics were wrong.
 const repoPath = (name: string) => `${process.cwd()}/${name}`
 const core = (name: string) => repoPath(`src/${name}`)
@@ -27,9 +27,20 @@ const plugin = (name: string) => repoPath(`src/plugins/${name}`)
 
 const rule = kernelPluginBoundary.rules['no-core-to-plugin-imports']
 
+// `sourceRoot` is a REQUIRED rule option — a config that omits it fails at load
+// time rather than silently linting nothing — so every case has to supply it.
+// Injected here instead of per-case so the cases stay about the boundary; any
+// case that sets its own options (e.g. `allowIn`) keeps them.
+type Case = {options?: [Record<string, unknown>]}
+const withSourceRoot = <T extends Case>(cases: T[]): T[] =>
+  cases.map(one => ({
+    ...one,
+    options: [{sourceRoot: `${process.cwd()}/src`, ...(one.options?.[0] ?? {})}],
+  }))
+
 describe('no-core-to-plugin-imports ESLint rule', () => {
   ruleTester.run('no-core-to-plugin-imports', rule, {
-    valid: [
+    valid: withSourceRoot([
       // Core importing core is the whole point of core.
       {
         filename: core('extensions/appUpdateMount.tsx'),
@@ -40,7 +51,7 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         code: `import { repo } from '../data/repo.js'`,
       },
       // The other half of the principle: a plugin MAY depend on another plugin
-      // (113 files in src/plugins do). Both cases hit the same `isInsidePlugin`
+      // (well over a hundred files in src/plugins do). Both hit the same `isInsidePlugin`
       // early return — the rule registers no visitors at all for a file inside
       // a plugin — so the second is a statement of intent about relative-path
       // sibling imports, not extra branch coverage.
@@ -144,8 +155,8 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         code: `const m = import.meta.glob('/src/{components,hooks}/**/*.ts')`,
       },
       // An alias that climbs OUT of `src/` — a real idiom here, three files
-      // import `@/../vite-plugins/…`. Pins `withinSrc`'s out-of-tree branch,
-      // which is what rejects these (not the anchor in `owningPlugin`).
+      // import `@/../vite-plugins/…`. Pins `srcRelativePath`'s out-of-tree
+      // check, which is what rejects these (not the anchor in `owningPlugin`).
       {
         filename: core('data/repo.ts'),
         code: `import { injectThemeBootDefaults } from '@/../vite-plugins/injectThemeBootDefaults'`,
@@ -164,8 +175,8 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         // template placeholder — that unresolvable specifier IS the case.
         code: 'const m = await import(`@/plugins/${name}/index.js`)',
       },
-    ],
-    invalid: [
+    ]),
+    invalid: withSourceRoot([
       // The live violations this rule was written for.
       {
         filename: core('extensions/appUpdateStatus.ts'),
@@ -446,6 +457,18 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
           data: { specifier: '/src/@(plugins|components)/**' },
         }],
       },
+      // A brace ALTERNATIVE containing a slash. The first-segment split happens
+      // before expansion, so this arrives as the unbalanced fragment
+      // `{components/ui` — which expands to nothing and used to sail through.
+      // `{` and `}` are metacharacters precisely so that fragment still counts.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/{components/ui,plugins}/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/{components/ui,plugins}/**' },
+        }],
+      },
       // A no-substitution template literal is exactly as static as a quoted
       // string — it resolves to one module. Only an INTERPOLATED template is
       // genuinely dynamic (see the valid case above).
@@ -475,6 +498,6 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
           data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
         }],
       },
-    ],
+    ]),
   })
 })

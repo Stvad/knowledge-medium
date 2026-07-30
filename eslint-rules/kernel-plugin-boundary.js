@@ -97,7 +97,15 @@ const getFilename = (context) =>
  *  the gate was never actually blind, but an editor integration or a
  *  hand-invoked `eslint` needn't. `sourceRoot` is therefore passed explicitly
  *  from eslint.config.js (`import.meta.dirname`), which is exact and
- *  cwd-independent; the cwd default only serves standalone/RuleTester use. */
+ *  cwd-independent, and the schema marks it REQUIRED — a cwd-derived default
+ *  just moved the same fail-open one level up, where any config that forgot the
+ *  option would silently lint nothing.
+ *
+ *  Dormant limitation: `import.meta.dirname` resolves symlinks while ESLint's
+ *  `context.filename` preserves them, so a checkout under a symlinked ancestor
+ *  would make the two diverge and every file miss this prefix match. Not the
+ *  case here (`pwd -P` == `pwd`); fixing it needs a realpath call, which is not
+ *  worth filesystem access inside a lint rule until someone actually hits it. */
 const srcRelativePath = (filename, sourceRoot) => {
   const relative = posix.relative(sourceRoot, filename)
   return relative.startsWith('../') || posix.isAbsolute(relative) ? undefined : relative
@@ -177,7 +185,7 @@ const staticString = (node) => {
   const el = node?.type === 'TSLiteralType' ? node.literal : node
   if (el?.type === 'Literal') return typeof el.value === 'string' ? el.value : undefined
   if (el?.type === 'TemplateLiteral' && el.expressions.length === 0) {
-    return el.quasis[0].value.cooked
+    return el.quasis[0].value.cooked ?? undefined
   }
   return undefined
 }
@@ -206,7 +214,7 @@ const specifierLiterals = (node) => {
  *  though the rest of the pattern might exclude every real plugin file. A glob
  *  is a coarse dependency by nature; a false alarm here is cheap to silence
  *  inline, a miss is invisible. */
-const GLOB_METACHARACTER = /[*?[\]()!+@]/
+const GLOB_METACHARACTER = /[*?[\](){}!+@]/
 
 /** Expand the simple brace alternations in a glob segment into the literal
  *  candidates it can produce: `plugin{s,}` -> `plugins`, `plugin`, and
@@ -259,10 +267,16 @@ const noCoreToPluginImports = {
     },
     schema: [{
       type: 'object',
+      // `sourceRoot` is REQUIRED, so a config that forgets it fails loudly at
+      // load time instead of silently linting nothing. Making it optional with
+      // a cwd-derived default was the same fail-open bug one level up: the
+      // shipped config passed it, so the gate worked, while any other config —
+      // a nested one, an inline `--rule`, a copy of this rule elsewhere —
+      // silently reintroduced it.
+      required: ['sourceRoot'],
       properties: {
-        // Absolute path to the source root (`<repo>/src`). Pass it — deriving
-        // it from the cwd makes the rule fail OPEN when eslint runs from a
-        // subdirectory. See `srcRelativePath`.
+        // Absolute path to the source root (`<repo>/src`), from
+        // `import.meta.dirname` — exact and cwd-independent.
         sourceRoot: {type: 'string'},
         // `src/`-relative paths (matched EXACTLY) that may import plugins
         // anyway: the composition root, and nothing else by default.
@@ -279,9 +293,7 @@ const noCoreToPluginImports = {
   },
   create(context) {
     const filename = getFilename(context)
-    const sourceRoot = normalizePath(
-      context.options[0]?.sourceRoot ?? posix.join(context.cwd ?? process.cwd(), 'src'),
-    )
+    const sourceRoot = normalizePath(context.options[0].sourceRoot)
     const importerSrcRelative = srcRelativePath(filename, sourceRoot)
 
     // Only CORE files can violate this: a file outside `src/` isn't in either
