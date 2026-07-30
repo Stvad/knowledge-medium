@@ -9,6 +9,7 @@ import blockSubscriptions from './eslint-rules/block-subscriptions.js'
 import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
 import childView from './eslint-rules/child-view.js'
 import noRawSyncedTableWrites from './eslint-rules/no-raw-synced-table-writes.js'
+import kernelPluginBoundary from './eslint-rules/kernel-plugin-boundary.js'
 
 // DI-lens audit (PR #357) / follow-up (PR #424): every ambient-global
 // restriction the audit produced now lives in ambientAccessors.data.js and
@@ -238,6 +239,45 @@ export default tseslint.config(
     },
   },
   {
+    // THE central architecture principle, as a gate: **core cannot depend on
+    // plugins; plugins may depend on core and on each other.** Core declares
+    // seams (facets, mutators, queries, actions, renderers) and plugins fill
+    // them — the moment a core module names a plugin, that plugin stops being
+    // removable and the seam stops being a seam.
+    //
+    // A lint rule rather than a paragraph because this repo is built primarily
+    // by agents, and the erosion is always one line: a core module wants one
+    // constant or one type that happens to live in a plugin, and nothing
+    // objects. Prose doesn't survive that; a failing gate does.
+    //
+    // Scoped to `src/` — `scripts/` and `packages/` are top-level consumers
+    // sitting ABOVE both layers (like an entry point), so their plugin imports
+    // are not core→plugin edges. The rule additionally self-scopes: a file
+    // under `src/plugins/` is never a violator, so plugin→plugin (123 files
+    // today) stays allowed even if this `files` glob is later widened.
+    //
+    // See eslint-rules/kernel-plugin-boundary.js for where the boundary is
+    // derived from and what counts as a dependency (static import, `export …
+    // from`, dynamic `import()`, type-position `import('…')` — type-only
+    // imports included, since a contract core NAMES is a contract that belongs
+    // in core).
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: {boundary: kernelPluginBoundary},
+    rules: {
+      'boundary/no-core-to-plugin-imports': ['error', {
+        // The composition root — the two files whose entire job is registering
+        // every plugin with the app. Importing all of them is not a leak here,
+        // it is the definition of the file. This is the ONLY blanket exemption;
+        // genuine debt elsewhere carries an inline disable + a reason, so a
+        // NEW plugin import in an already-compromised file still fails.
+        allowIn: [
+          'src/extensions/staticAppExtensions.ts',
+          'src/extensions/staticDataExtensions.ts',
+        ],
+      }],
+    },
+  },
+  {
     // Static half of the "raw write to a synced table silently never
     // uploads" bug class (src/data/syncedTableWriteGuard.ts; GitHub issue
     // #404 item 1). Only a `repo.tx(...)` write sets `tx_context.source`,
@@ -299,11 +339,23 @@ export default tseslint.config(
     // the CallbackSet nudge is off there too. Test fixtures/harnesses also
     // legitimately poke synced tables directly (seeding rows, asserting on
     // raw SQL shapes) without going through repo.tx.
+    //
+    // The core→plugin boundary is off here for the same reason `scripts/` is
+    // out of scope: the invariant is about the SHIPPED module graph, and a test
+    // is a top-level consumer sitting above both layers, not part of core's
+    // dependency closure. A core integration test proving that core and several
+    // plugin data extensions compose (systemPagesCollision.test.ts installs
+    // four of them) is the correct shape for such a test, and the type-parity
+    // fixture (extensions/test/apiCatalogTypeParity.ts) exists precisely to
+    // name every type the catalog advertises — including the two the catalog
+    // sources from plugins. Enforcing here would mean ~24 disable comments
+    // saying "this is a test", which teaches nothing.
     files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': 'off',
       'callback-set/prefer-callback-set': 'off',
       'synced-write/no-raw-synced-table-writes': 'off',
+      'boundary/no-core-to-plugin-imports': 'off',
     },
   },
 )

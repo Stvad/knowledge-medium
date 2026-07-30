@@ -13,6 +13,13 @@ import { appUpdate } from '@/appUpdate.js'
 import { checkForAppUpdate } from '@/registerServiceWorker.js'
 import { showInfo } from '@/utils/toast.js'
 import { actionsFacet } from './core.js'
+// Grandfathered core→plugin edge (issue #493). This module is core — it projects
+// the core-owned service-worker update signal into a status snapshot — yet the
+// diagnostics seam it contributes to lives in a plugin, whose own header calls
+// it "deliberately NOT in core". Resolving that contradiction is a layer move,
+// tracked separately; the disable is per-import, so a new plugin import here
+// still fails the gate.
+// eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
 import {
   diagnosticsFacet,
   type DiagnosticSnapshot,

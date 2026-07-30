@@ -19,7 +19,18 @@
  * The derived snapshot is memoized (see below) to stay referentially stable
  * (a `useDiagnostics`/`useSyncExternalStore` need).
  */
+// Two grandfathered core→plugin edges (issue #493). This module is core — it
+// projects the core-owned extension-prompt store into a status snapshot — yet
+// it reaches into the diagnostics and extensions-settings plugins.
+// `plugins/diagnostics/facet.ts` says the diagnostics seam is "deliberately NOT
+// in core", which can't both be true while core contributes to it. Resolving
+// that is a layer move (facet down into core, or these projections up into the
+// plugin layer), not something to smuggle into the commit that adds the lint
+// rule. The disables are per-import on purpose: a NEW plugin import here still
+// fails the gate.
+// eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
 import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/plugins/extensions-settings/actions.js'
+// eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
 import {
   diagnosticsFacet,
   type DiagnosticSnapshot,
