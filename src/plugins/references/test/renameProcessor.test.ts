@@ -122,6 +122,14 @@ const blockReferences = async (sourceId: string, targetId: string) =>
     [sourceId, targetId],
   )
 
+/** The two LOCAL derived columns — what makes a row a field row (§7/§9).
+ *  `env.read` doesn't select them (they're device-local reflections of
+ *  content, not part of the synced row the other assertions look at). */
+const derivedColumns = async (id: string) =>
+  env.h.db.get<{reference_target_id: string | null; is_field_form: 1 | null}>(
+    'SELECT reference_target_id, is_field_form FROM blocks WHERE id = ?', [id],
+  )
+
 const seedSource = async (id: string, content: string): Promise<void> => {
   await env.repo.tx(
     tx => tx.create({id, workspaceId: WS, parentId: null, orderKey: 'b0', content}),
@@ -541,6 +549,146 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
       expect(await blockReferences('s', computeAliasSeatId('A', WS, 0)))
         .toEqual([{alias: 'A'}])
       expect(warn.mock.calls.flat().join(' ')).toContain('cannot pin a span')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)', () => {
+  // The last open arm of group 2: "its lossy-name fallback for MARKED rows is
+  // canonical `::((A))`, never a pinned label". A marked row is a property
+  // field row (§7) — it renders its property NAME, resolved through the
+  // definition its id points at — so a pinned label is text the row never
+  // displays. The tier is chosen per SOURCE, not per alias.
+
+  it('re-keys a marked name row to ::((A)) where a prose span gets the pinned label', async () => {
+    // Both referrers in ONE commit, so this also pins the partitioning: a
+    // blanket switch to the canonical form would break the prose span's
+    // display text, and no switch at all would leave the marked row with an
+    // invented label.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget(PIN_TARGET, '', ['Status'])
+      await seedSource('marked', '::[[Status]]')
+      await seedSource('prose', 'tracked in [[Status]] today')
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+      expect((await env.read('prose'))!.content)
+        .toBe(`tracked in [Status](((${PIN_TARGET}))) today`)
+      // Both still bind, and the marked row is still a field row: the
+      // canonical form keeps BOTH derived columns, which is what makes it
+      // machinery at all.
+      expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
+      expect(await derivedColumns('marked'))
+        .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('re-keys a LOSSY-name marked row cleanly, with no sanitized display to report', async () => {
+    // The behavioural gain, and the case the doc's wording names. `]` is legal
+    // in a wikilink alias but illegal in an aliased-blockref label, so the
+    // pinned tier can only display `ab` — it rewrites, but reports a changed
+    // display (see the sibling test above, which asserts exactly that for a
+    // prose span). On a marked row that display was never rendered in the
+    // first place, so the canonical form loses nothing and there is nothing
+    // to warn about.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget(PIN_TARGET, '', ['a]b'])
+      await seedSource('marked', '::[[a]b]]')
+      expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: 'a]b'}])
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+      expect(await blockReferences('marked', PIN_TARGET)).toEqual([{alias: PIN_TARGET}])
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('sanitized text')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('pins an UNMARKED whole-content [[α]] row — only the marker makes it machinery', async () => {
+    // The `::` marker is the whole difference. A block whose entire content is
+    // a page link is ordinary user content, and its display text is the alias
+    // the author typed: `((A))` would render A's CURRENT title instead, which
+    // after the release is the new name — silently retitling the user's link.
+    // Only a field row has a name of its own to render, which is why it can
+    // afford to drop the label.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget(PIN_TARGET, '', ['Status'])
+      await seedSource('unmarked', '[[Status]]')
+
+      await env.repo.tx(
+        tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('unmarked'))!.content).toBe(`[Status](((${PIN_TARGET})))`)
+      // And it is NOT a field row: the aliased form stamps the target column
+      // for any whole-block span, so the bit is the only thing separating the
+      // two — assert it, or this passes for the wrong reason.
+      expect(await derivedColumns('unmarked'))
+        .toEqual({reference_target_id: PIN_TARGET, is_field_form: null})
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('leaves a clean 1-for-1 rename in wikilink form, marked or not', async () => {
+    // Liveness for the tier ABOVE the fallback: the marked arm changes the
+    // fallback only. A name row follows the living name exactly as a link
+    // does — pinning it here would convert every renamed field row to an
+    // id-addressed one behind the user's back.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('marked', '::[[Old]]')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('marked'))!.content).toBe('::[[New]]')
+    expect(await blockReferences('marked', 't')).toEqual([{alias: 'New'}])
+  })
+
+  it('leaves a marked row alone when the target is not UUID-shaped', async () => {
+    // The canonical form is checked against the INLINE grammar, which is
+    // UUID-only — the same grammar that produces the edge the rewriter swaps
+    // in lockstep. Emitting `::((t))` would write an entry for an edge no
+    // re-parse produces. So the content is left alone and the stale edge is
+    // dropped for the re-parse to rebind, exactly as the pinned tier does.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await seedTarget('t', '', ['A'])
+      await seedSource('marked', '::[[A]]')
+      expect(await blockReferences('marked', 't')).toEqual([{alias: 'A'}])
+
+      await env.repo.tx(
+        tx => tx.setProperty('t', aliasesProp, []),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect((await env.read('marked'))!.content).toBe('::[[A]]')
+      expect(await blockReferences('marked', 't')).toEqual([])
+      expect(warn.mock.calls.flat().join(' ')).toContain('cannot re-key a marked row')
     } finally {
       warn.mockRestore()
     }
