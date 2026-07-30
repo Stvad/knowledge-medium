@@ -1,4 +1,5 @@
-import type { TypedBlockQuery } from '@/data/api'
+import type { BlockData, TypedBlockQuery } from '@/data/api'
+import { getBlockTypes } from '@/data/properties.js'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import {
   SRS_SM25_TYPE,
@@ -64,3 +65,43 @@ export const buildDueCardsQuery = ({
   ...(tagBlockId ? {match: [{scope, referencedBy: {id: tagBlockId}}]} : {}),
   order: 'created-asc',
 })
+
+/** Every block carrying the deck's tag ON ITSELF, cards and non-cards
+ *  alike. `selectNewCards` narrows this to the ones that aren't cards yet.
+ *
+ *  Two deliberate differences from `buildDueCardsQuery`:
+ *
+ *  - Scope is always `self`, never the deck's `ancestor` default. An
+ *    *existing* card may inherit deck membership from a tagged ancestor
+ *    page, but ENROLLING a block is only ever triggered by a tag on the
+ *    block itself. Ancestor scope here would enqueue every bullet under a
+ *    tagged page — answers, prose, scratch notes — as a new card.
+ *  - No type filter, because the predicate language has no "does NOT carry
+ *    type X" primitive (`types` is positive-only; `exclude` predicates
+ *    carry `where`/`referencedBy`/`id`, and the types property is a list,
+ *    so no `where` operator expresses non-membership). The tag narrows the
+ *    scan to `block_references`; `selectNewCards` applies the type test to
+ *    that result.
+ *
+ *  An absent `tagBlockId` (the untagged "all due" deck, or a tag whose page
+ *  doesn't exist) targets `UNRESOLVED_TAG_ID`, so the query matches nothing:
+ *  with no tag there is no "tagged for SRS" set to collect from. The filter
+ *  is kept rather than dropped — an omitted `referencedBy` would collect
+ *  every block in the workspace — and a sentinel id is used rather than a
+ *  null, which the predicate validator rejects outright. */
+export const buildTaggedCandidatesQuery = ({
+  workspaceId,
+  tagBlockId,
+}: Pick<DueCardsQueryInput, 'workspaceId' | 'tagBlockId'>): TypedBlockQuery => ({
+  workspaceId,
+  referencedBy: {id: tagBlockId || UNRESOLVED_TAG_ID},
+  order: 'created-asc',
+})
+
+/** The tagged blocks that aren't cards yet — "tagged for SRS but with no
+ *  SRS metadata". Carrying the type IS the metadata: every scheduling
+ *  property is written in the same tx that adds it (`applySrsReschedulePlan`),
+ *  so there is no half-enrolled state to distinguish, and a card that's
+ *  merely not due today must NOT come back as new. */
+export const selectNewCards = (candidates: readonly BlockData[]): BlockData[] =>
+  candidates.filter(data => !getBlockTypes(data).includes(SRS_SM25_TYPE))

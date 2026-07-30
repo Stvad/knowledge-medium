@@ -47,7 +47,7 @@ import {
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
 import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
-import { useDueCards, useDueCardsReady } from './useDueCards.ts'
+import { useReviewDeckCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
 import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
@@ -96,7 +96,14 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
  *  archived. A card can lose any of these in another panel after the
  *  session snapshotted its id; grading it then would re-add the type
  *  and/or write a fresh date via `rescheduleBlock`, resurrecting a card
- *  the user just removed from review. */
+ *  the user just removed from review.
+ *
+ *  A NEW card fails every clause here by construction (it carries no SRS
+ *  type at all), which is why grading one is gated on live membership of
+ *  the deck's new set instead — see `grade`. The two must stay separate:
+ *  "has no SRS type" is the normal state of a newly-tagged block AND the
+ *  state of a card whose type was just deleted, and only the tag tells
+ *  them apart. */
 const isLiveSrsCard = (data: BlockData): boolean => {
   if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
   try {
@@ -163,8 +170,9 @@ const GradeButtons = ({card, busy, onGrade}: {
 export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) => {
   const repo = useRepo()
   const workspaceId = deck.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-  const dueCards = useDueCards(workspaceId, tagName)
-  const dueLoaded = useDueCardsReady(workspaceId, tagName)
+  // Due cards followed by blocks tagged for review that aren't enrolled yet.
+  // `newIds` is live membership, not a snapshot — see `useReviewDeckCards`.
+  const {cards: dueCards, newIds, ready: dueLoaded} = useReviewDeckCards(workspaceId, tagName)
 
   // Persist the in-progress session (frozen queue + place) on a per-deck
   // child of the plugin's ui-state block so navigating away and back
@@ -330,8 +338,13 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         // `rescheduleBlock` would re-add the type and write a fresh date,
         // silently resurrecting a card the user just removed — so drop it
         // from the session instead of grading it.
+        // A new card (tagged for review, not enrolled yet) has no SRS state
+        // to resurrect — grading it IS the enrolment, and `rescheduleBlock`
+        // seeds the SM-2.5 defaults plus the type in one tx. Gate it on LIVE
+        // membership of the deck's new set, so a block that lost its tag
+        // since the queue was snapshotted is dropped rather than enrolled.
         const data = block.peek() ?? (await block.load())
-        if (!data || !isLiveSrsCard(data)) {
+        if (!data || !(isLiveSrsCard(data) || newIds.has(currentId))) {
           showInfo('Card is no longer in spaced repetition')
           advance()
           return
@@ -352,7 +365,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         setBusy(false)
       }
     },
-    [currentId, busy, repo, advance],
+    [currentId, busy, repo, advance, newIds],
   )
 
   const archive = useCallback(async () => {
@@ -449,6 +462,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }, [revealed])
 
   const deckLabel = tagName.trim() ? tagName.trim() : 'All due cards'
+  // Grading a new card enrolls it in spaced repetition (it has no history
+  // and no schedule yet), so say so rather than presenting an unfamiliar
+  // block as if it were an overdue card the user has seen before.
+  const currentIsNew = currentId !== null && newIds.has(currentId)
 
   const header = (
     <div className="mb-4 flex items-center justify-between gap-3">
@@ -456,7 +473,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         <ChevronLeft className="mr-1 h-3.5 w-3.5" />
         Decks
       </Button>
-      <span className="truncate text-sm font-medium text-muted-foreground">{deckLabel}</span>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-sm font-medium text-muted-foreground">{deckLabel}</span>
+        {currentIsNew && (
+          <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
+            New
+          </span>
+        )}
+      </span>
       <div className="flex items-center gap-1">
         <span className="text-xs tabular-nums text-muted-foreground">
           {total === 0 ? '' : `${Math.min(index + 1, total)} / ${total}`}
