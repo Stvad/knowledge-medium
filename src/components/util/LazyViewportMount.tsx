@@ -9,6 +9,23 @@ import { registerPendingLazyMount } from './lazyMountRegistry.js'
 const measuredHeights = new Map<string, number>()
 const mountedCacheKeys = new Set<string>()
 
+/**
+ * Cap on how far ABOVE the scrollport we pre-mount, regardless of the
+ * caller's `overscanPx`.
+ *
+ * Overscan exists so scrolling (and keyboard navigation) doesn't run into
+ * placeholders, and both of those overwhelmingly move DOWN — upward rows are
+ * usually mounted already, since mounting is sticky. Pre-mounting far above
+ * costs on both sides: it roughly doubles the mounted set at rest, and each
+ * row that mounts above the fold swaps its height estimate for its real
+ * height, pushing visible content down on engines without scroll anchoring
+ * (WebKit doesn't support `overflow-anchor`, so iOS/Safari take the jump).
+ *
+ * Callers' `overscanPx` therefore sets the downward distance, which is the
+ * one that has to cover a keystroke; upward is clamped to this.
+ */
+const UPWARD_OVERSCAN_CAP_PX = 200
+
 export interface LazyViewportPlaceholderProps {
   reservedHeight: number
 }
@@ -59,14 +76,25 @@ export function LazyViewportMount({
       // (the default) our overscan was therefore worth nothing inside a
       // scrolling panel — rows mounted only once they were literally on
       // screen, so "the next row" was routinely absent from the DOM.
-      {root: nearestScrollableAncestor(el), rootMargin: `${overscanPx}px 0px`},
+      //
+      // Accepted cost of rooting here: clips ABOVE the root no longer apply
+      // either, so rows in a panel that is itself scrolled out of view
+      // horizontally (≥4 open columns in `.layout`) mount anyway. Bounded by
+      // that panel's own scrollport, and mounting is sticky, so it's a
+      // one-off per column. Don't "fix" it by AND-ing a viewport-rooted
+      // observer: that reimposes the unexpanded panel clip and takes the
+      // overscan back to zero.
+      {
+        root: nearestScrollableAncestor(el),
+        rootMargin: `${Math.min(overscanPx, UPWARD_OVERSCAN_CAP_PX)}px 0px ${overscanPx}px 0px`,
+      },
     )
     observer.observe(el)
     return () => observer.disconnect()
   }, [mounted, overscanPx])
 
-  // While showing a placeholder, stay reachable by id so a focus write can
-  // pull this row into existence — see `lazyMountRegistry`.
+  // While showing a placeholder, stay reachable by key so a focus write can
+  // pull this row into existence — rationale in `lazyMountRegistry`.
   useEffect(() => {
     if (mounted) return
     return registerPendingLazyMount(cacheKey, () => setMounted(true))
@@ -100,4 +128,11 @@ export function LazyViewportMount({
       })}
     </div>
   )
+}
+
+/** Test-only: drop the session caches. Without this, a cache key that mounted
+ *  in an earlier test starts the next one already mounted. */
+export const __resetLazyMountCachesForTesting = (): void => {
+  mountedCacheKeys.clear()
+  measuredHeights.clear()
 }

@@ -8,7 +8,10 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { focusBlock } from '@/data/properties'
 import { FocusedRowLazyMount } from './FocusedRowLazyMount.tsx'
-import { LazyViewportMount } from './LazyViewportMount.tsx'
+import {
+  LazyViewportMount,
+  __resetLazyMountCachesForTesting,
+} from './LazyViewportMount.tsx'
 import { __resetLazyMountRegistryForTesting, lazyBlockCacheKey } from './lazyMountRegistry.ts'
 
 const WS = 'ws-1'
@@ -31,6 +34,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetLazyMountRegistryForTesting()
+  __resetLazyMountCachesForTesting()
   vi.stubGlobal('IntersectionObserver', NeverIntersectingObserver)
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo

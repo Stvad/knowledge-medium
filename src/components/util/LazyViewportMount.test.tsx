@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { LazyViewportMount } from './LazyViewportMount'
+import {
+  LazyViewportMount,
+  __resetLazyMountCachesForTesting,
+} from './LazyViewportMount'
 import {
   __resetLazyMountRegistryForTesting,
   requestLazyMount,
@@ -49,6 +52,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   TestIntersectionObserver.instances = []
   __resetLazyMountRegistryForTesting()
+  __resetLazyMountCachesForTesting()
 })
 
 describe('LazyViewportMount', () => {
@@ -89,9 +93,12 @@ describe('LazyViewportMount', () => {
 
     renderLazy('block:in-scroller', {container: host, overscanPx: 600})
 
+    // Asymmetric: the caller's overscan governs DOWNWARD only, where a
+    // keystroke needs it; upward is capped to keep the at-rest mounted set
+    // (and the layout shift above the fold) down.
     expect(TestIntersectionObserver.instances[0].options).toMatchObject({
       root: scroller,
-      rootMargin: '600px 0px',
+      rootMargin: '200px 0px 600px 0px',
     })
   })
 
@@ -102,13 +109,48 @@ describe('LazyViewportMount', () => {
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
 
     await act(async () => {
-      expect(requestLazyMount('block:off-screen')).toBe(true)
+      requestLazyMount('block:off-screen')
     })
 
     expect(screen.getByTestId('child')).toBeInTheDocument()
   })
 
-  it('reports no pending row for a key nothing is deferring', () => {
-    expect(requestLazyMount('block:not-rendered')).toBe(false)
+  // The same block renders in every panel/embed/recents row showing it, all
+  // under one cache key. Mounting only one of them would strand the others as
+  // placeholders their effects will never re-register — and the stranded one
+  // may be exactly the copy the focused location refers to.
+  it('mounts every pending row sharing a cache key', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    renderLazy('block:two-copies')
+    renderLazy('block:two-copies')
+    expect(screen.getAllByTestId('placeholder')).toHaveLength(2)
+
+    await act(async () => {
+      requestLazyMount('block:two-copies')
+    })
+
+    expect(screen.getAllByTestId('child')).toHaveLength(2)
+    expect(screen.queryByTestId('placeholder')).not.toBeInTheDocument()
+  })
+
+  // A request routinely arrives before the row exists: mounting a parent
+  // renders no children until its childIds handle resolves, so focus can move
+  // onto the first child a commit or two before that child registers. An
+  // edge-triggered request would be dropped there.
+  it('mounts a row that registers after the request, until the want is withdrawn', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    const withdraw = requestLazyMount('block:not-yet-rendered')
+    renderLazy('block:not-yet-rendered')
+    expect(screen.getByTestId('child')).toBeInTheDocument()
+
+    cleanup()
+    __resetLazyMountCachesForTesting()
+    withdraw()
+
+    renderLazy('block:not-yet-rendered')
+    expect(screen.getByTestId('placeholder')).toBeInTheDocument()
+    expect(screen.queryByTestId('child')).not.toBeInTheDocument()
   })
 })
