@@ -267,10 +267,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
       {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
-      {/* Focus can be written to a row that is still a lazy placeholder
-          (keyboard navigation resolves its target from the block model).
-          This pulls that row into existence so the focus has somewhere to
-          land. Renders null; one subscription per panel. */}
+      {/* Keeps this panel's focused row mounted even when it's still a lazy
+          placeholder — see the component. Renders null. */}
       <FocusedRowLazyMount block={block}/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">

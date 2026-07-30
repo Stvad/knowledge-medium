@@ -1,5 +1,6 @@
 import { clamp } from 'lodash-es'
 import { isElementProperlyVisible } from '@/utils/dom.js'
+import type { SpatialSurface } from './surface.ts'
 import {
   type FocusedBlockLocation,
   sameFocusedBlockLocation,
@@ -92,8 +93,15 @@ interface PanelPositionHint {
   ancestorLocations: readonly FocusedBlockLocation[]
 }
 
-export const surfaceOf = (el: HTMLElement): string | undefined =>
+const surfaceOf = (el: HTMLElement): string | undefined =>
   el.dataset.blockSurface
+
+/** True for a plain outline row — the panel's own tree, as opposed to a
+ *  trailing/nested surface (backlink, embed, breadcrumb). Lives here with the
+ *  rest of the surface policy (`DEFAULT_NON_NAVIGABLE_SURFACES`) so callers
+ *  don't hand-compare `data-block-surface` strings. */
+export const isOutlineSurface = (el: HTMLElement): boolean =>
+  surfaceOf(el) === ('outline' satisfies SpatialSurface)
 
 const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
   el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el

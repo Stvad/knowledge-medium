@@ -14,7 +14,13 @@ const windowVisibilityBounds = (): VerticalVisibilityBounds => ({
  *  (an `IntersectionObserver` `rootMargin` expands only the ROOT's rect —
  *  clip rects of scrolling ancestors in between are applied unexpanded, so
  *  an observer rooted at the viewport gets no overscan at all inside one of
- *  these). */
+ *  these).
+ *
+ *  Note the predicate reads COMPUTED `overflowY`, which CSS propagates from
+ *  `overflow-x` — an `overflow-x: auto` element with no explicit `overflow-y`
+ *  computes `auto` here and counts as a match. Fine for today's callers (such
+ *  a wrapper still clips vertically), but it's why this asks about a
+ *  scrollport rather than claiming the element definitely scrolls. */
 export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | null => {
   let ancestor = element.parentElement
   while (ancestor) {
