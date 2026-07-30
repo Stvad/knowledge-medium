@@ -154,6 +154,16 @@ describe('scoreCandidate', () => {
     expect(prefix).toBeGreaterThan(contains)
   })
 
+  it('prefers a later word-start occurrence over an earlier mid-word one', () => {
+    // `indexOf` alone reports whichever occurrence comes first in the
+    // string, not the better one — "sense" hits inside "Nonsense" at 3
+    // before the standalone "Sense" at 9, and the documented tier order
+    // says word-start beats substring.
+    const shadowed = scoreCandidate('Nonsense Sense', 'sense', tokens('sense'))!
+    const plain = scoreCandidate('Nonsense', 'sense', tokens('sense'))!
+    expect(shadowed).toBeGreaterThan(plain)
+  })
+
   it('ranks word-start higher than mid-word substring', () => {
     const wordStart = scoreCandidate('Java Programming', 'java', tokens('java'))!
     const midWord = scoreCandidate('Megajava', 'java', tokens('java'))!

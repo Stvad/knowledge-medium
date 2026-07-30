@@ -484,6 +484,12 @@ export interface BlockTypeAssignment {
   type: string
 }
 
+/** Live-claimant count for one alias string. */
+export interface AliasClaimantCount {
+  alias: string
+  claimants: number
+}
+
 // ════════════════════════════════════════════════════════════════════
 // Phase 4 chunk B — kernel queries as `queriesFacet` contributions
 // ════════════════════════════════════════════════════════════════════
@@ -1367,9 +1373,63 @@ export const blockTypesByIdsQuery = defineQuery<
        WHERE b.workspace_id = ?
          AND b.deleted = 0
          AND b.id IN (${placeholders})
+         AND json_type(b.properties_json, '$.types') = 'array'
          AND typeof(je.value) = 'text'
        ORDER BY b.id, je.key`,
       [workspaceId, ...blockIds],
+    )
+  },
+})
+
+/** How many LIVE blocks claim each of the given aliases.
+ *
+ *  Duplicate claimants are a documented latent state: the
+ *  `block_aliases_workspace_alias_unique` trigger only fires for local
+ *  user txs, so sync-applied rows can leave several. Consumers that
+ *  show something about "the block behind this alias" need to know,
+ *  because `aliasLookup` resolves the alias to the OLDEST claimant
+ *  regardless of how anything else ranked them.
+ *
+ *  Keyed by alias rather than block id on purpose: the caller has
+ *  already truncated its ranked rows to a display limit, so counting
+ *  claimants among THOSE would miss a claimant that ranked below the
+ *  cutoff and report a contested alias as uncontested. Index-backed by
+ *  `idx_block_aliases_ws_alias`. */
+export const aliasClaimantCountsQuery = defineQuery<
+  {workspaceId: string; aliases: string[]},
+  AliasClaimantCount[]
+>({
+  name: 'core.aliasClaimantCounts',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    // Same bound + reasoning as `blockTypesByIds`.
+    aliases: z.array(z.string()).max(200),
+  }),
+  resultSchema: z.array(z.object({
+    alias: z.string(),
+    claimants: z.number(),
+  })),
+  resolve: async ({workspaceId, aliases}, ctx) => {
+    if (!workspaceId || aliases.length === 0) return []
+    // The alias channel, not per-row deps: what matters here is a
+    // claimant entering or leaving the set for these aliases, which is
+    // exactly what this channel reports (and the rows that could do it
+    // are not knowable up front).
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
+    const placeholders = aliases.map(() => '?').join(', ')
+    return ctx.db.getAll<AliasClaimantCount>(
+      `SELECT ba.alias AS alias, count(*) AS claimants
+       FROM block_aliases ba
+       JOIN blocks b ON b.id = ba.block_id
+       WHERE ba.workspace_id = ?
+         AND ba.alias IN (${placeholders})
+         AND b.deleted = 0
+       GROUP BY ba.alias`,
+      [workspaceId, ...aliases],
     )
   },
 })
@@ -1450,6 +1510,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   aliasMatchesQuery,
   aliasMatchesFuzzyQuery,
   blockTypesByIdsQuery,
+  aliasClaimantCountsQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -1478,6 +1539,7 @@ declare module '@/data/api' {
     'core.aliasMatches': typeof aliasMatchesQuery
     'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
     'core.blockTypesByIds': typeof blockTypesByIdsQuery
+    'core.aliasClaimantCounts': typeof aliasClaimantCountsQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }

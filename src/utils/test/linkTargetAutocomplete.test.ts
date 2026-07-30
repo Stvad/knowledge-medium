@@ -495,6 +495,41 @@ describe('link target autocomplete helpers', () => {
     })
   })
 
+  it('ignores a non-array types value on the SEARCH path too, matching the MRU path', async () => {
+    // json_each happily walks a scalar and yields its text value, so
+    // without an array guard a block storing `types: "person"` shows
+    // "Person" for a typed query and nothing at `[[` — the two paths
+    // disagreeing on exactly the malformed input the tolerance exists
+    // for.
+    await insertRaw('scalar', {alias: ['Scalar page'], types: 'person'})
+
+    await expect(searchAliasLabels(env.repo, {workspaceId: WS, query: 'scalar'}))
+      .resolves.toEqual([{label: 'Scalar page', typeIds: []}])
+  })
+
+  it('suppresses the hint for a co-claimed alias that ranking truncated', async () => {
+    // Co-claim detection cannot run on the already-sliced ranked rows:
+    // if the MRU-boosted claimant lands inside the display limit and the
+    // canonical (oldest) one falls below the cutoff, the survivor list
+    // shows a single claimant and the hint describes the wrong block.
+    await create({id: 'older', aliases: ['Ada'], types: ['page', 'location']})
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('newer', ?, NULL, 'key-newer', '', ?, '[]', 9, 9, 9, 'u', 'u', 0)`,
+      [WS, JSON.stringify({alias: ['Ada'], types: ['page', 'person']})],
+    )
+
+    // limit=1 keeps only the MRU-boosted 'newer' row, which is the
+    // straddling-the-cutoff shape without needing 50 decoys.
+    await expect(searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'ada',
+      recentBlockIds: ['newer'],
+      limit: 1,
+    })).resolves.toEqual([{label: 'Ada', typeIds: []}])
+  })
+
   it('boosts recently-opened pages ahead of older matches', async () => {
     await create({id: 'older', aliases: ['Apple Tarte']})
     await create({id: 'recent', aliases: ['Apple Strudel']})

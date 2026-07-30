@@ -844,6 +844,38 @@ describe('repo.query.blockTypesByIds', () => {
   })
 })
 
+describe('repo.query.aliasClaimantCounts', () => {
+  it('counts live claimants per alias, ignoring deleted rows and other workspaces', async () => {
+    // Duplicate claims cannot go through `repo.tx` — the alias-uniqueness
+    // processor rejects the second one. Raw inserts are the sync-applied
+    // shape that produces co-claims in the first place: they maintain the
+    // block_aliases index but run no post-commit processor.
+    const claimRaw = async (id: string, alias: string, workspaceId = WS, deleted = 0) => {
+      await env.h.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, ?, '', ?, '[]', 1, 1, 1, 'u', 'u', ?)`,
+        [id, workspaceId, `k-${id}`, JSON.stringify({[aliasesProp.name]: [alias]}), deleted],
+      )
+    }
+    await claimRaw('a1', 'Shared')
+    await claimRaw('a2', 'Shared')
+    await claimRaw('gone', 'Shared', WS, 1)
+    await claimRaw('solo', 'Solo')
+    await claimRaw('other', 'Shared', 'ws-other')
+
+    const out = await env.repo.query.aliasClaimantCounts({
+      workspaceId: WS,
+      aliases: ['Shared', 'Solo', 'Absent'],
+    }).load()
+
+    expect([...out].sort((x, y) => x.alias.localeCompare(y.alias))).toEqual([
+      {alias: 'Shared', claimants: 2},
+      {alias: 'Solo', claimants: 1},
+    ])
+  })
+})
+
 describe('invalidation', () => {
   it('subtree: a new descendant invalidates the handle (parent-edge dep)', async () => {
     await create({id: 'r'})

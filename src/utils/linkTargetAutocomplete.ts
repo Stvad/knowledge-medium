@@ -242,24 +242,27 @@ export const searchAliasLabels = async (
   })
 
   // One row per alias STRING, since that string is what gets inserted.
-  // Where several live blocks claim the same alias, keep the top-ranked
-  // row for ordering but remember that the alias was contested.
   const firstByAlias = new Map<string, FuzzyAliasRow>()
-  const contested = new Set<string>()
   for (const row of rows) {
-    const existing = firstByAlias.get(row.alias)
-    if (!existing) {
-      firstByAlias.set(row.alias, row)
-      continue
-    }
-    if (existing.blockId !== row.blockId) contested.add(row.alias)
+    if (!firstByAlias.has(row.alias)) firstByAlias.set(row.alias, row)
   }
-
   const surviving = [...firstByAlias.values()]
-  const typeIdsByBlock = await loadTypeIdsByBlock(
-    repo,
-    workspaceId,
-    [...new Set(surviving.filter(row => !contested.has(row.alias)).map(row => row.blockId))],
+
+  // Claimant counts come from `block_aliases`, NOT from `rows`. `rows`
+  // has already been ranked and sliced to the display limit, so a second
+  // claimant that fell below the cutoff would be invisible here and the
+  // alias would look uncontested — showing the truncated winner's type
+  // for a link that resolves elsewhere. Runs alongside the type read
+  // rather than after it, so the extra lookup costs no round trip.
+  const [typeIdsByBlock, claimantCounts] = await Promise.all([
+    loadTypeIdsByBlock(repo, workspaceId, [...new Set(surviving.map(row => row.blockId))]),
+    repo.query.aliasClaimantCounts({
+      workspaceId,
+      aliases: surviving.map(row => row.alias),
+    }).load(),
+  ])
+  const contested = new Set(
+    claimantCounts.filter(row => row.claimants > 1).map(row => row.alias),
   )
   return surviving.map(row => ({
     label: row.alias,

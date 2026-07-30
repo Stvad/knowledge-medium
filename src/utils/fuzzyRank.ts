@@ -235,17 +235,27 @@ const scoreToken = (
   words: () => readonly string[],
   token: string,
 ): number | null => {
-  const idx = lowerText.indexOf(token)
-  if (idx === 0) return SCORE_TOKEN_WORD_START
-  if (idx > 0) {
-    // Same separator class `splitWords` uses. An ASCII-only test here
-    // (the previous `a-z` / `0-9` ranges) called any non-ASCII letter a
-    // word boundary, so "ve" scored a full word-start inside "Naïve"
-    // but a mid-word substring inside "Naive" — a 15-point swing that
-    // turned entirely on the preceding letter's alphabet.
-    const isWordBoundary = WORD_BOUNDARY_CHAR_RE.test(lowerText[idx - 1])
-    return isWordBoundary ? SCORE_TOKEN_WORD_START : SCORE_TOKEN_SUBSTRING
+  // Walk every occurrence, not just the first: `indexOf` reports the
+  // one earliest in the string, which is not the same as the best one.
+  // "sense" hits inside "Nonsense" at 3 before the standalone "Sense"
+  // at 9, and the header's "word-start beats substring" says the second
+  // should win. Bounded by the label (a page title), and the common case
+  // exits on the first iteration.
+  //
+  // The boundary test uses the same separator class `splitWords` does.
+  // An ASCII-only test (the previous `a-z` / `0-9` ranges) called any
+  // non-ASCII letter a word boundary, so "ve" scored a full word-start
+  // inside "Naïve" but a mid-word substring inside "Naive" — a 15-point
+  // swing that turned entirely on the preceding letter's alphabet.
+  let idx = lowerText.indexOf(token)
+  const firstIdx = idx
+  while (idx !== -1) {
+    if (idx === 0 || WORD_BOUNDARY_CHAR_RE.test(lowerText[idx - 1])) {
+      return SCORE_TOKEN_WORD_START
+    }
+    idx = lowerText.indexOf(token, idx + 1)
   }
+  if (firstIdx !== -1) return SCORE_TOKEN_SUBSTRING
   // Chain before typo: it scores higher (a deliberate abbreviation beats
   // a slip), so it has to win when a token satisfies both — and it is
   // also the cheaper of the two checks.
