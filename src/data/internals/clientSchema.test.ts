@@ -1170,6 +1170,36 @@ describe('runAnalyzeIfStale — index-set drift', () => {
     expect(ranAnalyze()).toBe(false)
   })
 
+  it('settles even against a db shim that drops bound params', async () => {
+    // Bootstrap callers hand-roll their db shim, and `repoProvider`'s dropped
+    // the params argument on `getOptional`. A `WHERE key = ?` marker lookup
+    // there binds NULL, matches nothing, and reads as "never analyzed" — so
+    // the multi-second scan would run on EVERY boot, in production only, with
+    // the suite green because this file's double forwards params.
+    const paramsDroppingDb = () => {
+      const executed: string[] = []
+      return {
+        executed,
+        db: {
+          execute: async (sql: string, params?: unknown[]) => {
+            executed.push(sql.trim())
+            const stmt = h.db.prepare(sql)
+            if (params && params.length > 0) stmt.run(...(params as Array<string | number>))
+            else stmt.run()
+          },
+          getOptional: async <T,>(sql: string) => (h.db.prepare(sql).get() as T) ?? null,
+        },
+      }
+    }
+    seedBlocks(opts.minBlocks)
+    const first = paramsDroppingDb()
+    expect((await runAnalyzeIfStale(first.db, opts)).analyzed).toBe(true)
+
+    const second = paramsDroppingDb()
+    expect((await runAnalyzeIfStale(second.db, opts)).analyzed).toBe(false)
+    expect(second.executed).not.toContain('ANALYZE')
+  })
+
   it('still respects the too-small-to-matter floor when the index set changes', async () => {
     h.insertBlock({id: 'only-block'})
     h.db.exec('CREATE INDEX idx_test_tiny ON blocks (created_at)')

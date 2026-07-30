@@ -1113,8 +1113,18 @@ export const SELECT_INDEX_SET_SQL = `
 
 export const ANALYZE_INDEX_SET_MARKER_PREFIX = 'analyze_index_set:'
 
+/** Reads the marker WITHOUT a bound parameter and compares the fingerprint in
+ *  JS. There is only ever one such row (recording clears the rest), so
+ *  `LIMIT 1` is exact. Param-free on purpose: bootstrap callers pass hand-rolled
+ *  db shims, and `repoProvider`'s dropped the params argument on `getOptional`
+ *  entirely — a `WHERE key = ?` lookup there binds NULL, matches nothing, and
+ *  silently turns "already analyzed" into "never analyzed", so the multi-second
+ *  scan would run on every boot. That shim is fixed, but this read no longer
+ *  depends on it. */
 export const SELECT_ANALYZE_INDEX_SET_MARKER_SQL = `
-  SELECT key FROM client_schema_state WHERE key = ?
+  SELECT key FROM client_schema_state
+  WHERE key LIKE '${ANALYZE_INDEX_SET_MARKER_PREFIX}%'
+  LIMIT 1
 `
 
 /** Replace rather than accumulate — only the current set is meaningful, and
@@ -1534,11 +1544,8 @@ const indexSetIsAnalyzed = async (
   db: ClientSchemaBootstrapDb,
   fingerprint: string,
 ): Promise<boolean> => {
-  const row = await db.getOptional<{key: string}>(
-    SELECT_ANALYZE_INDEX_SET_MARKER_SQL,
-    [ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint],
-  )
-  return row !== null
+  const row = await db.getOptional<{key: string}>(SELECT_ANALYZE_INDEX_SET_MARKER_SQL)
+  return row?.key === ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint
 }
 
 const recordIndexSetMarker = async (

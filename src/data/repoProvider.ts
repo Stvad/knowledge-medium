@@ -416,8 +416,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     // backfills must go through repo.tx (workspaceBackfillsFacet).
     execute: guardSyncedTableWrites((sql: string, params?: unknown[]) =>
       powerSyncDb.execute(sql, params as never[] | undefined)),
-    getOptional: async <T,>(sql: string) => {
-      const row = await powerSyncDb.getOptional<T>(sql)
+    // Forwards params. Dropping them silently bound NULL for any `?` in a
+    // bootstrap read, so the query matched nothing and the caller read that as
+    // "not done yet" — a backfill/marker probe that can never see its own
+    // completion re-runs its scan on every boot.
+    getOptional: async <T,>(sql: string, params?: unknown[]) => {
+      const row = await powerSyncDb.getOptional<T>(sql, params as never[] | undefined)
       return row ?? null
     },
   }
