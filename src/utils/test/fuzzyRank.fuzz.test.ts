@@ -40,6 +40,11 @@
  * P7 literal-substring tokens never score null (`scoreToken`'s `indexOf`
  *    branch, fuzzyRank.ts:133-146) — a token literally present in the label
  *    always contributes a non-null score.
+ * P8 word-prefix-chain soundness (`matchesWordPrefixChain`) — a token
+ *    BUILT as a chain (concatenated prefixes of an in-order subset of the
+ *    label's words) always scores non-null. Constructed rather than
+ *    mirrored: the generator knows the answer by construction, so there is
+ *    no reimplementation of the DP to drift from the shipped one.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -353,6 +358,12 @@ describe("editDistanceAtMostOne / hasTypoSubstring mirror (fuzzyRank.ts:85-129, 
         // `indexOf !== -1` fact this `fc.pre` excludes). So scoreCandidate
         // reduces exactly to `hasTypoSubstring(lowerLabel, token) ? 4 : null`.
         fc.pre(lowerLabel.indexOf(token) === -1)
+        // …provided the word-prefix-chain tier can't also fire, which it
+        // can't here: it needs a label of >= 2 words, and this generator's
+        // alphabet is [a-z0-9] with no separators. Assert that rather than
+        // depending on it silently — widening the alphabet later must
+        // break this line, not quietly invalidate the reduction above.
+        expect(/[\s\p{P}\p{S}]/u.test(label)).toBe(false)
 
         const real = scoreCandidate(label, token, [token])
         const mirrored = mirrorHasTypoSubstring(lowerLabel, token)
@@ -388,6 +399,54 @@ describe("scoreCandidate: literal-substring tokens never score null (scoreToken'
         expect(result).not.toBeNull()
       }),
       fuzzParams(150),
+    )
+  })
+})
+
+// ──── P8: word-prefix-chain soundness ────
+
+/** A lowercase word of 2-10 letters — the building block of a multi-word
+ *  label. Kept alphabetic so `splitWords`' separator class never cuts
+ *  inside one. */
+const wordArb = fc
+  .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), {minLength: 2, maxLength: 10})
+  .map(cs => cs.join(''))
+
+/** A multi-word label plus a token built to BE a valid word-prefix chain
+ *  over it: pick an in-order, non-empty subset of the words and
+ *  concatenate a non-empty prefix of each. Bounded by the shipped
+ *  CHAIN_MAX_WORDS / CHAIN_MAX_TOKEN_LEN caps (12 words / 24 chars) so a
+ *  generated case is never rejected by a guard rather than by the rule. */
+const chainCaseArb = fc
+  .array(wordArb, {minLength: 2, maxLength: 6})
+  .chain(words =>
+    fc
+      .array(
+        fc.record({
+          take: fc.boolean(),
+          prefixLen: fc.integer({min: 1, max: 10}),
+        }),
+        {minLength: words.length, maxLength: words.length},
+      )
+      .map(picks => {
+        const chunks: string[] = []
+        words.forEach((word, i) => {
+          if (!picks[i].take) return
+          chunks.push(word.slice(0, Math.min(picks[i].prefixLen, word.length)))
+        })
+        return {words, token: chunks.join('')}
+      })
+      .filter(({token}) => token.length > 0 && token.length <= 24),
+  )
+
+describe('scoreCandidate: word-prefix-chain soundness (matchesWordPrefixChain)', () => {
+  it('a token built as a chain of in-order word prefixes always scores non-null', () => {
+    fc.assert(
+      fc.property(chainCaseArb, ({words, token}) => {
+        const label = words.join(' ')
+        expect(scoreCandidate(label, token, [token])).not.toBeNull()
+      }),
+      fuzzParams(300),
     )
   })
 })

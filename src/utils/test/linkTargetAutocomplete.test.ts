@@ -1,13 +1,14 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import type { BlockData } from '@/data/api'
-import { aliasesProp } from '@/data/properties.js'
+import type { BlockData, TypeContribution } from '@/data/api'
+import { aliasesProp, typesProp } from '@/data/properties.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
 import {
+  completionTypeHint,
   labelForBlockData,
   searchAliasLabels,
   searchBlocksAcrossSources,
@@ -44,6 +45,7 @@ const create = async (args: {
   id: string
   content?: string
   aliases?: string[]
+  types?: string[]
 }) => {
   await env.repo.tx(async tx => {
     await tx.create({
@@ -52,12 +54,22 @@ const create = async (args: {
       parentId: null,
       orderKey: `key-${args.id}`,
       content: args.content ?? '',
-      properties: args.aliases
-        ? {[aliasesProp.name]: aliasesProp.codec.encode(args.aliases)}
-        : {},
+      properties: {
+        ...(args.aliases ? {[aliasesProp.name]: aliasesProp.codec.encode(args.aliases)} : {}),
+        ...(args.types ? {[typesProp.name]: typesProp.codec.encode(args.types)} : {}),
+      },
     })
   }, {scope: ChangeScope.BlockDefault})
 }
+
+/** `searchAliasLabels` returns `{label, typeIds}` rows; most assertions
+ *  here only care about the labels and their order. */
+const labelsOf = async (args: {
+  query: string
+  recentBlockIds?: string[]
+  limit?: number
+}): Promise<string[]> =>
+  (await searchAliasLabels(env.repo, {workspaceId: WS, ...args})).map(row => row.label)
 
 const blockData = (id: string, content: string, aliases?: string[]): BlockData => ({
   id,
@@ -84,6 +96,40 @@ const deferred = <T>() => {
   })
   return {promise, resolve, reject}
 }
+
+const typeRegistry = (
+  ...types: {id: string; label?: string; hideFromBlockDisplay?: boolean}[]
+): ReadonlyMap<string, TypeContribution> => new Map(types.map(type => [type.id, type]))
+
+describe('completionTypeHint', () => {
+  it('names the first display-worthy type', () => {
+    expect(completionTypeHint(
+      ['page', 'person'],
+      typeRegistry({id: 'page', label: 'Page', hideFromBlockDisplay: true}, {id: 'person', label: 'Person'}),
+    )).toBe('Person')
+  })
+
+  it('skips plumbing types whose chip is hidden on the block itself', () => {
+    // `page` sits on every page — annotating every dropdown row with it
+    // is noise, which is exactly what hideFromBlockDisplay already means.
+    expect(completionTypeHint(
+      ['page'],
+      typeRegistry({id: 'page', label: 'Page', hideFromBlockDisplay: true}),
+    )).toBeUndefined()
+  })
+
+  it('skips ids the registry does not know rather than showing a raw id', () => {
+    expect(completionTypeHint(['b7f2-uuid'], typeRegistry())).toBeUndefined()
+  })
+
+  it('skips a registered type that has no label to show', () => {
+    expect(completionTypeHint(['nameless'], typeRegistry({id: 'nameless'}))).toBeUndefined()
+  })
+
+  it('returns undefined for an untyped block', () => {
+    expect(completionTypeHint([], typeRegistry())).toBeUndefined()
+  })
+})
 
 describe('link target autocomplete helpers', () => {
   it('labels blocks by first alias, then content, then fallback', () => {
@@ -238,10 +284,7 @@ describe('link target autocomplete helpers', () => {
     await create({id: 'exact', aliases: ['Dating']})
     await create({id: 'prefix', aliases: ['Dating pool']})
 
-    await expect(searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: 'dating',
-    })).resolves.toEqual(['Dating', 'Dating pool'])
+    expect(await labelsOf({query: 'dating'})).toEqual(['Dating', 'Dating pool'])
   })
 
   it('uses recently-opened page aliases for an empty CodeMirror completion query', async () => {
@@ -249,43 +292,29 @@ describe('link target autocomplete helpers', () => {
     await create({id: 'recent', aliases: ['Recent page', 'Recent alternate']})
     await create({id: 'not-recent', aliases: ['Not recent']})
 
-    await expect(searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: '',
-      recentBlockIds: ['recent', 'older'],
-    })).resolves.toEqual(['Recent page', 'Recent alternate', 'Older page'])
+    expect(await labelsOf({query: '', recentBlockIds: ['recent', 'older']}))
+      .toEqual(['Recent page', 'Recent alternate', 'Older page'])
   })
 
   it('does not browse every workspace alias for an empty completion query', async () => {
     await create({id: 'page', aliases: ['Workspace page']})
 
-    await expect(searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: '',
-      recentBlockIds: [],
-    })).resolves.toEqual([])
+    expect(await labelsOf({query: '', recentBlockIds: []})).toEqual([])
   })
 
   it('skips missing recent blocks and limits aliases without falling through to older pages', async () => {
     await create({id: 'recent', aliases: ['Recent page', 'Recent alternate']})
     await create({id: 'older', aliases: ['Older page']})
 
-    await expect(searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: '',
-      recentBlockIds: ['recent', 'missing', 'older'],
-      limit: 2,
-    })).resolves.toEqual(['Recent page', 'Recent alternate'])
+    expect(await labelsOf({query: '', recentBlockIds: ['recent', 'missing', 'older'], limit: 2}))
+      .toEqual(['Recent page', 'Recent alternate'])
   })
 
   it('matches out-of-order tokens (word skip)', async () => {
     await create({id: 'match', aliases: ['PR Review Skill']})
     await create({id: 'no-pr', aliases: ['Book Review']})
 
-    const out = await searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: 'review pr',
-    })
+    const out = await labelsOf({query: 'review pr'})
     expect(out).toContain('PR Review Skill')
     expect(out).not.toContain('Book Review')
   })
@@ -293,23 +322,57 @@ describe('link target autocomplete helpers', () => {
   it('tolerates a single-char typo on tokens of length >= 4', async () => {
     await create({id: 'a', aliases: ['Apples']})
 
+    expect(await labelsOf({query: 'appls'})).toEqual(['Apples'])
+  })
+
+  it('carries the block type ids that back the dropdown type hint', async () => {
+    await create({id: 'person', aliases: ['Ada Lovelace'], types: ['page', 'person']})
+    await create({id: 'plain', aliases: ['Ada notes'], types: ['page']})
+
+    const out = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'ada'})
+    const byLabel = new Map(out.map(row => [row.label, [...row.typeIds].sort()]))
+    expect(byLabel.get('Ada Lovelace')).toEqual(['page', 'person'])
+    expect(byLabel.get('Ada notes')).toEqual(['page'])
+  })
+
+  it('reports no types for an untyped page rather than dropping the row', async () => {
+    await create({id: 'bare', aliases: ['Bare page']})
+
+    const out = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'bare'})
+    expect(out).toEqual([{label: 'Bare page', typeIds: []}])
+  })
+
+  it('reads types on the empty-query MRU path too', async () => {
+    await create({id: 'recent', aliases: ['Recent person'], types: ['page', 'person']})
+
     const out = await searchAliasLabels(env.repo, {
       workspaceId: WS,
-      query: 'appls',
+      query: '',
+      recentBlockIds: ['recent'],
     })
-    expect(out).toEqual(['Apples'])
+    expect(out).toEqual([{label: 'Recent person', typeIds: ['page', 'person']}])
+  })
+
+  it('does not leak types from a same-id block in another workspace', async () => {
+    await create({id: 'here', aliases: ['Shared name'], types: ['page']})
+    // Same block id is impossible, but a stale cross-workspace row in
+    // block_types is not — the query is workspace-scoped so it must not
+    // pick one up.
+    await env.h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, ?)`,
+      ['here', 'ws-other', 'person'],
+    )
+
+    const out = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'shared'})
+    expect(out).toEqual([{label: 'Shared name', typeIds: ['page']}])
   })
 
   it('boosts recently-opened pages ahead of older matches', async () => {
     await create({id: 'older', aliases: ['Apple Tarte']})
     await create({id: 'recent', aliases: ['Apple Strudel']})
 
-    const out = await searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: 'apple',
-      recentBlockIds: ['recent'],
-    })
-    expect(out).toEqual(['Apple Strudel', 'Apple Tarte'])
+    expect(await labelsOf({query: 'apple', recentBlockIds: ['recent']}))
+      .toEqual(['Apple Strudel', 'Apple Tarte'])
   })
 
   it('builds id candidates with excluded block ids', async () => {

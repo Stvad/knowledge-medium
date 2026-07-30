@@ -73,6 +73,59 @@ describe('scoreCandidate', () => {
     expect(scoreCandidate('Apples', 'xyz', tokens('xyz'))).toBeNull()
   })
 
+  describe('word-prefix chain (spaces dropped out of a multi-word title)', () => {
+    const chain = (label: string, query: string) =>
+      scoreCandidate(label, query, tokens(query))
+
+    it('matches run-together word prefixes', () => {
+      expect(chain('Meeting Notes', 'meetnotes')).not.toBeNull()
+      expect(chain('Product Requirements Document', 'prodreq')).not.toBeNull()
+      expect(chain('Strength Training Program', 'strtrain')).not.toBeNull()
+    })
+
+    it('matches initialisms', () => {
+      expect(chain('Product Requirements Document', 'prd')).not.toBeNull()
+      expect(chain('Strength Training Program', 'stp')).not.toBeNull()
+      expect(chain('San Francisco', 'sf')).not.toBeNull()
+    })
+
+    it('skips words between chunks', () => {
+      expect(chain('Product Requirements Document', 'pd')).not.toBeNull()
+      expect(chain('Product Requirements Document', 'proddoc')).not.toBeNull()
+    })
+
+    it('keeps chunk order — a chain may skip words but not reorder them', () => {
+      expect(chain('Product Requirements Document', 'dp')).toBeNull()
+      expect(chain('Meeting Notes', 'notesmeet')).toBeNull()
+    })
+
+    it('requires the whole token to be consumed', () => {
+      expect(chain('Meeting Notes', 'meetnoteszz')).toBeNull()
+      expect(chain('San Francisco', 'sfx')).toBeNull()
+    })
+
+    it('needs every chunk to start at a word start, not mid-word', () => {
+      // Three words, so the run-together form is two dropped spaces away
+      // — out of typo range — and "lpha" is not a prefix of "alpha".
+      expect(chain('Alpha Bravo Charlie', 'lphabravocharlie')).toBeNull()
+      // Same shape with word-start chunks does match, so the assertion
+      // above is pinning the word-start rule and not just the distance.
+      expect(chain('Alpha Bravo Charlie', 'alphbravcharl')).not.toBeNull()
+    })
+
+    it('does not fire on single-word labels (substring/typo already cover those)', () => {
+      expect(chain('Autocomplete', 'atcmp')).toBeNull()
+    })
+
+    it('ranks below a literal substring and above a typo', () => {
+      const substring = scoreCandidate('Strength Training', 'training', tokens('training'))!
+      const chained = scoreCandidate('Strength Training', 'strtrain', tokens('strtrain'))!
+      const typo = scoreCandidate('Strength', 'strenth', tokens('strenth'))!
+      expect(substring).toBeGreaterThan(chained)
+      expect(chained).toBeGreaterThan(typo)
+    })
+  })
+
   it('ranks exact whole-query match above prefix and substring', () => {
     const exact = scoreCandidate('Dating', 'dating', tokens('dating'))!
     const prefix = scoreCandidate('Dating pool', 'dating', tokens('dating'))!

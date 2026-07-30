@@ -1,6 +1,6 @@
-import type { BlockData } from '@/data/api'
+import type { BlockData, TypeContribution } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties.js'
+import { aliasesProp, typesProp } from '@/data/properties.js'
 import {
   searchSourcesFacet,
   type SearchSourceArgs,
@@ -28,6 +28,16 @@ export interface LinkTargetAliasMatch {
   alias: string
   blockId: string
   content: string
+}
+
+/** One row of the `[[` completion dropdown: the alias to insert plus the
+ *  block's type ids, which the wiring turns into the muted hint shown
+ *  beside it (see {@link completionTypeHint}). Type ids rather than a
+ *  resolved string so this stays a pure data read — the registry that
+ *  names them is a UI-time concern. */
+export interface AliasCompletionCandidate {
+  label: string
+  typeIds: readonly string[]
 }
 
 export interface LinkTargetBlockMatch {
@@ -75,6 +85,35 @@ export const labelForBlockData = (
 const stringSet = (values?: Iterable<string>): Set<string> =>
   new Set(values ?? [])
 
+/** The type name shown beside a `[[` completion candidate, or
+ *  `undefined` when the row has nothing worth saying.
+ *
+ *  Reuses the `hideFromBlockDisplay` rule rather than inventing a second
+ *  one: a type whose chip is suppressed on the block itself is plumbing
+ *  (`page` sits on every page, so annotating every row with it is pure
+ *  noise), and the same judgement applies in the dropdown. Unknown ids
+ *  are skipped too — `TypeChipsDecorator` keeps them visible so a tag
+ *  never silently disappears from a block the user is looking at, but
+ *  here there is no label to render and a raw uuid is worse than no
+ *  hint. First surviving type wins; the dropdown row has space for one. */
+export const completionTypeHint = (
+  typeIds: readonly string[],
+  registry: ReadonlyMap<string, TypeContribution>,
+): string | undefined => {
+  for (const typeId of typeIds) {
+    const type = registry.get(typeId)
+    if (!type || type.hideFromBlockDisplay === true) continue
+    const label = type.label?.trim()
+    if (label) return label
+  }
+  return undefined
+}
+
+const decodeTypeIds = (data: BlockData): readonly string[] => {
+  const raw = data.properties[typesProp.name]
+  return raw === undefined ? typesProp.defaultValue : typesProp.codec.decode(raw)
+}
+
 const aliasMatchesFromRows = (
   rows: LinkTargetAliasMatch[],
   seenBlockIds: Set<string>,
@@ -109,6 +148,28 @@ const blockMatchesFromRows = (
   return blocks
 }
 
+/** Types for a bounded set of already-chosen blocks, as a lookup keyed
+ *  by block id. One `block_types` read for the whole page of results:
+ *  the index is keyed `(block_id, type)`, so this is `ids.length` seeks
+ *  and stays flat as the workspace grows — unlike folding the types into
+ *  the fuzzy pre-filter, which would pay per *scanned* row rather than
+ *  per *displayed* one. */
+const loadTypeIdsByBlock = async (
+  repo: Repo,
+  workspaceId: string,
+  blockIds: string[],
+): Promise<Map<string, string[]>> => {
+  const byBlock = new Map<string, string[]>()
+  if (blockIds.length === 0) return byBlock
+  const rows = await repo.query.blockTypesByIds({workspaceId, blockIds}).load()
+  for (const row of rows) {
+    const existing = byBlock.get(row.blockId)
+    if (existing) existing.push(row.type)
+    else byBlock.set(row.blockId, [row.type])
+  }
+  return byBlock
+}
+
 export const searchAliasLabels = async (
   repo: Repo,
   {
@@ -122,7 +183,7 @@ export const searchAliasLabels = async (
     recentBlockIds?: ReadonlyArray<string>
     limit?: number
   },
-): Promise<string[]> => {
+): Promise<AliasCompletionCandidate[]> => {
   if (!workspaceId) return []
   const trimmed = query.trim()
   // Bare `[[` is a suggestion surface, not "browse all aliases". Loading
@@ -135,19 +196,23 @@ export const searchAliasLabels = async (
       (recentBlockIds ?? []).map(blockId => repo.block(blockId).load()),
     )
     const seen = new Set<string>()
-    const labels: string[] = []
+    const candidates: AliasCompletionCandidate[] = []
     for (const block of blocks) {
       if (!block || block.workspaceId !== workspaceId) continue
       const aliases = block.properties[aliasesProp.name]
       if (!Array.isArray(aliases)) continue
+      // These rows are whole blocks already (the MRU path loads them to
+      // read aliases), so their types come along for free — no
+      // `block_types` round trip on the zero-input path.
+      const typeIds = decodeTypeIds(block)
       for (const alias of aliases) {
         if (typeof alias !== 'string' || alias.trim() === '' || seen.has(alias)) continue
         seen.add(alias)
-        labels.push(alias)
-        if (labels.length === limit) return labels
+        candidates.push({label: alias, typeIds})
+        if (candidates.length === limit) return candidates
       }
     }
-    return labels
+    return candidates
   }
 
   const rows = await runFuzzyAliasSearch(repo, {
@@ -157,14 +222,25 @@ export const searchAliasLabels = async (
     limit,
   })
 
+  // De-dupe by alias BEFORE reading types, so the type lookup is sized
+  // by what actually renders rather than by the candidate pool.
   const seen = new Set<string>()
-  const labels: string[] = []
+  const surviving: FuzzyAliasRow[] = []
   for (const row of rows) {
     if (seen.has(row.alias)) continue
     seen.add(row.alias)
-    labels.push(row.alias)
+    surviving.push(row)
   }
-  return labels
+
+  const typeIdsByBlock = await loadTypeIdsByBlock(
+    repo,
+    workspaceId,
+    [...new Set(surviving.map(row => row.blockId))],
+  )
+  return surviving.map(row => ({
+    label: row.alias,
+    typeIds: typeIdsByBlock.get(row.blockId) ?? [],
+  }))
 }
 
 interface FuzzyAliasRow {

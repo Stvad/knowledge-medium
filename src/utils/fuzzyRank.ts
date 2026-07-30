@@ -7,22 +7,36 @@
  * and filtering.
  *
  * Matching: a candidate matches when every query token has either a
- * literal substring match (case-insensitive) or — for tokens of length
- * >= 4 — a substring at edit distance 1. Each token contributes its
- * own score (word-start beats substring beats typo); whole-query
- * exact / prefix / substring matches add a large bonus on top so the
- * "I typed exactly the page name" path stays at the top regardless of
- * recency. Recency is layered last (MRU > recent edit > nothing).
+ * literal substring match (case-insensitive), a substring at edit
+ * distance 1 (tokens of length >= 4 only), or a word-prefix chain —
+ * the token cut into consecutive chunks that are each a prefix of a
+ * later word in the label ("prodreq" / "prd" → "Product Requirements
+ * Document"). Each token contributes its own score (word-start beats
+ * substring beats chain beats typo); whole-query exact / prefix /
+ * substring matches add a large bonus on top so the "I typed exactly
+ * the page name" path stays at the top regardless of recency. Recency
+ * is layered last (MRU > recent edit > nothing).
  */
 
 const PREFIX_FILTER_LEN = 3
 const TYPO_MIN_TOKEN_LEN = 4
+
+/** Guards on the word-prefix-chain DP below. Both are far above any
+ *  real page title / typed query, and exist so a pathological label
+ *  (a pasted paragraph that ended up as an alias) can't turn an
+ *  autocomplete keystroke into a long scan. */
+const CHAIN_MAX_WORDS = 12
+const CHAIN_MAX_TOKEN_LEN = 24
 
 const SCORE_FULL_EXACT = 1000
 const SCORE_FULL_PREFIX = 500
 const SCORE_FULL_SUBSTRING = 200
 const SCORE_TOKEN_WORD_START = 30
 const SCORE_TOKEN_SUBSTRING = 15
+/** Above `SCORE_TOKEN_TYPO`: dropping the spaces out of a title you know
+ *  ("prd", "meetnotes") is a deliberate abbreviation, which is stronger
+ *  evidence of intent than a one-character slip. */
+const SCORE_TOKEN_WORD_CHAIN = 8
 const SCORE_TOKEN_TYPO = 4
 const SCORE_RECENT_MRU_HEAD = 80
 const SCORE_RECENT_MRU_STEP = 6
@@ -128,9 +142,76 @@ const hasTypoSubstring = (text: string, token: string): boolean => {
   return false
 }
 
+/** Word runs of a lowercased label — split on whitespace, punctuation
+ *  and symbols. Script-agnostic (any `\p{L}` run stays one word), so
+ *  "Café Notes" is ["café", "notes"] rather than being cut at the
+ *  accent. */
+const WORD_SPLIT_RE = /[\s\p{P}\p{S}]+/u
+
+const splitWords = (lowerText: string): string[] =>
+  lowerText.split(WORD_SPLIT_RE).filter(word => word.length > 0)
+
+/**
+ * Does `token` read as an abbreviation of `words` — can it be cut into
+ * consecutive chunks, each a prefix of a later word, in order?
+ *
+ * This is the shape people type when they drop the spaces out of a page
+ * title they already know: run-together prefixes ("meetnotes" →
+ * "Meeting Notes", "prodreq" → "Product Requirements …") and
+ * initialisms ("prd" → "Product Requirements Document"). Words may be
+ * skipped between chunks ("pd" → "Product … Document"); chunk order may
+ * not be. Every chunk must start at a word start, which is what keeps
+ * this far tighter than a plain subsequence match — "lphabravocharlie"
+ * does not match "Alpha Bravo Charlie".
+ *
+ * Single-word labels bow out: with nothing to chain, the rule would
+ * degenerate into "is a prefix of", which `indexOf` already scored.
+ *
+ * DP over reachable token offsets — `reachable[p] === 1` means "the
+ * first p token chars are accounted for by the words seen so far", and
+ * each word extends every reachable offset by every prefix length it
+ * can absorb. A flat byte array rather than a Set per word: this runs
+ * per candidate per keystroke, where the allocation dominated the
+ * comparisons it was guarding. O(words × tokenLen × wordLen), bounded
+ * by the CHAIN_MAX_* caps.
+ */
+const matchesWordPrefixChain = (words: readonly string[], token: string): boolean => {
+  const target = token.length
+  if (target === 0 || words.length < 2) return false
+  if (words.length > CHAIN_MAX_WORDS || target > CHAIN_MAX_TOKEN_LEN) return false
+
+  const reachable = new Uint8Array(target + 1)
+  reachable[0] = 1
+  let highWater = 0
+  for (const word of words) {
+    // Walk offsets high-to-low so extensions added for THIS word are not
+    // themselves extended by it — a chunk comes from one word only.
+    for (let start = highWater; start >= 0; start--) {
+      if (reachable[start] !== 1) continue
+      const maxChunk = Math.min(word.length, target - start)
+      for (let k = 1; k <= maxChunk; k++) {
+        if (word.charCodeAt(k - 1) !== token.charCodeAt(start + k - 1)) break
+        const end = start + k
+        if (end === target) return true
+        reachable[end] = 1
+        if (end > highWater) highWater = end
+      }
+    }
+  }
+  return false
+}
+
 /** Returns the score for a single token against a lowercased candidate
- *  string, or `null` if the token does not match at all. */
-const scoreToken = (lowerText: string, token: string): number | null => {
+ *  string, or `null` if the token does not match at all. `words` is a
+ *  memoized getter, not an array: the overwhelmingly common case is
+ *  every token matching by `indexOf`, and splitting the label is pure
+ *  waste there. Deferring it keeps the substring path allocation-free
+ *  and the split at most once per candidate. */
+const scoreToken = (
+  lowerText: string,
+  words: () => readonly string[],
+  token: string,
+): number | null => {
   const idx = lowerText.indexOf(token)
   if (idx === 0) return SCORE_TOKEN_WORD_START
   if (idx > 0) {
@@ -140,6 +221,18 @@ const scoreToken = (lowerText: string, token: string): number | null => {
       (prev >= 48 && prev <= 57)     // 0-9
     )
     return isWordBoundary ? SCORE_TOKEN_WORD_START : SCORE_TOKEN_SUBSTRING
+  }
+  // Chain before typo: it scores higher (a deliberate abbreviation beats
+  // a slip), so it has to win when a token satisfies both — and it is
+  // also the cheaper of the two checks.
+  //
+  // Necessary condition, checked before splitting the label: a chain's
+  // first chunk starts with the token's first character, so that
+  // character has to appear somewhere. This is what keeps a query that
+  // matches nothing ("zzz") from splitting and running the DP over every
+  // candidate the pre-filter returned.
+  if (lowerText.includes(token[0]) && matchesWordPrefixChain(words(), token)) {
+    return SCORE_TOKEN_WORD_CHAIN
   }
   if (hasTypoSubstring(lowerText, token)) return SCORE_TOKEN_TYPO
   return null
@@ -182,10 +275,12 @@ export const scoreCandidate = (
   if (queryTokens.length === 0) return 0
   const lowerLabel = label.toLowerCase()
   const lowerQuery = query.toLowerCase().trim()
+  let words: readonly string[] | null = null
+  const wordsOf = () => (words ??= splitWords(lowerLabel))
 
   let tokenScore = 0
   for (const token of queryTokens) {
-    const ts = scoreToken(lowerLabel, token)
+    const ts = scoreToken(lowerLabel, wordsOf, token)
     if (ts === null) return null
     tokenScore += ts
   }

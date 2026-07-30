@@ -478,6 +478,12 @@ export interface AliasMatchWithRecency extends AliasMatch {
   updatedAt: number
 }
 
+/** One `(block, type)` membership row from the `block_types` index. */
+export interface BlockTypeAssignment {
+  blockId: string
+  type: string
+}
+
 // ════════════════════════════════════════════════════════════════════
 // Phase 4 chunk B — kernel queries as `queriesFacet` contributions
 // ════════════════════════════════════════════════════════════════════
@@ -1303,6 +1309,48 @@ export const aliasMatchesFuzzyQuery = defineQuery<
   },
 })
 
+/** Types of a bounded, already-chosen set of blocks — one row per
+ *  `(blockId, type)` pair, read straight off the trigger-maintained
+ *  `block_types` index (PRIMARY KEY `(block_id, type)`, so each id is an
+ *  index seek, not a scan).
+ *
+ *  Exists for display hints on rows some other query already picked —
+ *  the type shown beside each wikilink completion candidate. It is
+ *  deliberately NOT a search predicate: callers pass the ids they are
+ *  about to render, so the cost is O(ids) and independent of workspace
+ *  size. Filtering blocks BY type is `byType` / `typedBlocks`, which use
+ *  the same index from the other direction.
+ *
+ *  Per-id row deps (not just per returned row): a block that has no
+ *  types yet returns nothing, and tagging it later has to invalidate
+ *  this handle too. */
+export const blockTypesByIdsQuery = defineQuery<
+  {workspaceId: string; blockIds: string[]},
+  BlockTypeAssignment[]
+>({
+  name: 'core.blockTypesByIds',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    blockIds: z.array(z.string()),
+  }),
+  resultSchema: z.array(z.object({
+    blockId: z.string(),
+    type: z.string(),
+  })),
+  resolve: async ({workspaceId, blockIds}, ctx) => {
+    if (!workspaceId || blockIds.length === 0) return []
+    for (const blockId of blockIds) ctx.depend({kind: 'row', id: blockId})
+    const placeholders = blockIds.map(() => '?').join(', ')
+    return ctx.db.getAll<BlockTypeAssignment>(
+      `SELECT bt.block_id AS blockId, bt.type AS type
+       FROM block_types bt
+       WHERE bt.workspace_id = ?
+         AND bt.block_id IN (${placeholders})`,
+      [workspaceId, ...blockIds],
+    )
+  },
+})
+
 /** Single-block lookup by exact alias in a workspace. */
 export const aliasLookupQuery = defineQuery<
   {workspaceId: string; alias: string},
@@ -1378,6 +1426,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   aliasesInWorkspaceQuery,
   aliasMatchesQuery,
   aliasMatchesFuzzyQuery,
+  blockTypesByIdsQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -1405,6 +1454,7 @@ declare module '@/data/api' {
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
     'core.aliasMatches': typeof aliasMatchesQuery
     'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
+    'core.blockTypesByIds': typeof blockTypesByIdsQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }
