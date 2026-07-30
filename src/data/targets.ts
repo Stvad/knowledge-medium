@@ -56,7 +56,8 @@ import {
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
-import { aliasesProp, addBlockTypeToProperties } from './properties'
+import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
+import { propertyDefinitionBlockId } from './definitionSeeds'
 import { PAGE_TYPE } from './blockTypes'
 
 /** Layer 1 args. */
@@ -67,13 +68,18 @@ export interface CreateOrRestoreArgs {
   orderKey: string
   /** Applied on both insert and restore. */
   freshContent: string
-  /** Mint the row as a speculative engine default (`system:<userId>`
-   *  author) so it yields to an older-but-authoritative server row under
-   *  the reconcile gate. Applies to the INSERT path only — a tombstone
-   *  restore is an update and stays user-authored (create-only, per
-   *  TxInsertOpts). Seat materializers (alias / daily-note seats,
-   *  shortcuts) set this; content-bearing creators (Roam import, which
-   *  uses its own tx.create, not this primitive) do not. */
+  /** Mint the row as a speculative engine default so it yields to an
+   *  older-but-authoritative server row under the reconcile gate. The
+   *  marker is `updated_at = 0` — the pristine sentinel the gate's
+   *  stamp-0 exemption keys on; `created_by` / `updated_by` stay the
+   *  REAL user, since provenance stopped being the discriminator (see
+   *  `TxInsertOpts` and `SYSTEM_AUTHOR_PREFIX`, retained only as a
+   *  display shim for pre-migration rows). Applies to the INSERT path
+   *  only — a tombstone restore is an update and takes a real
+   *  row-version (create-only, per TxInsertOpts). Seat materializers
+   *  (alias / daily-note seats, shortcuts) set this; content-bearing
+   *  creators (Roam import, which uses its own tx.create, not this
+   *  primitive) do not. */
   systemMint?: boolean
   /** Strip the tombstone bag's `aliases` key in the SAME restore UPDATE.
    *  Set by callers whose `onInsertedOrRestored` OWNS the alias write
@@ -161,7 +167,7 @@ const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
  *  surfaces anomalous state — a saturated alias namespace, an infinite
  *  probe loop from a buggy read source — as a loud error rather than a
  *  hang. */
-const MAX_PROBE_SLOTS = 64
+export const ALIAS_SEAT_PROBE_SLOTS = 64
 
 /** Deterministic id for the `index`-th alias-seat slot. Slot 0 is the
  *  happy-path id; higher slots are claimed by probes that skipped a
@@ -325,6 +331,23 @@ export const matchesAliasSeatSeed = (
   return propertiesMatchSeed(row.properties, seed.properties)
 }
 
+/** The definition ids whose field rows are a seat's own GENERATED
+ *  property machinery in a child-backed workspace. `ensureAliasTarget`
+ *  writes exactly two properties at mint — `alias` and `types` — and
+ *  post-flip `tx.setProperty` routes each through `writePropertyValueChild`,
+ *  so in a flipped workspace EVERY seat has live children from birth.
+ *
+ *  That makes a bare "has live children?" test invert after the flip: it
+ *  stops meaning "a user touched this" and starts meaning "this is a
+ *  seat". Every caller gating on children has to subtract these ids
+ *  first — and only when the workspace is actually flipped, because in an
+ *  un-flipped one a column match under a seat is by construction
+ *  user-authored content, not machinery's to ignore. */
+export const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
+  propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
+  propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
+])
+
 /** Predicate: this tombstoned slot was created by `ensureAliasTarget`
  *  for `alias` and was never touched before cleanup tombstoned it — i.e.
  *  the row's `(content, properties)` still equals `aliasSeatSeed(alias)`
@@ -352,7 +375,7 @@ export const isAliasSeatSlotId = (
   alias: string,
   workspaceId: string,
 ): boolean => {
-  for (let index = 0; index < MAX_PROBE_SLOTS; index++) {
+  for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
     if (computeAliasSeatId(alias, workspaceId, index) === id) return true
   }
   return false
@@ -384,7 +407,7 @@ export const resolveAliasSeatId = async (
   alias: string,
   workspaceId: string,
 ): Promise<string> => {
-  for (let index = 0; index < MAX_PROBE_SLOTS; index++) {
+  for (let index = 0; index < ALIAS_SEAT_PROBE_SLOTS; index++) {
     const id = computeAliasSeatId(alias, workspaceId, index)
     const row = await read(id)
     if (row === null) return id
@@ -396,7 +419,7 @@ export const resolveAliasSeatId = async (
     // Live row claims a different alias — typical post-rename. Probe next.
   }
   throw new Error(
-    `resolveAliasSeatId: ${MAX_PROBE_SLOTS} slots exhausted for alias "${alias}" in workspace "${workspaceId}"`,
+    `resolveAliasSeatId: ${ALIAS_SEAT_PROBE_SLOTS} slots exhausted for alias "${alias}" in workspace "${workspaceId}"`,
   )
 }
 

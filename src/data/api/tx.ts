@@ -343,6 +343,18 @@ export interface Tx {
    *  from other clients. */
   aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null>
 
+  /** EVERY live block in `workspaceId` claiming the exact `alias`,
+   *  oldest first. Use this instead of `aliasLookup` when the question
+   *  is "is this alias claimed?" rather than "which block is named X?".
+   *
+   *  `aliasLookup`'s `LIMIT 1` tie-break silently hides co-claimants,
+   *  and co-claimants are reachable: the uniqueness trigger only fires
+   *  for local user txs, so sync-applied rows can land duplicates. A
+   *  caller that vetoes on "any claimant that isn't mine" gets the wrong
+   *  answer from the single-row form whenever the row it recognizes
+   *  happens to be the oldest. Sees this tx's own writes. */
+  aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own

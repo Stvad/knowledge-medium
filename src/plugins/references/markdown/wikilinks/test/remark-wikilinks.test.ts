@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
 import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
+import { remarkBlockrefs } from '../../blockrefs/remark-blockrefs.ts'
 
 interface WikilinkNode {
   type: 'wikilink'
@@ -378,3 +379,62 @@ describe('remarkWikilinks', () => {
     })
   })
 })
+
+describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
+  // The claim the rename/merge rewrite rests on, asserted on NODE VALUES
+  // through the real pipeline rather than on node counts (Codex on PR #444
+  // found the bug this pins; counting nodes would have missed it, since
+  // both the broken and the fixed form yield exactly one node).
+  const UUID = '11111111-2222-4333-8444-555555555555'
+  const pipeline = (md: string) => {
+    const processor = unified()
+      .use(remarkParse)
+      .use(remarkWikilinks, {resolveAlias: (a: string) => (a === 'Old' ? 't' : undefined)})
+      .use(remarkBlockrefs)
+    return processor.runSync(processor.parse(md) as Root) as Root
+  }
+  const nodeTypes = (tree: Root): string[] => {
+    const out: string[] = []
+    visit(tree, (n) => out.push((n as {type: string}).type))
+    return out
+  }
+
+  it('is a wikilink before any rewrite, displaying the wrapper text', () => {
+    const links = collectWikilinks(pipeline('[label]([[Old]])'))
+    expect(links).toHaveLength(1)
+    expect(links[0].data.hProperties.alias).toBe('Old')
+    expect(links[0].data.hProperties.blockId).toBe('t')
+    expect(wikilinkChildText(links[0])).toBe('label')
+  })
+
+  it('becomes a plain markdown LINK if only the inner span is pinned', () => {
+    // The pre-fix output. Not a wikilink and not a blockref — the URL is
+    // the pinned span as literal text, so the reference is gone while the
+    // stored edge has already moved to the target.
+    const tree = pipeline(`[label]([Old](((${UUID}))))`)
+    expect(collectWikilinks(tree)).toHaveLength(0)
+    expect(nodeTypes(tree)).not.toContain('blockref')
+    expect(nodeTypes(tree)).toContain('link')
+  })
+
+  it('becomes a blockref keeping the display text when the whole wrapper is pinned', () => {
+    // What the fixed rewrite emits.
+    const tree = pipeline(`[label](((${UUID})))`)
+    const refs: Array<{type: string; value?: string}> = []
+    visit(tree, (n) => {
+      const node = n as {type: string; value?: string}
+      if (node.type === 'blockref') refs.push(node)
+    })
+    expect(refs).toHaveLength(1)
+    expect(collectText(tree)).toEqual(['label'])
+  })
+
+  it('stays a wikilink when the inner span takes the wikilink form', () => {
+    // Why the wikilink branch needs no widening.
+    const links = collectWikilinks(pipeline('[label]([[New]])'))
+    expect(links).toHaveLength(1)
+    expect(links[0].data.hProperties.alias).toBe('New')
+    expect(wikilinkChildText(links[0])).toBe('label')
+  })
+})
+

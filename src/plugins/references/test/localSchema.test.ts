@@ -139,6 +139,7 @@ describe('references local schema bootstrap', () => {
     expect(indexes).toEqual(expect.arrayContaining([
       'idx_blocks_workspace_with_references',
       'idx_block_references_target',
+      'idx_block_references_ws_alias',
     ]))
   })
 
@@ -434,6 +435,25 @@ describe('block_references backfill', () => {
         references_json: refsJson([{id: 'tgt', alias: 'tgt', sourceField: 'blocked-by'}]),
       })).not.toThrow()
       expect(refRows(h.db).map(row => row.source_field)).toEqual(['reviewer', 'blocked-by'])
+    })
+
+    it('restores every block_references index after the table rebuild', async () => {
+      // The rebuild DROPs the table, taking its indexes with it. Schema
+      // `statements` all run BEFORE the backfills, so anything created
+      // there is already gone by now and has to be recreated here — miss
+      // one and the install runs its entire first session without it,
+      // then silently self-heals on the next boot.
+      await runMigration()
+
+      const indexes = (h.db
+        .prepare(`SELECT name FROM sqlite_master
+                  WHERE type='index' AND tbl_name='block_references'`)
+        .all() as Array<{name: string}>)
+        .map(r => r.name)
+      expect(indexes).toEqual(expect.arrayContaining([
+        'idx_block_references_target',
+        'idx_block_references_ws_alias',
+      ]))
     })
 
     it('short-circuits once the source-field marker is present', async () => {
