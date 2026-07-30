@@ -31,7 +31,7 @@ import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
-import { consumeFieldEscape, usePropertyEditingActivation } from './usePropertyEditingActivation'
+import { dismissOnFieldEscape, usePropertyEditingActivation } from './usePropertyEditingActivation'
 import type { Block } from '@/data/block'
 import {
   resolveEditorOverride,
@@ -302,12 +302,10 @@ export function PropertyPicker({
               // Keyed on `showSuggestions`, not `suggestionsOpen`: focus opens
               // the list eagerly, so a zero-suggestion `suggestionsOpen` would
               // swallow the first Escape on an invisible dismiss.
-              const dismiss = showSuggestions
-                ? () => setSuggestionsOpen(false)
-                : onEscape
-              if (!dismiss) return
-              consumeFieldEscape(event)
-              dismiss()
+              dismissOnFieldEscape(
+                event,
+                showSuggestions ? () => setSuggestionsOpen(false) : onEscape,
+              )
               return
             }
             onKeyDown(event)

@@ -21,7 +21,7 @@ import {
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import {
-  consumeFieldEscape,
+  dismissOnFieldEscape,
   usePropertyEditingActivation,
 } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
@@ -306,10 +306,7 @@ export function ReferenceSearch({
               // claim the key and keep the caret here. With it already closed
               // the event falls through to `exit_property_editing`, which
               // blurs the field (property fields only — see `propertyField`).
-              if (open) {
-                consumeFieldEscape(event)
-                setOpen(false)
-              }
+              dismissOnFieldEscape(event, open && (() => setOpen(false)))
               return
             }
             onKeyDown(event)

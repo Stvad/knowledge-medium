@@ -77,4 +77,38 @@ describe('ReferenceSearch — Escape ownership', () => {
       window.removeEventListener('keydown', reachedShortcuts)
     }
   })
+
+  it('leaves a composing Escape to the IME instead of dismissing', async () => {
+    // Searching for a CJK page name means composing INSIDE this field with
+    // the dropdown open — the most reachable composition case in the panel.
+    // Escape there drops the IME's candidate; dismissing the dropdown would
+    // consume the key and eat the character.
+    const reachedShortcuts = vi.fn()
+    window.addEventListener('keydown', reachedShortcuts)
+    try {
+      render(
+        <ReferenceSearch
+          owner={owner}
+          excludeIds={[]}
+          targetTypes={[]}
+          placeholder="Search blocks"
+          selectionMode="single"
+          onPick={vi.fn()}
+          propertyField
+        />,
+      )
+      const input = screen.getByRole('combobox')
+
+      fireEvent.focus(input)
+      expect(input.getAttribute('aria-expanded')).toBe('true')
+      await flush()
+
+      fireEvent.keyDown(input, {key: 'Escape', isComposing: true})
+
+      expect(input.getAttribute('aria-expanded')).toBe('true')
+      expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('keydown', reachedShortcuts)
+    }
+  })
 })

@@ -9,7 +9,7 @@ import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { TypeChip } from '@/components/typeChip/TypeChip'
 import {
-  consumeFieldEscape,
+  dismissOnFieldEscape,
   usePropertyEditingActivation,
 } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
@@ -174,10 +174,7 @@ export function TypesPropertyEditor({
       // matching types" row), so closing it is a real dismiss: claim the key
       // and keep the caret here. Already closed → the event falls through to
       // `exit_property_editing`, which blurs the field.
-      if (open) {
-        consumeFieldEscape(event)
-        setOpen(false)
-      }
+      dismissOnFieldEscape(event, open && (() => setOpen(false)))
     }
   }
 

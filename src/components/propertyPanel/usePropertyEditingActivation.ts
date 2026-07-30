@@ -69,3 +69,26 @@ export const consumeFieldEscape = (event: SyntheticEvent): void => {
   event.preventDefault()
   event.stopPropagation()
 }
+
+/**
+ * The whole Escape rule for a property field's own dismissable UI, in one
+ * place: dismiss what's actually open and claim the key, or report that
+ * nothing was claimed so the press falls through to `exit_property_editing`.
+ * Pass `undefined`/`false` for "nothing to dismiss".
+ *
+ * Declines while an IME composition is in flight. Escape belongs to the
+ * input method there — it drops the pending candidate — and consuming it
+ * would both eat the character and hide the key from the coordinator. Every
+ * field routes through here so a new editor can't reintroduce that by
+ * hand-rolling `consumeFieldEscape`.
+ */
+export const dismissOnFieldEscape = (
+  event: SyntheticEvent,
+  dismiss: (() => void) | false | undefined,
+): boolean => {
+  if (!dismiss) return false
+  if ((event.nativeEvent as Partial<KeyboardEvent>)?.isComposing) return false
+  consumeFieldEscape(event)
+  dismiss()
+  return true
+}

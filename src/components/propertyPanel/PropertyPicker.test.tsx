@@ -121,6 +121,26 @@ describe('PropertyPicker', () => {
       }
     })
 
+    it('leaves a composing Escape alone instead of dismissing the list', () => {
+      // Mid-composition Escape drops the IME's pending candidate. Dismissing
+      // the suggestion list here would consume the key (preventDefault +
+      // stopPropagation) and take it away from the input method entirely —
+      // the list is still open afterwards precisely because we did nothing.
+      const reachedShortcuts = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker()
+        expect(activeOption()).toMatch(/-option-0$/)
+
+        fireEvent.keyDown(input, {key: 'Escape', isComposing: true})
+
+        expect(activeOption()).toMatch(/-option-0$/)
+        expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+
     it('keeps Escape when the parent still has an add-row to cancel', () => {
       const reachedShortcuts = vi.fn()
       const onEscape = vi.fn()

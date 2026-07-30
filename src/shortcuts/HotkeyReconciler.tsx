@@ -487,6 +487,13 @@ export function HotkeyReconciler(): null {
   useEffect(() => {
     const dispatchPhase = (phase: 'keydown' | 'keyup', rawEvent: Event): void => {
       const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+      // An in-flight IME composition owns the keyboard: its keydowns are the
+      // user talking to the input method, not to the app. Bail before the
+      // matchers so no sequence state advances either — a composing `g`
+      // must not become the first half of `g g`. Declining per action was
+      // not enough: a decline means "not handled, try the next candidate",
+      // which handed the chord to whatever ranked below.
+      if (event.isComposing) return
       const completed = completedRef.current
       completed.length = 0
       // Feed every candidate of this phase so each advances its own sequence
@@ -659,6 +666,8 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 
   const onKeydown = (rawEvent: Event): void => {
     const event = withRecoveredLetterKey(rawEvent as KeyboardEvent)
+    // Same rule as the keydown coordinator: don't arm off an IME's keys.
+    if (event.isComposing) return
     if (event.repeat) {
       if (pending) applyEventOptions(event, action, binding, contextConfigsByTypeRef.current)
       return

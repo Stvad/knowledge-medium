@@ -315,10 +315,11 @@ describe('Escape in a property editor', () => {
   })
 
   it('leaves a REBOUND modifier chord to the IME as well', () => {
-    // The composition guard has to sit where it can veto. Parked in the
-    // context's `eventFilter` it only ever widened, so this chord reached the
-    // handler through the editable-target heuristic (which admits every
-    // modifier chord) and blurred the field mid-composition regardless.
+    // Whatever the exit key is rebound to, a composing press belongs to the
+    // input method. The guard has to sit where it applies to every binding:
+    // in the context's `eventFilter` it only ever widened (so the chord came
+    // straight back in through the editable-target heuristic, which admits
+    // every modifier chord).
     renderWith([
       {...propertyEditingAction('exit_property_editing'), defaultBinding: {keys: 'Control+j'}},
     ])
@@ -328,6 +329,29 @@ describe('Escape in a property editor', () => {
 
     pressKeyInInput('j', {ctrlKey: true})
     expect(document.activeElement).not.toBe(input)
+  })
+
+  it('runs nothing at all during a composition, not even the next candidate', () => {
+    // Declining per action was the wrong shape: a decline means "not handled,
+    // try the next candidate", so a global sharing the chord ran while the
+    // key belonged to the IME. Composing presses now stop before any
+    // candidate is considered.
+    const globalHandler = vi.fn()
+    renderWith([
+      {...propertyEditingAction('exit_property_editing'), defaultBinding: {keys: 'Control+j'}},
+      {
+        id: 'test.global_same_chord_ime',
+        description: 'global sharing the rebound chord',
+        context: ActionContextTypes.GLOBAL,
+        handler: globalHandler,
+        defaultBinding: {keys: 'Control+j'},
+      } as ActionConfig,
+    ])
+
+    pressKeyInInput('j', {ctrlKey: true, isComposing: true})
+
+    expect(globalHandler).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(input)
   })
 
   it('does not lend its opt-in to a global bound to a bare named key', () => {
