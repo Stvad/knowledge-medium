@@ -1,0 +1,2 @@
+import{getBlockTypes as e}from"../../data/properties.js";import{srsArchivedProp as t}from"../srs-rescheduling/schema.js";import"../srs-rescheduling/index.js";var n=async n=>{if(n.repo.isReadOnly)return!1;let r=n.peek()??await n.load();return!r||!e(r).includes(`srs-sm2.5`)?!1:(await n.set(t,!0),!0)};export{n as archiveSrsCard};
+//# sourceMappingURL=archive.js.map
