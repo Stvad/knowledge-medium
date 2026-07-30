@@ -31,6 +31,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
@@ -370,7 +371,21 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  re-renders with the same blocks (stable identity) hit the same
  *  cached handle. Block facade identity is stable per id, so the
  *  returned arrays compare equal across re-fires when the chain is
- *  unchanged. Empty entries land for ids whose row is missing. */
+ *  unchanged. Empty entries land for ids whose row is missing.
+ *
+ *  Sticky across id-set changes: because the key IS the id set, every
+ *  add/remove mints a COLD handle (`peek() === undefined`). Reporting
+ *  that as "nobody has ancestors" is what made a live backlinks refresh
+ *  jump — `BreadcrumbList` renders null for an empty chain, so every
+ *  visible entry lost its breadcrumb line for the duration of the load
+ *  and the section collapsed by a line per entry, then sprang back. So
+ *  while the new key loads we keep serving the previously resolved
+ *  chains, projected onto the ids currently asked for. Ids that are new
+ *  in this set have no entry until the load lands (they're new rows
+ *  anyway). A plain move keeps the id set — and therefore the key — so
+ *  it re-resolves in place and never reads a carried chain; only a tx
+ *  that moves a block AND changes the set in one commit shows that
+ *  block's old chain, for the length of one load. */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Sort the ids so logically-equal block sets in different orders
@@ -379,9 +394,19 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
     () => Array.from(new Set(blocks.map(b => b.id))).sort(),
     [blocks],
   )
-  return useHandle(repo.query.manyAncestors({ids}), {
-    selector: data => {
-      if (!data || data.length === 0) return EMPTY_PARENT_MAP
+  // `undefined` (not EMPTY_PARENT_MAP) for an unresolved handle — the
+  // carry-over below has to tell "still loading" apart from "resolved,
+  // and these blocks genuinely have no ancestors".
+  //
+  // The selector is memoized, not inline: it is one of `useHandle`'s
+  // getSelection deps, and an identity that churns per render resets
+  // that closure's memo, so the hook hands back a freshly allocated
+  // (structurally equal) map on renders where nothing changed. The
+  // carry-over below compares by identity, so an inline selector would
+  // make it re-set state forever.
+  const selectParents = useCallback(
+    (data: readonly {startId: string; ancestors: readonly BlockData[]}[] | undefined) => {
+      if (!data) return undefined
       const out = new Map<string, Block[]>()
       for (const entry of data) {
         const parents = entry.ancestors.map(d => repo.block(d.id)).reverse()
@@ -389,7 +414,28 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
       }
       return out
     },
-  }) as ReadonlyMap<string, Block[]>
+    [repo],
+  )
+  const resolved = useHandle(repo.query.manyAncestors({ids}), {selector: selectParents})
+
+  // Remember the last resolved chains with the "adjust state during
+  // render" pattern (as `usePromotableBreadcrumb` does) rather than an
+  // effect: the carry-over has to be available in the SAME render that
+  // first sees the cold handle, or the blank frame it exists to prevent
+  // paints anyway.
+  const [lastResolved, setLastResolved] =
+    useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
+  if (resolved && resolved !== lastResolved) setLastResolved(resolved)
+
+  return useMemo(() => {
+    if (resolved) return resolved
+    const carried = new Map<string, Block[]>()
+    for (const id of ids) {
+      const parents = lastResolved.get(id)
+      if (parents) carried.set(id, parents)
+    }
+    return carried.size === 0 ? EMPTY_PARENT_MAP : carried
+  }, [resolved, lastResolved, ids])
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
