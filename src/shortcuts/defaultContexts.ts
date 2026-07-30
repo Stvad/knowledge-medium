@@ -94,13 +94,12 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     // own React handlers either way, since admitting an event only lets a
     // *bound* action match it, and this context's binding opts out of
     // preventDefault.
-    // Not while an IME composition is in flight: those keys belong to the
-    // input method, and Escape there means "cancel the candidate", not "leave
-    // the field". Blurring would end the composition synchronously and let
-    // the field's own blur commit the half-composed value — `preventDefault:
-    // false` can't preserve the native behaviour once focus is gone. Declining
-    // drops the press back to the editable-target heuristic, which blocks it.
-    eventFilter: (event: KeyboardEvent) => event.key.length > 1 && !event.isComposing,
+    // IME compositions are guarded on the action (`exit_property_editing`
+    // declines a composing trigger), not here: a filter only ever widens, so
+    // a `false` from it falls back to the editable-target heuristic — which
+    // admits every modifier chord. It could never have vetoed a rebound
+    // `Ctrl+J` pressed mid-composition.
+    eventFilter: (event: KeyboardEvent) => event.key.length > 1,
     validateDependencies: isPropertyEditingDependencies,
   },
   {

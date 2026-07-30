@@ -314,6 +314,22 @@ describe('Escape in a property editor', () => {
     expect(document.activeElement).not.toBe(input)
   })
 
+  it('leaves a REBOUND modifier chord to the IME as well', () => {
+    // The composition guard has to sit where it can veto. Parked in the
+    // context's `eventFilter` it only ever widened, so this chord reached the
+    // handler through the editable-target heuristic (which admits every
+    // modifier chord) and blurred the field mid-composition regardless.
+    renderWith([
+      {...propertyEditingAction('exit_property_editing'), defaultBinding: {keys: 'Control+j'}},
+    ])
+
+    pressKeyInInput('j', {ctrlKey: true, isComposing: true})
+    expect(document.activeElement).toBe(input)
+
+    pressKeyInInput('j', {ctrlKey: true})
+    expect(document.activeElement).not.toBe(input)
+  })
+
   it('does not lend its opt-in to a global bound to a bare named key', () => {
     // The opt-in admits non-text keys so a REBOUND exit key still works. That
     // must not also hand those keys to GLOBAL, which declares no filter: the

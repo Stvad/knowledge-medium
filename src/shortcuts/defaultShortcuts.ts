@@ -1151,7 +1151,19 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       // click into the field trips the editor's blur exit
       // (`shouldExitEditModeAfterBlur` treats a property input as "not an
       // editor"). A clear here would be dead code dressed as load-bearing.
-      handler: (deps: PropertyEditingDependencies) => { deps.input.blur() },
+      handler: (deps: PropertyEditingDependencies, trigger) => {
+        // Mid-composition the key belongs to the input method: Escape there
+        // means "drop the candidate", not "leave the field". Blurring ends
+        // the composition synchronously and the field's own blur commits
+        // whatever was half-composed. Declining (the not-handled sentinel)
+        // leaves the press to the IME.
+        //
+        // This has to live on the action, not the context's `eventFilter`:
+        // a filter only widens, so it cannot veto a rebound modifier chord
+        // like `Ctrl+J`, which the editable-target heuristic admits anyway.
+        if (trigger instanceof KeyboardEvent && trigger.isComposing) return false
+        deps.input.blur()
+      },
       defaultBinding: {
         keys: 'Escape',
         // Same stance as `exit_edit_mode_cm` (whose context defaults to
