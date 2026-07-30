@@ -102,10 +102,12 @@ describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandid
     //
     // It is ~0.5s run alone (mostly fast-check/JIT warm-up, being the first
     // `fc.assert` in the file's process — the steady-state property body is
-    // single-digit ms), but measured 7.5s inside the full suite. That ~15x
-    // is far above the ~6x the suite sees at p99.9, because this property is
-    // pure CPU with no awaits: it never yields, so it takes the full brunt
-    // of one-worker-per-core contention instead of interleaving with it.
+    // single-digit ms), but 2.9-4.4s inside a loaded full suite. That
+    // multiplier is well above the ~6x the suite sees at p99.9 because this
+    // property is pure CPU with no awaits: it never yields, so it takes the
+    // full brunt of one-worker-per-core contention instead of interleaving
+    // with it. 4.4s against a 5s default is a coin flip, which is what this
+    // was losing.
     //
     // Derived (`fuzzTestTimeout()`), never a hard-coded number: a per-test
     // timeout OVERRIDES the `--testTimeout` that `pnpm fuzz` passes, so a
