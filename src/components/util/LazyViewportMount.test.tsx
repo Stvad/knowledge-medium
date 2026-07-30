@@ -2,16 +2,22 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LazyViewportMount } from './LazyViewportMount'
+import {
+  __resetLazyMountRegistryForTesting,
+  requestLazyMount,
+} from './lazyMountRegistry'
 
 class TestIntersectionObserver {
   static instances: TestIntersectionObserver[] = []
 
   readonly callback: IntersectionObserverCallback
+  readonly options: IntersectionObserverInit | undefined
   readonly observe = vi.fn()
   readonly disconnect = vi.fn()
 
-  constructor(callback: IntersectionObserverCallback) {
+  constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback
+    this.options = options
     TestIntersectionObserver.instances.push(this)
   }
 
@@ -23,24 +29,26 @@ class TestIntersectionObserver {
   }
 }
 
-const renderLazy = (cacheKey: string) =>
+const renderLazy = (cacheKey: string, options?: {container?: HTMLElement; overscanPx?: number}) =>
   render(
     <LazyViewportMount
       cacheKey={cacheKey}
       estimatedHeightPx={32}
-      overscanPx={0}
+      overscanPx={options?.overscanPx ?? 0}
       renderPlaceholder={({reservedHeight}) => (
         <div data-testid="placeholder" style={{minHeight: reservedHeight}} />
       )}
     >
       <div data-testid="child">Mounted content</div>
     </LazyViewportMount>,
+    options?.container ? {container: options.container} : undefined,
   )
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   TestIntersectionObserver.instances = []
+  __resetLazyMountRegistryForTesting()
 })
 
 describe('LazyViewportMount', () => {
@@ -64,5 +72,43 @@ describe('LazyViewportMount', () => {
     expect(screen.getByTestId('child')).toBeInTheDocument()
     expect(screen.queryByTestId('placeholder')).not.toBeInTheDocument()
     expect(TestIntersectionObserver.instances).toHaveLength(0)
+  })
+
+  // `rootMargin` expands the ROOT's rect only — a scrolling ancestor in
+  // between clips the target unexpanded. Rooted at the viewport (the
+  // default), the overscan bought nothing inside a scrolling panel and rows
+  // mounted only once literally on screen.
+  it('roots the observer at the scrolling ancestor so the overscan applies', () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    const scroller = document.createElement('div')
+    scroller.style.overflowY = 'auto'
+    document.body.appendChild(scroller)
+    const host = document.createElement('div')
+    scroller.appendChild(host)
+
+    renderLazy('block:in-scroller', {container: host, overscanPx: 600})
+
+    expect(TestIntersectionObserver.instances[0].options).toMatchObject({
+      root: scroller,
+      rootMargin: '600px 0px',
+    })
+  })
+
+  it('mounts a pending row on request, so focus can land on an off-screen block', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    renderLazy('block:off-screen')
+    expect(screen.getByTestId('placeholder')).toBeInTheDocument()
+
+    await act(async () => {
+      expect(requestLazyMount('block:off-screen')).toBe(true)
+    })
+
+    expect(screen.getByTestId('child')).toBeInTheDocument()
+  })
+
+  it('reports no pending row for a key nothing is deferring', () => {
+    expect(requestLazyMount('block:not-rendered')).toBe(false)
   })
 })

@@ -19,6 +19,7 @@ import { usePropertyValue } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { panelMountsFacet } from '@/extensions/core.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { FocusedRowLazyMount } from '@/components/util/FocusedRowLazyMount.js'
 import {
   goBackInPanel,
   goForwardInPanel,
@@ -266,6 +267,11 @@ export function PanelRenderer({block}: BlockRendererProps) {
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
       {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
+      {/* Focus can be written to a row that is still a lazy placeholder
+          (keyboard navigation resolves its target from the block model).
+          This pulls that row into existence so the focus has somewhere to
+          land. Renders null; one subscription per panel. */}
+      <FocusedRowLazyMount block={block}/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
           <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">

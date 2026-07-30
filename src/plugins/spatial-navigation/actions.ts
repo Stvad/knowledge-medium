@@ -41,6 +41,7 @@ import {
   panelOf,
   panelInstances,
   resolveCurrentAnchor,
+  surfaceOf,
   verticalNeighbor,
 } from './walker.ts'
 import { resolveSpatialNavExclusions } from './exclusionsFacet.ts'
@@ -166,21 +167,27 @@ const extendSelectionVertical = async (
  * off the same prop. Adding our own DOM mutations would just race.
  *
  * Return contract (intentionally different from "did we move?"):
- *   - `false` → "no anchor; please fall through to the underlying
- *     vim handler". Only the `!current` early return takes this
- *     path — neither a live focused instance nor a recovery anchor
- *     exists, so vim's data-model walk is a legitimate fallback.
+ *   - `false` → "please fall through to the underlying vim handler",
+ *     for either of two reasons: (a) no anchor at all — neither a
+ *     live focused instance nor a recovery anchor exists; (b) an
+ *     outline-surface row with no rendered neighbour, where the DOM
+ *     has run out but the data model may not have (lazily mounted
+ *     rows below the fold aren't in the DOM to be found).
  *   - `true` → "spatial nav handled this keystroke". Includes the
- *     no-neighbor / panel-boundary case. We must NOT fall through
- *     to vim's `nextVisibleBlock` for a panel-boundary block on a
- *     non-outline surface (backlinks, embeds): vim's walker climbs
- *     the data-model parent chain of the source block, which for a
- *     backlink entry lives in some other page entirely. Following
- *     that chain returns a block from elsewhere in the workspace,
- *     and writing it as the panel's `focusedBlockLocation` leaves
- *     `useInFocus(<anyone in this panel>)` returning false →
+ *     no-neighbor case on every surface EXCEPT outline. We must NOT
+ *     fall through to vim's `nextVisibleBlock` for a panel-boundary
+ *     block on a non-outline surface (backlinks, embeds): vim's
+ *     walker climbs the data-model parent chain of the source block,
+ *     which for a backlink entry lives in some other page entirely.
+ *     Following that chain returns a block from elsewhere in the
+ *     workspace, and writing it as the panel's `focusedBlockLocation`
+ *     leaves `useInFocus(<anyone in this panel>)` returning false →
  *     normal-mode deactivates → all shortcuts go dead until the
- *     user clicks back into a block.
+ *     user clicks back into a block. On the outline surface that
+ *     risk doesn't exist (the walk is bounded by the panel's scope
+ *     root), and swallowing the key instead strands the user at the
+ *     bottom of the mounted window: no focus write means no scroll,
+ *     no scroll means nothing new mounts, so `j` never works again.
  */
 const moveVertical = async (
   deps: BlockShortcutDependencies,
@@ -216,7 +223,17 @@ const moveVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
-  if (!next) return true // boundary — handled, no move
+  // No neighbour in the rendered DOM. That is NOT the same as "no next
+  // block": rows are lazily mounted, so the outline continues past the last
+  // mounted instance with placeholders the walker can't see. On the outline
+  // surface, defer to vim's data-model walk, which is bounded by the panel's
+  // own scope root and therefore can't leave the panel — it resolves the
+  // real next block whether or not it happens to be mounted, and the panel's
+  // `FocusedRowLazyMount` mounts whatever it lands on. Every other surface
+  // keeps swallowing the keystroke: for a backlink/embed row the model walk
+  // climbs a parent chain that lives on another page (see the return
+  // contract above), and landing there kills normal mode outright.
+  if (!next) return surfaceOf(current) !== 'outline'
   const destPanel = next.closest<HTMLElement>('[data-panel-id]')
   if (!destPanel) return true
   const destPanelId = destPanel.dataset.panelId

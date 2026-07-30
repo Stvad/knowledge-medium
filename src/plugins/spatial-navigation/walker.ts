@@ -92,7 +92,7 @@ interface PanelPositionHint {
   ancestorLocations: readonly FocusedBlockLocation[]
 }
 
-const surfaceOf = (el: HTMLElement): string | undefined =>
+export const surfaceOf = (el: HTMLElement): string | undefined =>
   el.dataset.blockSurface
 
 const visibilityTargetFor = (el: HTMLElement): HTMLElement =>

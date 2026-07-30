@@ -470,6 +470,62 @@ describe('spatial navigation vertical actions', () => {
       renderScopeId: 'panel:missing:X',
     })
   })
+
+  // Rows are mounted lazily, so "last instance in the panel DOM" means "last
+  // row mounted so far", not "last row on the page". Swallowing the keystroke
+  // there stranded the user: no focus write => no scroll => nothing new
+  // mounts => `j` is dead for the rest of the page.
+  it('falls through to the model walker at the end of the mounted outline rows', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      {blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:B',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+  })
+
+  // The other half of the same branch: on a non-outline surface the model
+  // walk climbs a parent chain that lives on another page, so the boundary
+  // must still be swallowed. (Reverting the surface check in `moveVertical`
+  // flips exactly one of this pair, never both.)
+  it('still swallows the boundary keystroke on a backlink surface', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X', surface: 'backlink'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'panel:backlink:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:backlink:X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+  })
 })
 
 // Integration coverage for the contributable exclusion seam

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { nearestScrollableAncestor } from '@/utils/dom.js'
+import { registerPendingLazyMount } from './lazyMountRegistry.js'
 
 /** Session-scoped cache of measured lazy-rendered heights, keyed by the
  *  caller's stable cache key. It lets remounted placeholders reserve the
@@ -51,11 +53,24 @@ export function LazyViewportMount({
       (entries) => {
         if (entries[0]?.isIntersecting) setMounted(true)
       },
-      {rootMargin: `${overscanPx}px 0px`},
+      // Root at the scrolling ancestor, not the viewport: `rootMargin`
+      // expands only the ROOT's rect, while the clip rect of every scrolling
+      // ancestor in between is applied unexpanded. Rooted at the viewport
+      // (the default) our overscan was therefore worth nothing inside a
+      // scrolling panel — rows mounted only once they were literally on
+      // screen, so "the next row" was routinely absent from the DOM.
+      {root: nearestScrollableAncestor(el), rootMargin: `${overscanPx}px 0px`},
     )
     observer.observe(el)
     return () => observer.disconnect()
   }, [mounted, overscanPx])
+
+  // While showing a placeholder, stay reachable by id so a focus write can
+  // pull this row into existence — see `lazyMountRegistry`.
+  useEffect(() => {
+    if (mounted) return
+    return registerPendingLazyMount(cacheKey, () => setMounted(true))
+  }, [mounted, cacheKey])
 
   useEffect(() => {
     if (!mounted) return
