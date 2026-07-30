@@ -64,11 +64,13 @@ const create = async (args: {
   workspaceId?: string
   aliases?: string[]
   type?: string
+  types?: string[]
   references?: BlockReference[]
 }) => {
   const properties: Record<string, unknown> = {}
   if (args.aliases) properties[aliasesProp.name] = aliasesProp.codec.encode(args.aliases)
-  if (args.type) properties[typesProp.name] = typesProp.codec.encode([args.type])
+  const types = args.types ?? (args.type ? [args.type] : null)
+  if (types) properties[typesProp.name] = typesProp.codec.encode(types)
   await env.repo.tx(async tx => {
     await tx.create({
       id: args.id,
@@ -330,6 +332,25 @@ describe('repo.query.typedBlockCount', () => {
   // The count projection must aggregate the SAME candidate set as the id
   // projection — proven here on the non-referencedBy (types) path; the
   // backlinks path is covered in plugins/backlinks/inline-counts.
+  it('does not multiply a block carrying several of the requested types', async () => {
+    // The `block_types` filter is a JOIN, so a block tagged with two of the
+    // requested types produces two candidate rows; only `SELECT DISTINCT b.id`
+    // in the CTE collapses them. `ids` would show it as a duplicate, `count`
+    // as a phantom extra. Sibling of the ancestor_chain non-multiplication
+    // case below.
+    await create({id: 'both', types: ['note', 'task']})
+    await create({id: 'one', type: 'task'})
+    // Untyped, so the join's INNER-ness is pinned here too: LEFT would keep
+    // this row (the ON clause fails, the row survives with NULL bt columns).
+    await create({id: 'untyped'})
+
+    const ids = await env.repo.query.typedBlockIds({workspaceId: WS, types: ['note', 'task']}).load()
+    const n = await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note', 'task']}).load()
+
+    expect([...ids].sort()).toEqual(['both', 'one'])
+    expect(n).toBe(2)
+  })
+
   it('equals typedBlockIds length, excluding tombstoned rows', async () => {
     await create({id: 'a', type: 'note'})
     await create({id: 'b', type: 'note'})

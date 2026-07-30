@@ -46,7 +46,7 @@ import {
   CLIENT_SCHEMA_STATEMENTS,
   analyzeIsWarranted,
   backfillBlockAliasesIfEmpty,
-  indexSetFingerprint,
+  analyzeFingerprint,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
   ensureUndoGroupIdColumns,
@@ -989,7 +989,7 @@ describe('block_aliases backfill', () => {
 
 // Real-SQLite adapter recording every executed statement, so a test can
 // assert whether ANALYZE actually ran in addition to inspecting the result.
-const buildRecordingDb = () => {
+const buildRecordingDb = ({dropParams = false}: {dropParams?: boolean} = {}) => {
   const executed: string[] = []
   const db = {
     execute: async (sql: string, params?: unknown[]) => {
@@ -1001,10 +1001,14 @@ const buildRecordingDb = () => {
         stmt.run()
       }
     },
+    // `dropParams` reproduces the hand-rolled bootstrap shims that took
+    // `(sql)` and forwarded only `sql`. Production-only bug class, invisible
+    // to a double that forwards.
     getOptional: async <T,>(sql: string, params?: unknown[]) => {
       const stmt = h.db.prepare(sql)
-      const row = (params && params.length > 0
-        ? stmt.get(...(params as Array<string | number | null>))
+      const bind = dropParams ? undefined : params
+      const row = (bind && bind.length > 0
+        ? stmt.get(...(bind as Array<string | number | null>))
         : stmt.get()) as T | undefined
       return row ?? null
     },
@@ -1119,14 +1123,10 @@ describe('runAnalyzeIfStale', () => {
   })
 })
 
-// Row-count drift can't see a SCHEMA change. A freshly-created index has no
-// `sqlite_stat1` row at all, and SQLite then defaults to "an equality seek on
-// the leading column yields ~10 rows" for it. On this schema every hot index
-// leads with `workspace_id`, whose real selectivity is ~1 (a client holds one
-// or two workspaces), so that default inverts join order: the planner picks a
-// full scan of the new index as the OUTER loop and probes the genuinely
-// selective side per row. Measured on a 346k-block client, one grouped-
-// backlinks leg went 6297ms → 3ms on ANALYZE alone, no SQL change.
+// Row-count drift can't see a SCHEMA change; the second axis covers that. Why
+// it exists and why it keys off a recorded marker rather than "does every
+// index have stats?": see SELECT_INDEX_SET_SQL / SELECT_STAT1_KEYS_SQL in
+// clientSchema.ts.
 describe('runAnalyzeIfStale — index-set drift', () => {
   const opts = {minBlocks: 4, growthFactor: 2}
   const seedBlocks = (n: number) => {
@@ -1171,33 +1171,47 @@ describe('runAnalyzeIfStale — index-set drift', () => {
   })
 
   it('settles even against a db shim that drops bound params', async () => {
-    // Bootstrap callers hand-roll their db shim, and `repoProvider`'s dropped
-    // the params argument on `getOptional`. A `WHERE key = ?` marker lookup
-    // there binds NULL, matches nothing, and reads as "never analyzed" — so
-    // the multi-second scan would run on EVERY boot, in production only, with
-    // the suite green because this file's double forwards params.
-    const paramsDroppingDb = () => {
-      const executed: string[] = []
-      return {
-        executed,
-        db: {
-          execute: async (sql: string, params?: unknown[]) => {
-            executed.push(sql.trim())
-            const stmt = h.db.prepare(sql)
-            if (params && params.length > 0) stmt.run(...(params as Array<string | number>))
-            else stmt.run()
-          },
-          getOptional: async <T,>(sql: string) => (h.db.prepare(sql).get() as T) ?? null,
-        },
-      }
-    }
+    // The trap `3d4e778e5` fixed, kept pinned: a shim that forwards no params
+    // binds NULL for every `?`, so a param-bound marker read matches nothing,
+    // reads as "never analyzed", and re-runs the multi-second scan on every
+    // boot — production-only, suite green. Both marker legs are param-free.
     seedBlocks(opts.minBlocks)
-    const first = paramsDroppingDb()
-    expect((await runAnalyzeIfStale(first.db, opts)).analyzed).toBe(true)
+    expect((await runAnalyzeIfStale(buildRecordingDb({dropParams: true}).db, opts)).analyzed).toBe(true)
 
-    const second = paramsDroppingDb()
+    const second = buildRecordingDb({dropParams: true})
     expect((await runAnalyzeIfStale(second.db, opts)).analyzed).toBe(false)
-    expect(second.executed).not.toContain('ANALYZE')
+    expect(second.ranAnalyze()).toBe(false)
+  })
+
+  it('re-analyzes when a rebuilt table loses its stats under unchanged index names', async () => {
+    // `DROP TABLE` deletes that table's sqlite_stat1 rows. A migration that
+    // rebuilds a derived local table and recreates its indexes under the same
+    // names therefore destroys the stats while leaving the index-NAME set
+    // byte-identical — a name-only fingerprint matches and ANALYZE is skipped,
+    // silently restoring the pessimal plan. Live instance in-tree:
+    // backfillBlockReferencesSourceFieldIfNeeded drops `block_references` and
+    // recreates idx_block_references_ws_alias, earlier in the same boot.
+    seedBlocks(opts.minBlocks)
+    h.db.exec('CREATE TABLE test_rebuilt (id TEXT NOT NULL, k TEXT)')
+    h.db.exec("INSERT INTO test_rebuilt (id, k) VALUES ('a', 'x'), ('b', 'y')")
+    h.db.exec('CREATE INDEX idx_test_rebuilt_k ON test_rebuilt (k)')
+    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(true)
+    expect(
+      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_rebuilt_k'").get(),
+    ).toBeDefined()
+
+    h.db.exec('DROP TABLE test_rebuilt')
+    h.db.exec('CREATE TABLE test_rebuilt (id TEXT NOT NULL, k TEXT)')
+    h.db.exec("INSERT INTO test_rebuilt (id, k) VALUES ('a', 'x'), ('b', 'y')")
+    h.db.exec('CREATE INDEX idx_test_rebuilt_k ON test_rebuilt (k)')
+    // Same index names as the recorded set, but the stats are gone.
+    expect(
+      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_rebuilt_k'").get(),
+    ).toBeUndefined()
+
+    const {db, ranAnalyze} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
   })
 
   it('still respects the too-small-to-matter floor when the index set changes', async () => {
@@ -1223,16 +1237,22 @@ describe('runAnalyzeIfStale — index-set drift', () => {
   })
 })
 
-describe('indexSetFingerprint', () => {
-  it('is insensitive to nothing but the set of index names', () => {
-    expect(indexSetFingerprint('a\nb')).toBe(indexSetFingerprint('a\nb'))
-    expect(indexSetFingerprint('a\nb')).not.toBe(indexSetFingerprint('a\nc'))
+describe('analyzeFingerprint', () => {
+  it('tracks the index names', () => {
+    expect(analyzeFingerprint('a\nb', 't/a')).toBe(analyzeFingerprint('a\nb', 't/a'))
+    expect(analyzeFingerprint('a\nb', 't/a')).not.toBe(analyzeFingerprint('a\nc', 't/a'))
     // A dropped index must invalidate too — stats for a gone index linger.
-    expect(indexSetFingerprint('a\nb')).not.toBe(indexSetFingerprint('a'))
+    expect(analyzeFingerprint('a\nb', 't/a')).not.toBe(analyzeFingerprint('a', 't/a'))
   })
 
-  it('distinguishes "no indexes" from a real set', () => {
-    expect(indexSetFingerprint(null)).not.toBe(indexSetFingerprint('a'))
+  it('tracks which indexes have stats, not just which exist', () => {
+    // The rebuilt-table case: identical names, stats gone.
+    expect(analyzeFingerprint('a\nb', 't/a\nt/b')).not.toBe(analyzeFingerprint('a\nb', null))
+  })
+
+  it('cannot alias by shifting the boundary between the two dimensions', () => {
+    expect(analyzeFingerprint('a', 'b')).not.toBe(analyzeFingerprint('ab', null))
+    expect(analyzeFingerprint(null, 'a')).not.toBe(analyzeFingerprint('a', null))
   })
 })
 

@@ -15,6 +15,7 @@ import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 import { compileTypedBlockQuery } from './typedBlockQuery'
+import type { ResolvedTypedBlockQuery } from '@/data/api'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -629,18 +630,13 @@ describe('repo.countBlocksUsingProperty', () => {
   })
 })
 
-// The `types` filter used to compile to a correlated `EXISTS` against
-// `block_types` while the candidate scan drove from `blocks` filtered only by
-// workspace. SQLite cannot hoist a correlated subquery into the outer loop, so
-// that shape always scanned every live block in the workspace and probed
-// `block_types` once per row — 346k probes to return 562 rows on a real
-// client (294ms warm / 5.3s cold, versus 12ms for the join form). Expressed as
-// a JOIN the planner is free to drive from `idx_block_types_type_workspace`,
-// whose leading `type` column is the selective one.
+// Why the type filter is a JOIN and not a correlated EXISTS, including the
+// crossover where it is SLOWER: see the block comment on `typeJoin` in
+// typedBlockQuery.ts. These tests pin the emitted shape and the param order.
 describe('compileTypedBlockQuery — type filter join order', () => {
-  const compileTypes = (types: string[], extra: Record<string, unknown> = {}) =>
+  const compileTypes = (types: string[], extra: Partial<ResolvedTypedBlockQuery> = {}) =>
     compileTypedBlockQuery(
-      {workspaceId: WS, types, match: [], exclude: [], ...extra} as never,
+      {workspaceId: WS, types, match: [], exclude: [], ...extra},
       new Map(),
       {projection: 'ids'},
     )

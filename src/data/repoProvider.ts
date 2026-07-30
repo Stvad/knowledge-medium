@@ -63,7 +63,7 @@ import {
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
@@ -445,12 +445,19 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   //
   // (a) Boot: catches anything that changed since the last session — a
   // prior-session import, organic growth, or the legacy "0 0" stats bug.
+  // scheduleDEEPIdle, not scheduleIdle: the latter caps at 2s and its own doc
+  // says it "guarantees the work runs inside the cold-start window on a busy
+  // load". Before the index-set axis existed the drift gate essentially never
+  // fired on a stable client, so that was academic; now every client >=
+  // ANALYZE_MIN_BLOCKS fires once on the boot after any release that adds or
+  // drops an index. Parking the single SQLite worker for seconds IS the freeze
+  // this whole change is about, so it must not land on first paint.
   const scheduleAnalyzeCheck = (reason: string) => {
-    scheduleIdle(() => {
+    scheduleDeepIdle(() => {
       void runAnalyzeIfStale(backfillDb).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
-    })
+    }, CATCHUP_DEEP_IDLE)
   }
   scheduleAnalyzeCheck('boot')
 

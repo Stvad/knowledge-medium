@@ -12,6 +12,7 @@
  *      }
  */
 
+import { fnv1a32Hex } from '@/utils/fnv1a'
 import {
   ALIAS_COLLISION_RAISE_PREFIX,
   PARENT_DELETED_RAISE_PREFIX,
@@ -1111,48 +1112,89 @@ export const SELECT_INDEX_SET_SQL = `
   FROM (SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name)
 `
 
+/** The index NAMES alone are not enough: `DROP TABLE` / `DROP INDEX` deletes
+ *  that table's `sqlite_stat1` rows, so a migration that rebuilds a derived
+ *  local table and recreates its indexes under the same names destroys the
+ *  stats while leaving the name set byte-identical — the marker matches and
+ *  ANALYZE is skipped. That is not hypothetical:
+ *  `backfillBlockReferencesSourceFieldIfNeeded` drops `block_references` and
+ *  recreates `idx_block_references_ws_alias`, the very index this rule exists
+ *  for, and it runs earlier in the same boot than the ANALYZE check.
+ *
+ *  So the fingerprint also covers which (tbl, idx) pairs currently HAVE stats.
+ *  Keys only, never the `stat` values — those move with row counts and would
+ *  re-trigger every boot. An empty table contributes no key before or after,
+ *  so the idle-queue loop avoided above stays avoided. */
+export const SELECT_STAT1_KEYS_SQL = `
+  SELECT group_concat(tbl || '/' || idx, char(10)) AS keys
+  FROM (SELECT tbl, idx FROM sqlite_stat1 ORDER BY tbl, idx)
+`
+
 export const ANALYZE_INDEX_SET_MARKER_PREFIX = 'analyze_index_set:'
 
+/** `_` is a LIKE wildcard, and the prefix has two of them. Escaped so the
+ *  family match — especially the DELETE — can't reach a key like
+ *  `analyzeXindexXset:…` that some future marker family introduces. */
+const ANALYZE_MARKER_LIKE = String.raw`analyze\_index\_set:%`
+
 /** Reads the marker WITHOUT a bound parameter and compares the fingerprint in
- *  JS. There is only ever one such row (recording clears the rest), so
- *  `LIMIT 1` is exact. Param-free on purpose: bootstrap callers pass hand-rolled
- *  db shims, and `repoProvider`'s dropped the params argument on `getOptional`
- *  entirely — a `WHERE key = ?` lookup there binds NULL, matches nothing, and
- *  silently turns "already analyzed" into "never analyzed", so the multi-second
- *  scan would run on every boot. That shim is fixed, but this read no longer
- *  depends on it. */
+ *  JS. Recording keeps exactly one row in the family, so `LIMIT 1` is exact.
+ *
+ *  Param-free on purpose, as is the write below. Bootstrap callers pass
+ *  hand-rolled db shims and `LocalSchemaDb` (`src/data/facets.ts`) literally
+ *  declares the params-less shape; TypeScript cannot catch the mismatch,
+ *  because a narrower arity is always assignable. Against such a shim a bound
+ *  `?` silently binds NULL — the read would match nothing ("never analyzed")
+ *  and the write would insert a NULL key, which the PK permits any number of
+ *  — so the multi-second scan would run on every boot, in production only,
+ *  with the suite green. Keeping both legs param-free makes that structural
+ *  rather than conventional. */
 export const SELECT_ANALYZE_INDEX_SET_MARKER_SQL = `
   SELECT key FROM client_schema_state
-  WHERE key LIKE '${ANALYZE_INDEX_SET_MARKER_PREFIX}%'
+  WHERE key LIKE '${ANALYZE_MARKER_LIKE}' ESCAPE '\\'
   LIMIT 1
 `
 
-/** Replace rather than accumulate — only the current set is meaningful, and
- *  the DELETE keeps one row rather than one per index-set revision ever seen. */
-export const CLEAR_ANALYZE_INDEX_SET_MARKERS_SQL = `
-  DELETE FROM client_schema_state WHERE key LIKE '${ANALYZE_INDEX_SET_MARKER_PREFIX}%'
-`
-
-export const RECORD_ANALYZE_INDEX_SET_MARKER_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`
-
-/** FNV-1a over the newline-joined index names, plus the count as a cheap
- *  second dimension. Pure so the drift rule stays unit-testable without a
- *  database. A collision only costs a skipped ANALYZE until the next
- *  row-count drift, so 32 bits is ample. `null` (no explicit indexes) is
- *  distinct from every real set. */
-export const indexSetFingerprint = (names: string | null): string => {
-  const source = names ?? ''
-  let hash = 0x811c9dc5
-  for (let i = 0; i < source.length; i++) {
-    hash ^= source.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193) >>> 0
+/** Fingerprints are `[0-9a-f]+` by construction ({@link analyzeFingerprint}),
+ *  so inlining one into a SQL string literal is injection-free. Asserted
+ *  rather than assumed — if the fingerprint format ever widens, this throws
+ *  instead of quietly emitting a broken (or hostile) statement. */
+const assertInlinableFingerprint = (fingerprint: string): string => {
+  if (!/^[0-9a-f]+$/.test(fingerprint)) {
+    throw new Error(`[clientSchema] non-inlinable ANALYZE fingerprint: ${JSON.stringify(fingerprint)}`)
   }
-  const count = names === null || names === '' ? 0 : source.split('\n').length
-  return `${count}-${hash.toString(16)}`
+  return fingerprint
 }
+
+/** Upsert FIRST, then drop the rest of the family. The reverse order leaves a
+ *  window with no marker at all, during which a concurrent reader — a second
+ *  tab on the shared worker, or the boot check racing the first-sync check —
+ *  reads "never analyzed" and queues another multi-second ANALYZE. This order
+ *  keeps the family at >= 1 row throughout and converges to exactly one even
+ *  if two writers interleave. */
+export const recordAnalyzeMarkerSql = (fingerprint: string): string => `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${ANALYZE_INDEX_SET_MARKER_PREFIX}${assertInlinableFingerprint(fingerprint)}',
+          strftime('%s', 'now') * 1000)
+`
+
+export const clearOtherAnalyzeMarkersSql = (fingerprint: string): string => `
+  DELETE FROM client_schema_state
+  WHERE key LIKE '${ANALYZE_MARKER_LIKE}' ESCAPE '\\'
+    AND key <> '${ANALYZE_INDEX_SET_MARKER_PREFIX}${assertInlinableFingerprint(fingerprint)}'
+`
+
+/** FNV-1a over the index names and the stat-bearing (tbl, idx) keys, joined by
+ *  NUL — the one character a SQLite identifier cannot contain, so no two
+ *  distinct (names, keys) pairs can alias by shifting the boundary. Written as
+ *  an escape, never a literal NUL in source. Pure, so the drift rule stays
+ *  unit-testable without a database. A collision only costs a skipped ANALYZE
+ *  until the next row-count drift, so 32 bits is ample. `null` on either side
+ *  stays distinct from every real set. */
+export const analyzeFingerprint = (
+  indexNames: string | null,
+  stat1Keys: string | null,
+): string => fnv1a32Hex(`${indexNames ?? ''}\u0000${stat1Keys ?? ''}`)
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1532,15 +1574,24 @@ export interface AnalyzeResult {
   previousEstimate: number | null
 }
 
-/** Fingerprint of the explicit indexes present right now. See
- *  {@link SELECT_INDEX_SET_SQL}. */
-const readIndexSetFingerprint = async (db: ClientSchemaBootstrapDb): Promise<string> => {
-  const row = await db.getOptional<{names: string | null}>(SELECT_INDEX_SET_SQL)
-  return indexSetFingerprint(row?.names ?? null)
+/** Fingerprint of the current planner-stats schema state: which explicit
+ *  indexes exist ({@link SELECT_INDEX_SET_SQL}) and which of them have stats
+ *  ({@link SELECT_STAT1_KEYS_SQL}). */
+const readAnalyzeFingerprint = async (db: ClientSchemaBootstrapDb): Promise<string> => {
+  const indexNames = (await db.getOptional<{names: string | null}>(SELECT_INDEX_SET_SQL))?.names ?? null
+  // `sqlite_stat1` doesn't exist until the first ANALYZE — querying it before
+  // then throws "no such table", so probe `sqlite_master` first (same guard as
+  // getBlocksStatEstimate). Absent table => no stat keys, which is exactly the
+  // "nothing analyzed yet" fingerprint.
+  const hasStatTable = await db.getOptional<{present: number}>(SELECT_SQLITE_STAT1_EXISTS_SQL)
+  const stat1Keys = hasStatTable === null
+    ? null
+    : (await db.getOptional<{keys: string | null}>(SELECT_STAT1_KEYS_SQL))?.keys ?? null
+  return analyzeFingerprint(indexNames, stat1Keys)
 }
 
-/** True when the current index set is the one the last ANALYZE ran against. */
-const indexSetIsAnalyzed = async (
+/** True when the current schema state is the one the last ANALYZE left behind. */
+const analyzeMarkerMatches = async (
   db: ClientSchemaBootstrapDb,
   fingerprint: string,
 ): Promise<boolean> => {
@@ -1548,25 +1599,33 @@ const indexSetIsAnalyzed = async (
   return row?.key === ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint
 }
 
-const recordIndexSetMarker = async (
+const recordAnalyzeMarker = async (
   db: ClientSchemaBootstrapDb,
   fingerprint: string,
 ): Promise<void> => {
-  await db.execute(CLEAR_ANALYZE_INDEX_SET_MARKERS_SQL)
-  await db.execute(RECORD_ANALYZE_INDEX_SET_MARKER_SQL, [
-    ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint,
-  ])
+  await db.execute(recordAnalyzeMarkerSql(fingerprint))
+  await db.execute(clearOtherAnalyzeMarkersSql(fingerprint))
+}
+
+/** Record the state ANALYZE actually left behind, not the one it found.
+ *  ANALYZE itself creates `sqlite_stat1` rows, so the fingerprint that gated
+ *  the decision is stale the moment the scan finishes — recording it would
+ *  never match on the next boot and would re-run the scan forever. */
+const analyzeAndRecord = async (db: ClientSchemaBootstrapDb): Promise<void> => {
+  await db.execute('ANALYZE')
+  await recordAnalyzeMarker(db, await readAnalyzeFingerprint(db))
 }
 
 /** Run `ANALYZE` if either staleness axis has moved: the live `blocks` count
  *  has drifted from the `sqlite_stat1` baseline (see
- *  {@link analyzeIsWarranted}), or the set of indexes has changed since the
- *  last run (see {@link SELECT_INDEX_SET_SQL}) and so some index is planning
- *  against SQLite's default guess instead of real stats. Both are gated by
- *  {@link ANALYZE_MIN_BLOCKS}: below it, join order doesn't cost enough to
- *  pay for the scan. Callers MUST schedule this off the first-paint critical
- *  path (idle / post-sync): the count is a full index scan and ANALYZE itself
- *  is a multi-second pass on a large DB, both on the single SQLite worker. */
+ *  {@link analyzeIsWarranted}), or the planner-stats schema state has changed
+ *  since the last run (see {@link SELECT_STAT1_KEYS_SQL}) and so some index is
+ *  planning against SQLite's default guess instead of real stats. Both are
+ *  gated by {@link ANALYZE_MIN_BLOCKS}: below it, join order doesn't cost
+ *  enough to pay for the scan. Callers MUST schedule this off the first-paint
+ *  critical path (deep idle / post-sync): the count is a full index scan and
+ *  ANALYZE itself is a multi-second pass on a large DB, both on the single
+ *  SQLite worker. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
   opts: {minBlocks?: number; growthFactor?: number} = {},
@@ -1575,13 +1634,12 @@ export const runAnalyzeIfStale = async (
   const growthFactor = opts.growthFactor ?? ANALYZE_GROWTH_FACTOR
   const previousEstimate = await getBlocksStatEstimate(db)
   const count = await getBlocksCount(db)
-  const fingerprint = await readIndexSetFingerprint(db)
-  const indexSetDrifted = count >= minBlocks && !(await indexSetIsAnalyzed(db, fingerprint))
-  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor) && !indexSetDrifted) {
+  const schemaDrifted =
+    count >= minBlocks && !(await analyzeMarkerMatches(db, await readAnalyzeFingerprint(db)))
+  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor) && !schemaDrifted) {
     return {analyzed: false, count, previousEstimate}
   }
-  await db.execute('ANALYZE')
-  await recordIndexSetMarker(db, fingerprint)
+  await analyzeAndRecord(db)
   return {analyzed: true, count, previousEstimate}
 }
 
@@ -1595,9 +1653,7 @@ export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<{count: number}> => {
   const count = await getBlocksCount(db)
-  const fingerprint = await readIndexSetFingerprint(db)
-  await db.execute('ANALYZE')
-  await recordIndexSetMarker(db, fingerprint)
+  await analyzeAndRecord(db)
   return {count}
 }
 
