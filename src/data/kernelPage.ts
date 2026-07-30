@@ -53,6 +53,37 @@ export interface KernelPageSpec {
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   uuidv5(workspaceId, namespace)
 
+/** Read-only alias-first resolution: which block currently IS this kernel
+ *  page. Returns the same id `getOrCreateKernelPage` would resolve to — the
+ *  canonical-alias claimant if one is eligible, else the deterministic id —
+ *  but writes NOTHING: it neither creates, restores, nor repairs, and the
+ *  returned id may name a tombstone or no row at all.
+ *
+ *  For callers that need the page's IDENTITY without wanting to bring it into
+ *  existence — e.g. a read that should fail loudly when the page is missing,
+ *  or navigation that wants to check liveness itself. Callers that need the
+ *  page to exist must use `getOrCreateKernelPage` and take its returned
+ *  block's `.id`; per `canonicalAliasReaderFromTx`, a prediction taken outside
+ *  a write tx is a hint that must be re-resolved inside one before any write.
+ *
+ *  Mirrors `predictedJournalId` in `@/plugins/daily-notes`, and applies the
+ *  SAME adoption guard `getOrCreateKernelPage` does, so the two agree on which
+ *  claimants are eligible. */
+export const predictKernelPageId = async (
+  repo: Repo,
+  workspaceId: string,
+  spec: KernelPageSpec,
+): Promise<string> => {
+  const resolved = await resolveCanonicalAliasOwner(
+    canonicalAliasReaderFromRepo(repo),
+    [spec.alias],
+    workspaceId,
+    kernelPageBlockId(workspaceId, spec.namespace),
+    refuseTypedClaimant([PAGE_TYPE, spec.markerType]),
+  )
+  return resolved.id
+}
+
 /** Get-or-create a per-workspace kernel page. Resolves ALIAS-FIRST (issue
  *  #378, repo-owner decision — "try id if not, use alias, everywhere"):
  *  if a live block already owns `spec.alias` (e.g. the canonical page was
