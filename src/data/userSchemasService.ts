@@ -33,6 +33,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { isGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
@@ -252,11 +253,9 @@ export class UserSchemasService {
     // existing user definitions are complete only after this workspace's
     // projector has delivered its first tick.
     const workspaceId = this.repo.activeWorkspaceId
-    const propertiesPageId = this.repo.propertiesPageId
     const generationToken = this.repo.projectors.generationToken
     if (
       !workspaceId ||
-      !propertiesPageId ||
       generationToken === null ||
       this.repo.projectors.workspaceId !== workspaceId
     ) {
@@ -345,6 +344,20 @@ export class UserSchemasService {
         }
         throw error
       }
+      assertGeneration('creation')
+      assertNameAvailable()
+
+      // Resolve the parent through the get-or-create rather than
+      // `repo.propertiesPageId` (a thin `kernelPageBlockId` wrapper). Since
+      // issue #378 the Properties page resolves ALIAS-FIRST: if its canonical
+      // row was deleted and a user page claims 'Properties', THAT page is the
+      // Properties page and the deterministic id is a tombstone — parenting
+      // there makes the parent-deleted trigger reject the create, so the user
+      // can't add a property at all. This also makes the path self-sufficient
+      // when bootstrap never ran for this workspace (was ParentNotFoundError).
+      const propertiesPageId = (await getOrCreatePropertiesPage(this.repo, workspaceId)).id
+      // The ensure awaited (and may have opened its own tx) — re-assert both
+      // preflight invariants before the write tx, same rule as the awaits above.
       assertGeneration('creation')
       assertNameAvailable()
 
