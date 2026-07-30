@@ -760,6 +760,82 @@ describe('rename — surviving spans converge after the re-parse (#444 round 7)'
   })
 })
 
+describe('rename — derived reference columns (#444 round 8)', () => {
+  const stampOf = async (id: string) =>
+    (await env.h.db.get<{t: string | null}>(
+      `SELECT reference_target_id AS t FROM blocks WHERE id = ?`, [id])).t
+
+  it('leaves an exact-reference source correctly stamped after a handoff', async () => {
+    // A whole-content `[[Shared]]` row carries a derived
+    // `reference_target_id`, and the handoff branch changes no CONTENT — so
+    // rename's own inline recompute (which is gated on a content rewrite)
+    // does not run, and `core.deriveReferenceTarget` watches `content`
+    // only. The stamp is repaired anyway, INSIDE this tx: dropping the
+    // stale edge is a write, which dirties the row, and the kernel's
+    // derivation re-run visits dirty rows without filtering on watched
+    // fields and re-derives unconditionally. Asserted at commit time,
+    // before any post-commit processor can have run, because that is the
+    // claim — a post-commit repair would be a different (weaker) one.
+    await seedTarget(PIN_TARGET, 'T', ['Shared'])
+    await seedTarget('u', 'U', [])
+    await seedSource('s', '[[Shared]]')
+    // Precondition: it really was stamped at the releasing block, so this
+    // cannot pass by the column having been null all along.
+    expect(await stampOf('s')).toBe(PIN_TARGET)
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(PIN_TARGET, aliasesProp, [])
+      await tx.setProperty('u', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await stampOf('s')).toBe('u')
+    expect((await env.read('s'))!.content).toBe('[[Shared]]')
+    await flush()
+    expect(await stampOf('s')).toBe('u')
+  })
+})
+
+describe('rename — pinning a [display]([[alias]]) wikilink (#444 round 8)', () => {
+  const refsOf = async (id: string) =>
+    JSON.parse((await env.read(id))!.references_json) as Array<{id: string; alias: string}>
+
+  it('rewrites the whole wrapper, keeping the display text and the edge', async () => {
+    // `[label]([[A]])` is ONE wikilink to the renderer, with `label` as its
+    // display text — `parseReferences` only sees the inner span. Pinning
+    // just that span left `[label]([A](((id))))`, a plain markdown link:
+    // reference destroyed, stored edge moved to the target anyway.
+    await seedTarget(PIN_TARGET, '', ['A'])
+    await seedSource('s', 'see [label]([[A]]) please')
+    expect(await blockReferences('s', PIN_TARGET)).toEqual([{alias: 'A'}])
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe(`see [label](((${PIN_TARGET}))) please`)
+    // The span really still binds, as a blockref whose alias is the id.
+    expect(await refsOf('s')).toEqual([{id: PIN_TARGET, alias: PIN_TARGET}])
+  })
+
+  it('keeps the wrapper shape on a 1-for-1 swap', async () => {
+    // The wikilink branch needs no widening: `[label]([[New]])` is the same
+    // shape, so the author's display text survives untouched.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'see [label]([[Old]]) please')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [label]([[New]]) please')
+    expect(await refsOf('s')).toEqual([{id: 't', alias: 'New'}])
+  })
+})
+
 describe('rename — claimants of the released alias (§11 group 2)', () => {
   const refsOf = async (id: string) =>
     JSON.parse((await env.read(id))!.references_json) as Array<{id: string; alias: string}>

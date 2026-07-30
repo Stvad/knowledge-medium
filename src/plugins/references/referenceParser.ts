@@ -426,6 +426,123 @@ export const pinnedSpanReplacement = (
   }
 }
 
+/** `[display]([[alias]])` — a wikilink carrying custom display text.
+ *
+ *  A THIRD span shape the rewriters have to know about, because
+ *  `parseReferences` doesn't: it reports only the inner `[[alias]]`, while
+ *  `remark-wikilinks` treats the whole wrapper as one wikilink whose
+ *  rendered children are `display` (its first pass matches a `link` node
+ *  with url `[[alias]]`; its `LINK_FORM_RE` pass catches the same shape
+ *  when the alias has spaces and remark therefore never made a link).
+ *
+ *  Splicing a PINNED replacement into the inner span alone yields
+ *  `[display]([label](((uuid))))`, which the real pipeline renders as an
+ *  ordinary markdown link whose URL is `[label](((uuid)))` — verified
+ *  against `remarkWikilinks` + `remarkBlockrefs`, not assumed. Neither a
+ *  wikilink nor a blockref: the reference is destroyed while the stored
+ *  edge moves to the target, so content and edge disagree permanently.
+ *  (The wikilink→wikilink swap is safe: `[display]([[new]])` is still the
+ *  same shape. Only the pinned form has to widen its range.)
+ *
+ *  `image: true` for `![display]([[alias]])`, which markdown parses as an
+ *  IMAGE — it carries no reference at render time even before a rewrite,
+ *  so pinned callers step over it exactly as they do a page embed rather
+ *  than converting an image into a blockref.
+ *
+ *  Returns null when the wrapper doesn't match the grammar the renderer
+ *  accepts, in which case the inner span is the whole span. */
+const linkFormWrapperAround = (
+  content: string,
+  mark: {startIndex: number; endIndex: number},
+): {start: number; end: number; display: string; image: boolean} | null => {
+  if (content[mark.endIndex] !== ')') return null
+  if (mark.startIndex < 2) return null
+  if (content.slice(mark.startIndex - 2, mark.startIndex) !== '](') return null
+  const close = mark.startIndex - 2
+  const open = content.lastIndexOf('[', close - 1)
+  if (open === -1) return null
+  const display = content.slice(open + 1, close)
+  // Same character class as the renderer's `LINK_FORM_RE` display group.
+  // `lastIndexOf` already guarantees no `[`; this rejects `]` and newlines,
+  // which would make remark parse something other than one link.
+  if (/[[\]\n]/.test(display)) return null
+  return {
+    start: open,
+    end: mark.endIndex + 1,
+    display,
+    image: open > 0 && content[open - 1] === '!',
+  }
+}
+
+/** How one alias's spans should be replaced. `pinnedTargetId` is set iff
+ *  `text` is the PINNED form `[label](((id)))` — it lets the splice widen
+ *  its range over a `[display]([[alias]])` wrapper and re-render with the
+ *  author's display text (see `linkFormWrapperAround`). Pinned callers
+ *  pass it alongside `skipEmbeds`; both derive from the same
+ *  `SpanReplacement.toTargetId`. */
+export interface WikilinkRewrite {
+  text: string
+  skipEmbeds?: boolean
+  pinnedTargetId?: string
+}
+
+/** The splice range and text for one mark, or `null` to leave it alone.
+ *  Shared by both rewriters so the wrapper and embed rules cannot drift
+ *  between the rename path and the merge path. */
+const spliceFor = (
+  content: string,
+  mark: {startIndex: number; endIndex: number},
+  rewrite: WikilinkRewrite,
+): {start: number; end: number; text: string} | null => {
+  const pinned = rewrite.pinnedTargetId
+  if (pinned !== undefined) {
+    const wrapper = linkFormWrapperAround(content, mark)
+    if (wrapper !== null) {
+      // An image carries no reference to preserve; leave the text as-is.
+      if (wrapper.image) return null
+      // Re-render with the AUTHOR's display text rather than the ladder's
+      // `pinLabel` — in this shape the author's text is `display`, and the
+      // pinned form's whole purpose is to keep it. Verified the same way
+      // every other spliced span is.
+      //
+      // The `null` branch is DEFENCE IN DEPTH, not a reachable path. It
+      // needs `pinnedSpanReplacement` to refuse, and for a display this
+      // detection accepts that means only a non-UUID target — which
+      // already made the LADDER refuse upstream, so no pinned replacement
+      // would exist to splice here. (`[` can't appear: the opener scan
+      // takes the innermost bracket. `]`/newline can't: rejected above.)
+      // Kept anyway, because the two calls verify DIFFERENT labels — the
+      // ladder's invented one, this one's authored one — and a splice that
+      // emits unverified text is wrong on its own terms. Degrades like an
+      // embed: a working late-binding link, whose now-stale edge the caller
+      // invalidates for the re-parse.
+      //
+      // `lossyLabel` is deliberately NOT reported here, unlike in
+      // `preferredSpanReplacement`. That warning exists because the ladder
+      // INVENTS a label and may sanitize it; here the label is text the
+      // author already had in a label position, so the rendered display
+      // does not change. Its `]`/newline half cannot fire either — the
+      // wrapper detection already rejects both.
+      const replacement = pinnedSpanReplacement(wrapper.display, pinned)
+      if (replacement === null) return null
+      return {start: wrapper.start, end: wrapper.end, text: replacement.text}
+    }
+  }
+  // `![[alias]]` is the PAGE EMBED form, and markdown is a third grammar
+  // sharing this text. Splicing the pinned form under a leading `!` yields
+  // `![label](((uuid)))` — a markdown IMAGE, and `remark-blockrefs` only
+  // visits `link`/`text` nodes, so it renders as a broken `<img>`. The
+  // reference survives; the display doesn't, which is the half of the
+  // span's meaning the pinned form exists to preserve. Callers splicing a
+  // pinned replacement pass `skipEmbeds` and leave those spans as the
+  // working late-binding embed they already are. (A wikilink→wikilink swap
+  // is safe under `!` — still a page embed — so this is opt-in, not
+  // automatic.)
+  if (rewrite.skipEmbeds
+    && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') return null
+  return {start: mark.startIndex, end: mark.endIndex, text: rewrite.text}
+}
+
 /** Replace every wikilink whose alias exactly matches `alias` with
  *  the literal `replacement` string. Uses `parseReferences` to find
  *  spans and avoids the
@@ -437,11 +554,12 @@ export const rewriteWikilinks = (
   content: string,
   alias: string,
   replacement: string,
-  opts?: {skipEmbeds?: boolean},
+  opts?: {skipEmbeds?: boolean; pinnedTargetId?: string},
 ): string => {
   if (alias === '') return content  // parser never emits empty-alias marks
   const marks = parseReferences(content)
   if (marks.length === 0) return content
+  const rewrite: WikilinkRewrite = {text: replacement, ...opts}
   let result = ''
   let cursor = 0
   for (const mark of marks) {
@@ -450,22 +568,14 @@ export const rewriteWikilinks = (
     // rewritten — replacing both would corrupt the outer's text.
     if (mark.startIndex < cursor) continue
     if (mark.alias !== alias) continue
-    // `![[alias]]` is the PAGE EMBED form, and markdown is a third
-    // grammar sharing this text. Splicing the pinned form under a
-    // leading `!` yields `![label](((uuid)))` — a markdown IMAGE, and
-    // `remark-blockrefs` only visits `link`/`text` nodes, so it renders
-    // as a broken `<img>`. The reference survives; the display doesn't,
-    // which is the half of the span's meaning the pinned form exists to
-    // preserve. Callers splicing a pinned replacement pass
-    // `skipEmbeds` and leave those spans as the working late-binding
-    // embed they already are. (A wikilink→wikilink swap is safe under
-    // `!` — still a page embed — so this is opt-in, not automatic.)
-    if (opts?.skipEmbeds && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') {
-      continue
-    }
-    result += content.slice(cursor, mark.startIndex)
-    result += replacement
-    cursor = mark.endIndex
+    const splice = spliceFor(content, mark, rewrite)
+    if (splice === null) continue
+    // A wrapper splice starts BEFORE the mark; if a previous replacement
+    // already consumed that text, widening here would corrupt it.
+    if (splice.start < cursor) continue
+    result += content.slice(cursor, splice.start)
+    result += splice.text
+    cursor = splice.end
   }
   return cursor === 0 ? content : result + content.slice(cursor)
 }
@@ -481,11 +591,12 @@ export const rewriteWikilinks = (
  *  α's entry to β's block. Parsing once and splicing from the ORIGINAL
  *  content makes each span the target of at most one rewrite.
  *
- *  `skipEmbeds` is per-alias because it tracks whether THAT alias's
- *  replacement is the pinned form (see `rewriteWikilinks`). */
+ *  `skipEmbeds` / `pinnedTargetId` are per-alias because they track
+ *  whether THAT alias's replacement is the pinned form (see
+ *  `rewriteWikilinks` and `linkFormWrapperAround`). */
 export const rewriteWikilinksMulti = (
   content: string,
-  replacements: ReadonlyMap<string, {text: string; skipEmbeds?: boolean}>,
+  replacements: ReadonlyMap<string, WikilinkRewrite>,
 ): string => {
   if (replacements.size === 0) return content
   const marks = parseReferences(content)
@@ -496,11 +607,13 @@ export const rewriteWikilinksMulti = (
     if (mark.startIndex < cursor) continue
     const replacement = replacements.get(mark.alias)
     if (replacement === undefined) continue
-    if (replacement.skipEmbeds
-      && mark.startIndex > 0 && content[mark.startIndex - 1] === '!') continue
-    result += content.slice(cursor, mark.startIndex)
-    result += replacement.text
-    cursor = mark.endIndex
+    const splice = spliceFor(content, mark, replacement)
+    if (splice === null) continue
+    // See `rewriteWikilinks`: a wrapper splice reaches back before the mark.
+    if (splice.start < cursor) continue
+    result += content.slice(cursor, splice.start)
+    result += splice.text
+    cursor = splice.end
   }
   return cursor === 0 ? content : result + content.slice(cursor)
 }

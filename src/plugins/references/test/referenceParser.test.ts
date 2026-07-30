@@ -537,3 +537,67 @@ Another [[normal-ref]]
     })
   })
 })
+
+describe('pinned rewrites inside a [display]([[alias]]) wrapper', () => {
+  // `parseReferences` reports only the inner `[[alias]]`, but
+  // `remark-wikilinks` treats the whole `[display]([[alias]])` as ONE
+  // wikilink whose rendered children are `display`. Splicing the pinned
+  // form into the inner span alone produced
+  // `[display]([label](((uuid))))`, which the real pipeline renders as a
+  // plain markdown link — reference destroyed, stored edge moved anyway
+  // (Codex on PR #444). `remark-wikilinks.test.ts` asserts the rendered
+  // node values for both forms; these pin the rewrite itself.
+  const PINNED = `[Old](((${UUID})))`
+  const opts = {skipEmbeds: true, pinnedTargetId: UUID}
+
+  it('replaces the whole wrapper and keeps the author display text', () => {
+    expect(rewriteWikilinks('see [label]([[Old]]) here', 'Old', PINNED, opts))
+      .toBe(`see [label](((${UUID}))) here`)
+  })
+
+  it('handles a wrapper and a bare span in one pass', () => {
+    expect(rewriteWikilinks('[label]([[Old]]) and [[Old]]', 'Old', PINNED, opts))
+      .toBe(`[label](((${UUID}))) and [Old](((${UUID})))`)
+  })
+
+  it('leaves an image wrapper alone — it carries no reference to preserve', () => {
+    // `![display]([[alias]])` parses as a markdown IMAGE, so nothing is
+    // lost by leaving it and a blockref would be a different node entirely.
+    expect(rewriteWikilinks('x ![label]([[Old]]) y', 'Old', PINNED, opts))
+      .toBe('x ![label]([[Old]]) y')
+  })
+
+  it('takes the INNERMOST bracket as the display text', () => {
+    // The opener is found by scanning back for the nearest `[`, so a
+    // display can never contain `[` — which is also why the
+    // label-smuggling refusal inside `spliceFor` is defence in depth
+    // rather than a reachable path. Pinned here because the scan-back is
+    // subtle: `[a[b]([[Old]])` wraps on `[b]`, leaving `[a` as prose.
+    expect(rewriteWikilinks('x [a[b]([[Old]]) y', 'Old', PINNED, opts))
+      .toBe(`x [a[b](((${UUID}))) y`)
+  })
+
+  it('reports a display text the pinned grammar would mangle as unchanged', () => {
+    // `\\` is markdown-unsafe in a label, so `pinnedSpanReplacement`
+    // flags `lossyLabel` — but it flags it against the LADDER's invented
+    // label. Here the text was already sitting in a label position, so the
+    // rendered display does not change and the rewrite proceeds.
+    expect(rewriteWikilinks('x [a\\b]([[Old]]) y', 'Old', PINNED, opts))
+      .toBe(`x [a\\b](((${UUID}))) y`)
+  })
+
+  it('does not widen the range for a WIKILINK replacement', () => {
+    // `[display]([[new]])` is still the same wrapper shape, so the inner
+    // swap stays correct and the author's display text is untouched.
+    expect(rewriteWikilinks('see [label]([[Old]]) here', 'Old', '[[New]]'))
+      .toBe('see [label]([[New]]) here')
+  })
+
+  it('needs a real wrapper, not just a trailing paren', () => {
+    // `](` immediately before the span is the whole signal, so a span that
+    // merely sits inside parens must not be widened.
+    expect(rewriteWikilinks('see ([[Old]]) here', 'Old', PINNED, opts))
+      .toBe(`see ([Old](((${UUID})))) here`)
+  })
+})
+

@@ -378,7 +378,14 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   // entry swap's own last-write-wins map.)
   const nextContent = rewriteWikilinksMulti(
     current.content,
-    new Map(plan.rewrites.map(rw => [rw.alias, {text: rw.replacement, skipEmbeds: rw.pinned}])),
+    new Map(plan.rewrites.map(rw => [rw.alias, {
+      text: rw.replacement,
+      skipEmbeds: rw.pinned,
+      // Set only for the pinned form, and it is what lets the splice widen
+      // over a `[display]([[α]])` wrapper instead of destroying it — see
+      // `linkFormWrapperAround`.
+      pinnedTargetId: rw.pinned ? rw.toTargetId : undefined,
+    }])),
   )
 
   const {swapped, stranded} = splitBySurvivingSpan(plan.rewrites, nextContent)
@@ -425,6 +432,24 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
     // unresolvable alias (`undefined`) clears the column rather than
     // preserving a caller-provided id the way the derive processor's
     // create path does.
+    //
+    // Gated on a content rewrite, and that is sufficient — checked, because
+    // it looks like a hole (Codex on PR #444). The no-content-change paths
+    // (handoff, co-claim, unrenderable replacement) still WRITE, because
+    // they drop the stale edge; that write dirties the row, and the kernel's
+    // derivation re-run visits dirty rows without filtering on watched
+    // fields, re-deriving `[[α]]` against the tx's staged alias index. So
+    // the stamp lands correct inside this same tx — pinned by "leaves an
+    // exact-reference source correctly stamped after a handoff", which
+    // asserts it at commit time rather than after the post-commit drain.
+    //
+    // What is genuinely NOT repaired is an exact-`[[α]]` row this pass never
+    // touches — not a backlink source of the renaming block, so never
+    // enumerated. Its stamp keeps naming the old claimant. That is the
+    // kernel's own deliberately-deferred case, not ours:
+    // `core.aliasClaimRederive` schedules a re-derive for alias GAINS only,
+    // and its docblock states that re-pointing already-stamped rows (the
+    // handoff/reclaim half) stays out until auto-claim lands.
     const nextTargetId = derived.targetId ?? null
     if ((current.referenceTargetId ?? null) !== nextTargetId) {
       patch.referenceTargetId = nextTargetId

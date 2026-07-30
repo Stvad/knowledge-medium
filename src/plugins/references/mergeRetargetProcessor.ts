@@ -200,8 +200,13 @@ const retargetReferenceContent = (
   let next = rewriteBlockRefs(content, fromId, intoId)
   for (const [fromAlias, replacement] of aliasReplacements) {
     if (replacement === null) continue
-    next = rewriteWikilinks(next, fromAlias, replacement.text,
-      {skipEmbeds: replacement.toTargetId !== null})
+    next = rewriteWikilinks(next, fromAlias, replacement.text, {
+      skipEmbeds: replacement.toTargetId !== null,
+      // Pinned only: lets the splice widen over a `[display]([[alias]])`
+      // wrapper rather than turning it into a plain markdown link (see
+      // `linkFormWrapperAround`).
+      pinnedTargetId: replacement.toTargetId ?? undefined,
+    })
   }
   return next
 }
