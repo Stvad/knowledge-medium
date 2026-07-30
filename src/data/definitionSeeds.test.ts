@@ -429,6 +429,48 @@ describe('materializePropertySeeds', () => {
     await expect(materializePropertySeeds(repo, WS, [seed, seed])).rejects.toThrow('duplicate seed key')
     expect(getAll).not.toHaveBeenCalled()
   })
+
+  it('ensures its own Properties page when it does not exist yet (self-sufficient before bootstrap)', async () => {
+    // Mirrors the analogous TYPE-seed test below (added when that ordering fix
+    // landed — commit 1228828d2 / "C3d") but was missing on the property side.
+    // A `setActiveWorkspaceId`-driven reschedule (or any caller that races ahead
+    // of bootstrap's `ensureSystemPages`) can fire the property pass before the
+    // Properties page exists; without the pass ensuring its own parent,
+    // `tx.create` throws ParentNotFoundError ("parent block <id> does not
+    // exist"). `ensureParent` (definitionSeeds.ts) already guards this — this
+    // test pins that guarantee for the property kind with the parent's absence
+    // as a fixed starting condition, not a timing window.
+    //
+    // NOTE re #455: this direct-call, single-shot scenario is NOT itself the
+    // mechanism behind the CI flake — `ensureParent` already existed before
+    // #455 was filed. The flake's two symptoms have separate, verified causes:
+    // `awaitSeedMaterialization()` can resolve before a freshly (re)scheduled
+    // pass has even entered its pending set (see the fixed test below), and the
+    // `parent block ... does not exist` stderr traces to `ensureParent` and the
+    // seed's own `tx.create` being two separate write transactions — a window
+    // in which this test file's shared-db `resetTestDb()` (run by every test's
+    // `beforeEach`) can collide with a PRIOR test's still-in-flight, unawaited
+    // `PendingIdleJobs`-scheduled pass (nothing aborts/drains a test's dangling
+    // seed-materialization job when that test ends and a new `Repo` is built for
+    // the next one — `seedMaterializationGeneration` is a per-instance
+    // AbortController, so a later test's `Repo` cannot reach into and cancel an
+    // earlier one's). See the PR description for the reproduction of both.
+    const freshWs = 'ws-no-pages-property'
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [propertiesPageBlockId(freshWs)])).toBeNull()
+
+    expect(await materializePropertySeeds(repo, freshWs, [seed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+
+    // The parent Properties page was materialized by the pass itself...
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [propertiesPageBlockId(freshWs)])).not.toBeNull()
+    // ...and the backing block is parented under it.
+    const row = await sharedDb.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?',
+      [propertyDefinitionBlockId(freshWs, seed.seedKey)])
+    expect(row.parent_id).toBe(propertiesPageBlockId(freshWs))
+  })
 })
 
 describe('property seed materialization access', () => {
@@ -535,17 +577,26 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     expect(seedKeys.length).toBeGreaterThan(0)
 
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await repo.awaitSeedMaterialization()
 
-    // Every registry seed now has a live definition block under Properties.
-    for (const seedKey of seedKeys) {
-      const id = propertyDefinitionBlockId(WS, seedKey)
-      const row = await sharedDb.db.get<{parent_id: string; deleted: number}>(
-        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [id],
-      )
-      expect(row?.parent_id).toBe(propertiesPageBlockId(WS))
-      expect(row?.deleted).toBe(0)
-    }
+    // #455: awaitSeedMaterialization() only drains jobs whose deferral timer has
+    // already fired — a freshly (re)scheduled pass can still be in flight (or not
+    // yet even entered the pending set) when it resolves, so it must not be
+    // trusted to mean "materialization landed." Poll for the actual outcome
+    // (every registry seed has a live definition block under Properties)
+    // instead of asserting immediately after one await, matching the sibling
+    // tests below. getOptional (not get) so a still-missing row is a legible
+    // assertion failure rather than an opaque adapter throw.
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      for (const seedKey of seedKeys) {
+        const id = propertyDefinitionBlockId(WS, seedKey)
+        const row = await sharedDb.db.getOptional<{parent_id: string; deleted: number}>(
+          'SELECT parent_id, deleted FROM blocks WHERE id = ?', [id],
+        )
+        expect(row?.parent_id).toBe(propertiesPageBlockId(WS))
+        expect(row?.deleted).toBe(0)
+      }
+    })
   })
 
   it('re-runs once when a seed-set change coalesces mid-flight (dirty re-run)', async () => {
