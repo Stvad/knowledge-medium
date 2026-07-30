@@ -341,8 +341,9 @@
   (<code>references.renameBacklinks</code> moved post-commit &rarr; same-tx):
   the local read&rarr;write window and everything built for it &mdash; the
   seat-target disjunction, the window-seat predicate, later-edit-wins &mdash;
-  are marked superseded in place; the sync-arrival window and the
-  references-parse fence are unaffected and still open.
+  are marked superseded in place; the sync-arrival window is unaffected and
+  still open, and the references-parse fence is now landed for the rename
+  enumeration (see §9) and still open for delete/merge.
   §11 items landing out of
   <a href="https://github.com/Stvad/knowledge-medium/issues/443">#443</a> are
   marked <strong>landed</strong> at the entry that specifies them, with the
@@ -2217,8 +2218,26 @@ supabase skill if it's kept.
     the release.
     <br><br>
     What SURVIVES from them is the
-    <em>references-parse fence</em> requirement, unchanged and still open
-    (§11 group 4): <code>block_references</code> is written by a post-commit
+    <em>references-parse fence</em> requirement &mdash; <strong>landed for the
+    rename enumeration</strong> (#443 group 4), by a different mechanism than
+    the drain described below, which a same-tx processor cannot perform. There
+    is no reliable "is a parse outstanding?" signal to gate on either:
+    <code>processorRunner</code>'s pending set excludes a delayed job whose
+    timer hasn't fired. What IS available is a second index over the same text
+    that does not lag &mdash; <code>blocks_fts</code>, the trigram FTS5 index
+    over <code>blocks.content</code>, which like <code>block_aliases</code> is
+    TRIGGER-maintained and so is written in the same SQL transaction as the
+    content itself. <code>parseFence.ts</code> enumerates through it as a
+    second leg, merged with the edge-keyed one and gated on the release path
+    (where the renaming block was the alias's only claimant, so every
+    <code>[[&alpha;]]</code> span resolved to it and no target check is
+    needed). The failure it closes was measured, and is worse than this entry
+    describes: the missed source kept <code>[[Old]]</code> and the late parse
+    then MINTED A SEAT for the now-unclaimed name and bound the span to that
+    empty stub &mdash; a live link became a link to nothing, silently. Still
+    open for the delete/merge enumerations, which key on target id rather than
+    alias, though the mechanism generalizes. Original entry:
+    <code>block_references</code> is written by a post-commit
     processor, so a <code>::[[old]]</code> row edited or pasted in a
     <em>previous</em> tx whose parse has not drained yet can have <em>no
     edge at all</em> when the rename enumerates &mdash; and an unfenced scan

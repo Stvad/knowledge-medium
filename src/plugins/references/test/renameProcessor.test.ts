@@ -555,6 +555,129 @@ describe('rename — whole-span round-trip guard (§11 group 2)', () => {
   })
 })
 
+describe('rename — the references-parse fence (§11 group 4)', () => {
+  /** A source with content but NO parsed edge — the undrained window the
+   *  fence covers.
+   *
+   *  A RAW `db.writeTransaction`, not `repo.tx` without a flush. Skipping the
+   *  flush looks like it produces this state but doesn't reliably: every
+   *  `await` before the rename — including the ones asserting the
+   *  precondition — gives the already-queued parse a chance to run, so the
+   *  test silently drifts into testing the drained path. (Measured: two of
+   *  these tests passed with the fence removed for exactly that reason.) A
+   *  raw write still maintains every trigger-backed index — `blocks_fts`
+   *  included, which is the whole point — while firing no post-commit
+   *  processor at all.
+   *
+   *  It fires no SAME-TX processor either, so `derived` supplies by hand
+   *  what `core.deriveReferenceTarget` would have stamped. That is the
+   *  honest shape of the case: a row edited in a previous tx had its same-tx
+   *  derive run inside that tx, and only its post-commit parse is
+   *  outstanding. */
+  const seedUndrainedSource = async (
+    id: string,
+    content: string,
+    derived?: {referenceTargetId: string; isFieldForm: boolean},
+  ): Promise<void> => {
+    await env.h.db.writeTransaction(async tx => {
+      await tx.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                             properties_json, references_json, created_at, updated_at,
+                             created_by, updated_by, deleted,
+                             reference_target_id, is_field_form)
+         VALUES (?, ?, NULL, 'b0', ?, '{}', '[]', 1, 1, 'u', 'u', 0, ?, ?)`,
+        [id, WS, content, derived?.referenceTargetId ?? null,
+         derived?.isFieldForm === true ? 1 : null],
+      )
+    })
+  }
+
+  it('rewrites a source whose edge has not been parsed yet', async () => {
+    // Measured before the fix: the source kept `see [[Old]]`, and the late
+    // parse then MINTED A SEAT for the now-unclaimed `Old` and bound the span
+    // to that empty stub — a live link to a real block became a link to
+    // nothing, silently. The precondition is asserted, not assumed, because
+    // the whole test is vacuous if the edge happens to be there already.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedUndrainedSource('s', 'see [[Old]]')
+    expect(await blockReferences('s', 't')).toEqual([])
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[New]]')
+    expect(await blockReferences('s', 't')).toEqual([{alias: 'New'}])
+    // The span must NOT have been rebound to a freshly minted seat.
+    expect(await blockReferences('s', computeAliasSeatId('Old', WS, 0))).toEqual([])
+  })
+
+  it('re-keys an undrained MARKED row too — it has a stamp but still no edge', async () => {
+    // A `::[[old]]` field row typed just before the release is the case the
+    // doc names. Its derived columns ARE stamped same-tx, so the row keeps
+    // resolving; what it loses without the fence is the canonical re-key.
+    await seedTarget(PIN_TARGET, '', ['Status'])
+    await seedUndrainedSource('marked', '::[[Status]]',
+      {referenceTargetId: PIN_TARGET, isFieldForm: true})
+    expect(await blockReferences('marked', PIN_TARGET)).toEqual([])
+    expect(await derivedColumns('marked'))
+      .toEqual({reference_target_id: PIN_TARGET, is_field_form: 1})
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('marked'))!.content).toBe(`::((${PIN_TARGET}))`)
+  })
+
+  it('does not rewrite a differently-cased alias the FTS match also returns', async () => {
+    // `blocks_fts` is `case_sensitive 0`, so releasing `Status` makes the
+    // fence's MATCH return a `[[status]]` row too. This locks the OUTCOME,
+    // and deliberately not the mechanism: the exact-alias filter in
+    // `parseFence` is an efficiency guard (dropping it fails no test —
+    // the splice is keyed on `Status` and matches nothing), so what is
+    // asserted here is that the two layers together never touch a span that
+    // never pointed at this block.
+    await seedTarget(PIN_TARGET, '', ['Status'])
+    await seedUndrainedSource('other', 'see [[status]] please')
+
+    await env.repo.tx(
+      tx => tx.setProperty(PIN_TARGET, aliasesProp, []),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('other'))!.content).toBe('see [[status]] please')
+  })
+
+  it('leaves an undrained source alone on a HANDOFF', async () => {
+    // The fence is deliberately release-only, and this locks in that the
+    // handoff path stays a content no-op: `[[Shared]]` already resolves
+    // where the author expects (`u` owns the name now), so late-binding it
+    // is the correct outcome and rewriting would steal the span.
+    //
+    // The raw seed has no pending parse to eventually bind the span — that
+    // is the one thing it can't model — so this asserts only what holds
+    // regardless: content untouched, and no edge invented for either block.
+    await seedTarget('t', 'Shared', ['Shared'])
+    await seedTarget('u', 'U', [])
+    await seedUndrainedSource('s', 'see [[Shared]]')
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty('t', aliasesProp, [])
+      await tx.setProperty('u', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[Shared]]')
+    expect(await blockReferences('s', 't')).toEqual([])
+  })
+})
+
 describe('rename — marked name rows re-key to canonical ::((A)) (§11 group 2)', () => {
   // The last open arm of group 2: "its lossy-name fallback for MARKED rows is
   // canonical `::((A))`, never a pinned label". A marked row is a property
