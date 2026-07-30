@@ -11,7 +11,14 @@ export type ExactReferenceBlockContent =
 // ALIASED_BLOCK_REF_RE exactly (UUID-only id, no `]`/newline in the
 // label) — that parser owns the form, and a whole-block reading that
 // accepted more would diverge from every inline reader of the same text.
-const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+// Exported so other modules that need "what does a UUID-shaped id look
+// like" (e.g. explicitBlockId.ts's write-boundary validator) reuse this
+// SOURCE instead of copying the character class a third time. Case
+// policy is a per-consumer choice, not baked in here: this file's own
+// UUID_RE below adds the `i` flag (parsing existing content accepts and
+// canonicalizes any case), while a stricter consumer can anchor the bare
+// source without it to require lowercase.
+export const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const UUID_RE = new RegExp(`^${UUID_RE_SOURCE}$`, 'i')
 const EXACT_BLOCK_REF_RE = /^\(\(([^()\s]+)\)\)$/
 const EXACT_ALIASED_BLOCK_REF_RE = new RegExp(
