@@ -995,15 +995,18 @@ const buildRecordingDb = ({dropParams = false}: {dropParams?: boolean} = {}) => 
     execute: async (sql: string, params?: unknown[]) => {
       executed.push(sql.trim())
       const stmt = h.db.prepare(sql)
-      if (params && params.length > 0) {
-        stmt.run(...(params as Array<string | number | null>))
+      const bind = dropParams ? undefined : params
+      if (bind && bind.length > 0) {
+        stmt.run(...(bind as Array<string | number | null>))
       } else {
         stmt.run()
       }
     },
     // `dropParams` reproduces the hand-rolled bootstrap shims that took
-    // `(sql)` and forwarded only `sql`. Production-only bug class, invisible
-    // to a double that forwards.
+    // `(sql)` and forwarded only `sql` — `LocalSchemaDb` still declares that
+    // shape. It must drop on BOTH legs: the marker READ goes through
+    // getOptional and the marker WRITE through execute, and a double that
+    // crippled only the read left the write leg's fix entirely unpinned.
     getOptional: async <T,>(sql: string, params?: unknown[]) => {
       const stmt = h.db.prepare(sql)
       const bind = dropParams ? undefined : params
@@ -1212,6 +1215,58 @@ describe('runAnalyzeIfStale — index-set drift', () => {
     const {db, ranAnalyze} = buildRecordingDb()
     expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
     expect(ranAnalyze()).toBe(true)
+  })
+
+  it('notices a rebuilt table that has no indexes of its own', async () => {
+    // A table-cardinality stat row carries a NULL `idx`. Without COALESCE the
+    // `tbl || '/' || idx` concat is NULL and group_concat drops it, so an
+    // index-less table (tx_context, the FTS shadow tables) could be dropped
+    // and rebuilt without moving the fingerprint at all.
+    seedBlocks(opts.minBlocks)
+    h.db.exec('CREATE TABLE test_no_index (id TEXT NOT NULL)')
+    h.db.exec("INSERT INTO test_no_index (id) VALUES ('a'), ('b')")
+    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(true)
+    expect(
+      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE tbl = 'test_no_index' AND idx IS NULL").get(),
+    ).toBeDefined()
+
+    h.db.exec('DROP TABLE test_no_index')
+
+    const {db, ranAnalyze} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+  })
+
+  it('keeps the marker family present at every point, and scoped to its own prefix', async () => {
+    // Two structural properties the mutation table showed were unpinned.
+    // (a) upsert-before-delete: the reverse order leaves a window with no
+    //     marker, and a concurrent reader in that window queues a redundant
+    //     multi-second ANALYZE.
+    // (b) `_` is a LIKE wildcard and the prefix has two of them, so an
+    //     unescaped family match would let the DELETE eat a foreign key.
+    seedBlocks(opts.minBlocks)
+    h.db.prepare(
+      "INSERT INTO client_schema_state (key, completed_at) VALUES ('analyzeXindexXset:evil', 0)",
+    ).run()
+    h.db.prepare(
+      "INSERT INTO client_schema_state (key, completed_at) VALUES ('analyze_index_set:stale', 0)",
+    ).run()
+
+    const {db, executed} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
+
+    const insertAt = executed.findIndex(sql => sql.startsWith('INSERT OR REPLACE INTO client_schema_state'))
+    const deleteAt = executed.findIndex(sql => sql.startsWith('DELETE FROM client_schema_state'))
+    expect(insertAt).toBeGreaterThanOrEqual(0)
+    expect(deleteAt).toBeGreaterThan(insertAt)
+
+    const keys = (h.db.prepare(
+      "SELECT key FROM client_schema_state WHERE key NOT LIKE 'blocks_%' ORDER BY key",
+    ).all() as Array<{key: string}>).map(row => row.key)
+    // The foreign key survives; the superseded marker is gone; exactly one left.
+    expect(keys).toContain('analyzeXindexXset:evil')
+    expect(keys).not.toContain('analyze_index_set:stale')
+    expect(keys.filter(k => k.startsWith('analyze_index_set:'))).toHaveLength(1)
   })
 
   it('still respects the too-small-to-matter floor when the index set changes', async () => {

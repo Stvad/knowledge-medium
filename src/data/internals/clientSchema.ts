@@ -1124,9 +1124,12 @@ export const SELECT_INDEX_SET_SQL = `
  *  So the fingerprint also covers which (tbl, idx) pairs currently HAVE stats.
  *  Keys only, never the `stat` values — those move with row counts and would
  *  re-trigger every boot. An empty table contributes no key before or after,
- *  so the idle-queue loop avoided above stays avoided. */
+ *  so the idle-queue loop avoided above stays avoided. `COALESCE(idx, '')`
+ *  because a table-cardinality row carries a NULL `idx`, and `||` on NULL is
+ *  NULL, which `group_concat` drops — without it an index-less table
+ *  (`tx_context`, the FTS shadow tables) could be rebuilt invisibly. */
 export const SELECT_STAT1_KEYS_SQL = `
-  SELECT group_concat(tbl || '/' || idx, char(10)) AS keys
+  SELECT group_concat(tbl || '/' || COALESCE(idx, ''), char(10)) AS keys
   FROM (SELECT tbl, idx FROM sqlite_stat1 ORDER BY tbl, idx)
 `
 
@@ -1169,9 +1172,15 @@ const assertInlinableFingerprint = (fingerprint: string): string => {
 /** Upsert FIRST, then drop the rest of the family. The reverse order leaves a
  *  window with no marker at all, during which a concurrent reader — a second
  *  tab on the shared worker, or the boot check racing the first-sync check —
- *  reads "never analyzed" and queues another multi-second ANALYZE. This order
- *  keeps the family at >= 1 row throughout and converges to exactly one even
- *  if two writers interleave. */
+ *  reads "never analyzed" and queues another multi-second ANALYZE.
+ *
+ *  Not atomic, and deliberately not claimed to be: two writers holding
+ *  DIFFERENT fingerprints (two tabs on different releases sharing the worker)
+ *  can interleave as upsert(A) upsert(B) clearOthers(A) clearOthers(B) and
+ *  leave the family EMPTY. Cost is one redundant ANALYZE on the next boot,
+ *  which then records a marker again — self-healing, and strictly better than
+ *  the delete-first order, which opens the same window on every single run
+ *  rather than only under a race. */
 export const recordAnalyzeMarkerSql = (fingerprint: string): string => `
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES ('${ANALYZE_INDEX_SET_MARKER_PREFIX}${assertInlinableFingerprint(fingerprint)}',
