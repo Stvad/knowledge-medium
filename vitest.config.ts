@@ -35,10 +35,15 @@ export default defineConfig({
     // node_modules + dist are vitest defaults; .claude/worktrees and
     // .codex/worktrees hold full repo copies from agent runs (Claude Code and
     // Codex respectively) whose tests we don't want to re-execute here.
-    // agent-extensions are standalone packages with their own dependency
-    // installs and Vitest configs, so root collection must not pick up their
-    // tests accidentally.
-    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**', 'agent-extensions/**'],
+    // The agent-extensions SUBDIRECTORIES are standalone packages with their own
+    // dependency installs and Vitest configs (they alias `@` to the generated
+    // kernel-types stubs), so root collection must not pick up their tests.
+    // The FLAT extension files next to them (readwise.tsx, …) are different:
+    // they have no config of their own and resolve `@/…` against this repo's
+    // real `src` — which is also how the app resolves them once installed — so
+    // their tests belong in this run, and the gate is the only place they'd
+    // ever get executed.
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**', 'agent-extensions/*/**'],
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: ['node_modules/', 'src/test/setup.ts']

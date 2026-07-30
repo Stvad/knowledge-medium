@@ -1153,17 +1153,32 @@ const readReviewed = (properties: Record<string, unknown>): boolean => {
   }
 }
 
-const toggleHighlightReviewed = async (block: any): Promise<boolean> => {
+/** Claim the keypress to mark an unreviewed highlight reviewed — ONCE.
+ *
+ *  Reviewing a highlight is a one-way latch, not a cycle: the review pass asks
+ *  "have I seen this yet", a question that only gets answered once. So once the
+ *  latch is set this returns false and the highlight stops being special —
+ *  the key falls through to whatever the action normally does (cycling the todo
+ *  state), and from then on the block behaves like any other block.
+ *
+ *  Un-marking therefore isn't on this key. It stays available where every other
+ *  typed value is edited: the `readwise:reviewed` checkbox in the block's
+ *  properties (it's a declared property of the highlight type), so nothing is
+ *  unrecoverable — it just isn't a keystroke away.
+ *
+ *  Returns whether the keypress was consumed. */
+const markHighlightReviewed = async (block: any): Promise<boolean> => {
   const data = block.peek() ?? await block.load()
   if (!data || !getBlockTypes(data).includes(READWISE_HIGHLIGHT_TYPE)) return false
+  if (readReviewed(data.properties)) return false
 
   if (!block.repo.isReadOnly) {
-    await block.set(reviewedProp, !readReviewed(data.properties))
+    await block.set(reviewedProp, true)
   }
   return true
 }
 
-const decorateActionToToggleReadwiseReview = (
+const decorateActionToMarkReadwiseReviewed = (
   actionId: string,
   context?: ActionContextType,
 ): ActionTransform => ({
@@ -1173,21 +1188,21 @@ const decorateActionToToggleReadwiseReview = (
     ...action,
     handler: async (deps, trigger, dispatch) => {
       const block = (deps as BlockShortcutDependencies).block
-      if (block && (await toggleHighlightReviewed(block))) return
+      if (block && (await markHighlightReviewed(block))) return
       await action.handler(deps as never, trigger, dispatch)
     },
   }),
 })
 
 const readwiseSwipeRightDecorator: ActionTransform =
-  decorateActionToToggleReadwiseReview(SWIPE_RIGHT_BLOCK_ACTION_ID)
+  decorateActionToMarkReadwiseReviewed(SWIPE_RIGHT_BLOCK_ACTION_ID)
 
 const readwiseTodoCycleDecorators: readonly ActionTransform[] = [
-  decorateActionToToggleReadwiseReview(
+  decorateActionToMarkReadwiseReviewed(
     TODO_CYCLE_ACTION_ID,
     ActionContextTypes.NORMAL_MODE,
   ),
-  decorateActionToToggleReadwiseReview(
+  decorateActionToMarkReadwiseReviewed(
     EDIT_MODE_TODO_CYCLE_ACTION_ID,
     ActionContextTypes.EDIT_MODE_CM,
   ),
