@@ -129,11 +129,41 @@ const isAutolinkLiteral = (node: RootContent): node is Link => {
 // `[[…]]` spans that GFM split across siblings. Non-text, non-autolink
 // nodes are opaque — we substitute a NUL placeholder so the `[[` / `]]`
 // scan can't accidentally match across them.
+//
+// `html` is transparent too, for the same reason an autolink literal is: it
+// is a TOKENIZATION artifact over text the author wrote as prose, not a
+// structure they built with markdown syntax. CommonMark's raw-inline-HTML
+// rule fires on anything tag-SHAPED, and a page title like `<taglike page>`
+// is exactly that (`taglike` reads as the tag name, `page` as a bare
+// attribute), so `[[<taglike page>]]` reaches us already split into
+// `text("[[") + html("<taglike page>") + text("]]")` — same split as an
+// autolink literal, from a different parser rule.
+//
+// Two properties make bridging an `html` node lossless, and both are
+// load-bearing:
+//   1. Its `value` is the verbatim source slice — unlike `emphasis` /
+//      `link` / `inlineCode`, whose source cannot be recovered from the
+//      node at all. So the joined string is the real source, and the alias
+//      we derive from it is the one `parseReferences` (the canonical
+//      grammar, which runs over raw content and has no notion of html
+//      nodes) already stored as this block's reference edge. Refusing to
+//      bridge is what made the RENDERER disagree with the index.
+//   2. This pipeline never RENDERS raw HTML: there is no rehype-raw, and
+//      `MarkdownRenderConfig` has no `rehypePlugins` slot for an extension
+//      to add one, so react-markdown escapes every `html` node to literal
+//      text. An `html` node is therefore render-equivalent to a `text` node
+//      holding the same characters, and folding one into a wikilink alias
+//      destroys no rendered structure. (Were raw HTML ever enabled, this
+//      branch is the thing to revisit.)
+//
+// Transparent is not the same as freely sliceable, though: see the
+// swallow-whole containment check in `reassembleOneCrossNodeRef`.
 const childSourceForReassembly = (node: RootContent): {text: string; opaque: boolean} => {
   if (node.type === 'text') return {text: (node as Literal).value, opaque: false}
   if (isAutolinkLiteral(node)) {
     return {text: (node.children[0] as Literal).value, opaque: false}
   }
+  if (node.type === 'html') return {text: (node as Literal).value, opaque: false}
   return {text: OPAQUE_SENTINEL, opaque: true}
 }
 
@@ -316,6 +346,21 @@ const reassembleOneCrossNodeRef = (
 
     const isEmbed = ref.startIndex > 0 && joined[ref.startIndex - 1] === '!'
     const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
+    // An `html` node contributes a run of raw tag source, and the splice
+    // below turns whatever falls outside the span into a plain `text` node.
+    // Slicing a tag in half that way is the one case where bridging is
+    // lossy, so the span has to SWALLOW each html child whole. Reachable
+    // when `[[` sits inside an attribute value (`<a href="[[">x]]`), which
+    // puts the opener mid-node.
+    let cutsHtml = false
+    for (let i = startChild; i <= endChild; i++) {
+      if (kids[i].type !== 'html') continue
+      if (starts[i] >= spanStart && starts[i] + pieces[i].length <= ref.endIndex) continue
+      cutsHtml = true
+      break
+    }
+    if (cutsHtml) continue
+
     const prefix = pieces[startChild].slice(0, spanStart - starts[startChild])
     const suffix = pieces[endChild].slice(ref.endIndex - starts[endChild])
     const raw = joined.slice(spanStart, ref.endIndex)
