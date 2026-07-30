@@ -792,6 +792,90 @@ describe('repo.query.findExtensionBlocks', () => {
 // Invalidation per dep kind
 // ════════════════════════════════════════════════════════════════════
 
+describe('repo.query.blockTypesByIds', () => {
+  it('returns types in the order the block declares them, filtering non-strings', async () => {
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+      [JSON.stringify({types: ['person', null, 'author']}), 'b'],
+    ).catch(() => {})
+    await create({id: 'ordered'})
+    await env.h.db.execute(
+      `UPDATE blocks SET properties_json = ? WHERE id = ?`,
+      [JSON.stringify({types: ['person', null, 'author']}), 'ordered'],
+    )
+
+    const out = await env.repo.query.blockTypesByIds({
+      workspaceId: WS,
+      blockIds: ['ordered'],
+    }).load()
+    // Declared order, NOT the (block_id, type) index's ascending order —
+    // consumers show the first type, so 'person' has to stay first.
+    expect(out).toEqual([
+      {blockId: 'ordered', type: 'person'},
+      {blockId: 'ordered', type: 'author'},
+    ])
+  })
+
+  it('tagging a previously-untyped block invalidates the handle (per-id row dep)', async () => {
+    // The dep is declared per REQUESTED id, not per returned row. An
+    // untyped block contributes no rows, so a dep derived from the
+    // result set would never see it gain a type — the completion
+    // dropdown would keep showing no hint until something else
+    // invalidated it.
+    await create({id: 'untyped'})
+    const handle = env.repo.query.blockTypesByIds({workspaceId: WS, blockIds: ['untyped']})
+    expect(await handle.load()).toEqual([])
+
+    const fired: unknown[] = []
+    const unsub = handle.subscribe(v => { fired.push(v) })
+    try {
+      await env.repo.tx(async tx => {
+        await tx.update('untyped', {
+          properties: {[typesProp.name]: typesProp.codec.encode(['person'])},
+        })
+      }, {scope: ChangeScope.BlockDefault})
+
+      await vi.waitFor(() => {
+        expect(handle.peek()).toEqual([{blockId: 'untyped', type: 'person'}])
+      })
+    } finally {
+      unsub()
+    }
+  })
+})
+
+describe('repo.query.aliasClaimantCounts', () => {
+  it('counts live claimants per alias, ignoring deleted rows and other workspaces', async () => {
+    // Duplicate claims cannot go through `repo.tx` — the alias-uniqueness
+    // processor rejects the second one. Raw inserts are the sync-applied
+    // shape that produces co-claims in the first place: they maintain the
+    // block_aliases index but run no post-commit processor.
+    const claimRaw = async (id: string, alias: string, workspaceId = WS, deleted = 0) => {
+      await env.h.db.execute(
+        `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+         VALUES (?, ?, NULL, ?, '', ?, '[]', 1, 1, 1, 'u', 'u', ?)`,
+        [id, workspaceId, `k-${id}`, JSON.stringify({[aliasesProp.name]: [alias]}), deleted],
+      )
+    }
+    await claimRaw('a1', 'Shared')
+    await claimRaw('a2', 'Shared')
+    await claimRaw('gone', 'Shared', WS, 1)
+    await claimRaw('solo', 'Solo')
+    await claimRaw('other', 'Shared', 'ws-other')
+
+    const out = await env.repo.query.aliasClaimantCounts({
+      workspaceId: WS,
+      aliases: ['Shared', 'Solo', 'Absent'],
+    }).load()
+
+    expect([...out].sort((x, y) => x.alias.localeCompare(y.alias))).toEqual([
+      {alias: 'Shared', claimants: 2},
+      {alias: 'Solo', claimants: 1},
+    ])
+  })
+})
+
 describe('invalidation', () => {
   it('subtree: a new descendant invalidates the handle (parent-edge dep)', async () => {
     await create({id: 'r'})
