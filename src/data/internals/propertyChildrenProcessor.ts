@@ -198,9 +198,7 @@ const firstProjectedFieldValue = async (
     const values = await fieldValueChildren(tx, fieldRow.id)
     for (const value of values) {
       try {
-        return propertyChildContentToEncodedValue(
-          schema, value.content, value.referenceTargetId ?? null,
-        )
+        return propertyChildContentToEncodedValue(schema, value.content)
       } catch {
         // Invalid child text should not preserve a stale parent cell
         // projection. Skip it; if no child under this field parses, the

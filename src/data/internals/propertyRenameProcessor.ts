@@ -168,9 +168,7 @@ const rekeyParent = (
           .filter(isFieldValueChild)
         for (const value of values) {
           try {
-            projected = propertyChildContentToEncodedValue(
-              rename.schema, value.content, value.referenceTargetId ?? null,
-            )
+            projected = propertyChildContentToEncodedValue(rename.schema, value.content)
             hasProjection = true
             break
           } catch {
