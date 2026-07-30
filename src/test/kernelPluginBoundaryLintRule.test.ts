@@ -122,6 +122,27 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/core.ts'),
         code: `import { pluginBlockId } from '@/extensions/pluginIds.js'`,
       },
+      // ...and a whole LEADING segment. A core directory that merely contains
+      // one is core. No such directory exists today, but `markdown/plugins/`
+      // for remark/rehype plugins is an obvious name for one — this is what
+      // the `^` anchor in `owningPlugin` is actually for.
+      {
+        filename: core('markdown/extensions.ts'),
+        code: `import { remarkFoo } from '@/markdown/plugins/remarkFoo/index.js'`,
+      },
+      // The overwhelmingly common import shape: a bare package specifier is not
+      // a path into `src/` at all.
+      {
+        filename: core('data/repo.ts'),
+        code: `import { z } from 'zod'`,
+      },
+      // An alias that climbs OUT of `src/` — a real idiom here, three files
+      // import `@/../vite-plugins/…`. Pins `withinSrc`'s out-of-tree branch,
+      // which is what rejects these (not the anchor in `owningPlugin`).
+      {
+        filename: core('data/repo.ts'),
+        code: `import { injectThemeBootDefaults } from '@/../vite-plugins/injectThemeBootDefaults'`,
+      },
       // A relative specifier that climbs out of `src/` entirely can't be a
       // plugin import, however many `plugins` segments the name suggests.
       {
@@ -340,6 +361,15 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/src/{components,plugins}/**/*.ts' },
+        }],
+      },
+      // The deprecated Vite spelling is handled too.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.globEager('/src/plugins/*/index.ts')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/plugins/*/index.ts' },
         }],
       },
       // `new URL('…', import.meta.url)` is Vite's idiom for a worker/wasm/asset

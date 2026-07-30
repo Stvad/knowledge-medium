@@ -250,28 +250,27 @@ export default tseslint.config(
     // constant or one type that happens to live in a plugin, and nothing
     // objects. Prose doesn't survive that; a failing gate does.
     //
-    // Scoped to `src/` — `scripts/` and `packages/` are top-level consumers
-    // sitting ABOVE both layers (like an entry point), so their plugin imports
-    // are not core→plugin edges. The rule additionally self-scopes: a file
-    // inside `src/plugins/<name>/` is never a violator, so plugin→plugin (113
-    // files today) stays allowed even if this `files` glob is later widened.
+    // Where the boundary is, what counts as a dependency, and why `scripts/` +
+    // `packages/` are out of scope all live in the rule's own docstring —
+    // eslint-rules/kernel-plugin-boundary.js. Deliberately NOT restated here;
+    // it was, and the duplicated prose (down to a file count) is two copies to
+    // keep in sync by hand.
     //
-    // `.js`/`.mjs`/`.cjs` are in the glob even though every other block in this
-    // config is `{ts,tsx}`-only. That gap is real, not theoretical:
+    // Config-specific, with no home in the rule file: `.js`/`.mjs`/`.cjs` are
+    // in this glob even though every other block in this config is
+    // `{ts,tsx}`-only. That gap is real, not theoretical —
     // `src/data/syncedTableSqlRecognizer.js` is shipped core code that NO rule
     // in this config currently lints, so renaming a file to `.js` was a
     // one-step way out of this boundary. Widening the whole config is a
     // separate call; widening this one rule is not.
-    //
-    // See eslint-rules/kernel-plugin-boundary.js for where the boundary is
-    // derived from and what counts as a dependency (static import, `export …
-    // from`, dynamic `import()`, type-position `import('…')` — type-only
-    // imports included, since a contract core NAMES is a contract that belongs
-    // in core).
     files: ['src/**/*.{ts,tsx,js,mjs,cjs}'],
     plugins: {boundary: kernelPluginBoundary},
     rules: {
       'boundary/no-core-to-plugin-imports': ['error', {
+        // Anchor the layer split on THIS file's directory, not the cwd. Derived
+        // from the cwd, the rule failed open — running `eslint` from `src/`
+        // made every path escape and the rule reported nothing at all.
+        sourceRoot: `${import.meta.dirname}/src`,
         // The composition root — the two files whose entire job is registering
         // every plugin with the app. Importing all of them is not a leak here,
         // it is the definition of the file. This is the ONLY blanket exemption;

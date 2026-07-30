@@ -59,6 +59,11 @@
  *     frame away (`load('@/plugins/todo/x.js')`) — the literal never reaches an
  *     import node, and chasing it needs interprocedural analysis a single-file
  *     AST rule doesn't have. No such loader exists in `src/` today.
+ *   - `require` is matched by NAME, with no scope analysis, so a locally
+ *     declared `require` that happens to take a plugin-shaped string would be
+ *     flagged. Left alone deliberately: this app is pure ESM, so a real
+ *     `require` call can't run at all, and adding scope analysis to tell the
+ *     two apart would cost more than the false alarm it prevents.
  */
 
 import { posix } from 'node:path'
@@ -68,21 +73,28 @@ const normalizePath = (value) => value.replaceAll('\\', '/')
 const getFilename = (context) =>
   normalizePath(context.filename ?? context.getFilename?.() ?? '')
 
-/** The linted file's path relative to `src/`, resolved against the project root
- *  (`context.cwd`). `undefined` outside `src/` — such a file is in neither
- *  layer, so the rule has nothing to say about it.
+/** The linted file's path relative to the source root. `undefined` outside it —
+ *  such a file is in neither layer, so the rule has nothing to say about it.
  *
- *  Anchored on the cwd rather than on a `src` path SEGMENT because both segment
- *  heuristics are wrong in opposite directions: `indexOf('src')` breaks when the
- *  repo lives under a directory named `src` (`/Users/me/src/repo/src/x.ts`),
- *  while `lastIndexOf('src')` breaks on a `src` nested INSIDE the tree —
+ *  Not a `src` path SEGMENT search, because both segment heuristics are wrong in
+ *  opposite directions: `indexOf('src')` breaks when the repo lives under a
+ *  directory named `src` (`/Users/me/src/repo/src/x.ts`), while
+ *  `lastIndexOf('src')` breaks on a `src` nested INSIDE the tree —
  *  `src/plugins/foo/src/index.ts` reduced to `index.ts`, which reads as core, so
  *  that plugin file would have been denied the sibling-plugin imports the
- *  principle grants it. A relative-path resolve has neither failure mode. */
-const srcRelativePath = (filename, cwd) => {
-  const relative = posix.relative(normalizePath(cwd), filename)
-  if (relative.startsWith('../') || posix.isAbsolute(relative)) return undefined
-  return relative.startsWith('src/') ? relative.slice('src/'.length) : undefined
+ *  principle grants it.
+ *
+ *  Not derived from `context.cwd` either. That was the first fix and it FAILED
+ *  OPEN: run `eslint` from `src/` (or any subdirectory) and every path escaped
+ *  the cwd, so the rule quietly reported nothing at all — a guard that silently
+ *  passes is worse than no guard. `pnpm run check` runs from the repo root so
+ *  the gate was never actually blind, but an editor integration or a
+ *  hand-invoked `eslint` needn't. `sourceRoot` is therefore passed explicitly
+ *  from eslint.config.js (`import.meta.dirname`), which is exact and
+ *  cwd-independent; the cwd default only serves standalone/RuleTester use. */
+const srcRelativePath = (filename, sourceRoot) => {
+  const relative = posix.relative(sourceRoot, filename)
+  return relative.startsWith('../') || posix.isAbsolute(relative) ? undefined : relative
 }
 
 /** A module-file extension, used to tell `plugins/registry.js` (a loose FILE)
@@ -91,11 +103,10 @@ const srcRelativePath = (filename, cwd) => {
 const MODULE_EXTENSION = /\.[cm]?[jt]sx?$/
 
 /** The plugin a src-relative path belongs to, or undefined. `plugins` must be
- *  a whole leading segment, so `pluginIds.ts` and `pluginValuePresets` don't
- *  match. The `^` anchor is also what rejects a path that climbed out of `src/`
- *  (`../scripts/plugins/x`) — the `../../scripts/plugins/` case in the test
- *  suite pins exactly that, so don't drop the anchor thinking a separate
- *  out-of-tree guard covers it. There isn't one; this is it.
+ *  a whole LEADING segment: `pluginIds.ts` doesn't match, and neither does a
+ *  core directory that merely contains one (`markdown/plugins/remarkFoo.ts` —
+ *  no such directory today, but that is an obvious name for one). Out-of-tree
+ *  paths are rejected earlier, by `withinSrc`, not here.
  *
  *  A bare `plugins/<name>` with no further segment is the plugin's barrel
  *  (`import { todoPlugin } from '@/plugins/todo'` — how every registration in
@@ -227,6 +238,10 @@ const noCoreToPluginImports = {
     schema: [{
       type: 'object',
       properties: {
+        // Absolute path to the source root (`<repo>/src`). Pass it — deriving
+        // it from the cwd makes the rule fail OPEN when eslint runs from a
+        // subdirectory. See `srcRelativePath`.
+        sourceRoot: {type: 'string'},
         // `src/`-relative paths (matched EXACTLY) that may import plugins
         // anyway: the composition root, and nothing else by default.
         allowIn: {type: 'array', items: {type: 'string'}},
@@ -242,7 +257,10 @@ const noCoreToPluginImports = {
   },
   create(context) {
     const filename = getFilename(context)
-    const importerSrcRelative = srcRelativePath(filename, context.cwd ?? process.cwd())
+    const sourceRoot = normalizePath(
+      context.options[0]?.sourceRoot ?? posix.join(context.cwd ?? process.cwd(), 'src'),
+    )
+    const importerSrcRelative = srcRelativePath(filename, sourceRoot)
 
     // Only CORE files can violate this: a file outside `src/` isn't in either
     // layer, and a plugin importing a plugin is explicitly allowed. Checking
