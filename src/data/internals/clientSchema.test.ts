@@ -46,6 +46,7 @@ import {
   CLIENT_SCHEMA_STATEMENTS,
   analyzeIsWarranted,
   backfillBlockAliasesIfEmpty,
+  indexSetFingerprint,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
   ensureUndoGroupIdColumns,
@@ -1000,8 +1001,11 @@ const buildRecordingDb = () => {
         stmt.run()
       }
     },
-    getOptional: async <T,>(sql: string) => {
-      const row = h.db.prepare(sql).get() as T | undefined
+    getOptional: async <T,>(sql: string, params?: unknown[]) => {
+      const stmt = h.db.prepare(sql)
+      const row = (params && params.length > 0
+        ? stmt.get(...(params as Array<string | number | null>))
+        : stmt.get()) as T | undefined
       return row ?? null
     },
   }
@@ -1115,7 +1119,104 @@ describe('runAnalyzeIfStale', () => {
   })
 })
 
+// Row-count drift can't see a SCHEMA change. A freshly-created index has no
+// `sqlite_stat1` row at all, and SQLite then defaults to "an equality seek on
+// the leading column yields ~10 rows" for it. On this schema every hot index
+// leads with `workspace_id`, whose real selectivity is ~1 (a client holds one
+// or two workspaces), so that default inverts join order: the planner picks a
+// full scan of the new index as the OUTER loop and probes the genuinely
+// selective side per row. Measured on a 346k-block client, one grouped-
+// backlinks leg went 6297ms → 3ms on ANALYZE alone, no SQL change.
+describe('runAnalyzeIfStale — index-set drift', () => {
+  const opts = {minBlocks: 4, growthFactor: 2}
+  const seedBlocks = (n: number) => {
+    for (let i = 0; i < n; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
+  }
+
+  it('re-analyzes when an index is added, though the row count never drifted', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    // Baseline: a stable table with an unchanged index set is left alone.
+    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(false)
+
+    h.db.exec('CREATE INDEX idx_test_blocks_updated ON blocks (updated_at)')
+
+    const {db, ranAnalyze} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    // The new index now has planner stats — the whole point of the re-run.
+    const stat = h.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_blocks_updated'")
+      .get() as {stat: string} | undefined
+    expect(stat?.stat).toBeDefined()
+  })
+
+  it('settles after the index-set re-analyze instead of re-running every boot', async () => {
+    // The loop hazard this marker exists to avoid. ANALYZE writes no
+    // `sqlite_stat1` row at all for an EMPTY table, so "does every index have
+    // stats?" is permanently false on any DB holding an idle queue table —
+    // `blocks_synced_changes` is empty whenever sync is caught up — and that
+    // rule would re-run the multi-second scan on every boot forever.
+    seedBlocks(opts.minBlocks)
+    h.db.exec('CREATE TABLE test_idle_queue (id TEXT NOT NULL, seq INTEGER)')
+    h.db.exec('CREATE INDEX idx_test_idle_queue ON test_idle_queue (seq)')
+    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(true)
+    expect(
+      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_idle_queue'").get(),
+    ).toBeUndefined()
+
+    const {db, ranAnalyze} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+  })
+
+  it('still respects the too-small-to-matter floor when the index set changes', async () => {
+    h.insertBlock({id: 'only-block'})
+    h.db.exec('CREATE INDEX idx_test_tiny ON blocks (created_at)')
+    const {db, ranAnalyze} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+  })
+
+  it('does not accumulate a marker row per index-set revision', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    h.db.exec('CREATE INDEX idx_test_a ON blocks (updated_at)')
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    h.db.exec('CREATE INDEX idx_test_b ON blocks (created_at)')
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+
+    const {count} = h.db
+      .prepare("SELECT COUNT(*) AS count FROM client_schema_state WHERE key LIKE 'analyze_index_set:%'")
+      .get() as {count: number}
+    expect(count).toBe(1)
+  })
+})
+
+describe('indexSetFingerprint', () => {
+  it('is insensitive to nothing but the set of index names', () => {
+    expect(indexSetFingerprint('a\nb')).toBe(indexSetFingerprint('a\nb'))
+    expect(indexSetFingerprint('a\nb')).not.toBe(indexSetFingerprint('a\nc'))
+    // A dropped index must invalidate too — stats for a gone index linger.
+    expect(indexSetFingerprint('a\nb')).not.toBe(indexSetFingerprint('a'))
+  })
+
+  it('distinguishes "no indexes" from a real set', () => {
+    expect(indexSetFingerprint(null)).not.toBe(indexSetFingerprint('a'))
+  })
+})
+
 describe('runAnalyzeNow', () => {
+  it('clears the index-set drift so the next boot does not re-analyze', async () => {
+    for (let i = 0; i < 8; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
+    h.db.exec('CREATE INDEX idx_test_manual ON blocks (updated_at)')
+    await runAnalyzeNow(buildRecordingDb().db)
+
+    const {db, ranAnalyze} = buildRecordingDb()
+    expect((await runAnalyzeIfStale(db, {minBlocks: 4, growthFactor: 2})).analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+  })
+
   it('runs ANALYZE unconditionally and reports the live count', async () => {
     // No drift gate: a single block (well below the floor) still analyzes.
     h.insertBlock({id: 'only-block'})

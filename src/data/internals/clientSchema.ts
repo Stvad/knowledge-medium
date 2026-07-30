@@ -1087,6 +1087,63 @@ export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
 
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
+/** The second staleness axis: the SCHEMA changed, not the row count.
+ *
+ *  A freshly-created index has no `sqlite_stat1` row, and SQLite then falls
+ *  back to "an equality seek on the leading column yields ~10 rows" for it.
+ *  Every hot index here leads with `workspace_id`, whose real selectivity is
+ *  ~1 (a client holds one or two workspaces), so that default inverts join
+ *  order: the planner drives from a full scan of the new index and probes the
+ *  genuinely selective side once per row. Adding
+ *  `idx_block_references_ws_alias` did exactly that — one grouped-backlinks
+ *  leg went 6297ms → 3ms on ANALYZE alone, with no SQL change — and the
+ *  row-count drift rule above cannot see it, because `blocks` never moved.
+ *
+ *  Compared against the set recorded at the last ANALYZE rather than against
+ *  "does every index have a stat row?": ANALYZE writes no `sqlite_stat1` row
+ *  at all for an EMPTY table, so that rule is permanently false on any DB
+ *  holding an idle queue table (`blocks_synced_changes` is empty whenever
+ *  sync is caught up) and would re-run the multi-second scan on every boot.
+ *  Implicit `sqlite_autoindex_*` entries are excluded (NULL `sql`) — they
+ *  arrive and leave with their table, never on their own. */
+export const SELECT_INDEX_SET_SQL = `
+  SELECT group_concat(name, char(10)) AS names
+  FROM (SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name)
+`
+
+export const ANALYZE_INDEX_SET_MARKER_PREFIX = 'analyze_index_set:'
+
+export const SELECT_ANALYZE_INDEX_SET_MARKER_SQL = `
+  SELECT key FROM client_schema_state WHERE key = ?
+`
+
+/** Replace rather than accumulate — only the current set is meaningful, and
+ *  the DELETE keeps one row rather than one per index-set revision ever seen. */
+export const CLEAR_ANALYZE_INDEX_SET_MARKERS_SQL = `
+  DELETE FROM client_schema_state WHERE key LIKE '${ANALYZE_INDEX_SET_MARKER_PREFIX}%'
+`
+
+export const RECORD_ANALYZE_INDEX_SET_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+/** FNV-1a over the newline-joined index names, plus the count as a cheap
+ *  second dimension. Pure so the drift rule stays unit-testable without a
+ *  database. A collision only costs a skipped ANALYZE until the next
+ *  row-count drift, so 32 bits is ample. `null` (no explicit indexes) is
+ *  distinct from every real set. */
+export const indexSetFingerprint = (names: string | null): string => {
+  const source = names ?? ''
+  let hash = 0x811c9dc5
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  const count = names === null || names === '' ? 0 : source.split('\n').length
+  return `${count}-${hash.toString(16)}`
+}
+
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
  *  `reproject_ref:<X>` lands in `client_schema_state`. Subsequent
@@ -1282,7 +1339,7 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
 
 interface ClientSchemaBootstrapDb {
   execute: (sql: string, params?: unknown[]) => Promise<unknown>
-  getOptional: <T>(sql: string) => Promise<T | null>
+  getOptional: <T>(sql: string, params?: unknown[]) => Promise<T | null>
 }
 
 /** Run after CLIENT_SCHEMA_STATEMENTS to populate block_aliases from
@@ -1465,11 +1522,44 @@ export interface AnalyzeResult {
   previousEstimate: number | null
 }
 
-/** Run `ANALYZE` only if the live `blocks` count has drifted from the
- *  `sqlite_stat1` baseline (see {@link analyzeIsWarranted}). Callers MUST
- *  schedule this off the first-paint critical path (idle / post-sync):
- *  the count is a full index scan and ANALYZE itself is a multi-second
- *  pass on a large DB, both on the single SQLite worker. */
+/** Fingerprint of the explicit indexes present right now. See
+ *  {@link SELECT_INDEX_SET_SQL}. */
+const readIndexSetFingerprint = async (db: ClientSchemaBootstrapDb): Promise<string> => {
+  const row = await db.getOptional<{names: string | null}>(SELECT_INDEX_SET_SQL)
+  return indexSetFingerprint(row?.names ?? null)
+}
+
+/** True when the current index set is the one the last ANALYZE ran against. */
+const indexSetIsAnalyzed = async (
+  db: ClientSchemaBootstrapDb,
+  fingerprint: string,
+): Promise<boolean> => {
+  const row = await db.getOptional<{key: string}>(
+    SELECT_ANALYZE_INDEX_SET_MARKER_SQL,
+    [ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint],
+  )
+  return row !== null
+}
+
+const recordIndexSetMarker = async (
+  db: ClientSchemaBootstrapDb,
+  fingerprint: string,
+): Promise<void> => {
+  await db.execute(CLEAR_ANALYZE_INDEX_SET_MARKERS_SQL)
+  await db.execute(RECORD_ANALYZE_INDEX_SET_MARKER_SQL, [
+    ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint,
+  ])
+}
+
+/** Run `ANALYZE` if either staleness axis has moved: the live `blocks` count
+ *  has drifted from the `sqlite_stat1` baseline (see
+ *  {@link analyzeIsWarranted}), or the set of indexes has changed since the
+ *  last run (see {@link SELECT_INDEX_SET_SQL}) and so some index is planning
+ *  against SQLite's default guess instead of real stats. Both are gated by
+ *  {@link ANALYZE_MIN_BLOCKS}: below it, join order doesn't cost enough to
+ *  pay for the scan. Callers MUST schedule this off the first-paint critical
+ *  path (idle / post-sync): the count is a full index scan and ANALYZE itself
+ *  is a multi-second pass on a large DB, both on the single SQLite worker. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
   opts: {minBlocks?: number; growthFactor?: number} = {},
@@ -1478,22 +1568,29 @@ export const runAnalyzeIfStale = async (
   const growthFactor = opts.growthFactor ?? ANALYZE_GROWTH_FACTOR
   const previousEstimate = await getBlocksStatEstimate(db)
   const count = await getBlocksCount(db)
-  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor)) {
+  const fingerprint = await readIndexSetFingerprint(db)
+  const indexSetDrifted = count >= minBlocks && !(await indexSetIsAnalyzed(db, fingerprint))
+  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor) && !indexSetDrifted) {
     return {analyzed: false, count, previousEstimate}
   }
   await db.execute('ANALYZE')
+  await recordIndexSetMarker(db, fingerprint)
   return {analyzed: true, count, previousEstimate}
 }
 
 /** Unconditional `ANALYZE` for the manual command-palette command — runs
  *  regardless of drift (the user explicitly asked) and reports the table
- *  size so the caller can surface it. Still belongs off the render
- *  path. */
+ *  size so the caller can surface it. Records the index-set marker like the
+ *  automatic path, so using the escape hatch also settles the schema axis
+ *  rather than leaving the next boot to re-run the same scan. Still belongs
+ *  off the render path. */
 export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<{count: number}> => {
   const count = await getBlocksCount(db)
+  const fingerprint = await readIndexSetFingerprint(db)
   await db.execute('ANALYZE')
+  await recordIndexSetMarker(db, fingerprint)
   return {count}
 }
 
