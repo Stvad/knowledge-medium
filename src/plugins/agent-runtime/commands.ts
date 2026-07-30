@@ -20,6 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
+import { assertCanonicalBlockId } from '@/data/explicitBlockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
@@ -437,6 +438,14 @@ const createRuntimeBlock = async (
   const content = input.content ?? (input.data?.content as string | undefined) ?? ''
   const properties = input.properties ?? (input.data?.properties as Record<string, unknown> | undefined)
   const explicitId = input.data?.id as string | undefined
+  // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
+  // from an agent/CLI caller can render ambiguously in the outline (control
+  // characters, bidi reordering, homoglyphs — see PR #447's history) in a
+  // way no render-time filter alone can fully rule out. Internal minting
+  // (crypto.randomUUID() below, and every deterministic v5 helper elsewhere
+  // in the app) never goes through this function's explicitId, so it's
+  // unaffected.
+  if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
@@ -840,6 +849,10 @@ const installRuntimeExtension = async (
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
   let installedId = input.id?.trim() || ''
+  // Same write-boundary guard as createBlock (issue #456) — fail before any
+  // write (the parent-container lookup above is read-only) rather than
+  // minting a non-UUID block id for a brand-new extension.
+  if (installedId) assertCanonicalBlockId(installedId, 'installExtension')
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     let rootId = parentIdFromInput ?? defaultParent?.id ?? null

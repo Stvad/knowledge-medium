@@ -15,6 +15,8 @@ import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/
 import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
+import { InvalidBlockIdError } from '@/data/explicitBlockId'
+import type { BlockData } from '@/data/api'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1', name: 'Alice'}
@@ -538,4 +540,102 @@ describe('agent runtime commands', () => {
     }
   })
 
+  // Write-boundary guard (issue #456): a caller-supplied block id must be a
+  // canonical UUID. createBlock and installExtension are the two entry
+  // points that accept an explicit id from outside the app; see
+  // explicitBlockId.ts for why the guard lives there and not in tx.create /
+  // createChild (which stay id-agnostic for internal deterministic minting
+  // and mnemonic test ids).
+  describe('explicit block id validation (issue #456)', () => {
+    // Must contain hex LETTERS (not just digits) — .toUpperCase() below
+    // needs to actually change the string for the uppercase-rejection case.
+    const VALID_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+
+    it('create-block accepts a canonical UUID id and stores it verbatim', async () => {
+      const result = await executeCommand({
+        commandId: 'create-uuid',
+        type: 'create-block',
+        data: {id: VALID_ID, content: 'explicit uuid'},
+      }, env.context) as BlockData
+      expect(result.id).toBe(VALID_ID)
+      expect(await env.repo.load(VALID_ID)).toMatchObject({id: VALID_ID, content: 'explicit uuid'})
+    })
+
+    it('create-block still auto-mints a UUID when no id is supplied', async () => {
+      const result = await executeCommand({
+        commandId: 'create-auto',
+        type: 'create-block',
+        data: {content: 'auto id'},
+      }, env.context) as BlockData
+      expect(result.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    })
+
+    it.each([
+      ['not a UUID at all', 'my-block'],
+      ['an uppercase UUID', VALID_ID.toUpperCase()],
+      ['a UUID with an embedded newline', `${VALID_ID.slice(0, -1)}\n`],
+      ['a UUID with an embedded `]`', `${VALID_ID.slice(0, -1)}]`],
+    ])('create-block rejects an id that is %s, with no block created', async (_label, id) => {
+      await expect(executeCommand({
+        commandId: 'create-invalid',
+        type: 'create-block',
+        data: {id, content: 'must not be created'},
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      const row = await env.repo.db.getOptional<{id: string}>(
+        'SELECT id FROM blocks WHERE content = ?',
+        ['must not be created'],
+      )
+      expect(row).toBeNull()
+    })
+
+    it('create-block rejects an invalid explicit id under a parent too (createChild path)', async () => {
+      const parent = await executeCommand({
+        commandId: 'create-parent',
+        type: 'create-block',
+        data: {content: 'parent'},
+      }, env.context) as BlockData
+
+      await expect(executeCommand({
+        commandId: 'create-child-invalid',
+        type: 'create-block',
+        parentId: parent.id,
+        data: {id: 'not-a-uuid', content: 'must not be created'},
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      const children = await env.repo.query.children({id: parent.id}).load()
+      expect(children).toHaveLength(0)
+    })
+
+    it('install-extension accepts a canonical UUID id for a brand-new extension', async () => {
+      const result = await executeCommand({
+        commandId: 'install-uuid',
+        type: 'install-extension',
+        source: 'export default []',
+        id: VALID_ID,
+        reload: false,
+      }, env.context) as InstallExtensionResult
+      expect(result.id).toBe(VALID_ID)
+      expect(await env.repo.load(VALID_ID)).toMatchObject({id: VALID_ID})
+    })
+
+    it('install-extension rejects a non-UUID id for a brand-new extension, with nothing created', async () => {
+      await expect(executeCommand({
+        commandId: 'install-invalid',
+        type: 'install-extension',
+        source: 'export default []',
+        id: 'my-plugin',
+        reload: false,
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      // Validation runs before the tx (after only the read-only parent
+      // lookup), so not even the "Agent-installed extensions" root page
+      // should have been minted by this call.
+      const root = await env.repo.query.aliasLookup({
+        workspaceId: WS,
+        alias: AGENT_EXTENSIONS_PARENT_ALIAS,
+      }).load()
+      expect(root).toBeNull()
+    })
+  })
 })
