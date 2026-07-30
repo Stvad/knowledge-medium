@@ -791,3 +791,82 @@ export const useBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions 
     [repo, panelId, plainClick],
   )
 }
+
+/** `openBlockFromEvent` for a surface whose target block id is only known
+ *  ASYNCHRONOUSLY — a get-or-create page. The Recents header button is the
+ *  motivating case: since issue #378 kernel pages resolve alias-first, so the
+ *  live page's id comes from `getOrCreateRecentsPage`, not from the
+ *  deterministic id, which may be a tombstone.
+ *
+ *  A click has to do two things at different times. The intent decision and the
+ *  event gating MUST happen synchronously inside the browser's dispatch phase —
+ *  after an `await`, `stopPropagation`/`preventDefault` are too late: ancestor
+ *  handlers have already run and the default action is committed. The real
+ *  `blockId` only arrives later. So resolve the decision now against a
+ *  placeholder id, gate the event through the usual
+ *  `applyNavigationDecision`-equivalent branch, then patch the real id in via
+ *  `mapNavigate` once `resolveTarget` settles.
+ *
+ *  Sound because intent resolution is block-INDEPENDENT: the default policy
+ *  routes on role/modifiers/viewport/panel and never reads `blockId`. That is
+ *  the same assumption `NAVIGATOR_TARGET_PROBE_BLOCK_ID` already makes, and the
+ *  same acknowledged smell — see its docblock and #242. A `navigationIntentVerb`
+ *  override that DID branch on `blockId` would mis-route this surface. Kept
+ *  inside this module (rather than exporting `resolveNavigationIntent` and the
+ *  placeholder convention to plugin callers) so the assumption has exactly one
+ *  home to fix when #242 lands a first-class block-free intent query.
+ *
+ *  Never rejects — matches the fire-and-forget contract of the sync opener: a
+ *  throw from `resolveTarget` is logged, and execution inherits `navigate`'s
+ *  own catch-and-log. */
+export const openAsyncBlockFromEvent = (
+  repo: Repo,
+  e: MouseEvent,
+  resolveTarget: (workspaceId: string) => Promise<OpenBlockContext>,
+  {plainClick = 'follow-link', panelId}: {plainClick?: BlockOpenerPlainClick; panelId?: string} = {},
+): void => {
+  const resolvedWorkspaceId = repo.activeWorkspaceId
+  if (!resolvedWorkspaceId) return
+  const decision = resolveNavigationIntent(repo, {
+    role: plainClick,
+    modifiers: modifiersFromMouseEvent(e),
+    panelId,
+    blockId: NAVIGATOR_TARGET_PROBE_BLOCK_ID,
+    workspaceId: resolvedWorkspaceId,
+    viewport: currentViewport(),
+  })
+  // Same gating order as `applyNavigationDecision`, which can't be reused
+  // directly: it executes the navigation, and we must defer that until the
+  // real target id is known.
+  if (decision.kind === 'passthrough') return
+  e.stopPropagation()
+  e.preventDefault()
+  if (decision.kind !== 'navigate') return
+  void (async () => {
+    try {
+      const target = await resolveTarget(resolvedWorkspaceId)
+      const resolved = mapNavigate(decision, input => ({
+        ...input,
+        blockId: target.blockId,
+        workspaceId: target.workspaceId ?? input.workspaceId,
+      }))
+      if (resolved.kind === 'navigate') await navigate(repo, resolved.input)
+    } catch (error) {
+      console.error('[navigation] async open target failed', error)
+    }
+  })()
+}
+
+/** `useBlockOpener` for an asynchronously-resolved target — see
+ *  `openAsyncBlockFromEvent`. Returns
+ *  `(event, resolveTarget) => void`, where `resolveTarget(workspaceId)`
+ *  yields the real `{blockId, workspaceId?}` (e.g. via a get-or-create). */
+export const useAsyncBlockOpener = ({plainClick = 'follow-link'}: BlockOpenerOptions = {}) => {
+  const repo = useRepo()
+  const {panelId} = useBlockContext()
+  return useCallback(
+    (e: MouseEvent, resolveTarget: (workspaceId: string) => Promise<OpenBlockContext>) =>
+      openAsyncBlockFromEvent(repo, e, resolveTarget, {plainClick, panelId}),
+    [repo, panelId, plainClick],
+  )
+}
