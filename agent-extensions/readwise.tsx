@@ -13,6 +13,7 @@ import {
   type PropertySeedDeclaration,
 } from '@/data/api/index.js'
 import { definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet } from '@/data/facets.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty.js'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import { keyBetween, keysBetween } from '@/data/orderKey.js'
 import { pluginBlockId } from '@/extensions/pluginIds.js'
@@ -1143,34 +1144,25 @@ const ensureHighlightReviewState = async (
   if (changed) await tx.update(blockId, { properties: next })
 }
 
-const readReviewed = (properties: Record<string, unknown>): boolean => {
-  const stored = properties[reviewedProp.name]
-  if (stored === undefined) return reviewedProp.defaultValue
-  try {
-    return reviewedProp.codec.decode(stored)
-  } catch {
-    return reviewedProp.defaultValue
-  }
-}
+/** Lenient on purpose: a malformed `reviewed` cell reads as unreviewed, and the
+ *  mark then overwrites it with a real boolean, so the cell self-heals. The
+ *  propagating twin would make the keypress throw instead. */
+const readReviewed = (data: Pick<BlockData, 'properties'>): boolean =>
+  safeDecodeRowProperty(data, reviewedProp)
 
-/** Claim the keypress to mark an unreviewed highlight reviewed — ONCE.
+/** Marking a highlight reviewed is a one-way LATCH, not a cycle: the review pass
+ *  asks "have I seen this yet", which only gets answered once. Once latched this
+ *  returns false, so the press falls through to whatever the action normally
+ *  does and the highlight stops being special.
  *
- *  Reviewing a highlight is a one-way latch, not a cycle: the review pass asks
- *  "have I seen this yet", a question that only gets answered once. So once the
- *  latch is set this returns false and the highlight stops being special —
- *  the key falls through to whatever the action normally does (cycling the todo
- *  state), and from then on the block behaves like any other block.
+ *  Un-marking is deliberately not on this key (that would be the cycle again) —
+ *  it's the `readwise:reviewed` checkbox in the block's properties.
  *
- *  Un-marking therefore isn't on this key. It stays available where every other
- *  typed value is edited: the `readwise:reviewed` checkbox in the block's
- *  properties (it's a declared property of the highlight type), so nothing is
- *  unrecoverable — it just isn't a keystroke away.
- *
- *  Returns whether the keypress was consumed. */
-const markHighlightReviewed = async (block: any): Promise<boolean> => {
+ *  Returns whether the press was consumed. */
+const markHighlightReviewed = async (block: Block): Promise<boolean> => {
   const data = block.peek() ?? await block.load()
   if (!data || !getBlockTypes(data).includes(READWISE_HIGHLIGHT_TYPE)) return false
-  if (readReviewed(data.properties)) return false
+  if (readReviewed(data)) return false
 
   if (!block.repo.isReadOnly) {
     await block.set(reviewedProp, true)
