@@ -83,7 +83,8 @@ describe('classifyUploadError', () => {
     it('classifies P0002 (no_data_found) as permanent', () => {
       // Raised by apply_block_patches when a patch's target row is
       // missing — the RPC rolls back via this exception, and the
-      // missing row will not reappear on retry.
+      // missing row will not reappear on retry. Fixing commit: 2b18b676c
+      // (issue #459 — cite the hash here so a reviewer can `git show` it).
       expect(classifyUploadError(postgrestError('P0002'))).toBe('permanent')
     })
   })
