@@ -37,13 +37,21 @@ export default defineConfig({
     // Codex respectively) whose tests we don't want to re-execute here.
     // The agent-extensions SUBDIRECTORIES are standalone packages with their own
     // dependency installs and Vitest configs (they alias `@` to the generated
-    // kernel-types stubs), so root collection must not pick up their tests.
-    // The FLAT extension files next to them (readwise.tsx, …) are different:
-    // they have no config of their own and resolve `@/…` against this repo's
-    // real `src` — which is also how the app resolves them once installed — so
-    // their tests belong in this run, and the gate is the only place they'd
-    // ever get executed.
-    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**', 'agent-extensions/*/**'],
+    // kernel-types stubs, which are .d.ts only — no runtime), so root collection
+    // must not pick up their tests. The FLAT extension files next to them
+    // (readwise.tsx, …) are different: they have no config of their own and
+    // resolve `@/…` through this config's alias to the real `src`, so their
+    // tests run here — the gate is the only place they'd ever get executed.
+    // That makes this a compile/import contract on the flat extensions against
+    // `src`; it is NOT the installed extension's importmap resolution, and a
+    // green run doesn't mean the copy installed in the user's DB was updated
+    // (see AGENTS.md). `*.probe.*` is the escape hatch for a scratch test file
+    // next to an extension — gitignored, and skipped here so a leftover one
+    // can't redden an unrelated run.
+    exclude: [
+      '**/node_modules/**', '**/dist/**', '.claude/**', '.codex/**', 'tmp/**',
+      'agent-extensions/*/**', 'agent-extensions/*.probe.*',
+    ],
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: ['node_modules/', 'src/test/setup.ts']
