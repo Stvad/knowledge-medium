@@ -4,18 +4,18 @@
  * Runs INSIDE the live app tab via the agent bridge:
  *
  *   # 1. audit only — writes nothing, prints the plan (DEFAULT)
- *   pnpm agent --profile <profile> eval --file scripts/repair-merged-type-membership.mjs
+ *   pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js
  *
  *   # 2. apply, after reading the plan. Save the printed `journal` — it is the undo record.
- *   pnpm agent --profile <profile> eval --file scripts/repair-merged-type-membership.mjs \
+ *   pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js \
  *     --data-json '{"apply": true}'
  *
  *   # 3a. preview a revert, feeding back a journal from a previous apply
- *   pnpm agent --profile <profile> eval --file scripts/repair-merged-type-membership.mjs \
+ *   pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js \
  *     --data <journal.json>
  *
  *   # 3b. actually revert (a bare journal always previews; applying is explicit)
- *   pnpm agent --profile <profile> eval --file scripts/repair-merged-type-membership.mjs \
+ *   pnpm agent --profile <profile> eval --file scripts/merged-type-membership/repair.eval.js \
  *     --data-json '{"apply": true, "revert": <journal array>}'
  *
  * WHAT IT REPAIRS
