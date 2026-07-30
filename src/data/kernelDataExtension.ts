@@ -38,10 +38,12 @@ import {
   systemPagesFacet,
   typeSeedsFacet,
   valuePresetCoresFacet,
+  workspaceBackfillsFacet,
 } from './facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
 import { getOrCreateRecentsPage } from '@/data/recentsPage'
+import { blockTypeNameAliasBackfill } from './internals/blockTypeAliasBackfill'
 import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
@@ -74,6 +76,11 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typeSeedsFacet.of(t, {source: 'kernel'})),
   kernelValuePresetCores.map(core => valuePresetCoresFacet.of(core, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
+  // Catch-up half of "a user-defined type named X also claims the alias X":
+  // the write-time paths (`createTypeBlock`, `core.blockTypeTypeify`,
+  // `writeBlockTypeLabel`) only cover types created since 2026-07; this claims
+  // the name on older rows, additively and without stealing a live claim.
+  workspaceBackfillsFacet.of(blockTypeNameAliasBackfill, {source: 'kernel'}),
   // Kernel singleton pages, materialised eagerly at workspace bootstrap via
   // `Repo.ensureSystemPages` (before the landing/seed) so wiki-links to their
   // reserved aliases resolve to the canonical page instead of auto-creating a
