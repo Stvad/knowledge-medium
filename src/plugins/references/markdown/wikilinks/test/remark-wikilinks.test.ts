@@ -6,6 +6,7 @@ import { visit } from 'unist-util-visit'
 import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
 import { remarkBlockrefs } from '../../blockrefs/remark-blockrefs.ts'
+import { parseReferences } from '../../../referenceParser.ts'
 
 interface WikilinkNode {
   type: 'wikilink'
@@ -46,9 +47,34 @@ const collectWikilinks = (tree: Root): WikilinkNode[] => {
   return out
 }
 
+// The visitor bodies are braced deliberately: `visit` reads a NUMERIC return
+// as "resume at this index", and `Array.prototype.push` returns the new
+// length — an expression body re-visits the node it just collected, which
+// duplicates entries (invisible to `toContain`, wrong under `toEqual`).
 const collectText = (tree: Root): string[] => {
   const out: string[] = []
-  visit(tree, 'text', (node) => out.push(node.value))
+  visit(tree, 'text', (node) => { out.push(node.value) })
+  return out
+}
+
+const collectHtml = (tree: Root): string[] => {
+  const out: string[] = []
+  visit(tree, 'html', (node) => { out.push(node.value) })
+  return out
+}
+
+const collectEmbeds = (tree: Root) => {
+  const out: Array<{alias: string; blockId: string; raw: string}> = []
+  visit(tree, (node) => {
+    if ((node as {type: string}).type === 'pageembed') {
+      const props = (node as unknown as {data: {hProperties: {alias: string; blockId: string}}; value: string})
+      out.push({
+        alias: props.data.hProperties.alias,
+        blockId: props.data.hProperties.blockId,
+        raw: props.value,
+      })
+    }
+  })
   return out
 }
 
@@ -182,21 +208,6 @@ describe('remarkWikilinks', () => {
   })
 
   describe('![[alias]] page-embed', () => {
-    const collectEmbeds = (tree: Root) => {
-      const out: Array<{alias: string; blockId: string; raw: string}> = []
-      visit(tree, (node) => {
-        if ((node as {type: string}).type === 'pageembed') {
-          const props = (node as unknown as {data: {hProperties: {alias: string; blockId: string}}; value: string})
-          out.push({
-            alias: props.data.hProperties.alias,
-            blockId: props.data.hProperties.blockId,
-            raw: props.value,
-          })
-        }
-      })
-      return out
-    }
-
     it('rewrites ![[Foo]] as a pageembed', () => {
       const tree = transform('See ![[Foo]] for context.', {Foo: 'block-foo'})
       const embeds = collectEmbeds(tree)
@@ -222,21 +233,6 @@ describe('remarkWikilinks', () => {
   })
 
   describe('GFM autolink-literal interaction', () => {
-    const collectEmbeds = (tree: Root) => {
-      const out: Array<{alias: string; blockId: string; raw: string}> = []
-      visit(tree, (node) => {
-        if ((node as {type: string}).type === 'pageembed') {
-          const props = (node as unknown as {data: {hProperties: {alias: string; blockId: string}}; value: string})
-          out.push({
-            alias: props.data.hProperties.alias,
-            blockId: props.data.hProperties.blockId,
-            raw: props.value,
-          })
-        }
-      })
-      return out
-    }
-
     it('reassembles [[email@host]] split into text + link + text by gfm', () => {
       const tree = transformWithGfm('[[foo@example.com]]', {'foo@example.com': 'block-foo'})
       const links = collectWikilinks(tree)
@@ -376,6 +372,95 @@ describe('remarkWikilinks', () => {
       })
       expect(links).toHaveLength(1)
       expect(links[0].url).toBe('mailto:foo@example.com')
+    })
+  })
+
+  // CommonMark's raw-inline-HTML rule fires on anything tag-SHAPED — a name
+  // followed by a bare word is an open tag with an attribute — so a page
+  // titled `<taglike page>` is split into `text("[[") + html + text("]]")`
+  // during PARSING, exactly like a GFM autolink-literal. The reassembly pass
+  // bridges those `html` nodes; see `childSourceForReassembly`.
+  describe('raw inline HTML tokenization interaction', () => {
+    it('rewrites [[<taglike page>]] into a wikilink instead of literal text', () => {
+      const tree = transformWithGfm('[[<taglike page>]]', {'<taglike page>': 'block-tag'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('<taglike page>')
+      expect(links[0].data.hProperties.blockId).toBe('block-tag')
+      expect(wikilinkChildText(links[0])).toBe('<taglike page>')
+      // The html node was consumed into the alias, not left beside the link.
+      expect(collectHtml(tree)).toEqual([])
+    })
+
+    it('preserves surrounding text around a tag-shaped alias', () => {
+      const tree = transformWithGfm('before [[<x y>]] after', {'<x y>': 'x'})
+      expect(collectWikilinks(tree)).toHaveLength(1)
+      const texts = collectText(tree)
+      expect(texts).toContain('before ')
+      expect(texts).toContain(' after')
+    })
+
+    it('keeps a genuine-looking tag inside a longer title as part of the alias', () => {
+      const tree = transformWithGfm(
+        '[[C++ <algorithm> header]]',
+        {'C++ <algorithm> header': 'block-cpp'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('C++ <algorithm> header')
+      expect(links[0].data.hProperties.blockId).toBe('block-cpp')
+      expect(wikilinkChildText(links[0])).toBe('C++ <algorithm> header')
+    })
+
+    it('rewrites ![[<taglike page>]] as a pageembed', () => {
+      const tree = transformWithGfm('![[<taglike page>]]', {'<taglike page>': 'block-tag'})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      expect(collectEmbeds(tree)).toEqual([
+        {alias: '<taglike page>', blockId: 'block-tag', raw: '![[<taglike page>]]'},
+      ])
+    })
+
+    it('agrees with the canonical grammar about the alias', () => {
+      // `parseReferences` runs over the RAW content to build the stored edge,
+      // and it has no notion of html nodes — it already reports this span as
+      // a reference. The renderer refusing to draw it was the divergence.
+      const content = '[[<taglike page>]]'
+      expect(parseReferences(content).map(r => r.alias)).toEqual(['<taglike page>'])
+      expect(collectWikilinks(transformWithGfm(content)).map(l => l.data.hProperties.alias))
+        .toEqual(['<taglike page>'])
+    })
+
+    it('leaves real inline HTML elsewhere in the block untouched', () => {
+      const tree = transformWithGfm('Use <b>bold</b> then [[Foo]] here', {Foo: 'f'})
+      const links = collectWikilinks(tree)
+      expect(links.map(l => l.data.hProperties.alias)).toEqual(['Foo'])
+      expect(collectHtml(tree)).toEqual(['<b>', '</b>'])
+      expect(collectText(tree)).toContain('bold')
+    })
+
+    it('leaves real inline HTML alone when the block has no wikilink', () => {
+      const tree = transformWithGfm('a <br> b', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      expect(collectHtml(tree)).toEqual(['<br>'])
+    })
+
+    it('does not rewrite a [[…]] that lives entirely inside an html comment', () => {
+      const tree = transformWithGfm('before <!-- [[foo]] --> after', {foo: 'f'})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      expect(collectHtml(tree)).toEqual(['<!-- [[foo]] -->'])
+    })
+
+    it('does not bridge when the span would cut an html node in half', () => {
+      // `[[` lives INSIDE the tag's attribute value, so the span the scan
+      // finds (`">x`) starts mid-node. Bridging would slice the raw tag
+      // source in two and emit `<a href="` as a text node beside a bogus
+      // wikilink; an html child must be swallowed whole or not at all.
+      // The trailing `<b>bold</b>` is load-bearing for the test, not
+      // decoration: with fewer than three children the reassembly pass
+      // bails before the containment check is ever consulted.
+      const tree = transformWithGfm('Paste <a href="[[">x]] and <b>bold</b> here', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      expect(collectHtml(tree)).toEqual(['<a href="[[">', '<b>', '</b>'])
     })
   })
 })
