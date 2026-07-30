@@ -120,8 +120,21 @@ export const wikilinkSourcesByContent = async (
     parseReferences(row.content).some(mark => mark.alias === alias))
 }
 
-/** Merge edge-keyed and content-keyed referrers, first occurrence
- *  winning, preserving the (order_key, id) ordering both queries emit. */
+/** Union the legs, first occurrence of an id winning.
+ *
+ *  CONCATENATION, not a k-way merge: each group arrives in its own
+ *  `(order_key, id)` order and those orders are preserved WITHIN a group,
+ *  but the result is group-by-group, so a content-leg row with a lower
+ *  `order_key` still lands after every edge-leg row. Deterministic — same
+ *  inputs, same output — which is all the callers need, and stated
+ *  precisely because the earlier wording claimed a global sort this does
+ *  not provide (Codex on PR #484). Nothing downstream may rely on
+ *  cross-leg order: each source is planned independently, and both the
+ *  splice and the entry swap are keyed by alias through a Map. Carrying
+ *  `order_key` through just to sort would buy no observable behaviour.
+ *
+ *  A union, so the content leg's own WHERE-clause exclusions (`blocks_fts`
+ *  skips empty-content rows) can never drop a row the edge leg found. */
 export const mergeReferrers = (
   ...groups: ReadonlyArray<readonly ReferrerRow[]>
 ): ReferrerRow[] => {
