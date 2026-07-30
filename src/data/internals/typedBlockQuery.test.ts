@@ -14,6 +14,7 @@ import { typesProp } from '@/data/properties'
 import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
+import { compileTypedBlockQuery } from './typedBlockQuery'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -625,5 +626,45 @@ describe('repo.countBlocksUsingProperty', () => {
     await create({id: 'miss', properties: {status: 'open'}})
 
     expect(await env.repo.countBlocksUsingProperty(weirdNameProp.name)).toBe(1)
+  })
+})
+
+// The `types` filter used to compile to a correlated `EXISTS` against
+// `block_types` while the candidate scan drove from `blocks` filtered only by
+// workspace. SQLite cannot hoist a correlated subquery into the outer loop, so
+// that shape always scanned every live block in the workspace and probed
+// `block_types` once per row — 346k probes to return 562 rows on a real
+// client (294ms warm / 5.3s cold, versus 12ms for the join form). Expressed as
+// a JOIN the planner is free to drive from `idx_block_types_type_workspace`,
+// whose leading `type` column is the selective one.
+describe('compileTypedBlockQuery — type filter join order', () => {
+  const compileTypes = (types: string[], extra: Record<string, unknown> = {}) =>
+    compileTypedBlockQuery(
+      {workspaceId: WS, types, match: [], exclude: [], ...extra} as never,
+      new Map(),
+      {projection: 'ids'},
+    )
+
+  it('joins block_types instead of probing it per candidate row', () => {
+    const {sql} = compileTypes(['property-schema'])
+    expect(sql).toContain('JOIN block_types bt')
+    expect(sql).not.toMatch(/EXISTS\s*\(\s*SELECT 1\s*FROM block_types/)
+  })
+
+  it('binds the type params in FROM-clause position, ahead of the WHERE params', () => {
+    // The join's `?` now precedes `b.workspace_id = ?` in the statement text,
+    // so a params array still ordered WHERE-first would silently filter by the
+    // wrong values rather than throw.
+    const {sql, params} = compileTypes(['property-schema', 'block-type'])
+    // Types arrive sorted — normalizeTypedBlockQuery canonicalises them so the
+    // compiled SQL is a stable cache key.
+    expect(params).toEqual(['block-type', 'property-schema', WS])
+    expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('b.workspace_id = ?'))
+  })
+
+  it('keeps referencedBy params in statement order when both are present', () => {
+    const {sql, params} = compileTypes(['todo'], {referencedBy: {id: 'target-1'}})
+    expect(params).toEqual(['todo', WS, 'target-1'])
+    expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('br.workspace_id = ?'))
   })
 })

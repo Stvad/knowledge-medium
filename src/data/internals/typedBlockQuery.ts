@@ -438,11 +438,36 @@ export const buildCandidatesCte = (
   const clauses: string[] = []
   let from: string
 
+  // A JOIN rather than a correlated `EXISTS (SELECT 1 FROM block_types …)`.
+  // SQLite cannot hoist a correlated subquery into the outer loop, so the
+  // EXISTS form pinned the candidate scan to `blocks` filtered by workspace
+  // alone — every live block in the workspace, probing `block_types` once per
+  // row (346k probes to return 562 rows on a real client: 294ms warm, 5.3s
+  // cold). As a join the planner is free to drive from
+  // `idx_block_types_type_workspace`, whose leading `type` column is the
+  // selective one — measured 12ms. Semantics are unchanged: the CTE already
+  // projects `SELECT DISTINCT b.id`, so a block carrying two of the requested
+  // types still yields one candidate row. `bt.workspace_id = b.workspace_id`
+  // is kept (not rebound to the query's workspace param) so the predicate
+  // stays literally the same; SQLite's transitive-equality propagation still
+  // reaches the composite index through `b.workspace_id = ?`.
+  const typeJoin = types.length > 0
+    ? `
+      JOIN block_types bt
+        ON bt.block_id = b.id
+       AND bt.workspace_id = b.workspace_id
+       AND bt.type IN (${types.map(() => '?').join(', ')})`
+    : ''
+
+  // Param order is statement order, and the join's placeholders now sit in the
+  // FROM clause — ahead of every WHERE placeholder. Each branch therefore
+  // pushes the type params before its own.
   if (normalized.referencedBy !== undefined) {
     from = `
       FROM block_references br
-      JOIN blocks b ON b.id = br.source_id
+      JOIN blocks b ON b.id = br.source_id${typeJoin}
     `.trim()
+    params.push(...types)
     clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
     params.push(normalized.workspaceId, normalized.referencedBy.id)
     if (normalized.referencedBy.sourceField !== undefined) {
@@ -450,22 +475,10 @@ export const buildCandidatesCte = (
       params.push(normalized.referencedBy.sourceField)
     }
   } else {
-    from = 'FROM blocks b'
+    from = `FROM blocks b${typeJoin}`
+    params.push(...types)
     clauses.push('b.workspace_id = ?', 'b.deleted = 0')
     params.push(normalized.workspaceId)
-  }
-
-  if (types.length > 0) {
-    clauses.push(`
-      EXISTS (
-        SELECT 1
-        FROM block_types bt
-        WHERE bt.block_id = b.id
-          AND bt.workspace_id = b.workspace_id
-          AND bt.type IN (${types.map(() => '?').join(', ')})
-      )
-    `.trim())
-    params.push(...types)
   }
 
   if (normalized.where !== undefined) {
