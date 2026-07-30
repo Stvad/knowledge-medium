@@ -1,4 +1,3 @@
-import { ChangeScope } from '@/data/api'
 import type { WorkspaceBackfill } from '@/data/facets'
 import { dailyNoteDateValue } from './dailyNotes.ts'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
@@ -87,7 +86,7 @@ export const dailyNoteDateBackfill: WorkspaceBackfill = {
             await t.setProperty(id, dailyNoteDateProp, dailyNoteDateValue(iso))
           }
         },
-        {scope: ChangeScope.BlockDefault, description: 'backfill daily-note:date from ISO alias'},
+        {description: 'backfill daily-note:date from ISO alias'},
       )
     }
   },

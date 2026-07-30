@@ -56,6 +56,7 @@ import {
   refTypedSchemaNames,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { onSyncSettled } from './internals/firstSync'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import {
@@ -383,6 +384,16 @@ export interface RepoOptions {
    *  pass `false` and call `setFacetRuntime` themselves, or just call
    *  `setFacetRuntime` (it REPLACES the kernel install). */
   installKernelRuntime?: boolean
+  /** Gate for one-shot `WorkspaceBackfill` passes: arms `cb` for when this
+   *  device is no longer behind the server, and returns a disposer. Default
+   *  `onSyncSettled(db)` — connected with no download in flight.
+   *
+   *  Injected because the default would never open under test: `createTestDb`
+   *  opens a real `PowerSyncDatabase` with no backend connector, so it reports
+   *  `connected: false` forever and every backfill would hang rather than fail
+   *  visibly. Tests pass an immediate gate; `onSyncSettled` itself is covered
+   *  directly in `firstSync.test.ts`. */
+  backfillSyncGate?: (cb: () => void) => () => void
   /** When true (default), the Layout B sync observer is started at
    *  construction time so sync-applied writes — staged into `blocks_synced`
    *  — materialize into the app-visible `blocks` table and invalidate
@@ -626,6 +637,12 @@ export class Repo {
    *  drained by `awaitWorkspaceBackfills()` for deterministic test quiescence,
    *  mirroring `reprojectionJobs`. */
   private readonly workspaceBackfillJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Arms a callback for when this device is no longer behind the server
+   *  (`RepoOptions.backfillSyncGate`). */
+  private readonly backfillSyncGate: (cb: () => void) => () => void
+  /** Disposer for a gate armed but not yet opened, so a workspace switch or
+   *  repo teardown doesn't leave a status listener attached. */
+  private disposeBackfillSyncGate: (() => void) | undefined
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
@@ -882,6 +899,8 @@ export class Repo {
       SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
       RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
     )
+    this.backfillSyncGate = opts.backfillSyncGate
+      ?? ((cb) => onSyncSettled(this.db as unknown as Parameters<typeof onSyncSettled>[0], cb))
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this._client = new ClientContext({user: opts.user})
@@ -1436,7 +1455,7 @@ export class Repo {
     // scopes are filtered inside `record`; zero-write txs have no pinned
     // workspace (null) and nothing to undo, so skip them here. Replays go
     // through `_replay`, not here, so they don't add new history.
-    if (result.workspaceId !== null) {
+    if (result.workspaceId !== null && !opts.skipUndo) {
       this.undoManagerFor(result.workspaceId).record({
         scope: opts.scope,
         txId: result.txId,
@@ -2446,9 +2465,37 @@ export class Repo {
   scheduleWorkspaceBackfills(workspaceId: string): void {
     if (this.isReadOnly || !workspaceId || this._workspaceBackfills.length === 0) return
     const backfills = this._workspaceBackfills
-    this.workspaceBackfillJobs.schedule(() =>
-      this.runWorkspaceBackfills(workspaceId, backfills),
-    )
+    {
+      // Gate on the download queue draining, NOT on `onFirstSync` (`hasSynced`
+      // persists across sessions, so it fires synchronously on every warm
+      // client and gates nothing). Two hazards this closes, both of which bite
+      // a device that synced days ago and opens today:
+      //
+      //   1. the one-shot marker. `runWorkspaceBackfills` records it after any
+      //      clean run, so a pass that scanned a half-downloaded graph burns
+      //      its only attempt — the daily-note:date regression exactly.
+      //   2. worse, lost edits. `apply_block_patches` assigns `properties_json`
+      //      wholesale (column-LWW; per-key merge is out of scope, #51), so a
+      //      write built from a stale local row uploads the whole stale bag and
+      //      drops property edits another device made that haven't arrived yet.
+      //      A backfill is the worst shape for this: unattended, across every
+      //      matching row, seconds after open.
+      //
+      // A session that never connects never runs its backfills — correct for
+      // catch-up work, which retries on the next open.
+      // Gate FIRST, then defer to idle — not the other way round. An idle job
+      // that waits on the gate from inside would never settle on a device that
+      // never connects, leaving a promise pending forever in the drain set
+      // (and hanging `awaitWorkspaceBackfills`). Arming the gate here means a
+      // session that never catches up simply never schedules a job.
+      this.disposeBackfillSyncGate?.()
+      this.disposeBackfillSyncGate = this.backfillSyncGate(() => {
+        this.disposeBackfillSyncGate = undefined
+        this.workspaceBackfillJobs.schedule(() =>
+          this.runWorkspaceBackfills(workspaceId, backfills),
+        )
+      })
+    }
   }
 
   /**
@@ -2617,8 +2664,19 @@ export class Repo {
         workspaceId,
         getAll: <T>(sql: string, params?: readonly unknown[]) =>
           this.db.getAll<T>(sql, params as unknown[] | undefined),
-        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {scope: ChangeScope; description?: string}) =>
-          this.tx(fn, opts),
+        // Scope and undo-recording are NOT the backfill's to choose. The scope
+        // stays `BlockDefault` — these ARE document edits and must keep the
+        // read-only gate and the seed-definition guard, both of which key off
+        // it — but the undo entry is suppressed: the pass fires seconds after
+        // workspace open, so on the stack it means a cmd-Z aimed at the user's
+        // own edit reverts the whole batch, permanently (the completion marker
+        // is already recorded).
+        tx: <R>(fn: (tx: Tx) => Promise<R>, opts: {description?: string}) =>
+          this.tx(fn, {
+            scope: ChangeScope.BlockDefault,
+            description: opts.description,
+            skipUndo: true,
+          }),
       }
       try {
         await backfill.run(ctx)

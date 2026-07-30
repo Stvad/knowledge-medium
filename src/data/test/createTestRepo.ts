@@ -50,6 +50,8 @@ export interface CreateTestRepoOptions {
   startSyncObserver?: boolean
   /** Forward Repo's construction-time kernel runtime install. Default true. */
   installKernelRuntime?: boolean
+  /** Override the workspace-backfill sync gate (default: opens immediately). */
+  backfillSyncGate?: (cb: () => void) => () => void
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
@@ -90,6 +92,11 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
     installKernelRuntime: opts.installKernelRuntime,
+    // `createTestDb` opens a real PowerSyncDatabase with no backend
+    // connector, so the production gate (connected && !downloading) would
+    // never open and every backfill would hang. Default to an immediate
+    // gate; tests that exercise the gating itself inject their own.
+    backfillSyncGate: opts.backfillSyncGate ?? ((cb) => { cb(); return () => {} }),
   })
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))
