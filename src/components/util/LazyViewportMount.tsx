@@ -16,9 +16,12 @@ const mountedCacheKeys = new Set<string>()
  * Overscan exists so scrolling (and keyboard navigation) doesn't run into
  * placeholders, and both of those overwhelmingly move DOWN — upward rows are
  * usually mounted already, since mounting is sticky. (Not after a scroll
- * restore, where nothing above the landing point has ever mounted; moving up
- * there goes through the model fall-through instead, which is exactly what
- * that path is for.) Pre-mounting far above
+ * restore, where nothing above the landing point has ever mounted — and the
+ * boundary fall-through does NOT rescue that direction, because the panel's
+ * top-level row is always mounted, so the upward walker always finds *a*
+ * neighbour. Moving up across a never-mounted region jumps to that row.
+ * Pre-existing, and the reason to keep some upward overscan rather than
+ * none.) Pre-mounting far above
  * costs on both sides: it roughly doubles the mounted set at rest, and each
  * row that mounts above the fold swaps its height estimate for its real
  * height, pushing visible content down on engines without scroll anchoring

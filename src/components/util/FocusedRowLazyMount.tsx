@@ -26,14 +26,17 @@ const ANCESTOR_WALK_DELAY_MS = 150
  *     all: `BlockChildren` renders a child's lazy wrapper only once the
  *     parent is mounted, so a target under a deferred ancestor has nothing
  *     to register. Wanting each level lets the cascade resolve itself.
- *   - Ignores the focus value the panel MOUNTS with, acting only on moves
- *     after that. Mounting a row makes `BlockFocusShellDecorator` scroll it
- *     into view, which on arrival would drag the panel away from the scroll
- *     position `PanelRenderer` just restored — the stored focus and the
- *     stored scroll position disagree whenever the user scrolled away from
- *     their cursor. Keyboard navigation from a restored-but-off-screen focus
- *     was already inert before any of this (normal mode needs a mounted
- *     focused row to activate at all), so this trades nothing away.
+ *   - Ignores the focus value the panel ARRIVES with (once — see the ref
+ *     below), acting on every move after that. Mounting a row makes
+ *     `BlockFocusShellDecorator` scroll it into view, which on arrival would
+ *     drag the panel away from the scroll position `PanelRenderer` just
+ *     restored — the stored focus and the stored scroll position disagree
+ *     whenever the user scrolled away from their cursor. Keyboard navigation
+ *     from a restored-but-off-screen focus was already inert before any of
+ *     this (normal mode needs a mounted focused row to activate at all), so
+ *     this trades nothing away versus master — but it does mean a restored
+ *     panel stays keyboard-dead until the user clicks or scrolls, which is a
+ *     real gap, just not a new one.
  *
  * One instance per panel (rendered by `PanelRenderer`), subscribed to that
  * panel's focused location only — one subscription per panel, not per row.
@@ -50,13 +53,21 @@ export function FocusedRowLazyMount({block, scopeRootId}: {block: Block; scopeRo
 
   // The value this panel mounted with — see the third bullet above. Captured
   // during the first render (not in an effect) so StrictMode's double-invoked
-  // effects both see the same one.
-  const mountedWithRef = useRef<{id: string | undefined} | null>(null)
-  mountedWithRef.current ??= {id: focusedBlockId}
+  // effects both see the same one, and cleared as soon as focus moves
+  // anywhere else. Clearing is the point: the exemption is about ARRIVAL, and
+  // a permanent one would mean that if focus ever came back to that block
+  // while its row was still deferred, nothing would mount it and normal mode
+  // would go dead there — the very bug this component exists to prevent.
+  const arrivalRef = useRef<{id: string | undefined; pending: boolean} | null>(null)
+  arrivalRef.current ??= {id: focusedBlockId, pending: true}
 
   useEffect(() => {
     if (!focusedBlockId) return
-    if (focusedBlockId === mountedWithRef.current?.id) return
+    const arrival = arrivalRef.current
+    if (arrival?.pending && focusedBlockId === arrival.id) return
+    // Any move retires the exemption for good — including a move back to the
+    // arrival block later on.
+    if (arrival) arrival.pending = false
     let cancelled = false
     const withdrawals: Array<() => void> = []
     const want = (blockId: string) => {

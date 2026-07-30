@@ -194,4 +194,33 @@ describe('FocusedRowLazyMount', () => {
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
     expect(screen.queryByTestId('row')).not.toBeInTheDocument()
   })
+
+  // ...but only on arrival. A permanent exemption would mean focus returning
+  // to that block later never mounts its row — normal mode dead exactly
+  // there, which is the bug this component exists to prevent.
+  it('stops ignoring the arrival block once focus has moved away', async () => {
+    const panel = repo.block(PANEL_ID)
+    await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
+
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('off-screen')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="row">off-screen row</div>
+        </LazyViewportMount>
+      </>,
+    )
+
+    await focusBlock(panel, 'top', {renderScopeId: 'panel:top'})
+    await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
+
+    await waitFor(() => {
+      expect(screen.getByTestId('row')).toBeInTheDocument()
+    })
+  })
 })

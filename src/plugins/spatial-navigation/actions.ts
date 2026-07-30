@@ -155,11 +155,17 @@ const extendSelectionVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
-  // Same "the DOM ran out, the outline didn't" case `moveVertical` handles:
-  // decline on an outline row so the structural base (`extendSelectionDown`,
-  // model-based) can extend onto a row that isn't mounted yet. Without this,
-  // `Shift+j` would stop at the last mounted row while plain `j` kept going.
-  if (!next) return !isOutlineSurface(current)
+  // NOT the same call as `moveVertical`'s boundary, though it looks like it.
+  // Declining here doesn't extend the selection by one row: the structural
+  // base re-derives the WHOLE range from the model, which sweeps in every
+  // unmounted row the spatial (DOM-order) range had skipped — one keystroke
+  // silently adding rows the user has never seen, straight into the path of
+  // `d` / delete. So the selection edge stays "handled", as the
+  // hidden-structural-siblings test above it has always specified. Shift+j
+  // therefore still stops at the last mounted row while `j` walks on; making
+  // those agree means teaching this path to extend onto a model-resolved row
+  // spatially, which is its own change.
+  if (!next) return true
   await extendSelectionToSpatialTarget(deps, next)
   return true
 }

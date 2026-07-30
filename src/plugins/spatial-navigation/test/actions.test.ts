@@ -169,30 +169,6 @@ afterEach(async () => {
 })
 
 describe('spatial navigation selection actions', () => {
-  // Same lazily-mounted boundary `moveVertical` handles: without the decline,
-  // `Shift+j` would stop at the last mounted row while plain `j` walked on.
-  it('declines at the end of the mounted outline rows so the model can extend', async () => {
-    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'}])
-    const panel = env.repo.block('panel')
-    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
-    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'extend_selection_down',
-      description: 'Extend selection down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
-
-    await action.handler({
-      block: env.repo.block('A'),
-      uiStateBlock: panel,
-      renderScopeId: 'panel:A',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
-
-    expect(fallback).toHaveBeenCalledTimes(1)
-  })
-
   it('extends normal-mode selection through DOM order instead of structural order', async () => {
     buildPanelDom([
       {blockId: 'A', renderScopeId: 'panel:A'},
@@ -296,8 +272,13 @@ describe('spatial navigation selection actions', () => {
     })
   })
 
+  // Note the explicit `surface`: every real row is tagged by the shell
+  // decorator, and `moveVertical`'s boundary now branches on it. The selection
+  // edge deliberately does NOT — declining here would re-derive the whole
+  // range from the model and sweep in unmounted rows — so this has to be
+  // pinned on the shape real rows actually have.
   it('treats the spatial edge as handled instead of falling through to hidden structural siblings', async () => {
-    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A'}])
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'}])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
     await panel.set(selectionStateProp, {
