@@ -5,6 +5,7 @@ import type {
   SVGProps,
 } from 'react';
 import { Block } from '../data/block';
+import type { Repo } from '../data/repo';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
@@ -120,6 +121,18 @@ export const ActionContextTypes = {
 
 export interface BaseShortcutDependencies {
   uiStateBlock: Block;
+  /** The Repo a handler must route its WRITES through, when the caller has
+   *  one to impose. A batch wrapper (`applyToAllBlocksInSelection`) supplies
+   *  an `undoGroup` facade here so that fanning one gesture out over N
+   *  selected blocks still collapses to ONE undo entry; ordinary dispatch
+   *  leaves it undefined and handlers fall back to their ambient repo.
+   *
+   *  Only `tx` / `mutate` / `run` carry the group token — reads are
+   *  identical either way, so a handler only needs this for writes. Writing
+   *  through `block.set(...)` / `block.delete()` instead routes via
+   *  `block.repo` and silently leaves the group (see docs/undo-grouping.md);
+   *  handlers that can be batched use `repo.mutate.*` for that reason. */
+  writeRepo?: Repo;
   /** Root of the visible subtree the action runs within (see
    *  `BlockContextType.scopeRootId`). Structural and navigation
    *  handlers use this as the surface boundary instead of reading the

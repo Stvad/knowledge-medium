@@ -1,6 +1,6 @@
 # Undo grouping — merge-at-record for multi-tx composite operations
 
-> **Status:** current — last verified against code 2026-07-03 (issue #306 implementation commit).
+> **Status:** current — last verified against code 2026-07-30 (multi-select bulk-gesture rollout).
 
 ## Problem
 
@@ -147,6 +147,38 @@ A follow-up audit (PR #308) grouped the other multi-tx composites:
   **`captureMedia`** (ASSETS-page bootstrap + asset mint) each wrap
   their composite in a caller-level group.
 
+A second rollout grouped the **multi-select bulk gestures** — the case
+the original design punted on ("Auto-grouping at action dispatch" below).
+Indent / outdent / move-up / move-down / toggle-collapse /
+toggle-properties fan a single-block action out across the selection via
+`applyToAllBlocksInSelection`, and `Delete` / cut delete the selection via
+`deleteSelectedBlocks`. Each committed one tx per selected block, so
+undoing a 5-block indent took five cmd-Zs and stopping halfway left the
+outline in a state nobody asked for.
+
+Both wrap their fan-out in `undoGroup`. The obstacle was that the
+per-block handlers get their Repo from `createSharedBlockActions`'
+construction closure and from `block.repo` — neither of which is ever the
+facade — so wrapping the loop alone would have grouped nothing. The fix
+threads the facade to the handlers explicitly:
+
+- `BaseShortcutDependencies.writeRepo` is the Repo a handler must route
+  WRITES through. `applyToAllBlocksInSelection` sets it to the facade;
+  ordinary dispatch leaves it undefined.
+- `blockActions.ts` names its closure binding `ambientRepo`, not `repo`,
+  so a handler that writes cannot reach the ungrouped repo by habit — it
+  has to call `writeRepo(deps, ambientRepo)` first, and a stray
+  `repo.mutate.…` doesn't compile.
+- the two toggles moved off `block.set(...)` onto
+  `repo.mutate.setProperty(...)` for the reason listed under
+  "deliberately does NOT join" above: `block.set` routes through
+  `block.repo`.
+
+`deleteBlocksThroughUi` takes an optional Repo for the same reason. Note
+the failure mode of getting this wrong is benign: a handler that writes
+through the ambient repo lands as a foreign tx and merely SPLITS the
+group (two entries instead of one), never a wrong undo.
+
 Audited and deliberately NOT grouped: the geo editor place-insert (the
 link text lands via the editor's own flush pipeline in the common path
 — cross-system, only the collision-toast fallback writes directly);
@@ -182,7 +214,10 @@ gated by `src/data/test/repoFacadeGate.test.ts`.
 ## Out of scope (deliberately)
 
 - Auto-grouping at action dispatch (every action handler silently
-  grouped) — needs its own design pass on action boundaries.
+  grouped) — needs its own design pass on action boundaries. The
+  multi-select rollout above grouped the bulk gestures *explicitly at the
+  fan-out site*, which is deliberately narrower: the batch wrapper knows
+  it is one user gesture, whereas the dispatch seam does not.
 - Per-step snapshots / "step into a group" UI — `steps` records the
   txIds so this stays possible.
 - Events-derived persistent undo (§16.6) — `group_id` in `row_events` is
