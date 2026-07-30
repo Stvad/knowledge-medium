@@ -1021,9 +1021,18 @@ const buildReparentMap = (recons: PageReconciliation[]): Map<string, string> => 
  *  merge group and never holds members whose `finalId` copies its own (pinned
  *  by the "does not merge daily pages through page_alias properties" test).
  *
- *  Must run before the reparent map is built and before the write phase. Note
- *  it cannot retroactively fix `references[]`, which step 3 already patched
- *  from `resolveAliases`' own independent prediction — hence the diagnostic. */
+ *  Must run before the reparent map is built and before the write phase.
+ *
+ *  Does NOT repair `references[]`, which step 3 already patched from
+ *  `resolveAliases`' own independent prediction — so on a divergence, imported
+ *  wikilinks to this date stay bound to whichever block that prediction picked
+ *  while the page's aliases/attrs/descendants move to the real note. That is a
+ *  gap, not an impossibility: descendants aren't written until 5d, so a repatch
+ *  here is reachable — it needs `aliasIdMap` updated for the date's aliases and
+ *  a REWRITE (not `patchAliasReferences`' append) of the already-patched refs on
+ *  every planned block. Left for a follow-up rather than bolted on here, since
+ *  "rewrite an existing derived ref" is a decision with its own blast radius;
+ *  the diagnostic names the divergence in the meantime. */
 const retargetDailyReconciliations = (
   recons: PageReconciliation[],
   iso: string,

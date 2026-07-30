@@ -814,6 +814,29 @@ describe('openAsyncBlockFromEvent (useAsyncBlockOpener wiring)', () => {
     })
   })
 
+  it('honours a policy that redirects the blockId instead of overwriting it', async () => {
+    // A decorator may retarget the gesture to a block of its own. The sync
+    // opener honours that (the policy saw the real id), so this one must too —
+    // the placeholder is filled in only when the policy left it alone.
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'navigate'
+          ? goTo({...decision.input, blockId: 'b-policy-choice'})
+          : decision
+      },
+    ])
+    const e = fakeMouseEvent()
+    openAsyncBlockFromEvent(
+      env.repo, e as unknown as OpenerEvent,
+      async () => ({blockId: 'b-would-have-been'}),
+      {plainClick: 'navigator'},
+    )
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-policy-choice'])
+    })
+  })
+
   it('a throwing resolver is logged, not an unhandled rejection', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
