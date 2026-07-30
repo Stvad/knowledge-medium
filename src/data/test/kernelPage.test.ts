@@ -10,7 +10,7 @@ import {
   kernelPageBlockId,
 } from '@/data/kernelPage'
 import { Repo } from '@/data/repo'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const WS = 'ws-kernel-page'
@@ -121,5 +121,85 @@ describe('getOrCreateKernelPage', () => {
     // is NOT resurrected — it stays with the squatter.
     expect(restored.peekProperty(aliasesProp)).toEqual(['Foo'])
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
+  })
+
+  it('adopts a live claimant of the CANONICAL alias instead of colliding with it (issue #378)', async () => {
+    // The genuinely-unresolved case the fuzz suite and the test above
+    // scope out: the kernel page is deleted, then a DIFFERENT live block
+    // claims its canonical alias ('Foo') itself — not just a stray extra.
+    // Pre-#378-fix, the id-based restore path's own setProperty(aliases,
+    // ['Foo']) would collide with the claimant and abort the whole tx,
+    // leaving the kernel page an unrestorable tombstone forever. Per the
+    // owner's decision, the claimant's page BECOMES the kernel page.
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+    await env.repo.tx(async tx => { await tx.delete(page.id) }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Claimant'})
+      await tx.setProperty('claimant', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const resolved = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(resolved.id).toBe('claimant')
+    expect(resolved.id).not.toBe(page.id)
+    expect(resolved.peek()?.deleted).toBe(false)
+    expect(resolved.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    expect(resolved.peekProperty(aliasesProp)).toEqual(['Foo'])
+    // The old deterministic-id row stays a tombstone — nothing re-mints it.
+    expect(await isBlockDeleted(env.repo, page.id)).toBe(true)
+  })
+
+  it('refuses to adopt a claimant that already has a different type (ambiguous, issue #378)', async () => {
+    // A claimant that's already something ELSE (not a bare page) is a
+    // genuine design ambiguity the resolver deliberately does not guess
+    // at — falls back to the deterministic id, reproducing the pre-fix
+    // collision behavior for this one case on purpose.
+    const OTHER_TYPE = 'panel:fuzz-378-other'
+    const { repo } = await (async () => {
+      const h = sharedDb
+      const created = createTestRepo({
+        db: h.db,
+        user: {id: 'user-1'},
+        extensions: [
+          typeSeedsFacet.of(seedType({seedKey: 'test/type/panel-foo', revision: 1, id: FOO_PAGE_TYPE, label: 'Foo'}), {source: 'test'}),
+          typeSeedsFacet.of(seedType({seedKey: 'test/type/panel-other', revision: 1, id: OTHER_TYPE, label: 'Other'}), {source: 'test'}),
+        ],
+      })
+      created.repo.setActiveWorkspaceId(WS)
+      return created
+    })()
+
+    const page = await getOrCreateKernelPage(repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+    await repo.tx(async tx => { await tx.delete(page.id) }, {scope: ChangeScope.BlockDefault})
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Claimant'})
+      await tx.setProperty('claimant', aliasesProp, ['Foo'])
+      await repo.addTypeInTx(tx, 'claimant', OTHER_TYPE)
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Left unchanged: the id-based path still tries to reclaim 'Foo' and
+    // still collides with the claimant — same pre-fix ProcessorRejection.
+    await expect(getOrCreateKernelPage(repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })).rejects.toThrow()
+
+    expect(await isBlockDeleted(repo, page.id)).toBe(true)
+    expect(repo.block('claimant').peekProperty(typesProp)).toEqual([OTHER_TYPE])
   })
 })

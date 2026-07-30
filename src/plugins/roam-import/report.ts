@@ -1,5 +1,5 @@
 import { ChangeScope, type Tx } from '@/data/api'
-import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
+import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { keyAtEnd, keysBetween } from '@/data/orderKey'
 import type { Repo } from '@/data/repo'
 import type { RoamMemoImportPlanSummary } from './roamMemo'
@@ -452,9 +452,13 @@ export const writeImportLog = async (
 ): Promise<void> => {
   const iso = todayIso()
   // Make sure today's daily-note row exists. Idempotent: if today's
-  // import already touched it, this is a cache hit.
-  await getOrCreateDailyNote(repo, workspaceId, iso)
-  const dailyId = dailyNoteBlockId(workspaceId, iso)
+  // import already touched it, this is a cache hit. Use the RETURNED
+  // block id, not `dailyNoteBlockId(workspaceId, iso)` — issue #378's
+  // alias-first resolution can adopt a live claimant at a different id,
+  // and appending under the raw deterministic id would silently write
+  // the report under a page nobody sees.
+  const daily = await getOrCreateDailyNote(repo, workspaceId, iso)
+  const dailyId = daily.id
   const typeCandidateSections = formatTypeCandidateReport(stats.typeCandidates)
   const roamMemoLines = formatRoamMemoReport(stats.roamMemo)
   const typeCandidateSummary = stats.typeCandidates.length > 0
