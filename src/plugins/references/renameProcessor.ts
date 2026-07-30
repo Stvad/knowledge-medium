@@ -91,6 +91,11 @@ import {
   rewriteWikilinksMulti,
   type SpanReplacement,
 } from './referenceParser.ts'
+import {
+  mergeReferrers,
+  wikilinkSourcesByContent,
+  type ReferrerRow,
+} from './parseFence.ts'
 import { preferredSpanReplacement } from './spanReplacement.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
@@ -134,6 +139,9 @@ export const RENAME_BACKLINKS_PRECEDENCE = 10
  *  trigger-maintained projection already reflects anything this tx has
  *  staged. Rides `idx_block_references_ws_alias` (`localSchema.ts`).
  *  Ordered for determinism, like the sibling same-tx processors. */
+/** Edge-keyed leg of the enumeration. Complete only for rows whose
+ *  post-commit parse has DRAINED — see `parseFence.ts` for the rows it
+ *  misses and the content-keyed leg that covers them. */
 const SELECT_BACKLINK_SOURCES_SQL = `
   SELECT DISTINCT br.source_id AS sourceId, source.content AS content
   FROM block_references br
@@ -261,16 +269,14 @@ const collectTargetPlans = async (
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
 
   for (const alias of removed) {
-    const sources = await ctx.db.getAll<{sourceId: string; content: string}>(
+    const edgeSources = await ctx.db.getAll<ReferrerRow>(
       SELECT_BACKLINK_SOURCES_SQL,
       [after.workspaceId, alias, after.id],
     )
-    if (sources.length === 0) continue
-    // Consult α's claimants (§11 group 2). This is the whole check —
-    // one read, inside the tx that performed the release, so there is no
-    // window for a competing claim to land in and no seat-exemption
-    // heuristic to get wrong. A live claimant means α is not ours to
-    // re-key:
+    // α's claimants (§11 group 2). This is the whole check — one read,
+    // inside the tx that performed the release, so there is no window for a
+    // competing claim to land in and no seat-exemption heuristic to get
+    // wrong. A live claimant means α is not ours to re-key:
     //   - handoff — some other block owns the name now, so `[[α]]`
     //     already resolves where the author would expect. Rewriting it
     //     (to the new alias, or pinned to the block that just gave α up)
@@ -283,8 +289,23 @@ const collectTargetPlans = async (
     // computed from its own before/after, so by definition it no longer
     // claims α in this tx's staged state.
     //
-    // Only a genuine RELEASE falls through to the rename ladder.
+    // Only a genuine RELEASE falls through to the rename ladder — and read
+    // BEFORE the enumeration, because it also decides whether the fence
+    // leg below is needed.
     const claimants = await ctx.tx.aliasClaimants(alias, after.workspaceId)
+    // THE REFERENCES-PARSE FENCE. On a genuine release, add the rows whose
+    // content carries `[[α]]` but whose edge hasn't been parsed yet —
+    // `parseFence.ts` has the measurement and why the doc's "drain first"
+    // is unavailable to a same-tx processor. Gated on the release path
+    // because the content leg does no target check and is only SOUND there;
+    // on a handoff it would merely be wasted work (see its docblock).
+    const sources = claimants.length === 0
+      ? mergeReferrers(
+          edgeSources,
+          await wikilinkSourcesByContent(ctx.db, after.workspaceId, alias),
+        )
+      : edgeSources
+    if (sources.length === 0) continue
     // Partitioned by fallback tier, then ONE ladder run per non-empty
     // partition. Not per source: `replacementFor` REPORTS on failure, and
     // running it per source would repeat the same warning once per
