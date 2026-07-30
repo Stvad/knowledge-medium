@@ -83,8 +83,10 @@ describe('pasteMultilineText', () => {
 
   it('keeps the later roots siblings when a blank target WITH children absorbs the first', async () => {
     // A blank target absorbs pasted root #1 — so it IS root #1, and roots #2..N
-    // are its SIBLINGS. The "paste after an expanded block lands as its first
-    // visible children" rule is about pasting *around* a pre-existing block and
+    // are its SIBLINGS whenever a sibling slot exists (a scope-root / parentless
+    // target has none, and still takes them as children — see the zoomed-block
+    // cases). The "paste after an expanded block lands as its first visible
+    // children" rule is about pasting *around* a pre-existing block and
     // must not fire here: it used to reparent Beta under Alpha (and above the
     // pre-existing child), so the same clipboard produced a different tree
     // depending only on whether the blank target happened to have children.

@@ -329,11 +329,14 @@ export async function pasteMultilineText(
 
     // Decide absorption FIRST — it changes what the target is to the paste, and
     // so which destination rule applies. A blank target absorbs pasted root #1,
-    // i.e. it BECOMES root #1, and roots #2..N are its siblings. `visible`
-    // placement's "paste after an expanded block lands as its first visible
-    // children" rule is about pasting *around* a pre-existing block, so it must
-    // not fire once we're absorbing — otherwise a blank target that happens to
-    // have children reparents the rest of the clipboard under root #1.
+    // i.e. it BECOMES root #1, so roots #2..N belong beside it wherever a
+    // sibling slot exists. `visible` placement's "paste after an expanded block
+    // lands as its first visible children" rule is about pasting *around* a
+    // pre-existing block, so it must not fire once we're absorbing — otherwise a
+    // blank target that happens to have children reparents the rest of the
+    // clipboard under root #1. The scope-root / parentless legs of
+    // `rootsAsChildren` are unaffected and still place roots #2..N as children:
+    // there is no sibling slot to use there.
     const absorbedRoot = isBlankContent(target.content) ? parsedRoots[0] : undefined
     const destination = await resolveRootDestination(tx, target, {
       position,
