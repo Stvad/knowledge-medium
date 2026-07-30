@@ -2,6 +2,14 @@
  * Target-block primitives for parseReferences + Roam import (spec §7,
  * §13.1, v4.31).
  *
+ *   Layer 0.5 — `resolveCanonicalAliasOwner` (issue #378) is the shared
+ *   alias-first identity resolver for id-keyed get-or-create paths that
+ *   ALSO own a canonical alias (`getOrCreateJournalBlock`,
+ *   `getOrCreateDailyNote`, `getOrCreateKernelPage`): look up who
+ *   currently claims the alias before falling back to the deterministic
+ *   id, so a user page aliased over a deleted canonical page gets
+ *   ADOPTED instead of colliding with it. See its docblock below.
+ *
  *   Layer 1 — `createOrRestoreTargetBlock(tx, args)` is the shared
  *   primitive: SELECT-then-branch via `tx.createOrGet`, restore
  *   tombstones via `tx.restore`. Same semantics every domain helper
@@ -49,6 +57,7 @@
 
 import {
   DeletedConflictError,
+  type BlockData,
   type ProcessorReadDb,
   type Tx,
   type TypeRegistrySnapshot,
@@ -56,7 +65,7 @@ import {
 import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
-import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
+import { aliasesProp, addBlockTypeToProperties, getBlockTypes, typesProp } from './properties'
 import { propertyDefinitionBlockId } from './definitionSeeds'
 import { PAGE_TYPE } from './blockTypes'
 
@@ -165,6 +174,173 @@ export const createOrRestoreTargetBlock = async (
     // this throw and not catch it.
     throw err
   }
+}
+
+// ──── Layer 0.5 — alias-first identity resolution (issue #378) ────
+//
+// `getOrCreateJournalBlock` / `getOrCreateDailyNote` / `getOrCreateKernelPage`
+// resolve a workspace-singleton page by a deterministic id AND separately
+// need to own one canonical alias ('Journal', a date's long-form + ISO
+// pair, 'Properties', …). Resolving by id alone is blind to who currently
+// holds the alias: if the canonical row is deleted and the user aliases a
+// DIFFERENT live page with the same canonical alias, the id-based
+// restore/repair path's alias-reclaim write collides with that live
+// claimant on `block_aliases_workspace_alias_unique` and aborts the WHOLE
+// tx — the page becomes permanently unreachable (issue #378).
+//
+// The fix mirrors `ensureAliasTarget` / `ensureDailyNoteTarget`'s existing
+// "lookup-first" rule, generalised to id-keyed (not just seat-probed)
+// identities: look up the alias claimant FIRST; if a live block already
+// owns the canonical alias, ADOPT it (apply the domain's type + ensure the
+// alias) instead of minting/restoring at the deterministic id. The
+// deterministic id remains the fallback when nobody claims the alias.
+
+/** Read a canonical-alias claimant. Same shape as `AliasSeatReader` above
+ *  — a caller-supplied indirection so one resolver works both inside a
+ *  write tx (`canonicalAliasReaderFromTx`) and as a read-only prediction
+ *  outside one (`canonicalAliasReaderFromRepo`, e.g. a get-or-create's
+ *  fast pre-tx check or a planning step like Roam import's alias-id map). */
+export type CanonicalAliasReader = (alias: string, workspaceId: string) => Promise<BlockData | null>
+
+/** Tx-scoped reader — `tx.aliasLookup` is the authoritative, read-your-
+ *  own-writes answer. Callers MUST re-resolve with this INSIDE the write
+ *  tx before applying any adoption/repair write, even if they already
+ *  consulted `canonicalAliasReaderFromRepo` outside the tx as a fast-path
+ *  hint: the world can move between that read and the tx opening (same
+ *  staleness rule `ensureAliasTarget` / `ensureDailyNoteTarget` follow). */
+export const canonicalAliasReaderFromTx = (tx: Tx): CanonicalAliasReader =>
+  (alias, workspaceId) => tx.aliasLookup(alias, workspaceId)
+
+/** Read-only reader for outside-tx use: the committed-state kernel query,
+ *  same one `referencesProcessor.ts`'s read phase and Roam import's
+ *  alias-planning step use. Never definitive on its own — see
+ *  `canonicalAliasReaderFromTx`. */
+export const canonicalAliasReaderFromRepo = (repo: Repo): CanonicalAliasReader =>
+  (alias, workspaceId) => repo.query.aliasLookup({workspaceId, alias}).load()
+
+/** Adoption safety valve. A resolver that found a claimant asks this
+ *  before folding the domain's identity onto it; returning a non-null
+ *  string REFUSES the adoption (the resolver falls back to the
+ *  deterministic id, reproducing the pre-#378-fix id-based behavior —
+ *  including its alias-collision-abort failure mode — for that one case,
+ *  on purpose: see `resolveCanonicalAliasOwner`'s docblock). */
+export type CanonicalAdoptionGuard = (claimant: BlockData) => string | null
+
+/** Default adoption guard: refuse to fold a domain's canonical identity
+ *  onto a claimant that already carries some OTHER block-type identity —
+ *  a daily note, a different kernel page, or any other typed block.
+ *  That's a genuine, unsettled collision between two identities (issue
+ *  #378 names "a claimant that is itself a daily note" as exactly this
+ *  shape) — merging them is a domain/product decision, not something a
+ *  resolver should guess at.
+ *
+ *  `allowedTypes` (default: just `PAGE_TYPE`) lets a domain that tags its
+ *  OWN adopted claimants with a marker type (`getOrCreateKernelPage`'s
+ *  `spec.markerType`) recognise its own prior adoption on a later call as
+ *  "already us", not a foreign collision — without that, a claimant this
+ *  resolver itself adopted and typed on a PREVIOUS call would fail its
+ *  own guard on the NEXT call (the marker type it just applied now reads
+ *  as "extra"), permanently falling back to the dead deterministic id.
+ *  Domains whose type carries further sub-identity that a bare type-tag
+ *  can't distinguish (`getOrCreateDailyNote`'s `DAILY_NOTE_TYPE` — every
+ *  day's note has it, so "already a daily note" doesn't by itself mean
+ *  "already THIS day's note") need a bespoke guard instead; see
+ *  `dailyNoteAdoptionGuard` in `@/plugins/daily-notes`. */
+export const refuseTypedClaimant = (
+  allowedTypes: readonly string[] = [PAGE_TYPE],
+): CanonicalAdoptionGuard => claimant => {
+  const extraTypes = getBlockTypes(claimant).filter(t => !allowedTypes.includes(t))
+  return extraTypes.length > 0
+    ? `claimant ${claimant.id} already has type(s) ${extraTypes.join(', ')} — ambiguous identity, left unchanged pending an owner decision (issue #378)`
+    : null
+}
+
+/** A union rather than a flat record so `adopted` narrows `claimant`: the
+ *  adopt branch of a caller needs the claimant's `BlockData` (to hand to
+ *  `adoptTypedBlock`, or to read before shaping it), and re-reading it by id
+ *  would be both a second round-trip and a second chance to get the null
+ *  handling wrong. */
+export type CanonicalAliasOwnerResolution =
+  | {
+      /** The claimant's id — a DIFFERENT live block than `fallbackId`. */
+      id: string
+      adopted: true
+      /** The block being adopted, as read by `read`. Inside a write tx that
+       *  is the authoritative read-your-own-writes row; outside one it is a
+       *  prediction like the rest of the resolution. */
+      claimant: BlockData
+      refusalReason: null
+    }
+  | {
+      /** `fallbackId` — nobody eligible claims any of `aliases`. */
+      id: string
+      adopted: false
+      claimant: null
+      /** Set iff a claimant existed but adoption was refused (ambiguous —
+       *  see `CanonicalAdoptionGuard`, or two of `aliases` disagree on who
+       *  owns them). */
+      refusalReason: string | null
+    }
+
+/** The alias-first half of "try id, if not — use alias" (issue #378,
+ *  repo-owner decision): resolve which block currently owns a domain's
+ *  canonical identity. Checks EVERY alias in `aliases` (a daily note owns
+ *  two — long-form + ISO) and requires them to agree: if the two aliases
+ *  are claimed by two DIFFERENT live blocks, that's the "two canonical
+ *  aliases pointing at different live blocks" ambiguity — refuse rather
+ *  than pick one. Otherwise, a single live claimant that differs from
+ *  `fallbackId` and passes `guard` is ADOPTED; no claimant (or the
+ *  claimant IS `fallbackId` — the ordinary steady state) falls back to
+ *  `fallbackId`, unchanged from pre-#378-fix behavior.
+ *
+ *  Doesn't write anything itself. The domain caller applies the
+ *  adoption/repair mutation to whichever id this returns — same as it
+ *  already does for the plain-id path. That write is what "adopts" the
+ *  claimant; mutating a user's existing block is deliberate (issue #378:
+ *  "the user's page becomes the journal").
+ *
+ *  When all that write has to do is re-tag types, hand `claimant` to
+ *  `adoptTypedBlock` (`@/data/typedRecords`) rather than looping
+ *  `repo.addTypeInTx` — this is exactly the "found the real record another
+ *  way" case its docblock names, and it carries the tombstone/foreign
+ *  re-check that a hand-rolled loop keeps forgetting. Domains whose adopted
+ *  shape is more than types (`getOrCreateDailyNote` also needs both aliases,
+ *  the date property, and the journal parent) still write their own.
+ *
+ *  MUST be called with `canonicalAliasReaderFromTx` fresh INSIDE the
+ *  write tx before any write — see that reader's docblock. */
+export const resolveCanonicalAliasOwner = async (
+  read: CanonicalAliasReader,
+  aliases: readonly string[],
+  workspaceId: string,
+  fallbackId: string,
+  guard: CanonicalAdoptionGuard = refuseTypedClaimant(),
+): Promise<CanonicalAliasOwnerResolution> => {
+  const claimants = new Map<string, BlockData>()
+  for (const alias of aliases) {
+    const claimant = await read(alias, workspaceId)
+    if (claimant !== null) claimants.set(claimant.id, claimant)
+  }
+  const others = [...claimants.values()].filter(c => c.id !== fallbackId)
+  if (others.length === 0) {
+    return {id: fallbackId, adopted: false, claimant: null, refusalReason: null}
+  }
+  if (others.length > 1) {
+    return {
+      id: fallbackId,
+      adopted: false,
+      claimant: null,
+      refusalReason:
+        `canonical aliases resolve to different live blocks (${others.map(c => c.id).join(', ')}) `
+        + '— ambiguous, left unchanged pending an owner decision (issue #378)',
+    }
+  }
+  const [claimant] = others
+  const refusalReason = guard(claimant)
+  if (refusalReason !== null) {
+    return {id: fallbackId, adopted: false, claimant: null, refusalReason}
+  }
+  return {id: claimant.id, adopted: true, claimant, refusalReason: null}
 }
 
 // ──── Deterministic-id namespaces (UUIDv5) ────

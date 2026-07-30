@@ -148,6 +148,68 @@ describe('getOrCreateJournalBlock', () => {
     expect(restored.peekProperty(aliasesProp)).toEqual(['Journal'])
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
   })
+
+  it('adopts a live claimant of the CANONICAL "Journal" alias instead of colliding with it (issue #378)', async () => {
+    // The repro from issue #378: the journal page is deleted, the user
+    // then aliases a DIFFERENT page 'Journal'. Pre-fix, getOrCreateJournalBlock
+    // resolves purely by deterministic id — it never asks who owns the
+    // alias — so its own setProperty(aliases, ['Journal']) on the
+    // restore path collides with the claimant's live claim and aborts
+    // the WHOLE tx (ProcessorRejection: alias.collision), permanently
+    // stranding the journal as an unrestorable tombstone. Per the
+    // owner's decision, the user's page becomes the journal instead.
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    await env.repo.tx(async tx => { await tx.delete(journal.id) }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Journal'})
+      await tx.setProperty('claimant', aliasesProp, ['Journal'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const resolved = await getOrCreateJournalBlock(env.repo, WS)
+
+    expect(resolved.id).toBe('claimant')
+    expect(resolved.id).not.toBe(journal.id)
+    expect(resolved.peek()?.deleted).toBe(false)
+    expect(resolved.hasType(PAGE_TYPE)).toBe(true)
+    expect(resolved.peekProperty(aliasesProp)).toEqual(['Journal'])
+    // The user's original content survives adoption — only the type +
+    // alias claim were touched, content is untouched.
+    expect(resolved.peek()?.content).toBe('My Journal')
+    // The old deterministic-id row stays a tombstone — nothing re-mints it.
+    expect(await isBlockDeleted(env.repo, journal.id)).toBe(true)
+
+    // Idempotent: a second call resolves to the same adopted block, no
+    // spurious repair-tx / duplicate.
+    const again = await getOrCreateJournalBlock(env.repo, WS)
+    expect(again.id).toBe('claimant')
+  })
+
+  it('refuses to adopt a claimant that is itself a daily note (ambiguous, issue #378)', async () => {
+    // A genuine design ambiguity named explicitly in issue #378: don't
+    // guess whether a daily note doubling as the Journal should keep
+    // acting as a dated page too. Left unchanged — the id-based path
+    // still collides with the claimant, reproducing pre-fix behavior for
+    // this one case on purpose.
+    // Create the daily note FIRST (which also creates the journal as its
+    // parent), THEN delete the journal and add its alias to the note —
+    // in that order, so getOrCreateDailyNote's own internal journal
+    // bootstrap doesn't race the alias claim below.
+    const note = await getOrCreateDailyNote(env.repo, WS, '2026-01-05')
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    await env.repo.tx(async tx => { await tx.delete(journal.id) }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      const current = await tx.get(note.id)
+      const aliases = [...(current?.properties[aliasesProp.name] as string[] ?? []), 'Journal']
+      await tx.setProperty(note.id, aliasesProp, aliases)
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(getOrCreateJournalBlock(env.repo, WS)).rejects.toThrow()
+
+    expect(await isBlockDeleted(env.repo, journal.id)).toBe(true)
+    expect(env.repo.block(note.id).hasType(DAILY_NOTE_TYPE)).toBe(true)
+  })
 })
 
 describe('getOrCreateDailyNote', () => {
@@ -287,6 +349,66 @@ describe('getOrCreateDailyNote', () => {
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
   })
 
+  it('adopts a live claimant of the CANONICAL ISO alias instead of colliding with it (issue #378)', async () => {
+    // Same repro shape as the Journal case, one level down: the day's
+    // note is deleted, then the user aliases a DIFFERENT page to that
+    // ISO date. Pre-fix this permanently strands the day. Per the
+    // owner's decision, the user's page becomes that day's note.
+    const note = await getOrCreateDailyNote(env.repo, WS, ISO)
+    const expectedOrderKey = note.peek()?.orderKey
+    await env.repo.tx(async tx => { await tx.delete(note.id) }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My notes for that day'})
+      await tx.setProperty('claimant', aliasesProp, [ISO])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const resolved = await getOrCreateDailyNote(env.repo, WS, ISO)
+
+    expect(resolved.id).toBe('claimant')
+    expect(resolved.id).not.toBe(note.id)
+    expect(resolved.peek()?.deleted).toBe(false)
+    expect(resolved.peek()?.parentId).toBe(journalBlockId(WS))
+    expect(resolved.peek()?.orderKey).toBe(expectedOrderKey)
+    expect(resolved.hasType(PAGE_TYPE)).toBe(true)
+    expect(resolved.hasType(DAILY_NOTE_TYPE)).toBe(true)
+    expect(resolved.peekProperty(dailyNoteDateProp)?.toISOString()).toBe('2026-04-28T00:00:00.000Z')
+    // The claimant only had the ISO alias — adoption ADDS the missing
+    // long-form alias rather than dropping to just the ISO.
+    const aliases = resolved.peekProperty(aliasesProp)
+    expect(aliases).toContain(ISO)
+    expect(aliases).toHaveLength(2)
+    expect(resolved.peek()?.content).toBe('My notes for that day')
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+
+    const again = await getOrCreateDailyNote(env.repo, WS, ISO)
+    expect(again.id).toBe('claimant')
+  })
+
+  it('refuses to adopt when the two canonical aliases resolve to different live blocks (ambiguous, issue #378)', async () => {
+    // The long-form and ISO aliases for the same day claimed by two
+    // DIFFERENT live pages — genuinely ambiguous, per issue #378's "two
+    // canonical aliases pointing at different live blocks". Left
+    // unchanged: the id-based path still tries to reclaim both aliases
+    // and still collides.
+    const note = await getOrCreateDailyNote(env.repo, WS, ISO)
+    const [longLabel] = note.peekProperty(aliasesProp) ?? []
+    await env.repo.tx(async tx => { await tx.delete(note.id) }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'ISO page'})
+      await tx.setProperty('iso-claimant', aliasesProp, [ISO])
+      await tx.create({id: 'long-claimant', workspaceId: WS, parentId: null, orderKey: 'z1', content: 'Long page'})
+      await tx.setProperty('long-claimant', aliasesProp, [longLabel])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(getOrCreateDailyNote(env.repo, WS, ISO)).rejects.toThrow()
+
+    expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+    expect(env.repo.block('iso-claimant').peekProperty(aliasesProp)).toEqual([ISO])
+    expect(env.repo.block('long-claimant').peekProperty(aliasesProp)).toEqual([longLabel])
+  })
+
   /** A row at this id belonging to another workspace is never ours to touch.
    *
    *  Both reads that can find an occupant select on id alone (`repo.load` and
@@ -397,6 +519,41 @@ describe('todayDailyNoteLanding', () => {
 
     expect(id).toBeNull()
     expect(await isBlockDeleted(env.repo, note.id)).toBe(true)
+  })
+
+  it('declines without minting a fresh row when the excluded block was an ADOPTED today-note that never touched the deterministic id (issue #378)', async () => {
+    // A page claims today's ISO BEFORE the deterministic id is ever
+    // created — getOrCreateDailyNote (via the landing resolver) ADOPTS it,
+    // so `dailyNoteBlockId(WS, todayIso())` is never minted at all. The
+    // existing tombstone check (`anyBlockTombstoned([id, journalId])`) is
+    // blind to this: neither id was ever created, so neither reads as
+    // "tombstoned". The exclusion must still recognise the deleted
+    // claimant as "was today's identity" via its (tombstone-tolerant)
+    // stored alias bag, or it would mint a BRAND NEW page for today right
+    // after the user deleted the one they were looking at.
+    const iso = todayIso()
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My today'})
+      await tx.setProperty('claimant', aliasesProp, [iso])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const landedId = await todayDailyNoteLanding({repo: env.repo, workspaceId: WS, freshlyCreated: false})
+    expect(landedId).toBe('claimant')
+    expect(await isBlockDeleted(env.repo, dailyNoteBlockId(WS, iso))).toBe(false)
+    // Deterministic id was never minted — "not tombstoned" is true only
+    // because it was never created, per isBlockDeleted's semantics; confirm
+    // via a direct existence check instead.
+    expect(await env.repo.load(dailyNoteBlockId(WS, iso))).toBeNull()
+
+    await env.repo.tx(tx => tx.delete('claimant'), {scope: ChangeScope.BlockDefault})
+
+    const id = await todayDailyNoteLanding({
+      repo: env.repo, workspaceId: WS, freshlyCreated: false, excludeBlockId: 'claimant',
+    })
+
+    expect(id).toBeNull()
+    expect(await env.repo.load(dailyNoteBlockId(WS, iso))).toBeNull()
+    expect(await isBlockDeleted(env.repo, 'claimant')).toBe(true)
   })
 
   it('still answers when the excluded block is some other page', async () => {

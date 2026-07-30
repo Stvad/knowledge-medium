@@ -6,6 +6,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import type { Repo } from '@/data/repo'
@@ -42,6 +43,25 @@ describe('dailyNotesDeletionGuard', () => {
   it('refuses the Journal', async () => {
     const journal = await getOrCreateJournalBlock(repo, WS)
     expect(await dailyNotesDeletionGuard(journal)).toMatch(/Journal/)
+  })
+
+  it('refuses an ADOPTED Journal at a non-canonical id (issue #378)', async () => {
+    // The canonical Journal is deleted, then the user aliases a different
+    // page 'Journal' — getOrCreateJournalBlock ADOPTS it (see
+    // dailyNotes.ts), so the deletion guard must recognise THAT block as
+    // the Journal too, not just the deterministic-id row it used to live
+    // at (an id-based check would silently stop protecting it).
+    const journal = await getOrCreateJournalBlock(repo, WS)
+    await repo.tx(async tx => { await tx.delete(journal.id) }, {scope: ChangeScope.BlockDefault})
+    await repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Journal'})
+      await tx.setProperty('claimant', aliasesProp, ['Journal'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const adopted = await getOrCreateJournalBlock(repo, WS)
+    expect(adopted.id).toBe('claimant')
+    expect(adopted.id).not.toBe(journal.id)
+    expect(await dailyNotesDeletionGuard(adopted)).toMatch(/Journal/)
   })
 
   it('allows an ordinary page, including a child of a daily note', async () => {

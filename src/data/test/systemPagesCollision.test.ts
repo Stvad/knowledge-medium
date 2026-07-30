@@ -6,17 +6,25 @@
  * alias-"seat" id when no page with that alias exists. The singleton system
  * pages (Journal/Properties/Types/Locations) live at their OWN deterministic
  * ids and claim a reserved alias, so a wiki-link that resolves before the
- * canonical page exists auto-creates a RIVAL claimant → two blocks, one alias →
- * `alias.collision`.
+ * canonical page exists auto-creates a RIVAL claimant at a different id.
  *
  * `Repo.ensureSystemPages` (run at bootstrap before the seed) creates the
- * canonical pages first, so `aliasLookup` hits and no rival is minted. This
- * exercises the real references + alias processors — the unit tests for
+ * canonical pages first, so `aliasLookup` hits and no rival is minted —
+ * still the preferred, deterministic-id-converging path. This exercises the
+ * real references + alias processors — the unit tests for
  * `ensureSystemPages` don't.
+ *
+ * Second layer (issue #378): if a rival DOES get minted first (bootstrap
+ * ordering race, or `ensureSystemPages` skipped), the get-or-create helpers
+ * (`getOrCreateJournalBlock` / `getOrCreateKernelPage`) now resolve
+ * ALIAS-FIRST and ADOPT the rival instead of colliding with it — the
+ * `alias.collision` this file used to pin as a "negative control" is fixed
+ * at that layer too. See `resolveCanonicalAliasOwner` (src/data/targets.ts).
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, ProcessorRejection } from '@/data/api'
+import { ChangeScope } from '@/data/api'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
@@ -92,19 +100,20 @@ describe('system-pages alias-collision fix', () => {
     expect((await lookup('Locations'))?.id).toBe(locationsPageBlockId(WS))
   })
 
-  it('negative control: without the eager page, the same scenario collides', async () => {
+  it('without the eager page, getOrCreateJournalBlock adopts the rival instead of colliding (issue #378)', async () => {
     // No ensureSystemPages. The wiki-link auto-creates a rival "Journal" at a
     // seat id…
     await seedBlockLinking('[[Journal]]')
     const rival = await lookup('Journal')
     expect(rival?.id).not.toBe(journalBlockId(WS))
 
-    // …so daily-notes later creating its canonical Journal page collides.
-    let caught: unknown
-    try {
-      await getOrCreateJournalBlock(env.repo, WS)
-    } catch (err) { caught = err }
-    expect(caught).toBeInstanceOf(ProcessorRejection)
-    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    // …so daily-notes later resolving its canonical Journal page now ADOPTS
+    // the rival (alias-first resolution, issue #378) instead of colliding
+    // with it — this used to be a `ProcessorRejection('alias.collision')`
+    // before the fix.
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    expect(journal.id).toBe(rival?.id)
+    expect(journal.id).not.toBe(journalBlockId(WS))
+    expect(journal.hasType(PAGE_TYPE)).toBe(true)
   })
 })

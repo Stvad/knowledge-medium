@@ -452,6 +452,50 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(refs).toContainEqual({id: jan21Id, alias: 'January 21st, 2020'})
   })
 
+  it('resolves a daily-shaped [[alias]] to a live claimant instead of the deterministic id (issue #378)', async () => {
+    // A page in the TARGET workspace already claims the date alias before
+    // import starts (e.g. the user manually created it, or a prior import
+    // run already adopted it). `resolveAliases`' daily-shaped branch must
+    // predict THAT id, not the raw deterministic `dailyNoteBlockId` — since
+    // getOrCreateDailyNote (step 4) now resolves alias-first too (issue
+    // #378) and would ADOPT the claimant, never minting a row at the
+    // deterministic id. Predicting the deterministic id here would leave
+    // references[] pointing at a row that's never materialised.
+    const claimantId = 'preexisting-2026-04-28-page'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: claimantId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a0', content: '2026-04-28',
+      })
+      await tx.setProperty(claimantId, aliasesProp, ['2026-04-28'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await importRoam([
+      {
+        title: 'scratch',
+        uid: 'scratchPage2',
+        children: [
+          {string: 'see [[2026-04-28]]', uid: 'linkingBlock2'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const deterministicId = dailyNoteBlockId(WORKSPACE, '2026-04-28')
+    const deterministicRow = await readBlock(deterministicId)
+    expect(deterministicRow).toBeNull()
+
+    const linking = await readBlock(roamBlockId(WORKSPACE, 'linkingBlock2'))
+    const refs = JSON.parse(linking!.references_json) as {id: string, alias: string}[]
+    expect(refs).toContainEqual({id: claimantId, alias: '2026-04-28'})
+
+    // The claimant was ADOPTED as the day's daily note (parented under the
+    // journal), not left as a bare page.
+    const claimant = await readBlock(claimantId)
+    expect(claimant?.parent_id).toBe(journalBlockId(WORKSPACE))
+  })
+
   it('resolves [[alias]] references to imported page final ids', async () => {
     await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

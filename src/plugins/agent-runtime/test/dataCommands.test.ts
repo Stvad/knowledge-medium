@@ -22,6 +22,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { aliasesProp } from '@/data/properties.js'
 import { keyAtEnd } from '@/data/orderKey'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
@@ -279,6 +280,30 @@ describe('daily-note command', () => {
       {commandId: 'dn-bad', type: 'daily-note', date: 'not a date at all'},
       context,
     )).rejects.toThrow(/Could not parse/)
+  })
+
+  it('resolves to a live claimant of the date alias instead of a false-negative on the deterministic id (issue #378)', async () => {
+    // A page already claims the ISO alias at a DIFFERENT id than the
+    // deterministic one (e.g. getOrCreateDailyNote adopted it earlier).
+    // The command must report THAT block, not a stale "doesn't exist" for
+    // an id nothing will ever be created at.
+    const iso = '2026-06-19'
+    const deterministicId = dailyNoteBlockId(WS, iso)
+    await create({
+      id: 'claimant',
+      content: 'My notes',
+      properties: {[aliasesProp.name]: aliasesProp.codec.encode([iso])},
+    })
+
+    const result = await executeCommand(
+      {commandId: 'dn-3', type: 'daily-note', date: iso},
+      context,
+    ) as {blockId: string, exists: boolean, block: {id: string} | null}
+
+    expect(result.blockId).toBe('claimant')
+    expect(result.blockId).not.toBe(deterministicId)
+    expect(result.exists).toBe(true)
+    expect(result.block?.id).toBe('claimant')
   })
 })
 

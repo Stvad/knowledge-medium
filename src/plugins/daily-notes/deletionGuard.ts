@@ -15,7 +15,7 @@
  * that really means it still goes through `block.delete()`.
  */
 import type { BlockDeletionGuard } from '@/extensions/core.js'
-import { journalBlockId } from './dailyNotes.ts'
+import { isJournalBlock } from './dailyNotes.ts'
 import { DAILY_NOTE_TYPE } from './schema.ts'
 
 /**
@@ -37,7 +37,12 @@ export const dailyNotesDeletionGuard: BlockDeletionGuard = block => {
   const data = block.peek()
   if (!data) return null
 
-  if (block.id === journalBlockId(data.workspaceId)) {
+  // `isJournalBlock` (alias-based) rather than an id comparison against
+  // `journalBlockId`: the latter stops recognising the Journal once issue
+  // #378's alias-first resolution has ADOPTED a different block as the
+  // Journal (canonical row deleted, user aliased another page 'Journal');
+  // the guard would then silently let that block be deleted.
+  if (isJournalBlock(data)) {
     return 'The Journal can\u2019t be deleted \u2014 it\u2019s recreated automatically as the home for daily notes.'
   }
   if (block.hasType(DAILY_NOTE_TYPE)) {
