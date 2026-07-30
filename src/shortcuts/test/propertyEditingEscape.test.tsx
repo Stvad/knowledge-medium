@@ -257,6 +257,34 @@ describe('Escape in a property editor', () => {
     expect(document.activeElement).toBe(input)
   })
 
+  it('still exits when the key is rebound to a modifier chord', () => {
+    // The opt-in declines single-character keys so typing stays typing — but
+    // that must not veto `Ctrl+J`, which the editable-target heuristic admits
+    // on its own (a modifier chord is aimed at the app, not the field). An
+    // opt-in adds to the default; it never subtracts from it.
+    renderWith([
+      {...propertyEditingAction('exit_property_editing'), defaultBinding: {keys: 'Control+j'}},
+    ])
+    expect(document.activeElement).toBe(input)
+
+    pressKeyInInput('j', {ctrlKey: true})
+
+    expect(document.activeElement).not.toBe(input)
+  })
+
+  it('leaves Escape to the IME while a composition is in flight', () => {
+    // Mid-composition Escape cancels the candidate; blurring here would end
+    // the composition and let the field's blur commit the half-composed text.
+    renderWith([propertyEditingAction('exit_property_editing')])
+
+    pressKeyInInput('Escape', {isComposing: true})
+    expect(document.activeElement).toBe(input)
+
+    // Composition over, same key: the ordinary exit is back.
+    pressKeyInInput('Escape')
+    expect(document.activeElement).not.toBe(input)
+  })
+
   it('does not lend its opt-in to a global bound to a bare named key', () => {
     // The opt-in admits non-text keys so a REBOUND exit key still works. That
     // must not also hand those keys to GLOBAL, which declares no filter: the

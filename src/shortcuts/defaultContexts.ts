@@ -104,7 +104,13 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     // stays sound only while the vote is installable-scoped: consulting merely
     // *active* contexts let a shadowed vote hand keys to whatever shadowed it
     // (Escape → `clear_selection`, Delete → the multi-select delete).
-    eventFilter: (event: KeyboardEvent) => event.key.length > 1,
+    // Not while an IME composition is in flight: those keys belong to the
+    // input method, and Escape there means "cancel the candidate", not "leave
+    // the field". Blurring would end the composition synchronously and let
+    // the field's own blur commit the half-composed value — `preventDefault:
+    // false` can't preserve the native behaviour once focus is gone. Declining
+    // drops the press back to the editable-target heuristic, which blocks it.
+    eventFilter: (event: KeyboardEvent) => event.key.length > 1 && !event.isComposing,
     validateDependencies: isPropertyEditingDependencies,
   },
   {

@@ -116,7 +116,14 @@ const contextAdmitsEvent = (
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): boolean => {
   const filter = contextConfigsByType.get(contextType)?.eventFilter
-  return filter ? filter(event) : defaultEventFilter(event)
+  // Additive, never a veto: a filter says "also admit these", so a `false`
+  // from it still falls through to the editable-target heuristic. Treating
+  // it as a veto killed deliberate modifier chords — property-editing's
+  // filter declines single-character keys, which would have made a rebind of
+  // the exit key onto Ctrl+J dead even though `defaultEventFilter` admits
+  // every modifier chord. Matches the contract declared on
+  // `ActionContextConfig.eventFilter`.
+  return filter?.(event) === true || defaultEventFilter(event)
 }
 
 /**
