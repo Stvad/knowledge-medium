@@ -1088,6 +1088,16 @@ export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
 
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
+/** Is the sync observer still materializing? PowerSync's `hasSynced` fires
+ *  when the DOWNLOAD finishes; the observer then drains
+ *  `blocks_synced_changes` into `blocks` in bounded windows, so `blocks` keeps
+ *  growing well after "synced". ANALYZE mid-drain bakes a baseline from a
+ *  half-built table AND records the schema marker, settling both axes on a
+ *  state that is about to change — and the row-count rule only re-corrects if
+ *  the remaining drain is more than 4x what landed. Cheap existence probe, not
+ *  a COUNT. */
+export const SELECT_MATERIALIZE_PENDING_SQL = `SELECT 1 AS pending FROM blocks_synced_changes LIMIT 1`
+
 /** The second staleness axis: the SCHEMA changed, not the row count.
  *
  *  A freshly-created index has no `sqlite_stat1` row, and SQLite then falls
@@ -1124,7 +1134,14 @@ export const SELECT_INDEX_SET_SQL = `
  *  So the fingerprint also covers which (tbl, idx) pairs currently HAVE stats.
  *  Keys only, never the `stat` values — those move with row counts and would
  *  re-trigger every boot. An empty table contributes no key before or after,
- *  so the idle-queue loop avoided above stays avoided. `COALESCE(idx, '')`
+ *  so the idle-queue loop avoided above stays avoided. The flip side, accepted:
+ *  a table EMPTY at ANALYZE time that later fills is not detected here — its
+ *  absence is recorded as the settled state, and only `blocks` row-count drift
+ *  re-triggers. That gap now sits under `block_types`, which the typedBlocks
+ *  candidate CTE drives from (see `typeJoin` in typedBlockQuery.ts); the two
+ *  conditions are strongly anti-correlated (a workspace large enough to matter
+ *  almost certainly has typed blocks), which is why it stays accepted rather
+ *  than special-cased. `COALESCE(idx, '')`
  *  because a table-cardinality row carries a NULL `idx`, and `||` on NULL is
  *  NULL, which `group_concat` drops — without it an index-less table
  *  (`tx_context`, the FTS shadow tables) could be rebuilt invisibly. */
@@ -1141,7 +1158,13 @@ export const ANALYZE_INDEX_SET_MARKER_PREFIX = 'analyze_index_set:'
 const ANALYZE_MARKER_LIKE = String.raw`analyze\_index\_set:%`
 
 /** Reads the marker WITHOUT a bound parameter and compares the fingerprint in
- *  JS. Recording keeps exactly one row in the family, so `LIMIT 1` is exact.
+ *  JS. Recording normally keeps exactly one row in the family; a crash between
+ *  the upsert and the delete can leave two, and this scan is in KEY order, so
+ *  it would return whichever hex sorts first rather than the live one. That
+ *  costs one redundant ANALYZE, which then re-records and settles — the same
+ *  self-healing bound as the empty-family race documented on
+ *  {@link recordAnalyzeMarkerSql}, so `LIMIT 1` stays rather than growing an
+ *  ORDER BY for it.
  *
  *  Param-free on purpose, as is the write below. Bootstrap callers pass
  *  hand-rolled db shims and `LocalSchemaDb` (`src/data/facets.ts`) literally
@@ -1175,9 +1198,13 @@ const assertInlinableFingerprint = (fingerprint: string): string => {
  *  reads "never analyzed" and queues another multi-second ANALYZE.
  *
  *  Not atomic, and deliberately not claimed to be: two writers holding
- *  DIFFERENT fingerprints (two tabs on different releases sharing the worker)
- *  can interleave as upsert(A) upsert(B) clearOthers(A) clearOthers(B) and
- *  leave the family EMPTY. Cost is one redundant ANALYZE on the next boot,
+ *  DIFFERENT fingerprints can interleave as upsert(A) upsert(B)
+ *  clearOthers(A) clearOthers(B) and
+ *  leave the family EMPTY. Divergent fingerprints are narrow — two tabs on the
+ *  same device read the same physical `sqlite_master`, and `CREATE INDEX IF
+ *  NOT EXISTS` makes the index set monotonic — so it takes one tab's bootstrap
+ *  creating an index mid-flight of the other's check. Cost is one redundant
+ *  ANALYZE on the next boot,
  *  which then records a marker again — self-healing, and strictly better than
  *  the delete-first order, which opens the same window on every single run
  *  rather than only under a race. */
@@ -1577,6 +1604,11 @@ export const analyzeIsWarranted = (
 export interface AnalyzeResult {
   /** Whether `ANALYZE` was run this call. */
   analyzed: boolean
+  /** True when a warranted ANALYZE was held back because the sync observer is
+   *  still materializing (see {@link SELECT_MATERIALIZE_PENDING_SQL}). The
+   *  caller should re-check later rather than treat this as "nothing to do";
+   *  no marker is recorded, so a later run re-evaluates from scratch. */
+  deferred?: boolean
   /** Live `blocks` count observed (drives the decision + any toast). */
   count: number
   /** Recorded estimate before this call (`null` = never analyzed). */
@@ -1647,6 +1679,10 @@ export const runAnalyzeIfStale = async (
     count >= minBlocks && !(await analyzeMarkerMatches(db, await readAnalyzeFingerprint(db)))
   if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor) && !schemaDrifted) {
     return {analyzed: false, count, previousEstimate}
+  }
+  // Warranted — but not while `blocks` is still filling underneath us.
+  if (await db.getOptional<{pending: number}>(SELECT_MATERIALIZE_PENDING_SQL) !== null) {
+    return {analyzed: false, deferred: true, count, previousEstimate}
   }
   await analyzeAndRecord(db)
   return {analyzed: true, count, previousEstimate}

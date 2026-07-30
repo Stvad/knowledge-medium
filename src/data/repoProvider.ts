@@ -437,24 +437,36 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `sqlite_stat1`, so the planner makes pessimal join-order choices on
   // `blocks` once a workspace is large (a 4-id `json_each` lookup can
   // degenerate to a 4-second scan of the workspace partial index).
-  // `runAnalyzeIfStale` re-runs only when the live `blocks` count has
-  // drifted from the count the stats were built on (see clientSchema), so
-  // a stable workspace pays nothing and a grown one self-corrects. Both
-  // the count probe and ANALYZE run on the single SQLite worker, so every
-  // trigger below is idle-deferred — never on the first-paint path.
+  // `runAnalyzeIfStale` re-runs on either staleness axis — the live `blocks`
+  // count drifting from the count the stats were built on, OR the set of
+  // indexes / which of them have stats changing since the last run (see
+  // clientSchema). A stable workspace on an unchanged schema pays nothing;
+  // every client >= ANALYZE_MIN_BLOCKS pays one scan on the boot after a
+  // release that adds or drops an index. Both the count probe and ANALYZE run
+  // on the single SQLite worker, so every trigger below is idle-deferred.
   //
-  // (a) Boot: catches anything that changed since the last session — a
-  // prior-session import, organic growth, or the legacy "0 0" stats bug.
-  // scheduleDEEPIdle, not scheduleIdle: the latter caps at 2s and its own doc
-  // says it "guarantees the work runs inside the cold-start window on a busy
-  // load". Before the index-set axis existed the drift gate essentially never
-  // fired on a stable client, so that was academic; now every client >=
-  // ANALYZE_MIN_BLOCKS fires once on the boot after any release that adds or
-  // drops an index. Parking the single SQLite worker for seconds IS the freeze
-  // this whole change is about, so it must not land on first paint.
-  const scheduleAnalyzeCheck = (reason: string) => {
+  // scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap means it WILL run
+  // inside the cold-start window on a busy load (its own doc says so).
+  // Parking the single SQLite worker for seconds IS the freeze this whole
+  // change is about, so it must not land on first paint.
+  //
+  // Deferred far enough that it can now overlap the sync observer's
+  // materialization drain, which is what actually fills `blocks`.
+  // `runAnalyzeIfStale` refuses to analyze mid-drain and reports `deferred`;
+  // re-arm on that, bounded.
+  const MAX_DRAIN_WAITS = 6
+  const scheduleAnalyzeCheck = (reason: string, drainWaits = 0) => {
     scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(backfillDb).catch(error => {
+      void (async () => {
+        const result = await runAnalyzeIfStale(backfillDb)
+        // Held back because the observer is still materializing. Re-arm —
+        // bounded, because a drain that never finishes must not mean stats
+        // never get built; on exhaustion we simply leave it to the next boot,
+        // which is correct-by-default since no marker was recorded.
+        if (result.deferred && drainWaits < MAX_DRAIN_WAITS) {
+          scheduleAnalyzeCheck(reason, drainWaits + 1)
+        }
+      })().catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
     }, CATCHUP_DEEP_IDLE)

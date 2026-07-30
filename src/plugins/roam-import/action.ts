@@ -6,7 +6,7 @@ import {
 import { activeWorkspaceIdPreferringHash } from '@/utils/navigation.js'
 import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import type { RoamExport } from './types.ts'
 
@@ -60,15 +60,20 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
             `${summary.blocksWritten} blocks (${(summary.durationMs / 1000).toFixed(1)}s)`,
           )
           // A bulk import can multiply the workspace; the planner's
-          // `sqlite_stat1` is now stale and would mis-rank join orders
-          // until the next boot. Re-check drift at idle so good plans land
-          // this session without a reload (no-op unless the import grew
-          // `blocks` past the drift factor — see clientSchema.runAnalyzeIfStale).
-          scheduleIdle(() => {
+          // `sqlite_stat1` is now stale and would mis-rank join orders until
+          // the next boot. Re-check at idle so good plans land this session
+          // without a reload. Usually a no-op — it runs only if the import
+          // moved `blocks` past the drift factor, or the index set changed
+          // since the last ANALYZE (see clientSchema.runAnalyzeIfStale).
+          //
+          // Deep idle, matching the boot check in repoProvider: ANALYZE is a
+          // multi-second park of the single SQLite worker, and scheduleIdle's
+          // 2s cap would land it right as the freshly-imported tree renders.
+          scheduleDeepIdle(() => {
             void runAnalyzeIfStale(repo.db).catch(error => {
               console.warn('[roam-import] ANALYZE check failed:', error)
             })
-          })
+          }, CATCHUP_DEEP_IDLE)
         } catch (err) {
           console.error('[roam-import] failed:', err)
           banner.fail(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)
