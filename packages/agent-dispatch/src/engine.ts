@@ -11,8 +11,9 @@ import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './co
 import { PROPS } from './config.js'
 import type { Graph } from './graph.js'
 import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
-import { resumeOptionsForRun } from './resumeCommand.js'
+import { resumeOptionsForRun, type AgentResumeOptions } from './resumeCommand.js'
 import type { StateStore } from './state.js'
+import { classifyRunFailure, retryBackoffMs, type RunFailureClass } from './runFailure.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from '@knowledge-medium/agent-cli/mcpShared'
@@ -136,6 +137,46 @@ export const createEngine = (deps: EngineDeps) => {
   let launchTimes: number[] = []
   let launchTimesLoaded = false
 
+  /** Infrastructure cooldown — the "don't chew the queue" half of the
+   *  retryable-failure handling. One run failing because the account is out
+   *  of credits says nothing about THAT task and everything about the next
+   *  ten, so the daemon stops launching until the cooldown lapses, then
+   *  lets exactly one probe through. Deliberately in-memory only: it's an
+   *  optimisation over the per-task `agent:retry-after` (which IS durable),
+   *  and a restart re-deriving it costs one extra doomed spawn. */
+  let cooldownUntil = 0
+  let consecutiveInfraFailures = 0
+  let cooldownReason = ''
+  /** The window we last logged, so a cooldown is announced once, not once
+   *  per watcher per tick. */
+  let cooldownLogged = 0
+
+  const noteInfraFailure = (failure: RunFailureClass, sourceLabel: string): number => {
+    consecutiveInfraFailures += 1
+    const backoff = retryBackoffMs(consecutiveInfraFailures)
+    cooldownUntil = now() + backoff
+    cooldownReason = failure.label
+    log(`[${sourceLabel}] ${failure.label} — nothing was attempted; pausing new runs for ${Math.round(backoff / 1000)}s (infrastructure failure ${consecutiveInfraFailures} in a row)`)
+    return cooldownUntil
+  }
+
+  /** Any run that reached the model proves the infrastructure is back —
+   *  including one that failed on its own merits. */
+  const clearInfraCooldown = () => {
+    consecutiveInfraFailures = 0
+    cooldownUntil = 0
+    cooldownReason = ''
+  }
+
+  const inInfraCooldown = (): boolean => {
+    if (now() >= cooldownUntil) return false
+    if (cooldownLogged !== cooldownUntil) {
+      cooldownLogged = cooldownUntil
+      log(`deferring new runs until ${new Date(cooldownUntil).toISOString()} (${cooldownReason})`)
+    }
+    return true
+  }
+
   // `session:` placeholders (thread-dedup, added in processMention) share
   // the `running` map but are NOT launches — exclude them so one --resume
   // follow-up doesn't consume two of maxConcurrent's slots.
@@ -240,8 +281,8 @@ export const createEngine = (deps: EngineDeps) => {
     const fresh = await graph.getBlock(sourceId)
     if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
     const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
-    await graph.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Delete the agent:* properties to retry.`).catch(() => {})
+    await graph.setTaskProps(sourceId, {status: 'error', error: reason, retryAfter: null, nowMs: now()})
+    await graph.createReply(sourceId, `⚠️ agent-dispatch: ${reason}. Use the chip's Retry action (or delete the agent:* properties) to re-run it.`).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
@@ -285,11 +326,17 @@ export const createEngine = (deps: EngineDeps) => {
     // that had already streamed most of its (billed) answer keeps that
     // partial (collapsed to a single note block) instead of discarding it.
     let lastStreamedText = ''
-    // Set once a TERMINAL reply (the ok answer, or the failure/partial note)
-    // has been written. The infra-catch checks it so a transient blip on the
-    // *terminal props write* — which lands AFTER a good reply — can't
-    // re-enter the reply write and clobber the answer. See the catch below.
+    // Set once the run's LAST reply write has landed (the ok answer, the
+    // failure/partial note, or the retry-deferral note). The infra-catch
+    // checks it so a transient blip on the *props write* — which lands
+    // AFTER a good reply — can't re-enter the reply write and clobber the
+    // answer. See the catch below.
     let terminalReplyDelivered = false
+    // Whether runTask returned at all. Splits the catch's two very
+    // different worlds: a throw BEFORE it is "we never got to try"
+    // (retryable), a throw after is "the answer we already paid for failed
+    // to land" (terminal — re-running would re-bill it).
+    let runAttempted = false
     // Per-run reply identity + shape, set once `attempt` is known (below).
     // Every reconcile of this run tags its blocks with `replyKey`, so it
     // converges the SAME subtree in place; a rerun uses a fresh key and thus
@@ -331,13 +378,58 @@ export const createEngine = (deps: EngineDeps) => {
       }
     }
 
+    const attempt = taskAttempts(block) + 1
+    // Fresh reply subtree per attempt (a rerun posts a new reply, never
+    // mutating the prior attempt's answer); split unless the watcher opted
+    // out. Reconciles within THIS attempt share the key → converge in place.
+    replyKey = `reply:${sourceId}:${attempt}`
+    replyShape = watcher.splitReply ? 'outline' : 'block'
+
+    /** Put the task BACK in the queue instead of parking it as failed:
+     *  hand the attempt and the spend slot back, leave a "waiting" trace
+     *  where the answer would go, and cool the whole daemon down. Shared by
+     *  the two ways a run can fail WITHOUT having been attempted — a
+     *  classified run result, and a throw around the spawn (executor not on
+     *  PATH, bridge down, channel listener down). */
+    const deferForRetry = async (
+      failure: RunFailureClass,
+      detail: string,
+      resume: {session?: string | null, resumeOptions?: AgentResumeOptions | null} = {},
+    ) => {
+      const retryAfter = noteInfraFailure(failure, watcher.name)
+      // A run that never reached the model spent nothing, so the
+      // runsPerHour slot comes back too — letting doomed attempts eat the
+      // budget would defer REAL work for an hour once the outage lifts.
+      // (Same reasoning as the pre-claim refunds above.)
+      refundLaunch(launchStamp)
+      const partial = lastStreamedText.trim()
+      const waitingNote = `⏳ agent-dispatch: ${failure.label} — nothing ran; retrying automatically. (${detail})`
+      // Replaces any streamed placeholder/partial in place (same replyKey,
+      // since the attempt number is rolled back too), so the retry's real
+      // answer converges onto this block rather than stacking under it.
+      await reconcileReplyWithRetry(
+        partial ? `${partial}\n\n${waitingNote}` : waitingNote,
+        {final: true, shape: 'block'},
+      ).catch(error => log(`[${watcher.name}] could not post the retry note for ${sourceId}: ${errorMessage(error)}`))
+      terminalReplyDelivered = true
+      await graph.setTaskProps(sourceId, {
+        status: 'queued',
+        error: `${failure.label} — waiting to retry (${detail})`,
+        // Roll the attempt back. Attempts exist to cap a task that keeps
+        // CRASHING; counting an outage against them would park the queue
+        // after three ticks — the very bug this path fixes.
+        attempts: attempt - 1,
+        session: resume.session ?? undefined,
+        resumeOptions: resume.resumeOptions,
+        activity: null,
+        cancel: null,
+        retryAfter,
+        nowMs: now(),
+      })
+      log(`[${watcher.name}] DEFERRED ${sourceId}: ${failure.label} (${detail})`)
+    }
+
     try {
-      const attempt = taskAttempts(block) + 1
-      // Fresh reply subtree per attempt (a rerun posts a new reply, never
-      // mutating the prior attempt's answer); split unless the watcher opted
-      // out. Reconciles within THIS attempt share the key → converge in place.
-      replyKey = `reply:${sourceId}:${attempt}`
-      replyShape = watcher.splitReply ? 'outline' : 'block'
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
@@ -473,7 +565,15 @@ export const createEngine = (deps: EngineDeps) => {
 
       const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
       const result = await runTask(runOptions)
+      // The run happened (whatever its outcome). Past this line a throw is
+      // about DELIVERING a billed answer, not about failing to start one —
+      // which is what the catch keys its defer-vs-park decision off.
+      runAttempted = true
       await writes // ordering guarantee: no progress write races the final one below
+
+      // Why the run ended, for a failure the user did NOT ask for. A
+      // cancel is deliberate and terminal, so it's never classified.
+      const failure = result.ok || abortController.signal.aborted ? null : classifyRunFailure(result)
 
       if (result.ok) {
         // Deliberately NOT gated on signal.aborted: if the child completed
@@ -495,9 +595,24 @@ export const createEngine = (deps: EngineDeps) => {
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
           cancel: null,
+          retryAfter: null,
           nowMs: now(),
         })
+        clearInfraCooldown()
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+      } else if (failure?.retryable) {
+        // NOT a task failure — the run never got to attempt it (out of
+        // credits, expired login, rate limited, network down). Parking it
+        // `error` here is what turned a single credit outage into a queue
+        // of dead tasks.
+        await deferForRetry(
+          failure,
+          truncate(result.stderr.trim() || result.failureText.trim() || `exit ${result.exitCode}`, 200),
+          {
+            session: storedSessionFor(runner.executor, result.sessionId),
+            resumeOptions: resumeOptionsForSession(result.sessionId),
+          },
+        )
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
         // a timeout/crash so the task parks `error: cancelled` (deliberate,
@@ -529,8 +644,14 @@ export const createEngine = (deps: EngineDeps) => {
           resumeOptions: resumeOptionsForSession(result.sessionId),
           activity: null,
           cancel: null,
+          retryAfter: null,
           nowMs: now(),
         })
+        // A run that failed on its own merits still REACHED the model, so
+        // the infrastructure is evidently fine — drop any cooldown a
+        // previous outage left armed. A cancel proves nothing either way,
+        // so it leaves the cooldown alone.
+        if (!cancelled) clearInfraCooldown()
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
@@ -541,6 +662,23 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
+      // A throw BEFORE the run is the same "we couldn't try" case a
+      // classified run failure is: `claudeBin` missing from launchd's PATH,
+      // the bridge down, the channel listener not up. Parking here kills
+      // every task the daemon touches for the duration, so defer instead.
+      // Gated on runAttempted so a throw while delivering a BILLED answer
+      // still parks — a re-run would have to pay for it again.
+      const startupFailure = runAttempted || terminalReplyDelivered
+        ? null
+        : classifyRunFailure({stderr: reason, failureText: '', exitCode: null, timedOut: false})
+      if (startupFailure?.retryable) {
+        // Best-effort: if the defer itself can't be written the block stays
+        // `running` and the stale sweep re-queues it, which is the same
+        // fallback the parking path has always had.
+        await deferForRetry(startupFailure, reason)
+          .catch(deferError => log(`[${watcher.name}] could not defer ${sourceId}: ${errorMessage(deferError)}`))
+        throw error
+      }
       // Only post the infra note if no terminal reply landed yet. If the
       // answer (or failure/partial note) was already delivered and the error
       // came from the *props* write that follows it, reconciling again would
@@ -555,7 +693,7 @@ export const createEngine = (deps: EngineDeps) => {
       // aborted, e.g. the reply write then failed). Left behind, the flag
       // survives askAgent's retry-reset and would abort the fresh run on
       // its very next tick.
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, nowMs: now()}).catch(() => {})
+      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, retryAfter: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
@@ -629,6 +767,21 @@ export const createEngine = (deps: EngineDeps) => {
         log(`[${watcher.name}] cleared an un-actionable agent:cancel on ${source.id}`)
         continue
       }
+      // Stop on a DEFERRED task: nothing is running to abort, so the flag
+      // means "stop waiting to retry". Honour it as the terminal cancel the
+      // running path writes — otherwise the only way out of an automatic
+      // retry loop would be deleting the block's agent:* properties.
+      if (
+        view.properties?.[PROPS.cancel]
+        && view.properties?.[PROPS.status] === 'queued'
+        && !running.has(source.id)
+      ) {
+        await graph.setTaskProps(source.id, {
+          status: 'error', error: 'cancelled', activity: null, cancel: null, retryAfter: null, nowMs: now(),
+        })
+        log(`[${watcher.name}] stopped retrying ${source.id} (Stop requested while deferred)`)
+        continue
+      }
       if (running.has(source.id)) continue
       const quietExempt = quietExemptBlockIds.has(source.id)
       const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
@@ -640,6 +793,10 @@ export const createEngine = (deps: EngineDeps) => {
       }
       if (!preview.pending) continue
       if (capacityLeft() <= 0) return
+      // Gated HERE rather than at the top of the tick so a cooldown never
+      // suppresses the non-launching work above (clearing an inert cancel,
+      // parking an exhausted task) — it only stops NEW runs.
+      if (inInfraCooldown()) return
       if (!spendBudgetLeft()) {
         log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${source.id}`)
         return
@@ -675,6 +832,11 @@ export const createEngine = (deps: EngineDeps) => {
     }
     if (diff.newRows.length === 0) return
     if (capacityLeft() <= 0) return
+    // Query rows are especially costly to fire into an outage: the cursor
+    // advances before the run, so a doomed launch DROPS them (the rollback
+    // below is best-effort). Hold them instead — the cursor stays put and
+    // the same rows re-diff once the cooldown lapses.
+    if (inInfraCooldown()) return
     if (!spendBudgetLeft()) {
       log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${diff.newRows.length} new row(s)`)
       return
@@ -705,7 +867,7 @@ export const createEngine = (deps: EngineDeps) => {
     // Spawn mode: claim-at-cursor BEFORE the run so a persistently
     // failing (billed) prompt can't re-fire every tick.
     await state.setCursor(watcher.name, diff.seenIds)
-    recordLaunch()
+    const launchStamp = recordLaunch()
     log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
     launch(key, async () => {
       // Log the session id the instant it streams (same as the mention
@@ -721,10 +883,28 @@ export const createEngine = (deps: EngineDeps) => {
       }))
       const session = result.sessionId ?? loggedSession
       if (result.ok) {
+        clearInfraCooldown()
         log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
-      } else {
-        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        return
       }
+      const failure = classifyRunFailure(result)
+      if (!failure.retryable) {
+        clearInfraCooldown()
+        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        return
+      }
+      // Nothing was attempted, so put the rows BACK: this watcher has no
+      // graph-side task state to sweep, and the cursor was advanced before
+      // the run — leaving it advanced would silently drop exactly the rows
+      // the outage prevented us from handling. Restoring `prev` also
+      // re-surfaces rows that appeared during the run, which is the right
+      // direction to be wrong in. Safe against a concurrent tick: the
+      // `running.has(key)` guard above keeps this watcher single-flight.
+      refundLaunch(launchStamp)
+      noteInfraFailure(failure, watcher.name)
+      await state.setCursor(watcher.name, prev)
+        .then(() => log(`[${watcher.name}] DEFERRED ${batch.length} row(s): ${failure.label} — cursor rolled back, they re-fire after the cooldown`))
+        .catch(error => log(`[${watcher.name}] ${failure.label}, but the cursor rollback FAILED (${errorMessage(error)}) — ${batch.length} row(s) will not re-fire`))
     })
   }
 

@@ -17,7 +17,11 @@ import { isReadOnlySql } from '@knowledge-medium/agent-cli/mcpShared'
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
 export const PROPS = {
-  /** queued | running | done | error — presence means "seen". */
+  /** queued | running | done | error — presence means "seen".
+   *  `queued` is the daemon's NON-terminal deferral state: a run that
+   *  failed for a retryable infrastructure reason (see runFailure.ts)
+   *  goes back to `queued` with `agent:retry-after`, so an outage never
+   *  parks a task as failed. */
   status: 'agent:status',
   /** Executor session/thread id (enables resume where supported). */
   session: 'agent:session',
@@ -32,8 +36,14 @@ export const PROPS = {
   /** How many times this task has been claimed (stale-running requeues
    *  bump it; MAX_ATTEMPTS in watchers.ts caps the retry loop). */
   attempts: 'agent:attempts',
-  /** Error message for status=error. */
+  /** Error message for status=error — and the deferral reason while
+   *  status=queued, so a task waiting out an outage says WHY. */
   error: 'agent:error',
+  /** Epoch-ms a `queued` (deferred) task may be re-attempted at. Written
+   *  with the retryable-failure deferral; the gate lives in the graph, not
+   *  in daemon memory, so a restart doesn't re-attempt the whole queue at
+   *  once. Cleared on every other terminal write. */
+  retryAfter: 'agent:retry-after',
   /** Marks daemon-authored reply blocks so watchers never re-trigger on them. */
   reply: 'agent:reply',
   /** Transient "what the run is doing right now" label (e.g. a tool
