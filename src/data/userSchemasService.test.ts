@@ -22,6 +22,7 @@ import {
 } from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
 import {
+  aliasesProp,
   propertyChangeScopeProp,
   propertyDefaultProp,
   propertyHiddenProp,
@@ -37,6 +38,9 @@ import { Repo } from './repo'
 
 const WS = 'ws-user-schemas'
 const SUBSCRIPTION_TIMEOUT_MS = 3_000
+/** Stand-in "user page that claimed 'Properties'" row for the issue-#378
+ *  adoption test. */
+const PROPERTIES_CLAIMANT = '33333333-3333-4333-8333-333333333333'
 
 interface Harness {
   h: TestDb
@@ -270,6 +274,52 @@ describe('UserSchemasService.addSchema', () => {
     })
     expect(schema.codec.encode('open')).toBe('open')
     expect(() => schema.codec.encode('closed')).toThrow()
+  })
+
+  it('parents the new block under the ADOPTED Properties page, not the raw id (issue #378)', async () => {
+    // `getOrCreatePropertiesPage` resolves alias-first as of #378: with the
+    // canonical row deleted and a user page claiming 'Properties', THAT page is
+    // the Properties page. `addSchema` used to parent straight to
+    // `repo.propertiesPageId` — a thin `kernelPageBlockId` wrapper — which is
+    // then a tombstone, so the parent-deleted trigger rejects the create and
+    // the user simply cannot add a property until the raw row is revived.
+    env = await setup()
+    const rawPropertiesPageId = env.repo.propertiesPageId!
+    await env.repo.tx(tx => tx.delete(rawPropertiesPageId), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: PROPERTIES_CLAIMANT, workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Properties',
+      })
+      await tx.setProperty(PROPERTIES_CLAIMANT, aliasesProp, ['Properties'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const schema = await env.service.addSchema({name: 'homepage', presetId: 'url'})
+
+    const blockId = env.service.getSchemaBlockId(schema.name)!
+    const row = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [blockId])
+    expect(row.parent_id).toBe(PROPERTIES_CLAIMANT)
+  })
+
+  it('ensures the Properties page itself when bootstrap never created it (issue #378)', async () => {
+    // Companion to the adoption case: `addSchema` resolves its parent through
+    // `getOrCreatePropertiesPage` rather than assuming bootstrap ran, so a
+    // never-bootstrapped workspace gets the page instead of a
+    // ParentNotFoundError. (setup() ensures the page, so delete it outright —
+    // with nobody claiming the alias, the get-or-create restores that row.)
+    env = await setup()
+    const rawPropertiesPageId = env.repo.propertiesPageId!
+    await env.repo.tx(tx => tx.delete(rawPropertiesPageId), {scope: ChangeScope.BlockDefault})
+
+    const schema = await env.service.addSchema({name: 'homepage', presetId: 'url'})
+
+    const blockId = env.service.getSchemaBlockId(schema.name)!
+    const row = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [blockId])
+    expect(row.parent_id).toBe(rawPropertiesPageId)
+    const page = await env.repo.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [rawPropertiesPageId])
+    expect(page.deleted).toBe(0)
   })
 })
 

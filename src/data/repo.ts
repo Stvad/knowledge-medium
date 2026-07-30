@@ -779,7 +779,16 @@ export class Repo {
 
   /** Deterministic id of the workspace's Properties page (parent of
    *  all `'property-schema'` blocks). Created lazily by
-   *  `getOrCreatePropertiesPage` during workspace bootstrap. */
+   *  `getOrCreatePropertiesPage` during workspace bootstrap.
+   *
+   *  NOT necessarily the LIVE Properties page. Since issue #378 the page
+   *  resolves alias-first, so a user block that claims 'Properties' after the
+   *  canonical row is deleted becomes the Properties page at its OWN id, and
+   *  this getter then names a tombstone. Anything that writes (parents a child,
+   *  navigates, compares identity) must go through
+   *  `getOrCreatePropertiesPage(repo, ws)` and use the returned block's `.id`.
+   *  This getter is for constructing the deterministic id itself — chiefly
+   *  tests setting up a scenario. */
   get propertiesPageId(): string | null {
     if (!this.client.activeWorkspaceId) return null
     return propertiesPageBlockId(this.client.activeWorkspaceId)
@@ -807,7 +816,9 @@ export class Repo {
 
   /** Deterministic id of the workspace's Types page (parent of every
    *  `'block-type'` block in the workspace). Created lazily by
-   *  `getOrCreateTypesPage` during workspace bootstrap. */
+   *  `getOrCreateTypesPage` during workspace bootstrap. Carries the same
+   *  alias-first caveat as `propertiesPageId` — read that docblock before
+   *  using this for anything but constructing the deterministic id. */
   get typesPageId(): string | null {
     if (!this.client.activeWorkspaceId) return null
     return typesPageBlockId(this.client.activeWorkspaceId)
