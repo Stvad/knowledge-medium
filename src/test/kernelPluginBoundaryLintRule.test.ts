@@ -109,6 +109,22 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/apiCatalog.ts'),
         code: `const m = import.meta.glob(['/src/**', '!/src/plugins/**'])`,
       },
+      // A `base` that doesn't reach the plugin layer is fine.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('./ui/**', { base: '/src/components' })`,
+      },
+      // Augmenting a CORE module is the sanctioned direction and must stay
+      // clean — this is how plugins extend `@/data/api` today.
+      {
+        filename: core('data/api/events.ts'),
+        code: `declare module './sameTxProcessor' { interface X { a: 1 } }`,
+      },
+      // A wildcard ambient declaration is not a module path at all.
+      {
+        filename: core('types/ast.d.ts'),
+        code: `declare module '*.svg' { const c: string; export default c }`,
+      },
       // `new URL` against something other than `import.meta.url` is an ordinary
       // runtime URL, not a build-time module reference.
       {
@@ -502,6 +518,37 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@//plugins/todo/schema.js' },
+        }],
+      },
+      // Vite's `base` option resolves the pattern under the base, not under the
+      // importing file — so a harmless-looking relative pattern lands in the
+      // plugin layer.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { base: '/src/plugins' })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
+        }],
+      },
+      // A pattern beginning `**` is resolved from the project root and spans
+      // everything under it, so it reaches src/plugins without naming it.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('**/*.ts')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '**/*.ts' },
+        }],
+      },
+      // Augmenting a plugin module resolves it, so core's typecheck fails
+      // without the plugin present — the same coupling `import type` has.
+      {
+        filename: core('data/api/events.ts'),
+        code: `declare module '@/plugins/todo/schema.js' { interface X { a: 1 } }`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
         }],
       },
       // A no-substitution template literal is exactly as static as a quoted

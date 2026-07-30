@@ -233,6 +233,9 @@ const expandBraces = (segment) => {
 const globReachesPluginLayer = (pattern) => {
   const first = pattern?.split('/')[0]
   if (first === undefined) return false
+  // A pattern that begins `**` is resolved from the project root and spans every
+  // directory under it, `src/plugins` included.
+  if (first === '**') return true
   return expandBraces(first).some(candidate =>
     // A literal `plugins`, or anything still holding a glob metacharacter.
     // Conservative on purpose: `[p]lugins`, `@(plugins|components)` and `**`
@@ -258,6 +261,18 @@ const isImportMetaUrl = (node) =>
   && node.arguments[1].object.meta?.name === 'import'
   && node.arguments[1].object.property?.name === 'meta'
   && node.arguments[1].property?.name === 'url'
+
+/** The value node of a named property on an object literal, or undefined. Used
+ *  to read `import.meta.glob`'s `base` option; a computed or spread property is
+ *  not statically known and drops out. */
+const propertyValue = (objectNode, name) =>
+  objectNode?.type === 'ObjectExpression'
+    ? objectNode.properties.find(
+        property => property.type === 'Property'
+          && !property.computed
+          && (property.key?.name === name || property.key?.value === name),
+      )?.value
+    : undefined
 
 const isImportMetaGlob = (callee) =>
   callee?.type === 'MemberExpression'
@@ -325,9 +340,23 @@ const noCoreToPluginImports = {
 
     /** Globs need their own classifier — see `globReachesPluginLayer`. A
      *  pattern names no single plugin, so the message names the layer. */
-    const checkGlob = (node, sourceNode) => {
+    const checkGlob = (node, sourceNode, optionsNode) => {
       const patterns = specifierLiterals(sourceNode)
-      const resolve = (pattern) => resolveSpecifier(pattern, importerSrcRelative, sourceRoot)
+      // `import.meta.glob('./todo/**', {base: '/src/plugins'})` — a supported
+      // Vite form that resolves the pattern under the base, not under the
+      // importing file. Resolving against a synthetic file inside the base dir
+      // reuses the same relative-specifier path as everything else.
+      const base = staticString(propertyValue(optionsNode, 'base'))
+      const resolvedBase = base === undefined
+        ? undefined
+        : resolveSpecifier(base.endsWith('/') ? base : `${base}/`, importerSrcRelative, sourceRoot)
+      const importerForPattern = resolvedBase === undefined
+        ? importerSrcRelative
+        : posix.join(resolvedBase, '__glob_base__')
+      const resolve = (pattern) =>
+        // A bare leading `**` is root-relative, so it is not a module specifier
+        // at all — hand it through untouched for globReachesPluginLayer.
+        pattern.startsWith('**') ? pattern : resolveSpecifier(pattern, importerForPattern, sourceRoot)
       // `import.meta.glob(['/src/**', '!/src/plugins/**'])` reaches no plugin at
       // all — the exclusion is the whole point. Only the canonical
       // whole-subtree spelling clears the call: a narrower exclusion
@@ -365,11 +394,17 @@ const noCoreToPluginImports = {
       // (plugins/agent-runtime/authoringCatalog.ts), which makes it the shape a
       // core module is most likely to reach for to "find all the plugins".
       CallExpression: (node) => {
-        if (isImportMetaGlob(node.callee)) checkGlob(node, node.arguments[0])
+        if (isImportMetaGlob(node.callee)) checkGlob(node, node.arguments[0], node.arguments[1])
         else if (node.callee?.name === 'require') check(node, node.arguments[0])
       },
       // `new URL('…', import.meta.url)`, incl. inside `new Worker(...)`.
       NewExpression: (node) => isImportMetaUrl(node) && check(node, node.arguments[0]),
+      // `declare module '@/plugins/todo/schema.js' { … }`. Augmenting a module
+      // resolves it, so core's typecheck fails without the plugin — the same
+      // coupling `import type` has. Not hypothetical here: augmenting
+      // `@/data/api` is how plugins extend core (backlinks/query.ts), so the
+      // reverse spelling is a shape someone would reach for.
+      TSModuleDeclaration: (node) => node.id?.type === 'Literal' && check(node, node.id),
     }
   },
 }
