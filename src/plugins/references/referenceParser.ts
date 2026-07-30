@@ -657,6 +657,39 @@ export const pinnedSpanReplacement = (
   }
 }
 
+/** `((targetId))` — the canonical id form, carrying NO display text.
+ *
+ *  The third tier of the replacement ladder, and the one a MARKED row
+ *  wants: a field row renders its property name (resolved through the
+ *  definition the id points at), so a pinned label is text it never
+ *  displays, and `::((id))` is the canonical shape every other field row
+ *  already has (§7).
+ *
+ *  Having no label also makes it the only tier that can't be lossy, and
+ *  the only one that survives a label the pinned form has to refuse: an
+ *  alias containing `[[` smuggles a wikilink opener through
+ *  `pinnedSpanReplacement`, which refuses rather than splice it — with
+ *  nothing to put in a label there is nothing left to refuse.
+ *
+ *  Returns null on the same terms as the pinned form: the inline blockref
+ *  grammar is UUID-only, so a target whose id doesn't round-trip
+ *  character-for-character gets no replacement at all rather than text
+ *  that reads as prose. */
+export const canonicalIdSpanReplacement = (targetId: string): SpanReplacement | null => {
+  const text = `((${targetId}))`
+  const marks = parseBlockRefs(text)
+  // A non-UUID target fails HERE: the grammar doesn't match, so zero marks.
+  if (marks.length !== 1) return null
+  const [mark] = marks
+  if (mark.startIndex !== 0 || mark.endIndex !== text.length) return null
+  // EXACT, for the reason spelled out at `pinnedSpanReplacement`: the parser
+  // lower-cases UUID-shaped ids, so comparing against a pre-lowered target
+  // would certify a round trip that did not happen and bind the span to an
+  // id no row has.
+  if (mark.blockId !== targetId) return null
+  return {text, refAlias: mark.blockId, toTargetId: mark.blockId, lossyLabel: false}
+}
+
 /** `[display]([[alias]])` — a wikilink carrying custom display text.
  *
  *  A THIRD span shape the rewriters have to know about, because

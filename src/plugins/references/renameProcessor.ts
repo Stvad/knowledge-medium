@@ -81,6 +81,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp, getAliases } from '@/data/properties'
+import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
 import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
@@ -133,8 +134,8 @@ export const RENAME_BACKLINKS_PRECEDENCE = 10
  *  trigger-maintained projection already reflects anything this tx has
  *  staged. Rides `idx_block_references_ws_alias` (`localSchema.ts`).
  *  Ordered for determinism, like the sibling same-tx processors. */
-const SELECT_BACKLINK_SOURCE_IDS_SQL = `
-  SELECT DISTINCT br.source_id AS sourceId
+const SELECT_BACKLINK_SOURCES_SQL = `
+  SELECT DISTINCT br.source_id AS sourceId, source.content AS content
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
   WHERE br.workspace_id = ?
@@ -144,6 +145,27 @@ const SELECT_BACKLINK_SOURCE_IDS_SQL = `
     AND source.deleted = 0
   ORDER BY source.order_key, source.id
 `
+
+/** Is this source a MARKED NAME ROW for `alias` — a property field row
+ *  whose whole content is `::[[alias]]`, addressing its definition by name
+ *  rather than by id (§7/§9)? Selects the fallback tier: see
+ *  `SpanReplacementRequest.markedRow`.
+ *
+ *  Asked of the CONTENT rather than of `is_field_form`, though the bit is
+ *  derived from exactly this parse. The parse needs no stamp to have
+ *  landed — this runs same-tx over rows the same commit may have just
+ *  written, and slice 1 of #443 is the recorded cost of treating a derived
+ *  column as the signal when the content is right there.
+ *
+ *  `exact.alias` is TRIMMED by the whole-block parser while
+ *  `block_references.alias` is not, so a `::[[ α ]]` row whose released
+ *  alias carries surrounding whitespace reads as not-marked and takes the
+ *  ordinary pinned tier. Conservative in the safe direction, and only
+ *  reachable for an alias stored with padding. */
+const isMarkedNameRowFor = (content: string, alias: string): boolean => {
+  const exact = parseExactReferenceBlockContent(content)
+  return exact?.kind === 'alias' && exact.fieldForm && exact.alias === alias
+}
 
 /** Replacement form for a single removed alias α — the rename ladder,
  *  composed from the shared `preferredSpanReplacement` policy.
@@ -158,23 +180,21 @@ const SELECT_BACKLINK_SOURCE_IDS_SQL = `
  *  labelled with the REMOVED alias so the source author's display text
  *  survives.
  *
- *  NOT YET IMPLEMENTED (§11 group 2, tracked on #443): the doc's
- *  marked-row arm — "its lossy-name fallback for marked rows is
- *  canonical `::((A))`, never a pinned label". Nothing here consults
- *  `isFieldForm`, so a marked name row `::[[α]]` with a lossy label
- *  currently gets `::[sanitized](((A)))` plus a warning. That is still a
- *  recognized field row (the bit stamps for every marked form,
- *  aliased blockref included), so it degrades honestly rather than
- *  silently — but it is not the canonical form the doc specifies. */
+ *  `markedRow` selects the fallback tier per SOURCE: a marked name row
+ *  falls back to canonical `::((A))` instead of a pinned label (§11 group
+ *  2 / #443 — see `SpanReplacementRequest.markedRow`). The wikilink tier
+ *  is unaffected and still wins a clean 1-for-1, marked or not. */
 export const replacementFor = (
   alias: string,
   removed: readonly string[],
   added: readonly string[],
   targetId: string,
+  markedRow = false,
 ): SpanReplacement | null => preferredSpanReplacement({
   wikilinkAlias: removed.length === 1 && added.length === 1 ? added[0] : null,
   pinLabel: alias,
   targetId,
+  markedRow,
   context: RENAME_BACKLINKS_PROCESSOR,
 })
 
@@ -241,11 +261,11 @@ const collectTargetPlans = async (
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
 
   for (const alias of removed) {
-    const sourceIds = await ctx.db.getAll<{sourceId: string}>(
-      SELECT_BACKLINK_SOURCE_IDS_SQL,
+    const sources = await ctx.db.getAll<{sourceId: string; content: string}>(
+      SELECT_BACKLINK_SOURCES_SQL,
       [after.workspaceId, alias, after.id],
     )
-    if (sourceIds.length === 0) continue
+    if (sources.length === 0) continue
     // Consult α's claimants (§11 group 2). This is the whole check —
     // one read, inside the tx that performed the release, so there is no
     // window for a competing claim to land in and no seat-exemption
@@ -265,36 +285,53 @@ const collectTargetPlans = async (
     //
     // Only a genuine RELEASE falls through to the rename ladder.
     const claimants = await ctx.tx.aliasClaimants(alias, after.workspaceId)
-    // `replacementFor` REPORTS when it returns null, so it is called only
-    // on the release path — a handoff is not a rendering failure.
-    const replacement = claimants.length === 0
-      ? replacementFor(alias, removed, added, after.id)
-      : null
-    for (const {sourceId} of sourceIds) {
-      const plan = planFor(plansBySourceId, sourceId)
-      if (replacement === null) {
-        // Two ways to get here, one treatment. Either α was handed off /
-        // co-claimed, or no rendering could carry the span (already
-        // reported). Both leave the source's CONTENT alone — but the
-        // stored edge still names the block that gave α up, and the
-        // renderer resolves `[[α]]` through those stored edges
-        // (`wikilinkMarkdownExtension` builds its alias→id map from
-        // them), so leaving it would navigate the span to the wrong
-        // block permanently. Dropping the edge is itself the write that
-        // schedules `parseReferences` to rebind it, which resolves the
-        // alias exactly as the renderer does — so computing the answer
-        // here could only disagree with it.
-        plan.staleEdges.push({alias, targetId: after.id})
-        continue
+    // Partitioned by fallback tier, then ONE ladder run per non-empty
+    // partition. Not per source: `replacementFor` REPORTS on failure, and
+    // running it per source would repeat the same warning once per
+    // referrer. Not once overall either — the tier is a property of the
+    // SOURCE (is this span the whole content of a marked name row?), not
+    // of the alias.
+    const partitions: Array<{markedRow: boolean; sourceIds: string[]}> = [
+      {markedRow: false, sourceIds: []},
+      {markedRow: true, sourceIds: []},
+    ]
+    for (const {sourceId, content} of sources) {
+      partitions[isMarkedNameRowFor(content, alias) ? 1 : 0].sourceIds.push(sourceId)
+    }
+
+    for (const {markedRow, sourceIds} of partitions) {
+      if (sourceIds.length === 0) continue
+      // `replacementFor` REPORTS when it returns null, so it is called only
+      // on the release path — a handoff is not a rendering failure.
+      const replacement = claimants.length === 0
+        ? replacementFor(alias, removed, added, after.id, markedRow)
+        : null
+      for (const sourceId of sourceIds) {
+        const plan = planFor(plansBySourceId, sourceId)
+        if (replacement === null) {
+          // Two ways to get here, one treatment. Either α was handed off /
+          // co-claimed, or no rendering could carry the span (already
+          // reported). Both leave the source's CONTENT alone — but the
+          // stored edge still names the block that gave α up, and the
+          // renderer resolves `[[α]]` through those stored edges
+          // (`wikilinkMarkdownExtension` builds its alias→id map from
+          // them), so leaving it would navigate the span to the wrong
+          // block permanently. Dropping the edge is itself the write that
+          // schedules `parseReferences` to rebind it, which resolves the
+          // alias exactly as the renderer does — so computing the answer
+          // here could only disagree with it.
+          plan.staleEdges.push({alias, targetId: after.id})
+          continue
+        }
+        plan.rewrites.push({
+          alias,
+          replacement: replacement.text,
+          fromTargetId: after.id,
+          toTargetId: replacement.toTargetId ?? after.id,
+          refAlias: replacement.refAlias,
+          pinned: replacement.toTargetId !== null,
+        })
       }
-      plan.rewrites.push({
-        alias,
-        replacement: replacement.text,
-        fromTargetId: after.id,
-        toTargetId: replacement.toTargetId ?? after.id,
-        refAlias: replacement.refAlias,
-        pinned: replacement.toTargetId !== null,
-      })
     }
   }
 }

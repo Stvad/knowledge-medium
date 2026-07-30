@@ -3028,8 +3028,19 @@ them as one-off flow patches would reproduce the per-caller forget-me failure
     B2); the delete flow triggers the release rewrite explicitly (a bare
     tombstone leaves no properties diff — §9); the rename plan's source
     enumeration is alias-keyed with the claimant-or-provable-seat target
-    disjunction, and its lossy-name fallback for marked rows is canonical
-    <code>::((A))</code>, never a pinned label (§9); the whole-span round-trip guard
+    disjunction, and <s>its lossy-name fallback for marked rows is canonical
+    <code>::((A))</code>, never a pinned label (§9)</s> &mdash;
+    <strong>landed</strong> (#443 group 2): the ladder's fallback tier is chosen
+    per SOURCE, and a marked name row takes
+    <code>canonicalIdSpanReplacement</code> &mdash; the id form with no label,
+    checked against the inline grammar (which owns the edge the rewriter swaps
+    in lockstep, and is UUID-only, so a non-UUID target is refused exactly as
+    the pinned tier refuses it). The wikilink tier is unchanged and still wins
+    a clean 1-for-1: id-carrying rows are identity-pinned, name rows follow the
+    living name, and a marked name row is still a name row. An
+    <em>unmarked</em> whole-content <code>[[α]]</code> row keeps the pinned
+    label &mdash; only the marker makes a row machinery with a name of its own
+    to render; the whole-span round-trip guard
     (render → parse back through the owning parser → compare target
     <em>and</em> label; the aliased form is UUID-only, so non-UUID targets
     fail it too) applies at <em>every</em> span-rendering
