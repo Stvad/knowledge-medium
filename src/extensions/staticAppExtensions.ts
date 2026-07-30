@@ -60,6 +60,7 @@ import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
 import { supertagsPlugin } from '@/plugins/supertags'
+import { webArchivePlugin } from '@/plugins/web-archive'
 import type { AppExtension } from '@/facets/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -150,6 +151,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   startupMetricsPlugin,
   updateIndicatorPlugin,
   blockInfoPlugin,
+  // Its post-commit processor watches `content`, and its drain loop is the
+  // only thing here that reaches the network — both are inert until the user
+  // sets `webarchive:enabled`.
+  webArchivePlugin,
   agentRuntimePlugin,
   agentDispatchCompanionPlugin,
   roamImportPlugin({repo}),
