@@ -262,27 +262,34 @@ const moveVertical = async (
   const destLocation = locationOf(next)
   if (!destPanelId || !destLocation) return true
 
-  if (destPanelId === uiStateBlock.id) {
-    // Same-panel step — identical to vim's `focusBlock` write.
-    void focusBlock(uiStateBlock, destLocation.blockId, {renderScopeId: destLocation.renderScopeId})
-    return true
-  }
-
-  // About to cross into a stack-sibling panel — but "the panel's rows ran
-  // out" is a DOM statement, and with lazily mounted rows it can be false:
-  // in a stacked column the neighbour below is reachable from the last
-  // MOUNTED row, so `j` would leap into the next panel and silently skip the
-  // rest of this page. Ask the model whether this outline has more first;
-  // only the genuine end of the outline crosses the boundary. Costs an
-  // O(depth) walk on the cross-panel keystroke alone, not on ordinary steps
-  // — twice over, since declining means vim's handler repeats it. Cheap at
-  // that frequency, and keeping the walk here read-only preserves the
-  // "spatial nav never writes what the model handler would" contract.
-  if (isOutlineSurface(current) && deps.scopeRootId) {
+  // About to leave the outline — either into a trailing surface of this
+  // panel (backlinks, embeds) or into a stack-sibling panel. Both are DOM
+  // statements about where the MOUNTED rows stop, which with lazily mounted
+  // rows is not where the outline stops: the row below the last mounted one
+  // may simply not have rendered yet (its parent's `childIds` handle is
+  // still resolving), while the backlinks below it, or the panel below, are
+  // long since mounted. Accepting that neighbour would silently skip the
+  // rest of the page. Ask the model first; only the genuine end of the
+  // outline leaves it.
+  //
+  // Costs an O(depth) walk on the keystroke that leaves the outline alone,
+  // not on ordinary steps — twice over, since declining means vim's handler
+  // repeats it. Cheap at that frequency, and keeping the walk here read-only
+  // preserves the "spatial nav never writes what the model handler would"
+  // contract.
+  const leavesOutline = isOutlineSurface(current) &&
+    (destPanelId !== uiStateBlock.id || !isOutlineSurface(next))
+  if (leavesOutline && deps.scopeRootId) {
     const modelNext = direction === 'down'
       ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
       : await previousVisibleBlock(block, deps.scopeRootId)
     if (modelNext) return false
+  }
+
+  if (destPanelId === uiStateBlock.id) {
+    // Same-panel step — identical to vim's `focusBlock` write.
+    void focusBlock(uiStateBlock, destLocation.blockId, {renderScopeId: destLocation.renderScopeId})
+    return true
   }
 
   // Crossed into a stack-sibling panel below/above. Activate the new

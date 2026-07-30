@@ -597,6 +597,74 @@ describe('spatial navigation vertical actions', () => {
     expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toBeUndefined()
   })
 
+  // The trailing-surface twin of the stacked-panel case: backlinks sit in the
+  // same panel and carry their own overscan, so a mounted backlink entry can
+  // follow the last mounted outline row while outline rows between them are
+  // still deferred (their parent's `childIds` handle resolving, or a scroll
+  // that left a hole). Accepting it would skip straight past the page.
+  it('stays in the outline when the model continues past a mounted backlink', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X', surface: 'backlink'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    // 'B' follows 'A' in the model, so the keystroke belongs to the outline.
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:A',
+    })
+  })
+
+  // ...and the feature this must not break: at the real end of the outline,
+  // `j` still walks into the trailing surface.
+  it('still steps into the trailing surface at the genuine end of the outline', async () => {
+    buildPanelDom([
+      {blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X', surface: 'backlink'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:B',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'panel:backlink:X',
+      })
+    })
+  })
+
   it('still crosses into the stack sibling at the genuine end of the outline', async () => {
     // 'B' is the last child of 'top', so the model agrees the outline is done.
     buildStackedColumnDom(

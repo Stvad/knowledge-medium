@@ -17,6 +17,7 @@ import { __resetLazyMountRegistryForTesting, lazyBlockCacheKey } from './lazyMou
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
 const PANEL_ID = 'panel'
+const PANEL_ID_2 = 'panel-2'
 
 /** Never intersects on its own — the row stays a placeholder until something
  *  asks it to mount, which is the state a row below the fold is in. */
@@ -46,6 +47,14 @@ beforeEach(async () => {
     // Nested one level deeper: its lazy wrapper only exists once `off-screen`
     // mounts, so reaching it needs the ancestor walk.
     await tx.create({id: 'nested', workspaceId: WS, parentId: 'off-screen', orderKey: 'c0', content: 'nested'})
+    // Fence targets for the negative tests: rows that ARE expected to mount,
+    // so "the other one didn't" is an observation rather than a race with the
+    // property subscription. `fence-parent`/`fence-nested` mirror the
+    // off-screen/nested pair so the fence runs the same delayed walk.
+    await tx.create({id: 'control', workspaceId: WS, parentId: 'top', orderKey: 'b1', content: 'control'})
+    await tx.create({id: 'fence-parent', workspaceId: WS, parentId: 'top', orderKey: 'b2', content: 'fence parent'})
+    await tx.create({id: 'fence-nested', workspaceId: WS, parentId: 'fence-parent', orderKey: 'c1', content: 'fence nested'})
+    await tx.create({id: PANEL_ID_2, workspaceId: WS, parentId: null, orderKey: 'a2'})
   }, {scope: ChangeScope.UiState})
 })
 
@@ -116,11 +125,22 @@ describe('FocusedRowLazyMount', () => {
 
   // The row is already rendered in THIS panel, so nothing needs forcing —
   // the ancestor walk must not run and drag unrelated rows in with it.
+  //
+  // Fenced with a SECOND panel rather than a sleep: its focused row has no
+  // rendered copy, so its walk must run, and both walks are armed in the same
+  // tick with the same delay. Once the fence row appears, the subject's walk
+  // has demonstrably had its turn. (Fencing on the same panel would not work
+  // — changing that panel's focus cancels the very timer under test.)
   it('leaves ancestors alone when the focused row is already rendered here', async () => {
     const panel = repo.block(PANEL_ID)
+    const fencePanel = repo.block(PANEL_ID_2)
+    await focusBlock(panel, 'nested', {renderScopeId: 'panel:nested'})
+    await focusBlock(fencePanel, 'fence-nested', {renderScopeId: 'panel2:fence-nested'})
+
     render(
       <>
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <FocusedRowLazyMount block={fencePanel} scopeRootId="top"/>
         <div data-block-id="nested" data-render-scope-id="panel:nested"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
@@ -130,11 +150,27 @@ describe('FocusedRowLazyMount', () => {
         >
           <div data-testid="ancestor-row">ancestor</div>
         </LazyViewportMount>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('fence-parent')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="fence-placeholder"/>}
+        >
+          <div data-testid="fence-row">fence</div>
+        </LazyViewportMount>
       </>,
     )
 
+    // Both panels arrive already focused, so nudge each off its arrival value
+    // (the exemption) to arm the walks.
+    await focusBlock(panel, 'top', {renderScopeId: 'panel:top'})
+    await focusBlock(fencePanel, 'top', {renderScopeId: 'panel2:top'})
     await focusBlock(panel, 'nested', {renderScopeId: 'panel:nested'})
-    await new Promise(resolve => setTimeout(resolve, 400))
+    await focusBlock(fencePanel, 'fence-nested', {renderScopeId: 'panel2:fence-nested'})
+
+    await waitFor(() => {
+      expect(screen.getByTestId('fence-row')).toBeInTheDocument()
+    }, {timeout: 3000})
 
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
     expect(screen.queryByTestId('ancestor-row')).not.toBeInTheDocument()
@@ -186,10 +222,25 @@ describe('FocusedRowLazyMount', () => {
         >
           <div data-testid="row">off-screen row</div>
         </LazyViewportMount>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('control')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="control-placeholder"/>}
+        >
+          <div data-testid="control-row">control</div>
+        </LazyViewportMount>
       </>,
     )
 
-    await new Promise(resolve => setTimeout(resolve, 400))
+    // Fence: a focus MOVE is honoured, and it's issued after the arrival
+    // value the component is meant to ignore. Once the control row has
+    // mounted, "the arrival row didn't" is a real observation rather than a
+    // race with the property subscription.
+    await focusBlock(panel, 'control', {renderScopeId: 'panel:control'})
+    await waitFor(() => {
+      expect(screen.getByTestId('control-row')).toBeInTheDocument()
+    })
 
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
     expect(screen.queryByTestId('row')).not.toBeInTheDocument()
