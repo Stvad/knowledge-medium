@@ -19,7 +19,6 @@ import type {
   AnyValuePresetCore,
   AnyValuePresetPresentation,
   BlockData,
-  ChangeScope,
   Tx,
 } from '@/data/api'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
@@ -99,10 +98,19 @@ export interface WorkspaceBackfillContext {
   /** Raw read against the local DB — use to find candidate rows. */
   getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>
   /** Run a writing transaction. Routes through `repo.tx`, so writes carry
-   *  source='user' and upload (the whole point — a raw write would not). */
+   *  source='user' and upload (the whole point — a raw write would not).
+   *
+   *  Scope and undo-recording are fixed by the runner and deliberately not
+   *  parameters. The scope stays `BlockDefault` — a backfill amends ordinary
+   *  document properties, so it must keep the read-only gate and the
+   *  seed-definition guard, which both key off it — but the undo entry is
+   *  suppressed (`skipUndo`): the pass runs unattended seconds after workspace
+   *  open, so on the undo stack it means a cmd-Z aimed at the user's own edit
+   *  reverts the whole pass, permanently (the completion marker is already
+   *  recorded by then). */
   tx: <R>(
     fn: (tx: Tx) => Promise<R>,
-    opts: {scope: ChangeScope; description?: string},
+    opts: {description?: string},
   ) => Promise<R>
 }
 
