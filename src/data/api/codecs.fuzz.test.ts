@@ -35,6 +35,14 @@ import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { codecs, CodecError, decodeRefId, decodeRefListIds } from './codecs'
 
+/** "Any string" domain for the round-trip properties below. fast-check
+ *  4.9's `fc.string()` defaults to `unit: 'grapheme-ascii'` (printable
+ *  ASCII only) — an unqualified call would make every "any string" claim
+ *  in this file false, and codec round-trips are exactly where non-ASCII,
+ *  lone surrogates, and NFC/NFD normalization edges bite. `unit: 'binary'`
+ *  is the full Unicode code-point range (excluding lone surrogates). */
+const anyStringArb = fc.string({ unit: 'binary' })
+
 // ──── Junk domain for the totality oracles ────
 //
 // A mix of well-formed JSON values, numeric edge cases that JSON itself
@@ -135,7 +143,7 @@ describe('strict decode: total (returns or throws only CodecError)', () => {
 describe('round-trip: decode(encode(v)) on the valid domain', () => {
   it('string: any string', () => {
     fc.assert(
-      fc.property(fc.string(), v => {
+      fc.property(anyStringArb, v => {
         expect(codecs.string.decode(codecs.string.encode(v))).toBe(v)
       }),
       fuzzParams(150),
@@ -182,7 +190,7 @@ describe('round-trip: decode(encode(v)) on the valid domain', () => {
 
   it('url: any string (codec does no real URL validation — codecs.ts:319-331)', () => {
     fc.assert(
-      fc.property(fc.string(), v => {
+      fc.property(anyStringArb, v => {
         expect(codecs.url.decode(codecs.url.encode(v))).toBe(v)
       }),
       fuzzParams(150),
@@ -213,7 +221,7 @@ describe('round-trip: decode(encode(v)) on the valid domain', () => {
   it('ref: any string target id', () => {
     const codec = codecs.ref({targetTypes: ['project']})
     fc.assert(
-      fc.property(fc.string(), v => {
+      fc.property(anyStringArb, v => {
         expect(codec.decode(codec.encode(v))).toBe(v)
       }),
       fuzzParams(150),
@@ -222,7 +230,7 @@ describe('round-trip: decode(encode(v)) on the valid domain', () => {
 
   it('optionalRef: any string or undefined, with the documented \'\' → undefined collapse (codecs.ts:191-193)', () => {
     const codec = codecs.optionalRef({targetTypes: ['project']})
-    const valueArb = fc.option(fc.string(), {nil: undefined})
+    const valueArb = fc.option(anyStringArb, {nil: undefined})
     fc.assert(
       fc.property(valueArb, v => {
         const decoded = codec.decode(codec.encode(v))
@@ -236,7 +244,7 @@ describe('round-trip: decode(encode(v)) on the valid domain', () => {
   it('refList: arrays of strings', () => {
     const codec = codecs.refList({targetTypes: ['task']})
     fc.assert(
-      fc.property(fc.array(fc.string(), {maxLength: 15}), v => {
+      fc.property(fc.array(anyStringArb, {maxLength: 15}), v => {
         expect(codec.decode(codec.encode(v))).toEqual(v)
       }),
       fuzzParams(150),
@@ -244,7 +252,7 @@ describe('round-trip: decode(encode(v)) on the valid domain', () => {
   })
 
   it('optionalString: any string or undefined (no canonicalization — codecs.ts:350-365)', () => {
-    const valueArb = fc.option(fc.string(), {nil: undefined})
+    const valueArb = fc.option(anyStringArb, {nil: undefined})
     fc.assert(
       fc.property(valueArb, v => {
         expect(codecs.optionalString.decode(codecs.optionalString.encode(v))).toBe(v)
