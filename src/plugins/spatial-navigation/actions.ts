@@ -262,28 +262,37 @@ const moveVertical = async (
   const destLocation = locationOf(next)
   if (!destPanelId || !destLocation) return true
 
-  // About to leave the outline — either into a trailing surface of this
-  // panel (backlinks, embeds) or into a stack-sibling panel. Both are DOM
-  // statements about where the MOUNTED rows stop, which with lazily mounted
-  // rows is not where the outline stops: the row below the last mounted one
-  // may simply not have rendered yet (its parent's `childIds` handle is
-  // still resolving), while the backlinks below it, or the panel below, are
-  // long since mounted. Accepting that neighbour would silently skip the
-  // rest of the page. Ask the model first; only the genuine end of the
-  // outline leaves it.
+  // Every step FROM an outline row gets checked against the model, not just
+  // the ones that visibly leave the outline. "The next MOUNTED row" and "the
+  // next row" diverge in more ways than running out: mounting is sticky and
+  // an `IntersectionObserver` only reports per-frame state, so a scrollbar
+  // drag leaves two mounted islands with a hole between them, and a
+  // just-mounted row's children arrive only when its `childIds` handle
+  // resolves while a later sibling is still mounted from before. In both the
+  // DOM's neighbour is a real, mounted, same-panel outline row — just the
+  // wrong one, hundreds of rows past what the user expects.
   //
-  // Costs an O(depth) walk on the keystroke that leaves the outline alone,
-  // not on ordinary steps — twice over, since declining means vim's handler
-  // repeats it. Cheap at that frequency, and keeping the walk here read-only
-  // preserves the "spatial nav never writes what the model handler would"
-  // contract.
-  const leavesOutline = isOutlineSurface(current) &&
-    (destPanelId !== uiStateBlock.id || !isOutlineSurface(next))
-  if (leavesOutline && deps.scopeRootId) {
+  // Within the outline the two orders are the same thing (it IS the model
+  // tree rendered in order), so agreement is the normal case and disagreement
+  // means the DOM is missing rows. On disagreement, decline: vim's handler
+  // resolves the model row and `FocusedRowLazyMount` mounts it.
+  //
+  // Costs one O(depth) walk per keystroke over handle-cached rows — the same
+  // walk vim's `move_down` does on its own when spatial nav is off. The
+  // second walk only happens on the rare disagreement, where a wrong jump is
+  // the alternative.
+  if (isOutlineSurface(current) && deps.scopeRootId) {
     const modelNext = direction === 'down'
       ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
       : await previousVisibleBlock(block, deps.scopeRootId)
-    if (modelNext) return false
+    // The outline continues, so the only acceptable neighbour is that row, in
+    // this panel. Anything else — a trailing surface, a stack sibling, or a
+    // far-away outline row across a hole — would skip what's in between.
+    if (modelNext && (destPanelId !== uiStateBlock.id || modelNext.id !== destLocation.blockId)) {
+      return false
+    }
+    // No model row left: the outline is genuinely done, so the DOM's answer
+    // (trailing surface, or the panel below) is the right one.
   }
 
   if (destPanelId === uiStateBlock.id) {

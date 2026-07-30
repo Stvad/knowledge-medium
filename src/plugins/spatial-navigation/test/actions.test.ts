@@ -79,6 +79,15 @@ const seedPanelAndBlocks = async (repo: Repo): Promise<void> => {
       orderKey: 'd0',
       content: 'B',
     })
+    // Third outline row, so a test can render a panel whose mounted rows skip
+    // the middle one — the "two mounted islands" shape a scrollbar drag makes.
+    await tx.create({
+      id: 'C',
+      workspaceId: WS,
+      parentId: 'top',
+      orderKey: 'd5',
+      content: 'C',
+    })
     await tx.create({
       id: 'X',
       workspaceId: WS,
@@ -413,9 +422,9 @@ describe('spatial navigation jump-to-edge actions', () => {
     })
 
     await action.handler({
-      block: env.repo.block('B'),
+      block: env.repo.block('C'),
       uiStateBlock: panel,
-      renderScopeId: 'panel:B',
+      renderScopeId: 'panel:C',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
 
@@ -597,6 +606,74 @@ describe('spatial navigation vertical actions', () => {
     expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toBeUndefined()
   })
 
+  // Mounting is sticky and an IntersectionObserver only reports per-frame
+  // state, so a scrollbar drag leaves two mounted islands with a hole between
+  // them. Here the DOM's next row is a real, mounted, same-panel outline row —
+  // just the wrong one, with a deferred row in between.
+  it('declines when the next mounted outline row is not the next model row', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      // 'B' sits between them in the model and simply isn't mounted.
+      {blockId: 'C', renderScopeId: 'panel:C', surface: 'outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    // Crucially NOT 'C' — that jump is the bug.
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:A',
+    })
+  })
+
+  // ...and the ordinary step is untouched: DOM and model agree, so spatial nav
+  // handles it without deferring to the model handler.
+  it('takes the mounted neighbour when it is the model row', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'},
+      {blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'B',
+        renderScopeId: 'panel:B',
+      })
+    })
+  })
+
   // The trailing-surface twin of the stacked-panel case: backlinks sit in the
   // same panel and carry their own overscan, so a mounted backlink entry can
   // follow the last mounted outline row while outline rows between them are
@@ -636,11 +713,11 @@ describe('spatial navigation vertical actions', () => {
   // `j` still walks into the trailing surface.
   it('still steps into the trailing surface at the genuine end of the outline', async () => {
     buildPanelDom([
-      {blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'},
+      {blockId: 'C', renderScopeId: 'panel:C', surface: 'outline'},
       {blockId: 'X', renderScopeId: 'panel:backlink:X', surface: 'backlink'},
     ])
     const panel = env.repo.block('panel')
-    await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
+    await focusBlock(panel, 'C', {renderScopeId: 'panel:C'})
     const fallback = vi.fn()
     const action = decorateAction({
       id: 'move_down',
@@ -650,9 +727,9 @@ describe('spatial navigation vertical actions', () => {
     })
 
     await action.handler({
-      block: env.repo.block('B'),
+      block: env.repo.block('C'),
       uiStateBlock: panel,
-      renderScopeId: 'panel:B',
+      renderScopeId: 'panel:C',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
 
@@ -666,14 +743,14 @@ describe('spatial navigation vertical actions', () => {
   })
 
   it('still crosses into the stack sibling at the genuine end of the outline', async () => {
-    // 'B' is the last child of 'top', so the model agrees the outline is done.
+    // 'C' is the last child of 'top', so the model agrees the outline is done.
     buildStackedColumnDom(
-      [{blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'}],
+      [{blockId: 'C', renderScopeId: 'panel:C', surface: 'outline'}],
       [{blockId: 'X', renderScopeId: 'below:X', surface: 'outline'}],
     )
     await seedPanelBelow(env.repo)
     const panel = env.repo.block('panel')
-    await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
+    await focusBlock(panel, 'C', {renderScopeId: 'panel:C'})
     const fallback = vi.fn()
     const action = decorateAction({
       id: 'move_down',
@@ -683,9 +760,9 @@ describe('spatial navigation vertical actions', () => {
     })
 
     await action.handler({
-      block: env.repo.block('B'),
+      block: env.repo.block('C'),
       uiStateBlock: panel,
-      renderScopeId: 'panel:B',
+      renderScopeId: 'panel:C',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
     // (`panel-below` is seeded in both tests, so the negative assertion in the
