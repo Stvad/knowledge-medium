@@ -1,0 +1,2 @@
+import{focusedBlockLocationProp as e}from"../../data/properties.js";import{usePropertyValue as t}from"../../hooks/block.js";import{lazyBlockCacheKey as n,requestLazyMount as r}from"./lazyMountRegistry.js";import{useEffect as i}from"react";import{c as a}from"react/compiler-runtime";function o(o){let s=a(3),{block:c}=o,[l]=t(c,e),u=l?.blockId,d,f;return s[0]===u?(d=s[1],f=s[2]):(d=()=>{u&&r(n(u))},f=[u],s[0]=u,s[1]=d,s[2]=f),i(d,f),null}export{o as FocusedRowLazyMount};
+//# sourceMappingURL=FocusedRowLazyMount.js.map

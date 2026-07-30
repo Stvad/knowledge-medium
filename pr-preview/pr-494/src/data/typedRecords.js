@@ -1,0 +1,2 @@
+import{createChild as e}from"./mutators.js";var t=async(t,n,r)=>{let i=await n.run(e,{parentId:r.parentId,content:r.content??``,...r.id===void 0?{}:{id:r.id},...r.position===void 0?{}:{position:r.position},...r.references===void 0?{}:{references:[...r.references]}});for(let e of r.types)await t.addTypeInTx(n,i,e,{},r.typeSnapshot);return r.properties&&r.properties.length>0&&await n.setProperties(i,{set:r.properties}),i};export{t as createTypedChild};
+//# sourceMappingURL=typedRecords.js.map

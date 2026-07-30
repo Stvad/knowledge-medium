@@ -1,0 +1,2 @@
+var e=e=>`block:${e}`,t=new Map,n=(e,n)=>(t.set(e,n),()=>{t.get(e)===n&&t.delete(e)}),r=e=>{let n=t.get(e);return n?(n(),!0):!1},i=()=>{t.clear()};export{i as __resetLazyMountRegistryForTesting,e as lazyBlockCacheKey,n as registerPendingLazyMount,r as requestLazyMount};
+//# sourceMappingURL=lazyMountRegistry.js.map
