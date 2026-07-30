@@ -7,9 +7,9 @@ import {
   CodeMirrorEditModeDependencies,
   MultiSelectModeDependencies,
   PropertyEditingDependencies,
-  PropertyEditingField,
 } from '@/shortcuts/types.js'
 import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
+import { isPropertyEditingField } from '@/shortcuts/utils.js'
 import { Block } from '../data/block'
 import { EditorView } from '@codemirror/view'
 
@@ -21,11 +21,6 @@ const isBlockShortcutDependencies = (deps: unknown): deps is BlockShortcutDepend
 
 const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEditModeDependencies =>
   isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block && 'editorView' in deps && deps.editorView instanceof EditorView
-
-const isPropertyEditingField = (value: unknown): value is PropertyEditingField =>
-  value instanceof HTMLInputElement ||
-  value instanceof HTMLSelectElement ||
-  value instanceof HTMLTextAreaElement
 
 const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && isPropertyEditingField(deps.input)
@@ -94,11 +89,12 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     // own React handlers either way, since admitting an event only lets a
     // *bound* action match it, and this context's binding opts out of
     // preventDefault.
-    // IME compositions are guarded on the action (`exit_property_editing`
-    // declines a composing trigger), not here: a filter only ever widens, so
-    // a `false` from it falls back to the editable-target heuristic — which
-    // admits every modifier chord. It could never have vetoed a rebound
-    // `Ctrl+J` pressed mid-composition.
+    //
+    // Nothing about IME compositions here: a filter only ever widens, so a
+    // `false` from it falls back to the editable-target heuristic, which
+    // admits every modifier chord — it could never veto a rebound `Ctrl+J`
+    // pressed mid-composition. The coordinator drops composing keydowns
+    // outright instead, for every context.
     eventFilter: (event: KeyboardEvent) => event.key.length > 1,
     validateDependencies: isPropertyEditingDependencies,
   },

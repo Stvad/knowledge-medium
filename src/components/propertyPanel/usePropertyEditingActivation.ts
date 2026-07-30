@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState, type FocusEvent, type SyntheticEvent } from 'react'
 import { usePropertyEditingShortcuts } from '@/shortcuts/useActionContext.js'
 import type { PropertyEditingField } from '@/shortcuts/types.js'
+import { isPropertyEditingField } from '@/shortcuts/utils.js'
 import { Block } from '@/data/block'
 
 interface PropertyEditingFocusHandlers {
-  onFocus: (event: FocusEvent<PropertyEditingField>) => void
+  onFocus: (event: FocusEvent<HTMLElement>) => void
   onBlur: () => void
 }
 
@@ -22,6 +23,13 @@ interface PropertyEditingFocusHandlers {
  *
  * Inputs already wired with their own `onFocus`/`onBlur` should compose
  * with these handlers — call both, the order doesn't matter.
+ *
+ * `PropertyRow` puts these on the value cell, so every value editor is
+ * activated by the row — including one a plugin registered, whose author
+ * never saw this hook. The built-in editors also call it on their own input;
+ * that's redundant rather than load-bearing (the row's activation carries the
+ * same block and the same focused element, so it dedupes), and it can be
+ * collapsed into the row wiring whenever someone wants to.
  */
 export function usePropertyEditingActivation(block: unknown): PropertyEditingFocusHandlers {
   const targetBlock = block instanceof Block ? block : null
@@ -35,8 +43,12 @@ export function usePropertyEditingActivation(block: unknown): PropertyEditingFoc
   )
   usePropertyEditingShortcuts(dependencies, targetBlock !== null && input !== null)
 
-  const onFocus = useCallback((event: FocusEvent<PropertyEditingField>) => {
-    setInput(event.currentTarget)
+  // `target`, not `currentTarget`: React focus events carry focusin/focusout
+  // semantics, so these handlers work on a CONTAINER as well as on the field
+  // itself — which is how the property row activates for an editor it doesn't
+  // know the shape of. On a field they are the same element.
+  const onFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    setInput(isPropertyEditingField(event.target) ? event.target : null)
   }, [])
   const onBlur = useCallback(() => setInput(null), [])
 

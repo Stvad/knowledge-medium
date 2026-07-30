@@ -6,6 +6,7 @@ import {
   ActionIcon,
   BlockShortcutDependencies,
   MultiSelectModeDependencies,
+  PropertyEditingField,
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
@@ -20,6 +21,17 @@ export const hasEditableTarget = (event: KeyboardEvent) => {
     target.tagName === 'SELECT' ||
     target.tagName === 'TEXTAREA'
 }
+
+/**
+ * A focusable field a property editor can put the caret in — what
+ * `PROPERTY_EDITING` carries as its dependency and what its actions blur.
+ * Shared by the context's dependency validator and the activation hook so
+ * "which elements count" is answered in one place.
+ */
+export const isPropertyEditingField = (value: unknown): value is PropertyEditingField =>
+  value instanceof HTMLInputElement ||
+  value instanceof HTMLSelectElement ||
+  value instanceof HTMLTextAreaElement
 
 /**
  * True for keyboard events shaped like "the user is typing into an editable
