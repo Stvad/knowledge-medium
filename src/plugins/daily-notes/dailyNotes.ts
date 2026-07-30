@@ -277,6 +277,35 @@ const dailyNoteAdoptionGuard = (dateValue: Date): CanonicalAdoptionGuard => clai
     : `claimant ${claimant.id} is itself a daily note for a different date — ambiguous identity, left unchanged pending an owner decision (issue #378)`
 }
 
+/** Read-only alias-first resolution: which block currently IS `iso`'s daily
+ *  note. Returns the same id `getOrCreateDailyNote` would resolve to — the
+ *  claimant of either canonical alias if one is eligible, else the
+ *  deterministic `dailyNoteBlockId` — applying the SAME
+ *  `dailyNoteAdoptionGuard`, so the two agree on eligibility. Writes nothing;
+ *  the returned id may name a tombstone or no row at all.
+ *
+ *  For PLANNING steps that must predict the daily note's identity before
+ *  materializing it — Roam import builds its page-reconciliation and
+ *  descendant-reparent maps from this, since a plan keyed on the raw
+ *  deterministic id silently mis-targets an adopted note (issue #378). A
+ *  prediction can go stale: anything that then WRITES must re-resolve inside
+ *  its own tx (see `canonicalAliasReaderFromTx`), or reconcile against the
+ *  Block `getOrCreateDailyNote` actually returns. */
+export const predictDailyNoteId = async (
+  repo: Repo,
+  workspaceId: string,
+  iso: string,
+): Promise<string> => {
+  const resolved = await resolveCanonicalAliasOwner(
+    canonicalAliasReaderFromRepo(repo),
+    dailyNoteAliasesFor(iso),
+    workspaceId,
+    dailyNoteBlockId(workspaceId, iso),
+    dailyNoteAdoptionGuard(dailyNoteDateValue(iso)),
+  )
+  return resolved.id
+}
+
 /** Apply the daily-note's full canonical shape — both aliases (added to,
  *  never replacing, whatever the target already has), `PAGE_TYPE` +
  *  `DAILY_NOTE_TYPE` with the date value, and the journal parent/order —
