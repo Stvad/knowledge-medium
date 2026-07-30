@@ -827,13 +827,37 @@ describe('openAsyncBlockFromEvent (useAsyncBlockOpener wiring)', () => {
       },
     ])
     const e = fakeMouseEvent()
+    const resolve = vi.fn(async () => ({blockId: 'b-would-have-been'}))
+    openAsyncBlockFromEvent(env.repo, e as unknown as OpenerEvent, resolve, {plainClick: 'navigator'})
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-policy-choice'])
+    })
+    // And the resolver is never even CALLED: the motivating one is a
+    // get-or-create, so running it here would create a page nobody navigates
+    // to, and awaiting it would let its failure block a navigation that no
+    // longer depends on it.
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('a redirected navigation survives a resolver that never settles', async () => {
+    // The availability half of the same point: with the policy's target already
+    // chosen, a hung resolver must not hold the navigation hostage.
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'navigate'
+          ? goTo({...decision.input, blockId: 'b-redirect-hung'})
+          : decision
+      },
+    ])
+    const e = fakeMouseEvent()
     openAsyncBlockFromEvent(
       env.repo, e as unknown as OpenerEvent,
-      async () => ({blockId: 'b-would-have-been'}),
+      () => new Promise(() => {}), // never settles
       {plainClick: 'navigator'},
     )
     await vi.waitFor(async () => {
-      expect(await currentPanelBlockIds()).toEqual(['b-policy-choice'])
+      expect(await currentPanelBlockIds()).toEqual(['b-redirect-hung'])
     })
   })
 

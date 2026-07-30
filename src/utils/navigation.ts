@@ -842,15 +842,24 @@ export const openAsyncBlockFromEvent = (
   e.stopPropagation()
   e.preventDefault()
   if (decision.kind !== 'navigate') return
+  // A `navigationIntentVerb` decorator is free to redirect the gesture to a
+  // block of its own choosing (the sync opener honours that, because there the
+  // policy saw the real id). If it did, the placeholder is gone and
+  // `resolveTarget` is irrelevant — so don't run it at all: it may MUTATE (the
+  // motivating caller is a get-or-create, which would create a page nobody
+  // navigates to), and awaiting it would let a failure or a delay block a
+  // navigation that no longer depends on it.
+  if (decision.input.blockId !== NAVIGATOR_TARGET_PROBE_BLOCK_ID) {
+    void navigate(repo, decision.input)
+    return
+  }
   void (async () => {
     try {
       const target = await resolveTarget(resolvedWorkspaceId)
-      // Fill in the placeholder ONLY if the policy left it in place. A
-      // `navigationIntentVerb` decorator is free to redirect the gesture to a
-      // block of its own choosing, and the sync opener honours that because the
-      // policy saw the real id; overwriting here unconditionally would make this
-      // surface the one place a redirect is silently ignored.
       const resolved = mapNavigate(decision, input => (
+        // Re-check rather than assume: `mapNavigate` is the only writer of the
+        // real id, and a decorator could in principle be re-consulted between
+        // the check above and here.
         input.blockId === NAVIGATOR_TARGET_PROBE_BLOCK_ID
           ? {...input, blockId: target.blockId, workspaceId: target.workspaceId ?? input.workspaceId}
           : input
