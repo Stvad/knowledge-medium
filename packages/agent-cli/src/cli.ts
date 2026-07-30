@@ -935,6 +935,16 @@ cli
   })
 
 cli
+  .command('audit-properties', wireDescription('audit-properties'))
+  .option('--workspace <id>', 'Assert the workspace being audited (defaults to the active one; a workspace whose definition registry is not loaded is refused, not reported on)')
+  .action(async (options: {workspace?: string}) => {
+    await runAndPrint({
+      type: 'audit-properties',
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
   .command('run-action <id> [depsJson]', wireDescription('run-action'))
   .action(async (id: string, depsJson: string | undefined) => {
     const dependencies = depsJson ? parseJson(depsJson, 'depsJson') : {}
