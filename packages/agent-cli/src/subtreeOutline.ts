@@ -61,56 +61,77 @@ const MAX_OUTLINE_DEPTH = 100
  *  - The two Unicode line/paragraph separators, U+2028/U+2029, which sit
  *    outside both ASCII ranges but are still read as a line break by many
  *    parsers (and left un-escaped by `JSON.stringify`).
- *  - The Unicode BIDIRECTIONAL FORMATTING controls that can actually
- *    REORDER displayed text — LRM/RLM (U+200E/U+200F), the embedding/
+ *  - Every codepoint the Unicode `Bidi_Control` PROPERTY covers — matched
+ *    via `\p{Bidi_Control}`, not an enumerated range of codepoints. PR
+ *    #447 review comment 3677343389 (the "Trojan Source" class,
+ *    CVE-2021-42574): a bidi override/isolate inside content is rendered
+ *    unchanged by a bidi-aware terminal or text viewer, which can
+ *    visually REORDER the `[id]` token, its closing delimiter, and
+ *    adjacent text — defeating the "id comes first, unambiguously" claim
+ *    this module exists to make, even though not a single BYTE of the
+ *    underlying string moved. That fix originally hand-enumerated the
+ *    property's membership — LRM/RLM (U+200E/U+200F), the embedding/
  *    override pair-formers LRE/RLE/PDF/LRO/RLO (U+202A–U+202E), and the
- *    isolate formers LRI/RLI/FSI/PDI (U+2066–U+2069). PR #447 review
- *    comment 3677343389 (the "Trojan Source" class, CVE-2021-42574): a
- *    bidi override/isolate inside content is rendered unchanged by a
- *    bidi-aware terminal or text viewer, which can visually REORDER the
- *    `[id]` token, its closing delimiter, and adjacent text — defeating
- *    the "id comes first, unambiguously" claim this module exists to
- *    make, even though not a single BYTE of the underlying string moved.
- *    This is why the id-side fix (below) had to stop being an enumerated
- *    C0/C1 deny-list and become a full Unicode-CATEGORY boundary: bidi
- *    controls are Unicode category Cf (format), a category this module's
- *    earlier control-character enumeration never covered at all — the
- *    fourth time this exact character-surface has needed widening.
+ *    isolate formers LRI/RLI/FSI/PDI (U+2066–U+2069) — the same way the
+ *    id-side fix (below) originally did before ITS switch to the
+ *    categorical `\p{C}` boundary. PR #447 review comment 3677564794
+ *    found that hand-copy had independently omitted U+061C ARABIC LETTER
+ *    MARK, a `Bidi_Control` member exactly as reordering-capable as the
+ *    eleven that were listed — matching the property directly instead of
+ *    a transcription of its membership closes that class of gap by
+ *    construction: the transcription can drift from the standard,
+ *    `\p{Bidi_Control}` cannot.
  *
- * DELIBERATELY NOT neutralized here, even though both are Cf: ZERO WIDTH
- * JOINER (U+200D) and ZERO WIDTH NON-JOINER (U+200C). Unlike the bidi
- * controls above, NEITHER reorders anything — they only affect how
- * ADJACENT characters are shaped/combined in place. ZWJ is how compound
- * emoji are built (a family or profession emoji is several codepoints
- * joined by ZWJ; strip it and they fall apart into separate emoji). ZWNJ
- * is semantically REQUIRED orthography in Persian, Hindi, and other
- * scripts that use it to prevent letters from ligating. Stripping either
- * would corrupt real user content to defend against a risk they don't
- * create. The accepted residual this leaves: an invisible-but-
- * NON-reordering character can still appear in rendered prose (ZWJ/ZWNJ
- * here, and Cf format characters this module doesn't enumerate at all,
- * e.g. U+00AD SOFT HYPHEN) — that's a display-fidelity/steganography
- * concern, not the anti-forgery one this module defends against, and is
- * out of scope for the SAME reason blanket-`\p{C}`-stripping prose would
- * be the wrong fix: it damages legitimate text to close a risk that
- * doesn't exist for those characters.
+ * DELIBERATELY NOT neutralized here: ZERO WIDTH JOINER (U+200D) and ZERO
+ * WIDTH NON-JOINER (U+200C). Both are Unicode category Cf (format), same
+ * as the bidi controls above — but `\p{Bidi_Control}` does NOT include
+ * either, so excluding them from neutralization here isn't a carve-out
+ * this module has to maintain by hand; it falls out of matching the
+ * narrower, correctly-scoped property instead of the broader `\p{C}`/
+ * `\p{Cf}`. Unlike the bidi controls above, NEITHER ZWJ nor ZWNJ reorders
+ * anything — they only affect how ADJACENT characters are shaped/combined
+ * in place. ZWJ is how compound emoji are built (a family or profession
+ * emoji is several codepoints joined by ZWJ; strip it and they fall apart
+ * into separate emoji). ZWNJ is semantically REQUIRED orthography in
+ * Persian, Hindi, and other scripts that use it to prevent letters from
+ * ligating. Stripping either would corrupt real user content to defend
+ * against a risk they don't create. The accepted residual this leaves: an
+ * invisible-but-NON-reordering character can still appear in rendered
+ * prose (ZWJ/ZWNJ here, and Cf format characters outside `Bidi_Control`
+ * this module doesn't neutralize at all, e.g. U+00AD SOFT HYPHEN) —
+ * that's a display-fidelity/steganography concern, not the anti-forgery
+ * one this module defends against, and is out of scope for the SAME
+ * reason blanket-`\p{C}`-stripping prose would be the wrong fix: it
+ * damages legitimate text to close a risk that doesn't exist for those
+ * characters.
  *
  * INVARIANT: no character that can forge a line break or REORDER
  * displayed text reaches the terminal (or an LLM reading the raw outline
  * text) through CONTENT or PROPERTIES. This invariant used to be a
- * character-by-character deny-list, widened four times now as each
- * round's fix revealed the next character (or character CLASS) an
- * attacker could still reach — first LF/CR/VT/FF, then ESC plus the C0
- * information separators (FS/GS/RS/US), then the rest of the C1 range,
- * then backspace (U+0008: PR #447 review comment 3676752551 — enough
- * backspaces walk the terminal cursor back over the real `- [id] ` prefix
- * and overwrite it), and now the bidi-reordering set above. Enumerating
- * hostile characters one at a time is a losing game: there is always one
- * more nobody thought to name. This enumeration remains a deny-list
- * (unlike `id`'s categorical boundary below) because content is prose,
- * where a categorical `\p{C}` cut would need per-character carve-outs
- * (ZWJ/ZWNJ, and potentially others) to avoid corrupting legitimate text
- * — the residual above is the accepted cost of staying enumerated here.
+ * character-by-character (or, for one round, character-PROPERTY-member-
+ * by-member) deny-list end to end, widened six times now as each round's
+ * fix revealed the next character, character CLASS, or — this round —
+ * missed MEMBER of a class already thought closed: first LF/CR/VT/FF,
+ * then ESC plus the C0 information separators (FS/GS/RS/US), then the
+ * rest of the C1 range, then backspace (U+0008: PR #447 review comment
+ * 3676752551 — enough backspaces walk the terminal cursor back over the
+ * real `- [id] ` prefix and overwrite it), then the bidi-reordering set
+ * as a hand-enumerated range (PR #447 review comment 3677343389), and now
+ * — PR #447 review comment 3677564794 — that hand-enumerated bidi range
+ * itself replaced by the semantic `\p{Bidi_Control}` property after it
+ * turned out to already be missing a member (U+061C) on day one.
+ * Enumerating hostile characters, OR hostile PROPERTY MEMBERS, one at a
+ * time is a losing game: there is always one more nobody thought to name
+ * — which is why the bidi hazard class now matches the Unicode property
+ * that defines it rather than a transcription of that property's current
+ * membership. The C0/C1/DEL/line-separator portion of this space remains
+ * a hand-enumerated range: unlike the bidi set, none of those has a
+ * single built-in Unicode property matching exactly this module's
+ * TAB-excluded, Zl/Zp-inclusive boundary (see the TAB paragraph below,
+ * and `ID_ENCODE_REGEX`'s doc comment for why U+2028/U+2029 need listing
+ * explicitly even under `id`'s categorical approach), so there's no
+ * equivalent categorical swap available for that portion the way there
+ * was for bidi.
  *
  * TAB (U+0009) is the one deliberate exclusion from the control-character
  * portion of this space. Unlike every other character in it, a
@@ -124,9 +145,17 @@ const MAX_OUTLINE_DEPTH = 100
  * `CONTROL_CHAR_RUN_REGEX` is `+`-quantified to collapse a RUN of these to
  * a single marker; `ID_ENCODE_REGEX` (further below) is a DIFFERENT,
  * broader, categorical pattern — see its doc comment for why `id` can't
- * reuse this one. */
+ * reuse this one. As of this fix, NEITHER regex in this module contains a
+ * hand-maintained list of hostile Unicode FORMAT characters: `id` bounds
+ * its whole hazard space by the `\p{C}` category (plus the grammar/
+ * separator additions `ID_ENCODE_REGEX`'s own doc comment explains), and
+ * content bounds its bidi-reordering hazard by the `\p{Bidi_Control}`
+ * property, layered on top of the C0/C1/DEL/line-separator range that
+ * remains this module's one hand-enumerated character span (a plain
+ * control-character range with no format-character hazard, and so no
+ * matching Unicode property the way bidi controls have one). */
 // eslint-disable-next-line no-control-regex -- intentional control-char match
-const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u200e-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g
+const CONTROL_CHAR_RUN_REGEX = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u2028\u2029\p{Bidi_Control}]+/gu
 
 /** The lossy neutralization pass applied to CONTENT and the rendered
  *  `properties` JSON: both are prose, not identifiers, so collapsing every
@@ -171,13 +200,15 @@ const neutralizeOutlineField = (text: string): string =>
  * TAB the way there is for prose — keeping the category boundary total
  * (no exceptions) is simpler and can't be defeated by naming a character
  * that "should have" been exempt but wasn't. Whether this categorical
- * boundary genuinely closes the class for `id` — vs. content, which still
- * has the enumerated-list residual discussed above — is exactly the
- * question a reviewer should keep pressure-testing (see this module's
- * git history for the four rounds it took content to even get partway
- * there); the honest answer as of this fix is "it closes every rendering-
- * or terminal-relevant Unicode category we could find," which is a
- * narrower claim than "it closes the class forever." */
+ * boundary genuinely closes the class for `id` — vs. content, whose
+ * bidi-reordering hazard is now ALSO categorical (`\p{Bidi_Control}`, see
+ * `CONTROL_CHAR_RUN_REGEX`'s doc comment above) but whose C0/C1/DEL/
+ * line-separator range is still a hand-enumerated residual — is exactly
+ * the question a reviewer should keep pressure-testing (see this module's
+ * git history for the six rounds it took to get even this far); the
+ * honest answer as of this fix is "it closes every rendering- or
+ * terminal-relevant Unicode category we could find," which is a narrower
+ * claim than "it closes the class forever." */
 const ID_ENCODE_REGEX = /\p{C}|[\u2028\u2029%\]]/gu
 
 /**
