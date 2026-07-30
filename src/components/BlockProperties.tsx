@@ -129,6 +129,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const model = useMemo(() => blockData
     ? buildPropertyPanelModel({
       blockId: blockData.id,
+      workspaceId: blockData.workspaceId,
       updatedAt: blockData.userUpdatedAt,
       updatedBy: updatedByUser.name,
       updatedByBlockId: updatedByUser.blockId,

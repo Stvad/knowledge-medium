@@ -33,8 +33,12 @@ export interface PropertyPanelMetadataRow {
   readonly label: string
   readonly value: string
   /** When set, the value renders as a link opening this block (e.g.
-   *  "Changed by" → the editing user's page). */
-  readonly linkToBlockId?: string
+   *  "Changed by" → the editing user's page). The workspace travels WITH
+   *  the block id: the target is resolved in the panel block's workspace,
+   *  which isn't necessarily the active one (a panel left open across a
+   *  workspace switch). Pairing them structurally is what stops the href
+   *  from being built for a different workspace than the id came from. */
+  readonly linkTo?: {readonly blockId: string; readonly workspaceId: string}
 }
 
 export interface PropertyPanelModelRow {
@@ -222,6 +226,9 @@ const resolveSection = (
 
 export const buildPropertyPanelModel = (args: {
   blockId: string
+  /** The panel block's own workspace — where `updatedByBlockId` was
+   *  resolved, and therefore where its link must open. */
+  workspaceId: string
   updatedAt: number
   updatedBy: string
   /** User page block id for `updatedBy`, so "Changed by" can link to it. */
@@ -320,7 +327,13 @@ export const buildPropertyPanelModel = (args: {
   const metadataRows = [
     {label: 'ID', value: args.blockId},
     {label: 'Last changed', value: new Date(args.updatedAt).toLocaleString()},
-    {label: 'Changed by', value: args.updatedBy, linkToBlockId: args.updatedByBlockId},
+    {
+      label: 'Changed by',
+      value: args.updatedBy,
+      ...(args.updatedByBlockId
+        ? {linkTo: {blockId: args.updatedByBlockId, workspaceId: args.workspaceId}}
+        : {}),
+    },
   ]
 
   return {
