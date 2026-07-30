@@ -48,7 +48,11 @@
 export const lazyBlockCacheKey = (blockId: string): string => `block:${blockId}`
 
 const pendingMounts = new Map<string, Set<() => void>>()
-const wantedKeys = new Set<string>()
+/** key -> how many callers currently want it. Counted, not a flag: two panels
+ *  can focus the same block, and one withdrawing must not cancel the other's
+ *  standing want (which would leave the second panel's row deferred forever
+ *  once its placeholder registers). */
+const wantedKeys = new Map<string, number>()
 
 /** Register `mount` as a way to force a row for `cacheKey` to mount. Returns
  *  the unregister function (effect-cleanup shaped). Only rows currently
@@ -56,6 +60,7 @@ const wantedKeys = new Set<string>()
  *  mounts straight away instead of registering. */
 export const registerPendingLazyMount = (cacheKey: string, mount: () => void): (() => void) => {
   if (wantedKeys.has(cacheKey)) {
+    // Someone is already waiting on this key — mount rather than defer.
     mount()
     return () => {}
   }
@@ -75,7 +80,7 @@ export const registerPendingLazyMount = (cacheKey: string, mount: () => void): (
  *  reason for wanting the row is gone (effect-cleanup shaped), otherwise a
  *  stale want would keep eagerly mounting that block elsewhere. */
 export const requestLazyMount = (cacheKey: string): (() => void) => {
-  wantedKeys.add(cacheKey)
+  wantedKeys.set(cacheKey, (wantedKeys.get(cacheKey) ?? 0) + 1)
   const mounts = pendingMounts.get(cacheKey)
   if (mounts) {
     // Drop the registrations before invoking: each `mount()` re-renders its
@@ -83,8 +88,13 @@ export const requestLazyMount = (cacheKey: string): (() => void) => {
     pendingMounts.delete(cacheKey)
     for (const mount of mounts) mount()
   }
+  let withdrawn = false
   return () => {
-    wantedKeys.delete(cacheKey)
+    if (withdrawn) return
+    withdrawn = true
+    const remaining = (wantedKeys.get(cacheKey) ?? 1) - 1
+    if (remaining > 0) wantedKeys.set(cacheKey, remaining)
+    else wantedKeys.delete(cacheKey)
   }
 }
 

@@ -41,7 +41,11 @@ beforeEach(async () => {
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: PANEL_ID, workspaceId: WS, parentId: null, orderKey: 'a0'})
-    await tx.create({id: 'off-screen', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'off-screen'})
+    await tx.create({id: 'top', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'top'})
+    await tx.create({id: 'off-screen', workspaceId: WS, parentId: 'top', orderKey: 'b0', content: 'off-screen'})
+    // Nested one level deeper: its lazy wrapper only exists once `off-screen`
+    // mounts, so reaching it needs the ancestor walk.
+    await tx.create({id: 'nested', workspaceId: WS, parentId: 'off-screen', orderKey: 'c0', content: 'nested'})
   }, {scope: ChangeScope.UiState})
 })
 
@@ -59,7 +63,7 @@ describe('FocusedRowLazyMount', () => {
     const panel = repo.block(PANEL_ID)
     render(
       <>
-        <FocusedRowLazyMount block={panel}/>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
           estimatedHeightPx={32}
@@ -78,5 +82,36 @@ describe('FocusedRowLazyMount', () => {
     await waitFor(() => {
       expect(screen.getByTestId('row')).toBeInTheDocument()
     })
+  })
+
+  // A restored session can point focus at a nested row whose ANCESTOR is
+  // deferred: the target has no placeholder to reach, because a child's lazy
+  // wrapper only renders once its parent mounts. Wanting the ancestors makes
+  // the cascade resolve itself.
+  it('mounts the ancestor chain when the focused row has no placeholder yet', async () => {
+    const panel = repo.block(PANEL_ID)
+    // Only the ancestor is rendered; `nested` has no wrapper at all, exactly
+    // as in the real tree before `off-screen` mounts.
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <LazyViewportMount
+          cacheKey={lazyBlockCacheKey('off-screen')}
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="ancestor-row">ancestor</div>
+        </LazyViewportMount>
+      </>,
+    )
+
+    expect(screen.getByTestId('placeholder')).toBeInTheDocument()
+
+    await focusBlock(panel, 'nested', {renderScopeId: 'panel:nested'})
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ancestor-row')).toBeInTheDocument()
+    }, {timeout: 3000})
   })
 })

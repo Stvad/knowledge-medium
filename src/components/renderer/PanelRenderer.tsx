@@ -269,7 +269,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
       {/* Keeps this panel's focused row mounted even when it's still a lazy
           placeholder — see the component. Renders null. */}
-      <FocusedRowLazyMount block={block}/>
+      <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
           <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">

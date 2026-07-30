@@ -153,4 +153,18 @@ describe('LazyViewportMount', () => {
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
     expect(screen.queryByTestId('child')).not.toBeInTheDocument()
   })
+
+  // Two panels can hold focus on the same block. If wants were a flag rather
+  // than a count, the first panel to move on would cancel the second's, and
+  // the second's row would stay deferred once its placeholder registered.
+  it('keeps a want alive while another requester still holds it', () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    const withdrawFirst = requestLazyMount('block:wanted-twice')
+    requestLazyMount('block:wanted-twice')
+    withdrawFirst()
+
+    renderLazy('block:wanted-twice')
+    expect(screen.getByTestId('child')).toBeInTheDocument()
+  })
 })

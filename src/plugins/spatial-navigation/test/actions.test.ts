@@ -105,6 +105,35 @@ const buildPanelDom = (
   document.body.appendChild(panel)
 }
 
+/** Two panels stacked in one layout column, so `verticalNeighbor` can fall
+ *  through from the end of the upper panel's MOUNTED rows into the lower one. */
+const buildStackedColumnDom = (
+  upper: Array<{blockId: string; renderScopeId: string; surface?: string}>,
+  lower: Array<{blockId: string; renderScopeId: string; surface?: string}>,
+): void => {
+  const column = document.createElement('div')
+  column.dataset.layoutColumnId = 'col-1'
+  const addPanel = (
+    panelId: string,
+    instances: Array<{blockId: string; renderScopeId: string; surface?: string}>,
+  ) => {
+    const panelEl = document.createElement('div')
+    panelEl.dataset.panelId = panelId
+    for (const {blockId, renderScopeId, surface} of instances) {
+      const el = document.createElement('div')
+      el.dataset.blockNavItem = 'true'
+      el.dataset.blockId = blockId
+      el.dataset.renderScopeId = renderScopeId
+      if (surface) el.dataset.blockSurface = surface
+      panelEl.appendChild(el)
+    }
+    column.appendChild(panelEl)
+  }
+  addPanel('panel', upper)
+  addPanel('panel-below', lower)
+  document.body.appendChild(column)
+}
+
 // The spatial behaviour is now an action-dispatch decorator, so build a handler
 // that runs the decorator's `wrap` with the base handler as `next` — exactly
 // what `invokeAction` does at dispatch time.
@@ -525,6 +554,79 @@ describe('spatial navigation vertical actions', () => {
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
 
     expect(fallback).not.toHaveBeenCalled()
+  })
+
+  // In a stacked column the DOM neighbour below the last MOUNTED row is the
+  // next panel, so `verticalNeighbor` never returns null and the boundary
+  // fall-through above can't fire. Without a model check, `j` leaps into the
+  // panel below and silently skips the rest of this page.
+  it('stays in the panel when the outline continues past the last mounted row', async () => {
+    // 'A' is the last mounted row of the upper panel, but 'B' follows it in
+    // the model (both children of 'top') and simply isn't mounted yet.
+    buildStackedColumnDom(
+      [{blockId: 'A', renderScopeId: 'panel:A', surface: 'outline'}],
+      [{blockId: 'X', renderScopeId: 'below:X', surface: 'outline'}],
+    )
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toBeUndefined()
+  })
+
+  it('still crosses into the stack sibling at the genuine end of the outline', async () => {
+    // 'B' is the last child of 'top', so the model agrees the outline is done.
+    buildStackedColumnDom(
+      [{blockId: 'B', renderScopeId: 'panel:B', surface: 'outline'}],
+      [{blockId: 'X', renderScopeId: 'below:X', surface: 'outline'}],
+    )
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'panel-below',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('X')},
+      })
+    }, {scope: ChangeScope.UiState})
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:B',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'below:X',
+      })
+    })
   })
 })
 

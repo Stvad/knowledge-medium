@@ -33,6 +33,8 @@ import {
   blockIdsInOrderedSelectionRange,
   commitSelectionRange,
   findBestSelectionAnchorIndex,
+  nextVisibleBlock,
+  previousVisibleBlock,
 } from '@/utils/selection.js'
 import {
   horizontalNeighborPanel,
@@ -251,6 +253,20 @@ const moveVertical = async (
     // Same-panel step — identical to vim's `focusBlock` write.
     void focusBlock(uiStateBlock, destLocation.blockId, {renderScopeId: destLocation.renderScopeId})
     return true
+  }
+
+  // About to cross into a stack-sibling panel — but "the panel's rows ran
+  // out" is a DOM statement, and with lazily mounted rows it can be false:
+  // in a stacked column the neighbour below is reachable from the last
+  // MOUNTED row, so `j` would leap into the next panel and silently skip the
+  // rest of this page. Ask the model whether this outline has more first;
+  // only the genuine end of the outline crosses the boundary. Costs an
+  // O(depth) walk on the cross-panel keystroke alone, not on ordinary steps.
+  if (isOutlineSurface(current) && deps.scopeRootId) {
+    const modelNext = direction === 'down'
+      ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
+      : await previousVisibleBlock(block, deps.scopeRootId)
+    if (modelNext) return false
   }
 
   // Crossed into a stack-sibling panel below/above. Activate the new
