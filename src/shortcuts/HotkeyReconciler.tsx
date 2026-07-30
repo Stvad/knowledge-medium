@@ -93,17 +93,28 @@ const getInstallableContextDeps = (
 
 /**
  * Run the same event-filter cascade tinykeys' default `ignore` would do,
- * but extended with per-context eventFilter overrides. An active context's
- * filter returning true means "I want this event even though it'd
- * normally be ignored" (e.g. property-editing needs Escape from inside
- * an <input>). Otherwise we apply the editable-target heuristic.
+ * but extended with per-context eventFilter overrides. A context's filter
+ * returning true means "I want this event even though it'd normally be
+ * ignored" (e.g. property-editing needs Escape from inside an <input>).
+ * Otherwise we apply the editable-target heuristic.
+ *
+ * Only INSTALLABLE contexts get a vote — not every active one. A context
+ * that modal shadowing has taken out of dispatch must not green-light keys
+ * for whatever shadowed it: its own actions are uninstalled, so admitting
+ * the event can only hand it to another mode. Concretely, with a property
+ * field focused and a block selection outliving that focus,
+ * MULTI_SELECT_MODE becomes the latest modal and property-editing goes
+ * shadowed-but-active — a filter vote there let a keypress in a text field
+ * run `clear_selection` (Escape) or the multi-select delete (Delete, no
+ * confirmation). This also closes the same hole for `EDIT_MODE_CM`, where
+ * it was unreachable only because entering edit mode clears the selection.
  */
 const shouldHandleEvent = (
   event: KeyboardEvent,
   active: ActiveContextsMap,
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>,
 ): boolean => {
-  for (const type of active.keys()) {
+  for (const type of computeInstallableContexts(active, contextConfigsByType)) {
     const config = contextConfigsByType.get(type)
     if (config?.eventFilter?.(event)) return true
   }

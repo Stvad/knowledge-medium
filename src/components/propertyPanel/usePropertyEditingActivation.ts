@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useState, type FocusEvent, type SyntheticEvent } from 'react'
 import { usePropertyEditingShortcuts } from '@/shortcuts/useActionContext.js'
+import type { PropertyEditingField } from '@/shortcuts/types.js'
 import { Block } from '@/data/block'
 
 interface PropertyEditingFocusHandlers {
-  onFocus: (event: FocusEvent<HTMLInputElement>) => void
+  onFocus: (event: FocusEvent<PropertyEditingField>) => void
   onBlur: () => void
 }
 
@@ -24,7 +25,7 @@ interface PropertyEditingFocusHandlers {
  */
 export function usePropertyEditingActivation(block: unknown): PropertyEditingFocusHandlers {
   const targetBlock = block instanceof Block ? block : null
-  const [input, setInput] = useState<HTMLInputElement | null>(null)
+  const [input, setInput] = useState<PropertyEditingField | null>(null)
   // `targetBlock!` / `input!` are lies when either is null, but `enabled`
   // is false in that case so `useActionContextActivations` filters the
   // activation out before any dependency read.
@@ -34,7 +35,7 @@ export function usePropertyEditingActivation(block: unknown): PropertyEditingFoc
   )
   usePropertyEditingShortcuts(dependencies, targetBlock !== null && input !== null)
 
-  const onFocus = useCallback((event: FocusEvent<HTMLInputElement>) => {
+  const onFocus = useCallback((event: FocusEvent<PropertyEditingField>) => {
     setInput(event.currentTarget)
   }, [])
   const onBlur = useCallback(() => setInput(null), [])
@@ -55,6 +56,14 @@ export function usePropertyEditingActivation(block: unknown): PropertyEditingFoc
  *
  * Call this ONLY when there was something to dismiss. With nothing open,
  * let the event through — Escape exiting the field is the point.
+ *
+ * The stop is unconditional, including from a picker rendered outside the
+ * property panel (`ReferenceSearch` with `propertyField` false, e.g. inside a
+ * dialog). That's harmless today rather than intended: Radix dialogs take
+ * Escape on a document CAPTURE listener, which has already run by the time
+ * this bubble-phase handler fires, and no bubble-phase window Escape listener
+ * exists outside the shortcut coordinator. Add such a listener and this would
+ * swallow it while the dropdown is open — gate on `propertyField` then.
  */
 export const consumeFieldEscape = (event: SyntheticEvent): void => {
   event.preventDefault()

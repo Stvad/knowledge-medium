@@ -39,6 +39,7 @@ import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
 import {
   ActionContextTypes,
   type ActionConfig,
+  type MultiSelectModeDependencies,
   type PropertyEditingDependencies,
 } from '@/shortcuts/types'
 
@@ -64,20 +65,37 @@ const propertyEditingAction = (id: string): ActionConfig => {
  *  keeps installed (`computeInstallableContexts`). Without GLOBAL active, a
  *  global action isn't a dispatch candidate at all and the bare-key case
  *  below would pass no matter how wide this context's filter got. */
-const Activator = () => {
+const Activator = ({shadowWithMultiSelect = false}: {shadowWithMultiSelect?: boolean}) => {
   const dispatch = useActiveContextsDispatch()
   useEffect(() => {
     dispatch.activate(ActionContextTypes.GLOBAL, {uiStateBlock: deps.uiStateBlock})
     dispatch.activate(ActionContextTypes.PROPERTY_EDITING, deps)
+    // Activated AFTER property-editing, so it becomes the latest modal and
+    // shadows it — the real sequence when a selection changes while a
+    // property field still holds focus (`activate` re-inserts at the end on
+    // any deps change, and multi-select's deps are a fresh object per
+    // selection change).
+    if (shadowWithMultiSelect) {
+      const multiSelectDeps: MultiSelectModeDependencies = {
+        uiStateBlock: deps.uiStateBlock,
+        selectedBlocks: [deps.block],
+        anchorBlock: null,
+      }
+      dispatch.activate(ActionContextTypes.MULTI_SELECT_MODE, multiSelectDeps)
+    }
     return () => {
+      if (shadowWithMultiSelect) dispatch.deactivate(ActionContextTypes.MULTI_SELECT_MODE)
       dispatch.deactivate(ActionContextTypes.PROPERTY_EDITING)
       dispatch.deactivate(ActionContextTypes.GLOBAL)
     }
-  }, [dispatch])
+  }, [dispatch, shadowWithMultiSelect])
   return null
 }
 
-const renderWith = (actions: readonly ActionConfig[]) => {
+const renderWith = (
+  actions: readonly ActionConfig[],
+  {shadowWithMultiSelect = false} = {},
+) => {
   const runtime = resolveFacetRuntimeSync([
     ...defaultActionContextConfigs.map(config => actionContextsFacet.of(config)),
     ...actions.map(action => actionsFacet.of(action)),
@@ -86,7 +104,7 @@ const renderWith = (actions: readonly ActionConfig[]) => {
     <AppRuntimeContextProvider value={runtime}>
       <ActiveContextsProvider>
         <HotkeyReconciler/>
-        <Activator/>
+        <Activator shadowWithMultiSelect={shadowWithMultiSelect}/>
       </ActiveContextsProvider>
     </AppRuntimeContextProvider>,
   )
@@ -169,6 +187,74 @@ describe('Escape in a property editor', () => {
     pressKeyInInput('F2')
 
     expect(document.activeElement).not.toBe(input)
+  })
+
+  it('exits a `<select>` field too, not just text inputs', () => {
+    // `enum` ("Choice") properties render a native `<select>`, which
+    // `hasEditableTarget` also treats as editable — so it needs the same exit,
+    // and the context's deps must accept it rather than only HTMLInputElement.
+    const select = document.createElement('select')
+    document.body.append(select)
+    try {
+      deps = {...deps, input: select}
+      select.focus()
+      renderWith([propertyEditingAction('exit_property_editing')])
+      expect(document.activeElement).toBe(select)
+
+      act(() => {
+        select.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'Escape', code: 'Escape', bubbles: true, cancelable: true,
+        }))
+      })
+
+      expect(document.activeElement).not.toBe(select)
+    } finally {
+      select.remove()
+    }
+  })
+
+  it('does not let a shadowed property-editing context green-light another modal', () => {
+    // A context this filter belongs to can be active but SHADOWED: focusing a
+    // property field deliberately keeps a block selection, and any later
+    // selection change re-activates MULTI_SELECT_MODE, making it the latest
+    // modal. `exit_property_editing` is then uninstalled, while
+    // MULTI_SELECT_MODE's own bare-key bindings are installed — `Escape`
+    // (`clear_selection`) and `Delete` (`deleteSelectedBlocks`, no
+    // confirmation). If this context's filter still admitted the event while
+    // shadowed, a keypress in a text field would run those: silently clearing
+    // the selection, or DELETING the selected blocks. The stand-ins below are
+    // bound to exactly those keys.
+    const multiEscape = vi.fn()
+    const multiDelete = vi.fn()
+    renderWith(
+      [
+        propertyEditingAction('exit_property_editing'),
+        {
+          id: 'test.multi_escape',
+          description: 'stands in for clear_selection',
+          context: ActionContextTypes.MULTI_SELECT_MODE,
+          handler: multiEscape,
+          defaultBinding: {keys: 'Escape'},
+        } as ActionConfig,
+        {
+          id: 'test.multi_delete',
+          description: 'stands in for the multi-select delete',
+          context: ActionContextTypes.MULTI_SELECT_MODE,
+          handler: multiDelete,
+          defaultBinding: {keys: 'Delete'},
+        } as ActionConfig,
+      ],
+      {shadowWithMultiSelect: true},
+    )
+
+    pressKeyInInput('Escape')
+    pressKeyInInput('Delete')
+
+    expect(multiEscape).not.toHaveBeenCalled()
+    expect(multiDelete).not.toHaveBeenCalled()
+    // Nothing ran at all: the shadowing also uninstalled the exit action, so
+    // the field keeps focus rather than the key being handed to another mode.
+    expect(document.activeElement).toBe(input)
   })
 
   it('leaves bare-key global chords blocked while the input has focus', () => {
