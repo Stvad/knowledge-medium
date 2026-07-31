@@ -31,16 +31,30 @@ export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | n
   return null
 }
 
+/** Where `element` can actually be seen: the window, clipped by EVERY scrollport
+ *  between it and the root.
+ *
+ *  All of them, not just the nearest: panes nest. A note row inside the
+ *  video-notes aside sits in that aside's scrollport, and the whole pane is
+ *  clipped again by the shared scrollport a stacked slot puts around it. Taking
+ *  only the nearest, a row scrolled out of sight behind the OUTER clip still
+ *  measured as visible — so the focus decorator saw no reason to scroll it in
+ *  and cursor-follows-scroll saw no reason to move off it. */
 export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
-  const windowBounds = windowVisibilityBounds()
-  const scrollport = nearestScrollableAncestor(element)
-  if (!scrollport) return windowBounds
-
-  const rect = scrollport.getBoundingClientRect()
-  return {
-    top: Math.max(windowBounds.top, rect.top),
-    bottom: Math.min(windowBounds.bottom, rect.bottom),
+  let bounds = windowVisibilityBounds()
+  let ancestor = element.parentElement
+  while (ancestor) {
+    const {overflowY} = window.getComputedStyle(ancestor)
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+      const rect = ancestor.getBoundingClientRect()
+      bounds = {
+        top: Math.max(bounds.top, rect.top),
+        bottom: Math.min(bounds.bottom, rect.bottom),
+      }
+    }
+    ancestor = ancestor.parentElement
   }
+  return bounds
 }
 
 export const isElementProperlyVisible = (

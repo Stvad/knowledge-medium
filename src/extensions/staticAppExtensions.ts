@@ -28,6 +28,7 @@ import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
+import { cursorFollowsScrollPlugin } from '@/plugins/cursor-follows-scroll'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
@@ -121,6 +122,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   mobileKeyboardToolbarPlugin,
   swipeQuickActionsPlugin,
   spatialNavigationPlugin,
+  cursorFollowsScrollPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   attachmentsPlugin,

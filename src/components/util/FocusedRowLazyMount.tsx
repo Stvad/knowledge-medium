@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { usePropertyValue } from '@/hooks/block.js'
 import { focusedBlockLocationProp } from '@/data/properties.js'
 import type { Block } from '@/data/block.js'
@@ -26,18 +26,16 @@ const ANCESTOR_WALK_DELAY_MS = 150
  *     all: `BlockChildren` renders a child's lazy wrapper only once the
  *     parent is mounted, so a target under a deferred ancestor has nothing
  *     to register. Wanting each level lets the cascade resolve itself.
- *   - Ignores the focus value the panel ARRIVES with — on mount and again on
- *     every content swap (back/forward, opening another page in the pane),
- *     once each — acting on every move after that. Mounting a row makes
- *     `BlockFocusShellDecorator` scroll it into view, which on arrival would
- *     drag the panel away from the scroll position `PanelRenderer` just
- *     restored — the stored focus and the stored scroll position disagree
- *     whenever the user scrolled away from their cursor. Keyboard navigation
- *     from a restored-but-off-screen focus was already inert before any of
- *     this (normal mode needs a mounted focused row to activate at all), so
- *     this trades nothing away versus master — but it does mean a restored
- *     panel stays keyboard-dead until the user clicks or scrolls, which is a
- *     real gap, just not a new one.
+ *   - Acts on the focus value the panel ARRIVES with too. That value used to
+ *     be exempt, because mounting its row makes `BlockFocusShellDecorator`
+ *     scroll it into view and that fought the pixel `scrollTop` the panel was
+ *     restoring — the stored cursor and the stored scroll position disagreed
+ *     whenever the user had scrolled away from their cursor. `PanelRenderer`
+ *     now restores BY the cursor (`alignScrollportToRow`) rather than by a
+ *     pixel offset, so the two want the same thing and the exemption had
+ *     nothing left to protect. Dropping it also fixes what it cost: a restored
+ *     panel used to stay keyboard-dead until the user clicked or scrolled,
+ *     because normal mode needs a mounted focused row to activate at all.
  *
  * One instance per panel (rendered by `PanelRenderer`), subscribed to that
  * panel's focused location only — one subscription per panel, not per row.
@@ -52,33 +50,8 @@ export function FocusedRowLazyMount({block, scopeRootId}: {block: Block; scopeRo
   const renderScopeId = focusedLocation?.renderScopeId
   const repo = block.repo
 
-  // The focus value this panel arrived with — see the third bullet above.
-  // Armed per panel CONTENT, not per component: `PanelRenderer` keeps this
-  // instance across back/forward and any other in-place page swap, and those
-  // restore a focus location the same way a reload does — in one tx with the
-  // new top-level block (`writePanelContent`), so both land in one commit and
-  // this effect sees them together. Without re-arming, a restored page's focus
-  // would read as an ordinary move and scroll away from the position the
-  // history effect is about to restore.
-  //
-  // All of it lives in the effect: reading refs during render is a lint error
-  // here, and the effect re-runs on exactly the two values that matter.
-  const arrivalRef = useRef<{scopeRootId: string; id: string | undefined; pending: boolean} | null>(null)
-
   useEffect(() => {
-    const arrival = arrivalRef.current
-    if (arrival?.scopeRootId !== scopeRootId) {
-      // First sighting of this page — whatever it's focusing right now is the
-      // arrival value, including nothing at all (a panel that mounts before
-      // its focus is written; the write that follows is then a real move).
-      arrivalRef.current = {scopeRootId, id: focusedBlockId, pending: true}
-      return
-    }
     if (!focusedBlockId) return
-    if (arrival.pending && focusedBlockId === arrival.id) return
-    // Any move retires the exemption for good — including a move back to the
-    // arrival block later on.
-    arrival.pending = false
     let cancelled = false
     const withdrawals: Array<() => void> = []
     const want = (blockId: string) => {

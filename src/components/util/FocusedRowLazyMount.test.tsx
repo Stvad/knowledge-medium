@@ -82,6 +82,7 @@ describe('FocusedRowLazyMount', () => {
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -112,6 +113,7 @@ describe('FocusedRowLazyMount', () => {
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -151,6 +153,7 @@ describe('FocusedRowLazyMount', () => {
         <div data-block-id="nested" data-render-scope-id="panel:nested"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -159,6 +162,7 @@ describe('FocusedRowLazyMount', () => {
         </LazyViewportMount>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('fence-parent')}
+          blockId="fence-parent"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="fence-placeholder"/>}
@@ -167,13 +171,6 @@ describe('FocusedRowLazyMount', () => {
         </LazyViewportMount>
       </>,
     )
-
-    // Both panels arrive already focused, so nudge each off its arrival value
-    // (the exemption) to arm the walks.
-    await focusBlock(panel, 'top', {renderScopeId: 'panel:top'})
-    await focusBlock(fencePanel, 'top', {renderScopeId: 'panel2:top'})
-    await focusBlock(panel, 'nested', {renderScopeId: 'panel:nested'})
-    await focusBlock(fencePanel, 'fence-nested', {renderScopeId: 'panel2:fence-nested'})
 
     await waitFor(() => {
       expect(screen.getByTestId('fence-row')).toBeInTheDocument()
@@ -195,6 +192,7 @@ describe('FocusedRowLazyMount', () => {
         <div data-block-id="nested" data-render-scope-id="some-other-panel"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -211,14 +209,16 @@ describe('FocusedRowLazyMount', () => {
     }, {timeout: 3000})
   })
 
-  // Mounting a row makes the focus decorator scroll it into view, so acting on
-  // the value the panel MOUNTS with would yank the panel away from the scroll
-  // position it just restored.
+  // The value a panel arrives with is the cursor a restore puts back, and
+  // `PanelRenderer` scrolls TO that row — so it has to exist. It used to be
+  // exempt here, to keep the mount-scroll off a pixel `scrollTop` restore that
+  // disagreed with it; restoring by the cursor removed the conflict, and with
+  // it the cost — a restored panel stayed keyboard-dead (normal mode needs a
+  // mounted focused row) until the user clicked.
   //
-  // Under `StrictMode` deliberately, matching `main.tsx`: it double-invokes
-  // the effect, so the second run re-enters with the arrival already recorded
-  // — which is the only path that reaches the "same scope, same id" guard.
-  it('ignores the focus value the panel mounts with', async () => {
+  // Under `StrictMode` deliberately, matching `main.tsx`: it double-invokes the
+  // effect, and the mount path is where a re-entry guard would go wrong.
+  it('mounts the focus value the panel arrives with', async () => {
     const panel = repo.block(PANEL_ID)
     await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
 
@@ -227,42 +227,58 @@ describe('FocusedRowLazyMount', () => {
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
         >
           <div data-testid="row">off-screen row</div>
         </LazyViewportMount>
-        <LazyViewportMount
-          cacheKey={lazyBlockCacheKey('control')}
-          estimatedHeightPx={32}
-          overscanPx={600}
-          renderPlaceholder={() => <div data-testid="control-placeholder"/>}
-        >
-          <div data-testid="control-row">control</div>
-        </LazyViewportMount>
       </StrictMode>,
     )
 
-    // Fence: a focus MOVE is honoured, and it's issued after the arrival
-    // value the component is meant to ignore. Once the control row has
-    // mounted, "the arrival row didn't" is a real observation rather than a
-    // race with the property subscription.
-    await focusBlock(panel, 'control', {renderScopeId: 'panel:control'})
     await waitFor(() => {
-      expect(screen.getByTestId('control-row')).toBeInTheDocument()
+      expect(screen.getByTestId('row')).toBeInTheDocument()
     })
+  })
+
+  // A backlink entry keys its placeholder `backlink:<scope>:<id>` so its sticky
+  // mounted-state and measured height stay per-entry. A caller holding only a
+  // focused location can't reconstruct that key, so before the registry
+  // registered under the canonical block key as well, a cursor restored onto a
+  // deferred backlink row could not be materialized at all — keyboard nav dead
+  // there, and a scroll restore anchored to it silently giving up.
+  it("mounts a focused row whose surface mints its own cache key", async () => {
+    const panel = repo.block(PANEL_ID)
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <LazyViewportMount
+          cacheKey={`backlink:entry-1:off-screen`}
+          blockId="off-screen"
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="row">backlink row</div>
+        </LazyViewportMount>
+      </>,
+    )
 
     expect(screen.getByTestId('placeholder')).toBeInTheDocument()
-    expect(screen.queryByTestId('row')).not.toBeInTheDocument()
+
+    await focusBlock(panel, 'off-screen', {renderScopeId: 'backlink:entry-1'})
+
+    await waitFor(() => {
+      expect(screen.getByTestId('row')).toBeInTheDocument()
+    })
   })
 
   // Back/forward keeps this component and swaps `scopeRootId` — the restored
-  // page's focus arrives the same way a reload's does (one tx with the new
-  // top-level block), so it must be exempt too. Otherwise it reads as an
-  // ordinary move and scrolls away from the position the history effect is
-  // about to restore.
-  it('re-arms the exemption when the panel swaps to another page', async () => {
+  // page's focus arrives the same way a reload's does, in one tx with the new
+  // top-level block. The row has to mount there too, or the restore has
+  // nothing to scroll to.
+  it('mounts the restored focus row when the panel swaps to another page', async () => {
     const panel = repo.block(PANEL_ID)
     await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
     await panel.set(topLevelBlockIdProp, 'top')
@@ -279,6 +295,7 @@ describe('FocusedRowLazyMount', () => {
         <PanelHarness/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('page2-row')}
+          blockId="page2-row"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="page2-placeholder"/>}
@@ -287,6 +304,7 @@ describe('FocusedRowLazyMount', () => {
         </LazyViewportMount>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('page2-control')}
+          blockId="page2-control"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="page2-control-placeholder"/>}
@@ -309,43 +327,11 @@ describe('FocusedRowLazyMount', () => {
       }, {scope: ChangeScope.UiState})
     })
 
-    // Fence: a real move under the NEW scope is honoured, proving the
-    // component is live there and that the arrival value alone was skipped.
-    await focusBlock(panel, 'page2-control', {renderScopeId: 'panel:page2-control'})
     await waitFor(() => {
-      expect(screen.getByTestId('page2-control-row')).toBeInTheDocument()
+      expect(screen.getByTestId('page2-row')).toBeInTheDocument()
     })
-
-    expect(screen.getByTestId('page2-placeholder')).toBeInTheDocument()
-    expect(screen.queryByTestId('page2-row')).not.toBeInTheDocument()
-  })
-
-  // ...but only on arrival. A permanent exemption would mean focus returning
-  // to that block later never mounts its row — normal mode dead exactly
-  // there, which is the bug this component exists to prevent.
-  it('stops ignoring the arrival block once focus has moved away', async () => {
-    const panel = repo.block(PANEL_ID)
-    await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
-
-    render(
-      <>
-        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
-        <LazyViewportMount
-          cacheKey={lazyBlockCacheKey('off-screen')}
-          estimatedHeightPx={32}
-          overscanPx={600}
-          renderPlaceholder={() => <div data-testid="placeholder"/>}
-        >
-          <div data-testid="row">off-screen row</div>
-        </LazyViewportMount>
-      </>,
-    )
-
-    await focusBlock(panel, 'top', {renderScopeId: 'panel:top'})
-    await focusBlock(panel, 'off-screen', {renderScopeId: 'panel:off-screen'})
-
-    await waitFor(() => {
-      expect(screen.getByTestId('row')).toBeInTheDocument()
-    })
+    // The pane's own control row is untouched: this wants the CURSOR's row,
+    // not every row on the new page.
+    expect(screen.getByTestId('page2-control-placeholder')).toBeInTheDocument()
   })
 })
