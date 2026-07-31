@@ -303,15 +303,27 @@ export const alignScrollportToRow = (
 
   const observer = new MutationObserver(() => {
     lastMutationAt = Date.now()
+    observeContent()
     attempt()
   })
   // Geometry-only settling — an image decoding, a font swapping — produces no
-  // mutation. Watching the scrolled CONTENT (not the port, whose own box
-  // doesn't change) catches the height changes that move the anchor.
+  // mutation. Observed on the ROWS, anywhere in the subtree: the pane's direct
+  // children are the wrong target (in the video-notes layout that is one
+  // fixed-size split root, so nothing inside its scrollable aside would ever
+  // register), and a row's own box does change when an image inside it decodes.
   const contentObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
     lastMutationAt = Date.now()
     attempt()
   })
+  /** Rows mount throughout the wait, so the observed set is refreshed on every
+   *  mutation burst rather than snapshotted once. Re-observing an element
+   *  already observed is a no-op, so this stays cheap. */
+  const observeContent = () => {
+    if (!contentObserver) return
+    for (const row of scrollEl.querySelectorAll<HTMLElement>('[data-block-id][data-render-scope-id]')) {
+      contentObserver.observe(row)
+    }
+  }
   const deadline = setTimeout(giveUp, waitMs)
 
   // Gestures the user aims at THIS panel. Scoped to the scroll container, not
@@ -331,7 +343,7 @@ export const alignScrollportToRow = (
 
   attempt()
   observer.observe(scrollEl, {childList: true, subtree: true})
-  for (const child of Array.from(scrollEl.children)) contentObserver?.observe(child)
+  observeContent()
 
   return finish
 }

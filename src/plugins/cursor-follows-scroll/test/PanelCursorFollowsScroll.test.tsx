@@ -20,16 +20,34 @@ const FENCE_PANEL_ID = 'fence-panel'
 const SCOPE = 'panel:page'
 const PORT_HEIGHT = 500
 
-/** happy-dom has no ResizeObserver and no layout to drive one. Collect the
- *  callbacks so a test can fire them, which is what a growing row above the
- *  cursor does in a real engine. */
-const resizeCallbacks: Array<() => void> = []
-class TestResizeObserver {
-  constructor(cb: () => void) { resizeCallbacks.push(cb) }
-  observe(): void {}
-  disconnect(): void {}
+/** happy-dom has no IntersectionObserver and no layout to drive one. Records
+ *  the TARGET each observer was pointed at, so firing one is also an assertion
+ *  that the component observed the element it claims to — a fake that ignores
+ *  its target would let "observed nothing useful" pass. */
+interface FakeIntersection {
+  target: HTMLElement | null
+  cb: IntersectionObserverCallback
 }
-const fireContentResize = () => { for (const cb of [...resizeCallbacks]) cb() }
+const intersectionObservers: FakeIntersection[] = []
+class TestIntersectionObserver {
+  private entry: FakeIntersection
+  constructor(cb: IntersectionObserverCallback) {
+    this.entry = {target: null, cb}
+    intersectionObservers.push(this.entry)
+  }
+  observe(el: HTMLElement): void { this.entry.target = el }
+  disconnect(): void { this.entry.target = null }
+}
+
+/** Drive the observer watching `target`. Fails loudly when nothing is watching
+ *  it, which is the regression the reviewer's note was about. */
+const fireIntersection = (target: HTMLElement, isIntersecting: boolean): void => {
+  const watching = intersectionObservers.filter(o => o.target === target)
+  expect(watching.length).toBeGreaterThan(0)
+  for (const o of watching) {
+    o.cb([{isIntersecting} as IntersectionObserverEntry], {} as IntersectionObserver)
+  }
+}
 
 const stubRect = (el: HTMLElement, top: number, height: number): void => {
   el.getBoundingClientRect = () => ({
@@ -40,6 +58,8 @@ const stubRect = (el: HTMLElement, top: number, height: number): void => {
 
 interface PanelDom {
   port: HTMLElement
+  /** The row's visibility target — what the cursor observer is pointed at. */
+  targetOf: (blockId: string) => HTMLElement
   /** Move a row's content rect — the test's stand-in for scrolling, since
    *  happy-dom has no layout to move on its own. */
   moveRow: (blockId: string, top: number) => void
@@ -74,6 +94,11 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
   return {
     port,
     addRow,
+    targetOf: (blockId) => {
+      const target = targets.get(blockId)
+      if (!target) throw new Error(`no row ${blockId}`)
+      return target
+    },
     moveRow: (blockId, top) => {
       const target = targets.get(blockId)
       if (target) stubRect(target, top, 30)
@@ -89,8 +114,8 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
-  resizeCallbacks.length = 0
-  vi.stubGlobal('ResizeObserver', TestResizeObserver)
+  intersectionObservers.length = 0
+  vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
@@ -358,10 +383,11 @@ describe('PanelCursorFollowsScroll', () => {
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
 
     // Rows above grow: `a` is shoved below the fold, `b` takes the top. No
-    // scroll event anywhere — `scrollTop` did not change.
+    // scroll event anywhere — `scrollTop` did not change. The only signal is
+    // the cursor's own row ceasing to intersect.
     dom.moveRow('a', 900)
     dom.moveRow('b', 20)
-    fireContentResize()
+    fireIntersection(dom.targetOf('a'), false)
 
     await vi.waitFor(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')

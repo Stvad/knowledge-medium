@@ -9,9 +9,10 @@ import {
   type FocusedBlockLocation,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block.js'
-import { panelById } from '@/plugins/spatial-navigation/walker.js'
+import { panelById, visibilityTargetFor } from '@/plugins/spatial-navigation/walker.js'
 import { resolveSpatialNavExclusions } from '@/plugins/spatial-navigation/exclusionsFacet.js'
 import { findInstance, isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
+import { nearestScrollableAncestor } from '@/utils/dom.js'
 import { createSettleScheduler } from './settleScheduler.ts'
 
 /** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
@@ -111,8 +112,9 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     }
 
     const sample = () => {
-      if (seenOnScreen) return
       const row = findInstance(panelEl, location, excluded())
+      if (row) watchCursorRow(row)
+      if (seenOnScreen) return
       if (row && isRowInViewport(row)) {
         seenOnScreen = true
         stopWatchingForMount()
@@ -158,20 +160,37 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     // changes. That is the norm on WebKit, which has no scroll anchoring
     // (`LazyViewportMount` documents it) — every lazy row above the cursor
     // swapping its estimate for a measured height shoves the cursor down — and
-    // it happens anywhere when an image decodes. A scroll-only trigger sees
-    // none of it, so the cursor silently goes stale and the next motion jumps
-    // back to it.
-    const onContentResize = () => {
-      sample()
+    // it happens anywhere when an image decodes.
+    //
+    // Watched on the CURSOR'S OWN ROW rather than on the content that moves it.
+    // Sizing observers have to be pointed at the right elements, and the right
+    // set is unknowable here: rows mount after this runs, the thing that grew
+    // may be nested inside a row or inside another scrollport, and the
+    // video-notes aside holds rows that are siblings of nothing this could have
+    // enumerated. Intersection asks the question that actually matters — is the
+    // cursor still on screen — and answers it whatever moved.
+    const onIntersection = (entries: IntersectionObserverEntry[]) => {
+      const entry = entries[entries.length - 1]
+      if (!entry) return
+      if (entry.isIntersecting) {
+        seenOnScreen = true
+        stopWatchingForMount()
+        return
+      }
       if (!seenOnScreen) return
-      const row = findInstance(panelEl, location, excluded())
-      if (!row || isRowInViewport(row)) return
       retriesLeft = SETTLE_RETRIES
       scheduler.schedule(SCROLL_SETTLE_MS)
     }
-    const contentObserver = typeof ResizeObserver === 'undefined'
-      ? null
-      : new ResizeObserver(onContentResize)
+    let cursorObserver: IntersectionObserver | null = null
+    /** Attach once the row exists; `sample` calls this as soon as it finds it. */
+    const watchCursorRow = (row: HTMLElement) => {
+      if (cursorObserver || typeof IntersectionObserver === 'undefined') return
+      const target = visibilityTargetFor(row)
+      cursorObserver = new IntersectionObserver(onIntersection, {
+        root: nearestScrollableAncestor(target),
+      })
+      cursorObserver.observe(target)
+    }
 
     settleRef.current = () => scheduler.runNow()
 
@@ -187,13 +206,6 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       mountWatcher.observe(panelEl, {childList: true, subtree: true})
     }
     const mountWatchDeadline = setTimeout(stopWatchingForMount, CURSOR_MOUNT_WATCH_MS)
-    if (contentObserver) {
-      // The scrolled content, not the port: the port's own box doesn't change
-      // when its contents grow.
-      for (const child of Array.from(panelEl.querySelectorAll<HTMLElement>('[data-block-nav-item="true"]'))) {
-        contentObserver.observe(child)
-      }
-    }
 
     // Capture at the document: scroll doesn't bubble, and which element
     // actually scrolls varies (the panel's own overflow container normally, an
@@ -204,7 +216,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     return () => {
       document.removeEventListener('scroll', onScroll, {capture: true})
       scheduler.cancel()
-      contentObserver?.disconnect()
+      cursorObserver?.disconnect()
       clearTimeout(mountWatchDeadline)
       stopWatchingForMount()
       settleRef.current = null
