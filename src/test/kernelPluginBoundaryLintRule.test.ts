@@ -131,6 +131,19 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('types/ast.d.ts'),
         code: `declare module '*.svg' { const c: string; export default c }`,
       },
+      // A runtime-conditional `new URL` is NOT a build dependency: Vite's regex
+      // wants a quoted literal directly after `new URL(`, so it never matches
+      // and no asset is emitted. Expanding both arms is right for `import()`
+      // and a false positive here.
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new URL(cond ? '../plugins/todo/asset.txt' : './core.txt', import.meta.url)`,
+      },
+      // Same reason: neither survives into a form Vite's regex matches.
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new URL((0, '../plugins/todo/asset.txt'), import.meta.url)`,
+      },
       // Unwrapping the callee must not make an ordinary core require report.
       {
         filename: core('data/repo.ts'),
@@ -1005,6 +1018,29 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // A simple assignment is value-preserving the same way. Confirmed with a
+      // real `vite build`: this and a plain `import('./plugins/todo/schema.ts')`
+      // compiled to the SAME emitted chunk.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `let p: string; const m = await import(p = '@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // `base: ''` is FALSY, and Vite tests the base for truthiness — so it is
+      // no base at all and the pattern resolves from the importing file.
+      // Treating it as a base pointing at the repo root sent this glob looking
+      // in `<repo>/plugins/` and it came back clean.
+      {
+        filename: core('bootstrap.ts'),
+        code: `const m = import.meta.glob('./plugins/*/index.ts', { base: '' })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './plugins/*/index.ts' },
         }],
       },
     ]),

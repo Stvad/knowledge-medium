@@ -215,7 +215,7 @@ const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
  *  `…!`. esbuild erases all of these and the build imports the plugin as if
  *  they were never written. Same shape as the `unwrap` in ambient-accessors.js,
  *  plus `TSLiteralType` for type-position specifiers. */
-const unwrap = (node) => {
+const unwrapTypeWrappers = (node) => {
   let current = node
   while (
     current?.type === 'ChainExpression'
@@ -224,17 +224,34 @@ const unwrap = (node) => {
     || current?.type === 'TSSatisfiesExpression'
     || current?.type === 'TSTypeAssertion'
     || current?.type === 'TSLiteralType'
-    // A sequence expression's VALUE is its last operand, so reducing to it is
-    // sound at every site this helper is used: `(0, require)(…)` is a `require`
-    // call, and `import((log(), '@/plugins/x'))` imports that specifier. The
-    // comma form matters because it is precisely the idiom for making a bundler
-    // stop looking — which is also what it does to a rule that pattern-matches
-    // on the callee.
-    || current?.type === 'SequenceExpression'
   ) {
-    if (current.type === 'TSLiteralType') current = current.literal
-    else if (current.type === 'SequenceExpression') current = current.expressions.at(-1)
-    else current = current.expression
+    current = current.type === 'TSLiteralType' ? current.literal : current.expression
+  }
+  return current
+}
+
+/** …plus the JS forms whose VALUE is a sub-expression. The split matters: the
+ *  wrappers above VANISH before Vite's text-level plugins run (oxc strips types
+ *  first), so unwrapping them is right everywhere. These two SURVIVE into the
+ *  emitted code, so they are only safe to unwrap where the consumer is the
+ *  module graph — `import()`, `require`, `import.meta.glob` — and NOT where it
+ *  is a source-text regex. `new URL` is the latter; see `checkAssetUrl`.
+ *
+ *  A sequence reduces to its last operand — `(0, require)(…)` is a `require`
+ *  call, the idiom for making a bundler stop looking. A simple `=` assignment
+ *  reduces to its right side: verified with a real `vite build` that
+ *  `import(p = './plugins/todo/schema.ts')` and a plain `import('…')` of the
+ *  same path compile to the SAME emitted chunk. Compound assignments (`+=`)
+ *  are not value-preserving in this sense and are left alone. */
+const unwrap = (node) => {
+  let current = unwrapTypeWrappers(node)
+  while (
+    current?.type === 'SequenceExpression'
+    || (current?.type === 'AssignmentExpression' && current.operator === '=')
+  ) {
+    current = unwrapTypeWrappers(
+      current.type === 'SequenceExpression' ? current.expressions.at(-1) : current.right,
+    )
   }
   return current
 }
@@ -577,6 +594,23 @@ const noCoreToPluginImports = {
       }
     }
 
+    /** `new URL(…, import.meta.url)` is NOT the module graph — it is a source
+     *  TEXT match. `assetImportMetaUrlRE` requires a quoted literal directly
+     *  after `new URL(`, so a conditional, a sequence, an assignment or a `+`
+     *  chain leaves the expression untouched and emits no asset at all.
+     *
+     *  So the shared `check` is wrong here in one direction: it expands both
+     *  arms of a conditional, which is right for `import()` (the bundler emits a
+     *  chunk per branch) and a false positive for a URL. Constrain to the node
+     *  shapes Vite's own regex accepts, then hand off — a template WITH
+     *  interpolations still goes through, because Vite turns that one into a
+     *  glob rather than ignoring it. */
+    const checkAssetUrl = (node) => {
+      const specifier = unwrapTypeWrappers(node.arguments[0])
+      if (specifier?.type !== 'Literal' && specifier?.type !== 'TemplateLiteral') return
+      check(node, specifier)
+    }
+
     /** Globs need their own classifier — see `globReachesPluginRoot`. A
      *  pattern names no single plugin, so the message names the layer. */
     const checkGlob = (node, sourceNode, optionsNode) => {
@@ -589,7 +623,14 @@ const noCoreToPluginImports = {
       // used to fall back silently to the importer's own directory, quietly
       // resolving the pattern somewhere it does not live.
       const baseNode = propertyValue(optionsNode, 'base')
-      const base = staticString(baseNode)
+      const baseText = staticString(baseNode)
+      // Vite tests the base for TRUTHINESS (`if (base)` in `toAbsoluteGlob`), so
+      // `base: ''` is not a base pointing at the root — it is no base at all,
+      // and the pattern resolves from the importing file. Treating the empty
+      // string as a real base turned `${base}/` into `/` and resolved from the
+      // repo root instead, which made a glob straight into the plugin layer come
+      // back clean. Fail-open, so worth the one comparison.
+      const base = baseText === '' ? undefined : baseText
       // A bare `base: 'plugins'` is importer-relative; `toAbsolute` only returns
       // undefined for it because it looks like a package name.
       const baseAbsolute = base === undefined
@@ -603,7 +644,7 @@ const noCoreToPluginImports = {
       // so instead. Nothing in `src/` passes `base` at all, so this costs
       // nothing today, and the inline disable is there for a base the rule
       // genuinely cannot follow.
-      if (baseNode !== undefined && base === undefined) {
+      if (baseNode !== undefined && baseText === undefined) {
         context.report({node, messageId: 'coreGlobUnknownBase'})
         return
       }
@@ -682,7 +723,7 @@ const noCoreToPluginImports = {
       NewExpression: (node) => {
         if (!isImportMetaUrl(node)) return
         if (hasViteIgnore(node, context.sourceCode) && !isWorkerConstructorArgument(node)) return
-        check(node, node.arguments[0])
+        checkAssetUrl(node)
       },
       // `/// <reference path="…" />`. Not a node at all — ESLint exposes it as a
       // comment — but TypeScript resolves and includes the target, so a core
