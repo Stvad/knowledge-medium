@@ -9,10 +9,9 @@ import {
   type FocusedBlockLocation,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block.js'
-import { panelById, visibilityTargetFor } from '@/plugins/spatial-navigation/walker.js'
+import { panelById } from '@/plugins/spatial-navigation/walker.js'
 import { resolveSpatialNavExclusions } from '@/plugins/spatial-navigation/exclusionsFacet.js'
 import { findInstance, isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
-import { nearestScrollableAncestor } from '@/utils/dom.js'
 import { createSettleScheduler } from './settleScheduler.ts'
 
 /** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
@@ -22,13 +21,6 @@ import { createSettleScheduler } from './settleScheduler.ts'
  *  gaps between momentum events without being perceptible. */
 const SCROLL_SETTLE_MS = 150
 
-/** How long to keep watching for the cursor's row to appear before giving up on
- *  ever seeing it on screen — see `seenOnScreen` below. Covers a cold load
- *  hydrating a deferred row and its ancestors; past that, a row that still
- *  isn't there is one the user has scrolled away from, and the next scroll
- *  samples it anyway. */
-const CURSOR_MOUNT_WATCH_MS = 3000
-
 /** A fast scroll can outrun lazy mounting: the rows now filling the viewport
  *  are still placeholders when the settle fires, so there is no candidate to
  *  anchor to and the attempt would be dropped for good — nothing schedules
@@ -37,11 +29,6 @@ const CURSOR_MOUNT_WATCH_MS = 3000
 const SETTLE_RETRY_MS = 250
 const SETTLE_RETRIES = 4
 
-/** Ratios at which the cursor observer re-reports. Spread rather than the
- *  default single `0` so a row sliding gradually out keeps producing callbacks
- *  instead of one at the moment it leaves entirely — see `onIntersection`, which
- *  re-measures with the real predicate each time. */
-const CURSOR_VISIBILITY_THRESHOLDS = [0, 0.01, 0.1, 0.5, 1]
 
 /**
  * Emacs's rule, per panel: scrolling the cursor out of the window moves the
@@ -104,27 +91,23 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     const location = {blockId: focusedBlockId, renderScopeId}
 
     let retriesLeft = 0
-    let mountWatcher: MutationObserver | null = null
     let seenOnScreen = false
+    /** Set when a scroll's settle was refused because the editor was open, so
+     *  closing it knows there is something to reconsider. Without it the retry
+     *  fires for a cursor that merely LANDED off screen in edit mode, whose
+     *  catch-up scroll is still in flight — re-anchoring away from the very row
+     *  the app is scrolling toward. */
+    let suppressedWhileEditing = false
 
     // Re-resolved per use rather than captured: the facet runtime can be
     // swapped (a plugin toggled) while this effect is alive, same as
     // `PanelFocusRecovery` does.
     const excluded = () => resolveSpatialNavExclusions(block.repo.facetRuntime)
 
-    const stopWatchingForMount = () => {
-      mountWatcher?.disconnect()
-      mountWatcher = null
-    }
-
     const sample = () => {
-      const row = findInstance(panelEl, location, excluded())
-      if (row) watchCursorRow(row)
       if (seenOnScreen) return
-      if (row && isRowInViewport(row)) {
-        seenOnScreen = true
-        stopWatchingForMount()
-      }
+      const row = findInstance(panelEl, location, excluded())
+      if (row && isRowInViewport(row)) seenOnScreen = true
     }
 
     // The decision itself is pure and lives in `resolveSettledAnchor`, so its
@@ -157,64 +140,65 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     const onScroll = () => {
       sample()
       if (!seenOnScreen) return
+      if (block.peekProperty(isEditingProp)) suppressedWhileEditing = true
       retriesLeft = SETTLE_RETRIES
       scheduler.schedule(SCROLL_SETTLE_MS)
     }
 
-    // The cursor can leave the viewport without any scroll at all: content
-    // ABOVE it grows and pushes it past the fold while `scrollTop` never
-    // changes. That is the norm on WebKit, which has no scroll anchoring
-    // (`LazyViewportMount` documents it) — every lazy row above the cursor
-    // swapping its estimate for a measured height shoves the cursor down — and
-    // it happens anywhere when an image decodes.
+    // Re-measure with the real predicate. Every signal below funnels here
+    // instead of deciding for itself, because none of them can express what
+    // `isRowInViewport` asks: an absolute line-height minimum, clipped through
+    // EVERY scrollport above the row.
     //
-    // Watched on the CURSOR'S OWN ROW rather than on the content that moves it.
-    // Sizing observers have to be pointed at the right elements, and the right
-    // set is unknowable here: rows mount after this runs, the thing that grew
-    // may be nested inside a row or inside another scrollport, and the
-    // video-notes aside holds rows that are siblings of nothing this could have
-    // enumerated. Intersection asks the question that actually matters — is the
-    // cursor still on screen — and answers it whatever moved.
-    // The observer is a CHANGE SIGNAL, not the decision. Its thresholds are area
-    // ratios while `isRowInViewport` is a line-height minimum, so the two can't
-    // be made to coincide: a shift that leaves three pixels of the row showing
-    // is off screen by the predicate and still intersecting by any threshold.
-    // So every callback re-measures with the real predicate, and the thresholds
-    // exist only to make sure callbacks keep arriving as visibility changes.
-    const onIntersection = () => {
+    // IntersectionObserver was tried for this and cannot do it, twice over. An
+    // element-rooted observer computes intersection through that root alone, so
+    // a nested port sliding behind an OUTER clip produces no callback at all;
+    // and its thresholds are area ratios, so on a tall row the slide from 21px
+    // to 15px visible — straight across the predicate's cutoff — moves the ratio
+    // by 0.002 and crosses nothing. Both are structural, not tuning.
+    const remeasure = () => {
       sample()
       if (!seenOnScreen) return
       const row = findInstance(panelEl, location, excluded())
       if (!row || isRowInViewport(row)) return
+      if (block.peekProperty(isEditingProp)) suppressedWhileEditing = true
       retriesLeft = SETTLE_RETRIES
       scheduler.schedule(SCROLL_SETTLE_MS)
     }
-    let cursorObserver: IntersectionObserver | null = null
-    /** Attach once the row exists; `sample` calls this as soon as it finds it. */
-    const watchCursorRow = (row: HTMLElement) => {
-      if (cursorObserver || typeof IntersectionObserver === 'undefined') return
-      const target = visibilityTargetFor(row)
-      cursorObserver = new IntersectionObserver(onIntersection, {
-        root: nearestScrollableAncestor(target),
-        threshold: CURSOR_VISIBILITY_THRESHOLDS,
-      })
-      cursorObserver.observe(target)
-    }
 
-    settleRef.current = () => scheduler.runNow()
+    // What moves the cursor out of view besides scrolling:
+    //   - content above it growing. On WebKit, which has no scroll anchoring,
+    //     every lazy row above the cursor swapping its estimated height for a
+    //     measured one shoves the cursor down with no scroll event at all —
+    //     and mounting a row is itself a mutation, so the watcher sees it.
+    //   - an image or font resizing IN PLACE inside a row above it, which
+    //     produces no mutation at all. Hence both observers.
+    const contentObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(remeasure)
+    const observeRows = () => {
+      if (!contentObserver) return
+      for (const row of panelEl.querySelectorAll<HTMLElement>('[data-block-id][data-render-scope-id]')) {
+        contentObserver.observe(row)
+      }
+    }
+    // Also how the cursor's row is noticed ARRIVING: on a cold load it is a
+    // deferred placeholder for the first few commits, and `sample` has to see
+    // it appear before `seenOnScreen` can ever become true.
+    const changeWatcher = new MutationObserver(() => {
+      observeRows()
+      remeasure()
+    })
+
+    settleRef.current = () => {
+      if (!suppressedWhileEditing) return
+      suppressedWhileEditing = false
+      scheduler.runNow()
+    }
 
     sample()
-    // The cursor's row often doesn't exist yet — a cold load, or a restore
-    // waiting on `FocusedRowLazyMount` to materialize deferred ancestors. Watch
-    // for it rather than leaving `seenOnScreen` to the next scroll event: a
-    // single coarse gesture (a scrollbar drag, a fling) can move the row from
-    // never-sampled straight to off-screen, and it would then be mistaken for a
-    // cursor the app was still scrolling toward.
-    if (!seenOnScreen) {
-      mountWatcher = new MutationObserver(sample)
-      mountWatcher.observe(panelEl, {childList: true, subtree: true})
-    }
-    const mountWatchDeadline = setTimeout(stopWatchingForMount, CURSOR_MOUNT_WATCH_MS)
+    changeWatcher.observe(panelEl, {childList: true, subtree: true})
+    observeRows()
 
     // Capture at the document: scroll doesn't bubble, and which element
     // actually scrolls varies (the panel's own overflow container normally, an
@@ -225,9 +209,8 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     return () => {
       document.removeEventListener('scroll', onScroll, {capture: true})
       scheduler.cancel()
-      cursorObserver?.disconnect()
-      clearTimeout(mountWatchDeadline)
-      stopWatchingForMount()
+      changeWatcher.disconnect()
+      contentObserver?.disconnect()
       settleRef.current = null
     }
   }, [block, focusedBlockId, renderScopeId])

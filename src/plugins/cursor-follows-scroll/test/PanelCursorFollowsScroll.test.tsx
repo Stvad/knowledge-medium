@@ -20,33 +20,31 @@ const FENCE_PANEL_ID = 'fence-panel'
 const SCOPE = 'panel:page'
 const PORT_HEIGHT = 500
 
-/** happy-dom has no IntersectionObserver and no layout to drive one. Records
- *  the TARGET each observer was pointed at, so firing one is also an assertion
+/** happy-dom has no ResizeObserver and no layout to drive one. Records the
+ *  TARGETS each observer was pointed at, so firing one is also an assertion
  *  that the component observed the element it claims to — a fake that ignores
- *  its target would let "observed nothing useful" pass. */
-interface FakeIntersection {
-  target: HTMLElement | null
-  cb: IntersectionObserverCallback
+ *  its targets would let "observed nothing useful" pass. */
+interface FakeResize {
+  targets: Set<HTMLElement>
+  cb: () => void
 }
-const intersectionObservers: FakeIntersection[] = []
-class TestIntersectionObserver {
-  private entry: FakeIntersection
-  constructor(cb: IntersectionObserverCallback) {
-    this.entry = {target: null, cb}
-    intersectionObservers.push(this.entry)
+const resizeObservers: FakeResize[] = []
+class TestResizeObserver {
+  private entry: FakeResize
+  constructor(cb: () => void) {
+    this.entry = {targets: new Set(), cb}
+    resizeObservers.push(this.entry)
   }
-  observe(el: HTMLElement): void { this.entry.target = el }
-  disconnect(): void { this.entry.target = null }
+  observe(el: HTMLElement): void { this.entry.targets.add(el) }
+  disconnect(): void { this.entry.targets.clear() }
 }
 
 /** Drive the observer watching `target`. Fails loudly when nothing is watching
- *  it, which is the regression the reviewer's note was about. */
-const fireIntersection = (target: HTMLElement, isIntersecting: boolean): void => {
-  const watching = intersectionObservers.filter(o => o.target === target)
+ *  it, so a test cannot pass an implementation that observed the wrong things. */
+const fireResize = (target: HTMLElement): void => {
+  const watching = resizeObservers.filter(o => o.targets.has(target))
   expect(watching.length).toBeGreaterThan(0)
-  for (const o of watching) {
-    o.cb([{isIntersecting} as IntersectionObserverEntry], {} as IntersectionObserver)
-  }
+  for (const o of watching) o.cb()
 }
 
 const stubRect = (el: HTMLElement, top: number, height: number): void => {
@@ -58,8 +56,8 @@ const stubRect = (el: HTMLElement, top: number, height: number): void => {
 
 interface PanelDom {
   port: HTMLElement
-  /** The row's visibility target — what the cursor observer is pointed at. */
-  targetOf: (blockId: string) => HTMLElement
+  /** The row shell — what the content observer is pointed at. */
+  shellOf: (blockId: string) => HTMLElement
   /** Move a row's content rect — the test's stand-in for scrolling, since
    *  happy-dom has no layout to move on its own. */
   moveRow: (blockId: string, top: number) => void
@@ -77,6 +75,7 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
   document.body.appendChild(panel)
 
   const targets = new Map<string, HTMLElement>()
+  const shells = new Map<string, HTMLElement>()
   const addRow = (blockId: string, top: number) => {
     const shell = document.createElement('div')
     shell.setAttribute('data-block-nav-item', 'true')
@@ -88,16 +87,17 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
     shell.appendChild(target)
     port.appendChild(shell)
     targets.set(blockId, target)
+    shells.set(blockId, shell)
   }
   for (const [blockId, top] of rows) addRow(blockId, top)
 
   return {
     port,
     addRow,
-    targetOf: (blockId) => {
-      const target = targets.get(blockId)
-      if (!target) throw new Error(`no row ${blockId}`)
-      return target
+    shellOf: (blockId) => {
+      const shell = shells.get(blockId)
+      if (!shell) throw new Error(`no row ${blockId}`)
+      return shell
     },
     moveRow: (blockId, top) => {
       const target = targets.get(blockId)
@@ -114,8 +114,8 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
-  intersectionObservers.length = 0
-  vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+  resizeObservers.length = 0
+  vi.stubGlobal('ResizeObserver', TestResizeObserver)
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
@@ -384,10 +384,10 @@ describe('PanelCursorFollowsScroll', () => {
 
     // Rows above grow: `a` is shoved below the fold, `b` takes the top. No
     // scroll event anywhere — `scrollTop` did not change. The only signal is
-    // the cursor's own row ceasing to intersect.
+    // the pane's content resizing.
     dom.moveRow('a', 900)
     dom.moveRow('b', 20)
-    fireIntersection(dom.targetOf('a'), false)
+    fireResize(dom.shellOf('a'))
 
     await vi.waitFor(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
@@ -398,7 +398,7 @@ describe('PanelCursorFollowsScroll', () => {
   // (which wants about a line) while still intersecting by any area ratio. The
   // observer therefore can't be the decision: it reports, and the real
   // predicate decides.
-  it('follows the cursor when it is left barely visible, still intersecting', async () => {
+  it('follows the cursor when it is left barely visible but not fully out', async () => {
     const panel = repo.block(PANEL_ID)
     const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
     await focusBlock(panel, 'a', {renderScopeId: SCOPE})
@@ -411,11 +411,30 @@ describe('PanelCursorFollowsScroll', () => {
     // Five pixels of `a` remain inside the port — less than a line, so the
     // predicate calls it off screen, but it is still intersecting.
     dom.moveRow('a', PORT_HEIGHT - 5)
-    fireIntersection(dom.targetOf('a'), true)
+    fireResize(dom.shellOf('a'))
 
     await vi.waitFor(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
     })
+  })
+
+  // Focus can LAND off screen already in edit mode (a jump that opens the
+  // editor), with the decorator's catch-up scroll still in flight. Escape then
+  // must not run the retry: nothing was ever suppressed, and re-anchoring here
+  // would move the cursor off the very row the app is scrolling toward.
+  it('does not retry on Escape when nothing was suppressed', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['far', 900]])
+    await focusBlock(panel, 'far', {renderScopeId: SCOPE, edit: true})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+
+    // The catch-up scroll is under way but `far` is still off screen.
+    dom.scroll()
+    await panel.set(isEditingProp, false)
+
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('far')
   })
 
   // An action can move focus AND leave edit mode in one write (`focusBlock(x,
