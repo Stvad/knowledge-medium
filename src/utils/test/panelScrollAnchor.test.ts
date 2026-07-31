@@ -479,6 +479,23 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     cancel()
   })
 
+  // Clicking a row during the wait moves the cursor while this aligner still
+  // holds the old one, and fires none of the other signals — so the anchor
+  // mounting a moment later would scroll off the row the user just picked.
+  it('gives up when a row in the panel is clicked', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
+    port.dispatchEvent(new Event('pointerdown', {bubbles: true}))
+
+    addRow('row-b', 'panel:page', 300)
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(port.scrollTop).toBe(0)
+    cancel()
+  })
+
   it('does not use the offset once the anchor has been found', async () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0

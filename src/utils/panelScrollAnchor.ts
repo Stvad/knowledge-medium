@@ -191,6 +191,7 @@ export const alignScrollportToRow = (
     scrollEl.removeEventListener('wheel', finish)
     scrollEl.removeEventListener('touchmove', finish)
     scrollEl.removeEventListener('keydown', finish)
+    scrollEl.removeEventListener('pointerdown', finish)
     watchedPort?.removeEventListener('scroll', onScroll)
     watchedPort = null
     scrollEl.removeEventListener('scroll', onScrollWhileWaiting, {capture: true})
@@ -307,6 +308,11 @@ export const alignScrollportToRow = (
   scrollEl.addEventListener('wheel', finish, {passive: true})
   scrollEl.addEventListener('touchmove', finish, {passive: true})
   scrollEl.addEventListener('keydown', finish)
+  // Clicking a row is takeover too, and fires none of the above. Without it a
+  // click during the wait moves the cursor while this aligner is still holding
+  // the OLD one — and the anchor mounting a moment later scrolls the pane off
+  // the row the user just picked.
+  scrollEl.addEventListener('pointerdown', finish)
   scrollEl.addEventListener('scroll', onScrollWhileWaiting, {capture: true, passive: true})
 
   attempt()
