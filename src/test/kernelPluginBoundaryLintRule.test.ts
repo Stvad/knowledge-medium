@@ -162,6 +162,16 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/apiCatalog.ts'),
         code: `const m = import.meta.glob('./**/*.ts')`,
       },
+      // `types=` names a package, not a path — and a `path=` to a core module is
+      // the sanctioned direction.
+      {
+        filename: core('vite-env.d.ts'),
+        code: `/// <reference types="vite/client" />\nexport type T = 1`,
+      },
+      {
+        filename: core('data/kernelTypes.d.ts'),
+        code: `/// <reference path="./repo.ts" />\nexport type T = 1`,
+      },
       // A glob whose root segment cannot match `src` is still clean.
       {
         filename: core('extensions/apiCatalog.ts'),
@@ -644,6 +654,29 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/src/components/../plugins/todo/**' },
+        }],
+      },
+      // `**` is zero-or-more segments WHEREVER it appears. Handling it only in
+      // the leading position — which is where the other cases put it — let a zip
+      // comparison consume it as exactly one segment and compare everything
+      // after it at the wrong depth.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('../../../*/**/src/plugins/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '../../../*/**/src/plugins/**' },
+        }],
+      },
+      // A triple-slash reference is a comment, not a node, so the entire
+      // visitor set was blind to it — yet TypeScript resolves and includes the
+      // target. `src/vite-env.d.ts` opens with one, so the idiom is live here.
+      {
+        filename: core('data/kernelTypes.d.ts'),
+        code: `/// <reference path="../plugins/todo/schema.ts" />\nexport type T = 1`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../plugins/todo/schema.ts' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,

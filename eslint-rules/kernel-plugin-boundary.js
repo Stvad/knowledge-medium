@@ -314,6 +314,22 @@ const segmentCanMatch = (segment, literal) =>
  *       span the gap, so match it segment by segment against the path down.
  *  A leading `**` spans any depth, and a brace group that survives the segment
  *  split unbalanced can't be reasoned about at all; both flag conservatively. */
+/** Whether a glob's remaining segments can walk DOWN a concrete path — used to
+ *  ask whether a pattern rooted above the plugin layer can reach into it.
+ *
+ *  `**` is zero-or-more segments, so it can swallow whatever is left of the gap
+ *  and the answer is yes wherever it appears. Handling it only in the leading
+ *  position — which is where the tests happened to put it — meant a zip
+ *  comparison consumed it as exactly ONE segment and compared everything after
+ *  it at the wrong depth. */
+const canDescendTo = (patternSegments, gapSegments) => {
+  if (gapSegments.length === 0) return true
+  if (patternSegments.length === 0) return false
+  const [first, ...rest] = patternSegments
+  if (first === '**' || hasUnbalancedBrace(first)) return true
+  return segmentCanMatch(first, gapSegments[0]) && canDescendTo(rest, gapSegments.slice(1))
+}
+
 const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
   if (absolutePattern === undefined) return false
   const {head, rest} = staticHead(absolutePattern)
@@ -321,11 +337,7 @@ const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
   if (!outsideRoot(posix.relative(pluginsRoot, headPath))) return true
   const gap = posix.relative(headPath, pluginsRoot)
   if (outsideRoot(gap)) return false
-  const restSegments = rest === '' ? [] : rest.split('/')
-  if (restSegments.length === 0) return false
-  if (restSegments[0] === '**' || restSegments.some(hasUnbalancedBrace)) return true
-  return gap.split('/').every((needed, i) =>
-    restSegments[i] !== undefined && segmentCanMatch(restSegments[i], needed))
+  return canDescendTo(rest === '' ? [] : rest.split('/'), gap.split('/'))
 }
 
 /** Split a glob into its static leading segments and the globby remainder. */
@@ -528,6 +540,28 @@ const noCoreToPluginImports = {
       },
       // `new URL('…', import.meta.url)`, incl. inside `new Worker(...)`.
       NewExpression: (node) => isImportMetaUrl(node) && check(node, node.arguments[0]),
+      // `/// <reference path="…" />`. Not a node at all — ESLint exposes it as a
+      // comment — but TypeScript resolves and includes the target, so a core
+      // .d.ts can pick up a plugin dependency the whole visitor set is blind to.
+      // A live idiom here: src/vite-env.d.ts opens with one.
+      Program: () => {
+        for (const comment of context.sourceCode.getAllComments()) {
+          if (comment.type !== 'Line') continue
+          const [, referencePath] =
+            comment.value.match(/^\/\s*<reference\s+path\s*=\s*["']([^"']+)["']/) ?? []
+          if (referencePath === undefined) continue
+          // Reference paths are resolved relative to the containing file.
+          const plugin = owningPlugin(
+            srcRelativePath(posix.resolve(importerDir, normalizePath(referencePath)), sourceRoot),
+          )
+          if (plugin === undefined) continue
+          context.report({
+            loc: comment.loc,
+            messageId: 'coreImportsPlugin',
+            data: {plugin, specifier: referencePath},
+          })
+        }
+      },
       // `declare module '@/plugins/todo/schema.js' { … }`. Augmenting a module
       // resolves it, so core's typecheck fails without the plugin — the same
       // coupling `import type` has. Not hypothetical here: augmenting
