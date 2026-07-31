@@ -25,6 +25,13 @@ const V5_IMPORT = "import { v5 as uuidv5 } from 'uuid'\nexport const id = uuidv5
 const V5_DYNAMIC_IMPORT =
   "export const id = async () => {\n  const {v5} = await import('uuid')\n  return v5('key', 'ns')\n}\n"
 
+/** The same thing with backticks. Statically identical to the line above — no
+ *  substitutions, so it is just the module name spelled with a different quote
+ *  character — but a different AST node, and the first version of this selector
+ *  matched only `Literal`. */
+const V5_DYNAMIC_TEMPLATE_IMPORT =
+  'export const id = async () => {\n  const {v5} = await import(`uuid`)\n  return v5("key", "ns")\n}\n'
+
 /** Restriction messages ESLint reports for `code` as if it lived at `filePath`.
  *  The file need not exist — only its path matters, which is the point.
  *
@@ -103,6 +110,23 @@ describe('uuid v5 is restricted outside @/data/derivedIds', {timeout: 30_000}, (
       const messages = await restrictionsAt('src/plugins/some-plugin/ids.ts', V5_DYNAMIC_IMPORT)
       expect(messages).toHaveLength(1)
       expect(messages[0]).toMatch(/derivedBlockId/)
+    })
+
+    it('is rejected when the specifier is written with backticks', async () => {
+      expect(await restrictionsAt('src/plugins/some-plugin/ids.ts', V5_DYNAMIC_TEMPLATE_IMPORT))
+        .toHaveLength(1)
+    })
+
+    /** Where the guard stops, on purpose. A computed specifier is not an
+     *  accident anyone has while writing an id helper — it is routing around a
+     *  rule you can read — and no selector can evaluate arbitrary expressions,
+     *  so pretending to cover it would be worse than saying where the line is.
+     *  `derivedIds.test.ts` is the pin that does not care how the import was
+     *  spelled. */
+    it('does NOT catch a specifier assembled at runtime, and that is the boundary', async () => {
+      const concatenated =
+        "export const id = async () => {\n  const {v5} = await import('uu' + 'id')\n  return v5('key', 'ns')\n}\n"
+      expect(await restrictionsAt('src/plugins/some-plugin/ids.ts', concatenated)).toEqual([])
     })
 
     it('is rejected inside src/data too, which a separate config block covers', async () => {

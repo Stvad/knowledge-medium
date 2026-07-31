@@ -724,11 +724,21 @@ const guides: AuthoringGuide[] = [
       'Store large or user-visible imported data as child/content blocks.',
     ],
     preferredModules: [
+      // Same rule as the settings-dialog list above, which is where it is
+      // written down: brief mode surfaces only these, so a step naming a helper
+      // whose module is absent sends the agent off to invent an import path.
+      // The singleton step names `getOrCreateKernelPage`; records filed under
+      // that root are `getOrCreateTypedChild`. Both modules belong here.
+      //
+      // `@/extensions/pluginIds.js` is deliberately gone: it returns an id and
+      // nothing else, which reads like a lookup and isn't, and no step here
+      // names it any more.
       '@/data/api/index.js',
       '@/data/facets.js',
       '@/extensions/dynamicExtensionSeeds.js',
       '@/data/stateBlocks.js',
-      '@/extensions/pluginIds.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
     ],
     relatedFacets: ['data.definition-seeds', 'data.types'],
     commands: [

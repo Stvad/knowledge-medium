@@ -102,9 +102,19 @@ const derivedIdMessage = 'Derive block ids through `derivedBlockId` (@/data/deri
  *  configuring it in a later, narrower block would silently drop the B3 and
  *  UI-delete restrictions for every file that block matched. It is listed in
  *  both `src/`-wide selector blocks below for the same reason, and left out of
- *  the test block so tests can still hash independently. */
+ *  the test block so tests can still hash independently.
+ *
+ *  Two specifier forms, and the boundary between covered and not is
+ *  deliberate. A string literal and a zero-substitution template literal are
+ *  both statically the module name — equally easy to type by accident, so both
+ *  are caught. A specifier that has to be COMPUTED (`'uu' + 'id'`, a variable,
+ *  a template with substitutions) is not, and chasing it would be theatre: no
+ *  selector can evaluate arbitrary expressions, and anyone assembling the
+ *  string at runtime is routing around a rule they can read. The pin that does
+ *  not care how the import was spelled is `derivedIds.test.ts`, which hashes
+ *  every live formula independently — this rule only has to stop the accident. */
 const derivedIdDynamicImportRestriction = {
-  selector: "ImportExpression[source.value='uuid']",
+  selector: "ImportExpression[source.value='uuid'], ImportExpression[source.expressions.length=0][source.quasis.0.value.cooked='uuid']",
   message: derivedIdMessage,
 }
 
