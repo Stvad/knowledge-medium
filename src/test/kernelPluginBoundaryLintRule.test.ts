@@ -131,6 +131,17 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('types/ast.d.ts'),
         code: `declare module '*.svg' { const c: string; export default c }`,
       },
+      // Import-equals against a CORE module is ordinary, and the
+      // namespace-alias form (`import X = A.B`) names no module at all — its
+      // `moduleReference` is a TSQualifiedName with no `.expression`.
+      {
+        filename: core('data/repo.ts'),
+        code: `import Api = require('@/data/api/index.js')`,
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: `import Schema = Todo.Schema`,
+      },
       // `new URL` against something other than `import.meta.url` is an ordinary
       // runtime URL, not a build-time module reference.
       {
@@ -350,6 +361,27 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // TypeScript's import-equals form. The type-only spelling is the live
+      // hole: it compiles clean under this repo's `module: ESNext` (verified
+      // against the repo's own tsc) and still resolves the plugin.
+      {
+        filename: core('types.ts'),
+        code: `import type Todo = require('@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // The value spelling is rejected by tsc here (TS1202), but a boundary
+      // rule shouldn't leave half its surface to a compiler setting.
+      {
+        filename: core('data/repo.ts'),
+        code: `import Todo = require('../plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../plugins/todo/schema.js' },
         }],
       },
       // Relative specifiers are resolved, not pattern-matched, so climbing

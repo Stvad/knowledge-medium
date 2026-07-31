@@ -39,7 +39,8 @@
  * — see the eslint.config.js overrides for why.
  *
  * What counts as depending: a static import, an `export … from`, a dynamic
- * `import()`, a type-position `import('…')`, `require()`, `import.meta.glob`
+ * `import()`, a type-position `import('…')`, `import X = require('…')`,
+ * `require()`, `import.meta.glob`
  * over the plugin layer, and `new URL('…', import.meta.url)`. Type-only imports
  * are flagged too: `import type` still makes core's typecheck fail without the
  * plugin present, and a contract core names is a contract that belongs in core.
@@ -592,6 +593,22 @@ const noCoreToPluginImports = {
       // unreachable today and therefore untested — do not read it as
       // load-bearing.
       TSImportType: (node) => check(node, node.source ?? node.argument),
+      // `import X = require('…')` — TypeScript's import-equals form, which the
+      // parser gives its own node type, so nothing above sees it. tsc rejects
+      // the VALUE spelling under this repo's `module: ESNext` (TS1202), but the
+      // `import type X = require('…')` spelling compiles clean and still
+      // resolves the target, so core's typecheck depends on the plugin exactly
+      // as `import type` would. Both are covered — a boundary rule shouldn't
+      // rely on a compiler setting to close half its own surface.
+      // The type guard is defence in depth, not load-bearing: `import Ns =
+      // Foo.Bar` (a TSQualifiedName alias) names no module, but its
+      // `.expression` is undefined and `check` already tolerates that, so the
+      // valid case below passes with the guard removed. Kept because saying
+      // which reference form this handles beats relying on nullish tolerance.
+      TSImportEqualsDeclaration: (node) => {
+        if (node.moduleReference?.type !== 'TSExternalModuleReference') return
+        check(node, node.moduleReference.expression)
+      },
       // `import.meta.glob('/src/plugins/*/…')` — pattern-based discovery of the
       // whole plugin layer, and `require('…')`. Neither is an import *node*, so
       // neither is reachable from the handlers above; `import.meta.glob` in
