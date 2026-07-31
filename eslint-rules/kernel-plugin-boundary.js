@@ -70,7 +70,14 @@
 
 import { posix } from 'node:path'
 
-const normalizePath = (value) => value.replaceAll('\\', '/')
+// Backslashes to forward slashes, and a drive prefix dropped. Both the source
+// root and the linted filename come through here, so stripping `C:` from both
+// keeps them comparable — and without it `posix.resolve` does not consider
+// `C:/repo/src` absolute, silently prepends the cwd, and every path stops
+// sharing the source root. That is a FAIL-OPEN on Windows: no violations, no
+// diagnostic. Not a platform this repo is developed or CI'd on, which is
+// exactly why it would have gone unnoticed.
+const normalizePath = (value) => value.replaceAll('\\', '/').replace(/^[A-Za-z]:/, '')
 
 // Under the pinned eslint, `context.filename` is always a string, so the
 // fallbacks are unreachable — kept only to match the identical helper in the
@@ -259,11 +266,22 @@ const templateGlob = (node) => {
   const el = unwrap(node)
   if (el?.type !== 'TemplateLiteral' || el.expressions.length === 0) return undefined
   const parts = el.quasis.map(quasi => quasi.value.cooked)
-  return parts.some(part => part === null || part === undefined) ? undefined : parts.join('*')
+  if (parts.some(part => part === null || part === undefined)) return undefined
+  // Only a genuinely dynamic expression becomes a wildcard. Replacing the static
+  // ones too threw away path segments Vite keeps, so a template mixing a known
+  // prefix with one unknown segment was checked against the wrong directory.
+  return parts.reduce(
+    (out, part, i) => out + (i === 0 ? '' : staticString(el.expressions[i - 1]) ?? '*') + part,
+    '',
+  )
 }
 
 const specifierLiterals = (node) => {
-  const elements = node?.type === 'ArrayExpression' ? node.elements : [node]
+  // Unwrap FIRST: `['…'] as const` is idiomatic, and testing the node type
+  // before unwrapping saw a TSAsExpression and treated the whole array as a
+  // single non-static element.
+  const unwrapped = unwrap(node)
+  const elements = unwrapped?.type === 'ArrayExpression' ? unwrapped.elements : [unwrapped]
   return elements
     .map(staticString)
     .filter(value => value !== undefined)
@@ -381,13 +399,13 @@ const hasUnbalancedBrace = (segment) => segment.includes('{') && !segment.includ
 const isImportMetaUrl = (node) =>
   node?.type === 'NewExpression'
   && node.callee?.name === 'URL'
-  && node.arguments[1]?.type === 'MemberExpression'
-  && node.arguments[1].object?.type === 'MetaProperty'
+  && unwrap(node.arguments[1])?.type === 'MemberExpression'
+  && unwrap(node.arguments[1]).object?.type === 'MetaProperty'
   // `new.target` is a MetaProperty too, so match the names — `new.target.url`
   // is an ordinary runtime base and Vite emits no chunk for it.
-  && node.arguments[1].object.meta?.name === 'import'
-  && node.arguments[1].object.property?.name === 'meta'
-  && node.arguments[1].property?.name === 'url'
+  && unwrap(node.arguments[1]).object.meta?.name === 'import'
+  && unwrap(node.arguments[1]).object.property?.name === 'meta'
+  && unwrap(node.arguments[1]).property?.name === 'url'
 
 /** The value node of a named property on an object literal, or undefined. Used
  *  to read `import.meta.glob`'s `base` option; a computed or spread property is

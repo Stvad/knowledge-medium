@@ -168,6 +168,12 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/kernelTypes.d.ts'),
         code: `export type X = 1\n/// <reference path="../plugins/todo/schema.ts" />`,
       },
+      // The same mixed template, resolving to core, stays clean — folding the
+      // static part must not turn every such template into a violation.
+      {
+        filename: core('data/repo.ts'),
+        code: "const m = await import(`./${'../data'}/${name}.ts`)",
+      },
       // `types=` names a package, not a path — and a `path=` to a core module is
       // the sanctioned direction.
       {
@@ -702,6 +708,37 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: './todo/**' },
+        }],
+      },
+      // `as const` on the ARRAY, not the elements. Testing the node type before
+      // unwrapping saw a TSAsExpression and treated the whole array as one
+      // non-static element, so every pattern in it went unread.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob(['/src/plugins/todo/**'] as const)`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/plugins/todo/**' },
+        }],
+      },
+      // ...and an assertion around the `new URL` base.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const w = new URL('../plugins/todo/index.tsx', import.meta.url as string)`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../plugins/todo/index.tsx' },
+        }],
+      },
+      // A template mixing a STATIC interpolation with a dynamic one. Wildcarding
+      // both threw away segments Vite keeps, so the pattern was checked against
+      // the importer's own directory instead of the plugin it names.
+      {
+        filename: core('data/repo.ts'),
+        code: "const m = await import(`./${'../plugins/todo'}/${name}.tsx`)",
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './../plugins/todo/*.tsx' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,
