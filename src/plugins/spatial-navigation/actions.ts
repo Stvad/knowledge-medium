@@ -245,10 +245,6 @@ const moveVertical = async (
     return true
   }
 
-  const next = verticalNeighbor(current, direction, excludedSurfaces)
-  const nextLocation = next ? locationOf(next) : null
-  const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
-
   // The model knows rows the DOM doesn't, because rows mount lazily. "The next
   // MOUNTED row" and "the next row" diverge in several ways — running out at
   // the bottom of the mounted window, a scrollbar drag leaving two mounted
@@ -290,6 +286,16 @@ const moveVertical = async (
     expectedLocation &&
     !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
   ) return true
+
+  // Read the neighbour AFTER the walk, never before: resolving the `childIds`
+  // that walk awaits is itself what mounts the rows under this one, so a
+  // neighbour read earlier can be a row that is no longer adjacent — and every
+  // test below is about adjacency. Taking that stale row while the mounted set
+  // says the model's row has since arrived would skip exactly the row that
+  // just mounted.
+  const next = verticalNeighbor(current, direction, excludedSurfaces)
+  const nextLocation = next ? locationOf(next) : null
+  const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
 
   if (modelNext) {
     // (1) The model's row is itself MOUNTED in this scope and panel. The DOM

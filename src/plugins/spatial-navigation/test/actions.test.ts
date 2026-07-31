@@ -901,6 +901,66 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // The rows under a block mount when its `childIds` handle resolves — which is
+  // the very handle the model walk awaits. So the walk's own await is when the
+  // model's row is most likely to appear, and a neighbour read before it can
+  // already be the wrong row.
+  it('re-reads the neighbour after the walk, so a row mounted during it is not skipped', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+      {blockId: 'X', renderScopeId: 'panel:backlink', surface: 'backlink'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+
+    // 'B' — the model's next row — mounts between 'A' and the backlink while the
+    // walk is in flight. Driven off `load()` because that IS the wait: the walk
+    // loads the row and its child list before it can answer.
+    const mountModelRowDuringWalk = new Proxy(env.repo.block('A'), {
+      get(target, prop) {
+        if (prop === 'load') {
+          return async () => {
+            const panelEl = document.querySelector<HTMLElement>('[data-panel-id="panel"]')!
+            const row = document.createElement('div')
+            row.dataset.blockNavItem = 'true'
+            row.dataset.blockId = 'B'
+            row.dataset.renderScopeId = 'panel:outline'
+            row.dataset.blockSurface = 'outline'
+            panelEl.insertBefore(row, panelEl.children[1])
+            return target.load()
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: mountModelRowDuringWalk,
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    // NOT the backlink: it was the neighbour before 'B' mounted, and taking it
+    // would jump the row that had just appeared in between.
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'B',
+        renderScopeId: 'panel:outline',
+      })
+    })
+  })
+
   // The model walk can await an uncached `childIds`, and a click or a second
   // keystroke can land in that window. Everything after the await is computed
   // from a row that no longer holds focus, so the invocation must bow out.
