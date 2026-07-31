@@ -219,6 +219,8 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   userTypes: 'stateful service constructor-bound to the real repo — documented group-escaping',
   workspaceBackfillJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   workspaceBackfillMarkers: 'shared object',
+  backfillSyncGate: 'injected function, captures no repo (default closes over this.db only)',
+  disposeBackfillSyncGate: 'disposer for the armed gate; reassigned only by scheduleWorkspaceBackfills, which the facade overrides',
   referenceTargetDeriveJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   referenceTargetSweepDone: 'shared Set (session bookkeeping)',
   pendingNameRederives: 'shared Map (session bookkeeping)',
