@@ -5,6 +5,7 @@ import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
+import type { Block } from '@/data/block'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
@@ -706,6 +707,135 @@ describe('default CodeMirror shortcuts', () => {
     expect(await isBlockDeleted(env.repo, 'one')).toBe(true)
     expect(await isBlockDeleted(env.repo, 'two')).toBe(true)
     expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
+  })
+
+  describe('a bulk action is ONE undo entry', () => {
+    // Every multi-select gesture used to commit one tx per selected block, so
+    // undoing a 5-block indent took five cmd-Zs — and stopping halfway left
+    // the outline in a state the user never asked for. `repo.undoGroup`
+    // (issue #306) already folds a multi-tx composite into a single entry;
+    // these pin that the bulk gestures actually run inside one.
+
+    /** root > a, b, c — plus `first`, so a,b,c all have a previous sibling
+     *  to indent under. */
+    const seedFour = async () => {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+        await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+      }, {scope: ChangeScope.BlockDefault})
+      for (const id of ['first', 'a', 'b', 'c']) {
+        await env.repo.mutate.createChild({parentId: 'root', id, content: id})
+      }
+      const uiStateBlock = env.repo.block('ui')
+      await uiStateBlock.set(topLevelBlockIdProp, 'root')
+      await uiStateBlock.set(selectionStateProp, {
+        ...selectionStateProp.defaultValue,
+        selectedBlockIds: ['a', 'b', 'c'],
+      })
+      env.repo.undoManager.clear()
+      return uiStateBlock
+    }
+
+    const runOnSelection = async (uiStateBlock: Block, actionId: string) => {
+      await findMultiSelectAction(env.repo, actionId).handler({
+        uiStateBlock,
+        scopeRootId: 'root',
+        selectedBlocks: [env.repo.block('a'), env.repo.block('b'), env.repo.block('c')],
+        anchorBlock: null,
+      } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+    }
+
+    const parentOf = async (id: string): Promise<string | null> =>
+      (await env.repo.db.getOptional<{parent_id: string | null}>(
+        'SELECT parent_id FROM blocks WHERE id = ?', [id],
+      ))?.parent_id ?? null
+
+    const undoDepth = () => env.repo.undoManager.depths(ChangeScope.BlockDefault).undo
+
+    it('indent: three blocks, one entry, one undo puts all three back', async () => {
+      const uiStateBlock = await seedFour()
+      await runOnSelection(uiStateBlock, 'multi_select.indent_block')
+
+      // Sanity: the fan-out really did indent all three (each lands beneath
+      // its own previous sibling), so the undo assertion isn't vacuous.
+      expect(await parentOf('a')).toBe('first')
+      expect(undoDepth()).toBe(1)
+
+      expect(await env.repo.undo()).toBe(true)
+      expect(await parentOf('a')).toBe('root')
+      expect(await parentOf('b')).toBe('root')
+      expect(await parentOf('c')).toBe('root')
+      expect(undoDepth()).toBe(0)
+    })
+
+    it('outdent: three blocks, one entry', async () => {
+      const uiStateBlock = await seedFour()
+      await runOnSelection(uiStateBlock, 'multi_select.indent_block')
+      env.repo.undoManager.clear()
+
+      await runOnSelection(uiStateBlock, 'multi_select.outdent_block')
+      expect(undoDepth()).toBe(1)
+    })
+
+    it('move down: three blocks, one entry (the write runs inside withRowSlide)', async () => {
+      // move up/down are the only bulk gestures whose write is nested inside
+      // an animation wrapper. If `withRowSlide` ever stopped awaiting its
+      // callback, the mutations would land after `undoGroup` returned and
+      // each would be its own entry again.
+      const uiStateBlock = await seedFour()
+      await runOnSelection(uiStateBlock, 'multi_select.move_block_down')
+      expect(undoDepth()).toBe(1)
+    })
+
+    it('toggle collapse: three blocks, one entry (the block.set write path)', async () => {
+      // Distinct from indent/outdent: these handlers wrote through
+      // `block.set(...)`, which routes to `block.repo` and so can't pick up a
+      // group token from the batch wrapper the way `repo.mutate.*` does.
+      const uiStateBlock = await seedFour()
+      await runOnSelection(uiStateBlock, 'multi_select.toggle_collapse')
+
+      expect(env.repo.block('a').peekProperty(isCollapsedProp)).toBe(true)
+      expect(env.repo.block('c').peekProperty(isCollapsedProp)).toBe(true)
+      expect(undoDepth()).toBe(1)
+
+      expect(await env.repo.undo()).toBe(true)
+      expect(env.repo.block('a').peekProperty(isCollapsedProp)).toBeFalsy()
+      expect(env.repo.block('c').peekProperty(isCollapsedProp)).toBeFalsy()
+    })
+
+    it('delete: three blocks, one entry, one undo restores all three', async () => {
+      const uiStateBlock = await seedFour()
+      await runOnSelection(uiStateBlock, 'multi_select.delete_block')
+
+      expect(await isBlockDeleted(env.repo, 'a')).toBe(true)
+      expect(undoDepth()).toBe(1)
+
+      expect(await env.repo.undo()).toBe(true)
+      expect(await isBlockDeleted(env.repo, 'a')).toBe(false)
+      expect(await isBlockDeleted(env.repo, 'b')).toBe(false)
+      expect(await isBlockDeleted(env.repo, 'c')).toBe(false)
+    })
+
+    it('cut: three blocks, one entry', async () => {
+      const uiStateBlock = await seedFour()
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', {clipboard: {write: vi.fn(async () => {})}})
+
+      await runOnSelection(uiStateBlock, 'cut_selected_blocks')
+
+      expect(await isBlockDeleted(env.repo, 'a')).toBe(true)
+      expect(undoDepth()).toBe(1)
+    })
+
+    it('a single-block action still gets its own entry (grouping is per gesture)', async () => {
+      // The group must be minted per bulk invocation, not held open across
+      // gestures — otherwise two consecutive bulk indents would merge into
+      // one undo step.
+      const uiStateBlock = await seedFour()
+      await runOnSelection(uiStateBlock, 'multi_select.indent_block')
+      await runOnSelection(uiStateBlock, 'multi_select.outdent_block')
+      expect(undoDepth()).toBe(2)
+    })
   })
 
   it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
