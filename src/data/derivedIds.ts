@@ -36,8 +36,10 @@
  *
  * ## Which get-or-create do I want?
  *
- * This module answers "what id", never "and then what". Three call shapes sit
- * on top of it, and they differ in the policy they apply to what they find:
+ * This module answers what the id IS, and whether what is sitting at it is
+ * YOURS ({@link classifyOccupant}) — never what to do about it. Three call
+ * shapes sit on top, and they differ in exactly that last part: the policy
+ * they apply to the verdict.
  *
  *  - {@link getOrCreateTypedChild} (`@/data/typedRecords`) — a RECORD under a
  *    parent block, inside your tx. Refuses a tombstone (answering `taken`
@@ -72,6 +74,7 @@
  */
 
 import { v5 as uuidv5 } from 'uuid'
+import type { BlockData } from './api'
 
 /**
  * What makes a block THIS one and not another.
@@ -92,3 +95,93 @@ export interface DerivedIdentity {
  *  reference to what that device happens to hold. */
 export const derivedBlockId = (identity: DerivedIdentity): string =>
   uuidv5(identity.key, identity.namespace)
+
+/**
+ * What is sitting at a derived id, as one caller sees it.
+ *
+ * A derived id tells you WHERE to look; it never promises the row you find is
+ * the one you meant. Every get-or-create above therefore reads the id and then
+ * asks the same question — "is this mine to write through?" — and that question
+ * used to be answered separately inside each of them, each with a different
+ * subset of the clauses.
+ *
+ * Three of the bugs fixed while writing this module were that, and only that:
+ * `getOrCreateKernelPage` repaired another workspace's page; `adoptTypedBlock`
+ * tagged a tombstone; `adoptTypedBlock` tagged another workspace's row. One
+ * omitted clause each, in three copies of one predicate — and fixing a copy
+ * left the others wrong, which is how the second and third were found.
+ *
+ * So the CLASSIFICATION lives here, once, and each caller applies its own
+ * POLICY to the verdict. A kernel page restores a `tombstoned`; a record
+ * refuses one. They are allowed to disagree about that — what they may not do
+ * is disagree about what `tombstoned` MEANS, or forget to ask about `foreign`.
+ *
+ * Not every derived-id flow forms this predicate: `createOrRestoreTargetBlock`
+ * delegates the whole question to `tx.createOrGet`, which classifies inside the
+ * engine and raises `DeletedConflictError` / `DeterministicIdCrossWorkspaceError`
+ * for the caller to catch. That is the same taxonomy arrived at from the other
+ * side, and it needs no read of its own — so it is deliberately not routed
+ * through here.
+ */
+export type OccupantVerdict =
+  /** No row at this id at all. Yours to create. */
+  | 'absent'
+  /** A row belonging to a DIFFERENT workspace.
+   *
+   *  Never yours, whatever the key says. Reachable two ways: a namespace whose
+   *  key omits the workspace (or is chosen by extension code, which the app
+   *  does not control), and — for any id at all — the window between a read and
+   *  the transaction that acts on it, because sync materialization rewrites
+   *  every stored column except `id`, `workspace_id` included. */
+  | 'foreign'
+  /** A soft-deleted row in this workspace. Whether that is an obstacle or
+   *  something to restore is the caller's policy; that it is not a live record
+   *  is not. */
+  | 'tombstoned'
+  /** Live and in this workspace, but the caller's own `adoptable` declined it
+   *  — the record moved, finished, or otherwise stopped being the one this
+   *  identity meant. */
+  | 'rejected'
+  /** Live, this workspace, accepted. The ONLY verdict you may write through. */
+  | 'ours'
+
+/** A verdict paired with the row it describes, so callers narrow instead of
+ *  casting. `block` is non-null for every verdict but `absent`. */
+export type Occupancy =
+  | { verdict: 'absent'; block: null }
+  | { verdict: Exclude<OccupantVerdict, 'absent'>; block: BlockData }
+
+export interface OccupantPolicy {
+  /** The workspace the caller is acting in — for a record, its PARENT's
+   *  workspace, not one the caller carries separately. */
+  workspaceId: string
+  /** May this block serve as the thing at this identity? Consulted only for a
+   *  live row in `workspaceId`, so it never has to re-check either. */
+  adoptable?: (block: BlockData) => boolean
+}
+
+/**
+ * Classify the row at a derived id. Pure; the caller does the reading.
+ *
+ * The order of the clauses is part of the contract, not an implementation
+ * detail:
+ *
+ *  - `foreign` outranks `tombstoned`, so a tombstone in someone else's
+ *    workspace reports `foreign`. That is what keeps a restore policy — which
+ *    keys on `tombstoned` — structurally unable to resurrect another
+ *    workspace's row: it never sees that verdict, rather than having to
+ *    remember a second check beside it.
+ *  - `adoptable` runs last, so it is never asked about a tombstone or a
+ *    foreign row. A predicate written against live records ("is this workout
+ *    still open?") would happily say yes to both.
+ */
+export const classifyOccupant = (
+  occupant: BlockData | null,
+  policy: OccupantPolicy,
+): Occupancy => {
+  if (occupant === null) return {verdict: 'absent', block: null}
+  if (occupant.workspaceId !== policy.workspaceId) return {verdict: 'foreign', block: occupant}
+  if (occupant.deleted) return {verdict: 'tombstoned', block: occupant}
+  if (policy.adoptable && !policy.adoptable(occupant)) return {verdict: 'rejected', block: occupant}
+  return {verdict: 'ours', block: occupant}
+}

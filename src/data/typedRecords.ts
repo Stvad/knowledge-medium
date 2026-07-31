@@ -16,7 +16,7 @@
  * hand-rolled record stays true here.
  */
 
-import { derivedBlockId, type DerivedIdentity } from './derivedIds'
+import { classifyOccupant, derivedBlockId, type DerivedIdentity, type OccupantPolicy } from './derivedIds'
 import type { AnyPropertyAssignment, BlockData, BlockReference, Tx, TypeRegistrySnapshot } from './api'
 import { DeletedConflictError, DeterministicIdCrossWorkspaceError } from './api/errors'
 import { createChild, orderKeyForInsert } from './mutators'
@@ -212,24 +212,26 @@ export const adoptTypedBlock = async (
   types: readonly string[],
   typeSnapshot?: TypeRegistrySnapshot,
 ): Promise<Extract<DerivedChildOutcome, {status: 'adopted'}>> => {
-  const current = await tx.get(block.id)
-  if (!current || current.deleted) {
+  // Re-read and re-classify: the caller's `block` is a snapshot, and the row
+  // behind it can have gone, been tombstoned, or moved workspace since. The
+  // workspace case is not exotic — sync materialization rewrites every stored
+  // column except `id`, `workspace_id` included — and tagging a foreign row
+  // would write into a workspace the caller never named, pinning the whole tx
+  // to it when this is the transaction's first write.
+  const seat = classifyOccupant(await tx.get(block.id), {workspaceId: block.workspaceId})
+  if (seat.verdict === 'foreign') {
     throw new Error(
-      `adoptTypedBlock: ${block.id} is ${current ? 'deleted' : 'missing'} — it cannot be adopted. Re-read the record inside this transaction before adopting it.`,
+      `adoptTypedBlock: ${block.id} is in workspace ${seat.block.workspaceId}, not ${block.workspaceId} — it is not this caller's record to adopt.`,
     )
   }
-  // …and it has to be the same workspace's row. `tx.get` selects on id alone,
-  // and sync materialization rewrites every stored column except `id` —
-  // `workspace_id` included — so the row behind a snapshot taken outside this
-  // transaction can belong to someone else by now. Tagging it would write into
-  // a workspace the caller never named, and because this may be the
-  // transaction's FIRST write, the tx would pin itself to that workspace
-  // rather than reject it. Same transition `getOrCreateKernelPage` guards.
-  if (current.workspaceId !== block.workspaceId) {
+  if (seat.verdict !== 'ours') {
+    // `rejected` cannot occur — no `adoptable` is passed — so this reads as
+    // absent-or-tombstoned, which is what the two words below cover.
     throw new Error(
-      `adoptTypedBlock: ${block.id} is in workspace ${current.workspaceId}, not ${block.workspaceId} — it is not this caller's record to adopt.`,
+      `adoptTypedBlock: ${block.id} is ${seat.block ? 'deleted' : 'missing'} — it cannot be adopted. Re-read the record inside this transaction before adopting it.`,
     )
   }
+  const current = seat.block
 
   const missing = types.filter(typeId => !hasBlockType(current, typeId))
   for (const typeId of missing) {
@@ -338,19 +340,19 @@ export const getOrCreateTypedChild = async (
     throw new Error(`getOrCreateTypedChild: parent ${childSpec.parentId} is missing or deleted`)
   }
 
-  // A row in another workspace is never ours, whatever the key says: adopting
-  // it would write this whole record's children into that workspace.
-  const usable = (block: BlockData | null): boolean =>
-    block !== null
-    && !block.deleted
-    && block.workspaceId === parent.workspaceId
-    && (adoptable?.(block) ?? true)
+  // The record's workspace is its PARENT's — a row at this id belonging to any
+  // other one is never ours, whatever the key says, because adopting it would
+  // write this whole record's children into that workspace.
+  const policy: OccupantPolicy = {workspaceId: parent.workspaceId, adoptable}
 
-  const existing = await tx.get(id)
-  if (usable(existing)) {
-    return adoptTypedBlock(repo, tx, existing as BlockData, childSpec.types, childSpec.typeSnapshot)
+  const seat = classifyOccupant(await tx.get(id), policy)
+  if (seat.verdict === 'ours') {
+    return adoptTypedBlock(repo, tx, seat.block, childSpec.types, childSpec.typeSnapshot)
   }
-  if (existing) return {status: 'taken', id, block: existing}
+  // Every other occupied verdict — foreign, tombstoned, rejected — is `taken`:
+  // this call writes nothing and hands the decision back, because only the
+  // caller knows whether a second record here is meaningful.
+  if (seat.verdict !== 'absent') return {status: 'taken', id, block: seat.block}
 
   const orderKey = await orderKeyForInsert(
     tx, childSpec.parentId, parent.workspaceId, position,
@@ -406,11 +408,11 @@ export const getOrCreateTypedChild = async (
     // as deliberate, not as a gap. It stays because if that ever stops holding,
     // falling through would write this caller's types and properties onto
     // someone else's row and report it `created`.
-    const claimed = await tx.get(id)
-    if (usable(claimed)) {
-      return adoptTypedBlock(repo, tx, claimed as BlockData, childSpec.types, childSpec.typeSnapshot)
+    const claimed = classifyOccupant(await tx.get(id), policy)
+    if (claimed.verdict === 'ours') {
+      return adoptTypedBlock(repo, tx, claimed.block, childSpec.types, childSpec.typeSnapshot)
     }
-    return {status: 'taken', id, block: claimed}
+    return {status: 'taken', id, block: claimed.block}
   }
 
   for (const typeId of childSpec.types) {

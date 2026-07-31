@@ -20,7 +20,7 @@
 import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
-import { derivedBlockId } from '@/data/derivedIds'
+import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -122,9 +122,13 @@ export const getOrCreateKernelPage = async (
    *  The engine already refuses this inside `createOrGet`; the create path
    *  below therefore cannot reach a foreign row, and only the adopt and
    *  restore paths need it said again. Raising the engine's own error keeps
-   *  one meaning for the condition across every deterministic-id caller. */
+   *  one meaning for the condition across every deterministic-id caller.
+   *
+   *  What counts as foreign is `classifyOccupant`'s to say, not this file's —
+   *  including that it outranks `tombstoned`, which is what stops the restore
+   *  branch below from ever being offered another workspace's row. */
   const refuseForeign = (occupant: BlockData): void => {
-    if (occupant.workspaceId !== workspaceId) {
+    if (classifyOccupant(occupant, {workspaceId}).verdict === 'foreign') {
       throw new DeterministicIdCrossWorkspaceError(id, occupant.workspaceId, workspaceId)
     }
   }

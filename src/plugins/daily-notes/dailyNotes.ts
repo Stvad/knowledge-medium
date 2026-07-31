@@ -1,6 +1,7 @@
-import { ChangeScope, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
-import { derivedBlockId } from '@/data/derivedIds'
+import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
@@ -163,8 +164,29 @@ export const getOrCreateDailyNote = async (
   const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
   const dailyAliases = [longLabel, isoLabel]
   const dateValue = dailyNoteDateValue(iso)
+
+  /** Same guard, and the same reasoning, as `getOrCreateKernelPage`'s: neither
+   *  read below is workspace-scoped (`repo.load` and `tx.get` both select on id
+   *  alone), and what they feed rewrites aliases and types, resurrects
+   *  tombstones, and — uniquely here — `tx.move`s the row under THIS
+   *  workspace's Journal, which would tear a page out of someone else's tree.
+   *
+   *  Worth being honest about reachability, because it differs from the kernel
+   *  page's by which half: `DAILY_NOTE_NS` is app-owned and the key already
+   *  carries the workspace, so a foreign occupant at rest needs a uuid
+   *  collision or a hand-written id. The window between `repo.load` and the
+   *  transaction is not hypothetical though — sync materialization rewrites
+   *  `workspace_id` along with every other column, so the row can change hands
+   *  mid-call whatever the namespace. */
+  const refuseForeign = (occupant: BlockData): void => {
+    if (classifyOccupant(occupant, {workspaceId}).verdict === 'foreign') {
+      throw new DeterministicIdCrossWorkspaceError(id, occupant.workspaceId, workspaceId)
+    }
+  }
+
   const live = await repo.load(id)
   if (live) {
+    refuseForeign(live)
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       live.parentId !== journalBlockId(workspaceId) ||
@@ -180,6 +202,7 @@ export const getOrCreateDailyNote = async (
     await repo.tx(async tx => {
       const current = await tx.get(id)
       if (!current || current.deleted) return
+      refuseForeign(current)
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
       if (!includesAll(currentAliases, dailyAliases)) {
         await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
@@ -202,6 +225,7 @@ export const getOrCreateDailyNote = async (
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     const existing = await tx.get(id)
+    if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       await tx.restore(id, {content: longLabel})
