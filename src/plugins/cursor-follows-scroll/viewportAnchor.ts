@@ -49,14 +49,6 @@ export const isRowInViewport = (instance: HTMLElement): boolean => {
 const scrollportOf = (instance: HTMLElement): HTMLElement | null =>
   nearestScrollableAncestor(visibilityTargetFor(instance))
 
-export const findInstance = (
-  panelEl: HTMLElement,
-  location: FocusedBlockLocation,
-  excludedSurfaces: ReadonlySet<string>,
-): HTMLElement | null =>
-  panelInstances(panelEl, excludedSurfaces)
-    .find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location)) ?? null
-
 /**
  * Where the cursor should go when the user has scrolled it out of the panel's
  * viewport: the topmost row still on screen. Null means leave it alone.

@@ -303,7 +303,7 @@ const moveVertical = async (
   // just mounted.
   const next = verticalNeighbor(current, direction, excludedSurfaces)
   const nextLocation = next ? locationOf(next) : null
-  const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
+  const nextPanelId = next ? panelOf(next)?.dataset.panelId : undefined
 
   if (modelNext) {
     // Where the model's row sits in the rendered panel — its own nav item if

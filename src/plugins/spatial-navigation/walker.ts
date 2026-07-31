@@ -363,20 +363,28 @@ export const findRecoveryAnchor = (
 }
 
 /**
- * The live navigable instance for `location` inside `panelId`, or null
- * when that row isn't mounted there (rows mount lazily, so "not in the
- * DOM" is the normal state for most of a page).
+ * The live navigable instance for `location` in `panel`, or null when that row
+ * isn't mounted there (rows mount lazily, so "not in the DOM" is the normal
+ * state for most of a page). The one definition of that lookup — every caller
+ * that had its own was matching the same two dataset fields by hand.
  */
-const instanceAt = (
+export const instanceIn = (
+  panel: HTMLElement,
+  location: FocusedBlockLocation,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null =>
+  panelInstances(panel, excludedSurfaces)
+    .find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
+    ?? null
+
+/** `instanceIn` for callers holding a panel id rather than its element. */
+export const instanceAt = (
   panelId: string,
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   const panel = panelById(panelId)
-  if (!panel) return null
-  return panelInstances(panel, excludedSurfaces)
-    .find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
-    ?? null
+  return panel ? instanceIn(panel, location, excludedSurfaces) : null
 }
 
 /**
