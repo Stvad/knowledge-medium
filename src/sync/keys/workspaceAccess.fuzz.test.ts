@@ -27,9 +27,13 @@
  * string `'e2ee'` — including near-miss casing, whitespace, unicode
  * homoglyphs, or empty/absent values — must quarantine, never silently
  * pass as plaintext-safe and never silently unlock. Hence the generator
- * below is weighted toward `fc.string()` (arbitrary unicode, including the
- * empty string and long strings) rather than just the two literals the
- * existing example-based tests (`workspaceAccess.test.ts`) already cover.
+ * below is weighted toward `fc.string({unit: 'binary'})` (arbitrary
+ * unicode, including the empty string and long strings) rather than just
+ * the two literals the existing example-based tests
+ * (`workspaceAccess.test.ts`) already cover. `unit: 'binary'` is explicit
+ * because fast-check 4.9's `fc.string()` defaults to `unit: 'grapheme-ascii'`
+ * (printable ASCII only) — an unqualified call here would silently drop
+ * the "unicode homoglyphs" case this docblock claims to cover.
  *
  * `decideWorkspaceEntry(pin, hasKey, row)` (workspaceAccess.ts:76-84) adds
  * one more gate in front: when the local `workspaces` row hasn't replicated
@@ -61,10 +65,13 @@ const pinArb: fc.Arbitrary<ModePin | null> = fc.constantFrom<ModePin | null>(nul
  *  actually sends ('e2ee' / 'none'), but mostly arbitrary strings —
  *  unicode, empty, long — since the strict `=== 'e2ee'` comparison is the
  *  property under test and an adversarial/corrupted server value is exactly
- *  the case the fail-closed gate exists for. */
+ *  the case the fail-closed gate exists for. `unit: 'binary'` (full Unicode
+ *  code-point range, excluding lone surrogates) rather than the default
+ *  `'grapheme-ascii'`, so this actually reaches non-ASCII near-misses of
+ *  `'e2ee'` (e.g. homoglyphs), not just printable ASCII. */
 const serverEncryptionModeArb: fc.Arbitrary<string> = fc.oneof(
   { weight: 2, arbitrary: fc.constantFrom('e2ee', 'none') },
-  { weight: 1, arbitrary: fc.string({ maxLength: 500 }) },
+  { weight: 1, arbitrary: fc.string({ maxLength: 500, unit: 'binary' }) },
   // Near-misses on the exact literal, to press on strict equality specifically.
   { weight: 1, arbitrary: fc.constantFrom('E2EE', 'e2ee ', ' e2ee', 'e2ee\x00', 'E2ee', '') },
 )

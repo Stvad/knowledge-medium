@@ -61,8 +61,14 @@
  *    in property 1, conserve the exact concatenation) — the total
  *    character count summed over all live blocks' content is conserved
  *    (concat only moves characters between rows, via JS `.length` sums,
- *    not SQL `LENGTH()`, to stay agnostic to any surrogate-pair content
- *    fast-check's default `fc.string()` may generate).
+ *    not SQL `LENGTH()`. `.length` is the content-agnostic choice — it
+ *    stays correct regardless of what the string generator produces. Note
+ *    `text` below is a bare `fc.string({maxLength: 8})`, which under
+ *    fast-check 4.9 defaults to `unit: 'grapheme-ascii'` — printable ASCII
+ *    only — so this suite never actually generates surrogate-pair content;
+ *    `.length`/`LENGTH()` would agree here too. ASCII-only is fine for this
+ *    property: it's about character-count conservation across split/merge,
+ *    not about Unicode handling, so no widening is needed).
  * 4. Undo round-trip: a short random sequence of splits/merges (typed
  *    domain rejections are legal outcomes for incoherent pairs, same
  *    allowlist as `repoMutators.fuzz.test.ts`) followed by undo-all and
