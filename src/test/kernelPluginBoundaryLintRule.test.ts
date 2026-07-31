@@ -137,6 +137,18 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `class C { constructor() { new URL('@/plugins/todo/worker.ts', new.target.url) } }`,
       },
+      // A loose ASSET under `src/plugins/` is core too — the layer split is about
+      // location, not file type, and Vite imports css/json/svg happily. A
+      // module-extension whitelist reported this as a plugin named `shared.css`.
+      {
+        filename: core('data/repo.ts'),
+        code: `import '@/plugins/shared.css'`,
+      },
+      // A glob whose root segment cannot match `src` is still clean.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/docs/plugins/**/*.ts')`,
+      },
       // A loose file directly under `src/plugins/` is CORE (see isInsidePlugin),
       // so importing one from core is a core→core edge. `owningPlugin` has to
       // agree with `isInsidePlugin` here, or the rule would forbid an import
@@ -532,6 +544,29 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: './todo/**' },
+        }],
+      },
+      // A globby ROOT segment. `resolveSpecifier` demands a literal `/src/`
+      // prefix, so these slipped past while the plainly-spelled `/src/plugins/`
+      // was caught — the broad ones getting through again.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/s[r]c/plugins/todo/**/*.ts')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/s[r]c/plugins/todo/**/*.ts' },
+        }],
+      },
+      // A brace group spanning a `/` survives the segment split as an
+      // unbalanced fragment, so no per-segment reasoning is sound — flagged
+      // conservatively. Unlike the char-class case above this is ordinary code,
+      // not obfuscation.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/{src/plugins,src/components}/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/{src/plugins,src/components}/**' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,

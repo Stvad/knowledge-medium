@@ -111,10 +111,17 @@ const srcRelativePath = (filename, sourceRoot) => {
   return relative.startsWith('../') || posix.isAbsolute(relative) ? undefined : relative
 }
 
-/** A module-file extension, used to tell `plugins/registry.js` (a loose FILE)
- *  from `plugins/todo` (a plugin BARREL — the form the composition root
- *  imports). */
-const MODULE_EXTENSION = /\.[cm]?[jt]sx?$/
+/** Tells `plugins/registry.js` or `plugins/shared.css` (a loose FILE) from
+ *  `plugins/todo` (a plugin BARREL — the form the composition root imports).
+ *  ANY extension, not a module-extension whitelist: the layer split says every
+ *  loose file directly under `src/plugins/` is core, and Vite happily imports
+ *  css/json/svg from there, so whitelisting `.ts`/`.js` made a core→core CSS
+ *  import report as a plugin named `shared.css`.
+ *
+ *  The tradeoff is a plugin DIRECTORY whose name contains a dot — its bare
+ *  barrel would read as a loose file. None exist (every plugin is kebab-case)
+ *  and a false positive on ordinary asset imports is the likelier harm. */
+const HAS_EXTENSION = /\.[^./]+$/
 
 /** The plugin a src-relative path belongs to, or undefined. `plugins` must be
  *  a whole LEADING segment: `pluginIds.ts` doesn't match, and neither does a
@@ -132,7 +139,7 @@ const MODULE_EXTENSION = /\.[cm]?[jt]sx?$/
 const owningPlugin = (srcRelative) => {
   const [, name, separator] = srcRelative?.match(/^plugins\/([^/]+)(\/|$)/) ?? []
   if (name === undefined) return undefined
-  return separator === '' && MODULE_EXTENSION.test(name) ? undefined : name
+  return separator === '' && HAS_EXTENSION.test(name) ? undefined : name
 }
 
 /** Whether the LINTED FILE lives inside a plugin. Deliberately stricter than
@@ -253,21 +260,31 @@ const expandBraces = (segment) => {
   return alternatives.split(',').map(alternative => `${before}${alternative}${after}`)
 }
 
-const globReachesPluginLayer = (pattern) => {
-  const first = pattern?.split('/')[0]
-  if (first === undefined) return false
-  // A pattern that begins `**` is resolved from the project root and spans every
-  // directory under it, `src/plugins` included.
-  if (first === '**') return true
-  return expandBraces(first).some(candidate =>
+/** Whether one glob path segment can match a literal directory name.
+ *  Conservative by design — see the note in `globReachesPluginLayer`. */
+const segmentCanMatch = (segment, literal) =>
+  expandBraces(segment).some(candidate =>
     // A literal `plugins`, or anything still holding a glob metacharacter.
     // Conservative on purpose: `[p]lugins`, `@(plugins|components)` and `**`
     // all expand into the plugin tree, and enumerating every glob dialect to
     // decide which ones can't is not worth it — a false alarm costs one inline
     // disable, a miss is invisible. `{components,ui}` expands to plain
     // literals and is correctly left alone.
-    candidate === 'plugins' || GLOB_METACHARACTER.test(candidate))
+    candidate === literal || GLOB_METACHARACTER.test(candidate))
+
+const globReachesPluginLayer = (pattern) => {
+  const first = pattern?.split('/')[0]
+  if (first === undefined) return false
+  // A pattern that begins `**` is resolved from the project root and spans every
+  // directory under it, `src/plugins` included.
+  if (first === '**') return true
+  return segmentCanMatch(first, 'plugins')
 }
+
+/** A brace group that spans a `/` (`{src/plugins,src/components}`) survives the
+ *  segment split as an unbalanced fragment, so no per-segment reasoning about it
+ *  is sound. Flag and let the author opt out rather than guess. */
+const hasUnbalancedBrace = (segment) => segment.includes('{') && !segment.includes('}')
 
 /** `new URL('…', import.meta.url)` — Vite's idiom for referencing a worker,
  *  wasm module or asset by path. It is not an import node, but Vite's static
@@ -396,10 +413,26 @@ const noCoreToPluginImports = {
       const importerForPattern = resolvedBase === undefined
         ? importerSrcRelative
         : posix.join(resolvedBase, '__glob_base__')
-      const resolve = (pattern) =>
+      const resolve = (pattern) => {
         // A bare leading `**` is root-relative, so it is not a module specifier
         // at all — hand it through untouched for globReachesPluginLayer.
-        pattern.startsWith('**') ? pattern : resolveSpecifier(pattern, importerForPattern, sourceRoot)
+        if (pattern.startsWith('**')) return pattern
+        // A root-relative GLOB may have a globby root segment (`/s[r]c/…`,
+        // `/{src,dist}/…`), which `resolveSpecifier`'s literal `/src/` prefix
+        // check rejects outright — so the broadest patterns slipped past while
+        // the plainly-spelled ones were caught. Decide the root segment the
+        // same way every other segment is decided.
+        if (pattern.startsWith('/')) {
+          const [root, ...rest] = pattern.slice(1).split('/')
+          // Hand the pattern back whole rather than naming a synthetic one:
+          // `globReachesPluginLayer` sees the `{` and flags it, and it matches no
+          // CLEARS_PLUGIN_LAYER entry, so an unbalanced-brace NEGATION cannot
+          // spuriously clear the call.
+          if (hasUnbalancedBrace(root)) return pattern.slice(1)
+          return segmentCanMatch(root, 'src') ? rest.join('/') : undefined
+        }
+        return resolveSpecifier(pattern, importerForPattern, sourceRoot)
+      }
       // `import.meta.glob(['/src/**', '!/src/plugins/**'])` reaches no plugin at
       // all — the exclusion is the whole point. Only the canonical
       // whole-subtree spelling clears the call: a narrower exclusion
