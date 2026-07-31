@@ -92,6 +92,24 @@ describe('createSequenceMatcher verdicts', () => {
     expect(matcher.next(pressAt({key: 'g', code: 'KeyG'}, 2000))).toEqual({completed: false, pending: true})
   })
 
+  it('keeps an in-flight sequence alive at exactly the timeout gap (boundary; strict `>`, deliberately not `>=` — see sequenceMatcher.ts and sequenceMatcher.fuzz.test.ts docblock for why: `event.timeStamp` coarsening makes gap === timeout an underdetermined read of true elapsed time, and we fail toward not silently dropping a shortcut)', () => {
+    // 999 (just under) and 1000 (exactly at) both continue/complete the
+    // sequence; only a gap strictly OVER the timeout (1001) abandons it —
+    // pinning the port's own chosen behavior, not tinykeys'.
+    const atBoundary = createSequenceMatcher('g g', {timeoutMs: 1000})
+    atBoundary.next(pressAt({key: 'g', code: 'KeyG'}, 0))
+    expect(atBoundary.next(pressAt({key: 'g', code: 'KeyG'}, 1000)).completed).toBe(true)
+
+    const justUnder = createSequenceMatcher('g g', {timeoutMs: 1000})
+    justUnder.next(pressAt({key: 'g', code: 'KeyG'}, 0))
+    expect(justUnder.next(pressAt({key: 'g', code: 'KeyG'}, 999)).completed).toBe(true)
+
+    const justOver = createSequenceMatcher('g g', {timeoutMs: 1000})
+    justOver.next(pressAt({key: 'g', code: 'KeyG'}, 0))
+    // A second `g` past the gap starts fresh (pending), it does not complete.
+    expect(justOver.next(pressAt({key: 'g', code: 'KeyG'}, 1001))).toEqual({completed: false, pending: true})
+  })
+
   it('holds a sequence indefinitely with an infinite timeout (inspector mode)', () => {
     const matcher = createSequenceMatcher('g g', {timeoutMs: Infinity})
     expect(matcher.next(pressAt({key: 'g', code: 'KeyG'}, 0)).pending).toBe(true)
