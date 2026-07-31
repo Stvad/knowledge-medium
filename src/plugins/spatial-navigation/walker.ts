@@ -360,6 +360,23 @@ export const findRecoveryAnchor = (
 }
 
 /**
+ * The live navigable instance for `location` inside `panelId`, or null
+ * when that row isn't mounted there (rows mount lazily, so "not in the
+ * DOM" is the normal state for most of a page).
+ */
+export const instanceAt = (
+  panelId: string,
+  location: FocusedBlockLocation,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null => {
+  const panel = panelById(panelId)
+  if (!panel) return null
+  return panelInstances(panel, excludedSurfaces)
+    .find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
+    ?? null
+}
+
+/**
  * Anchor lookup used by spatial-nav keystroke handlers. Returns the
  * live DOM instance for `focusedLocation` when it's still mounted in
  * the panel; otherwise falls back to `findRecoveryAnchor` so vertical
@@ -375,13 +392,8 @@ export const resolveCurrentAnchor = (
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null => {
   if (!focusedLocation) return null
-  const panel = panelById(panelId)
-  if (!panel) return null
-  const instances = panelInstances(panel, excludedSurfaces)
-  if (instances.length === 0) return null
-  const live = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, focusedLocation))
-  if (live) return live
-  return findRecoveryAnchor(panelId, focusedLocation, excludedSurfaces)
+  return instanceAt(panelId, focusedLocation, excludedSurfaces)
+    ?? findRecoveryAnchor(panelId, focusedLocation, excludedSurfaces)
 }
 
 /**

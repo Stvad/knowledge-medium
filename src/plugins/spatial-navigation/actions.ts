@@ -38,6 +38,7 @@ import {
 } from '@/utils/selection.js'
 import {
   horizontalNeighborPanel,
+  instanceAt,
   locationOf,
   panelById,
   panelOf,
@@ -181,8 +182,9 @@ const extendSelectionVertical = async (
  *   - `false` → "spatial nav declines; the model walk is the better
  *     answer here". Two cases: (a) no usable anchor — no live focused
  *     instance, no recovery anchor, and no expected location to keep
- *     us in this panel; (b) the model has a next row in this scope
- *     that the rendered DOM can't offer, because it hasn't mounted.
+ *     us in this panel; (b) taking the rendered neighbour would SKIP
+ *     the model's next row in this scope, because that row hasn't
+ *     mounted and nothing puts the neighbour ahead of it.
  *   - `true` → "spatial nav handled this keystroke", including the
  *     genuine edge where neither the model nor the DOM has anywhere
  *     left to go.
@@ -194,6 +196,13 @@ const extendSelectionVertical = async (
  * Rows inside a backlink entry are lazily mounted under the ordinary
  * `block:<id>` key like any other row, so a model-resolved target
  * there is mountable too.
+ *
+ * Equally: the model walk names only the rows of ONE scope, while the
+ * rendered order interleaves the nested surfaces those rows contain —
+ * an embed inside the content, an embed inside a property value, a
+ * trailing backlink list. Those rows are navigable and the user can
+ * see them, so a DOM neighbour that the model can't name is the normal
+ * case, not evidence of a missing row. See the rule at the check.
  *
  * The one thing this cannot reach is a scope whose WRAPPER is still
  * deferred: an unmounted backlink entry keys itself
@@ -240,35 +249,38 @@ const moveVertical = async (
   const nextLocation = next ? locationOf(next) : null
   const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
 
-  // WITHIN a render scope the model is authoritative; BETWEEN scopes the DOM
-  // is. That split is the whole rule, and it holds for every surface:
+  // The model knows rows the DOM doesn't, because rows mount lazily. "The next
+  // MOUNTED row" and "the next row" diverge in several ways — running out at
+  // the bottom of the mounted window, a scrollbar drag leaving two mounted
+  // islands with a hole between them, a just-mounted row whose children arrive
+  // only when its `childIds` handle resolves while a later sibling is still
+  // mounted from before. In all of them the DOM's neighbour is a real row, just
+  // hundreds of rows past what the user expects.
   //
-  //   - The model knows rows the DOM doesn't, because rows mount lazily.
-  //     "The next MOUNTED row" and "the next row" diverge in several ways —
-  //     running out at the bottom of the mounted window, a scrollbar drag
-  //     leaving two mounted islands with a hole between them, a just-mounted
-  //     row whose children arrive only when its `childIds` handle resolves
-  //     while a later sibling is still mounted from before.
-  //   - The DOM knows transitions the model can't express: outline → trailing
-  //     backlinks, one backlink entry → the next, panel → stacked panel. Each
-  //     surface's walk is bounded by its own `scopeRootId` (a backlink entry's
-  //     is its shown block, not the page), so the model simply ends there.
+  // But the DOM order is a SUPERSET of this scope's model order, not a
+  // different ordering of the same rows: nested surfaces (an embed in the
+  // content, an embed in a property value, a trailing backlink list) render
+  // rows of their OWN scope in between, and no walk of this scope can name
+  // them. So "the DOM's neighbour isn't the model's next row" doesn't mean the
+  // DOM is wrong — it usually means the DOM has MORE.
   //
-  // So: ask the model for the next row in this scope. If it has one, the only
-  // acceptable DOM neighbour is that row in this scope — anything else is the
-  // DOM missing rows, and we decline so the model handler resolves it and
-  // `FocusedRowLazyMount` mounts it. If the model has none, we're at the edge
-  // of the scope and the DOM's answer is the right one.
+  // What actually matters is only this: can we take the DOM's neighbour without
+  // SKIPPING the model's next row? Two ways to know we can't lose it, below.
+  // Anything else means rows are missing, and we decline so the model handler
+  // resolves the row and `FocusedRowLazyMount` mounts it.
   //
   // Costs one O(depth) walk per keystroke over handle-cached rows — the same
-  // walk the model handler does on its own when spatial nav is off. The second
-  // walk only happens on the rare disagreement, where the alternative is a
-  // silently wrong jump.
+  // walk the model handler does on its own when spatial nav is off.
   const modelNext = deps.scopeRootId
     ? (direction === 'down'
         ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
         : await previousVisibleBlock(block, deps.scopeRootId))
     : null
+
+  // Cache read, not a second query: the walk above loads `childIds` whenever it
+  // steps into this row's subtree. Undefined when it never looked (a collapsed
+  // row), which is also exactly when the model's next row can't be a child.
+  const firstChildId = block.childIds.peek()?.[0]
 
   // A second keystroke or a click can land while that walk waits on an
   // uncached `childIds`. Everything below is computed from a row that no
@@ -280,16 +292,48 @@ const moveVertical = async (
   ) return true
 
   if (modelNext) {
-    const domAgrees = Boolean(
+    // (1) The model's row is itself MOUNTED in this scope and panel. The DOM
+    //     neighbour is the immediately adjacent nav item in document order, and
+    //     within a scope document order IS model order — so that mounted row
+    //     sits at or beyond the neighbour, and stepping onto the neighbour
+    //     still walks into it. (Same-panel is load-bearing: a stack-sibling
+    //     panel's first row is "adjacent" to nothing.) This subsumes plain
+    //     agreement, where the neighbour IS that row.
+    const modelRowIsMounted = Boolean(instanceAt(
+      uiStateBlock.id,
+      {blockId: modelNext.id, renderScopeId: currentLocation.renderScopeId},
+      excludedSurfaces,
+    ))
+
+    // (2) We're stepping down into a nested surface THIS row renders: another
+    //     scope, inside this row's own element. Everything this row contains is
+    //     rendered before its next sibling, so the model's row still follows —
+    //     unless the model's row is this row's own first child, which renders
+    //     inside it too, and AFTER a trailing section (a footer backlink list).
+    //     Taking the neighbour then really would skip the children.
+    //     Down-only: going up, a nested surface between here and the model's
+    //     previous row belongs to a row that must itself be mounted (a surface
+    //     renders inside its owner), so case (1) already covers it.
+    const nestedSurfaceOfThisRow = Boolean(
+      direction === 'down' &&
+      next &&
+      nextLocation &&
+      // Defence in depth, not load-bearing: no test can falsify it through the
+      // dispatch path, because a same-scope row inside this one is a CHILD, and
+      // the first-child clause below already rejects that. It says what
+      // "nested surface" means, for a layout that renders its scope's rows in
+      // some order of its own.
+      nextLocation.renderScopeId !== currentLocation.renderScopeId &&
+      current.contains(next) &&
+      modelNext.id !== firstChildId,
+    )
+
+    const canTakeTheNeighbour = Boolean(
       nextLocation &&
       nextPanelId === uiStateBlock.id &&
-      nextLocation.blockId === modelNext.id &&
-      // Same scope, not merely the same block: one block renders under many
-      // scopes, and landing on an embed or backlink copy of it stops `j` from
-      // continuing through the scope the user is actually in.
-      nextLocation.renderScopeId === currentLocation.renderScopeId,
+      (modelRowIsMounted || nestedSurfaceOfThisRow),
     )
-    if (!domAgrees) return false
+    if (!canTakeTheNeighbour) return false
   }
 
   // Nothing in the model and nothing in the DOM — a real edge.

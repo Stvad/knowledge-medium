@@ -98,16 +98,26 @@ const seedPanelAndBlocks = async (repo: Repo): Promise<void> => {
   }, {scope: ChangeScope.UiState})
 }
 
-interface NavInstance {blockId: string; renderScopeId: string; surface?: string}
+interface NavInstance {
+  blockId: string
+  renderScopeId: string
+  surface?: string
+  /** Rows rendered INSIDE this row's shell — what a nested surface (an embed in
+   *  the content or in a property value, a trailing backlink list) produces.
+   *  The real shell wraps content, properties, children and footer alike, so a
+   *  nested surface's rows are DOM descendants of the row that renders it. */
+  nested?: readonly NavInstance[]
+}
 
-const appendInstances = (panelEl: HTMLElement, instances: readonly NavInstance[]): void => {
-  for (const {blockId, renderScopeId, surface} of instances) {
+const appendInstances = (parentEl: HTMLElement, instances: readonly NavInstance[]): void => {
+  for (const {blockId, renderScopeId, surface, nested} of instances) {
     const el = document.createElement('div')
     el.dataset.blockNavItem = 'true'
     el.dataset.blockId = blockId
     el.dataset.renderScopeId = renderScopeId
     if (surface) el.dataset.blockSurface = surface
-    panelEl.appendChild(el)
+    parentEl.appendChild(el)
+    if (nested) appendInstances(el, nested)
   }
 }
 
@@ -731,6 +741,163 @@ describe('spatial navigation vertical actions', () => {
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
+    })
+  })
+
+  // A row's own nested surfaces — an embed in its content, an embed in a
+  // property value — render rows of ANOTHER scope inside it, and no walk of
+  // this scope can name them. They're navigable and on screen, so the DOM
+  // neighbour disagreeing with the model is the normal case here, not evidence
+  // that a row is missing.
+  it('steps into a nested surface this row renders instead of jumping past it', async () => {
+    buildPanelDom([
+      {
+        blockId: 'A',
+        renderScopeId: 'panel:outline',
+        surface: 'outline',
+        nested: [{blockId: 'X', renderScopeId: 'embed:A:X', surface: 'embedded'}],
+      },
+      {blockId: 'B', renderScopeId: 'panel:outline', surface: 'outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'embed:A:X',
+      })
+    })
+  })
+
+  // ...and it must not depend on the model's row being mounted: an embed can be
+  // a whole subtree tall, which puts the row after it far outside the overscan.
+  it('steps into a nested surface even when the model row after it has not mounted', async () => {
+    buildPanelDom([
+      {
+        blockId: 'A',
+        renderScopeId: 'panel:outline',
+        surface: 'outline',
+        nested: [{blockId: 'X', renderScopeId: 'embed:A:X', surface: 'embedded'}],
+      },
+      // 'B' follows 'A' in the model and simply isn't mounted.
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'embed:A:X',
+      })
+    })
+  })
+
+  // The limit of that: a row's TRAILING sections (a footer backlink list) are
+  // inside its shell too, but they render after its children. With the
+  // children still deferred the nested rows are the only mounted thing left
+  // inside the row — taking them would skip the whole subtree.
+  it('stays in this scope when the nested surface follows the row own deferred children', async () => {
+    buildPanelDom([
+      {
+        blockId: 'top',
+        renderScopeId: 'panel:outline',
+        surface: 'outline',
+        // 'A'/'B'/'C' are top's children and none of them has mounted; the
+        // trailing backlink list has.
+        nested: [{blockId: 'X', renderScopeId: 'panel:backlink', surface: 'backlink'}],
+      },
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'top', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('top'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
+  // Upward, the nested rows belong to the row we're walking BACK into — a
+  // surface renders inside its owner, so that owner is mounted whenever they
+  // are, and `k` from the row below lands on the last of them.
+  it('steps back into the nested surface the previous row renders', async () => {
+    buildPanelDom([
+      {
+        blockId: 'A',
+        renderScopeId: 'panel:outline',
+        surface: 'outline',
+        nested: [{blockId: 'X', renderScopeId: 'embed:A:X', surface: 'embedded'}],
+      },
+      {blockId: 'B', renderScopeId: 'panel:outline', surface: 'outline'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_up',
+      description: 'Move up',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'X',
+        renderScopeId: 'embed:A:X',
+      })
     })
   })
 
