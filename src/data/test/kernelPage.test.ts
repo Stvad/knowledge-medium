@@ -88,6 +88,20 @@ describe('getOrCreateKernelPage', () => {
     expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE])
   })
 
+  it('rejects an omitted markerType by name, rather than failing at the tagger', async () => {
+    // The cast is the point: TypeScript already requires the field, so this
+    // pins the guard for the callers the type does not reach — a dynamic
+    // extension is transpiled, not typechecked. Without it, `undefined` flows
+    // into `addTypeInTx` and surfaces as "type id undefined is not
+    // registered", which sends the author off to add a type seed instead of
+    // to the field they left out.
+    await expect(getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+    } as unknown as Parameters<typeof getOrCreateKernelPage>[2]))
+      .rejects.toThrow(/markerType is required/)
+  })
+
   /** This helper is extension-facing, so the namespace is chosen by code the
    *  app does not control. Both reads that can find an occupant select on id
    *  alone, and what they feed rewrites properties or undeletes rows — so a

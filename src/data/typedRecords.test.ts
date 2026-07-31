@@ -393,3 +393,42 @@ describe('adoptTypedBlock', () => {
     expect(repo.block(id).peekProperty(weightProp)).toBe(145)
   })
 })
+
+/**
+ * The parent check, one test per CLAUSE.
+ *
+ * `!parent` and `parent.deleted` are separate failures sharing one predicate,
+ * and the broad clause hides the narrow one: with only a missing-parent test,
+ * deleting `|| parent.deleted` leaves the suite green. Nothing downstream
+ * catches it either — `createOrGet` will happily insert under a tombstone — so
+ * the record lands in a subtree the user deleted, where no parent-scoped read
+ * finds it again.
+ */
+describe('getOrCreateTypedChild — the parent has to be there', () => {
+  it('refuses a parent that does not exist', async () => {
+    await expect(repo.tx(tx => getOrCreateTypedChild(repo, tx, {
+      identity: identity('no-parent'),
+      parentId: 'not-a-block',
+      types: [recordType.id],
+    }), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/missing or deleted/)
+  })
+
+  it('refuses a parent that has been deleted, and writes nothing under it', async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'doomed', workspaceId: 'ws-1', parentId: null, orderKey: 'b0', content: 'Doomed'})
+      await tx.delete('doomed')
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(tx => getOrCreateTypedChild(repo, tx, {
+      identity: identity('under-a-tombstone'),
+      parentId: 'doomed',
+      types: [recordType.id],
+    }), {scope: ChangeScope.BlockDefault})).rejects.toThrow(/missing or deleted/)
+
+    // Nothing was minted into the deleted subtree on the way to throwing.
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ?', ['doomed'],
+    )
+    expect(rows).toEqual([])
+  })
+})
