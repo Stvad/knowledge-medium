@@ -47,15 +47,86 @@ const RUNTIME_CORRUPTION_SUBSTRINGS = [
   'disk image is malformed',
 ] as const
 
+// A revoked Proxy throws (TypeError) for EVERY internal trap — `[[Get]]`,
+// `[[GetPrototypeOf]]`, `[[Has]]`, all of them — not just string
+// conversion. This module reads `error`/`cause` (both `unknown`, with no
+// guarantee about what crosses the DB-open / worker boundary) via
+// `instanceof` and direct property access all over the functions below, so
+// EVERY one of those reads needs the same guard `safeString` needed, or a
+// hostile `error` can throw from a completely different line than the one
+// originally reported. Two small helpers centralize that:
+//  - `safeInstanceOf` guards the `[[GetPrototypeOf]]` walk `instanceof` does.
+//  - `safeGet` guards the `[[Get]]` a plain property read does.
+// Both fail closed (return `false` / `undefined`), which is exactly what an
+// absent/non-matching property would already mean to every caller below.
+const safeInstanceOf = (value: unknown, ctor: abstract new (...args: never[]) => unknown): boolean => {
+  try {
+    return value instanceof ctor
+  } catch {
+    return false
+  }
+}
+
+const safeGet = (obj: object, key: PropertyKey): unknown => {
+  try {
+    return (obj as Record<PropertyKey, unknown>)[key]
+  } catch {
+    return undefined
+  }
+}
+
+// `String(x)` throws "Cannot convert object to primitive value" for a
+// null-prototype object (`Object.create(null)`, or anything else with no
+// reachable `toString`/`valueOf`/`Symbol.toPrimitive`) — there's no
+// guarantee what crosses the DB-open / worker boundary, and this module's
+// whole job is to classify that value without ever throwing itself.
+// `Object.prototype.toString.call` is invoked explicitly rather than
+// resolved through the value's own prototype chain, so it can't fail the
+// same way for a null-prototype object; it matches what `String(x)` would
+// have returned for any ordinary object anyway ("[object Object]").
+//
+// But that fallback can ALSO throw: a revoked Proxy's `[[Get]]` trap throws
+// for every property access, including `Symbol.toStringTag`, which
+// `Object.prototype.toString` reads — and the same happens for any object
+// whose `Symbol.toStringTag` getter itself throws. Both shapes make
+// `String(x)` throw too (it resolves to the inherited
+// `Object.prototype.toString` when there's no own `toString`/`valueOf`),
+// so they'd reach this catch and throw a SECOND time. The final fallback
+// is a fixed string with no further property access on `error`, so this
+// function is total no matter how hostile `error` is.
+const safeString = (error: unknown): string => {
+  try {
+    return String(error)
+  } catch {
+    try {
+      return Object.prototype.toString.call(error)
+    } catch {
+      return '[unstringifiable error]'
+    }
+  }
+}
+
 const messageOf = (error: unknown): string => {
-  if (error instanceof Error) return error.message
+  // `safeInstanceOf` only guards the `[[GetPrototypeOf]]` walk `instanceof`
+  // does — it says nothing about the `[[Get]]` trap a SUBSEQUENT direct
+  // `.message` read invokes. A proxy that forwards `getPrototypeOf` (so
+  // `instanceof Error` succeeds) but throws from `get` for `message` passes
+  // this check and then throws on the very next line — the exact totality
+  // gap PR #447 review comment 3676752542 found. Route the read through
+  // `safeGet` like every other property read on a not-necessarily-honest
+  // `error` in this module.
+  if (safeInstanceOf(error, Error)) {
+    const msg = safeGet(error as object, 'message')
+    if (typeof msg === 'string') return msg
+    return safeString(error)
+  }
   // A worker/Comlink-serialized error arrives as a plain object; read its string
   // `.message` so the recovery UI's detail shows the real text, not "[object Object]".
   if (typeof error === 'object' && error !== null) {
-    const msg = (error as { message?: unknown }).message
+    const msg = safeGet(error, 'message')
     if (typeof msg === 'string') return msg
   }
-  return String(error)
+  return safeString(error)
 }
 
 // The SQLite corruption text doesn't always reach us on the top-level `.message`
@@ -71,21 +142,28 @@ const messageOf = (error: unknown): string => {
 // the runtime-corruption routing match at all.
 const messageChainOf = (error: unknown, depth = 5): string => {
   if (depth <= 0 || error === null || error === undefined) return ''
-  if (error instanceof Error) {
-    const cause = (error as { cause?: unknown }).cause
+  if (safeInstanceOf(error, Error)) {
+    const err = error as Error
+    // Same guard as `messageOf`: `instanceof` confirms the prototype chain,
+    // not that a direct `.message`/`.cause` read is safe — both go through
+    // `safeGet` (PR #447 review comment 3676752542).
+    const msg = safeGet(err, 'message')
+    const message = typeof msg === 'string' ? msg : safeString(error)
+    const cause = safeGet(err, 'cause')
     return cause === undefined
-      ? error.message
-      : `${error.message}\n${messageChainOf(cause, depth - 1)}`
+      ? message
+      : `${message}\n${messageChainOf(cause, depth - 1)}`
   }
   if (typeof error === 'object') {
-    const obj = error as { message?: unknown; cause?: unknown }
-    if (typeof obj.message === 'string') {
-      return obj.cause === undefined
-        ? obj.message
-        : `${obj.message}\n${messageChainOf(obj.cause, depth - 1)}`
+    const msg = safeGet(error, 'message')
+    if (typeof msg === 'string') {
+      const cause = safeGet(error, 'cause')
+      return cause === undefined
+        ? msg
+        : `${msg}\n${messageChainOf(cause, depth - 1)}`
     }
   }
-  return String(error)
+  return safeString(error)
 }
 
 const includesAnySubstring = (error: unknown, substrings: readonly string[]): boolean => {
@@ -132,17 +210,16 @@ export const corruptErrorUserId = (error: unknown): string | null => {
   // A non-empty userId is required: downstream resolves the OPFS `.db` from it
   // (`dbFilenameForUser('')` → `kmp-v6-.db`), so an empty id would back up /
   // delete the wrong file. Fall through to the generic boundary instead.
-  if (error instanceof LocalDatabaseCorruptError) {
-    return error.userId.length > 0 ? error.userId : null
+  if (safeInstanceOf(error, LocalDatabaseCorruptError)) {
+    const userId = safeGet(error as object, 'userId')
+    return typeof userId === 'string' && userId.length > 0 ? userId : null
   }
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { name?: unknown }).name === 'LocalDatabaseCorruptError' &&
-    typeof (error as { userId?: unknown }).userId === 'string' &&
-    (error as { userId: string }).userId.length > 0
-  ) {
-    return (error as { userId: string }).userId
+  if (typeof error === 'object' && error !== null) {
+    const name = safeGet(error, 'name')
+    const userId = safeGet(error, 'userId')
+    if (name === 'LocalDatabaseCorruptError' && typeof userId === 'string' && userId.length > 0) {
+      return userId
+    }
   }
   return null
 }

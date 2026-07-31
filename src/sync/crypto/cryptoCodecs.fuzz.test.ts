@@ -61,9 +61,10 @@
  *    column" example).
  *
  * A note on the string domain used here: `fc.string()` (default
- * `'grapheme'` unit) and `fc.string({unit: 'binary'})` both produce
- * well-formed Unicode (the latter explicitly excludes half surrogate
- * pairs per its fast-check docs). That matters for the AAD tuple-level
+ * `'grapheme-ascii'` unit — printable ASCII only) and
+ * `fc.string({unit: 'binary'})` (full Unicode code-point range) both
+ * produce well-formed Unicode (the latter explicitly excludes half
+ * surrogate pairs per its fast-check docs). That matters for the AAD tuple-level
  * injectivity property: `canonicalAad` UTF-8-encodes fields via
  * `TextEncoder`, which *silently* replaces an unpaired surrogate with
  * U+FFFD — so two distinct JS strings that differ only in how they spell
@@ -102,9 +103,10 @@ import { contentAad, assetBytesAad, canaryAad } from './aad.js'
 
 // ──── Shared helpers ────
 
-/** Well-formed-Unicode "nasty" strings: default grapheme unit plus the full
- *  Unicode code-point range (still well-formed — see docblock above) and
- *  ASCII control characters. */
+/** Well-formed-Unicode "nasty" strings: default (`'grapheme-ascii'`,
+ *  printable ASCII) unit, plus the full Unicode code-point range
+ *  (`'binary'`, still well-formed — see docblock above) and 0000-00FF
+ *  including ASCII control characters (`'binary-ascii'`). */
 const junkStringArb = fc.oneof(
   fc.string(),
   fc.string({ unit: 'binary' }),

@@ -19,12 +19,15 @@ import { usePropertyValue } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { panelMountsFacet } from '@/extensions/core.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { FocusedRowLazyMount } from '@/components/util/FocusedRowLazyMount.js'
 import {
   goBackInPanel,
   goForwardInPanel,
   panelHistory,
   usePanelHistory,
+  type VisitState,
 } from '@/utils/panelHistory.js'
+import { alignScrollportToRow } from '@/utils/panelScrollAnchor.js'
 import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
@@ -84,6 +87,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const pendingScrollTopRef = useRef<number | undefined>(undefined)
   const scrollWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingActivationRef = useRef(false)
+  // The restore this pane already drained, kept so StrictMode's effect replay
+  // sees the same answer the first setup did. `consumeRestore` is destructive,
+  // and the replay would otherwise find nothing, peek the cursor
+  // `writePanelContent` MANUFACTURES for a cursorless visit, and anchor to the
+  // top — undoing the offset the first pass had just restored. Keyed by
+  // (pane, content) so a real navigation drains a fresh one; only ever one
+  // slot, so A → B → A re-consumes correctly.
+  const consumedRestoreRef = useRef<{key: string; state: VisitState | undefined} | null>(null)
 
   const activatePanel = useCallback(() => {
     if (!layoutSessionBlockId) return
@@ -156,13 +167,43 @@ export function PanelRenderer({block}: BlockRendererProps) {
   // synchronously by the helper (so the new render starts with the
   // right cursor); scroll restoration has to wait for the new content
   // to lay out, which is exactly what this post-effect window gives us.
+  //
+  // The cursor is the anchor, not the stored pixel offset: rows mount lazily
+  // and their measured heights die with the page, so the same `scrollTop`
+  // means a different place after a reload (see `panelScrollAnchor`). The
+  // offset is still the fallback for a pane with no cursor at all — a page
+  // opened and scrolled but never clicked or navigated in.
   useEffect(() => {
     if (!topLevelBlockId) return
-    const restore = panelHistory.consumeRestore(block.id)
-    const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
-    if (scrollTop != null && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollTop
+    const restoreKey = `${block.id}:${topLevelBlockId}`
+    let restore: VisitState | undefined
+    if (consumedRestoreRef.current?.key === restoreKey) {
+      restore = consumedRestoreRef.current.state
+    } else {
+      restore = panelHistory.consumeRestore(block.id)
+      consumedRestoreRef.current = {key: restoreKey, state: restore}
     }
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    // A history snapshot answers for itself. A visit that was scrolled but never
+    // focused captured a `scrollTop` and no cursor — and `writePanelContent`
+    // then MANUFACTURES a cursor on the destination's top-level block, so
+    // peeking at the pane here would read that invention and anchor to the top,
+    // throwing away the offset the snapshot exists to replay. That case is the
+    // norm for anyone who scrolls without clicking, since scrolling alone never
+    // creates a cursor.
+    const location = restore ? restore.focusedLocation : peekFocusedBlockLocation(block)
+    const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
+    if (location) {
+      // The offset rides along as the floor, not as the alternative: a cursor
+      // whose row can never be re-resolved (see `fallbackScrollTop`) would
+      // otherwise strand the pane at the top, which is worse than the pixel
+      // restore this replaced.
+      return alignScrollportToRow(scrollEl, location, {
+        ...(scrollTop != null ? {fallbackScrollTop: scrollTop} : {}),
+      })
+    }
+    if (scrollTop != null) scrollEl.scrollTop = scrollTop
   }, [topLevelBlockId, block])
 
   useEffect(() => flushScrollTop, [flushScrollTop])
@@ -266,6 +307,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
       {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
+      {/* Keeps this panel's focused row mounted even when it's still a lazy
+          placeholder — see the component. Renders null. */}
+      <FocusedRowLazyMount block={block} scopeRootId={topLevelBlockId}/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
           <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">

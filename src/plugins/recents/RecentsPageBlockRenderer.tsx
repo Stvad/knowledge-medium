@@ -17,26 +17,11 @@ import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
+import { formatRelativeTime } from '@/utils/relativeTime.js'
 
 const RECENTS_LIMIT = 50
 const ROW_ESTIMATED_HEIGHT_PX = 64
 const ROW_OVERSCAN_PX = 600
-
-const formatRelative = (ts: number, now: number): string => {
-  if (now === 0) return ''
-  const diffMs = now - ts
-  if (diffMs < 0) return 'just now'
-  const sec = Math.floor(diffMs / 1000)
-  if (sec < 60) return 'just now'
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min}m ago`
-  const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr}h ago`
-  const day = Math.floor(hr / 24)
-  if (day < 7) return `${day}d ago`
-  const date = new Date(ts)
-  return date.toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: 'numeric'})
-}
 
 const RecentRowPlaceholder = ({reservedHeight}: LazyViewportPlaceholderProps) => (
   <div className="py-2" style={{minHeight: reservedHeight}} aria-hidden>
@@ -53,6 +38,7 @@ function RecentRow({data, now}: RecentRowProps) {
   return (
     <LazyViewportMount
       cacheKey={`recents:${data.id}`}
+      blockId={data.id}
       estimatedHeightPx={ROW_ESTIMATED_HEIGHT_PX}
       overscanPx={ROW_OVERSCAN_PX}
       renderPlaceholder={(props) => <RecentRowPlaceholder {...props}/>}
@@ -66,7 +52,7 @@ function RecentRow({data, now}: RecentRowProps) {
           />
         </div>
         <span className="shrink-0 pt-1 text-xs text-muted-foreground tabular-nums">
-          {formatRelative(data.userUpdatedAt, now)}
+          {formatRelativeTime(data.userUpdatedAt, now)}
         </span>
       </div>
     </LazyViewportMount>

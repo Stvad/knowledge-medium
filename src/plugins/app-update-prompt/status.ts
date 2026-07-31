@@ -12,7 +12,7 @@ import { RefreshCcw, RefreshCw } from 'lucide-react'
 import { appUpdate } from '@/appUpdate.js'
 import { checkForAppUpdate } from '@/registerServiceWorker.js'
 import { showInfo } from '@/utils/toast.js'
-import { actionsFacet } from './core.js'
+import { actionsFacet } from '@/extensions/core.js'
 import {
   diagnosticsFacet,
   type DiagnosticSnapshot,

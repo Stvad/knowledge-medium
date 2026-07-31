@@ -33,6 +33,8 @@ import {
   blockIdsInOrderedSelectionRange,
   commitSelectionRange,
   findBestSelectionAnchorIndex,
+  nextVisibleBlock,
+  previousVisibleBlock,
 } from '@/utils/selection.js'
 import {
   horizontalNeighborPanel,
@@ -152,6 +154,16 @@ const extendSelectionVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
+  // NOT the same call as `moveVertical`'s boundary, though it looks like it.
+  // Declining here doesn't extend the selection by one row: the structural
+  // base re-derives the WHOLE range from the model, which sweeps in every
+  // unmounted row the spatial (DOM-order) range had skipped — one keystroke
+  // silently adding rows the user has never seen, straight into the path of
+  // `d` / delete. So the selection edge stays "handled", as the
+  // hidden-structural-siblings test above it has always specified. Shift+j
+  // therefore still stops at the last mounted row while `j` walks on; making
+  // those agree means teaching this path to extend onto a model-resolved row
+  // spatially, which is its own change.
   if (!next) return true
   await extendSelectionToSpatialTarget(deps, next)
   return true
@@ -166,21 +178,30 @@ const extendSelectionVertical = async (
  * off the same prop. Adding our own DOM mutations would just race.
  *
  * Return contract (intentionally different from "did we move?"):
- *   - `false` → "no anchor; please fall through to the underlying
- *     vim handler". Only the `!current` early return takes this
- *     path — neither a live focused instance nor a recovery anchor
- *     exists, so vim's data-model walk is a legitimate fallback.
- *   - `true` → "spatial nav handled this keystroke". Includes the
- *     no-neighbor / panel-boundary case. We must NOT fall through
- *     to vim's `nextVisibleBlock` for a panel-boundary block on a
- *     non-outline surface (backlinks, embeds): vim's walker climbs
- *     the data-model parent chain of the source block, which for a
- *     backlink entry lives in some other page entirely. Following
- *     that chain returns a block from elsewhere in the workspace,
- *     and writing it as the panel's `focusedBlockLocation` leaves
- *     `useInFocus(<anyone in this panel>)` returning false →
- *     normal-mode deactivates → all shortcuts go dead until the
- *     user clicks back into a block.
+ *   - `false` → "spatial nav declines; the model walk is the better
+ *     answer here". Two cases: (a) no usable anchor — no live focused
+ *     instance, no recovery anchor, and no expected location to keep
+ *     us in this panel; (b) the model has a next row in this scope
+ *     that the rendered DOM can't offer, because it hasn't mounted.
+ *   - `true` → "spatial nav handled this keystroke", including the
+ *     genuine edge where neither the model nor the DOM has anywhere
+ *     left to go.
+ *
+ * Which SURFACE the row sits on doesn't enter into it. What matters is
+ * the scope, and every surface supplies its own `scopeRootId` (a
+ * backlink entry's is its shown block, not the page), so the model
+ * walk is always scope-local and cannot wander into another page.
+ * Rows inside a backlink entry are lazily mounted under the ordinary
+ * `block:<id>` key like any other row, so a model-resolved target
+ * there is mountable too.
+ *
+ * The one thing this cannot reach is a scope whose WRAPPER is still
+ * deferred: an unmounted backlink entry keys itself
+ * `backlink:<scope>:<id>`, invisible to both the walker and
+ * `lazyBlockCacheKey`. Moving between entries is a scope transition,
+ * which no model walk expresses either — it needs the list that owns
+ * that ordering to say what comes next. Unsolved here, and it was
+ * never solved by treating non-outline surfaces as a special case.
  */
 const moveVertical = async (
   deps: BlockShortcutDependencies,
@@ -216,12 +237,65 @@ const moveVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
-  if (!next) return true // boundary — handled, no move
-  const destPanel = next.closest<HTMLElement>('[data-panel-id]')
-  if (!destPanel) return true
-  const destPanelId = destPanel.dataset.panelId
-  const destLocation = locationOf(next)
-  if (!destPanelId || !destLocation) return true
+  const nextLocation = next ? locationOf(next) : null
+  const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
+
+  // WITHIN a render scope the model is authoritative; BETWEEN scopes the DOM
+  // is. That split is the whole rule, and it holds for every surface:
+  //
+  //   - The model knows rows the DOM doesn't, because rows mount lazily.
+  //     "The next MOUNTED row" and "the next row" diverge in several ways —
+  //     running out at the bottom of the mounted window, a scrollbar drag
+  //     leaving two mounted islands with a hole between them, a just-mounted
+  //     row whose children arrive only when its `childIds` handle resolves
+  //     while a later sibling is still mounted from before.
+  //   - The DOM knows transitions the model can't express: outline → trailing
+  //     backlinks, one backlink entry → the next, panel → stacked panel. Each
+  //     surface's walk is bounded by its own `scopeRootId` (a backlink entry's
+  //     is its shown block, not the page), so the model simply ends there.
+  //
+  // So: ask the model for the next row in this scope. If it has one, the only
+  // acceptable DOM neighbour is that row in this scope — anything else is the
+  // DOM missing rows, and we decline so the model handler resolves it and
+  // `FocusedRowLazyMount` mounts it. If the model has none, we're at the edge
+  // of the scope and the DOM's answer is the right one.
+  //
+  // Costs one O(depth) walk per keystroke over handle-cached rows — the same
+  // walk the model handler does on its own when spatial nav is off. The second
+  // walk only happens on the rare disagreement, where the alternative is a
+  // silently wrong jump.
+  const modelNext = deps.scopeRootId
+    ? (direction === 'down'
+        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
+        : await previousVisibleBlock(block, deps.scopeRootId))
+    : null
+
+  // A second keystroke or a click can land while that walk waits on an
+  // uncached `childIds`. Everything below is computed from a row that no
+  // longer holds focus, so hand the panel to whoever moved it rather than
+  // writing a move the user has already superseded.
+  if (
+    expectedLocation &&
+    !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
+  ) return true
+
+  if (modelNext) {
+    const domAgrees = Boolean(
+      nextLocation &&
+      nextPanelId === uiStateBlock.id &&
+      nextLocation.blockId === modelNext.id &&
+      // Same scope, not merely the same block: one block renders under many
+      // scopes, and landing on an embed or backlink copy of it stops `j` from
+      // continuing through the scope the user is actually in.
+      nextLocation.renderScopeId === currentLocation.renderScopeId,
+    )
+    if (!domAgrees) return false
+  }
+
+  // Nothing in the model and nothing in the DOM — a real edge.
+  if (!next || !nextLocation || !nextPanelId) return true
+  const destPanelId = nextPanelId
+  const destLocation = nextLocation
 
   if (destPanelId === uiStateBlock.id) {
     // Same-panel step — identical to vim's `focusBlock` write.
@@ -310,6 +384,13 @@ const crossPanelFocus = async (
  * can still `j` into. Same return contract as `moveVertical`: `false`
  * means "no live panel DOM — fall through to vim's data-model handler"
  * (SSR/headless, or the panel hasn't mounted); `true` means handled.
+ *
+ * Known divergence from `moveVertical`: the sequence this bounds is the
+ * MOUNTED one, so `Shift+G` lands on the last mounted row rather than the
+ * last row of the page, while `j` now walks past it via the model. Left
+ * as-is deliberately — declining here would hand the edges to a data-tree
+ * walk that skips the trailing surfaces this exists to include, and picking
+ * the right answer per surface needs its own change and tests.
  */
 const jumpToPanelEdge = async (
   deps: BlockShortcutDependencies,

@@ -2,8 +2,8 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
-import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
-import { extensionPromptsExtension } from '@/extensions/extensionPromptMount.js'
+import { appUpdatePromptExtension } from '@/plugins/app-update-prompt'
+import { extensionPromptsExtension } from '@/plugins/extension-prompts'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
 import {
   defaultActionContextsExtension,
@@ -28,6 +28,7 @@ import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
+import { cursorFollowsScrollPlugin } from '@/plugins/cursor-follows-scroll'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
@@ -121,6 +122,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   mobileKeyboardToolbarPlugin,
   swipeQuickActionsPlugin,
   spatialNavigationPlugin,
+  cursorFollowsScrollPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   attachmentsPlugin,
