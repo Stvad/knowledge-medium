@@ -136,7 +136,14 @@ export function LazyViewportMount({
   }
 
   return (
-    <div ref={containerRef}>
+    // `data-lazy-block-id` marks WHERE this row is reserved while it waits.
+    // Same reason the `blockId` prop is required at all: a deferred row must
+    // stay findable by block id. Mounting it needs the registry above; deciding
+    // whether a keyboard move would jump OVER it needs its position, which only
+    // the DOM has (see `rowSlotIn` in the spatial-navigation walker). Set on the
+    // placeholder branch only, so the attribute means "deferred", not "a row
+    // lives somewhere in here".
+    <div ref={containerRef} data-lazy-block-id={blockId}>
       {renderPlaceholder({
         reservedHeight: measuredHeights.get(cacheKey) ?? estimatedHeightPx,
       })}

@@ -38,12 +38,12 @@ import {
 } from '@/utils/selection.js'
 import {
   horizontalNeighborPanel,
-  instanceAt,
   locationOf,
   panelById,
   panelOf,
   panelInstances,
   resolveCurrentAnchor,
+  rowSlotIn,
   verticalNeighbor,
 } from './walker.ts'
 import { resolveSpatialNavExclusions } from './exclusionsFacet.ts'
@@ -183,8 +183,9 @@ const extendSelectionVertical = async (
  *     answer here". Two cases: (a) no usable anchor — no live focused
  *     instance, no recovery anchor, and no expected location to keep
  *     us in this panel; (b) taking the rendered neighbour would SKIP
- *     the model's next row in this scope, because that row hasn't
- *     mounted and nothing puts the neighbour ahead of it.
+ *     the model's next row in this scope — the neighbour sits past
+ *     that row's place in the document, or the DOM has no place for
+ *     it yet to compare against.
  *   - `true` → "spatial nav handled this keystroke", including the
  *     genuine edge where neither the model nor the DOM has anywhere
  *     left to go.
@@ -261,9 +262,8 @@ const moveVertical = async (
   // DOM is wrong — it usually means the DOM has MORE.
   //
   // What actually matters is only this: can we take the DOM's neighbour without
-  // SKIPPING the model's next row? Two ways to know we can't lose it, below.
-  // Anything else means rows are missing, and we decline so the model handler
-  // resolves the row and `FocusedRowLazyMount` mounts it.
+  // SKIPPING the model's next row? That is a question about POSITION, and the
+  // DOM answers it even for a row that hasn't mounted — see the check below.
   //
   // Costs one O(depth) walk per keystroke over handle-cached rows — the same
   // walk the model handler does on its own when spatial nav is off.
@@ -272,11 +272,6 @@ const moveVertical = async (
         ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
         : await previousVisibleBlock(block, deps.scopeRootId))
     : null
-
-  // Cache read, not a second query: the walk above loads `childIds` whenever it
-  // steps into this row's subtree. Undefined when it never looked (a collapsed
-  // row), which is also exactly when the model's next row can't be a child.
-  const firstChildId = block.childIds.peek()?.[0]
 
   // A second keystroke or a click can land while that walk waits on an
   // uncached `childIds`. Everything below is computed from a row that no
@@ -298,46 +293,40 @@ const moveVertical = async (
   const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
 
   if (modelNext) {
-    // (1) The model's row is itself MOUNTED in this scope and panel. The DOM
-    //     neighbour is the immediately adjacent nav item in document order, and
-    //     within a scope document order IS model order — so that mounted row
-    //     sits at or beyond the neighbour, and stepping onto the neighbour
-    //     still walks into it. (Same-panel is load-bearing: a stack-sibling
-    //     panel's first row is "adjacent" to nothing.) This subsumes plain
-    //     agreement, where the neighbour IS that row.
-    const modelRowIsMounted = Boolean(instanceAt(
+    // Where the model's row sits in the rendered panel — its own nav item if
+    // mounted, else the placeholder holding its place (`rowSlotIn`). Asking for
+    // the POSITION rather than "is it mounted" is what makes one test cover
+    // every surface: a nested surface's rows, a trailing footer list, and a
+    // hole left by lazy mounting differ only in where they fall relative to it.
+    const modelRowSlot = rowSlotIn(
       uiStateBlock.id,
       {blockId: modelNext.id, renderScopeId: currentLocation.renderScopeId},
       excludedSurfaces,
-    ))
+    )
 
-    // (2) We're stepping down into a nested surface THIS row renders: another
-    //     scope, inside this row's own element. Everything this row contains is
-    //     rendered before its next sibling, so the model's row still follows —
-    //     unless the model's row is this row's own first child, which renders
-    //     inside it too, and AFTER a trailing section (a footer backlink list).
-    //     Taking the neighbour then really would skip the children.
-    //     Down-only: going up, a nested surface between here and the model's
-    //     previous row belongs to a row that must itself be mounted (a surface
-    //     renders inside its owner), so case (1) already covers it.
-    const nestedSurfaceOfThisRow = Boolean(
-      direction === 'down' &&
-      next &&
-      nextLocation &&
-      // Defence in depth, not load-bearing: no test can falsify it through the
-      // dispatch path, because a same-scope row inside this one is a CHILD, and
-      // the first-child clause below already rejects that. It says what
-      // "nested surface" means, for a layout that renders its scope's rows in
-      // some order of its own.
-      nextLocation.renderScopeId !== currentLocation.renderScopeId &&
-      current.contains(next) &&
-      modelNext.id !== firstChildId,
+    // Taking the neighbour cannot skip the model's row when the neighbour is
+    // at, or on the near side of, that slot: keep pressing and the walk arrives
+    // there. On the far side it would jump over it — the rows between are
+    // missing from the DOM, so we decline and let the model handler resolve the
+    // row and `FocusedRowLazyMount` mount it.
+    //
+    // No slot at all means the DOM can't answer — the row's parent hasn't
+    // rendered its children yet — which is also a decline.
+    const towardsTheModelRow = next && modelRowSlot && (
+      next === modelRowSlot ||
+      Boolean(modelRowSlot.compareDocumentPosition(next) & (direction === 'down'
+        ? modelRowSlot.DOCUMENT_POSITION_PRECEDING
+        : modelRowSlot.DOCUMENT_POSITION_FOLLOWING))
     )
 
     const canTakeTheNeighbour = Boolean(
       nextLocation &&
+      // Defence in depth, not load-bearing: no test can falsify it, because the
+      // slot is looked up INSIDE this panel and a stack sibling's rows sit
+      // wholly before or after it — so the position test above already declines
+      // every cross-panel step the model still has rows ahead of.
       nextPanelId === uiStateBlock.id &&
-      (modelRowIsMounted || nestedSurfaceOfThisRow),
+      towardsTheModelRow,
     )
     if (!canTakeTheNeighbour) return false
   }

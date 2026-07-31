@@ -21,6 +21,9 @@ import {
  *                          `data-render-scope-id="<render scope>"`
  *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
  *   Block visibility target: `data-block-visibility-target="true"`
+ *   Deferred row's slot:   `data-lazy-block-id="<block.id>"` (set by
+ *                          `LazyViewportMount` while it shows a placeholder —
+ *                          the row's reserved place in document order)
  *
  * Excluded surfaces: which `data-block-surface` values the walker skips
  * (core excludes `breadcrumb` only — see `DEFAULT_NON_NAVIGABLE_SURFACES`
@@ -364,7 +367,7 @@ export const findRecoveryAnchor = (
  * when that row isn't mounted there (rows mount lazily, so "not in the
  * DOM" is the normal state for most of a page).
  */
-export const instanceAt = (
+const instanceAt = (
   panelId: string,
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
@@ -374,6 +377,43 @@ export const instanceAt = (
   return panelInstances(panel, excludedSurfaces)
     .find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
     ?? null
+}
+
+/**
+ * WHERE a row sits in the rendered panel — which is a different question from
+ * "is it mounted", and the one a caller comparing DOM order needs. Returns its
+ * live nav item when mounted, and otherwise the placeholder `LazyViewportMount`
+ * reserves for it (`data-lazy-block-id`), which holds the row's place in
+ * document order long before the row itself exists.
+ *
+ * A deferred row carries no render scope of its own — the placeholder is just a
+ * wrapper — so the scope comes from the row that RENDERED it: children inherit
+ * their parent row's scope, so the nearest enclosing nav item settles which
+ * occurrence this slot belongs to. That is what keeps an embed's deferred copy
+ * of a block from answering for the outline's.
+ *
+ * Null when the DOM has no place for the row at all: its parent's `childIds`
+ * hasn't resolved yet (so nothing has rendered a slot), or its surface defers
+ * the whole wrapper rather than the row. Callers must treat that as "the DOM
+ * can't tell me", not as "the row isn't there".
+ */
+export const rowSlotIn = (
+  panelId: string,
+  location: FocusedBlockLocation,
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
+): HTMLElement | null => {
+  const mounted = instanceAt(panelId, location, excludedSurfaces)
+  if (mounted) return mounted
+  const panel = panelById(panelId)
+  if (!panel) return null
+  const deferred = panel.querySelectorAll<HTMLElement>(
+    `[data-lazy-block-id="${CSS.escape(location.blockId)}"]`,
+  )
+  for (const slot of deferred) {
+    const owner = slot.closest<HTMLElement>(NAV_ITEM_SELECTOR)
+    if (owner?.dataset.renderScopeId === location.renderScopeId) return slot
+  }
+  return null
 }
 
 /**
