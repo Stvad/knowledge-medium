@@ -277,6 +277,48 @@ describe('getOrCreateTypedChild', () => {
     expect(children?.map(child => child.id)).toEqual([newest.id, existing.id])
   })
 
+  it('refuses an anchored position outright, since placement is computed before the id is known to be free', async () => {
+    // Placement has to happen before `tx.createOrGet`, and `createOrGet` is the
+    // only thing that sees the occupants `tx.get` hides — a tombstone, another
+    // workspace's row. So a `before`/`after` anchor would re-key a tied run of
+    // innocent siblings, or throw on an anchor that has since moved, on the way
+    // to a `taken` whose whole contract is that nothing was written. Rejected
+    // up front instead — and at RUNTIME, not just in the type, because the
+    // callers this primitive exists for are the ones the type does not reach: a
+    // dynamic extension is transpiled, not typechecked.
+    const anchor = await record('anchor')
+    await expect(record('anchored', {
+      // @ts-expect-error an anchored position is not offered on a derived record
+      position: {kind: 'after', siblingId: anchor.id},
+    })).rejects.toThrow(/'first' or 'last' only/)
+
+    const rows = await sharedDb.db.getAll<{id: string}>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0', ['parent'],
+    )
+    expect(rows.map(r => r.id)).toEqual([anchor.id])
+  })
+
+  it('moves no sibling on its way to reporting the id taken', async () => {
+    // The guard for the same finding from the other side: whatever placement
+    // this call computes, a `taken` answer must leave the tree byte-identical.
+    // Today that holds because 'first'/'last' are pure key arithmetic; this
+    // fails the moment placement can write again.
+    const first = await record('sibling-a')
+    const second = await record('sibling-b')
+    const doomed = await record('tombstoned')
+    await repo.tx(tx => tx.delete(doomed.id), {scope: ChangeScope.BlockDefault})
+
+    const siblings = () => sharedDb.db.getAll<{id: string; order_key: string}>(
+      'SELECT id, order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key', ['parent'],
+    )
+    const before = await siblings()
+
+    expect(await record('tombstoned', {position: {kind: 'first'}})).toMatchObject({status: 'taken'})
+
+    expect(await siblings()).toEqual(before)
+    expect(before.map(row => row.id)).toEqual([first.id, second.id])
+  })
+
   it('reports a deleted record as taken rather than resurrecting it', async () => {
     // Discarding a workout and then tapping a checkbox again must not bring
     // the discarded one back. Nor may it quietly derive a SECOND id and create

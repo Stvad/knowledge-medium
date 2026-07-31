@@ -158,8 +158,30 @@ export type DerivedChildOutcome =
    *  (null only for a row `tx.get` would not surface). */
   | { status: 'taken'; id: string; block: BlockData | null }
 
-export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id'> {
+export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id' | 'position'> {
   identity: DerivedIdentity
+  /** Where among the parent's children the CREATE puts the row. Default
+   *  'last'.
+   *
+   *  Narrower than `createTypedChild`'s, which also takes `{before}` /
+   *  `{after}`, and deliberately so: this call promises that a `taken`
+   *  outcome wrote NOTHING, and an anchored position cannot keep that
+   *  promise. Placement has to be computed BEFORE `tx.createOrGet`, and
+   *  `createOrGet` is the only thing that can see the two occupants `tx.get`
+   *  does not surface — a tombstone, and a row of the same id in another
+   *  workspace. So by the time `taken` is the answer, an anchored position
+   *  has already either thrown (`orderKeyForInsert` throws when the anchor
+   *  is no longer a sibling — moved away, or deleted) or re-keyed a tied run
+   *  of innocent siblings (`keysImmediatelyBefore`/`After` call `tx.move` to
+   *  open a strict slot). `first` and `last` reduce to `keyAtStart` /
+   *  `keyAtEnd`, which are pure string arithmetic: they cannot throw and
+   *  cannot write.
+   *
+   *  Nothing is lost by the restriction. Position applies to the create and
+   *  never to the adopt — a record already in the tree stays where the user
+   *  put it — so "next to that sibling" was never a property of the identity
+   *  this call resolves, only of whichever device happened to create first. */
+  position?: { kind: 'first' } | { kind: 'last' }
   /** May this existing block serve as the record? Soft-deleted blocks and
    *  blocks in another workspace are never offered (a deleted record was
    *  deleted on purpose, and silently resurrecting it is worse than making a
@@ -301,6 +323,20 @@ export const getOrCreateTypedChild = async (
   const {identity, adoptable, ...childSpec} = spec
   const id = derivedBlockId(identity)
 
+  // Checked here rather than trusted from the type, because the callers this
+  // primitive is FOR are the ones the type does not reach: a dynamic
+  // extension is transpiled, not typechecked, and bridge `eval` is plain JS.
+  // Rejected up front, before a single read or write, and on every path —
+  // including the adopt, where placement is unused — so the answer to "is
+  // this position supported" never depends on what happened to be sitting at
+  // the derived id.
+  const position = childSpec.position ?? {kind: 'last'}
+  if (position.kind !== 'first' && position.kind !== 'last') {
+    throw new Error(
+      `getOrCreateTypedChild: position '${String((position as {kind: unknown}).kind)}' is not supported — a derived record places 'first' or 'last' only, because an anchored position re-keys siblings and can throw before the id is known to be free.`,
+    )
+  }
+
   const parent = await tx.get(childSpec.parentId)
   if (!parent || parent.deleted) {
     throw new Error(`getOrCreateTypedChild: parent ${childSpec.parentId} is missing or deleted`)
@@ -321,7 +357,7 @@ export const getOrCreateTypedChild = async (
   if (existing) return {status: 'taken', id, block: existing}
 
   const orderKey = await orderKeyForInsert(
-    tx, childSpec.parentId, parent.workspaceId, childSpec.position ?? {kind: 'last'},
+    tx, childSpec.parentId, parent.workspaceId, position,
   )
   // `createOrGet`, not `createChild`: this is the insert the platform means
   // by a deterministic-id mint. It carries `systemMint` — which `createChild`
