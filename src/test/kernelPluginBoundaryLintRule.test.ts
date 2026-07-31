@@ -500,6 +500,13 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
       // `new URL('…', import.meta.url)` is Vite's idiom for a worker/wasm/asset
       // reference. Not an import node, but Vite emits a chunk for it, so the
       // build-time edge is just as real and just as non-removable.
+      //
+      // The ALIAS form specifically was challenged in review as a false
+      // positive ("Vite does not resolve aliases in new URL analysis"). It
+      // does: vite:asset-import-meta-url sends a non-relative URL through
+      // `createBackCompatIdResolver` -> `createIdResolver`, whose plugin
+      // container starts with `alias({entries: config.resolve.alias})`. Keep
+      // this case — narrowing to relative-only would open a real hole.
       {
         filename: core('extensions/liveRuntime.ts'),
         code: `const u = new URL('@/plugins/todo/worker.ts', import.meta.url)`,
@@ -783,6 +790,15 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // The assertion on the CALLEE. Seventh site of that unwrap fix.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = (import.meta.glob as any)('/src/plugins/todo/*.ts')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/plugins/todo/*.ts' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,

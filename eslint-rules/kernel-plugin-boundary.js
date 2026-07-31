@@ -438,12 +438,17 @@ const propertyValue = (node, name) => {
   return found
 }
 
-const isImportMetaGlob = (callee) =>
-  callee?.type === 'MemberExpression'
-  && callee.object?.type === 'MetaProperty'
-  && callee.object.meta?.name === 'import'
-  && callee.object.property?.name === 'meta'
-  && (callee.property?.name === 'glob' || callee.property?.name === 'globEager')
+const isImportMetaGlob = (node) => {
+  // Unwrap the callee too — `(import.meta.glob as any)(…)` is a TSAsExpression.
+  // Seventh site of this same fix; the lesson is that every node this rule
+  // pattern-matches on needs unwrapping, not the ones an example happened to name.
+  const callee = unwrap(node)
+  return callee?.type === 'MemberExpression'
+    && callee.object?.type === 'MetaProperty'
+    && callee.object.meta?.name === 'import'
+    && callee.object.property?.name === 'meta'
+    && (callee.property?.name === 'glob' || callee.property?.name === 'globEager')
+}
 
 const noCoreToPluginImports = {
   meta: {
