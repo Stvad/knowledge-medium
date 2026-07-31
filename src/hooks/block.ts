@@ -376,24 +376,27 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *
  *  Sticky across id-set changes: the key IS the id set, so an add or a
  *  remove usually lands on an unresolved handle (`peek() === undefined`
- *  — a recently used key can still be warm). Reporting that as "nobody
- *  has ancestors" is what made a live backlinks refresh jump:
- *  `BreadcrumbList` renders null for an empty chain, so every visible
- *  entry lost its breadcrumb line until the load landed, and the
- *  section collapsed by a line per entry then sprang back. While an
- *  unresolved handle loads we therefore keep serving the last resolved
- *  chains; a resolved value always wins outright.
+ *  — a key used within the store's GC window can still be warm).
+ *  Rendering that as "nobody has ancestors" collapses the panel by a
+ *  line per entry until the load lands, because `BreadcrumbList`
+ *  renders null for an empty chain (repro: the jump in
+ *  `plugins/backlinks/test/linkedReferencesRefresh`). So while an
+ *  unresolved handle loads we keep serving the last resolved chains; a
+ *  resolved value always wins outright.
  *
- *  What that deliberately does NOT cover: ids ENTERING the set have no
- *  carried chain — a new backlink, or every id re-added when a filter
- *  is switched off — so those entries still gain their breadcrumb line
- *  a load late. And "last resolved" can be several id-set changes old
- *  under rapid churn (one load is a floor, not a bound), so a tx that
- *  moves a block AND changes the set at once shows that block's old
- *  chain until the load lands. A plain move keeps the key, so it
- *  re-resolves in place and never reads a carried chain — though
- *  `LoaderHandle.peek()` serves its own stale value over that window
- *  regardless of anything here. */
+ *  Deliberately not covered. Ids ENTERING the set have no carried
+ *  chain — a new backlink, or the ids a filter had excluded when it is
+ *  switched off — so unless their key is still warm those entries gain
+ *  their breadcrumb line a load late. "Last resolved" can be several
+ *  id-set changes old under churn (one load is a floor, not a bound),
+ *  so a tx that moves a block AND changes the set at once shows the old
+ *  chain until the load lands. And a FAILED load is indistinguishable
+ *  from a slow one here, so its chains stay until the id set changes or
+ *  the handle is disposed — deliberate: that is already what `peek()`
+ *  does for a warm handle whose RELOAD fails (`LoaderHandle` keeps the
+ *  last value), and the failures that reach a first load are whole-DB
+ *  ones where the entry bodies are gone too, so last-known breadcrumbs
+ *  beat blank ones. */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Sort the ids so logically-equal block sets in different orders
@@ -409,9 +412,9 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // The selector is memoized, not inline: it is one of `useHandle`'s
   // getSelection deps, and an identity that churns per render resets
   // that closure's memo, so the hook hands back a freshly allocated
-  // (structurally equal) map on renders where nothing changed. The
-  // carry-over below compares by identity, so an inline selector would
-  // make it re-set state forever.
+  // (structurally equal) map on renders where nothing changed. That is
+  // an allocation win, NOT what makes the update below terminate — the
+  // structural check is.
   const selectParents = useCallback(
     (data: readonly {startId: string; ancestors: readonly BlockData[]}[] | undefined) => {
       if (!data) return undefined
@@ -424,16 +427,17 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
     },
     [repo],
   )
-  const handle = repo.query.manyAncestors({ids})
-  const resolved = useHandle(handle, {selector: selectParents})
+  const resolved = useHandle(repo.query.manyAncestors({ids}), {selector: selectParents})
 
   // Remember the last resolved chains with the "adjust state during
   // render" pattern (as `usePromotableBreadcrumb` does) rather than an
   // effect: the carry-over has to be available in the SAME render that
-  // first sees the cold handle, or the blank frame it exists to prevent
-  // paints anyway. The structural check keeps that update terminating
-  // even if React ever drops `useHandle`'s memo (documented as a hint,
-  // not a guarantee) and hands back an equal-but-fresh map.
+  // first sees the unresolved handle, or the blank frame it exists to
+  // prevent paints anyway. The structural check is what makes that
+  // update terminate — a consumer whose handle identity churns per
+  // render (or a dropped `useHandle` memo, documented as a hint rather
+  // than a guarantee) otherwise re-sets state with an equal-but-fresh
+  // map forever.
   const [lastResolved, setLastResolved] =
     useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
   if (
@@ -454,14 +458,7 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
     return out.size === 0 ? EMPTY_PARENT_MAP : out
   }, [lastResolved, ids])
 
-  if (resolved) return resolved
-  // A FAILED load also leaves `peek()` undefined, and permanently:
-  // `LoaderHandle` rolls its deps back on error (so no commit can
-  // invalidate it) and `useHandle` only ensure-loads from 'idle'.
-  // Carrying there would pin stale breadcrumbs for the rest of the
-  // session, so drop them instead. The error path fires no notify, so
-  // this takes effect on the next render rather than immediately.
-  return handle.status() === 'error' ? EMPTY_PARENT_MAP : carried
+  return resolved ?? carried
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
