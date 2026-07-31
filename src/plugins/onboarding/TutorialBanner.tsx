@@ -16,7 +16,7 @@
 import { GraduationCap, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button.js'
-import { runActionById } from '@/shortcuts/runAction.js'
+import { runActionByIdSafely } from '@/shortcuts/runAction.js'
 import type { BlockHeaderContribution } from '@/extensions/blockInteraction.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
@@ -33,16 +33,14 @@ export const TutorialBanner = () => {
   }
 
   const openTutorial = () => {
-    // Retire the banner first: the action navigates away, so waiting on it
-    // would leave the card on screen through the transition.
-    dismiss()
-    try {
-      void Promise.resolve(
-        runActionById(INSERT_TUTORIAL_ACTION_ID, new CustomEvent('open-tutorial')),
-      ).catch(e => console.error('[onboarding] open tutorial failed', e))
-    } catch (e) {
-      console.error('[onboarding] open tutorial failed', e)
-    }
+    // Hide immediately but do NOT persist yet: the action navigates away, so
+    // waiting would leave the card on screen through the transition, while
+    // persisting up front would burn the only prominent route in even when
+    // the dispatch never landed (its plugin toggled off, no active context).
+    // Persist once the dispatch reports success; restore the banner if not.
+    setDismissed(true)
+    void runActionByIdSafely(INSERT_TUTORIAL_ACTION_ID, new CustomEvent('open-tutorial'))
+      .then(ok => (ok ? dismissTutorialBanner() : setDismissed(false)))
   }
 
   return (

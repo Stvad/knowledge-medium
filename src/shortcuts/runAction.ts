@@ -112,6 +112,35 @@ export const runActionById: RunActionByIdFn = (actionId, trigger) => {
   return dispatcher(actionId, trigger)
 }
 
+/**
+ * `runActionById` for UI callers that must not throw into render or leave an
+ * unhandled rejection: a button's onClick, a status-dropdown row.
+ *
+ * `runActionById` throws SYNCHRONOUSLY when the id isn't an active action
+ * (its plugin toggled off, its context inactive) and can reject
+ * asynchronously from the handler — so a correct call site needs both a
+ * try/catch and a `.catch`. That exact shape had been copied per call site.
+ *
+ * Resolves `true` when the dispatch completed, `false` when it failed (the
+ * error is logged, not rethrown). Callers that make a decision on the
+ * outcome — persisting a "don't show this again" flag, say — should branch on
+ * it rather than assuming the click worked. Note it reports whether DISPATCH
+ * succeeded: an action that catches its own errors internally still resolves
+ * `true`.
+ */
+export const runActionByIdSafely = async (
+  actionId: string,
+  trigger: ActionTrigger,
+): Promise<boolean> => {
+  try {
+    await runActionById(actionId, trigger)
+    return true
+  } catch (e) {
+    console.error(`[runActionById] "${actionId}" failed`, e)
+    return false
+  }
+}
+
 export type DispatchActionWithDepsFn = (
   actionId: string,
   deps: Partial<BaseShortcutDependencies>,

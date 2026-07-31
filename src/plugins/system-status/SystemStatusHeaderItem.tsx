@@ -32,11 +32,13 @@ import {
 } from './queueCounts.ts'
 import { RejectionDialog } from './RejectionDialog.tsx'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
-import { runActionById } from '@/shortcuts/runAction.js'
+import { runActionByIdSafely } from '@/shortcuts/runAction.js'
 import {
   APP_CHECK_FOR_UPDATES_ACTION_ID,
   canCheckForAppUpdates,
-} from '@/extensions/appUpdateStatus.js'
+} from '@/plugins/app-update-prompt/status.js'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 
 interface UploadQueueCountRow {
   count: number
@@ -131,18 +133,9 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
 
 // Fire-and-forget dispatch of a global action by id — the same indirection
 // every control in this dropdown uses (a diagnostic's Inspect/Reload, the
-// update check). Rejections are logged, never surfaced into render.
-const dispatchAction = (actionId: string): Promise<void> => {
-  try {
-    return Promise.resolve(runActionById(actionId, new CustomEvent('run-diagnostic-action')))
-      .catch(e => {
-        console.error('Failed to run action', actionId, e)
-      })
-  } catch (e) {
-    console.error('Failed to run action', actionId, e)
-    return Promise.resolve()
-  }
-}
+// update check). Failures are logged, never surfaced into render.
+const dispatchAction = (actionId: string): Promise<boolean> =>
+  runActionByIdSafely(actionId, new CustomEvent('run-diagnostic-action'))
 
 /**
  * Proactive "is there a new build?" control.
@@ -159,7 +152,21 @@ const dispatchAction = (actionId: string): Promise<void> => {
  */
 function CheckForUpdatesRow() {
   const [checking, setChecking] = useState(false)
-  if (!canCheckForAppUpdates()) return null
+  // Two independent gates, both required.
+  //
+  // Browser capability: no service worker to ask (dev, unsupported browsers).
+  // Shared with the action's own `isVisible` so the two can't drift.
+  //
+  // Action availability: `app-update-prompt` is its OWN system toggle, so a
+  // user can disable it while leaving System status on. Its toggle boundary
+  // then withdraws `app.checkForUpdates` from the runtime and `runActionById`
+  // throws "Active action ... not found" — which `dispatchAction` only logs,
+  // leaving a button that spins briefly and does nothing. Ask the runtime
+  // whether the action is actually there rather than assuming its plugin is.
+  const runtime = useAppRuntime()
+  const actionAvailable = getEffectiveActions(runtime)
+    .some(action => action.id === APP_CHECK_FOR_UPDATES_ACTION_ID)
+  if (!canCheckForAppUpdates() || !actionAvailable) return null
   return (
     <div className="border-t pt-2">
       <Button

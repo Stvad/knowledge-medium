@@ -6,7 +6,7 @@ import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
 import type { ComponentType, FunctionComponent, RefObject } from 'react'
 import {
-  aliasesProp,
+  getAliases,
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -41,7 +41,7 @@ import {
   ContextMenuContent,
 } from '@/components/ui/context-menu.js'
 import { useBlockContext } from '@/context/block.js'
-import { useHasChildren, usePropertyValue } from '@/hooks/block.js'
+import { useHandle, useHasChildren, usePropertyValue } from '@/hooks/block.js'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
@@ -534,8 +534,18 @@ export function DefaultBlockRenderer(
   // a plain bullet you happened to zoom into are typographically identical.
   // Only the FOCAL title is distinguished (see `.page-title-content`);
   // inline `[[links]]` to the page are deliberately left alone.
-  const [aliases] = usePropertyValue(block, aliasesProp)
-  const isAliasedPage = isTopLevel && aliases.length > 0
+  // Read through `getAliases` rather than `usePropertyValue(block, aliasesProp)`:
+  // the raw hook calls `codec.decode` with no catch, and this read now runs for
+  // EVERY rendered block. One malformed `alias` value (imported, hand-written,
+  // arrived over sync) would throw here — in the renderer itself, above the
+  // per-block error boundary — and blank out that block's whole subtree, purely
+  // to decide a font size. `getAliases` is the codebase's existing tolerant
+  // decode for exactly this. The selector also returns a boolean, so it can't
+  // churn identity the way an array would.
+  const hasAlias = useHandle(block, {
+    selector: data => (data ? getAliases(data).length > 0 : false),
+  }) as boolean
+  const isAliasedPage = isTopLevel && hasAlias
 
   // The block's READ content, bare: the per-type read renderer in an error
   // boundary, no editable `block-content` wrapper, surface props, or gesture ref.

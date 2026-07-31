@@ -16,6 +16,7 @@ import {
 const mocks = vi.hoisted(() => ({
   localOnly: false,
   updateAvailable: false,
+  updateActionRegistered: true,
   runActionById: vi.fn(),
   queryCalls: [] as Array<{sql: string, params: unknown[], options: Record<string, unknown>}>,
   queryResponses: new Map<string, {data: Array<{count: number}>, error?: Error}>(),
@@ -54,7 +55,18 @@ vi.mock('@/components/Login.js', () => ({
 // The dropdown's diagnostic buttons (Inspect / Reload / Enable) dispatch by
 // action id through runActionById; assert the id rather than the side effect.
 vi.mock('@/shortcuts/runAction.js', () => ({
-  runActionById: (...args: unknown[]) => mocks.runActionById(...args),
+  runActionByIdSafely: async (...args: unknown[]) => {
+    mocks.runActionById(...args)
+    return mocks.updateActionRegistered
+  },
+}))
+
+// `app-update-prompt` is a separately-togglable plugin, so its actions may or
+// may not be in the resolved runtime. Drive that axis directly rather than
+// standing up a whole facet runtime.
+vi.mock('@/shortcuts/effectiveActions.js', () => ({
+  getEffectiveActions: () =>
+    mocks.updateActionRegistered ? [{id: 'app.checkForUpdates'}] : [],
 }))
 
 vi.mock('../RejectionDialog.tsx', () => ({
@@ -133,6 +145,7 @@ describe('SystemStatusHeaderItem', () => {
   beforeEach(() => {
     mocks.localOnly = false
     mocks.updateAvailable = false
+    mocks.updateActionRegistered = true
     mocks.runActionById = vi.fn()
     mocks.queryCalls = []
     mocks.status = defaultStatus()
@@ -471,6 +484,22 @@ describe('SystemStatusHeaderItem', () => {
     fireEvent.click(await screen.findByRole('button', {name: /Check for updates/}))
     expect(mocks.runActionById)
       .toHaveBeenCalledWith('app.checkForUpdates', expect.anything())
+  })
+
+  it('hides the update check when the app-update plugin is toggled off', async () => {
+    // System status and app-update-prompt toggle independently. With the
+    // latter off its action leaves the runtime, and dispatching by id would
+    // throw where only `dispatchAction`'s console.error sees it — a button
+    // that spins and does nothing. Capability alone isn't enough to show it.
+    setServiceWorkerPresent(true)
+    mocks.updateActionRegistered = false
+    mocks.queryResponses.set(uploadQueuePreviewCountSql, {data: [{count: 0}]})
+
+    render(<SystemStatusHeaderItem/>)
+    fireEvent.pointerDown(screen.getByRole('button'))
+
+    expect(await screen.findByText('Last sync')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /Check for updates/})).not.toBeInTheDocument()
   })
 
   it('hides the update check where there is no service worker to ask', async () => {

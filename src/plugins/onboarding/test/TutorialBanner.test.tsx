@@ -5,11 +5,20 @@ import type { BlockResolveContext } from '@/extensions/blockInteraction'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema'
 import { TutorialBanner, tutorialBannerHeader } from '../TutorialBanner.tsx'
 import { INSERT_TUTORIAL_ACTION_ID } from '../action.ts'
+import { isTutorialBannerDismissed } from '../bannerDismissal.ts'
 
-const mocks = vi.hoisted(() => ({runActionById: vi.fn()}))
+const mocks = vi.hoisted(() => ({
+  runActionById: vi.fn(),
+  /** Whether the dispatch reports success — drives the persist-only-on-success
+   *  path. */
+  dispatchSucceeds: true,
+}))
 
 vi.mock('@/shortcuts/runAction.js', () => ({
-  runActionById: (...args: unknown[]) => mocks.runActionById(...args),
+  runActionByIdSafely: async (...args: unknown[]) => {
+    mocks.runActionById(...args)
+    return mocks.dispatchSucceeds
+  },
 }))
 
 // Only the fields the header predicate reads; the facet hands it a full
@@ -45,6 +54,7 @@ describe('tutorial banner placement', () => {
 describe('TutorialBanner', () => {
   beforeEach(() => {
     mocks.runActionById = vi.fn()
+    mocks.dispatchSucceeds = true
     window.localStorage.clear()
   })
   afterEach(() => {
@@ -61,16 +71,36 @@ describe('TutorialBanner', () => {
       .toHaveBeenCalledWith(INSERT_TUTORIAL_ACTION_ID, expect.anything())
   })
 
-  it('retires itself once opened, so it never becomes permanent chrome', () => {
+  it('retires itself once opened, so it never becomes permanent chrome', async () => {
     const view = render(<TutorialBanner/>)
 
     fireEvent.click(screen.getByRole('button', {name: 'Open tutorial'}))
     expect(screen.queryByText(/Start with the tutorial/)).not.toBeInTheDocument()
 
-    // …and stays gone on the next session, not just this mount.
+    // …and stays gone on the next session, not just this mount. Persistence
+    // is deferred until the dispatch reports success, so wait for the flag
+    // rather than the DOM (already updated by the in-memory hide above).
+    await vi.waitFor(() => expect(isTutorialBannerDismissed()).toBe(true))
     view.unmount()
     render(<TutorialBanner/>)
     expect(screen.queryByText(/Start with the tutorial/)).not.toBeInTheDocument()
+  })
+
+  it('comes back when the dispatch never landed, keeping the only retry route', async () => {
+    // The action is the sole prominent way in. Persisting the dismissal before
+    // knowing the dispatch worked would retire the banner permanently on a
+    // failure the user can see (a toast) but no longer act on from here.
+    mocks.dispatchSucceeds = false
+    const view = render(<TutorialBanner/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Open tutorial'}))
+
+    // Restored in place…
+    expect(await screen.findByText(/Start with the tutorial/)).toBeInTheDocument()
+    // …and nothing was persisted, so a later session still offers it.
+    view.unmount()
+    render(<TutorialBanner/>)
+    expect(screen.getByText(/Start with the tutorial/)).toBeInTheDocument()
   })
 
   it('can be dismissed without opening the tutorial', () => {
