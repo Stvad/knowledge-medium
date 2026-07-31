@@ -101,16 +101,16 @@ describe('alignRowToScrollportTop', () => {
     const row = addRow('row-b', 'panel:page', 300)
     port.scrollTop = 0
 
-    expect(alignRowToScrollportTop(row)).toBe(300)
+    expect(alignRowToScrollportTop(row)).toBe(port)
     expect(port.scrollTop).toBe(300)
   })
 
-  it('reports zero and leaves the port alone when the row is already at the top', () => {
+  it('leaves the port alone when the row is already at the top', () => {
     const {port, addRow} = build(100)
     const row = addRow('row-b', 'panel:page', 42)
     port.scrollTop = 42
 
-    expect(alignRowToScrollportTop(row)).toBe(0)
+    expect(alignRowToScrollportTop(row)).toBe(port)
     expect(port.scrollTop).toBe(42)
   })
 })
@@ -183,21 +183,65 @@ describe('alignScrollportToRow', () => {
     cancel()
   })
 
-  // The keydown listener is on the document, which has no panel of its own, so
-  // before it can cancel anything it has to be sure there is something to
-  // cancel — otherwise typing in one pane strands every other pane that is
-  // still waiting for its rows.
-  it('does not let a keystroke cancel a restore that has not aligned yet', async () => {
+  // Keyboard scrolling (PageDown, Space) is a takeover like any other, and it
+  // can happen while the anchor row is still hydrating.
+  it('gives up when a key is pressed inside this panel', async () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
 
     const cancel = alignScrollportToRow(port, LOCATION)
-    document.dispatchEvent(new Event('keydown'))
+    port.dispatchEvent(new Event('keydown', {bubbles: true}))
+    addRow('row-b', 'panel:page', 300)
+
+    const fence = build(100)
+    const fenceCancel = alignScrollportToRow(fence.port, LOCATION)
+    fence.addRow('row-b', 'panel:page', 300)
+    await vi.waitFor(() => {
+      expect(fence.port.scrollTop).toBe(300)
+    })
+    fenceCancel()
+
+    expect(port.scrollTop).toBe(0)
+    cancel()
+  })
+
+  // ...but a keystroke in ANOTHER pane must not. During a multi-pane cold load
+  // several restores are pending at once, and typing in the one that is ready
+  // would otherwise strand all the others at the wrong position.
+  it('ignores a keystroke aimed at a different panel', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+    const elsewhere = build(100)
+
+    const cancel = alignScrollportToRow(port, LOCATION)
+    elsewhere.port.dispatchEvent(new Event('keydown', {bubbles: true}))
     addRow('row-b', 'panel:page', 300)
 
     await vi.waitFor(() => {
       expect(port.scrollTop).toBe(300)
     })
+    cancel()
+  })
+
+  // Dragging the native scrollbar emits neither `wheel` nor `touchmove`, so the
+  // only evidence is the port moving off the offset we left it at.
+  it('gives up when the port is scrolled by someone else', async () => {
+    const {port, addRow, moveRow} = build(100)
+    port.scrollTop = 0
+    const row = addRow('row-b', 'panel:page', 300)
+
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 1000})
+    expect(port.scrollTop).toBe(300)
+
+    // The user drags the scrollbar somewhere else.
+    port.scrollTop = 900
+    port.dispatchEvent(new Event('scroll'))
+
+    // Content above the anchor then settles, which would otherwise pull it back.
+    moveRow(row, 450)
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(port.scrollTop).toBe(900)
     cancel()
   })
 

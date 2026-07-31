@@ -42,6 +42,10 @@ interface LazyViewportMountProps {
   overscanPx: number
   children: ReactNode
   renderPlaceholder: (props: LazyViewportPlaceholderProps) => ReactNode
+  /** The block this row renders. Only needed when `cacheKey` is a surface's
+   *  own key rather than `lazyBlockCacheKey(blockId)`; it keeps the row
+   *  reachable by block id — see `lazyMountRegistry`. */
+  blockId?: string
 }
 
 /**
@@ -58,6 +62,7 @@ export function LazyViewportMount({
   overscanPx,
   children,
   renderPlaceholder,
+  blockId,
 }: LazyViewportMountProps) {
   const [mounted, setMounted] = useState(
     () => typeof IntersectionObserver === 'undefined' || mountedCacheKeys.has(cacheKey),
@@ -103,8 +108,8 @@ export function LazyViewportMount({
   // pull this row into existence — rationale in `lazyMountRegistry`.
   useEffect(() => {
     if (mounted) return
-    return registerPendingLazyMount(cacheKey, () => setMounted(true))
-  }, [mounted, cacheKey])
+    return registerPendingLazyMount(cacheKey, () => setMounted(true), blockId)
+  }, [mounted, cacheKey, blockId])
 
   useEffect(() => {
     if (!mounted) return

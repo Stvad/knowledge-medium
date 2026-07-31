@@ -236,6 +236,38 @@ describe('FocusedRowLazyMount', () => {
     })
   })
 
+  // A backlink entry keys its placeholder `backlink:<scope>:<id>` so its sticky
+  // mounted-state and measured height stay per-entry. A caller holding only a
+  // focused location can't reconstruct that key, so before the registry
+  // registered under the canonical block key as well, a cursor restored onto a
+  // deferred backlink row could not be materialized at all — keyboard nav dead
+  // there, and a scroll restore anchored to it silently giving up.
+  it("mounts a focused row whose surface mints its own cache key", async () => {
+    const panel = repo.block(PANEL_ID)
+    render(
+      <>
+        <FocusedRowLazyMount block={panel} scopeRootId="top"/>
+        <LazyViewportMount
+          cacheKey={`backlink:entry-1:off-screen`}
+          blockId="off-screen"
+          estimatedHeightPx={32}
+          overscanPx={600}
+          renderPlaceholder={() => <div data-testid="placeholder"/>}
+        >
+          <div data-testid="row">backlink row</div>
+        </LazyViewportMount>
+      </>,
+    )
+
+    expect(screen.getByTestId('placeholder')).toBeInTheDocument()
+
+    await focusBlock(panel, 'off-screen', {renderScopeId: 'backlink:entry-1'})
+
+    await waitFor(() => {
+      expect(screen.getByTestId('row')).toBeInTheDocument()
+    })
+  })
+
   // Back/forward keeps this component and swaps `scopeRootId` — the restored
   // page's focus arrives the same way a reload's does, in one tx with the new
   // top-level block. The row has to mount there too, or the restore has

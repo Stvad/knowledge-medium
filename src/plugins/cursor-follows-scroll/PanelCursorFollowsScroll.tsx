@@ -4,6 +4,8 @@ import {
   focusBlock,
   focusedBlockLocationProp,
   isEditingProp,
+  peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block.js'
 import { panelById } from '@/plugins/spatial-navigation/walker.js'
@@ -97,6 +99,20 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
 
     const settle = () => {
       settleTimer = null
+      // DEFENCE IN DEPTH, not the primary path: the effect's cleanup cancels
+      // this timer on any focus change, and that normally wins. It can't be
+      // relied on to always win, though — the cleanup runs only once React has
+      // propagated the new focus property, while a timer that is already due
+      // fires before that. Writing then would overwrite a move the user just
+      // made (pressing `j` as scrolling settles), and a normal-mode move leaves
+      // `isEditing` false, so the guard below wouldn't catch it.
+      //
+      // Deliberately unpinned: reverting this line fails no test, because the
+      // cleanup path satisfies the outcome in every ordering a test can stage.
+      // Kept because the window is real and the failure is silent data loss of
+      // the user's cursor — the same bug class as the superseded-move write
+      // fixed in #494.
+      if (!sameFocusedBlockLocation(peekFocusedBlockLocation(block), location)) return
       // Moving focus clears edit mode (`focusBlock` only preserves it for an
       // unchanged location), so re-anchoring mid-edit would close the editor
       // under the user — and scrolling while the on-screen keyboard is up is

@@ -238,6 +238,39 @@ describe('PanelCursorFollowsScroll', () => {
     })
   })
 
+  // Outcome test, NOT a pin on the location re-check inside `settle`: what
+  // satisfies it here is the effect cleanup cancelling the armed timer, and
+  // removing that re-check fails nothing. The re-check covers the ordering
+  // where the timer is already due when the move lands, which the cleanup
+  // cannot win and a test cannot stage — see the comment at the re-check.
+  it('keeps a cursor that moved while the scroll was settling', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200], ['c', 900]])
+    await focusBlock(panel, 'b', {renderScopeId: SCOPE})
+    const fence = await withFence()
+
+    render(
+      <>
+        <PanelCursorFollowsScroll block={panel}/>
+        <PanelCursorFollowsScroll block={fence.fencePanel}/>
+      </>,
+    )
+
+    // Scroll `b` out of view — the settle timer is now armed for `b`.
+    dom.moveRow('a', -400)
+    dom.moveRow('b', -100)
+    dom.moveRow('c', 40)
+    dom.scroll()
+    fence.scrollAway()
+
+    // The user presses `j` before the timer fires: the cursor is now `c`, and
+    // the pending timer still holds `b`.
+    await focusBlock(panel, 'c', {renderScopeId: SCOPE})
+
+    await fence.settled()
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('c')
+  })
+
   // `focusBlock` only preserves edit mode for an unchanged location, so
   // re-anchoring mid-edit closes the editor under the user — which is what
   // scrolling with the on-screen keyboard up would otherwise do on a phone.

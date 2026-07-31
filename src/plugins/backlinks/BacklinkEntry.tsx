@@ -196,6 +196,7 @@ export const LazyBacklinkItem = ({
   return (
     <LazyViewportMount
       cacheKey={`backlink:${scopeId}:${block.id}`}
+      blockId={block.id}
       estimatedHeightPx={BACKLINK_ESTIMATED_HEIGHT_PX}
       overscanPx={BACKLINK_OVERSCAN_PX}
       renderPlaceholder={(props) => <BacklinkItemPlaceholder {...props} />}

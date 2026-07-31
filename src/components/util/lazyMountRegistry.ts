@@ -33,12 +33,21 @@
  *     whose own `LazyBlockComponent` wrapper is rendered gets mounted, so
  *     the one the focused location names is among them.
  *
- * Known gaps, both handled a level up in `FocusedRowLazyMount` rather than
- * here: a copy nested under a still-deferred ancestor has no wrapper yet, so
- * there is nothing to register (its ancestors have to be wanted first); and
- * surfaces that mint their own keys — backlink entries key
- * `backlink:<scope>:<id>` — are not reachable through `lazyBlockCacheKey` at
- * all.
+ *   - **A surface may key its rows however it likes and still be reachable
+ *     by block id.** Backlink entries key `backlink:<scope>:<id>` so their
+ *     sticky mounted-state and measured heights are per-entry rather than
+ *     shared with the outline copy — both correct, and neither is something
+ *     a caller holding only a focused location can reconstruct. Registering
+ *     under `lazyBlockCacheKey` as WELL as the surface's own key keeps the
+ *     two independent: the surface owns its key, and "mount the row for this
+ *     block, wherever it lives" keeps working. That was a real hole — a
+ *     cursor restored onto a deferred backlink row could not be materialized
+ *     at all, so keyboard navigation was dead there and a scroll restore
+ *     anchored to it silently gave up.
+ *
+ * Remaining gap, handled a level up in `FocusedRowLazyMount` rather than here:
+ * a copy nested under a still-deferred ancestor has no wrapper yet, so there is
+ * nothing to register (its ancestors have to be wanted first).
  *
  * Registration is keyed, so a request costs a lookup rather than a
  * broadcast, and no `LazyViewportMount` has to subscribe to focus state —
@@ -73,22 +82,39 @@ const wantedKeys = new Map<string, number>()
  *  the unregister function (effect-cleanup shaped). Only rows currently
  *  showing a placeholder should register. If the key is already wanted, this
  *  mounts straight away instead of registering. */
-export const registerPendingLazyMount = (cacheKey: string, mount: () => void): (() => void) => {
-  if (wantedKeys.has(cacheKey)) {
-    // Someone is already waiting on this key — mount rather than defer.
+export const registerPendingLazyMount = (
+  cacheKey: string,
+  mount: () => void,
+  /** The block this row renders, when the caller's key isn't
+   *  `lazyBlockCacheKey(blockId)`. Adds a second registration under the
+   *  canonical key so a caller holding only a focused location can still
+   *  reach the row — see the surface-key bullet above. */
+  blockId?: string,
+): (() => void) => {
+  const canonical = blockId === undefined ? undefined : lazyBlockCacheKey(blockId)
+  const keys = canonical === undefined || canonical === cacheKey
+    ? [cacheKey]
+    : [cacheKey, canonical]
+
+  if (keys.some(key => wantedKeys.has(key))) {
+    // Someone is already waiting — mount rather than defer.
     mount()
     return () => {}
   }
-  let mounts = pendingMounts.get(cacheKey)
-  if (!mounts) {
-    mounts = new CallbackSet(`lazy-mount:${cacheKey}`)
-    pendingMounts.set(cacheKey, mounts)
-  }
-  const remove = mounts.add(mount)
-  return () => {
-    remove()
-    if (pendingMounts.get(cacheKey)?.size === 0) pendingMounts.delete(cacheKey)
-  }
+
+  const removals = keys.map(key => {
+    let mounts = pendingMounts.get(key)
+    if (!mounts) {
+      mounts = new CallbackSet(`lazy-mount:${key}`)
+      pendingMounts.set(key, mounts)
+    }
+    const remove = mounts.add(mount)
+    return () => {
+      remove()
+      if (pendingMounts.get(key)?.size === 0) pendingMounts.delete(key)
+    }
+  })
+  return () => { for (const remove of removals) remove() }
 }
 
 /** Ask every row for `cacheKey` to mount, and keep wanting it so rows that

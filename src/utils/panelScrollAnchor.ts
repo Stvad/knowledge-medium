@@ -73,22 +73,23 @@ export const findAnchorRow = (
 
 /**
  * Put `rowEl`'s top edge at the top of whatever actually scrolls it, and
- * return how far it had to move (0 when it was already there, so callers can
- * tell a correction from a no-op).
+ * return that scrollport — so a caller re-applying this can tell its own
+ * scrolling apart from the user's by watching the port it moved. Null when the
+ * page itself is the scrollport (nothing to watch that way).
  *
  * Resolved from the ROW rather than from a known container so a row inside a
  * nested scrollport (video notes, a scrollable embed) moves its own port.
  */
-export const alignRowToScrollportTop = (rowEl: HTMLElement): number => {
+export const alignRowToScrollportTop = (rowEl: HTMLElement): HTMLElement | null => {
   const rowTop = rowEl.getBoundingClientRect().top
   const port = nearestScrollableAncestor(rowEl)
   if (!port) {
     if (rowTop) window.scrollBy(0, rowTop)
-    return rowTop
+    return null
   }
   const delta = rowTop - port.getBoundingClientRect().top
   if (delta) port.scrollTop += delta
-  return delta
+  return port
 }
 
 export interface AlignScrollportOptions {
@@ -125,6 +126,9 @@ export const alignScrollportToRow = (
   let done = false
   let realignTimer: ReturnType<typeof setTimeout> | null = null
   let sampler: ReturnType<typeof setInterval> | null = null
+  /** The port we last aligned, and the offset we left it at. Anything that
+   *  moves it off that value afterwards is someone else scrolling. */
+  let aligned: {port: HTMLElement; scrollTop: number} | null = null
 
   const finish = () => {
     if (done) return
@@ -135,34 +139,51 @@ export const alignScrollportToRow = (
     if (sampler) clearInterval(sampler)
     scrollEl.removeEventListener('wheel', finish)
     scrollEl.removeEventListener('touchmove', finish)
-    document.removeEventListener('keydown', finish)
+    scrollEl.removeEventListener('keydown', finish)
+    aligned?.port.removeEventListener('scroll', onScroll)
   }
 
-  const beginCorrectionWindow = () => {
+  /** A scroll of the port we aligned that didn't come from us. Covers the ways
+   *  a user takes over that no input event announces — dragging the native
+   *  scrollbar is the one that matters, since it emits neither `wheel` nor
+   *  `touchmove`. Only armed after the first alignment: before that, the scroll
+   *  we'd see is the focus decorator bringing the restored cursor into view,
+   *  which is the app catching up rather than the user overriding. */
+  const onScroll = () => {
+    if (!aligned) return
+    if (Math.abs(aligned.port.scrollTop - aligned.scrollTop) <= 1) return
+    finish()
+  }
+
+  const beginCorrectionWindow = (port: HTMLElement | null) => {
     if (realignTimer) return
     realignTimer = setTimeout(finish, realignWindowMs)
     sampler = setInterval(attempt, REALIGN_SAMPLE_MS)
-    // Only now is a keystroke a reason to stop. Before the first alignment
-    // nothing has moved, so there is nothing to yank — and this listener is on
-    // the document, which has no panel of its own: a key pressed in the pane
-    // the user is already working in would otherwise cancel the pending
-    // restores of every OTHER pane still waiting for its rows to hydrate.
-    document.addEventListener('keydown', finish)
+    port?.addEventListener('scroll', onScroll, {passive: true})
   }
 
   const attempt = () => {
     if (done) return
     const row = findAnchorRow(scrollEl, location)
     if (!row) return
-    alignRowToScrollportTop(row)
-    beginCorrectionWindow()
+    const port = alignRowToScrollportTop(row)
+    if (port) {
+      beginCorrectionWindow(aligned ? null : port)
+      aligned = {port, scrollTop: port.scrollTop}
+    }
   }
 
   const observer = new MutationObserver(attempt)
   const deadline = setTimeout(finish, waitMs)
 
+  // Gestures the user aims at THIS panel. Scoped to the scroll container, not
+  // the document: `keydown` bubbles from whatever inside the panel has focus,
+  // so a PageDown/Space aimed here cancels here — while a keystroke in another
+  // pane leaves this pane's pending restore alone, which a document-level
+  // listener could not distinguish.
   scrollEl.addEventListener('wheel', finish, {passive: true})
   scrollEl.addEventListener('touchmove', finish, {passive: true})
+  scrollEl.addEventListener('keydown', finish)
 
   attempt()
   observer.observe(scrollEl, {childList: true, subtree: true})
