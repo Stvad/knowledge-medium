@@ -640,33 +640,25 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     await insertEditorMembership()
     await repo.whenPropertyDefinitionsReady(WS)
 
-    // Pins `withSeedPassSettled`, under the two conditions that make the leak
-    // real rather than timing-dependent.
-    //
-    // (1) Let the registry-priming pass finish, so the schedule below queues a
-    // FRESH job instead of coalescing onto a pending one. Coalescing is what
-    // makes a bare drain look sufficient: it awaits the already-fired job it
-    // rode in on, dirty bit and all.
+    // Pins `withSeedPassSettled`. The one precondition that makes the leak
+    // deterministic rather than timing-dependent: let the registry-priming pass
+    // finish, so the schedule below queues a FRESH job instead of coalescing
+    // onto a pending one. Coalescing is what makes a bare drain look
+    // sufficient — it awaits the already-fired job it rode in on, dirty bit and
+    // all. Against a fresh job the deferral has not fired, so a bare drain has
+    // nothing in `PendingIdleJobs` to await and returns having run nothing.
     await vi.waitFor(async () => {
       await repo.awaitSeedMaterialization()
       expect(outstandingSeedPasses()).toBe(0)
     })
 
-    // (2) Push the pass past the point reads a test does after scheduling —
-    // which is what CPU contention does under a loaded suite.
-    type WithKind = {materializeSeedKind: (...a: unknown[]) => Promise<void>}
-    const originalKind = (repo as unknown as WithKind).materializeSeedKind.bind(repo)
-    vi.spyOn(repo as unknown as WithKind, 'materializeSeedKind')
-      .mockImplementation(async (...args: unknown[]) => {
-        await new Promise((resolve) => { setTimeout(resolve, 50) })
-        await originalKind(...args)
-      })
-
     await withSeedPassSettled(() => repo.scheduleWorkspaceSeedMaterialization(WS, false))
 
-    // Swap the fence for a bare `awaitSeedMaterialization()` and this is 1: the
-    // pass is still queued/running, free to write through this now-abandoned
-    // `Repo` while the next test's `beforeEach` resets the shared database.
+    // Swap the fence for a bare `awaitSeedMaterialization()` and this is 1 — no
+    // wall-clock needed to expose it, since the schedule populates the pending
+    // set synchronously. The pass would be left queued, free to write through
+    // this now-abandoned `Repo` while the next test's `beforeEach` resets the
+    // shared database.
     expect(outstandingSeedPasses()).toBe(0)
   })
 
