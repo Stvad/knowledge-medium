@@ -21,6 +21,7 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
   getRootBlock,
+  blockAfterSubtreeRemoval,
 } from '@/utils/selection.js'
 import { importState } from '@/utils/state.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
@@ -52,14 +53,18 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
-import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import { copyBlockIdsToClipboard, copySelectedBlocksToClipboard } from '@/utils/copy.js'
+import {
+  deleteBlockThroughUi,
+  deleteBlocksThroughUi,
+  ensureDeletableThroughUi,
+} from '@/utils/deleteBlockThroughUi.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.js'
-import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import {
   navigate,
   navigateFromGlobalCommand,
@@ -168,7 +173,7 @@ const createNodeInActivePanelFromGlobalContext = async (
   const repo = uiStateBlock.repo
   if (repo.isReadOnly) return
 
-  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, repo.activeLayoutSessionId)
   await layoutSessionBlock.load()
   const rows = await repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
   const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
@@ -332,6 +337,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockEmbedAction,
     copyBlockContentAction,
     copyBlockLinkAction,
+    // Promoted out of the vim plugin, like the copy actions above it: an action
+    // has to be IN THE REGISTRY to be dispatchable at all, and the block/swipe
+    // menu and command palette dispatch by id with supplied deps rather than
+    // through an active keyboard context. Defined only by vim (an opt-in
+    // plugin), `delete_block` was absent on a default install, so the menu's
+    // Delete button logged "not registered" and did nothing —
+    // `DEFAULT_QUICK_ACTION_ITEMS` names exactly these three.
+    //
+    // They live in this group, inside `system:default-actions`, so turning that
+    // toggle off takes them with it. Deliberate: everything roots in a toggle.
+    // The keys still only fire in NORMAL_MODE, which only the vim plugin
+    // activates.
+    {...deleteBlockAction, defaultBinding: {keys: ['Delete', 'Backspace', 'd d']}},
+    togglePropertiesDisplayAction,
+    toggleBlockCollapseAction,
   ]
 
   // CodeMirror versions of move actions
@@ -914,18 +934,27 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Don't merge the scope root into a block outside the surface —
         // there's no visible previous block to merge into here.
-        const {canMergeUp, canDelete} = await structuralEditPolicyForBlock(block, scopeRootId)
+        const {canMergeUp} = await structuralEditPolicyForBlock(block, scopeRootId)
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
         const liveContent = editorView.state.doc.toString()
 
-        // Empty block: delete it and move focus up. Never the scope root —
-        // an emptied zoomed page (split at cursor 0, then Backspace) would
-        // otherwise tombstone the whole rendered surface, the same boundary
-        // delete_block guards (Codex review on the interaction fuzzer).
+        // Empty block: delete it and move focus up. Both branches are gated on
+        // `canMergeUp` because both are the same gesture — "consume this block
+        // and put the cursor on the previous visible one" — and at the scope
+        // root there is no such block. That's a statement about Backspace, not
+        // about deletability: explicit Delete on the scope root IS allowed
+        // (page deletion), it just isn't something Backspace should trigger on
+        // an accidentally-emptied page.
         if (liveContent === '') {
-          if (!canDelete) return
+          if (!canMergeUp) return
           trigger.preventDefault()
+          // Ask the deletion guards BEFORE moving focus — a refused delete that
+          // had already moved the cursor would look like the block vanished.
+          // This path deletes the block's whole subtree, so it needs the same
+          // veto as `delete_block`; emptying a daily note's title and pressing
+          // Backspace used to destroy it straight past the guard.
+          if (!await ensureDeletableThroughUi([block])) return
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {
             const prevData = await prevVisible.load()
@@ -935,7 +964,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             })
             await focusBlock(uiStateBlock, prevVisible.id, {edit: true, renderScopeId: deps.renderScopeId})
           }
-          await block.delete()
+          await deleteBlockThroughUi(block)
           return
         }
 
@@ -959,13 +988,23 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== block.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
 
-        // CodeMirror's backspace at pos 0 is a no-op, but stop the event
-        // anyway to avoid any chance of double-handling.
+        // Vestigial, and kept only because it costs nothing: every branch above
+        // awaits, so the event has finished dispatching by now and the browser
+        // default has already run — `move_up_from_cm_start` states that rule
+        // and calls preventDefault BEFORE its async hop for exactly this
+        // reason. There is nothing to suppress in any case: block editors pass
+        // `defaultKeymap: false`, so Backspace has no CodeMirror command, and
+        // native backspace at offset 0 of the editing host does nothing.
         trigger.preventDefault()
 
         const intoContentBefore = prevVisible.peek()?.content ?? ''
         const joinOffset = intoContentBefore.length
         const prevId = prevVisible.id
+
+        // A merge DESTROYS `from` (core.merge soft-deletes it), so it needs the
+        // same veto as an outright delete — otherwise Backspace at offset 0 of a
+        // guarded page merges it away while `Delete` on it is refused.
+        if (!await ensureDeletableThroughUi([block])) return
 
         // Single tx: flush the editor's live content into `from` first so
         // core.merge concatenates the latest text, then run the merge.
@@ -1027,8 +1066,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)
         if (fromChildIds.length > 0 && intoHasIndependentChildren) return
 
-        // CodeMirror's forward-delete at doc end is a no-op, but stop the
-        // event anyway to avoid any chance of double-handling.
+        // Ask the deletion guards BEFORE any side effect — the merge destroys
+        // `nextVisible`, so a guarded page must not be folded away. This has to
+        // precede the editor re-arm below: that dispatch is a real doc change,
+        // so CodeMirror's onChange fires and `pushChange` persists the
+        // concatenated text ~300ms later. Guarding after it left the refusal
+        // path writing the merged content while the other block survived —
+        // silent duplication on exactly the blocks the guard protects.
+        // (Nothing is lost by returning before the `preventDefault` below:
+        // block editors pass `defaultKeymap: false`, so Delete has no
+        // CodeMirror command at all, and native forward-delete at the end of
+        // the editing host is a no-op. That call is vestigial anyway — see the
+        // Backspace twin.)
+        if (!await ensureDeletableThroughUi([nextVisible])) return
+
         trigger.preventDefault()
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
@@ -1099,6 +1150,66 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  /**
+   * The body of BOTH destructive multi-select gestures. `Delete` and `d` differ
+   * only in whether the selection reaches the clipboard on its way out, so they
+   * share everything else rather than each re-deriving it — the divergence is
+   * what let `d` destroy a daily note that `Delete` refused, and later let
+   * `Delete` leave the pane in multi-select over tombstones that `d` exited
+   * cleanly.
+   *
+   * Order is load-bearing:
+   *  - guards BEFORE the clipboard write, so a refused cut can't leave the user
+   *    believing the content was copied;
+   *  - the copy while the blocks still exist, in SELECTION order (the delete
+   *    runs leaf-first so each removal can't disturb the next, which is not the
+   *    order the markdown should come out in);
+   *  - the selection reset only after a delete actually HAPPENED, so a refusal
+   *    leaves it intact to narrow and retry. `deleteBlocksThroughUi` re-asks
+   *    the guards immediately before writing, and a guard is not contracted to
+   *    answer the same way twice — an answer that flips during the clipboard
+   *    write would otherwise clear the selection having deleted nothing.
+   *
+   * Focus is moved explicitly rather than left to `PanelFocusRecovery`: that
+   * watcher is mounted by the spatial-navigation plugin, which is a toggle, so
+   * relying on it would leave focus pointing at a tombstone whenever the plugin
+   * is off. The target is computed BEFORE the delete (it has to be walked while
+   * the tree still exists) from the last selected block, skipping its subtree;
+   * if that lands back inside the selection there is no sensible target and we
+   * leave focus alone.
+   */
+  const deleteSelectedBlocks = async (
+    deps: MultiSelectModeDependencies,
+    {copyFirst}: {copyFirst: boolean},
+  ): Promise<void> => {
+    const {uiStateBlock, selectedBlocks, scopeRootId} = deps
+    if (!selectedBlocks.length) return
+
+    const blocks = selectedBlocks.toReversed()
+    if (!await ensureDeletableThroughUi(blocks)) return
+
+    // Copy exactly the set we're about to delete rather than re-reading the
+    // ui-state selection: with supplied deps the two can differ, and the copy
+    // would quietly no-op while the delete went ahead.
+    if (copyFirst) await copyBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
+
+    const selectedIds = new Set(selectedBlocks.map(block => block.id))
+    const after = scopeRootId
+      ? await blockAfterSubtreeRemoval(selectedBlocks[selectedBlocks.length - 1], scopeRootId)
+      : null
+    const focusTarget = after && !selectedIds.has(after.id) ? after : null
+
+    let deleted = false
+    await withMoveTransition(async () => {
+      deleted = await deleteBlocksThroughUi(blocks)
+    })
+    if (!deleted) return
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    if (focusTarget) {
+      void focusBlock(uiStateBlock, focusTarget.id)
+    }
+  }
+
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
     extendSelectionUpMultiAction,
     extendSelectionDownMultiAction,
@@ -1106,7 +1217,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     applyToAllBlocksInSelection(togglePropertiesDisplayAction),
     applyToAllBlocksInSelection(indentBlockAction),
     applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
-    applyToAllBlocksInSelection(deleteBlockAction),
+    // Not a per-block fan-out: `Delete` on a selection IS `cut` minus the
+    // clipboard, so both run the same batch below rather than converging on it
+    // by having two code paths remember the same rules.
+    {
+      ...makeMultiSelect(deleteBlockAction),
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: false}),
+    },
     applyToAllBlocksInSelection(moveBlockUpAction),
     applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
     {
@@ -1135,18 +1252,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'cut_selected_blocks',
       description: 'Cut selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        if (!selectedBlocks.length) return
-
-        await copySelectedBlocksToClipboard(uiStateBlock, repo)
-        await withMoveTransition(async () => {
-          for (const block of selectedBlocks.toReversed()) {
-            await block.delete()
-          }
-        })
-        await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-      },
+      handler: (deps: MultiSelectModeDependencies) => deleteSelectedBlocks(deps, {copyFirst: true}),
       defaultBinding: {
         keys: ['$mod+x', 'd'],
         eventOptions: {

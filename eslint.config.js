@@ -31,6 +31,62 @@ const b3CustomEventRestriction = {
     'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
 }
 
+// Every USER-INITIATED delete must route through `deleteBlockThroughUi` so the
+// deletion guards (`blockDeletionGuardsFacet`) are consulted. Handlers calling
+// `block.delete()` and remembering to ask first lasted exactly one commit:
+// `delete_block` checked, `cut_selected_blocks` and `delete_empty_block_cm`
+// didn't, so `Delete` on a daily note was refused while `d` on the same
+// selection destroyed it.
+//
+// FOUR selectors, because the repo has four ways to destroy a block and each
+// earlier version of this rule claimed completeness while missing some:
+//   1. `block.delete()` — zero-arg (Set/Map/query-builder deletes all take an
+//      argument, so arity alone separates them).
+//   2. `repo.mutate.delete({id})` — what `Block.delete()` wraps, and what two
+//      user-facing delete buttons actually call. An arity-only rule missed it.
+//   3. `tx.delete(id)` inside a `repo.tx(...)` — how `blockMerge`, the agent
+//      bridge, `subtreeDelete` and the references processor destroy blocks, so
+//      it is the shape a new handler is most likely to copy.
+//   4. `deleteSubtreeInTx(tx, id)` — the cascade helper behind (1) and (2).
+// Matched on the conventional receiver names for a tx (`tx`/`t`/`trx`); a tx
+// bound to some other name slips through, which is why this is a tripwire for
+// the common shapes rather than a proof.
+//
+// Applied to `src/` only (see the files block); ops scripts have no Blocks, so
+// their zero-arg `.delete()` calls are Supabase query builders and linting them
+// would be noise in files that can't have the defect. Legitimate programmatic
+// deletes inside `src/` opt out inline with a reason — that's the point of the
+// guard being UI-layer rather than a data-layer rule.
+//
+// Still not airtight, and deliberately so — the guards are a UI affordance, not
+// an immortality bit. A merge also destroys a block (`core.merge` soft-deletes
+// its `from`) via `tx.run(mergeMutator, …)`, which no syntactic rule will
+// recognise; those call sites are guarded by hand. Aliasing (`const {mutate} =
+// repo`), computed access (`block['delete']()`) and detached references all
+// slip through as well.
+const uiDeleteMessage =
+  'A user-initiated delete must go through `deleteBlockThroughUi` / `deleteBlocksThroughUi` / `ensureDeletableThroughUi` (@/utils/deleteBlockThroughUi) so blockDeletionGuardsFacet is consulted — otherwise a new delete path silently skips the guards, as cut_selected_blocks, delete_empty_block_cm and the merge handlers did. For a delete that is deliberately NOT user-initiated, add `// eslint-disable-next-line no-restricted-syntax -- programmatic delete: <why>`.'
+
+const uiDeleteRestriction = {
+  selector: "CallExpression[callee.property.name='delete'][arguments.length=0]",
+  message: uiDeleteMessage,
+}
+
+const uiMutateDeleteRestriction = {
+  selector: "CallExpression[callee.property.name='delete'][callee.object.property.name='mutate']",
+  message: uiDeleteMessage,
+}
+
+const uiTxDeleteRestriction = {
+  selector: "CallExpression[callee.property.name='delete'][callee.object.name=/^(tx|t|trx)$/]",
+  message: uiDeleteMessage,
+}
+
+const uiDeleteSubtreeRestriction = {
+  selector: "CallExpression[callee.name='deleteSubtreeInTx']",
+  message: uiDeleteMessage,
+}
+
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
@@ -97,8 +153,8 @@ export default tseslint.config(
       'no-restricted-syntax': ['error', b3CustomEventRestriction],
       // DI-lens audit (PR #357) / table-driven follow-up (PR #424): see
       // ambientAccessors.data.js for the restrictions themselves
-      // (getActiveUserId, navigator.platform, the mobile breakpoint
-      // literal) and their allowlists.
+      // (getActiveUserId, getLayoutSessionId, navigator.platform, the
+      // mobile breakpoint literal) and their allowlists.
       'ambient/ambient-accessors': ['error', { entries: ambientAccessorEntries }],
       // Warn (not error) when a Set of function callbacks reinvents the
       // listener add/notify/unsubscribe loop CallbackSet provides. Soft nudge:
@@ -132,6 +188,38 @@ export default tseslint.config(
     plugins: {'child-view': childView},
     rules: {
       'child-view/require-explicit-child-view': ['error', {check: 'query'}],
+    },
+  },
+  {
+    // The UI-delete guardrail applies to app code only. `scripts/` and other
+    // ops tooling have no Block deletes at all — their zero-arg `.delete()`
+    // calls are Supabase query builders — so linting them here would be pure
+    // noise in files that can never have the defect.
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction, uiMutateDeleteRestriction],
+    },
+  },
+  {
+    // The in-transaction forms, everywhere EXCEPT the data layer. `tx.delete` /
+    // `deleteSubtreeInTx` are how deletion is IMPLEMENTED, so `src/data/**` is
+    // full of legitimate uses and flagging them would just mean a dozen
+    // disable comments explaining that the delete mutator deletes. Outside it,
+    // reaching for a raw tx delete is the shape a new UI handler would copy
+    // from `blockMerge` — which is exactly the mistake this rule exists to
+    // catch. Non-UI callers out here (the agent bridge, processors) opt out
+    // inline with a reason, same as the other selectors.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/data/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        b3CustomEventRestriction,
+        uiDeleteRestriction,
+        uiMutateDeleteRestriction,
+        uiTxDeleteRestriction,
+        uiDeleteSubtreeRestriction,
+      ],
     },
   },
   {

@@ -33,7 +33,7 @@ import {
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
+import { assertNotGrammarShapedLabel, isRoundTrippableReferenceLabel } from '@/data/referenceBlock'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
@@ -230,6 +230,13 @@ export class UserSchemasService {
         + 'rename without "]]"',
       )
     }
+    // The other half of the same hygiene (PR #288 §7): a name that IS a
+    // reference span. The property-schema block keeps its name in a property
+    // rather than its content, so unlike a type label this mints nothing on
+    // its own — but the name is written as `[[name]]` wherever a definition
+    // is addressed by name, and one shaped like `((id))` or `::((id))` reads
+    // as a different reference entirely to everything downstream.
+    assertNotGrammarShapedLabel(name, '[addSchema] name')
 
     // Capture the generation before the first await. Creation is a
     // definition-identity write: synthesis is available synchronously, but

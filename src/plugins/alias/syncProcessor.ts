@@ -21,15 +21,26 @@
  *
  * Placement (same-tx vs post-commit):
  *   Sync runs inside the user's writeTransaction so content + alias
- *   writes commit atomically. Rename remains post-commit (see
- *   `@/plugins/references/renameProcessor.ts`) — the cross-block
- *   rewrites are too expensive to inline on the typing path, and
- *   eventual consistency is fine for backlink display text.
+ *   writes commit atomically. Rename (`references.renameBacklinks`) is
+ *   same-tx too as of #461, and is registered to run AFTER this
+ *   processor: the ordinary rename gesture is a title edit, so the alias
+ *   diff rename reacts to is the one written HERE by rule 1. Both halves
+ *   of a rename therefore land in one commit and one undo entry.
  *
  *   The "stale plan" guard that the post-commit version needed
  *   (re-read row at apply time, skip on divergence) is gone here —
  *   we're inside the same tx, so the snapshot we plan against IS
  *   the live state.
+ *
+ *   Not `rerunOnDirtyRows`: rename's own content rewrites can land on an
+ *   ALIASED source whose title embeds the renamed wikilink (`See [[Foo]]`
+ *   as a page title), and this processor no longer gets a second look at
+ *   it — the block keeps its old alias text until its next edit. The
+ *   post-commit rename got that reconciliation for free by writing in a
+ *   tx of its own. Left alone deliberately: opting into the re-run means
+ *   taking on the merged-baseline `before` semantics for a
+ *   content↔alias reconciliation, which is a bigger change than the
+ *   obscure case it fixes.
  */
 
 import {
@@ -42,7 +53,7 @@ import {
   type SameTxEvent,
 } from '@/data/api'
 import {
-  deriveReferenceTargetId,
+  deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
 import { aliasesProp, getAliases } from '@/data/properties'
@@ -200,20 +211,23 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
     // in a child-backed workspace a stamp resolving to a property definition
     // is what makes a row a field row, so the row would stay hidden and
     // projected under the wrong definition.
-    const patch: Partial<Pick<BlockData, 'content' | 'referenceTargetId'>> = {
+    const patch: Partial<Pick<BlockData, 'content' | 'referenceTargetId' | 'isFieldForm'>> = {
       content: plan.contentNext,
     }
-    const derived = await deriveReferenceTargetId(
+    const derived = await deriveReferenceColumns(
       plan.contentNext,
       plan.workspaceId,
       sameTxReferenceTargetLookups(ctx.tx),
     )
     // Always an update of an existing row (never a create), so an
     // unresolvable alias (`undefined`) clears rather than preserving an id.
-    const nextTargetId = derived ?? null
+    const nextTargetId = derived.targetId ?? null
     if ((plan.referenceTargetIdBefore ?? null) !== nextTargetId) {
       patch.referenceTargetId = nextTargetId
     }
+    // The bit rides the same recompute — a rewrite can move content into or
+    // out of the marked form, and nothing else re-derives it this tx.
+    patch.isFieldForm = derived.isFieldForm
     await ctx.tx.update(plan.id, patch, {skipMetadata: true})
   }
 }

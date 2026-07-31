@@ -99,9 +99,13 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
  * Creates a multi-select version of an action that applies the original action to each selected block.
  * Uses makeModeAction under the hood with a specialized handler override.
  */
+export interface ApplyToAllOptions {
+  applyInReverseOrder?: boolean
+}
+
 export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
-  {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
+  {applyInReverseOrder}: ApplyToAllOptions = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block.
   // Wrap the whole batch in one view transition so users see a single

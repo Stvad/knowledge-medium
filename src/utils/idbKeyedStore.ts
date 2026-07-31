@@ -217,6 +217,7 @@ export class IdbKeyedStore {
    * readwrite transaction. Sugar over {@link scanByPrefix}.
    */
   async deleteByPrefix(prefix: string): Promise<void> {
+    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: IndexedDB cursor, not a Block
     await this.scanByPrefix('readwrite', prefix, cursor => cursor.delete())
   }
 }

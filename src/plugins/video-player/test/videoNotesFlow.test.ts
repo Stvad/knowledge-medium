@@ -124,6 +124,35 @@ describe('closeVideoNotesView', () => {
     expect(panelHistory.getSnapshot(panelId).forward.map(entry => entry.blockId)).toEqual([VIDEO])
   })
 
+  it('marked, but the pre-enter page was deleted: clears the mode instead of stranding', async () => {
+    // goBackInPanel prunes dead entries rather than landing on a tombstone, so
+    // the marked target can disappear. Close must still get the pane out of
+    // video-notes mode.
+    await setup({videoChildren: ['existing-note'], panelShows: PAGE})
+    await enterVideoNotesView(videoBlock(), panelBlock())
+    await repo.block(PAGE).delete()
+
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(topLevelBlockIdProp)).toBe(VIDEO)
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+  })
+
+  it('marked target deleted with older history below: clears instead of jumping past it', async () => {
+    // goBackInPanel would prune the dead marked entry and happily land on the
+    // older page — but that's not "close the notes view", it's a surprise jump
+    // to something unrelated.
+    await setup({videoChildren: ['existing-note'], panelShows: PAGE})
+    panelHistory.push(panelId, {blockId: 'older-page'})
+    await enterVideoNotesView(videoBlock(), panelBlock())
+    await repo.block(PAGE).delete()
+
+    await closeVideoNotesView(panelBlock())
+
+    expect(panelBlock().peekProperty(topLevelBlockIdProp)).toBe(VIDEO)
+    expect(panelBlock().peekProperty(panelViewModeProp)).toBeUndefined()
+  })
+
   it('without the marker: clear-only, the video stays', async () => {
     await setup({videoChildren: ['existing-note']})
     await enterVideoNotesView(videoBlock(), panelBlock()) // same-block: no entry

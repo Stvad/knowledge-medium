@@ -24,10 +24,7 @@ import {
   RELOAD_IN_SAFE_MODE_ACTION_ID,
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
-import {
-  __resetLayoutSessionIdForTesting,
-  getLayoutSessionId,
-} from '@/utils/layoutSessionId'
+import { __resetLayoutSessionIdForTesting } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   panelBlockId,
@@ -40,8 +37,12 @@ import {
   type ActionTrigger,
   type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
+  type MultiSelectModeDependencies,
 } from '@/shortcuts/types'
 import { createSharedBlockActions } from '@/shortcuts/blockActions'
+import { blockDeletionGuardsFacet } from '@/extensions/core'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -129,6 +130,18 @@ const findEditModeAction = (
   const action = getDefaultActions({repo}).find(
     (candidate): candidate is ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> =>
       candidate.id === id && candidate.context === ActionContextTypes.EDIT_MODE_CM,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
+const findMultiSelectAction = (
+  repo: Repo,
+  id: string,
+): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
+  const action = getDefaultActions({repo}).find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> =>
+      candidate.id === id && candidate.context === ActionContextTypes.MULTI_SELECT_MODE,
   )
   if (!action) throw new Error(`Action not found: ${id}`)
   return action
@@ -345,7 +358,7 @@ describe('default CodeMirror shortcuts', () => {
     const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const prefsBlock = await getUserPrefsBlock(env.repo, WS, USER)
 
     await action.handler(
@@ -410,7 +423,7 @@ describe('default CodeMirror shortcuts', () => {
     }, {scope: ChangeScope.BlockDefault})
 
     const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
     const panelId = await insertPanelRow(env.repo, layoutSession, 'root')
     await env.repo.block(panelId).set(focusedBlockLocationProp, {
       blockId: 'existing-child',
@@ -555,11 +568,15 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
-  it('refuses to delete the scope root even when it is empty', async () => {
+  it('refuses to Backspace away the scope root even when it is empty', async () => {
     // Reachable from the keyboard: split the zoomed page at cursor 0 (its
     // content moves down), then Backspace at 0 in the now-empty root —
-    // without the canDelete guard the handler tombstoned the whole
+    // without the canMergeUp guard the handler tombstoned the whole
     // rendered surface (Codex review on the interaction fuzzer, PR #371).
+    // This gates the BACKSPACE gesture, which means "consume this block and
+    // put the cursor on the previous visible one" and has nowhere to land at
+    // the scope root. An explicit Delete on the same block IS allowed — that's
+    // page deletion (see the delete_block tests below).
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -583,6 +600,165 @@ describe('default CodeMirror shortcuts', () => {
     expect(trigger.preventDefault).not.toHaveBeenCalled()
     expect(env.repo.block('root').peek()).not.toBeNull()
     expect(env.repo.block('root').peekRaw()?.deleted).toBe(false)
+  })
+
+  it('Backspace on an empty block consults the deletion guards', async () => {
+    // Not the scope root, so `canMergeUp` is true and this path used to run
+    // straight to `block.delete()`. That let a daily note rendered as a child
+    // (its natural place, under the Journal) be destroyed by emptying its title
+    // and pressing Backspace — straight past the veto.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('protected'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    // Focus must not have moved for a delete that never happened.
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).not.toBe('first')
+  })
+
+  it('multi-select Delete refuses the whole selection when one block is guarded', async () => {
+    // Matches cut. The fan-out is per-block, so without a batch preflight the
+    // unguarded sibling was deleted and only the protected one survived —
+    // `Delete` half-deleting a selection that `d` refuses wholesale.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['ordinary', 'protected'],
+    })
+
+    const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('ordinary'), env.repo.block('protected')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+    // Refused: the selection is intact so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
+      .toEqual(['ordinary', 'protected'])
+  })
+
+  it('multi-select Delete clears the selection, so the pane leaves multi-select', async () => {
+    // MULTI_SELECT_MODE is modal and stays active while `selectedBlockIds` is
+    // non-empty. Leaving the deleted ids there parked the pane in multi-select
+    // over tombstones — nothing highlighted, every keystroke still routed to
+    // multi-select handlers. `cut` cleared it; `Delete` did not.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'one', content: 'one'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'two', content: 'two'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['one', 'two'],
+    })
+
+    const action = findMultiSelectAction(env.repo, 'multi_select.delete_block')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('one'), env.repo.block('two')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'one')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'two')).toBe(true)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual([])
+  })
+
+  it('cut refuses the whole selection when a block is guarded, and writes no clipboard', async () => {
+    // `cut_selected_blocks` is bound to `d` in multi-select. It called
+    // `block.delete()` directly, so `Delete` on a daily note was refused while
+    // `d` on the identical selection destroyed it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'r'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'ordinary', content: 'ordinary'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    await uiStateBlock.set(selectionStateProp, {
+      ...selectionStateProp.defaultValue,
+      selectedBlockIds: ['ordinary', 'protected'],
+    })
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class { })
+    vi.stubGlobal('navigator', {clipboard: {write}})
+
+    const action = findMultiSelectAction(env.repo, 'cut_selected_blocks')
+    await action.handler({
+      uiStateBlock,
+      selectedBlocks: [env.repo.block('ordinary'), env.repo.block('protected')],
+      anchorBlock: null,
+    } as MultiSelectModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // All-or-nothing: the unguarded sibling survives too, rather than the
+    // selection being half-cut.
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'ordinary')).toBe(false)
+    // And the guard runs BEFORE the copy: a refused cut must not leave the
+    // user believing the content is on their clipboard. Asserting only that
+    // nothing was deleted can't see this — `deleteBlocksThroughUi` re-checks
+    // the guards itself, so the deletion assertions pass even with the
+    // pre-copy check removed.
+    expect(write).not.toHaveBeenCalled()
+    // The selection survives too, so the user can narrow it and retry.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds)
+      .toEqual(['ordinary', 'protected'])
+    vi.unstubAllGlobals()
   })
 
   it("merges a first child with children into its parent when it is the parent's only child", async () => {
@@ -650,6 +826,79 @@ describe('default CodeMirror shortcuts', () => {
     expect(env.repo.block('current').peek()?.deleted).toBe(false)
     expect(await childIds('parent')).toEqual(['current', 'sibling'])
     expect(await childIds('current')).toEqual(['child'])
+  })
+
+  it('a guarded next block is not merged away — and the editor is left untouched', async () => {
+    // A merge DESTROYS the next block (`core.merge` soft-deletes its `from`),
+    // so it needs the deletion guards. The editor assertion is the load-bearing
+    // one: this handler re-arms CodeMirror with the concatenated text, and that
+    // dispatch is a real doc change, so `onChange` → debounced `pushChange`
+    // persists it. Guarding after the dispatch (as the first version did) left
+    // a refused merge writing the merged content while the next block survived.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    // No half-applied merge parked in the editor waiting to be flushed.
+    expect(editorView.state.doc.toString()).toBe('current')
+  })
+
+  it('a guarded block is not merged away by Backspace at offset 0', async () => {
+    // The Backspace twin of the above: this branch merges the CURRENT block
+    // into the previous one, which destroys the current block.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'protected', content: 'protected'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'protected')
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    await action.handler({
+      block: env.repo.block('protected'),
+      editorView: codeMirrorEditorView('protected', 0),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+    expect(env.repo.block('first').peek()?.content).toBe('first')
   })
 
   it('merges the next block into the current block when pressing delete at block end', async () => {
@@ -1151,5 +1400,148 @@ describe('default CodeMirror shortcuts', () => {
 
     expect(env.repo.block('victim').peek()).toBeNull()
     expect(env.repo.block('victim').peekRaw()?.deleted).toBe(true)
+  })
+
+  it('deletes the focal page when the pane is a real panel surface', async () => {
+    // Delete on the panel's own page. The handler just deletes it (and its
+    // subtree) — a real panel row carries a mounted PanelContentRecovery
+    // watcher that navigates the pane off the tombstone separately, so the
+    // handler no longer steers navigation itself.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'child', content: 'child'})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, env.repo.activeLayoutSessionId)
+    const panelId = await insertPanelRow(env.repo, layoutSession, 'page')
+    const uiStateBlock = env.repo.block(panelId)
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'child')).toBe(true)
+  })
+
+  it('deletes the focal page headlessly too (no panel surface required)', async () => {
+    // A bare UI-state block (agent bridge, fuzz harness) has no panel row and no
+    // recovery watcher. The delete still goes through: deletion is not a
+    // scope-relative decision, and the handler deliberately doesn't inspect the
+    // surface — recovery is the surface's job, and a headless caller has no
+    // surface to recover.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('page'), uiStateBlock, scopeRootId: 'page'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+  })
+
+  it('Shift+Up from the first bullet selects the whole page, and Delete then removes it', async () => {
+    // Records ACCEPTED behaviour, deliberately, so it isn't left living only in
+    // a fuzz-harness exclusion. `previousVisibleBlock` returns the parent even
+    // when it is the scope root, and `validateSelectionHierarchy` keeps an
+    // ancestor while dropping its descendants — so a second extend-up from a
+    // page's first bullet COLLAPSES the selection onto the page rather than
+    // growing it. Deleting then takes the page and its subtree.
+    //
+    // This is intended: the page renders highlighted while selected (the
+    // selection background wraps `<Children/>`, so the whole subtree is
+    // visibly shaded), and deleting a selected block has always taken its
+    // subtree. If the collapse is ever made to stop at the scope root instead,
+    // this test should fail and be rewritten — that's the point of it.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'c1', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'c2', content: 'second'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+    await focusBlock(uiStateBlock, 'c1')
+
+    const {extendSelectionUp, deleteBlock} = createSharedBlockActions({repo: env.repo})
+    const deps = {uiStateBlock, block: env.repo.block('c1'), scopeRootId: 'page'}
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await extendSelectionUp.handler(deps, trigger)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['c1'])
+
+    // Second press: collapses onto the page rather than extending.
+    await extendSelectionUp.handler(deps, trigger)
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['page'])
+
+    await deleteBlock.handler(
+      {uiStateBlock, block: env.repo.block('page'), scopeRootId: 'page'},
+      trigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'page')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'c1')).toBe(true)
+  })
+
+  it('refuses when a registered deletion guard vetoes the block', async () => {
+    // The guard facet is how daily-notes protects its get-or-create pages.
+    // Multi-select delete fans out through this same handler, so it's covered
+    // by the same check.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'protected', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'p'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      // setFacetRuntime REPLACES the registries, so the kernel data
+      // contribution has to be re-included or `childIds` stops resolving.
+      kernelDataExtension,
+      blockDeletionGuardsFacet.of(
+        block => (block.id === 'protected' ? 'Nope.' : null),
+        {source: 'test'},
+      ),
+    ]))
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('protected'), uiStateBlock: env.repo.block('ui'), scopeRootId: 'protected'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'protected')).toBe(false)
+  })
+
+  it('deletes a non-focal scope root (a backlink/embed of another block)', async () => {
+    // A block rendered as the scope root of a NESTED surface (an embed / backlink
+    // entry of a different block than the pane's page) is an ordinary deletable
+    // block — the nested surface just re-queries. It is NOT the focal page, so
+    // it takes the normal delete path (no page-delete gating).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'page', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'page'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'page', id: 'embedded', content: 'embedded'})
+
+    const uiStateBlock = env.repo.block('ui')
+    // Panel shows 'page'; 'embedded' is the scope root of a nested embed surface.
+    await uiStateBlock.set(topLevelBlockIdProp, 'page')
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('embedded'), uiStateBlock, scopeRootId: 'embedded'},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(await isBlockDeleted(env.repo, 'embedded')).toBe(true)
   })
 })

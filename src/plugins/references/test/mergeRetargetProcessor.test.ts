@@ -11,9 +11,12 @@ import { aliasesProp } from '@/data/properties'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { computeAliasSeatId } from '@/data/targets'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { pinnedSpanReplacement } from '../referenceParser.ts'
+import { retargetReferences } from '../mergeRetargetProcessor.ts'
 import { refTestSeed } from './refTestSeeds.ts'
 
 const WS = 'ws-1'
@@ -210,6 +213,106 @@ describe('references.retargetMergedBlockReferences', () => {
       {id: 'target', alias: 'Existing'},
       {id: 'target', alias: 'Other'},
     ]))
+  })
+
+  it('pins the span and re-keys the entry to the id when the collision alias is not wikilink-safe', async () => {
+    // `a]]b` is a legal wikilink alias but `renderWikilink` has to
+    // space the delimiters apart, so the wikilink form can't carry it.
+    // The rewrite falls back to the pinned form — and the stored entry
+    // has to follow the CONTENT: `[ab](((into)))` re-parses to a
+    // blockref edge whose alias IS the id. Keying the entry on the raw
+    // `toAlias` left the two disagreeing until the next re-parse.
+    const intoId = '44444444-4444-4444-8444-444444444444'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: intoId,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Target',
+        properties: aliasProperty(['a]]b']),
+      })
+      await tx.create({
+        id: 'source',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Partial',
+        properties: aliasProperty(['Partial']),
+      })
+      await tx.create({
+        id: 'ref',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'see [[Partial]]',
+        references: [{id: 'source', alias: 'Partial'}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId,
+      fromId: 'source',
+      collisionAlias: 'a]]b',
+      dropSourceAliases: ['Partial'],
+    })
+
+    expect(env.read('ref')!.content).toBe(`see [ab](((${intoId})))`)
+    expect(env.read('ref')!.references).toEqual(
+      normalizeReferences([{id: intoId, alias: intoId}]),
+    )
+  })
+
+  it('leaves content AND entry alone when neither form can carry the surviving alias', async () => {
+    // `a[[b` defeats BOTH rungs of the ladder: `renderWikilink` spaces
+    // the delimiters apart, and the pinned form refuses a label carrying
+    // a `[[` opener (spliced next to any later `]]` it would manufacture
+    // a bogus wikilink). The content therefore keeps saying
+    // `[[Partial]]` — so moving its ENTRY to the merge target writes a
+    // pairing the content does not support, and since the merge strips
+    // `Partial`, the next re-parse binds that span to a fresh seat rather
+    // than to `into`. Content and entries move together or not at all.
+    const intoId = '55555555-5555-4555-8555-555555555555'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: intoId, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'Target', properties: aliasProperty(['a[[b']),
+      })
+      await tx.create({
+        id: 'source', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: 'Partial', properties: aliasProperty(['Partial']),
+      })
+      await tx.create({
+        id: 'ref', workspaceId: WS, parentId: null, orderKey: 'a2',
+        content: 'see [[Partial]]',
+        references: [{id: 'source', alias: 'Partial'}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.run(ALIAS_COLLISION_MERGE_MUTATOR, {
+      intoId,
+      fromId: 'source',
+      collisionAlias: 'a[[b',
+      dropSourceAliases: ['Partial'],
+    })
+
+    // Same tx: content untouched, and the entry DROPPED rather than
+    // moved to `into` — neither `source` nor `into` is what the span
+    // means, so ownership goes to the re-parse.
+    expect(env.read('ref')!.content).toBe('see [[Partial]]')
+    expect(env.read('ref')!.references).toEqual([])
+
+    // Dropping it is also what SCHEDULES that re-parse: keeping the entry
+    // verbatim leaves the list byte-identical, so no patch is written, no
+    // watched field changes, and the edge stays pinned to the tombstoned
+    // `source` forever. `parseReferences` watches `references` as well as
+    // `content`, so the removal itself re-fires it.
+    await env.repo.awaitProcessors()
+    expect(env.read('ref')!.references).toEqual(
+      normalizeReferences([{id: computeAliasSeatId('Partial', WS, 0), alias: 'Partial'}]),
+    )
   })
 
   // Regression (found by referencesRecompute.fuzz.test.ts): property-derived
@@ -506,5 +609,62 @@ describe('references.retargetMergedBlockReferences', () => {
       expect(env.read('value')!.referenceTargetId).toBe(INTO)
       expect(env.read('value')!.references).toEqual([{id: INTO, alias: INTO}])
     })
+  })
+})
+
+describe('retargetReferences — entry mapping', () => {
+  // Runs in the same tx as the content rewrite, and `parseReferences`
+  // re-derives the same list moments later — so the processor-level
+  // assertion above cannot see this. The window before that re-parse is
+  // what a backlink query or a concurrent rename actually reads.
+  const INTO = '44444444-4444-4444-8444-444444444444'
+
+  it('drops the shared entry when a page embed survived the pinned rewrite', () => {
+    // `[[Partial]]` was pinned; `![[Partial]]` was stepped over. Both
+    // occurrences share ONE normalized entry, so it cannot describe the
+    // pinned span's target and the surviving embed's new binding at once.
+    // Retargeting it announces a backlink the content does not support;
+    // keeping it alongside the retargeted one (which this used to do)
+    // announces both, one of them onto the tombstoned merge source. Drop
+    // it — the drop is itself what re-fires the parse that can decide
+    // (PR #444 round 7, P2).
+    expect(retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
+      new Set(['Partial']), new Set(),
+    )).toEqual([])
+  })
+
+  it('drops an entry whose rewrite could not be rendered', () => {
+    // The same channel: an unrenderable replacement leaves `[[Partial]]`
+    // standing, so the call site puts it in the stranded set too. Neither
+    // `source` nor `into` is what the span means now.
+    expect(retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', null]]), new Set(['Partial']), new Set(),
+    )).toEqual([])
+  })
+
+  it('retargets a property-derived edge even when its alias is stranded', () => {
+    // Stranding answers a CONTENT problem — one normalized entry serving
+    // both `[[a]]` and a skipped `![[a]]`. A property-derived edge
+    // projects from the property VALUE, which the merge has already
+    // rewritten to `into`, so dropping it would leave the cell pointing at
+    // `into` with no entry, and keeping the old one would strand a
+    // `sourceField` edge on the tombstoned block.
+    const out = retargetReferences(
+      [{id: 'source', alias: 'Partial', sourceField: 'reviewer'}], 'source', INTO,
+      new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
+      new Set(['Partial']), new Set(['reviewer']),
+    )
+    expect(out).toEqual([{id: INTO, alias: INTO, sourceField: 'reviewer'}])
+  })
+
+  it('replaces an ordinary entry exactly once', () => {
+    expect(retargetReferences(
+      [{id: 'source', alias: 'Partial'}], 'source', INTO,
+      new Map([['Partial', pinnedSpanReplacement('Partial', INTO)]]),
+      new Set(), new Set(),
+    )).toEqual([{id: INTO, alias: INTO}])
   })
 })

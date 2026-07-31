@@ -18,12 +18,39 @@
  * plumbing.
  */
 import type { WorkspaceLandingResolver } from '@/extensions/core.js'
-import { getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+import { dailyNoteBlockId, getOrCreateDailyNote, journalBlockId, todayIso } from './dailyNotes.ts'
+import { anyBlockTombstoned } from '@/data/blockLiveness.js'
 
 export const todayDailyNoteLanding: WorkspaceLandingResolver = async ({
   repo,
   workspaceId,
+  excludeBlockId,
 }) => {
-  const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+  const iso = todayIso()
+  const id = dailyNoteBlockId(workspaceId, iso)
+  if (excludeBlockId) {
+    // Recovery context. `getOrCreateDailyNote` RESTORES a soft-deleted row, so
+    // answering here can undo a delete. Decline when we'd hand back the
+    // excluded block itself (id is a pure function of workspace+day, so this
+    // costs nothing)...
+    if (id === excludeBlockId) return null
+    // ...and, more broadly, whenever today's note is currently a tombstone.
+    // The excluded id is the vanished page of the pane being recovered, which
+    // is NOT necessarily the root of the deleted subtree: a pane zoomed into a
+    // CHILD of today's note recovers with the child's id, and an exact-id check
+    // would sail past and resurrect the deleted parent note. A tombstone means
+    // someone deleted it; recovery is never the right moment to bring it back.
+    //
+    // The Journal counts too: `getOrCreateDailyNote` calls
+    // `getOrCreateJournalBlock`, which restores a soft-deleted Journal row — so
+    // recovering after a Journal delete would resurrect it and hang a fresh
+    // daily note under it.
+    //
+    // `anyBlockTombstoned` reads the rows directly because the Block facade
+    // can't tell "deleted" (decline) from "never existed" (creating it is fine
+    // and wanted) — see its docblock.
+    if (await anyBlockTombstoned(repo, [id, journalBlockId(workspaceId)])) return null
+  }
+  const dailyNote = await getOrCreateDailyNote(repo, workspaceId, iso)
   return dailyNote.id
 }

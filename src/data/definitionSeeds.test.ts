@@ -32,7 +32,8 @@ import {
 } from '@/data/properties'
 import {propertiesPageBlockId} from '@/data/propertiesPage'
 import {typesPageBlockId} from '@/data/typesPage'
-import {seedType, type TypeSeedDeclaration} from '@/data/typeSeeds'
+import {isTypeSeedDeclaration, seedType, type TypeSeedDeclaration} from '@/data/typeSeeds'
+import {isPropertySeedDeclaration} from '@/data/propertySeeds'
 import {buildTypeDefinitionRegistry} from '@/data/typeDefinitionRegistry'
 import {typeSeedsFacet} from '@/data/facets'
 import {BLOCK_TYPE_TYPE, PAGE_TYPE} from '@/data/blockTypes'
@@ -88,6 +89,58 @@ beforeEach(async () => {
   repo = createTestRepo({db: sharedDb.db}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.ensureSystemPages(WS)
+})
+
+describe('seed name hygiene — a seed name/label is mirrored into block content (§7)', () => {
+  const UUID = '0f7b3c1a-9d2e-4f60-8a1b-2c3d4e5f6a7b'
+
+  // `materializePropertySeeds`/`materializeTypeSeeds` write the seed's
+  // name/label as its backing block's `content`. A reference-shaped one mints
+  // a block that reads as a span rather than a definition — and a `::`-marked
+  // one is a recognized property field row of the Properties/Types page,
+  // hidden from the outline and keyed onto that page's cell. Seeds are
+  // code-owned, so this has to fail at declaration, not at materialization.
+  it.each([
+    ['a marked exact ref', `::((${UUID}))`],
+    ['a bare exact ref', `((${UUID}))`],
+    ['a wikilink', '[[status]]'],
+  ])('seedProperty rejects %s as a name', (_label, name) => {
+    expect(() => seedProperty({
+      seedKey: 'system:test/property/bad', revision: 1, name,
+      preset: 'string', changeScope: ChangeScope.BlockDefault,
+    })).toThrow(/reads as a block reference/)
+  })
+
+  it.each([
+    ['a marked exact ref', `::((${UUID}))`],
+    ['a bare exact ref', `((${UUID}))`],
+    ['a wikilink', '[[Widget]]'],
+  ])('seedType rejects %s as a label', (_label, label) => {
+    expect(() => seedType({
+      seedKey: 'system:test/type/bad', revision: 1, id: 'bad', label,
+    })).toThrow(/reads as a block reference/)
+  })
+
+  // The runtime boundary drops rather than throws: one malformed dynamic
+  // contribution must not abort the shared materialization pass.
+  it('the declaration guards drop a reference-shaped dynamic contribution', () => {
+    expect(isTypeSeedDeclaration({
+      ...typeSeed, label: `::((${UUID}))`,
+    })).toBe(false)
+    expect(isPropertySeedDeclaration({
+      ...seed, name: `::((${UUID}))`,
+    })).toBe(false)
+    // Control: the same objects unmodified still pass, so the assertions
+    // above fail on the label/name and not on some unrelated field.
+    expect(isTypeSeedDeclaration(typeSeed)).toBe(true)
+    expect(isPropertySeedDeclaration(seed)).toBe(true)
+  })
+
+  it('leaves an ordinary name that merely contains grammar characters alone', () => {
+    expect(() => seedType({
+      seedKey: 'system:test/type/ok', revision: 1, id: 'ok', label: 'Status:: notes',
+    })).not.toThrow()
+  })
 })
 
 describe('property definition identity and payload', () => {
@@ -441,7 +494,26 @@ describe('property seed materialization access', () => {
   })
 })
 
-describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
+// Every test here drives a DEFERRED pass end to end — membership insert,
+// registry priming, one or more drains, and SQL reads against the shared DB —
+// which is real work, not waiting. Measured against the full suite these are
+// the slowest tests in the file (the deferred-pass test below was the single
+// worst load-sensitivity case in the suite: 0.5s solo, 3.3s with the machine
+// oversubscribed), so the 5s default leaves no room for CPU contention.
+describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000}, () => {
+  /** Poll for a deferred materialization outcome, retrying the drain.
+   *  `awaitSeedMaterialization` only awaits passes whose deferral timer has
+   *  ALREADY fired, so a single drain can legitimately return before the pass
+   *  even exists — retrying is the point. The explicit budget replaces
+   *  `vi.waitFor`'s 1000ms default, which under load allowed barely one
+   *  attempt (a drain plus a SQL read alone measured multiple seconds there)
+   *  and produced "Timed out in waitFor!" on perfectly healthy code. Kept
+   *  strictly below the describe's own timeout so a real failure surfaces as
+   *  this poll expiring — carrying the last assertion error — rather than as
+   *  an opaque test timeout. */
+  const waitForMaterialization = (check: () => Promise<void>): Promise<void> =>
+    vi.waitFor(check, {timeout: 15_000, interval: 50})
+
   const insertEditorMembership = async (): Promise<void> => {
     await repo.db.execute(
       `INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time)
@@ -484,7 +556,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // Settle the registry-priming auto-schedule (drain does NOT advance the idle
     // timer, so poll until its pass has actually materialized) — the spy below
     // then only counts our scenario's passes.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.get('SELECT id FROM blocks WHERE id = ?',
         [propertyDefinitionBlockId(WS, firstSeedKey!)])
@@ -525,7 +597,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // Drive ONLY the wiring path (no direct materializeTypeSeeds call): the one
     // deferred pass must now materialize type seeds alongside property seeds.
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{parent_id: string; deleted: number}>(
         'SELECT parent_id, deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
@@ -561,7 +633,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     })
 
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
@@ -587,7 +659,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/b')).toBe(seedBContested)
     })
     // The winner (seedA) is backed via the auto-reschedule; the id-loser (seedB) is not.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const rowA = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedA.seedKey)])
@@ -604,7 +676,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     const seedBFixed = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup-b', label: 'B'})
     repo.setRuntimeContributions(typeSeedsFacet, 'contested', [seedA, seedBFixed])
 
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const rowA = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedA.seedKey)])
@@ -648,7 +720,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // auto-reschedule under test.
     repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first])
     await vi.waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [backingId])
@@ -713,7 +785,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     })
     // ...and it materializes a backing block by the same path as any property seed, so
     // the type's block-type:properties ref resolves instead of dangling.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const propRow = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?',

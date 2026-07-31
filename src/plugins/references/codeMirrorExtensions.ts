@@ -9,7 +9,11 @@ import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.js'
-import { searchAliasLabels, searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
+import {
+  completionTypeHint,
+  searchAliasLabels,
+  searchBlocksAcrossSources,
+} from '@/utils/linkTargetAutocomplete.js'
 import { loadRecentBlockIds } from '@/plugins/quick-find/recents.js'
 
 const referenceAutocompleteTheme = EditorView.theme({
@@ -123,7 +127,17 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       // — cheap, and keeps the ranker reactive to navigation pushes
       // that happen between keystrokes.
       const recentBlockIds = await loadRecentBlockIds(repo, workspaceId)
-      const aliases = await searchAliasLabels(repo, {workspaceId, query: filter, recentBlockIds})
+      const matches = await searchAliasLabels(repo, {workspaceId, query: filter, recentBlockIds})
+      // `repo.types` is the in-memory registry snapshot — a synchronous
+      // map read, so naming each row's type costs nothing beyond the
+      // bounded per-id type lookup `searchAliasLabels` already did.
+      const typeRegistry = repo.types
+      // No `type` — `backlinkCompletionSource` already defaults alias
+      // candidates to 'class'.
+      const aliases = matches.map(match => ({
+        label: match.label,
+        detail: completionTypeHint(match.typeIds, typeRegistry),
+      }))
       const dateCompletions = relativeDateCandidates(filter).map(candidate => {
         const label = formatRoamDate(candidate.date)
         return {
@@ -142,7 +156,7 @@ const buildWikilinkSource = ({repo}: CodeMirrorExtensionContext): CompletionSour
       ]))
       return [
         ...dateCompletions,
-        ...aliases.filter(alias => !dateLabels.has(alias)),
+        ...aliases.filter(alias => !dateLabels.has(alias.label)),
       ]
     },
   })

@@ -129,21 +129,22 @@ export interface Tx {
    *  at the type level. */
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
 
-  /** Stamp the LOCAL derived `reference_target_id` column — and ONLY that
-   *  column — without advancing `updated_at`. This is the write mode for
-   *  `core.deriveReferenceTarget`'s same-tx amendment: the column is a
-   *  per-device reflection of `content` (never in `BLOCK_UPLOAD_COLUMNS`,
-   *  never uploaded), so re-deriving it is not a synced edit and must not mint
-   *  an upload PATCH. Because the UPDATE touches no upload column and leaves
-   *  `updated_at` untouched, `blocks_upload_update`'s diff predicate stays
-   *  false and nothing is enqueued — whereas `update(..., {skipMetadata})`
-   *  still bumps `updated_at` (an upload column) and ships a redundant PATCH
-   *  (PR #288 §5, Decision A). Same-tab reactivity still fires (the write
-   *  records a `referenceTargetId`-changed snapshot); cross-tab rides the
-   *  accompanying content edit's row_event. No-op when the column already
-   *  holds `targetId`. Not for content-bundled retargets — those change a
+  /** Stamp the LOCAL derived columns — `reference_target_id` and
+   *  `is_field_form`, and ONLY those — without advancing `updated_at`. This
+   *  is the write mode for `core.deriveReferenceTarget`'s same-tx amendment:
+   *  both columns are per-device reflections of `content` (never in
+   *  `BLOCK_UPLOAD_COLUMNS`, never uploaded), so re-deriving them is not a
+   *  synced edit and must not mint an upload PATCH. Because the UPDATE
+   *  touches no upload column and leaves `updated_at` untouched,
+   *  `blocks_upload_update`'s diff predicate stays false and nothing is
+   *  enqueued — whereas `update(..., {skipMetadata})` still bumps
+   *  `updated_at` (an upload column) and ships a redundant PATCH (PR #288
+   *  §5, Decision A). Same-tab reactivity still fires (the write records a
+   *  `referenceTargetId`/`isFieldForm`-changed snapshot); cross-tab rides
+   *  the accompanying content edit's row_event. No-op when both columns
+   *  already match. Not for content-bundled retargets — those change a
    *  synced column and go through `update`, which correctly uploads. */
-  stampReferenceTarget(id: string, targetId: string | null): Promise<void>
+  stampReferenceTarget(id: string, targetId: string | null, isFieldForm: boolean): Promise<void>
 
   // ──── Tree moves (structural) ────
 
@@ -237,6 +238,18 @@ export interface Tx {
     fieldId: string,
   ): AnyPropertySchema | null
 
+  /** §9 recognition, condition-3 checker: does `fieldId` name a definition
+   *  this workspace's registry can resolve — shadow-tolerant (a shadowed
+   *  loser COUNTS: its field rows keep classifying; only the name map and
+   *  projection exclude it, §6). This is the classification predicate's
+   *  fieldId half, exposed so `isPropertyFieldRow` reads the ONE checker
+   *  instead of restating the disjunction. (The rename processor and the
+   *  deferred migration batch answer the same question from their own
+   *  captured resolvers rather than the tx-start one — deliberately, since
+   *  those passes must not re-resolve at write time.) Synchronous — bound to
+   *  the tx-start registry snapshot. */
+  isPropertyFieldDefinition(workspaceId: string, fieldId: string): boolean
+
   /** The one properties-as-blocks predicate (PR #288 §6): is `workspaceId`
    *  flipped to child-backed properties (`workspaces.properties_migration`
    *  at or past 'children' — never an equality test)? Shared by
@@ -329,6 +342,18 @@ export interface Tx {
    *  for the sync-apply path that can still race-land duplicates
    *  from other clients. */
   aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null>
+
+  /** EVERY live block in `workspaceId` claiming the exact `alias`,
+   *  oldest first. Use this instead of `aliasLookup` when the question
+   *  is "is this alias claimed?" rather than "which block is named X?".
+   *
+   *  `aliasLookup`'s `LIMIT 1` tie-break silently hides co-claimants,
+   *  and co-claimants are reachable: the uniqueness trigger only fires
+   *  for local user txs, so sync-applied rows can land duplicates. A
+   *  caller that vetoes on "any claimant that isn't mine" gets the wrong
+   *  answer from the single-row form whenever the row it recognizes
+   *  happens to be the oldest. Sees this tx's own writes. */
+  aliasClaimants(alias: string, workspaceId: string): Promise<BlockData[]>
 
   // ──── Post-commit scheduling ────
 

@@ -154,6 +154,29 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
   })
 
+  // The `::` marker is the OTHER half of §9 recognition, and it is the half
+  // that moves on its own: adding or deleting the marker leaves
+  // `referenceTargetId` identical on both sides, so a comparison keyed only
+  // on the target emits no parent edge and the outline goes stale — the row
+  // stays hidden after the user un-marks it, or stays visible after they
+  // mark it, until some unrelated structural edit. Both directions, since
+  // the bit moves both ways.
+  it.each([
+    ['gaining the marker', false, true],
+    ['losing the marker', true, false],
+  ])('field-row flip by %s alone (target unchanged): adds the parent AND the row', (
+    _case, beforeBit, afterBit,
+  ) => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1', isFieldForm: beforeBit},
+        after: {parentId: 'p', workspaceId: 'w', referenceTargetId: 'def-1', isFieldForm: afterBit},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!).sort()).toEqual(['c', 'p'])
+  })
+
   it('move + field-row flip in ONE tx: adds old/new parents AND the row itself', () => {
     // `mergeBlocksInTx` clears a value row's referenceTargetId and relocates
     // it in the same commit, so the collapsed snapshot carries both a

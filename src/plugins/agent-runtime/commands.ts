@@ -658,6 +658,7 @@ const reconcileMarkdownSubtree = async (
         // than stranded live under the tombstone (§9). In an un-flipped
         // workspace there is no machinery, so this equals the single-row
         // delete it replaces.
+        // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge reconciling a markdown subtree, not a user gesture
         await deleteSubtreeInTx(tx, doomed.id)
       }
     }
@@ -719,6 +720,7 @@ const deleteRuntimeBlock = async (
   repo: Repo,
   input: DeleteBlockInput,
 ): Promise<DeleteBlockResult> => {
+  // eslint-disable-next-line no-restricted-syntax -- programmatic delete: agent bridge is not a UI gesture; UI-layer guards deliberately don't apply
   await repo.mutate.delete(input)
   return {id: input.id, deleted: true}
 }
@@ -990,6 +992,7 @@ const uninstallRuntimeExtension = async (
   // We mirror the install path's scope/description naming for
   // grep-ability in the change log.
   await repo.tx(async tx => {
+    // eslint-disable-next-line no-restricted-syntax -- programmatic delete: extension uninstall via the agent bridge, no UI entry point
     await tx.delete(found.block.id)
   }, {
     scope: ChangeScope.BlockDefault,

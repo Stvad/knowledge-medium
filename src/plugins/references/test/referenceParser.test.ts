@@ -13,6 +13,8 @@ import {
   rewriteWikilinks,
   inlineBlockRefs,
   rewriteBlockRefs,
+  faithfulWikilinkReplacement,
+  pinnedSpanReplacement,
 } from '../referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
@@ -417,4 +419,185 @@ Another [[normal-ref]]
       expect(inlineBlockRefs(content, UUID, 'BODY')).toBe(content)
     })
   })
+
+  describe('whole-span round-trip guard', () => {
+    it('accepts a label that survives rendering intact', () => {
+      expect(pinnedSpanReplacement('Plain', UUID)).toEqual({
+        text: `[Plain](((${UUID})))`,
+        refAlias: UUID,
+        toTargetId: UUID,
+        lossyLabel: false,
+      })
+    })
+
+    it('flags a label the renderer had to sanitize, keeping the link', () => {
+      // `]` is legal in a wikilink alias but illegal in a blockref label.
+      const result = pinnedSpanReplacement('a]b', UUID)
+      expect(result).toEqual({
+        text: `[ab](((${UUID})))`,
+        refAlias: UUID,
+        toTargetId: UUID,
+        lossyLabel: true,
+      })
+    })
+
+    it('refuses a target that cannot be represented in the pinned grammar', () => {
+      expect(pinnedSpanReplacement('Plain', 'not-a-uuid')).toBeNull()
+    })
+
+    it('refuses a wikilink alias markdown would re-escape, and flags the pinned label', () => {
+      // Markdown owns `\` as an escape and resolves it BEFORE
+      // `remark-wikilinks` sees the text, so `[[abc\]]` renders a link to
+      // alias `abc` while the stored edge says `abc\` — a span pointing
+      // somewhere the projection does not. The parsers here keep the
+      // backslash verbatim, so nothing else notices.
+      expect(faithfulWikilinkReplacement('abc\\')).toBeNull()
+      expect(faithfulWikilinkReplacement('a\\b')).toBeNull()
+      expect(faithfulWikilinkReplacement('abc')).not.toBeNull()
+
+      // The pinned form survives it: the id segment carries the binding,
+      // so only the DISPLAYED label loses the escape — reported, not
+      // refused, which is what keeps the ladder's fallback available.
+      const pinned = pinnedSpanReplacement('abc\\', UUID)
+      expect(pinned).not.toBeNull()
+      expect(pinned!.toTargetId).toBe(UUID)
+      expect(pinned!.lossyLabel).toBe(true)
+    })
+
+    it('flags a pinned label markdown would split at an unmatched bracket', () => {
+      // `[a[b](((uuid)))` clears the `[[` check — there is no doubled
+      // opener — but markdown reads the INNER `[b](...)` as the link and
+      // leaves `[a` outside it as literal text. The reference still lands
+      // on the right block; the label is reordered and only its suffix is
+      // clickable, so the honest report is lossy rather than faithful.
+      const split = pinnedSpanReplacement('a[b', UUID)
+      expect(split).not.toBeNull()
+      expect(split!.toTargetId).toBe(UUID)
+      expect(split!.lossyLabel).toBe(true)
+      // A LEADING `[` is a different case and stays refused outright: it
+      // renders `[[ab](((uuid)))`, whose doubled opener can pair with a
+      // later `]]` and manufacture a wikilink.
+      expect(pinnedSpanReplacement('[ab', UUID)).toBeNull()
+    })
+
+    it('refuses a target id the parser would canonicalize away', () => {
+      // `parseBlockRefs` lower-cases UUID-shaped ids, but `blocks.id` is
+      // compared case-sensitively and both `tx.create` and the agent
+      // bridge accept caller-supplied ids verbatim. So an upper-case
+      // target renders a span that binds to a lowercase id no row has —
+      // and comparing the parse against `targetId.toLowerCase()` would
+      // certify exactly that as a faithful round trip. Same divergence
+      // `referenceBlockContentForId` rejects on the `((id))` form.
+      // Hex LETTERS, so the id actually has a case to differ in.
+      const mixed = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+      const upper = mixed.toUpperCase()
+      expect(upper).not.toBe(mixed)
+      expect(pinnedSpanReplacement('Plain', mixed)).not.toBeNull()
+      expect(pinnedSpanReplacement('Plain', upper)).toBeNull()
+    })
+
+    it('refuses a pinned span whose label smuggles a wikilink opener', () => {
+      // `renderAliasedBlockref` strips `]` and newlines but NOT `[`, so
+      // this renders a valid aliased blockref that also carries an
+      // unbalanced `[[`. Spliced next to any later `]]` the pair closes
+      // across the spliced text and manufactures a bogus wikilink —
+      // which binds a reference and mints a seat. Checking only the
+      // grammar we rendered into would certify it as faithful.
+      expect(pinnedSpanReplacement('a[[b', UUID)).toBeNull()
+      expect(
+        parseReferences(`see ${renderAliasedBlockref('a[[b', UUID)} tail]]`).length,
+      ).toBe(1)
+    })
+
+    it('leaves a page-embed span alone when splicing the pinned form', () => {
+      // `![[A]]` is the page-embed syntax. Splicing the pinned form under
+      // the `!` yields `![A](((uuid)))` — a markdown IMAGE, and
+      // remark-blockrefs only visits link/text nodes, so it renders as a
+      // broken <img>. The reference survives, the display doesn't.
+      const pinned = pinnedSpanReplacement('A', UUID)!.text
+      expect(rewriteWikilinks('see ![[A]] please', 'A', pinned, {skipEmbeds: true}))
+        .toBe('see ![[A]] please')
+      // A plain (non-embed) span next to it still rewrites.
+      expect(rewriteWikilinks('see [[A]] and ![[A]]', 'A', pinned, {skipEmbeds: true}))
+        .toBe(`see ${pinned} and ![[A]]`)
+      // And a wikilink→wikilink swap under `!` is safe — still an embed.
+      expect(rewriteWikilinks('see ![[A]] please', 'A', '[[B]]'))
+        .toBe('see ![[B]] please')
+    })
+
+    it('refuses wikilink forms that do not parse back to the same alias', () => {
+      expect(faithfulWikilinkReplacement('')).toBeNull()
+      expect(faithfulWikilinkReplacement('foo]]bar')).toBeNull()
+      expect(faithfulWikilinkReplacement('Plain')).toEqual({
+        text: '[[Plain]]',
+        refAlias: 'Plain',
+        toTargetId: null,
+        lossyLabel: false,
+      })
+    })
+  })
 })
+
+describe('pinned rewrites inside a [display]([[alias]]) wrapper', () => {
+  // `parseReferences` reports only the inner `[[alias]]`, but
+  // `remark-wikilinks` treats the whole `[display]([[alias]])` as ONE
+  // wikilink whose rendered children are `display`. Splicing the pinned
+  // form into the inner span alone produced
+  // `[display]([label](((uuid))))`, which the real pipeline renders as a
+  // plain markdown link — reference destroyed, stored edge moved anyway
+  // (Codex on PR #444). `remark-wikilinks.test.ts` asserts the rendered
+  // node values for both forms; these pin the rewrite itself.
+  const PINNED = `[Old](((${UUID})))`
+  const opts = {skipEmbeds: true, pinnedTargetId: UUID}
+
+  it('replaces the whole wrapper and keeps the author display text', () => {
+    expect(rewriteWikilinks('see [label]([[Old]]) here', 'Old', PINNED, opts))
+      .toBe(`see [label](((${UUID}))) here`)
+  })
+
+  it('handles a wrapper and a bare span in one pass', () => {
+    expect(rewriteWikilinks('[label]([[Old]]) and [[Old]]', 'Old', PINNED, opts))
+      .toBe(`[label](((${UUID}))) and [Old](((${UUID})))`)
+  })
+
+  it('leaves an image wrapper alone — it carries no reference to preserve', () => {
+    // `![display]([[alias]])` parses as a markdown IMAGE, so nothing is
+    // lost by leaving it and a blockref would be a different node entirely.
+    expect(rewriteWikilinks('x ![label]([[Old]]) y', 'Old', PINNED, opts))
+      .toBe('x ![label]([[Old]]) y')
+  })
+
+  it('takes the INNERMOST bracket as the display text', () => {
+    // The opener is found by scanning back for the nearest `[`, so a
+    // display can never contain `[` — which is also why the
+    // label-smuggling refusal inside `spliceFor` is defence in depth
+    // rather than a reachable path. Pinned here because the scan-back is
+    // subtle: `[a[b]([[Old]])` wraps on `[b]`, leaving `[a` as prose.
+    expect(rewriteWikilinks('x [a[b]([[Old]]) y', 'Old', PINNED, opts))
+      .toBe(`x [a[b](((${UUID}))) y`)
+  })
+
+  it('reports a display text the pinned grammar would mangle as unchanged', () => {
+    // `\\` is markdown-unsafe in a label, so `pinnedSpanReplacement`
+    // flags `lossyLabel` — but it flags it against the LADDER's invented
+    // label. Here the text was already sitting in a label position, so the
+    // rendered display does not change and the rewrite proceeds.
+    expect(rewriteWikilinks('x [a\\b]([[Old]]) y', 'Old', PINNED, opts))
+      .toBe(`x [a\\b](((${UUID}))) y`)
+  })
+
+  it('does not widen the range for a WIKILINK replacement', () => {
+    // `[display]([[new]])` is still the same wrapper shape, so the inner
+    // swap stays correct and the author's display text is untouched.
+    expect(rewriteWikilinks('see [label]([[Old]]) here', 'Old', '[[New]]'))
+      .toBe('see [label]([[New]]) here')
+  })
+
+  it('needs a real wrapper, not just a trailing paren', () => {
+    // `](` immediately before the span is the whole signal, so a span that
+    // merely sits inside parens must not be widened.
+    expect(rewriteWikilinks('see ([[Old]]) here', 'Old', PINNED, opts))
+      .toBe(`see ([Old](((${UUID})))) here`)
+  })
+})
+

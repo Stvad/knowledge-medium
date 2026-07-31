@@ -1,13 +1,14 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import type { BlockData } from '@/data/api'
-import { aliasesProp } from '@/data/properties.js'
+import type { BlockData, TypeContribution } from '@/data/api'
+import { aliasesProp, typesProp } from '@/data/properties.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { searchSourcesFacet, type SearchSourceContribution } from '@/data/facets.js'
 import {
+  completionTypeHint,
   labelForBlockData,
   searchAliasLabels,
   searchBlocksAcrossSources,
@@ -44,6 +45,7 @@ const create = async (args: {
   id: string
   content?: string
   aliases?: string[]
+  types?: string[]
 }) => {
   await env.repo.tx(async tx => {
     await tx.create({
@@ -52,12 +54,22 @@ const create = async (args: {
       parentId: null,
       orderKey: `key-${args.id}`,
       content: args.content ?? '',
-      properties: args.aliases
-        ? {[aliasesProp.name]: aliasesProp.codec.encode(args.aliases)}
-        : {},
+      properties: {
+        ...(args.aliases ? {[aliasesProp.name]: aliasesProp.codec.encode(args.aliases)} : {}),
+        ...(args.types ? {[typesProp.name]: typesProp.codec.encode(args.types)} : {}),
+      },
     })
   }, {scope: ChangeScope.BlockDefault})
 }
+
+/** `searchAliasLabels` returns `{label, typeIds}` rows; most assertions
+ *  here only care about the labels and their order. */
+const labelsOf = async (args: {
+  query: string
+  recentBlockIds?: string[]
+  limit?: number
+}): Promise<string[]> =>
+  (await searchAliasLabels(env.repo, {workspaceId: WS, ...args})).map(row => row.label)
 
 const blockData = (id: string, content: string, aliases?: string[]): BlockData => ({
   id,
@@ -84,6 +96,40 @@ const deferred = <T>() => {
   })
   return {promise, resolve, reject}
 }
+
+const typeRegistry = (
+  ...types: {id: string; label?: string; hideFromBlockDisplay?: boolean}[]
+): ReadonlyMap<string, TypeContribution> => new Map(types.map(type => [type.id, type]))
+
+describe('completionTypeHint', () => {
+  it('names the first display-worthy type', () => {
+    expect(completionTypeHint(
+      ['page', 'person'],
+      typeRegistry({id: 'page', label: 'Page', hideFromBlockDisplay: true}, {id: 'person', label: 'Person'}),
+    )).toBe('Person')
+  })
+
+  it('skips plumbing types whose chip is hidden on the block itself', () => {
+    // `page` sits on every page — annotating every dropdown row with it
+    // is noise, which is exactly what hideFromBlockDisplay already means.
+    expect(completionTypeHint(
+      ['page'],
+      typeRegistry({id: 'page', label: 'Page', hideFromBlockDisplay: true}),
+    )).toBeUndefined()
+  })
+
+  it('skips ids the registry does not know rather than showing a raw id', () => {
+    expect(completionTypeHint(['b7f2-uuid'], typeRegistry())).toBeUndefined()
+  })
+
+  it('skips a registered type that has no label to show', () => {
+    expect(completionTypeHint(['nameless'], typeRegistry({id: 'nameless'}))).toBeUndefined()
+  })
+
+  it('returns undefined for an untyped block', () => {
+    expect(completionTypeHint([], typeRegistry())).toBeUndefined()
+  })
+})
 
 describe('link target autocomplete helpers', () => {
   it('labels blocks by first alias, then content, then fallback', () => {
@@ -238,20 +284,37 @@ describe('link target autocomplete helpers', () => {
     await create({id: 'exact', aliases: ['Dating']})
     await create({id: 'prefix', aliases: ['Dating pool']})
 
-    await expect(searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: 'dating',
-    })).resolves.toEqual(['Dating', 'Dating pool'])
+    expect(await labelsOf({query: 'dating'})).toEqual(['Dating', 'Dating pool'])
+  })
+
+  it('uses recently-opened page aliases for an empty CodeMirror completion query', async () => {
+    await create({id: 'older', aliases: ['Older page']})
+    await create({id: 'recent', aliases: ['Recent page', 'Recent alternate']})
+    await create({id: 'not-recent', aliases: ['Not recent']})
+
+    expect(await labelsOf({query: '', recentBlockIds: ['recent', 'older']}))
+      .toEqual(['Recent page', 'Recent alternate', 'Older page'])
+  })
+
+  it('does not browse every workspace alias for an empty completion query', async () => {
+    await create({id: 'page', aliases: ['Workspace page']})
+
+    expect(await labelsOf({query: '', recentBlockIds: []})).toEqual([])
+  })
+
+  it('skips missing recent blocks and limits aliases without falling through to older pages', async () => {
+    await create({id: 'recent', aliases: ['Recent page', 'Recent alternate']})
+    await create({id: 'older', aliases: ['Older page']})
+
+    expect(await labelsOf({query: '', recentBlockIds: ['recent', 'missing', 'older'], limit: 2}))
+      .toEqual(['Recent page', 'Recent alternate'])
   })
 
   it('matches out-of-order tokens (word skip)', async () => {
     await create({id: 'match', aliases: ['PR Review Skill']})
     await create({id: 'no-pr', aliases: ['Book Review']})
 
-    const out = await searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: 'review pr',
-    })
+    const out = await labelsOf({query: 'review pr'})
     expect(out).toContain('PR Review Skill')
     expect(out).not.toContain('Book Review')
   })
@@ -259,23 +322,220 @@ describe('link target autocomplete helpers', () => {
   it('tolerates a single-char typo on tokens of length >= 4', async () => {
     await create({id: 'a', aliases: ['Apples']})
 
+    expect(await labelsOf({query: 'appls'})).toEqual(['Apples'])
+  })
+
+  it('carries the block type ids that back the dropdown type hint', async () => {
+    await create({id: 'person', aliases: ['Ada Lovelace'], types: ['page', 'person']})
+    await create({id: 'plain', aliases: ['Ada notes'], types: ['page']})
+
+    const out = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'ada'})
+    const byLabel = new Map(out.map(row => [row.label, [...row.typeIds].sort()]))
+    expect(byLabel.get('Ada Lovelace')).toEqual(['page', 'person'])
+    expect(byLabel.get('Ada notes')).toEqual(['page'])
+  })
+
+  it('reports no types for an untyped page rather than dropping the row', async () => {
+    await create({id: 'bare', aliases: ['Bare page']})
+
+    const out = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'bare'})
+    expect(out).toEqual([{label: 'Bare page', typeIds: []}])
+  })
+
+  it('reads types on the empty-query MRU path too', async () => {
+    await create({id: 'recent', aliases: ['Recent person'], types: ['page', 'person']})
+
     const out = await searchAliasLabels(env.repo, {
       workspaceId: WS,
-      query: 'appls',
+      query: '',
+      recentBlockIds: ['recent'],
     })
-    expect(out).toEqual(['Apples'])
+    expect(out).toEqual([{label: 'Recent person', typeIds: ['page', 'person']}])
+  })
+
+  it('does not leak types from a same-id block in another workspace', async () => {
+    await create({id: 'here', aliases: ['Shared name'], types: ['page']})
+    // Same block id is impossible, but a stale cross-workspace row in
+    // block_types is not — the query is workspace-scoped so it must not
+    // pick one up.
+    await env.h.db.execute(
+      `INSERT INTO block_types (block_id, workspace_id, type) VALUES (?, ?, ?)`,
+      ['here', 'ws-other', 'person'],
+    )
+
+    const out = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'shared'})
+    expect(out).toEqual([{label: 'Shared name', typeIds: ['page']}])
+  })
+
+  /** Raw insert, bypassing `repo.tx` — a malformed `types` value cannot be
+   *  written through the typed path, and going raw also keeps the row out
+   *  of the block cache so the MRU read actually parses what is on disk. */
+  const insertRaw = async (id: string, properties: Record<string, unknown>) => {
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES (?, ?, NULL, ?, '', ?, '[]', 1, 1, 1, 'u', 'u', 0)`,
+      [id, WS, `key-${id}`, JSON.stringify(properties)],
+    )
+  }
+
+  it('survives a malformed types value on the MRU path', async () => {
+    // The `types` column's on-disk contract is "ignore malformed
+    // entries" — the maintenance trigger filters on
+    // `typeof(je.value)='text'` and the invalidation rule filters
+    // non-strings. A raw properties-bag write (agent-runtime
+    // `updateBlock`, the MCP verb, an importer, a sync-applied row) can
+    // land a non-array here. Running the string-list codec instead
+    // throws a CodecError that rejects out through `getAliases` — which
+    // has no try/catch above it — emptying the ENTIRE `[[` dropdown,
+    // relative-date completions included.
+    await insertRaw('bad', {alias: ['Malformed page'], types: 'person'})
+    const {repo} = createTestRepo({db: env.h.db, user: {id: 'user-1'}})
+
+    await expect(searchAliasLabels(repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['bad'],
+    })).resolves.toEqual([{label: 'Malformed page', typeIds: []}])
+  })
+
+  it('keeps the good entries of a partly-malformed types list, matching the trigger', async () => {
+    // Per-entry filtering, not all-or-nothing: the `block_types` trigger
+    // behind the search path keeps `page`/`person` out of this list, so
+    // the MRU path has to agree or the hint would flip between the
+    // zero-input and typed states.
+    await insertRaw('badlist', {alias: ['Malformed list'], types: ['page', null, 'person']})
+    const {repo} = createTestRepo({db: env.h.db, user: {id: 'user-1'}})
+
+    await expect(searchAliasLabels(repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['badlist'],
+    })).resolves.toEqual([{label: 'Malformed list', typeIds: ['page', 'person']}])
+  })
+
+  it('reports types in authored order on BOTH paths, so the hint cannot flip', async () => {
+    // `completionTypeHint` shows the FIRST display-worthy type, so the
+    // two paths have to agree on order. Reading `block_types` returns
+    // PK order (type-ascending), which would show "Author" for a typed
+    // query and "Person" for the zero-input MRU list — the hint visibly
+    // changing as you type the first character.
+    await create({id: 'ada', aliases: ['Ada Lovelace'], types: ['person', 'author']})
+
+    const typed = await searchAliasLabels(env.repo, {workspaceId: WS, query: 'ada'})
+    const mru = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: '',
+      recentBlockIds: ['ada'],
+    })
+
+    expect(typed[0].typeIds).toEqual(['person', 'author'])
+    expect(mru[0].typeIds).toEqual(['person', 'author'])
+  })
+
+  it('suppresses the hint when several live blocks claim the same alias', async () => {
+    // The dropdown inserts an alias STRING; `core.aliasLookup` later
+    // resolves it to the OLDEST claimant. Ranking can put a younger,
+    // recently-opened claimant first, so showing that row's type would
+    // advertise a type belonging to a different destination. Co-claims
+    // are a documented latent state: the alias-uniqueness trigger is
+    // skipped for sync-applied rows, which is what the raw insert below
+    // imitates (it maintains block_aliases but fires no processor).
+    await create({id: 'older', aliases: ['Ada'], types: ['page', 'location']})
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('newer', ?, NULL, 'key-newer', '', ?, '[]', 9, 9, 9, 'u', 'u', 0)`,
+      [WS, JSON.stringify({alias: ['Ada'], types: ['page', 'person']})],
+    )
+
+    const claimants = await env.h.db.getAll<{c: number}>(
+      `SELECT count(*) AS c FROM block_aliases WHERE workspace_id = ? AND alias = 'Ada'`,
+      [WS],
+    )
+    expect(claimants[0].c).toBe(2)
+
+    const out = await searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'ada',
+      recentBlockIds: ['newer'],
+    })
+    expect(out).toEqual([{label: 'Ada', typeIds: []}])
+  })
+
+  describe('word-prefix-chain matching through the REAL SQL pipeline', () => {
+    // fuzzyRank's chain tier is only ever offered candidates the SQL
+    // pre-filter returned, and that pre-filter ANDs `alias_lower LIKE
+    // '%<first 3 chars of each token>%'`. So a chain survives end-to-end
+    // only when its FIRST chunk is at least 3 characters — which the
+    // unit tests on `scoreCandidate` cannot see, because they never go
+    // through SQL. These pin the difference.
+    beforeEach(async () => {
+      await create({id: 'meet', aliases: ['Meeting Notes']})
+      await create({id: 'prod', aliases: ['Product Requirements Document']})
+      await create({id: 'stren', aliases: ['Strength Training Program']})
+      await create({id: 'sanfr', aliases: ['San Francisco']})
+    })
+
+    it('finds run-together word prefixes', async () => {
+      expect(await labelsOf({query: 'meetnotes'})).toContain('Meeting Notes')
+      expect(await labelsOf({query: 'prodreq'})).toContain('Product Requirements Document')
+      expect(await labelsOf({query: 'strtrain'})).toContain('Strength Training Program')
+    })
+
+    it('does NOT find initialisms — the 3-char pre-filter drops them before ranking', async () => {
+      // `scoreCandidate('Product Requirements Document', 'prd', ['prd'])`
+      // scores these fine; `aliasMatchesFuzzy` requires a contiguous
+      // "prd" in the alias and returns nothing to rank. Serving them
+      // needs a pre-filter change, not a ranker change — see the note on
+      // `matchesWordPrefixChain`.
+      expect(await labelsOf({query: 'prd'})).not.toContain('Product Requirements Document')
+      expect(await labelsOf({query: 'stp'})).not.toContain('Strength Training Program')
+      expect(await labelsOf({query: 'sf'})).not.toContain('San Francisco')
+    })
+  })
+
+  it('ignores a non-array types value on the SEARCH path too, matching the MRU path', async () => {
+    // json_each happily walks a scalar and yields its text value, so
+    // without an array guard a block storing `types: "person"` shows
+    // "Person" for a typed query and nothing at `[[` — the two paths
+    // disagreeing on exactly the malformed input the tolerance exists
+    // for.
+    await insertRaw('scalar', {alias: ['Scalar page'], types: 'person'})
+
+    await expect(searchAliasLabels(env.repo, {workspaceId: WS, query: 'scalar'}))
+      .resolves.toEqual([{label: 'Scalar page', typeIds: []}])
+  })
+
+  it('suppresses the hint for a co-claimed alias that ranking truncated', async () => {
+    // Co-claim detection cannot run on the already-sliced ranked rows:
+    // if the MRU-boosted claimant lands inside the display limit and the
+    // canonical (oldest) one falls below the cutoff, the survivor list
+    // shows a single claimant and the hint describes the wrong block.
+    await create({id: 'older', aliases: ['Ada'], types: ['page', 'location']})
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+        references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+       VALUES ('newer', ?, NULL, 'key-newer', '', ?, '[]', 9, 9, 9, 'u', 'u', 0)`,
+      [WS, JSON.stringify({alias: ['Ada'], types: ['page', 'person']})],
+    )
+
+    // limit=1 keeps only the MRU-boosted 'newer' row, which is the
+    // straddling-the-cutoff shape without needing 50 decoys.
+    await expect(searchAliasLabels(env.repo, {
+      workspaceId: WS,
+      query: 'ada',
+      recentBlockIds: ['newer'],
+      limit: 1,
+    })).resolves.toEqual([{label: 'Ada', typeIds: []}])
   })
 
   it('boosts recently-opened pages ahead of older matches', async () => {
     await create({id: 'older', aliases: ['Apple Tarte']})
     await create({id: 'recent', aliases: ['Apple Strudel']})
 
-    const out = await searchAliasLabels(env.repo, {
-      workspaceId: WS,
-      query: 'apple',
-      recentBlockIds: ['recent'],
-    })
-    expect(out).toEqual(['Apple Strudel', 'Apple Tarte'])
+    expect(await labelsOf({query: 'apple', recentBlockIds: ['recent']}))
+      .toEqual(['Apple Strudel', 'Apple Tarte'])
   })
 
   it('builds id candidates with excluded block ids', async () => {
@@ -314,7 +574,10 @@ describe('link target autocomplete helpers', () => {
 
     expect(out[0]).toMatchObject({id: 'exact', label: 'dancer'})
     expect(out.map(candidate => candidate.id)).toContain('partial')
-  })
+    // 32 alias-bearing creates make this the one write-heavy test in the file
+    // (~0.8s idle); the rest are far under. Contention pushes it at the 5s
+    // default.
+  }, 20_000)
 
   it('builds value candidates with excluded labels', async () => {
     await create({id: 'page', content: 'Dating notes', aliases: ['Dating']})

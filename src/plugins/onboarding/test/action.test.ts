@@ -66,7 +66,10 @@ const countTutorialPages = async (): Promise<number> => {
   return rows[0]?.n ?? 0
 }
 
-describe('insertTutorialIntoWorkspace', () => {
+// Both tests seed the full tutorial outline into a real repo (see
+// ./seed.test.ts) — ~1.2s of genuine tx work each on an idle machine, which
+// the 5s default does not cover once the machine is oversubscribed.
+describe('insertTutorialIntoWorkspace', {timeout: 30_000}, () => {
   it('seeds the Tutorial when the workspace has none', async () => {
     const result = await insertTutorialIntoWorkspace(env.repo, WS)
 

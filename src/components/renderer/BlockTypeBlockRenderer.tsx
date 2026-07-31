@@ -19,6 +19,7 @@ import {
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { assertNotGrammarShapedLabel, GrammarShapedLabelError } from '@/data/referenceBlock'
 import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
@@ -33,6 +34,7 @@ import {
 } from '@/components/propertyPanel/PropertyPicker.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 
 export const writeBlockTypeLabel = async (
   block: Block,
@@ -41,6 +43,12 @@ export const writeBlockTypeLabel = async (
   next: string,
 ): Promise<void> => {
   if (next === currentLabel && next === currentContent) return
+  // Name hygiene (PR #288 §7): the label is mirrored into `content` below,
+  // so a grammar-shaped label would silently turn this type's own block into
+  // a reference span. Refuse rather than mirror; the caller reverts the
+  // draft. (Blanking the label is a real operation — see the release path
+  // below — so only a non-empty one is checked.)
+  if (next !== '') assertNotGrammarShapedLabel(next, 'Type label')
   await block.repo.tx(async tx => {
     if (next !== currentLabel) {
       await tx.setProperty(block.id, blockTypeLabelProp, next)
@@ -151,7 +159,15 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
 
   const writeLabel = useCallback(async (next: string) => {
     const currentContent = data?.content ?? ''
-    await writeBlockTypeLabel(block, label, currentContent, next)
+    try {
+      await writeBlockTypeLabel(block, label, currentContent, next)
+    } catch (err) {
+      if (!(err instanceof GrammarShapedLabelError)) throw err
+      // Refused: snap the field back to the committed label so it never
+      // shows a name that wasn't saved.
+      console.error(`[BlockTypeBlockRenderer] ${err.message}`)
+      setDraftLabel(label)
+    }
   }, [block, data?.content, label])
 
   const writeDescription = useCallback(async (next: string) => {
@@ -224,7 +240,7 @@ export const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererPr
 
   const [confirmDelete, setConfirmDelete] = useState(false)
   const performDelete = useCallback(async () => {
-    await block.repo.mutate.delete({id: block.id})
+    await deleteBlockThroughUi(block)
   }, [block])
 
   if (!data) return null

@@ -19,6 +19,7 @@ import {
   type EditorSelectionState,
 } from '@/data/properties.js'
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
+import { deleteBlockThroughUi } from '@/utils/deleteBlockThroughUi.js'
 import {
   ActionConfig,
   ActionContextType,
@@ -278,16 +279,25 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      // Boundary rule: never delete the scope root itself — it would
-      // tombstone the whole rendered surface out from under the panel
-      // (see StructuralEditPolicy.canDelete). Every other structural
-      // handler already refuses at this boundary; found missing here by
-      // defaultActions.fuzz.test.ts.
-      const {canDelete} = await structuralEditPolicyForBlock(block, scopeRootId)
-      if (!canDelete) return
+      // No scope-root special case: deleting the root of a surface is an
+      // ordinary delete. Delete REMOVES a subtree, it doesn't relocate one
+      // across the surface boundary, so unlike indent / outdent / merge-up it
+      // isn't a scope-relative decision at all (see `structuralEditPolicy`).
+      // What the surface does afterwards is the surface's problem: a nested
+      // backlink/embed re-queries, and a panel showing the deleted page is
+      // stepped onto a live destination by the mounted `PanelContentRecovery`
+      // watcher. Keeping deletion and navigation decoupled is what makes the
+      // hard cases fall out for free — multi-pane duplicates, self-embeds of
+      // the focal page, and remote deletes all recover through the one
+      // watcher instead of N special cases here.
+      //
+      // The delete is atomic: a read-only workspace, or a guarded
+      // seed-definition ANYWHERE in the subtree, rolls the whole thing back
+      // and throws. Since nothing else moved, there is no half-state to clean
+      // up and no preflight is needed.
 
-      // Beyond the scope-root refusal above, `scopeRootId` only locates
-      // the post-delete focus target; the delete itself doesn't need it.
+      // `scopeRootId` only locates the post-delete focus target; the delete
+      // itself doesn't need it.
       // Don't gate the delete on it, so non-React runners that can't
       // inject a scope (the agent-runtime bridge) still delete — they
       // just skip focus recovery.
@@ -300,10 +310,12 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       // `PanelFocusRecovery` does on the DOM side, so manual deletes
       // and surprise disappearances both land on the same target.
       const next = scopeRootId ? await blockAfterSubtreeRemoval(block, scopeRootId) : null
+      let deleted = false
       await withMoveTransition(async () => {
-        await block.delete()
+        deleted = await deleteBlockThroughUi(block)
       })
-      if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+      // Don't move focus for a delete a guard refused.
+      if (deleted && next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
     },
     defaultBinding: {
       keys: 'Delete',

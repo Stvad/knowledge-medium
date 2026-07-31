@@ -54,7 +54,9 @@ describe('replayApplicationOrder', () => {
     expect(ordered).toHaveLength(DEPTH)
     expect(ordered[0][0]).toBe('n0')
     expect(ordered[DEPTH - 1][0]).toBe(`n${DEPTH - 1}`)
-  })
+    // 200k recorded writes plus the walk is ~1.4s of real work on an idle
+    // machine — under 4x the 5s default, which contention eats.
+  }, 20_000)
 
   it('degrades gracefully on a malformed cyclic target graph', () => {
     const snapshots = newSnapshotsMap()
