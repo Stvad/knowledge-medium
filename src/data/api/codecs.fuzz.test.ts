@@ -35,13 +35,38 @@ import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import { codecs, CodecError, decodeRefId, decodeRefListIds } from './codecs'
 
-/** "Any string" domain for the round-trip properties below. fast-check
- *  4.9's `fc.string()` defaults to `unit: 'grapheme-ascii'` (printable
- *  ASCII only) — an unqualified call would make every "any string" claim
- *  in this file false, and codec round-trips are exactly where non-ASCII,
- *  lone surrogates, and NFC/NFD normalization edges bite. `unit: 'binary'`
- *  is the full Unicode code-point range (excluding lone surrogates). */
-const anyStringArb = fc.string({ unit: 'binary' })
+/** A lone (unpaired) UTF-16 surrogate code unit. Not a Unicode scalar
+ *  value, but a perfectly legal JS string — and the input that separates a
+ *  byte-transparent codec from one that quietly normalizes, since UTF-8
+ *  encoding (`TextEncoder`) and `String.prototype.toWellFormed()` both
+ *  replace it with U+FFFD. No fast-check preset unit emits one. */
+const loneSurrogateArb = fc.integer({min: 0xd800, max: 0xdfff}).map(code => String.fromCharCode(code))
+
+/** "Any string" domain for the round-trip properties below — any sequence
+ *  of UTF-16 code units, which is what a JS string actually is. Both
+ *  widenings over a bare `fc.string()` are load-bearing:
+ *
+ *  1. fast-check 4.9 defaults to `unit: 'grapheme-ascii'` (printable ASCII
+ *     only), so an unqualified call would make every "any string" claim in
+ *     this file false. `unit: 'binary'` opens it to the full Unicode
+ *     code-point range (0000-10FFFF), which is where non-ASCII and NFC/NFD
+ *     normalization edges live.
+ *  2. `'binary'` still excludes half surrogate pairs (per its fast-check
+ *     docs; measured, 0 of 2000 samples contained one), so lone surrogates
+ *     — named above as exactly the edge that bites here — have to be mixed
+ *     in as a unit of their own. Adjacent high+low units may pair up into
+ *     an ordinary astral character; that's fine, unpaired ones are still
+ *     frequent (~33% of samples carry at least one).
+ *
+ *  Every codec under test is a `typeof` guard over an identity, so the
+ *  whole domain round-trips today. The property is here to fail the day
+ *  one of them stops being byte-transparent. */
+const anyStringArb = fc.string({
+  unit: fc.oneof(
+    {weight: 9, arbitrary: fc.string({unit: 'binary', minLength: 1, maxLength: 1})},
+    {weight: 1, arbitrary: loneSurrogateArb},
+  ),
+})
 
 // ──── Junk domain for the totality oracles ────
 //
