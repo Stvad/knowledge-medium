@@ -1067,6 +1067,52 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // ...and with nothing mounted after the embed at all, which is the shape a
+  // tall embed makes: the walker returns no neighbour, so the keystroke would
+  // otherwise be swallowed — no focus write, no scroll, nothing new mounts, and
+  // `j` is dead for the rest of the page.
+  it('steps onto a reserved row leaving a nested surface with no mounted neighbour', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [{
+        blockId: 'B',
+        renderScopeId: 'panel:outline',
+        surface: 'outline',
+        nested: [
+          {blockId: 'X', renderScopeId: 'embed:B:X', surface: 'embedded'},
+          {deferredBlockId: 'B1', deferredScopeId: 'panel:outline'},
+        ],
+      }],
+      // Nothing mounted after the embed — B1's placeholder is the last thing.
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'embed:B:X',
+      scopeRootId: 'X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'B1',
+        renderScopeId: 'panel:outline',
+      })
+    })
+  })
+
   // An anonymous slot is one whose row will belong to a scope decided inside
   // the wrapper (a backlink entry, a recents row). Reading the surrounding DOM
   // for its scope would label it with the outline's — and then a slot sitting
