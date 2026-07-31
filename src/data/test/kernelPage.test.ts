@@ -1,7 +1,8 @@
 // @vitest-environment node
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedType } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { typeSeedsFacet } from '@/data/facets'
@@ -43,6 +44,7 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('getOrCreateKernelPage', () => {
   it('creates a deterministic page tagged with PAGE_TYPE plus the marker type', async () => {
@@ -156,6 +158,54 @@ describe('getOrCreateKernelPage', () => {
     expect(resolved.peekProperty(aliasesProp)).toEqual(['Foo'])
     // The old deterministic-id row stays a tombstone — nothing re-mints it.
     expect(await isBlockDeleted(env.repo, page.id)).toBe(true)
+
+    // Every LATER call has to keep resolving there. This is what makes the
+    // adoption guard's allow-list `[PAGE_TYPE, markerType]` rather than the
+    // bare `[PAGE_TYPE]` default: the marker THIS call just applied would
+    // otherwise read as a foreign "extra" type on the next one, the claimant
+    // would be refused, and the fallback would land back on the tombstone
+    // above — whose alias reclaim collides with the claimant and aborts. The
+    // page would be permanently unreachable from the second call onward,
+    // which is exactly the state #378 is about.
+    const again = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+    expect(again.id).toBe('claimant')
+    expect(await isBlockDeleted(env.repo, page.id)).toBe(true)
+  })
+
+  it('adopts a claimant that only appears between the pre-transaction read and the transaction', async () => {
+    // The OTHER adopt site. Ordinarily the pre-transaction `repo.load` finds
+    // the live claimant and the repair branch does the tagging, so the create
+    // transaction's own adopt branch is reached only when that read came back
+    // absent and the in-transaction re-resolve then found a claimant — a fresh
+    // workspace where a peer's aliased page syncs in mid-call. Simulated by
+    // making the pre-transaction read disagree with what is on disk, the same
+    // way the cross-workspace tests below simulate their race.
+    //
+    // Untested, this branch is where a claimant gets adopted and handed back
+    // WITHOUT its types — a kernel page invisible to every `types`-indexed
+    // query, and no second call repairs it (the repair branch above sees the
+    // claimant, finds it needs types, and would only then fix it).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Claimant'})
+      await tx.setProperty('claimant', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+    vi.spyOn(env.repo, 'load').mockResolvedValueOnce(null)
+
+    const resolved = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: FOO_PAGE_TYPE,
+    })
+
+    expect(resolved.id).toBe('claimant')
+    expect(resolved.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    expect(resolved.peekProperty(aliasesProp)).toEqual(['Foo'])
+    // Nothing was minted at the deterministic id on the way past it.
+    expect(await env.repo.load(kernelPageBlockId(WS, FOO_PAGE_NS))).toBeNull()
   })
 
   it('refuses to adopt a claimant that already has a different type (ambiguous, issue #378)', async () => {
@@ -201,5 +251,170 @@ describe('getOrCreateKernelPage', () => {
 
     expect(await isBlockDeleted(repo, page.id)).toBe(true)
     expect(repo.block('claimant').peekProperty(typesProp)).toEqual([OTHER_TYPE])
+  })
+
+  it('tags PAGE_TYPE alone when the page has no marker (the Journal shape)', async () => {
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: null,
+    })
+
+    expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE])
+  })
+
+  /**
+   * The repair of a LIVE page, one test per leg of `needsRepair`.
+   *
+   * Neither leg was pinned by anything above: create covers the empty id,
+   * restore covers the tombstone, and the cross-workspace tests never get as
+   * far as repairing. Delete either leg and the suite stayed green — while a
+   * page that lost its marker type is invisible to every `types`-indexed query
+   * that looks for it (including this function's own repair check, which reads
+   * the same list), and one that lost its alias is unreachable by name.
+   *
+   * Both fixtures are built damaged rather than created-then-damaged: a repair
+   * path that ran on the way in would launder the damage before the assertion.
+   */
+  describe('repairing a live page in this workspace', () => {
+    it('re-tags a marker type the page has lost', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+        await tx.setProperty(id, aliasesProp, ['Foo'])
+        // PAGE_TYPE only — the marker is what a caller queries for, and its
+        // absence is exactly the state no query can report.
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+
+      const page = await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+      expect(page.peekProperty(aliasesProp)).toEqual(['Foo'])
+      expect(page.peek()?.content).toBe('Foo')
+    })
+
+    it('re-claims an alias the page has lost, keeping any the user added', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+        // Both types present, so this isolates the alias leg — and a second
+        // name the user chose, to pin that repair MERGES rather than replaces.
+        await tx.setProperty(id, aliasesProp, ['My Foo'])
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+        await env.repo.addTypeInTx(tx, id, FOO_PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+
+      const page = await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
+    })
+  })
+
+  it('rejects an omitted markerType by name, rather than failing at the tagger', async () => {
+    // The cast is the point: TypeScript already requires the field, so this
+    // pins the guard for the callers the type does not reach — a dynamic
+    // extension is transpiled, not typechecked. Without it, `undefined` flows
+    // into `addTypeInTx` and surfaces as "type id undefined is not
+    // registered", which sends the author off to add a type seed instead of
+    // to the field they left out.
+    await expect(getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+    } as unknown as Parameters<typeof getOrCreateKernelPage>[2]))
+      .rejects.toThrow(/markerType is required/)
+  })
+
+  /** This helper is extension-facing, so the namespace is chosen by code the
+   *  app does not control. Both reads that can find an occupant select on id
+   *  alone, and what they feed rewrites properties or undeletes rows — so a
+   *  foreign occupant must stop the call rather than be adopted. */
+  describe('a row at this id belonging to another workspace', () => {
+    const OTHER_WS = 'ws-someone-else'
+    const foreignRow = async (deleted: boolean): Promise<string> => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
+          content: 'someone else\'s page',
+        })
+        if (deleted) await tx.delete(id)
+      }, {scope: ChangeScope.BlockDefault})
+      return id
+    }
+
+    it('is refused rather than repaired', async () => {
+      const id = await foreignRow(false)
+
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // Untouched: no alias claimed, no type tagged, content as it was.
+      const row = await env.repo.load(id)
+      expect(row?.workspaceId).toBe(OTHER_WS)
+      expect(row?.content).toBe('someone else\'s page')
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+    })
+
+    it('is refused rather than resurrected', async () => {
+      const id = await foreignRow(true)
+
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // Still deleted — a tombstone in another workspace stays one.
+      expect(await env.repo.load(id)).toBeNull()
+    })
+
+    /** The check runs at three points and the two tests above pin it only
+     *  COLLECTIVELY — each enters through the first one, so deleting any single
+     *  site leaves them green while another catches the case. The two below
+     *  isolate the sites that a plain foreign occupant never reaches. */
+    it('is refused even when it is shaped exactly like ours, so nothing needs repair', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0', content: 'Foo',
+        })
+        await tx.setProperty(id, aliasesProp, ['Foo'])
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+        await env.repo.addTypeInTx(tx, id, FOO_PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+
+      // A fully-shaped row makes `needsRepair` false, so the repair
+      // transaction — and the recheck inside it — is never reached. The
+      // pre-repair check is the only thing standing between this call and
+      // handing back another workspace's page as ours.
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+    })
+
+    it('is refused when it only becomes foreign between the read and the transaction', async () => {
+      const id = await foreignRow(false)
+      // Sync materialization rewrites every stored column except `id`,
+      // `workspace_id` included, so the row read before the transaction can
+      // belong to someone else by the time it opens. Simulated by making that
+      // read disagree with what is actually on disk.
+      const asIfOurs = {...(await env.repo.load(id))!, workspaceId: WS}
+      vi.spyOn(env.repo, 'load').mockResolvedValueOnce(asIfOurs)
+
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // The repair never ran: no alias claimed, no type tagged.
+      const row = await env.repo.load(id)
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+    })
   })
 })

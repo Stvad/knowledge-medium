@@ -2,6 +2,8 @@ import { Repo } from '../../data/repo'
 import {
   focusBlock,
   isCollapsedProp,
+  peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
   selectionStateProp,
   uiStateRenderScopeId,
 } from '@/data/properties.js'
@@ -27,6 +29,26 @@ import {
 } from '@/shortcuts/types.js'
 
 const JUMP_BLOCK_COUNT = 8
+
+/**
+ * True when the panel's focus has moved off the row this invocation started
+ * from. The model walks below `await` — on an uncached `childIds` that's a DB
+ * round-trip — and a click or a second keystroke can land inside that window;
+ * writing afterwards would overwrite the newer intent, or make two fast
+ * presses land on the same row. The keystroke's premise is gone, so drop it.
+ *
+ * Only meaningful when `renderScopeId` identifies the rendered row (it always
+ * does on a real dispatch); without one there's nothing to compare against and
+ * the write proceeds as before.
+ */
+const focusMovedDuringWalk = (deps: BlockShortcutDependencies): boolean => {
+  const {block, uiStateBlock, renderScopeId} = deps
+  if (!block || !uiStateBlock || !renderScopeId) return false
+  return !sameFocusedBlockLocation(
+    peekFocusedBlockLocation(uiStateBlock),
+    {blockId: block.id, renderScopeId},
+  )
+}
 
 /** Walk up to `count` visible blocks in `direction`, stopping early at the
  *  scope boundary. Returns the landing block, or null when the start block is
@@ -97,7 +119,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!block || !uiStateBlock || !scopeRootId) return
 
         const next = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
-        if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+        if (next && !focusMovedDuringWalk(deps)) {
+          void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
+        }
       },
       defaultBinding: {
         keys: ['ArrowDown', 'j'],
@@ -111,7 +135,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!block || !uiStateBlock || !scopeRootId) return
 
         const prev = await previousVisibleBlock(block, scopeRootId)
-        if (prev) void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
+        if (prev && !focusMovedDuringWalk(deps)) {
+          void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
+        }
       },
       defaultBinding: {
         keys: ['ArrowUp', 'k'],

@@ -3,6 +3,7 @@ import {
   canonicalizeChord,
   matchesMouseEvent,
   normalizeChord,
+  normalizeChordSequence,
   pointerBindingDescriptor,
   type MouseChordDescriptor,
   type MouseEventLike,
@@ -68,6 +69,18 @@ describe('canonicalizeChord', () => {
     expect(canonicalizeChord('Space')).toBe('Space')
     expect(canonicalizeChord('KeyA')).toBe('KeyA')
     expect(canonicalizeChord('Numpad3')).toBe('Numpad3')
+  })
+
+  it('keeps `+` as a key instead of eating it (tinykeys splits on `+` only after \\w or ])', () => {
+    // The settings capture path records pressing `+` as 'Shift++'
+    // (keyCapture.ts pushes event.key after the modifier parts), and
+    // tinykeys parses that as Shift plus the `+` key. A naive `+` split
+    // would leave the bare modifier — and since direct overrides are
+    // INSTALLED through normalizeChordSequence, the action would end up
+    // bound to Shift alone.
+    expect(canonicalizeChord('Shift++')).toBe('Shift++')
+    expect(canonicalizeChord('$mod+Shift++')).toBe('$mod+Shift++')
+    expect(canonicalizeChord('+')).toBe('+')
   })
 
   it('still folds case for logical keys that dispatch via event.key', () => {
@@ -148,6 +161,17 @@ describe('pointerBindingDescriptor', () => {
   })
 })
 
+describe('normalizeChordSequence', () => {
+  it('normalises each press of a sequence, preserving the key\'s case', () => {
+    // The install form for keybinding overrides (issue #388): modifier
+    // aliases fold to dispatch-live names, display case survives — unlike
+    // canonicalizeChord, which case-folds because it's a comparison key.
+    expect(normalizeChordSequence('Cmd+K Cmd+S')).toBe('$mod+K $mod+S')
+    expect(normalizeChordSequence('ctrl+ArrowDown')).toBe('Control+ArrowDown')
+    expect(normalizeChordSequence('')).toBe('')
+  })
+})
+
 describe('normalizeChord (behaviour pinned across the lift)', () => {
   // keyCapture.test.ts covers the ordinary cases through the re-export;
   // these pin the adversarial edges of the "alias or key" rewrite. Only the
@@ -159,6 +183,8 @@ describe('normalizeChord (behaviour pinned across the lift)', () => {
     ['k+cmd', '$mod+k'],               // non-modifier before a modifier
     [' cmd + k ', '$mod+k'],           // surrounding whitespace trimmed
     ['', ''],                          // empty input stays empty
+    ['Shift++', 'Shift++'],            // `+` is the key, not a separator
+    ['cmd + +', '$mod++'],             // …even authored with spaces
   ])('normalizeChord(%j) === %j', (input, expected) => {
     expect(normalizeChord(input)).toBe(expected)
   })

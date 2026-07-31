@@ -20,6 +20,7 @@ import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { BlockProperties } from './BlockProperties'
 import { degradedFallbackSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
+import { buildAppHash } from '@/utils/routing'
 import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -43,6 +44,11 @@ const uiStateBlockRef = vi.hoisted(() => ({
 const navigateCallsRef = vi.hoisted(() => ({
   current: [] as unknown[],
 }))
+// Declared with the workspace arg dropped — `vi.fn` still records every
+// argument it was CALLED with, which is what the workspace assertions read.
+const useUserPageMock = vi.hoisted(() =>
+  vi.fn((userId: string): {name: string; blockId?: string} => ({name: userId})),
+)
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -56,10 +62,11 @@ vi.mock('@/data/globalState.ts', () => ({
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
     return uiStateBlockRef.current
   },
-  // Attribution name resolution is exercised in globalState's own tests;
-  // here it's identity (and reports no page) so the metadata row stays
-  // deterministic and renders as plain text.
-  useUserPage: (userId: string) => ({name: userId}),
+  // Attribution name resolution is exercised end-to-end in
+  // `data/test/useUserPage.test.tsx`; here it's identity (and reports no
+  // page) so the metadata row stays deterministic and renders as plain
+  // text. Kept as a spy so the workspace it's called WITH can be asserted.
+  useUserPage: useUserPageMock,
 }))
 
 vi.mock('@/utils/navigation.ts', () => ({
@@ -67,8 +74,10 @@ vi.mock('@/utils/navigation.ts', () => ({
     navigateCallsRef.current.push(input)
   },
   // MetadataRow's "Changed by" link uses this; record opens like navigate.
-  useOpenBlock: ({blockId}: {blockId: string}) => () => {
-    navigateCallsRef.current.push({blockId})
+  // The workspace is recorded too — it's what proves the link opens in the
+  // block's workspace rather than the active one.
+  useOpenBlock: ({blockId, workspaceId}: {blockId: string; workspaceId?: string}) => () => {
+    navigateCallsRef.current.push({blockId, workspaceId})
   },
 }))
 
@@ -154,6 +163,8 @@ describe('BlockProperties component', () => {
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
     navigateCallsRef.current = []
+    useUserPageMock.mockClear()
+    useUserPageMock.mockImplementation((userId: string) => ({name: userId}))
 
     await repo.tx(async tx => {
       await tx.create({
@@ -181,6 +192,50 @@ describe('BlockProperties component', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
+  })
+
+  // A panel can show a block from another workspace (a side panel left open
+  // across a workspace switch). The user page id is derived from
+  // (workspace, userId), so BOTH the name lookup and the link the row renders
+  // have to use the block's workspace: resolving the name against the active
+  // workspace finds no page and falls back to the raw user id, while building
+  // the href against the active workspace routes a foreign block id through
+  // the wrong workspace.
+  const renderForeignWorkspacePanel = async () => {
+    await repo.tx(async tx => {
+      await tx.create({id: 'block-elsewhere', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'create foreign-workspace block'})
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={repo.block('block-elsewhere')}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+  }
+
+  it('resolves the "Changed by" author in the block\'s workspace, not the active one', async () => {
+    await renderForeignWorkspacePanel()
+
+    await waitFor(() => expect(useUserPageMock).toHaveBeenCalledWith('user-1', 'ws-2'))
+  })
+
+  it('links "Changed by" to the user page in the block\'s workspace', async () => {
+    useUserPageMock.mockImplementation((userId: string) => ({name: userId, blockId: 'user-page-ws-2'}))
+    await renderForeignWorkspacePanel()
+
+    // Metadata rows live behind the hidden-fields toggle.
+    fireEvent.click(await screen.findByText(/Show hidden fields/))
+
+    const link = await screen.findByRole('link', {name: 'user-1'})
+    // The href must carry ws-2 — the workspace the user page id came from —
+    // not the active ws-1, or the click opens nothing (or the wrong block).
+    expect(link.getAttribute('href')).toBe(buildAppHash('ws-2', 'user-page-ws-2'))
+
+    fireEvent.click(link)
+    expect(navigateCallsRef.current).toContainEqual({blockId: 'user-page-ws-2', workspaceId: 'ws-2'})
   })
 
   it('keeps primitive value edits local until blur commits them', async () => {

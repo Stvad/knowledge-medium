@@ -1,6 +1,8 @@
-import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
+import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
+import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, getAliases, getBlockTypes, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -53,7 +55,7 @@ export const JOURNAL_ALIAS = 'Journal'
 const JOURNAL_ALIASES = [JOURNAL_ALIAS]
 
 export const journalBlockId = (workspaceId: string): string =>
-  uuidv5(workspaceId, JOURNAL_NS)
+  kernelPageBlockId(workspaceId, JOURNAL_NS)
 
 /** Is `data` currently the live claimant of the 'Journal' alias?
  *  `block_aliases_workspace_alias_unique` guarantees at most one live
@@ -69,7 +71,7 @@ export const isJournalBlock = (data: Pick<BlockData, 'properties'>): boolean =>
   getAliases(data).includes(JOURNAL_ALIAS)
 
 export const dailyNoteBlockId = (workspaceId: string, iso: string): string =>
-  uuidv5(`${workspaceId}:${iso}`, DAILY_NOTE_NS)
+  derivedBlockId({namespace: DAILY_NOTE_NS, key: `${workspaceId}:${iso}`})
 
 export const todayIso = (now: Date = new Date()): string =>
   formatIsoDate(now)
@@ -122,102 +124,32 @@ const includesAll = (existing: readonly string[], expected: readonly string[]): 
 
 const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
 
-/** Get-or-create the workspace's Journal page. Resolves ALIAS-FIRST
- *  (issue #378, repo-owner decision — "try id if not, use alias,
- *  everywhere"): if a live block already owns 'Journal' (e.g. the
- *  canonical journal was deleted and the user then aliased a different
- *  page 'Journal'), ADOPT it — apply `PAGE_TYPE` to THAT block — rather
- *  than minting/restoring at the deterministic id. Adoption mutates the
- *  user's existing block (it gains the type; the alias is already
- *  theirs); that's the point of "their page becomes the journal", not a
- *  side effect. Falls back to the deterministic id when nobody claims
- *  'Journal' (fresh workspace, or the claimant is later deleted →
- *  re-mint) — including when an eligible-looking claimant is refused by
- *  `resolveCanonicalAliasOwner`'s guard (already-typed claimant —
- *  genuinely ambiguous, left unchanged; see its docblock). Otherwise
- *  idempotent: two clients booting offline converge on the same
- *  deterministic row; a soft-deleted journal row is restored. */
+/** Get-or-create the workspace's Journal page.
+ *
+ *  The Journal is a kernel page — deterministic id from `workspaceId`, a
+ *  reserved alias, restored when soft-deleted, repaired when it has lost
+ *  its type or alias. So it IS one, rather than carrying its own copy of
+ *  that logic. Alias-first resolution (issue #378) comes with the
+ *  delegation and is not re-stated here: if a live block already owns
+ *  'Journal' — the canonical row was deleted and the user then aliased a
+ *  different page 'Journal' — `getOrCreateKernelPage` ADOPTS that block
+ *  instead of colliding with it on the deterministic id, so the returned
+ *  block's id is not always `journalBlockId(workspaceId)`.
+ *
+ *  It is the one kernel page with no marker type: the Journal is reached
+ *  by its derived id and by its alias, never by a
+ *  `subscribeBlocks({types})` query. Giving it a marker now would mean
+ *  tagging every Journal row already written, which is a migration and
+ *  not this function's business. */
 export const getOrCreateJournalBlock = async (
   repo: Repo,
   workspaceId: string,
-): Promise<Block> => {
-  const id = journalBlockId(workspaceId)
-  const predicted = await resolveCanonicalAliasOwner(
-    canonicalAliasReaderFromRepo(repo), JOURNAL_ALIASES, workspaceId, id,
-  )
-
-  const live = await repo.load(predicted.id)
-  if (live) {
-    const aliases = stringListProperty(live.properties[aliasesProp.name])
-    const needsRepair =
-      !hasBlockType(live, PAGE_TYPE) ||
-      !includesAll(aliases, JOURNAL_ALIASES)
-    if (!needsRepair) return repo.block(predicted.id)
-
-    const typeSnapshot = repo.snapshotTypeRegistries()
-    let finalId = predicted.id
-    await repo.tx(async tx => {
-      // Re-resolve fresh inside the tx — see canonicalAliasReaderFromTx.
-      const resolved = await resolveCanonicalAliasOwner(
-        canonicalAliasReaderFromTx(tx), JOURNAL_ALIASES, workspaceId, id,
-      )
-      finalId = resolved.id
-      const current = await tx.get(resolved.id)
-      if (!current || current.deleted) return
-      const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, JOURNAL_ALIASES)) {
-        await tx.setProperty(resolved.id, aliasesProp, mergeStrings([...JOURNAL_ALIASES, ...currentAliases]))
-      }
-      await repo.addTypeInTx(tx, resolved.id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-    }, {scope: ChangeScope.BlockDefault})
-    return repo.block(finalId)
-  }
-
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  let finalId = id
-  await repo.tx(async tx => {
-    const resolved = await resolveCanonicalAliasOwner(
-      canonicalAliasReaderFromTx(tx), JOURNAL_ALIASES, workspaceId, id,
-    )
-    if (resolved.adopted) {
-      // A live block already owns 'Journal' — adopt it instead of
-      // minting/restoring the deterministic id (issue #378). The alias
-      // is already theirs (that's how the lookup found them); just apply
-      // PAGE_TYPE.
-      finalId = resolved.id
-      await repo.addTypeInTx(tx, resolved.id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-      return
-    }
-    finalId = id
-    // Re-read inside the tx with the unfiltered `tx.get` so we see
-    // tombstones (`repo.load` filtered them out as null).
-    const existing = await tx.get(id)
-    if (existing && !existing.deleted) return
-    if (existing && existing.deleted) {
-      // The tombstone's stored alias bag can hold an EXTRA entry a
-      // different live block claimed while the journal was dead — as
-      // opposed to the CANONICAL 'Journal' alias itself, handled above
-      // via `resolved.adopted`. Restoring the bag as-is would re-insert
-      // that stale extra claim and abort the whole tx. Strip it here;
-      // the setProperty below re-claims exactly the canonical alias.
-      const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
-      await tx.restore(id, {content: JOURNAL_ALIAS, properties: restoredProperties})
-      await tx.setProperty(id, aliasesProp, JOURNAL_ALIASES)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-      return
-    }
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: null,
-      orderKey: 'a0',
-      content: JOURNAL_ALIAS,
-    }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-  }, {scope: ChangeScope.BlockDefault})
-
-  return repo.block(finalId)
-}
+): Promise<Block> =>
+  getOrCreateKernelPage(repo, workspaceId, {
+    namespace: JOURNAL_NS,
+    alias: JOURNAL_ALIAS,
+    markerType: null,
+  })
 
 /** Order key under the journal page. The tree uses normal ascending
  *  `(order_key, id)` ordering, so daily notes encode the date as its
@@ -280,23 +212,37 @@ const dailyNoteAdoptionGuard = (dateValue: Date): CanonicalAdoptionGuard => clai
 /** Apply the daily-note's full canonical shape — both aliases (added to,
  *  never replacing, whatever the target already has), `PAGE_TYPE` +
  *  `DAILY_NOTE_TYPE` with the date value, and the journal parent/order —
- *  to an already-live `id` inside `tx`. Shared by the two branches that
- *  repair/adopt an EXISTING live row (`getOrCreateDailyNote`'s
- *  needsRepair branch and its alias-adoption branch) so the shape logic
- *  lives in one place; the fresh create/tombstone-restore branch below
- *  stays separate since it also decides content + create-vs-restore. */
+ *  to the already-live `current` row inside `tx`. Shared by the two
+ *  branches that repair/adopt an EXISTING live row
+ *  (`getOrCreateDailyNote`'s needsRepair branch and its alias-adoption
+ *  branch) so the shape logic lives in one place; the fresh
+ *  create/tombstone-restore branch below stays separate since it also
+ *  decides content + create-vs-restore.
+ *
+ *  Takes the row rather than its id so the caller owns the read that
+ *  decides liveness — and therefore also owns the workspace check that
+ *  belongs beside it. This function `tx.move`s its target under THIS
+ *  workspace's journal, so a row from another workspace must never reach
+ *  it; see `refuseForeign` at both call sites.
+ *
+ *  NOT `adoptTypedBlock` (`@/data/typedRecords`), which the kernel-page
+ *  adopt path uses for the same-shaped job: that primitive re-tags missing
+ *  types and nothing else. A daily note's shape is types PLUS both aliases,
+ *  PLUS the `dailyNoteDateProp` value the `DAILY_NOTE_TYPE` tag has to
+ *  carry, PLUS the journal parent — and `adoptTypedBlock` passes no initial
+ *  values, so routing through it would silently leave a newly-adopted note
+ *  with no date and outside the journal. */
 const applyDailyNoteShape = async (
   tx: Tx,
   repo: Repo,
-  id: string,
+  current: BlockData,
   journalId: string,
   orderKey: string,
   dailyAliases: readonly string[],
   dateValue: Date,
   typeSnapshot: TypeRegistrySnapshot,
 ): Promise<void> => {
-  const current = await tx.get(id)
-  if (!current || current.deleted) return
+  const id = current.id
   const currentAliases = stringListProperty(current.properties[aliasesProp.name])
   if (!includesAll(currentAliases, dailyAliases)) {
     await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
@@ -336,7 +282,19 @@ const applyDailyNoteShape = async (
  *
  *  Runs under `repo.undoGroup`: journal bootstrap + note create/repair
  *  can be two txs — one undo entry for the pair, for every caller
- *  (callers handing us their own group facade fold us into theirs). */
+ *  (callers handing us their own group facade fold us into theirs).
+ *
+ *  NOT a kernel page, though it looks like one and the Journal above IS
+ *  one. The difference is that this row has a SECOND writer at the same
+ *  derived id: `ensureDailyNoteTarget` materialises it seat-shaped at
+ *  workspace root (content = iso, aliases = [iso]) when a `[[2026-07-24]]`
+ *  reference resolves before anyone opened the day. So the "repair" branch
+ *  below is not maintenance — it is the promotion of a seat-shaped row into
+ *  a note-shaped one, which is why it checks `parentId`/`orderKey` and
+ *  MERGES aliases rather than replacing them. A kernel page has one writer
+ *  and one shape and can never grow those checks, so folding this into
+ *  `getOrCreateKernelPage` would park seat-reconciliation behind a flag its
+ *  other callers can't reach. */
 export const getOrCreateDailyNote = async (
   repo: Repo,
   workspaceId: string,
@@ -349,12 +307,43 @@ export const getOrCreateDailyNote = async (
   const dateValue = dailyNoteDateValue(iso)
   const guard = dailyNoteAdoptionGuard(dateValue)
 
+  /** Same guard, and the same reasoning, as `getOrCreateKernelPage`'s: the
+   *  id-keyed reads below are not workspace-scoped (`repo.load` and `tx.get`
+   *  both select on id alone), and what they feed rewrites aliases and types,
+   *  resurrects tombstones, and — uniquely here — `tx.move`s the row under
+   *  THIS workspace's Journal, which would tear a page out of someone else's
+   *  tree.
+   *
+   *  Worth being honest about reachability, because it differs from the kernel
+   *  page's by which half: `DAILY_NOTE_NS` is app-owned and the key already
+   *  carries the workspace, so a foreign occupant at rest needs a uuid
+   *  collision or a hand-written id. The window between `repo.load` and the
+   *  transaction is not hypothetical though — sync materialization rewrites
+   *  `workspace_id` along with every other column, so the row can change hands
+   *  mid-call whatever the namespace.
+   *
+   *  Applied to the ALIAS claimant too (issue #378's adoption), even though
+   *  `aliasLookup` is workspace-scoped by construction — it selects on
+   *  `block_aliases.workspace_id`, which the alias triggers write from
+   *  `blocks.workspace_id` and rewrite on `UPDATE OF … workspace_id`. That
+   *  makes the check dead code as the index stands today, and it is here
+   *  anyway because the write it precedes is the `tx.move`: the cost of being
+   *  wrong is a page torn out of another workspace's tree, and the cost of the
+   *  check is one comparison. Names `occupant.id` rather than the outer `id`
+   *  so it stays truthful on that path (they are the same id on every other). */
+  const refuseForeign = (occupant: BlockData): void => {
+    if (classifyOccupant(occupant, {workspaceId}).verdict === 'foreign') {
+      throw new DeterministicIdCrossWorkspaceError(occupant.id, occupant.workspaceId, workspaceId)
+    }
+  }
+
   const predicted = await resolveCanonicalAliasOwner(
     canonicalAliasReaderFromRepo(repo), dailyAliases, workspaceId, id, guard,
   )
 
   const live = await repo.load(predicted.id)
   if (live) {
+    refuseForeign(live)
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const expectedJournalId = await predictedJournalId(repo, workspaceId)
     const needsRepair =
@@ -375,7 +364,12 @@ export const getOrCreateDailyNote = async (
         canonicalAliasReaderFromTx(tx), dailyAliases, workspaceId, id, guard,
       )
       finalId = resolved.id
-      await applyDailyNoteShape(tx, repo, resolved.id, journal.id, orderKey, dailyAliases, dateValue, typeSnapshot)
+      const current = await tx.get(resolved.id)
+      if (!current || current.deleted) return
+      refuseForeign(current)
+      await applyDailyNoteShape(
+        tx, repo, current, journal.id, orderKey, dailyAliases, dateValue, typeSnapshot,
+      )
     }, {scope: ChangeScope.BlockDefault})
     return repo.block(finalId)
   }
@@ -392,12 +386,18 @@ export const getOrCreateDailyNote = async (
       // A live block already owns the long-form or ISO alias — adopt it
       // instead of minting/restoring the deterministic id (issue #378).
       // Ensures whichever of the two aliases it didn't already have.
+      // `resolved.claimant` is the row the in-tx `aliasLookup` returned, so it
+      // is live in this transaction by construction — no second read.
+      refuseForeign(resolved.claimant)
       finalId = resolved.id
-      await applyDailyNoteShape(tx, repo, resolved.id, journal.id, orderKey, dailyAliases, dateValue, typeSnapshot)
+      await applyDailyNoteShape(
+        tx, repo, resolved.claimant, journal.id, orderKey, dailyAliases, dateValue, typeSnapshot,
+      )
       return
     }
     finalId = id
     const existing = await tx.get(id)
+    if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       // The tombstone's stored alias bag can hold an EXTRA entry a

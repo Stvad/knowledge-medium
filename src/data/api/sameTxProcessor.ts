@@ -14,11 +14,17 @@
  * paid by the user-commit path, so it has to stay cheap.
  *
  * What same-tx is NOT for: hot-path expensive enrichment
- * (parseReferences), typing-time cross-row writes (rename rewriting
- * backlinks across many sources), delayed cleanup. Those stay
- * post-commit per §7.1. Rare correctness-critical domain events
- * (e.g. merge retargeting) may still use same-tx when atomicity is
- * worth the extra commit cost.
+ * (parseReferences), delayed cleanup. Those stay post-commit per §7.1.
+ * Rare correctness-critical domain events (e.g. merge retargeting) may
+ * still use same-tx when atomicity is worth the extra commit cost.
+ *
+ * Cross-row writes are not disqualifying on their own — what matters is
+ * whether the GESTURE is on a hot path. This header used to name
+ * "rename rewriting backlinks across many sources" as the canonical
+ * counter-example; `references.renameBacklinks` is same-tx as of #461,
+ * because the read-outside-the-tx / write-inside-a-later-tx shape had a
+ * gap that no amount of guarding closed (see that file's header), and a
+ * rename is a rare, deliberate gesture whose latency nobody feels.
  *
  * Capabilities of `apply`:
  *   - Reads via `ctx.tx` — sees the live staged state of the user's

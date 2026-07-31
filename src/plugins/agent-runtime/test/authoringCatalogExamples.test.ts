@@ -164,7 +164,10 @@ describe('authoring catalog example drift guard', () => {
         changeScope: ChangeScope.UserPrefs,
       }),
     ])
-  })
+    // Babel-transpiles the example and evaluates it against the real curated
+    // modules — ~4s of genuine work on a warm cache, so the 5s default leaves
+    // no room for CPU contention. Same budget as the transpile sweep above.
+  }, 20_000)
 
   it('parseNamedImports extracts names across modules and syntaxes', () => {
     // Self-test for the regex — if this breaks, the drift guard above would

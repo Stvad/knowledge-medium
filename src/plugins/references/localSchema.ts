@@ -24,6 +24,20 @@ export const CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL = `
   ON block_references (target_id, workspace_id)
 `
 
+/** Alias-keyed edge lookup. The rename plan enumerates a removed alias's
+ *  spans by `(workspace_id, alias)` and applies its target disjunction in
+ *  JS (`renameProcessor.ts`), because a span whose edge already moved onto
+ *  a window-minted seat matches the alias but NOT the renaming target.
+ *  Neither the PK `(source_id, …)` nor `idx_block_references_target
+ *  (target_id, …)` has a usable leading column for that, so without this
+ *  index the enumeration degrades to a full scan of every edge on the
+ *  device — measured 10x slower at 400k edges, and paid even when the
+ *  alias has no backlinks at all. Mirrors `idx_block_aliases_ws_alias`. */
+export const CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_block_references_ws_alias
+  ON block_references (workspace_id, alias)
+`
+
 const referencesInsertSelectSql = (rowRef: 'NEW') => `
       INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)
       SELECT
@@ -147,6 +161,13 @@ export const backfillBlockReferencesSourceFieldIfNeeded = async (
   await db.execute('DROP TABLE IF EXISTS block_references')
   await db.execute(CREATE_BLOCK_REFERENCES_TABLE_SQL)
   await db.execute(CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL)
+  // Every index on the table went with the DROP above. `statements` ran
+  // BEFORE this backfill (applyLocalSchemaContributions does all
+  // statements, then all backfills), so anything created there is gone
+  // and must be recreated HERE — otherwise the install spends its whole
+  // first session without it and only self-heals on the next boot,
+  // which is exactly why tests and manual checks miss the gap.
+  await db.execute(CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL)
@@ -160,6 +181,7 @@ export const referencesLocalSchema: LocalSchemaContribution = {
     CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
     CREATE_BLOCK_REFERENCES_TABLE_SQL,
     CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
+    CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL,
     CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,
     CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,
     CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
