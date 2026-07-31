@@ -19,13 +19,26 @@ import { describe, expect, it } from 'vitest'
 
 const V5_IMPORT = "import { v5 as uuidv5 } from 'uuid'\nexport const id = uuidv5('key', 'ns')\n"
 
+/** The same derivation written so an import DECLARATION rule cannot see it.
+ *  `no-restricted-imports` inspects declarations only, so this form used to
+ *  sail past the guard entirely — an id formula established off the pins. */
+const V5_DYNAMIC_IMPORT =
+  "export const id = async () => {\n  const {v5} = await import('uuid')\n  return v5('key', 'ns')\n}\n"
+
 /** Restriction messages ESLint reports for `code` as if it lived at `filePath`.
- *  The file need not exist — only its path matters, which is the point. */
+ *  The file need not exist — only its path matters, which is the point.
+ *
+ *  Both rules, because the guard is split across two: the static half is
+ *  `no-restricted-imports`, the dynamic half a `no-restricted-syntax` selector
+ *  (which cannot live in the same config block — see the note on
+ *  `derivedIdDynamicImportRestriction`). A caller shouldn't have to know which
+ *  one caught it. */
 const restrictionsAt = async (filePath: string, code = V5_IMPORT): Promise<string[]> => {
   const eslint = new ESLint({cwd: process.cwd()})
   const [result] = await eslint.lintText(code, {filePath, warnIgnored: false})
   return (result?.messages ?? [])
-    .filter(message => message.ruleId === 'no-restricted-imports')
+    .filter(message => message.ruleId === 'no-restricted-imports'
+      || message.ruleId === 'no-restricted-syntax')
     .map(message => message.message)
 }
 
@@ -76,6 +89,29 @@ describe('uuid v5 is restricted outside @/data/derivedIds', {timeout: 30_000}, (
   it('allows tests, where hashing independently is what makes the oracle an oracle', async () => {
     expect(await restrictionsAt('src/data/derivedIds.test.ts')).toEqual([])
     expect(await restrictionsAt('src/data/test/somethingElse.ts')).toEqual([])
+  })
+
+  /** The dynamic form, which the declaration rule structurally cannot see.
+   *
+   *  Both cases matter because `no-restricted-syntax` is configured in TWO
+   *  `src/`-wide blocks — one excluding `src/data/**` — and flat config has the
+   *  later block REPLACE the earlier one rather than merge. Listing the
+   *  selector in only one of them leaves the other half of `src/` uncovered,
+   *  silently, which is the shape of hole this whole guard exists to close. */
+  describe('the dynamic import form', () => {
+    it('is rejected in ordinary app code', async () => {
+      const messages = await restrictionsAt('src/plugins/some-plugin/ids.ts', V5_DYNAMIC_IMPORT)
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toMatch(/derivedBlockId/)
+    })
+
+    it('is rejected inside src/data too, which a separate config block covers', async () => {
+      expect(await restrictionsAt('src/data/somethingElse.ts', V5_DYNAMIC_IMPORT)).toHaveLength(1)
+    })
+
+    it('is allowed in tests, like the static form', async () => {
+      expect(await restrictionsAt('src/data/derivedIds.test.ts', V5_DYNAMIC_IMPORT)).toEqual([])
+    })
   })
 
   it('leaves uuid v4 alone — a random id has nothing to do with this', async () => {

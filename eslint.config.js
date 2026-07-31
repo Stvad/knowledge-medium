@@ -83,6 +83,31 @@ const uiTxDeleteRestriction = {
   message: uiDeleteMessage,
 }
 
+const derivedIdMessage = 'Derive block ids through `derivedBlockId` (@/data/derivedIds), not a local uuidv5 — the formulas there are pinned by derivedIds.test.ts, and an unpinned one can silently re-point a whole kind at fresh ids. For a get-or-create, use getOrCreateTypedChild (records) or getOrCreateKernelPage (root pages).'
+
+/** The dynamic half of the derived-id guard below. `no-restricted-imports`
+ *  inspects import DECLARATIONS only, so `const {v5} = await import('uuid')`
+ *  sails past it and can establish an id formula off the pins — the exact
+ *  silent-orphaning outcome the static rule exists to prevent.
+ *
+ *  Coarser than its static counterpart on purpose: a syntax selector sees the
+ *  module specifier but not which binding the caller destructures, so this
+ *  catches a dynamic `v4` import too. Nothing in the tree imports uuid
+ *  dynamically at all, and a lazily-loaded random-id generator would be odd —
+ *  so the false-positive cost is a disable-with-a-reason, same as the other
+ *  selectors here.
+ *
+ *  Lives with the selectors rather than in the derived-id block because
+ *  `no-restricted-syntax` REPLACES rather than merges across matching blocks:
+ *  configuring it in a later, narrower block would silently drop the B3 and
+ *  UI-delete restrictions for every file that block matched. It is listed in
+ *  both `src/`-wide selector blocks below for the same reason, and left out of
+ *  the test block so tests can still hash independently. */
+const derivedIdDynamicImportRestriction = {
+  selector: "ImportExpression[source.value='uuid']",
+  message: derivedIdMessage,
+}
+
 const uiDeleteSubtreeRestriction = {
   selector: "CallExpression[callee.name='deleteSubtreeInTx']",
   message: uiDeleteMessage,
@@ -212,7 +237,13 @@ export default tseslint.config(
     // noise in files that can never have the defect.
     files: [SOURCE_GLOB],
     rules: {
-      'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction, uiMutateDeleteRestriction],
+      'no-restricted-syntax': [
+        'error',
+        b3CustomEventRestriction,
+        uiDeleteRestriction,
+        uiMutateDeleteRestriction,
+        derivedIdDynamicImportRestriction,
+      ],
     },
   },
   {
@@ -234,6 +265,7 @@ export default tseslint.config(
         uiMutateDeleteRestriction,
         uiTxDeleteRestriction,
         uiDeleteSubtreeRestriction,
+        derivedIdDynamicImportRestriction,
       ],
     },
   },
@@ -377,7 +409,7 @@ export default tseslint.config(
         paths: [{
           name: 'uuid',
           importNames: ['v5'],
-          message: 'Derive block ids through `derivedBlockId` (@/data/derivedIds), not a local uuidv5 — the formulas there are pinned by derivedIds.test.ts, and an unpinned one can silently re-point a whole kind at fresh ids. For a get-or-create, use getOrCreateTypedChild (records) or getOrCreateKernelPage (root pages).',
+          message: derivedIdMessage,
         }],
       }],
     },
