@@ -291,6 +291,35 @@ export default tseslint.config(
     },
   },
   {
+    // Every derived BLOCK id resolves through `@/data/derivedIds` — see that
+    // module's header for why, and `derivedIds.test.ts` for the formulas it
+    // pins. A hand-rolled `uuidv5` for a block id is how a namespace or a key
+    // shape drifts out from under those pins, and a drifted formula orphans
+    // every row already written at the old id, silently and with nothing
+    // failing. Only `v5` is restricted: `v4` is a fresh random id and has
+    // nothing to do with this.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: [
+      // The one implementation.
+      'src/data/derivedIds.ts',
+      // Workspace and member ids — not blocks, so none of the policy applies.
+      'src/data/workspaces.ts',
+      // The oracle hashes independently on purpose; that is what makes it an
+      // oracle rather than a mirror of the implementation.
+      '**/test/**/*.{ts,tsx}',
+      '**/*.test.{ts,tsx}',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: 'uuid',
+          importNames: ['v5'],
+          message: 'Derive block ids through `derivedBlockId` (@/data/derivedIds), not a local uuidv5 — the formulas there are pinned by derivedIds.test.ts, and an unpinned one can silently re-point a whole kind at fresh ids. For a get-or-create, use getOrCreateTypedChild (records) or getOrCreateKernelPage (root pages).',
+        }],
+      }],
+    },
+  },
+  {
     // Tests legitimately dispatch synthetic CustomEvents to drive
     // components, so the B3 selector above doesn't apply to them. (The
     // ambient-accessors table rule, unlike B3, applies to tests too — see

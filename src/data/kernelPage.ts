@@ -88,6 +88,16 @@ export const getOrCreateKernelPage = async (
   const id = kernelPageBlockId(workspaceId, spec.namespace)
   const aliases: readonly string[] = [spec.alias]
   const orderKey = spec.orderKey ?? 'a0'
+  // Checked rather than trusted from the type, because the callers this is
+  // newly exposed to are the ones the type does not reach: a dynamic extension
+  // is transpiled, not typechecked. Without this the omission surfaces several
+  // frames down as "type id undefined is not registered", which sends the
+  // author off to add a type seed instead of to the field they left out.
+  if (spec.markerType === undefined) {
+    throw new Error(
+      'KernelPageSpec.markerType is required — pass a marker block-type to query the page by, or null for a page reached only by its id and alias.',
+    )
+  }
   const types: readonly string[] =
     spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 

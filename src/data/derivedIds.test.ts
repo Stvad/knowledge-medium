@@ -59,7 +59,6 @@ describe('derivedBlockId', () => {
     expect(derivedBlockId({namespace: nsA, key: 'a'}))
       .not.toBe(derivedBlockId({namespace: nsA, key: 'b'}))
   })
-
 })
 
 /**

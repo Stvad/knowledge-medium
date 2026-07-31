@@ -233,12 +233,15 @@ describe('describeRuntime', () => {
     // friction for the right decision at orient time.
     expect(summary.capabilities.storage.principles.length).toBeGreaterThan(0)
     expect(summary.capabilities.storage.principles.join(' ')).toMatch(/credentials.*localStorage/i)
-    // Two separate principles, asserted separately: a single alternation here
-    // passed on the UserPrefs branch alone after the id-derivation principle
-    // was reworded, so it stopped pinning that one entirely.
-    expect(summary.capabilities.storage.principles.join(' ')).toMatch(/UserPrefs/)
-    expect(summary.capabilities.storage.principles.join(' '))
-      .toMatch(/getOrCreateKernelPage|getOrCreateTypedChild/)
+    // Asserted per-principle, not over the join. An alternation across the
+    // whole joined string goes green as soon as ANY principle happens to
+    // mention one of the names — which is how the previous version of this
+    // survived the id-derivation principle being reworded out from under it.
+    const {principles} = summary.capabilities.storage
+    expect(principles.some(p => /UserPrefs/.test(p))).toBe(true)
+    expect(principles.some(p =>
+      p.includes('getOrCreateKernelPage') && p.includes('getOrCreateTypedChild'),
+    )).toBe(true)
     const patternIds = summary.capabilities.storage.patterns.map(p => p.id)
     expect(patternIds).toContain('user-prefs-config')
     expect(patternIds).toContain('plugin-root-singleton')
