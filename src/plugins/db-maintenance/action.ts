@@ -7,11 +7,12 @@ import { DatabaseZap } from 'lucide-react'
 /** Command-palette command that runs SQLite `ANALYZE` on demand,
  *  unconditionally.
  *
- *  The data layer re-analyzes on its own when either staleness axis moves —
- *  `blocks` row-count drift, or a change to the index set / which indexes have
- *  stats (see clientSchema.runAnalyzeIfStale) — so this is the manual escape
- *  hatch for the cases neither axis models: stats that are present and
- *  schema-current but wrong for the current query mix.
+ *  The data layer re-analyzes on its own whenever SQLite reports stats as stale
+ *  (see clientSchema.runAnalyzeIfStale), so this is the manual escape hatch for
+ *  the case that heuristic cannot model: stats that are present and
+ *  schema-current but wrong for the current query mix. It is also the only
+ *  UNBOUNDED pass — the automatic path samples (`ANALYZE_SAMPLE_LIMIT`), this
+ *  one deliberately does not.
  *
  *  No drift gate — the user asked, so always run. ANALYZE is a multi-second
  *  scan holding the single SQLite worker, which is why the handler wraps it in

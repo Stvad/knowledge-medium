@@ -1,9 +1,12 @@
 # Spike: can `PRAGMA optimize` replace the custom auto-ANALYZE machinery?
 
-> **Status:** current — measured 2026-07-30 against `master` @ `07e2ce5a2` and a
-> live production client (347,350 blocks, wa-sqlite 3.53.0 / OPFS).
-> Last verified against code: 2026-07-30.
-> This is a spike report, not a change. No code was modified.
+> **Status:** implemented — the recommendation below was carried out in the same
+> PR. Measured 2026-07-30 against a live production client (347,350 blocks,
+> wa-sqlite 3.53.0 / OPFS). Last verified against code: 2026-07-30.
+>
+> Two deviations from what §6 originally recommended, both deliberate; see
+> [§10 What actually shipped](#10-what-actually-shipped) for the reasoning and
+> for the post-implementation verification against the live client.
 
 **Recommendation: REPLACE**, with three non-negotiable implementation details
 (§6). `PRAGMA optimize` covers every case the current two-axis trigger covers,
@@ -108,8 +111,9 @@ candidates) were planned under full stats and under `analysis_limit=400` stats:
 
 One reassuring detail: `analysis_limit` approximates only the per-column
 distinct-value averages. **The leading row count stays exact** — `blocks` records
-`325848` either way, `block_references` records `225600` either way. Anything
-reading the row estimate (today's `getBlocksStatEstimate` does) keeps working.
+`325848` either way, `block_references` records `225600` either way. So anything
+reading the recorded row estimate keeps working under a limit (this mattered for
+the then-current `getBlocksStatEstimate`, since deleted).
 
 ### Q3 — Does the heuristic cover the legacy `"0 0"` state?
 
@@ -240,8 +244,8 @@ All of this exists to answer "are the stats stale?", which SQLite answers itself
 
 - `ANALYZE_MIN_BLOCKS`, `ANALYZE_GROWTH_FACTOR`
 - `SELECT_BLOCKS_STAT_ESTIMATE_SQL`, `SELECT_SQLITE_STAT1_EXISTS_SQL`,
-  `SELECT_BLOCKS_COUNT_SQL`, `getBlocksStatEstimate`, `getBlocksCount`,
-  `analyzeIsWarranted`
+  `getBlocksStatEstimate`, `analyzeIsWarranted` (but NOT `getBlocksCount` /
+  `SELECT_BLOCKS_COUNT_SQL` — see §10)
 - `SELECT_INDEX_SET_SQL`, `SELECT_STAT1_KEYS_SQL`, `analyzeFingerprint`,
   `readAnalyzeFingerprint`
 - the entire marker family: `ANALYZE_INDEX_SET_MARKER_PREFIX`,
@@ -292,16 +296,16 @@ decides is stale. Both statements go through `db.execute`, which PowerSync route
 to its single write connection — but they must be separate calls (§Q1 trap).
 Reset it to `0` afterwards so a later manual ANALYZE isn't silently limited.
 
-### 6.3 Keep the manual full ANALYZE, keep the materialization gate
+### 6.3 Keep the manual full ANALYZE
 
 `runAnalyzeNow` (the db-maintenance palette command) should stay an unbounded
 full `ANALYZE` with `analysis_limit=0` — it is the escape hatch for exactly the
-case where the heuristic was wrong, and it should not be limited.
+case where the heuristic was wrong, and it should not be limited. Because the
+sample limit is a *connection* setting, the manual path has to clear it
+explicitly, or it silently inherits whatever the automatic path last set.
 
-`SELECT_MATERIALIZE_PENDING_SQL` costs one indexed existence probe. It is much
-less important now (a mid-drain optimize costs ~20 ms rather than seconds, and
-the 10x rule re-corrects a drain that multiplies the table), but "don't bake
-stats from a half-built table" is still right and it is nearly free. Keep it.
+*(This section originally also recommended keeping the materialization gate.
+That was written against a tree that still had one. See §10.)*
 
 ---
 
@@ -370,3 +374,66 @@ pnpm agent --profile <name> eval "$(cat docs/pragma-optimize-spike/live-probes/l
 - `live-probe4.js` — the probe whose null result turned out to be an artifact
 - `live-probe5.js` — §2 Q1, the definitive `PRAGMA optimize` write test
 - `live-probe6.js` — §6 proposed sequence, end to end, on a settled client
+
+---
+
+## 10. What actually shipped
+
+The recommendation was implemented in the same PR. Two deviations from §5/§6:
+
+**The materialization gate was not kept.** §6.3 argued for keeping it. By the
+time this landed, `3ac46485f` had already reverted it on stronger grounds than
+"it's nearly free": the probe missed the *largest* materialization path
+(`observer.materializeWorkspace` reads `blocks_synced` directly and never touches
+the `blocks_synced_changes` queue the gate watched), and on exhaustion a session
+could end up with no stats at all. A gate that misses the biggest instance of
+what it guards while risking a strictly worse outcome is not worth its cost. The
+reasoning is preserved at the declaration site in `clientSchema.ts` so it isn't
+reinvented. `PRAGMA optimize` makes being wrong here cheaper anyway — a mid-drain
+pass re-analyzes one table for tens of milliseconds.
+
+**`getBlocksCount` was kept**, though §5 listed it for deletion. It has exactly
+one caller left: the manual command's toast ("Query statistics rebuilt over N
+blocks"). A `COUNT(*)` is fine on a user-initiated command; deleting it to hit a
+bullet in this document would have cost a user-facing detail for nothing. The
+automatic path no longer counts anything, which was the point.
+
+### Verification
+
+`pnpm run check`: 563 files, 6508 tests, passed.
+
+Every guard clause was revert-tested individually — each one, removed on its own,
+fails exactly one named test:
+
+| clause removed | test that fails |
+| --- | --- |
+| the arming loop | `arming (stale-stats axis) > repairs degenerate "0 0" stats` |
+| `PRAGMA analysis_limit=400` | `arming > samples rather than fully scanning` |
+| the `finally` that restores the limit | `restores analysis_limit even when the optimize throws` |
+| the limit reset in `runAnalyzeNow` | `runAnalyzeNow > is unbounded even after the automatic path ran` |
+| the per-probe `try`/`catch` | `still analyzes when a table an arming probe names is absent` |
+| a probe rewritten as a write | `ANALYZE_ARMING_PROBES > are reads, so the …guard passes them through` |
+| `PRAGMA optimize` itself | 7 tests |
+
+The `analysis_limit` clause needed a fixture built for it — at ordinary test
+sizes the limit never binds, so it passed with the PRAGMA removed. The arming
+fixture now puts 500 rows behind a single `workspace_id`, which makes the
+sampling observable in the recorded stat (and incidentally pins the "row count
+stays exact" property from §Q2).
+
+### The shipped sequence, replayed against the live 347k client
+
+Extracted from `clientSchema.ts` so there is no drift between what was tested and
+what ships, and run inside a rolled-back transaction:
+
+| | result |
+| --- | --- |
+| settled client | 4 ms arming, `proposed: []`, **0 ms** optimize, nothing written |
+| brand-new index, no stat row | dry run names `block_references`, optimize repairs it in **858 ms**, stat row appears |
+| after rollback | index gone, `analysis_limit` back to 0, live stats untouched |
+
+The 858 ms is the one-table repair on OPFS with a just-built index — higher than
+the 52 ms warm figure in §Q4 because the fresh index's pages are cold. It is paid
+once, at deep idle, on the boot after a release that adds an index. The old path
+paid a `COUNT(*)` over 347k rows on *every* boot to decide, then 655 ms–3.1 s for
+the whole file when it acted.

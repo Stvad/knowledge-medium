@@ -12,7 +12,6 @@
  *      }
  */
 
-import { fnv1a32Hex } from '@/utils/fnv1a'
 import {
   ALIAS_COLLISION_RAISE_PREFIX,
   PARENT_DELETED_RAISE_PREFIX,
@@ -195,6 +194,19 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
 
 export const DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL = `
   DROP INDEX IF EXISTS idx_blocks_workspace_type
+`
+
+/** Litter from the marker-based ANALYZE trigger `PRAGMA optimize` replaced. Every
+ *  client that ran that build carries exactly one `analyze_index_set:<fnv1a>`
+ *  row; nothing reads it any more. Swept rather than left because a future
+ *  marker family reusing the prefix would otherwise inherit a stale row and read
+ *  it as current. `_` is a LIKE wildcard and the prefix has two, so the match is
+ *  escaped — unescaped it could reach a key like `analyzeXindexXset:…`.
+ *
+ *  A no-op DELETE over a table with a handful of rows, so it is cheaper to leave
+ *  in the boot statements than to build a one-shot marker for. */
+export const DROP_ANALYZE_INDEX_SET_MARKERS_SQL = String.raw`
+  DELETE FROM client_schema_state WHERE key LIKE 'analyze\_index\_set:%' ESCAPE '\'
 `
 
 /** Trigger-maintained membership index over `properties_json.$.types`.
@@ -1034,73 +1046,128 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-/** Planner-stats freshness, decided by *drift* rather than a clock.
- *  wa-sqlite ships without an automatic `sqlite_stat1`, so the planner
- *  falls back to row-count heuristics that consistently mis-rank join
- *  orders on `blocks` once the workspace is large — a 4-id `json_each`
- *  lookup with `(workspace_id, deleted)` filtering scans the workspace
- *  partial index (300k+ rows) instead of driving from the small set into
- *  the PK. Running `ANALYZE` populates `sqlite_stat1` and flips that
- *  decision.
+/** Planner-stats freshness, delegated to SQLite's own staleness heuristic.
  *
- *  WHEN to re-run is the subtle part: `sqlite_stat1` already records the
- *  row count seen at the last ANALYZE, so we re-run whenever the live
- *  `blocks` count has diverged from that baseline by more than
- *  {@link ANALYZE_GROWTH_FACTOR}×. That one rule covers every case a timer
- *  can't: the empty-table-at-init race (no baseline → ANALYZE once data
- *  lands, never over the empty table), a large initial sync, a bulk
- *  import, and the legacy "0 0" stats bug (baseline ~0 over a huge table →
- *  force re-ANALYZE). A stable workspace stays within the factor and is
- *  left alone, so the multi-second scan doesn't repeat every boot. No
- *  marker row is needed — `sqlite_stat1` itself is the source of truth. */
+ *  wa-sqlite ships without an automatic `sqlite_stat1`, so the planner falls
+ *  back to row-count guesses that mis-rank join orders once a workspace is
+ *  large. The sharp edge is a MISSING stat row: SQLite then assumes an equality
+ *  seek on the leading column yields ~10 rows, and every hot index here leads
+ *  with `workspace_id`, whose real selectivity is ~1 (a client holds one or two
+ *  workspaces). That default inverts join order — the planner drives from a full
+ *  scan of the index and probes the selective side once per row. Adding
+ *  `idx_block_references_ws_alias` did exactly that: one grouped-backlinks leg
+ *  went 6297ms → 3ms on ANALYZE alone, with no SQL change.
+ *
+ *  `PRAGMA optimize` is SQLite's answer to WHEN to re-run, and it is strictly
+ *  better informed than anything we can compute from outside: it re-analyzes a
+ *  table whose index has no `sqlite_stat1` row (the case above), and one whose
+ *  recorded row count has drifted ~10x from the live one. This replaced a
+ *  hand-rolled two-axis trigger — `blocks` row-count drift plus a fingerprint of
+ *  (index names + which (tbl,idx) pairs have stats), stored as a marker row.
+ *  Measurements, coverage table, and the reasoning are in
+ *  `docs/pragma-optimize-spike/`; the short version:
+ *
+ *  - it covers every case the fingerprint covered, PLUS one that design
+ *    documented as an accepted gap (a table EMPTY at ANALYZE time, so carrying
+ *    no stat row at all, that later fills — `block_types` sat under it),
+ *  - it costs 0ms on a settled 347k-block client versus a `COUNT(*)` over every
+ *    row just to decide, and re-analyzes only the STALE TABLE (14-52ms) instead
+ *    of every table in the file (655ms warm, 3.1s cold),
+ *  - it needs no marker row, no row-count probe, and no fingerprint.
+ *
+ *  Two things about it are non-obvious enough to be load-bearing; both are
+ *  pinned by tests. See {@link ANALYZE_ARMING_PROBES} and
+ *  {@link ANALYZE_SAMPLE_LIMIT}. */
 
-/** Below this many `blocks` rows the planner's join-order choices don't
- *  cause the multi-second freezes (scanning a sub-thousand-row table is
- *  cheap either way), so ANALYZE buys nothing — and recording a tiny
- *  row-estimate mid-sync could itself mislead the planner into scanning a
- *  table that's actually still filling. Gates whether ANALYZE runs at
- *  all. */
-export const ANALYZE_MIN_BLOCKS = 1000
+/** Bound on how many rows ANALYZE samples per index.
+ *
+ *  Load-bearing: WITHOUT it, `PRAGMA optimize` runs an UNBOUNDED ANALYZE over
+ *  whatever it found stale. 400 is SQLite's own documented recommendation for
+ *  this pairing, and measured on a real 347k-block client it holds a
+ *  whole-database pass to ~290ms against ~655ms unbounded.
+ *
+ *  Note that the scan bound is NOT where the win comes from — analyzing only the
+ *  stale table is (see the module comment above). What the limit buys is a
+ *  ceiling on the worst case, e.g. a fresh device where every table is stale at
+ *  once.
+ *
+ *  It approximates only the per-column distinct-value averages; the leading row
+ *  count stays EXACT either way. Verified on the live client: an unbounded pass
+ *  records `225605 75202 7` for `idx_block_references_ws_alias` where a limited
+ *  one records `225605 134 3`. Across the 8 hot query shapes there is zero plan
+ *  divergence between the two. */
+export const ANALYZE_SAMPLE_LIMIT = 400
 
-/** Re-ANALYZE once the live `blocks` count diverges from the count baked
- *  into `sqlite_stat1` by this factor in either direction. 4× keeps the
- *  estimate within the same order of magnitude the planner cares about
- *  (join order turns on order-of-magnitude differences, not 4×), so a
- *  gradually-growing workspace re-analyzes rarely while an import or
- *  initial sync that multiplies the table triggers it promptly. */
-export const ANALYZE_GROWTH_FACTOR = 4
+/** `analysis_limit` is a CONNECTION setting, not a database one, so it has to be
+ *  set on the same connection that runs the optimize, immediately before. */
+export const SET_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=${ANALYZE_SAMPLE_LIMIT}`
 
-/** Estimated `blocks` row count recorded at the last ANALYZE. `stat` is a
- *  space-separated string ("<rows> <avg-rows-per-key>…"); `CAST(... AS
- *  INTEGER)` parses its leading integer. MAX across the per-index rows is
- *  the table estimate (the partial workspace index reports live rows, the
- *  PK reports all rows; MAX takes the table total to match COUNT(*)).
- *  NULL when ANALYZE has never populated stats for `blocks`. */
-export const SELECT_BLOCKS_STAT_ESTIMATE_SQL = `
-  SELECT MAX(CAST(stat AS INTEGER)) AS rows FROM sqlite_stat1 WHERE tbl = 'blocks'
-`
+/** Restore the default so a later unbounded ANALYZE — {@link runAnalyzeNow},
+ *  the manual escape hatch — isn't silently sampled on this connection. */
+export const CLEAR_ANALYZE_SAMPLE_LIMIT_SQL = `PRAGMA analysis_limit=0`
 
-/** `sqlite_stat1` only exists once ANALYZE has run at least once; querying
- *  it before then throws "no such table". Probe `sqlite_master` first. */
-export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
-  SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1' LIMIT 1
-`
+/** Dry run of what {@link ANALYZE_OPTIMIZE_SQL} is about to do, for logging.
+ *
+ *  Mask `0x03` is debug(`0x01`) + "analyze what might benefit"(`0x02`), which is
+ *  the default mask plus the debug bit — so it reports exactly the work the real
+ *  call will perform. `PRAGMA optimize(-1)` is the obvious-looking choice and is
+ *  WRONG for this: it also sets `0x10000` ("analyze all tables"), so it reports
+ *  work the default mask declines to do. Verified against ground truth in four
+ *  states (settled / stale-and-armed / stale-and-unarmed / new index). */
+export const ANALYZE_DRY_RUN_SQL = `PRAGMA optimize(0x03)`
 
+export const ANALYZE_OPTIMIZE_SQL = `PRAGMA optimize`
+
+/** Planner-visible probes that ARM the staleness check. Load-bearing, and the
+ *  single most surprising part of this design.
+ *
+ *  `PRAGMA optimize`'s stale-stats rule only considers tables the CONNECTION has
+ *  planned a query against. Measured, on a table whose stats were the degenerate
+ *  `"0 0"`: doing nothing first → not repaired; `SELECT COUNT(*)` first → NOT
+ *  repaired; a PK-targeted `UPDATE` first → not repaired; querying a different
+ *  table → not repaired. An indexed `SELECT`, an `EXPLAIN QUERY PLAN` of one, or
+ *  even a `prepare()` that is never stepped → repaired. The flag is set when the
+ *  query PLANNER considers the table, not when rows are read.
+ *
+ *  So the check has to announce its interest. `EXPLAIN QUERY PLAN` is the right
+ *  primitive: it plans without touching a single data page — all four probes
+ *  measured 2ms total on a live 347k-block client.
+ *
+ *  The NEW-INDEX rule needs none of this (verified on a live client: a virgin
+ *  connection with no prior query re-analyzed a table whose index had just been
+ *  created), and that is the rule the 6297ms regression actually needed. Arming
+ *  buys the drift and `"0 0"` axes on top, for ~nothing.
+ *
+ *  Param-free on purpose, matching every other bootstrap statement in this file:
+ *  callers pass hand-rolled shims and `LocalSchemaDb` (`src/data/facets.ts`)
+ *  literally declares the params-less shape, so a bound `?` would silently bind
+ *  NULL. Here that would be harmless (the plan doesn't depend on the value), but
+ *  keeping it structural beats relying on that.
+ *
+ *  Reads only, so `guardSyncedTableWrites` passes them through — pinned below,
+ *  because a future probe written as a write would fail every boot's ANALYZE. */
 export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
+
+export const ANALYZE_ARMING_PROBES: readonly string[] = [
+  `SELECT id FROM blocks WHERE workspace_id = '' AND deleted = 0`,
+  `SELECT target_id FROM block_references WHERE workspace_id = '' AND alias = ''`,
+  `SELECT block_id FROM block_types WHERE type = '' AND workspace_id = ''`,
+  `SELECT block_id FROM block_aliases WHERE workspace_id = '' AND alias = ''`,
+]
 
 /** Deliberately NOT gated on "is the sync observer still materializing?".
  *
- *  Tried and reverted. The worry was that on a fresh device the check fires
- *  mid-drain (PowerSync's `hasSynced` marks the DOWNLOAD; the observer fills
- *  `blocks` afterwards), baking a baseline from a half-built table. Two
- *  reasons it isn't worth gating on:
+ *  Tried and reverted (the reasoning predates the `PRAGMA optimize` switch and
+ *  survives it). The worry was that on a fresh device the check fires mid-drain
+ *  (PowerSync's `hasSynced` marks the DOWNLOAD; the observer fills `blocks`
+ *  afterwards), baking a baseline from a half-built table. Two reasons it isn't
+ *  worth gating on:
  *
- *  1. A partial baseline is FINE for what stats are for here. Per
- *     {@link ANALYZE_GROWTH_FACTOR}, join order turns on order-of-magnitude
- *     differences, and the row-count axis re-corrects anything worse than 4x.
- *     A proportionally-low-but-present estimate is nothing like the failure
- *     this whole rule exists for — a MISSING stat row, where SQLite
- *     substitutes "~10 rows" for 75,198 and inverts the join.
+ *  1. A partial baseline is FINE for what stats are for here. Join order turns
+ *     on order-of-magnitude differences, and SQLite's own drift rule re-corrects
+ *     anything worse than ~10x. A proportionally-low-but-present estimate is
+ *     nothing like the failure this whole rule exists for — a MISSING stat row,
+ *     where SQLite substitutes "~10 rows" for 75,198 and inverts the join.
  *  2. Every cheap probe for "still materializing" is wrong. The
  *     `blocks_synced_changes` queue only covers the queue-driven drain;
  *     `observer.materializeWorkspace` reads `blocks_synced` DIRECTLY and never
@@ -1112,142 +1179,10 @@ export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
  *  A gate that misses the largest case while risking "this session gets no
  *  stats at all" is worse than no gate. If this is ever revisited, thread the
  *  observer's own in-flight state in rather than proxying one of its inputs,
- *  and fall through to ANALYZE on exhaustion instead of skipping. */
-
-/** The second staleness axis: the SCHEMA changed, not the row count.
+ *  and fall through to ANALYZE on exhaustion instead of skipping.
  *
- *  A freshly-created index has no `sqlite_stat1` row, and SQLite then falls
- *  back to "an equality seek on the leading column yields ~10 rows" for it.
- *  Every hot index here leads with `workspace_id`, whose real selectivity is
- *  ~1 (a client holds one or two workspaces), so that default inverts join
- *  order: the planner drives from a full scan of the new index and probes the
- *  genuinely selective side once per row. Adding
- *  `idx_block_references_ws_alias` did exactly that — one grouped-backlinks
- *  leg went 6297ms → 3ms on ANALYZE alone, with no SQL change — and the
- *  row-count drift rule above cannot see it, because `blocks` never moved.
- *
- *  Compared against the set recorded at the last ANALYZE rather than against
- *  "does every index have a stat row?": ANALYZE writes no `sqlite_stat1` row
- *  at all for an EMPTY table, so that rule is permanently false on any DB
- *  holding an idle queue table (`blocks_synced_changes` is empty whenever
- *  sync is caught up) and would re-run the multi-second scan on every boot.
- *  Implicit `sqlite_autoindex_*` entries are excluded (NULL `sql`) — they
- *  arrive and leave with their table, never on their own. */
-export const SELECT_INDEX_SET_SQL = `
-  SELECT group_concat(name, char(10)) AS names
-  FROM (SELECT name FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name)
-`
-
-/** The index NAMES alone are not enough: `DROP TABLE` / `DROP INDEX` deletes
- *  that table's `sqlite_stat1` rows, so a migration that rebuilds a derived
- *  local table and recreates its indexes under the same names destroys the
- *  stats while leaving the name set byte-identical — the marker matches and
- *  ANALYZE is skipped. That is not hypothetical:
- *  `backfillBlockReferencesSourceFieldIfNeeded` drops `block_references` and
- *  recreates `idx_block_references_ws_alias`, the very index this rule exists
- *  for, and it runs earlier in the same boot than the ANALYZE check.
- *
- *  So the fingerprint also covers which (tbl, idx) pairs currently HAVE stats.
- *  Keys only, never the `stat` values — those move with row counts and would
- *  re-trigger every boot. An empty table contributes no key before or after,
- *  so the idle-queue loop avoided above stays avoided. The flip side, accepted:
- *  a table EMPTY at ANALYZE time that later fills is not detected here — its
- *  absence is recorded as the settled state, and only `blocks` row-count drift
- *  re-triggers. That gap now sits under `block_types`, which the typedBlocks
- *  candidate CTE drives from (see `typeJoin` in typedBlockQuery.ts); the two
- *  conditions are strongly anti-correlated (a workspace large enough to matter
- *  almost certainly has typed blocks), which is why it stays accepted rather
- *  than special-cased. `COALESCE(idx, '')`
- *  because a table-cardinality row carries a NULL `idx`, and `||` on NULL is
- *  NULL, which `group_concat` drops — without it an index-less table
- *  (`tx_context`, the FTS shadow tables) could be rebuilt invisibly. */
-export const SELECT_STAT1_KEYS_SQL = `
-  SELECT group_concat(tbl || '/' || COALESCE(idx, ''), char(10)) AS keys
-  FROM (SELECT tbl, idx FROM sqlite_stat1 ORDER BY tbl, idx)
-`
-
-export const ANALYZE_INDEX_SET_MARKER_PREFIX = 'analyze_index_set:'
-
-/** `_` is a LIKE wildcard, and the prefix has two of them. Escaped so the
- *  family match — especially the DELETE — can't reach a key like
- *  `analyzeXindexXset:…` that some future marker family introduces. */
-const ANALYZE_MARKER_LIKE = String.raw`analyze\_index\_set:%`
-
-/** Reads the marker WITHOUT a bound parameter and compares the fingerprint in
- *  JS. Recording normally keeps exactly one row in the family; a crash between
- *  the upsert and the delete can leave two, and this scan is in KEY order, so
- *  it would return whichever hex sorts first rather than the live one. That
- *  costs one redundant ANALYZE, which then re-records and settles — the same
- *  self-healing bound as the empty-family race documented on
- *  {@link recordAnalyzeMarkerSql}, so `LIMIT 1` stays rather than growing an
- *  ORDER BY for it.
- *
- *  Param-free on purpose, as is the write below. Bootstrap callers pass
- *  hand-rolled db shims and `LocalSchemaDb` (`src/data/facets.ts`) literally
- *  declares the params-less shape; TypeScript cannot catch the mismatch,
- *  because a narrower arity is always assignable. Against such a shim a bound
- *  `?` silently binds NULL — the read would match nothing ("never analyzed")
- *  and the write would insert a NULL key, which the PK permits any number of
- *  — so the multi-second scan would run on every boot, in production only,
- *  with the suite green. Keeping both legs param-free makes that structural
- *  rather than conventional. */
-export const SELECT_ANALYZE_INDEX_SET_MARKER_SQL = `
-  SELECT key FROM client_schema_state
-  WHERE key LIKE '${ANALYZE_MARKER_LIKE}' ESCAPE '\\'
-  LIMIT 1
-`
-
-/** Fingerprints are `[0-9a-f]+` by construction ({@link analyzeFingerprint}),
- *  so inlining one into a SQL string literal is injection-free. Asserted
- *  rather than assumed — if the fingerprint format ever widens, this throws
- *  instead of quietly emitting a broken (or hostile) statement. */
-const assertInlinableFingerprint = (fingerprint: string): string => {
-  if (!/^[0-9a-f]+$/.test(fingerprint)) {
-    throw new Error(`[clientSchema] non-inlinable ANALYZE fingerprint: ${JSON.stringify(fingerprint)}`)
-  }
-  return fingerprint
-}
-
-/** Upsert FIRST, then drop the rest of the family. The reverse order leaves a
- *  window with no marker at all, during which a concurrent reader — a second
- *  tab on the shared worker, or the boot check racing the first-sync check —
- *  reads "never analyzed" and queues another multi-second ANALYZE.
- *
- *  Not atomic, and deliberately not claimed to be: two writers holding
- *  DIFFERENT fingerprints can interleave as upsert(A) upsert(B)
- *  clearOthers(A) clearOthers(B) and
- *  leave the family EMPTY. Divergent fingerprints are narrow — two tabs on the
- *  same device read the same physical `sqlite_master`, and index creation is
- *  `IF NOT EXISTS` almost everywhere (the one exception, the marker-gated
- *  `block_references` rebuild, runs once) — so it takes one tab's bootstrap
- *  creating an index mid-flight of the other's check. Cost is one redundant
- *  ANALYZE on the next boot,
- *  which then records a marker again — self-healing, and strictly better than
- *  the delete-first order, which opens the same window on every single run
- *  rather than only under a race. */
-export const recordAnalyzeMarkerSql = (fingerprint: string): string => `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${ANALYZE_INDEX_SET_MARKER_PREFIX}${assertInlinableFingerprint(fingerprint)}',
-          strftime('%s', 'now') * 1000)
-`
-
-export const clearOtherAnalyzeMarkersSql = (fingerprint: string): string => `
-  DELETE FROM client_schema_state
-  WHERE key LIKE '${ANALYZE_MARKER_LIKE}' ESCAPE '\\'
-    AND key <> '${ANALYZE_INDEX_SET_MARKER_PREFIX}${assertInlinableFingerprint(fingerprint)}'
-`
-
-/** FNV-1a over the index names and the stat-bearing (tbl, idx) keys, joined by
- *  NUL — the one character a SQLite identifier cannot contain, so no two
- *  distinct (names, keys) pairs can alias by shifting the boundary. Written as
- *  an escape, never a literal NUL in source. Pure, so the drift rule stays
- *  unit-testable without a database. A collision only costs a skipped ANALYZE
- *  until the next row-count drift, so 32 bits is ample. `null` on either side
- *  stays distinct from every real set. */
-export const analyzeFingerprint = (
-  indexNames: string | null,
-  stat1Keys: string | null,
-): string => fnv1a32Hex(`${indexNames ?? ''}\u0000${stat1Keys ?? ''}`)
+ *  Cheaper to be wrong about now than it was: a mid-drain optimize re-analyzes
+ *  one table for tens of milliseconds, not the whole file for seconds. */
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -1387,6 +1322,8 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
+  // After CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL above, which it deletes from.
+  DROP_ANALYZE_INDEX_SET_MARKERS_SQL,
   // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
@@ -1572,21 +1509,10 @@ export const ensureUndoGroupIdColumns = async (db: {
   }
 }
 
-/** Row count `sqlite_stat1` recorded for `blocks` at the last ANALYZE, or
- *  `null` if ANALYZE has never run for it. See {@link SELECT_BLOCKS_STAT_ESTIMATE_SQL}. */
-export const getBlocksStatEstimate = async (
-  db: ClientSchemaBootstrapDb,
-): Promise<number | null> => {
-  // sqlite_stat1 doesn't exist until the first ANALYZE — probe to avoid a
-  // "no such table" throw on a fresh device.
-  const hasStatTable = await db.getOptional<{present: number}>(SELECT_SQLITE_STAT1_EXISTS_SQL)
-  if (hasStatTable === null) return null
-  const row = await db.getOptional<{rows: number | null}>(SELECT_BLOCKS_STAT_ESTIMATE_SQL)
-  return row?.rows ?? null
-}
-
-/** Live `blocks` row count — a covering index scan: cheap relative to
- *  ANALYZE, but not free on a large table, so callers run it at idle. */
+/** Live `blocks` row count. Only the manual command uses it, for its toast —
+ *  the automatic path no longer counts anything to decide (SQLite does), which
+ *  is most of why it got cheap. A covering index scan: fine for a user-initiated
+ *  command, not for every boot. */
 export const getBlocksCount = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<number> => {
@@ -1594,119 +1520,84 @@ export const getBlocksCount = async (
   return row?.count ?? 0
 }
 
-/** Pure drift predicate (no I/O) so the thresholds stay unit-testable
- *  without a database. Given the count baked into `sqlite_stat1`
- *  (`estimate`, `null` = never analyzed) and the live `count`, decide
- *  whether ANALYZE is worth running. See {@link ANALYZE_MIN_BLOCKS} /
- *  {@link ANALYZE_GROWTH_FACTOR} for the rationale behind each branch. */
-export const analyzeIsWarranted = (
-  estimate: number | null,
-  count: number,
-  minBlocks: number = ANALYZE_MIN_BLOCKS,
-  growthFactor: number = ANALYZE_GROWTH_FACTOR,
-): boolean => {
-  // Too small for join order to matter — and a tiny recorded estimate
-  // could mislead the planner mid-sync. Leave the table's stats alone.
-  if (count < minBlocks) return false
-  // Real data but no baseline yet (fresh sync / first import).
-  if (estimate === null) return true
-  // Grew far past the baseline (import / initial sync / the "0 0" bug,
-  // where estimate≈0 makes any real count exceed estimate*factor).
-  if (count >= estimate * growthFactor) return true
-  // Shrank far below it (e.g. a large prune) — re-tighten the estimate.
-  if (estimate >= count * growthFactor) return true
-  return false
-}
-
 export interface AnalyzeResult {
-  /** Whether `ANALYZE` was run this call. */
-  analyzed: boolean
-  /** Live `blocks` count observed (drives the decision + any toast). */
-  count: number
-  /** Recorded estimate before this call (`null` = never analyzed). */
-  previousEstimate: number | null
+  /** What the dry run said `PRAGMA optimize` would do — one `ANALYZE "main"."x"`
+   *  per table it decided was stale, `[]` when nothing was. `null` means the db
+   *  surface returned no rows from `execute` (a bootstrap shim that discards
+   *  them), NOT that nothing happened: the optimize still ran, we just can't
+   *  report what it did. Observability only; nothing branches on it. */
+  proposed: string[] | null
 }
 
-/** Fingerprint of the current planner-stats schema state: which explicit
- *  indexes exist ({@link SELECT_INDEX_SET_SQL}) and which of them have stats
- *  ({@link SELECT_STAT1_KEYS_SQL}). */
-const readAnalyzeFingerprint = async (db: ClientSchemaBootstrapDb): Promise<string> => {
-  const indexNames = (await db.getOptional<{names: string | null}>(SELECT_INDEX_SET_SQL))?.names ?? null
-  // `sqlite_stat1` doesn't exist until the first ANALYZE — querying it before
-  // then throws "no such table", so probe `sqlite_master` first (same guard as
-  // getBlocksStatEstimate). Absent table => no stat keys, which is exactly the
-  // "nothing analyzed yet" fingerprint.
-  const hasStatTable = await db.getOptional<{present: number}>(SELECT_SQLITE_STAT1_EXISTS_SQL)
-  const stat1Keys = hasStatTable === null
-    ? null
-    : (await db.getOptional<{keys: string | null}>(SELECT_STAT1_KEYS_SQL))?.keys ?? null
-  return analyzeFingerprint(indexNames, stat1Keys)
+/** Announce interest in the hot tables so the staleness check considers them.
+ *  See {@link ANALYZE_ARMING_PROBES} for why this is required.
+ *
+ *  Guarded per probe. A missing table must not abort the pass: the alternative
+ *  failure mode is "this session gets no stats at all", which is strictly worse
+ *  than one unarmed table, and is a mode this code has already been burned by.
+ *  A probe that silently fails still shows up as an unrepaired table, which is
+ *  what the tests assert on — so the guard doesn't blunt the pin. */
+const armAnalyzeProbes = async (db: ClientSchemaBootstrapDb): Promise<void> => {
+  for (const probe of ANALYZE_ARMING_PROBES) {
+    try {
+      await db.execute(`EXPLAIN QUERY PLAN ${probe}`)
+    } catch (error) {
+      console.warn('[clientSchema] ANALYZE arming probe failed:', probe, error)
+    }
+  }
 }
 
-/** True when the current schema state is the one the last ANALYZE left behind. */
-const analyzeMarkerMatches = async (
-  db: ClientSchemaBootstrapDb,
-  fingerprint: string,
-): Promise<boolean> => {
-  const row = await db.getOptional<{key: string}>(SELECT_ANALYZE_INDEX_SET_MARKER_SQL)
-  return row?.key === ANALYZE_INDEX_SET_MARKER_PREFIX + fingerprint
+/** PowerSync's `execute` resolves to a `QueryResult` whose rows live under
+ *  `rows._array`; the hand-rolled bootstrap shims resolve to nothing. Read it
+ *  defensively rather than widening {@link ClientSchemaBootstrapDb} — the
+ *  optimize does not depend on this, only the log line does. */
+const readOptimizeRows = (result: unknown): string[] | null => {
+  const rows = (result as {rows?: {_array?: unknown[]}} | undefined)?.rows?._array
+  if (!Array.isArray(rows)) return null
+  return rows
+    .map(row => (row as {optimize?: unknown}).optimize)
+    .filter((sql): sql is string => typeof sql === 'string')
 }
 
-const recordAnalyzeMarker = async (
-  db: ClientSchemaBootstrapDb,
-  fingerprint: string,
-): Promise<void> => {
-  await db.execute(recordAnalyzeMarkerSql(fingerprint))
-  await db.execute(clearOtherAnalyzeMarkersSql(fingerprint))
-}
-
-/** Record the state ANALYZE actually left behind, not the one it found.
- *  ANALYZE itself creates `sqlite_stat1` rows, so the fingerprint that gated
- *  the decision is stale the moment the scan finishes — recording it would
- *  never match on the next boot and would re-run the scan forever. */
-const analyzeAndRecord = async (db: ClientSchemaBootstrapDb): Promise<void> => {
-  await db.execute('ANALYZE')
-  await recordAnalyzeMarker(db, await readAnalyzeFingerprint(db))
-}
-
-/** Run `ANALYZE` if either staleness axis has moved: the live `blocks` count
- *  has drifted from the `sqlite_stat1` baseline (see
- *  {@link analyzeIsWarranted}), or the planner-stats schema state has changed
- *  since the last run (see {@link SELECT_STAT1_KEYS_SQL}) and so some index is
- *  planning against SQLite's default guess instead of real stats. Both are
- *  gated by {@link ANALYZE_MIN_BLOCKS}: below it, join order doesn't cost
- *  enough to pay for the scan. Callers MUST schedule this off the first-paint
- *  critical path (deep idle / post-sync): the count is a full index scan and
- *  ANALYZE itself is a multi-second pass on a large DB, both on the single
- *  SQLite worker. */
+/** Re-ANALYZE whatever SQLite considers stale — a table whose index has no
+ *  `sqlite_stat1` row (a freshly created index, or one whose table was dropped
+ *  and rebuilt), or whose recorded row count has drifted ~10x from the live one.
+ *  Usually a no-op; measured at 0ms on a settled 347k-block client.
+ *
+ *  Still belongs off the first-paint critical path (deep idle / post-sync): when
+ *  it DOES fire it runs a real ANALYZE on the single SQLite worker, and on a
+ *  cold fresh device that can be every table at once. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
-  opts: {minBlocks?: number; growthFactor?: number} = {},
 ): Promise<AnalyzeResult> => {
-  const minBlocks = opts.minBlocks ?? ANALYZE_MIN_BLOCKS
-  const growthFactor = opts.growthFactor ?? ANALYZE_GROWTH_FACTOR
-  const previousEstimate = await getBlocksStatEstimate(db)
-  const count = await getBlocksCount(db)
-  const schemaDrifted =
-    count >= minBlocks && !(await analyzeMarkerMatches(db, await readAnalyzeFingerprint(db)))
-  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor) && !schemaDrifted) {
-    return {analyzed: false, count, previousEstimate}
+  await db.execute(SET_ANALYZE_SAMPLE_LIMIT_SQL)
+  try {
+    await armAnalyzeProbes(db)
+    const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
+    await db.execute(ANALYZE_OPTIMIZE_SQL)
+    return {proposed}
+  } finally {
+    // Restore the connection default even if optimize threw — leaving the limit
+    // set would silently sample the manual full ANALYZE that a user runs next.
+    await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
   }
-  await analyzeAndRecord(db)
-  return {analyzed: true, count, previousEstimate}
 }
 
-/** Unconditional `ANALYZE` for the manual command-palette command — runs
- *  regardless of drift (the user explicitly asked) and reports the table
- *  size so the caller can surface it. Records the index-set marker like the
- *  automatic path, so using the escape hatch also settles the schema axis
- *  rather than leaving the next boot to re-run the same scan. Still belongs
+/** Unconditional, UNBOUNDED `ANALYZE` for the manual command-palette command.
+ *
+ *  The escape hatch for the case the heuristic can't model: stats that are
+ *  present and schema-current but wrong for the current query mix. Deliberately
+ *  not sampled — `analysis_limit` is cleared first, so the user who reached for
+ *  the manual button gets exact stats rather than the automatic path's
+ *  approximation. Reports the table size so the caller can surface it.
+ *
+ *  A multi-second scan holding the single SQLite worker, so it stays manual and
  *  off the render path. */
 export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<{count: number}> => {
   const count = await getBlocksCount(db)
-  await analyzeAndRecord(db)
+  await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
+  await db.execute('ANALYZE')
   return {count}
 }
-

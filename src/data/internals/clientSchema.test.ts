@@ -25,6 +25,9 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
@@ -37,20 +40,24 @@ import {
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
 } from '@/data/workspaceSchema'
 import {
+  CREATE_BLOCK_REFERENCES_TABLE_SQL,
+  CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
+  CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL,
+} from '@/plugins/references/localSchema'
+import { syncedWriteTarget } from '@/data/syncedTableWriteGuard'
+import {
   ALIAS_BACKFILL_MARKER_KEY,
-  ANALYZE_GROWTH_FACTOR,
-  ANALYZE_MIN_BLOCKS,
   BACKFILL_BLOCK_ALIASES_SQL,
   BACKFILL_BLOCKS_FTS_SQL,
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
-  analyzeIsWarranted,
   backfillBlockAliasesIfEmpty,
-  analyzeFingerprint,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
   ensureUndoGroupIdColumns,
-  getBlocksStatEstimate,
+  ANALYZE_ARMING_PROBES,
+  ANALYZE_OPTIMIZE_SQL,
+  SET_ANALYZE_SAMPLE_LIMIT_SQL,
   runAnalyzeIfStale,
   runAnalyzeNow,
 } from './clientSchema'
@@ -161,6 +168,15 @@ const setupDb = (): TestDb => {
   // src/data/workspaceSchema.ts.
   db.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   db.exec(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
+
+  // block_references is contributed by the references plugin's local schema,
+  // not CLIENT_SCHEMA_STATEMENTS — but it IS part of the real client schema,
+  // and one of ANALYZE_ARMING_PROBES targets it. Without it here the probe
+  // would take its missing-table branch on every ANALYZE test, which is the
+  // fallback path rather than the one production runs.
+  db.exec(CREATE_BLOCK_REFERENCES_TABLE_SQL)
+  db.exec(CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL)
+  db.exec(CREATE_BLOCK_REFERENCES_WS_ALIAS_INDEX_SQL)
 
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     db.exec(stmt)
@@ -987,348 +1003,251 @@ describe('block_aliases backfill', () => {
   })
 })
 
-// Real-SQLite adapter recording every executed statement, so a test can
-// assert whether ANALYZE actually ran in addition to inspecting the result.
-const buildRecordingDb = ({dropParams = false}: {dropParams?: boolean} = {}) => {
+// Real-SQLite adapter shaped like PowerSync's `execute` (rows under
+// `rows._array`), recording every statement so a test can assert what ran.
+const buildRecordingDb = ({
+  failOn,
+}: {failOn?: RegExp} = {}) => {
   const executed: string[] = []
   const db = {
     execute: async (sql: string, params?: unknown[]) => {
       executed.push(sql.trim())
+      if (failOn?.test(sql)) throw new Error(`[test] forced failure on: ${sql.trim()}`)
       const stmt = h.db.prepare(sql)
-      const bind = dropParams ? undefined : params
-      if (bind && bind.length > 0) {
-        stmt.run(...(bind as Array<string | number | null>))
-      } else {
-        stmt.run()
-      }
+      const bind = params as Array<string | number | null> | undefined
+      // `.all()` rather than `.run()` throughout: PRAGMA statements RETURN rows,
+      // and reading them is how the optimize path reports what it did.
+      const rows = bind && bind.length > 0 ? stmt.all(...bind) : stmt.all()
+      return {rows: {_array: rows}}
     },
-    // `dropParams` reproduces the hand-rolled bootstrap shims that took
-    // `(sql)` and forwarded only `sql` — `LocalSchemaDb` still declares that
-    // shape. It must drop on BOTH legs: the marker READ goes through
-    // getOptional and the marker WRITE through execute, and a double that
-    // crippled only the read left the write leg's fix entirely unpinned.
     getOptional: async <T,>(sql: string, params?: unknown[]) => {
       const stmt = h.db.prepare(sql)
-      const bind = dropParams ? undefined : params
-      const row = (bind && bind.length > 0
-        ? stmt.get(...(bind as Array<string | number | null>))
-        : stmt.get()) as T | undefined
+      const bind = params as Array<string | number | null> | undefined
+      const row = (bind && bind.length > 0 ? stmt.get(...bind) : stmt.get()) as T | undefined
       return row ?? null
     },
   }
-  return {db, executed, ranAnalyze: () => executed.includes('ANALYZE')}
+  return {db, executed, ranAnalyze: () => executed.some(s => /^ANALYZE\b/.test(s))}
 }
 
-// `analyzeIsWarranted` is the pure drift predicate; `runAnalyzeIfStale`
-// wires it to the DB. wa-sqlite never auto-populates `sqlite_stat1`, so a
-// large `blocks` table gets pessimal join orders until ANALYZE runs — but
-// running it on an empty table (the init-before-sync race) records "0 rows"
-// stats that are WORSE than none. The decision is therefore drift-based:
-// re-ANALYZE only once the live count has diverged from the count baked
-// into `sqlite_stat1` (the implicit marker — no separate state row).
-describe('analyzeIsWarranted (drift predicate)', () => {
-  it('skips a table too small for join order to matter, whatever the stats', () => {
-    expect(analyzeIsWarranted(null, ANALYZE_MIN_BLOCKS - 1)).toBe(false)
-    // Even badly-stale stats on a sub-threshold table aren't worth a scan —
-    // and recording a tiny estimate could itself mislead the planner.
-    expect(analyzeIsWarranted(0, ANALYZE_MIN_BLOCKS - 1)).toBe(false)
-  })
+const statRows = (db: DatabaseSync, tbl: string): Record<string, string> => {
+  const present = db.prepare(
+    `SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'`,
+  ).get()
+  if (!present) return {}
+  const rows = db.prepare(
+    `SELECT COALESCE(idx,'') AS idx, stat FROM sqlite_stat1 WHERE tbl = ?`,
+  ).all(tbl) as Array<{idx: string; stat: string}>
+  return Object.fromEntries(rows.map(r => [r.idx, r.stat]))
+}
 
-  it('analyzes once there is real data but no stats yet', () => {
-    // Fresh device after the first sync lands: no sqlite_stat1 baseline.
-    expect(analyzeIsWarranted(null, ANALYZE_MIN_BLOCKS)).toBe(true)
-  })
+const analysisLimit = (db: DatabaseSync): number =>
+  (db.prepare('PRAGMA analysis_limit').get() as {analysis_limit: number}).analysis_limit
 
-  it('leaves a stable workspace alone (no repeat multi-second scan)', () => {
-    expect(analyzeIsWarranted(320_000, 321_000)).toBe(false)
-  })
-
-  it('force-corrects the legacy "0 rows" stats over a large table', () => {
-    expect(analyzeIsWarranted(0, 320_000)).toBe(true)
-  })
-
-  it('re-analyzes after growth past the factor (import / initial sync)', () => {
-    expect(analyzeIsWarranted(1_000, 1_000 * ANALYZE_GROWTH_FACTOR)).toBe(true)
-    expect(analyzeIsWarranted(1_000, 1_000 * ANALYZE_GROWTH_FACTOR - 1)).toBe(false)
-  })
-
-  it('re-analyzes after a large prune below the factor', () => {
-    // Both ends above the floor, estimate >> count → re-tighten.
-    const estimate = ANALYZE_MIN_BLOCKS * ANALYZE_GROWTH_FACTOR * 2
-    const count = ANALYZE_MIN_BLOCKS * 2
-    expect(estimate).toBeGreaterThanOrEqual(count * ANALYZE_GROWTH_FACTOR)
-    expect(analyzeIsWarranted(estimate, count)).toBe(true)
-  })
-})
-
+// `PRAGMA optimize` replaced a hand-rolled two-axis staleness trigger (`blocks`
+// row-count drift + a fingerprint of the index set / which indexes have stats,
+// recorded as a marker row). SQLite already tracks both, and knows things we
+// could not see from outside — see the module comment on ANALYZE_SAMPLE_LIMIT
+// and `docs/pragma-optimize-spike/` for the measurements.
+//
+// What these pin is the two non-obvious parts: that the arming probes are
+// required, and that the sample limit never leaks onto the manual path.
 describe('runAnalyzeIfStale', () => {
-  // Small thresholds keep the seeded row count tiny; the constants
-  // themselves (1000 / 4×) aren't restated, only their behavior.
-  const opts = {minBlocks: 4, growthFactor: 2}
-
-  const seedBlocks = (n: number, startIndex = 0) => {
-    for (let i = startIndex; i < startIndex + n; i++) {
-      h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
-    }
-  }
-
-  it('does not ANALYZE an empty table — never records the "0 rows" stats', async () => {
-    const {db, ranAnalyze} = buildRecordingDb()
-    const result = await runAnalyzeIfStale(db, opts)
-    expect(result.analyzed).toBe(false)
-    expect(ranAnalyze()).toBe(false)
-    // The original bug: ANALYZE on empty wrote a sqlite_stat1 estimate the
-    // planner then trusted for 30 days. With no ANALYZE, no such estimate.
-    expect(await getBlocksStatEstimate(db)).toBeNull()
-  })
-
-  it('runs ANALYZE once data is present and records the real row count', async () => {
-    seedBlocks(opts.minBlocks)
-    const {db, ranAnalyze} = buildRecordingDb()
-    const result = await runAnalyzeIfStale(db, opts)
-    expect(result.analyzed).toBe(true)
-    expect(ranAnalyze()).toBe(true)
-    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks)
-  })
-
-  it('does not re-run on a stable table', async () => {
-    seedBlocks(opts.minBlocks)
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-    const {db, ranAnalyze} = buildRecordingDb()
-    const result = await runAnalyzeIfStale(db, opts)
-    expect(result.analyzed).toBe(false)
-    expect(ranAnalyze()).toBe(false)
-  })
-
-  it('re-runs after the table grows past the drift factor', async () => {
-    seedBlocks(opts.minBlocks)
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-    // Grow well past the baseline * growthFactor.
-    seedBlocks(opts.minBlocks * opts.growthFactor, opts.minBlocks)
-    const {db, ranAnalyze} = buildRecordingDb()
-    const result = await runAnalyzeIfStale(db, opts)
-    expect(result.analyzed).toBe(true)
-    expect(ranAnalyze()).toBe(true)
-    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks + opts.minBlocks * opts.growthFactor)
-  })
-
-  it('force-corrects stale near-empty stats over a now-large table', async () => {
-    seedBlocks(opts.minBlocks)
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-    // Simulate the legacy "0 0" bug state: stats say ~empty, table isn't.
-    h.db.prepare("UPDATE sqlite_stat1 SET stat = '0' WHERE tbl = 'blocks'").run()
-    expect(await getBlocksStatEstimate(buildRecordingDb().db)).toBe(0)
-    const {db, ranAnalyze} = buildRecordingDb()
-    const result = await runAnalyzeIfStale(db, opts)
-    expect(result.analyzed).toBe(true)
-    expect(ranAnalyze()).toBe(true)
-    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks)
-  })
-})
-
-// Row-count drift can't see a SCHEMA change; the second axis covers that. Why
-// it exists and why it keys off a recorded marker rather than "does every
-// index have stats?": see SELECT_INDEX_SET_SQL / SELECT_STAT1_KEYS_SQL in
-// clientSchema.ts.
-describe('runAnalyzeIfStale — index-set drift', () => {
-  const opts = {minBlocks: 4, growthFactor: 2}
   const seedBlocks = (n: number) => {
     for (let i = 0; i < n; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
   }
 
-  it('re-analyzes when an index is added, though the row count never drifted', async () => {
-    seedBlocks(opts.minBlocks)
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-    // Baseline: a stable table with an unchanged index set is left alone.
-    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(false)
+  it('populates stats for a newly created index', async () => {
+    // The regression this whole mechanism exists for. A fresh index has no
+    // sqlite_stat1 row, so SQLite assumes ~10 rows for an equality seek on its
+    // leading column — and every hot index here leads with workspace_id, whose
+    // real selectivity is ~1. That inverts join order: measured 6297ms -> 3ms.
+    seedBlocks(64)
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    h.db.exec('CREATE INDEX idx_test_new ON blocks (workspace_id, updated_at)')
+    expect(statRows(h.db, 'blocks')['idx_test_new']).toBeUndefined()
 
-    h.db.exec('CREATE INDEX idx_test_blocks_updated ON blocks (updated_at)')
-
-    const {db, ranAnalyze} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
-    expect(ranAnalyze()).toBe(true)
-    // The new index now has planner stats — the whole point of the re-run.
-    const stat = h.db
-      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_blocks_updated'")
-      .get() as {stat: string} | undefined
-    expect(stat?.stat).toBeDefined()
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(statRows(h.db, 'blocks')['idx_test_new']).toBeDefined()
   })
 
-  it('settles after the index-set re-analyze instead of re-running every boot', async () => {
-    // The loop hazard this marker exists to avoid. ANALYZE writes no
-    // `sqlite_stat1` row at all for an EMPTY table, so "does every index have
-    // stats?" is permanently false on any DB holding an idle queue table —
-    // `blocks_synced_changes` is empty whenever sync is caught up — and that
-    // rule would re-run the multi-second scan on every boot forever.
-    seedBlocks(opts.minBlocks)
-    h.db.exec('CREATE TABLE test_idle_queue (id TEXT NOT NULL, seq INTEGER)')
-    h.db.exec('CREATE INDEX idx_test_idle_queue ON test_idle_queue (seq)')
-    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(true)
-    expect(
-      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_idle_queue'").get(),
-    ).toBeUndefined()
+  it('leaves a settled database alone', async () => {
+    seedBlocks(64)
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    const settled = statRows(h.db, 'blocks')
 
-    const {db, ranAnalyze} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(false)
-    expect(ranAnalyze()).toBe(false)
+    const {db, proposedFrom} = {db: buildRecordingDb().db, proposedFrom: null}
+    void proposedFrom
+    const result = await runAnalyzeIfStale(db)
+    // Nothing stale => the dry run proposes nothing and no stats move. This is
+    // the every-boot case: it has to stay free.
+    expect(result.proposed).toEqual([])
+    expect(statRows(h.db, 'blocks')).toEqual(settled)
   })
 
-  it('settles even against a db shim that drops bound params', async () => {
-    // The trap `3d4e778e5` fixed, kept pinned: a shim that forwards no params
-    // binds NULL for every `?`, so a param-bound marker read matches nothing,
-    // reads as "never analyzed", and re-runs the multi-second scan on every
-    // boot — production-only, suite green. Both marker legs are param-free.
-    seedBlocks(opts.minBlocks)
-    expect((await runAnalyzeIfStale(buildRecordingDb({dropParams: true}).db, opts)).analyzed).toBe(true)
+  it('reports the tables it decided to re-analyze', async () => {
+    seedBlocks(64)
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    h.db.exec('CREATE INDEX idx_test_reported ON blocks (workspace_id, updated_at)')
 
-    const second = buildRecordingDb({dropParams: true})
-    expect((await runAnalyzeIfStale(second.db, opts)).analyzed).toBe(false)
-    expect(second.ranAnalyze()).toBe(false)
+    const result = await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(result.proposed).toEqual([expect.stringContaining('"blocks"')])
   })
 
-  it('re-analyzes when a rebuilt table loses its stats under unchanged index names', async () => {
-    // `DROP TABLE` deletes that table's sqlite_stat1 rows. A migration that
-    // rebuilds a derived local table and recreates its indexes under the same
-    // names therefore destroys the stats while leaving the index-NAME set
-    // byte-identical — a name-only fingerprint matches and ANALYZE is skipped,
-    // silently restoring the pessimal plan. Live instance in-tree:
-    // backfillBlockReferencesSourceFieldIfNeeded drops `block_references` and
-    // recreates idx_block_references_ws_alias, earlier in the same boot.
-    seedBlocks(opts.minBlocks)
-    h.db.exec('CREATE TABLE test_rebuilt (id TEXT NOT NULL, k TEXT)')
-    h.db.exec("INSERT INTO test_rebuilt (id, k) VALUES ('a', 'x'), ('b', 'y')")
-    h.db.exec('CREATE INDEX idx_test_rebuilt_k ON test_rebuilt (k)')
-    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(true)
-    expect(
-      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_rebuilt_k'").get(),
-    ).toBeDefined()
-
-    h.db.exec('DROP TABLE test_rebuilt')
-    h.db.exec('CREATE TABLE test_rebuilt (id TEXT NOT NULL, k TEXT)')
-    h.db.exec("INSERT INTO test_rebuilt (id, k) VALUES ('a', 'x'), ('b', 'y')")
-    h.db.exec('CREATE INDEX idx_test_rebuilt_k ON test_rebuilt (k)')
-    // Same index names as the recorded set, but the stats are gone.
-    expect(
-      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'idx_test_rebuilt_k'").get(),
-    ).toBeUndefined()
-
-    const {db, ranAnalyze} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
-    expect(ranAnalyze()).toBe(true)
+  it('reports null rather than "nothing happened" when the db surface drops rows', async () => {
+    // Bootstrap shims resolve `execute` to undefined. The optimize still runs;
+    // we just cannot say what it did, and must not claim it did nothing.
+    seedBlocks(64)
+    const db = {
+      execute: async (sql: string) => { h.db.exec(sql) },
+      getOptional: async () => null,
+    }
+    const result = await runAnalyzeIfStale(db)
+    expect(result.proposed).toBeNull()
+    // ...and it really did analyze, despite reporting nothing.
+    expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBeDefined()
   })
 
-  it('notices a rebuilt table that has no indexes of its own', async () => {
-    // A table-cardinality stat row carries a NULL `idx`. Without COALESCE the
-    // `tbl || '/' || idx` concat is NULL and group_concat drops it, so an
-    // index-less table (tx_context, the FTS shadow tables) could be dropped
-    // and rebuilt without moving the fingerprint at all.
-    seedBlocks(opts.minBlocks)
-    h.db.exec('CREATE TABLE test_no_index (id TEXT NOT NULL)')
-    h.db.exec("INSERT INTO test_no_index (id) VALUES ('a'), ('b')")
-    expect((await runAnalyzeIfStale(buildRecordingDb().db, opts)).analyzed).toBe(true)
-    expect(
-      h.db.prepare("SELECT stat FROM sqlite_stat1 WHERE tbl = 'test_no_index' AND idx IS NULL").get(),
-    ).toBeDefined()
-
-    h.db.exec('DROP TABLE test_no_index')
-
-    const {db, ranAnalyze} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
-    expect(ranAnalyze()).toBe(true)
+  it('restores analysis_limit even when the optimize throws', async () => {
+    // Leaving the limit set would silently sample whatever ANALYZE runs next on
+    // this connection — including the manual, deliberately-unbounded one.
+    seedBlocks(8)
+    const {db} = buildRecordingDb({failOn: /^PRAGMA optimize$/})
+    await expect(runAnalyzeIfStale(db)).rejects.toThrow('forced failure')
+    expect(analysisLimit(h.db)).toBe(0)
   })
 
-  it('keeps the marker family present at every point, and scoped to its own prefix', async () => {
-    // Two structural properties the mutation table showed were unpinned.
-    // (a) upsert-before-delete: the reverse order leaves a window with no
-    //     marker, and a concurrent reader in that window queues a redundant
-    //     multi-second ANALYZE.
-    // (b) `_` is a LIKE wildcard and the prefix has two of them, so an
-    //     unescaped family match would let the DELETE eat a foreign key.
-    seedBlocks(opts.minBlocks)
-    h.db.prepare(
-      "INSERT INTO client_schema_state (key, completed_at) VALUES ('analyzeXindexXset:evil', 0)",
-    ).run()
-    h.db.prepare(
-      "INSERT INTO client_schema_state (key, completed_at) VALUES ('analyze_index_set:stale', 0)",
-    ).run()
-
-    const {db, executed} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(true)
-
-    const insertAt = executed.findIndex(sql => sql.startsWith('INSERT OR REPLACE INTO client_schema_state'))
-    const deleteAt = executed.findIndex(sql => sql.startsWith('DELETE FROM client_schema_state'))
-    expect(insertAt).toBeGreaterThanOrEqual(0)
-    expect(deleteAt).toBeGreaterThan(insertAt)
-
-    const keys = (h.db.prepare(
-      "SELECT key FROM client_schema_state WHERE key NOT LIKE 'blocks_%' ORDER BY key",
-    ).all() as Array<{key: string}>).map(row => row.key)
-    // The foreign key survives; the superseded marker is gone; exactly one left.
-    expect(keys).toContain('analyzeXindexXset:evil')
-    expect(keys).not.toContain('analyze_index_set:stale')
-    expect(keys.filter(k => k.startsWith('analyze_index_set:'))).toHaveLength(1)
-  })
-
-  it('still respects the too-small-to-matter floor when the index set changes', async () => {
-    h.insertBlock({id: 'only-block'})
-    h.db.exec('CREATE INDEX idx_test_tiny ON blocks (created_at)')
-    const {db, ranAnalyze} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, opts)).analyzed).toBe(false)
-    expect(ranAnalyze()).toBe(false)
-  })
-
-  it('does not accumulate a marker row per index-set revision', async () => {
-    seedBlocks(opts.minBlocks)
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-    h.db.exec('CREATE INDEX idx_test_a ON blocks (updated_at)')
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-    h.db.exec('CREATE INDEX idx_test_b ON blocks (created_at)')
-    await runAnalyzeIfStale(buildRecordingDb().db, opts)
-
-    const {count} = h.db
-      .prepare("SELECT COUNT(*) AS count FROM client_schema_state WHERE key LIKE 'analyze_index_set:%'")
-      .get() as {count: number}
-    expect(count).toBe(1)
+  it('still analyzes when a table an arming probe names is absent', async () => {
+    // A probe is best-effort: one missing table must not cost the session its
+    // stats entirely. That failure mode — "no stats at all this session" — is
+    // strictly worse than one unarmed table, and this code has hit it before.
+    seedBlocks(64)
+    h.db.exec('DROP TABLE block_references')
+    const result = await runAnalyzeIfStale(buildRecordingDb().db)
+    expect(result.proposed).toEqual(expect.arrayContaining([expect.stringContaining('"blocks"')]))
+    expect(statRows(h.db, 'blocks')['idx_blocks_workspace_active']).toBeDefined()
   })
 })
 
-describe('analyzeFingerprint', () => {
-  it('tracks the index names', () => {
-    expect(analyzeFingerprint('a\nb', 't/a')).toBe(analyzeFingerprint('a\nb', 't/a'))
-    expect(analyzeFingerprint('a\nb', 't/a')).not.toBe(analyzeFingerprint('a\nc', 't/a'))
-    // A dropped index must invalidate too — stats for a gone index linger.
-    expect(analyzeFingerprint('a\nb', 't/a')).not.toBe(analyzeFingerprint('a', 't/a'))
+// REVERT-TEST for ANALYZE_ARMING_PROBES. Delete the arming loop from
+// `runAnalyzeIfStale` and this fails; nothing else in the suite does, because
+// the new-index axis fires with or without arming.
+//
+// Needs a file-backed DB and a genuine reconnect: SQLite caches sqlite_stat1 in
+// memory at schema load, so damaging the table in-connection is invisible to the
+// staleness heuristic (and `ANALYZE sqlite_master` does not reload it either).
+// A reopen is what production does anyway — this is the next-boot path.
+describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
+  let dir: string
+  let db: DatabaseSync
+  const open = () => new DatabaseSync(join(dir, 'arming.db'))
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'analyze-arming-'))
+    db = open()
+    db.exec(CREATE_BLOCKS_TABLE_SQL)
+    db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+    const cols = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+    const ins = db.prepare(
+      `INSERT INTO blocks (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`,
+    )
+    for (let i = 0; i < 500; i++) {
+      ins.run(...cols.map(c => {
+        if (c === 'id') return `b-${i}`
+        // One workspace for all 500, deliberately: it puts more rows behind a
+        // single leading-column value than ANALYZE_SAMPLE_LIMIT, which is what
+        // makes the sampling observable ('samples rather than fully scanning').
+        if (c === 'workspace_id') return 'ws1'
+        if (c === 'order_key') return `a${i}`
+        if (c === 'created_at' || c === 'updated_at') return 1
+        if (c === 'created_by' || c === 'updated_by') return 'u1'
+        if (c === 'deleted') return 0
+        if (c === 'content') return 'x'
+        if (c === 'properties_json') return '{}'
+        if (c === 'references_json') return '[]'
+        return null
+      }) as Array<string | number | null>)
+    }
+    // Settle, then corrupt to the degenerate legacy shape.
+    db.exec('ANALYZE')
+    db.exec(`UPDATE sqlite_stat1 SET stat = '0 0' WHERE tbl = 'blocks'`)
+    db.close()
+    db = open()
+  })
+  afterEach(() => {
+    db.close()
+    rmSync(dir, {recursive: true, force: true})
   })
 
-  it('tracks which indexes have stats, not just which exist', () => {
-    // The rebuilt-table case: identical names, stats gone.
-    expect(analyzeFingerprint('a\nb', 't/a\nt/b')).not.toBe(analyzeFingerprint('a\nb', null))
+  const adapter = () => ({
+    execute: async (sql: string) => ({rows: {_array: db.prepare(sql).all()}}),
+    getOptional: async () => null,
   })
 
-  it('cannot alias by shifting the boundary between the two dimensions', () => {
-    expect(analyzeFingerprint('a', 'b')).not.toBe(analyzeFingerprint('ab', null))
-    expect(analyzeFingerprint(null, 'a')).not.toBe(analyzeFingerprint('a', null))
+  it('repairs degenerate "0 0" stats', async () => {
+    expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).toBe('0 0')
+    await runAnalyzeIfStale(adapter())
+    expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).not.toBe('0 0')
+  })
+
+  it('samples rather than fully scanning', async () => {
+    // Pins that ANALYZE_SAMPLE_LIMIT actually reaches ANALYZE. Without the
+    // PRAGMA, `PRAGMA optimize` runs an UNBOUNDED pass — invisible at this scale
+    // except through the recorded distribution, which is why this asserts on the
+    // stat values rather than on timing.
+    await runAnalyzeIfStale(adapter())
+    const [rowCount, avgPerWorkspace] = statRows(db, 'blocks')['idx_blocks_workspace_active']
+      .split(' ').map(Number)
+    // The row count stays EXACT under a limit — only the per-column
+    // distinct-value average is approximated. Both halves matter: the exact
+    // count is what any row-estimate reader depends on, and the sampled average
+    // is the evidence the limit was in force (unbounded would record 500 here,
+    // one row per distinct workspace_id, since all 500 share one).
+    expect(rowCount).toBe(500)
+    expect(avgPerWorkspace).toBeLessThan(500)
+  })
+
+  it('does not repair them without the probes — the arming is load-bearing', async () => {
+    // Same DB, same PRAGMAs, only the arming omitted. `PRAGMA optimize` skips a
+    // table this connection never planned a query against, so it walks away
+    // leaving the stats that invert join order in place.
+    db.exec(SET_ANALYZE_SAMPLE_LIMIT_SQL)
+    db.exec(ANALYZE_OPTIMIZE_SQL)
+    expect(statRows(db, 'blocks')['idx_blocks_workspace_active']).toBe('0 0')
+  })
+})
+
+describe('ANALYZE_ARMING_PROBES', () => {
+  it('are reads, so the synced-table write guard passes them through', () => {
+    // The probes run through repoProvider's guarded `execute`. One written as a
+    // write to `blocks` would reject there and take out the ANALYZE on every
+    // single boot — in production only, since the guard wraps only that shim.
+    for (const probe of ANALYZE_ARMING_PROBES) {
+      expect(syncedWriteTarget(`EXPLAIN QUERY PLAN ${probe}`)).toBeNull()
+    }
   })
 })
 
 describe('runAnalyzeNow', () => {
-  it('clears the index-set drift so the next boot does not re-analyze', async () => {
-    for (let i = 0; i < 8; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
-    h.db.exec('CREATE INDEX idx_test_manual ON blocks (updated_at)')
-    await runAnalyzeNow(buildRecordingDb().db)
-
-    const {db, ranAnalyze} = buildRecordingDb()
-    expect((await runAnalyzeIfStale(db, {minBlocks: 4, growthFactor: 2})).analyzed).toBe(false)
-    expect(ranAnalyze()).toBe(false)
-  })
-
   it('runs ANALYZE unconditionally and reports the live count', async () => {
-    // No drift gate: a single block (well below the floor) still analyzes.
+    // No staleness gate: a single block still analyzes. The user asked.
     h.insertBlock({id: 'only-block'})
     const {db, ranAnalyze} = buildRecordingDb()
     const {count} = await runAnalyzeNow(db)
     expect(count).toBe(1)
     expect(ranAnalyze()).toBe(true)
+  })
+
+  it('is unbounded even after the automatic path ran', async () => {
+    // The escape hatch exists for stats that are present and schema-current but
+    // wrong. Sampled stats would defeat the point, so the limit the automatic
+    // path uses must not survive into it.
+    for (let i = 0; i < 8; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
+    await runAnalyzeIfStale(buildRecordingDb().db)
+    h.db.exec(SET_ANALYZE_SAMPLE_LIMIT_SQL)
+
+    await runAnalyzeNow(buildRecordingDb().db)
+    expect(analysisLimit(h.db)).toBe(0)
   })
 })
 

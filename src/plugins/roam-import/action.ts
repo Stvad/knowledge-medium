@@ -62,9 +62,9 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
           // A bulk import can multiply the workspace; the planner's
           // `sqlite_stat1` is now stale and would mis-rank join orders until
           // the next boot. Re-check at idle so good plans land this session
-          // without a reload. Usually a no-op — it runs only if the import
-          // moved `blocks` past the drift factor, or the index set changed
-          // since the last ANALYZE (see clientSchema.runAnalyzeIfStale).
+          // without a reload. Usually a no-op — it re-analyzes only what SQLite
+          // reports as stale (see clientSchema.runAnalyzeIfStale), which for a
+          // table that merely grew means ~10x growth.
           //
           // Deep idle, matching the boot check in repoProvider: ANALYZE is a
           // multi-second park of the single SQLite worker, and scheduleIdle's

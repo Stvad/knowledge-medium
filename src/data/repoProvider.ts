@@ -437,22 +437,29 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `sqlite_stat1`, so the planner makes pessimal join-order choices on
   // `blocks` once a workspace is large (a 4-id `json_each` lookup can
   // degenerate to a 4-second scan of the workspace partial index).
-  // `runAnalyzeIfStale` re-runs on either staleness axis — the live `blocks`
-  // count drifting from the count the stats were built on, OR the set of
-  // indexes / which of them have stats changing since the last run (see
-  // clientSchema). A stable workspace on an unchanged schema pays nothing;
-  // every client >= ANALYZE_MIN_BLOCKS pays one scan on the boot after a
-  // release that adds or drops an index. Both the count probe and ANALYZE run
-  // on the single SQLite worker, so every trigger below is idle-deferred.
+  // `runAnalyzeIfStale` asks SQLite what is stale (`PRAGMA optimize`) and
+  // re-analyzes only that — a settled workspace pays ~nothing, and the boot
+  // after a release that adds an index pays one table rather than the whole
+  // file. See clientSchema / docs/pragma-optimize-spike.
   //
   // scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap means it WILL run
-  // inside the cold-start window on a busy load (its own doc says so).
-  // Parking the single SQLite worker for seconds IS the freeze this whole
-  // change is about, so it must not land on first paint.
+  // inside the cold-start window on a busy load (its own doc says so). When
+  // this DOES fire it runs a real ANALYZE on the single SQLite worker — on a
+  // cold fresh device, potentially every table at once — and parking that
+  // worker for seconds IS the freeze this whole change is about, so it must
+  // not land on first paint.
   //
   const scheduleAnalyzeCheck = (reason: string) => {
     scheduleDeepIdle(() => {
-      void runAnalyzeIfStale(backfillDb).catch(error => {
+      void runAnalyzeIfStale(backfillDb).then(({proposed}) => {
+        // Silent when nothing was stale, which is every boot after the first —
+        // but when it DOES park the worker, say which tables it was for.
+        // Otherwise the only symptom of a mis-tuned staleness rule is an
+        // unexplained pause.
+        if (proposed && proposed.length > 0) {
+          console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
+        }
+      }).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
     }, CATCHUP_DEEP_IDLE)
