@@ -41,6 +41,14 @@ const REALIGN_WINDOW_MS = 250
  *  childList record to react to. */
 const REALIGN_SAMPLE_MS = 50
 
+/** A scroll this soon after a DOM change is the layout moving, not the user.
+ *  Both of the ways a pane's own content shifts its offset — Chromium's scroll
+ *  anchoring swapping an estimated height for a measured one above the fold,
+ *  and the browser clamping `scrollTop` as outgoing content shrinks the
+ *  document on a back/forward swap — land in the same frame as the mutation
+ *  that caused them. A hand on the scrollbar does not. */
+const LAYOUT_SCROLL_GRACE_MS = 120
+
 const inSameScrollport = (scrollEl: HTMLElement) => (el: HTMLElement): boolean =>
   el.closest<HTMLElement>('[data-panel-id]') === scrollEl.closest<HTMLElement>('[data-panel-id]')
 
@@ -169,6 +177,9 @@ export const alignScrollportToRow = (
   let aligned: {port: HTMLElement; scrollTop: number} | null = null
   /** The port the takeover listener is currently attached to. */
   let watchedPort: HTMLElement | null = null
+  /** When this pane's DOM last changed — see `onScrollWhileWaiting`. Seeded to
+   *  now, because the mount that starts this restore IS a content change. */
+  let lastMutationAt = Date.now()
 
   const finish = () => {
     if (done) return
@@ -199,16 +210,32 @@ export const alignScrollportToRow = (
 
   /** Takeover during the WAIT, before anything has been aligned — a native
    *  scrollbar drag while the anchor row is still hydrating, which emits none
-   *  of the gestures below. There is no expected value to compare against yet,
-   *  so any scroll counts; that is sound precisely because the anchor row is not
-   *  rendered during this phase, and the focus decorator's catch-up only fires
-   *  for a MOUNTED focused row. Whatever moved the pane, it wasn't the thing
-   *  this restore is racing.
+   *  of the gestures below.
+   *
+   *  There is no expected value to compare against yet, so the discriminator is
+   *  TIME SINCE THE LAST MUTATION instead. Two mechanisms move a pane's offset
+   *  with no user involved and would otherwise read as takeover: the browser
+   *  clamping `scrollTop` as outgoing content shrinks the document on a
+   *  back/forward swap, and Chromium's scroll anchoring adjusting it as rows
+   *  above the fold swap estimated heights for measured ones. Cancelling on
+   *  either abandons the restore AND its fallback — losing the position rather
+   *  than being imprecise about it.
+   *
+   *  Both are DEFENCE: neither has been observed breaking a restore. The
+   *  back/forward path was measured with this guard removed and still restored
+   *  correctly (cursor at offset 0), so this is not a fix for a known failure —
+   *  it is a cheap way to keep an unguarded window from depending on layout
+   *  timing that varies by engine and by how much content is in flight.
+   *
+   *  Cost of the grace window: a drag during heavy hydration is missed, and the
+   *  pane snaps back when the anchor lands. That is the rarer case and the
+   *  gentler failure.
    *
    *  Capturing, so a nested port (the video-notes aside) is covered too: scroll
    *  does not bubble but does capture. */
   const onScrollWhileWaiting = () => {
     if (aligned) return
+    if (Date.now() - lastMutationAt < LAYOUT_SCROLL_GRACE_MS) return
     finish()
   }
 
@@ -266,7 +293,10 @@ export const alignScrollportToRow = (
     finish()
   }
 
-  const observer = new MutationObserver(attempt)
+  const observer = new MutationObserver(() => {
+    lastMutationAt = Date.now()
+    attempt()
+  })
   const deadline = setTimeout(giveUp, waitMs)
 
   // Gestures the user aims at THIS panel. Scoped to the scroll container, not

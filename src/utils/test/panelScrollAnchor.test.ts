@@ -442,6 +442,8 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
 
     const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
 
+    // Past the layout-settling grace window: this is a hand on the scrollbar.
+    await new Promise(resolve => setTimeout(resolve, 150))
     port.scrollTop = 900
     port.dispatchEvent(new Event('scroll'))
 
@@ -450,6 +452,30 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     await new Promise(resolve => setTimeout(resolve, 150))
 
     expect(port.scrollTop).toBe(900)
+    cancel()
+  })
+
+  // A pane's own content settling moves its offset and fires scroll: a
+  // back/forward swap keeps the container's old offset and the browser clamps
+  // it as the outgoing content shrinks the document. Reading that as the user
+  // abandons the restore AND its fallback.
+  it('ignores a scroll that lands with the content settling', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
+
+    // Content churns, and the offset moves in the same breath.
+    port.appendChild(document.createElement('div'))
+    port.scrollTop = 120
+    port.dispatchEvent(new Event('scroll'))
+
+    // The anchor arrives and must still be honoured.
+    addRow('row-b', 'panel:page', 300)
+
+    await vi.waitFor(() => {
+      expect(port.scrollTop).toBe(300)
+    })
     cancel()
   })
 

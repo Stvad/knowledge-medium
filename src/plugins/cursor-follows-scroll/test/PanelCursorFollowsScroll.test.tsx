@@ -300,6 +300,31 @@ describe('PanelCursorFollowsScroll', () => {
     })
   })
 
+  // A fast scroll outruns lazy mounting: the rows now filling the viewport are
+  // still placeholders when the settle fires. Dropping that attempt strands the
+  // cursor off screen, because a row mounting need not move `scrollTop` and so
+  // nothing schedules another.
+  it('retries when the rows that scrolled into view have not mounted yet', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+
+    // The cursor leaves, and nothing else is rendered yet to anchor to.
+    dom.moveRow('a', -400)
+    dom.scroll()
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
+
+    // The destination row mounts, with no scroll event of its own.
+    dom.addRow('b', 20)
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
+    }, {timeout: 2000})
+  })
+
   // `focusBlock` only preserves edit mode for an unchanged location, so
   // re-anchoring mid-edit closes the editor under the user — which is what
   // scrolling with the on-screen keyboard up would otherwise do on a phone.

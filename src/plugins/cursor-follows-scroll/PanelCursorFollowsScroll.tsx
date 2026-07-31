@@ -25,6 +25,14 @@ const SCROLL_SETTLE_MS = 150
  *  samples it anyway. */
 const CURSOR_MOUNT_WATCH_MS = 3000
 
+/** A fast scroll can outrun lazy mounting: the rows now filling the viewport
+ *  are still placeholders when the settle fires, so there is no candidate to
+ *  anchor to and the attempt would be dropped for good — nothing schedules
+ *  another, because a row mounting need not move `scrollTop`. Retry a few times
+ *  instead, bounded so a genuinely empty viewport doesn't spin. */
+const SETTLE_RETRY_MS = 250
+const SETTLE_RETRIES = 4
+
 /**
  * Emacs's rule, per panel: scrolling the cursor out of the window moves the
  * cursor rather than leaving it behind. Without it the cursor and the viewport
@@ -86,6 +94,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     const location = {blockId: focusedBlockId, renderScopeId}
 
     let settleTimer: ReturnType<typeof setTimeout> | null = null
+    let retriesLeft = 0
     let mountWatcher: MutationObserver | null = null
     let seenOnScreen = false
 
@@ -120,14 +129,26 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
         isEditing: Boolean(block.peekProperty(isEditingProp)),
         excludedSurfaces: excluded(),
       })
-      if (!next) return
-      void focusBlock(block, next.blockId, {renderScopeId: next.renderScopeId})
+      if (next) {
+        void focusBlock(block, next.blockId, {renderScopeId: next.renderScopeId})
+        return
+      }
+      // Null is ambiguous: "nothing to do" and "nothing rendered YET" look the
+      // same from here. Retry only in the shape that means the second — the
+      // cursor is off screen, so a move was wanted and no candidate was found.
+      if (retriesLeft <= 0) return
+      if (block.peekProperty(isEditingProp)) return
+      const row = findInstance(panelEl, location, excluded())
+      if (!row || isRowInViewport(row)) return
+      retriesLeft -= 1
+      settleTimer = setTimeout(settle, SETTLE_RETRY_MS)
     }
 
     const onScroll = () => {
       sample()
       if (!seenOnScreen) return
       if (settleTimer) clearTimeout(settleTimer)
+      retriesLeft = SETTLE_RETRIES
       settleTimer = setTimeout(settle, SCROLL_SETTLE_MS)
     }
 
