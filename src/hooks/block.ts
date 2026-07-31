@@ -384,19 +384,16 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  unresolved handle loads we keep serving the last resolved chains; a
  *  resolved value always wins outright.
  *
- *  Deliberately not covered. Ids ENTERING the set have no carried
- *  chain — a new backlink, or the ids a filter had excluded when it is
+ *  Deliberately not covered. Ids ENTERING the set have no carried chain
+ *  — a new backlink, or the ids a filter had excluded when it is
  *  switched off — so unless their key is still warm those entries gain
  *  their breadcrumb line a load late. "Last resolved" can be several
- *  id-set changes old under churn (one load is a floor, not a bound),
- *  so a tx that moves a block AND changes the set at once shows the old
- *  chain until the load lands. And a FAILED load is indistinguishable
- *  from a slow one here, so its chains stay until the id set changes or
- *  the handle is disposed — deliberate: that is already what `peek()`
- *  does for a warm handle whose RELOAD fails (`LoaderHandle` keeps the
- *  last value), and the failures that reach a first load are whole-DB
- *  ones where the entry bodies are gone too, so last-known breadcrumbs
- *  beat blank ones. */
+ *  id-set changes old under churn (one load is a floor, not a bound).
+ *  And a FAILED load is indistinguishable from a slow one here, so its
+ *  chains stay until the id set changes or the handle is disposed —
+ *  the policy `peek()` already applies to a warm handle whose RELOAD
+ *  fails, and the failures that reach a FIRST load are DB-level ones
+ *  where the rest of the panel is usually in trouble too. */
 export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Block[]> => {
   const repo = useRepo()
   // Sort the ids so logically-equal block sets in different orders
@@ -409,12 +406,11 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // carry-over below has to tell "still loading" apart from "resolved,
   // and these blocks genuinely have no ancestors".
   //
-  // The selector is memoized, not inline: it is one of `useHandle`'s
-  // getSelection deps, and an identity that churns per render resets
-  // that closure's memo, so the hook hands back a freshly allocated
-  // (structurally equal) map on renders where nothing changed. That is
-  // an allocation win, NOT what makes the update below terminate — the
-  // structural check is.
+  // Memoized, not inline like the selectors above: it is one of
+  // `useHandle`'s getSelection deps, so a per-render identity re-runs
+  // this O(n) projection and its deep-equality check on every render.
+  // The RESULT identity is stable either way (`useHandle` hands back
+  // the committed reference when the new selection is equal).
   const selectParents = useCallback(
     (data: readonly {startId: string; ancestors: readonly BlockData[]}[] | undefined) => {
       if (!data) return undefined
@@ -423,7 +419,7 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
         const parents = entry.ancestors.map(d => repo.block(d.id)).reverse()
         out.set(entry.startId, parents)
       }
-      return out
+      return out.size === 0 ? EMPTY_PARENT_MAP : out
     },
     [repo],
   )
@@ -433,22 +429,32 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // render" pattern (as `usePromotableBreadcrumb` does) rather than an
   // effect: the carry-over has to be available in the SAME render that
   // first sees the unresolved handle, or the blank frame it exists to
-  // prevent paints anyway. The structural check is what makes that
-  // update terminate — a consumer whose handle identity churns per
-  // render (or a dropped `useHandle` memo, documented as a hint rather
-  // than a guarantee) otherwise re-sets state with an equal-but-fresh
-  // map forever.
+  // prevent paints anyway.
+  //
+  // `ids.length > 0` because an EMPTY request resolves trivially, and
+  // overwriting the memory with its empty map throws the carry-over
+  // away right where it is needed: a list handle that re-keys (turning
+  // a backlinks filter ON) reports `[]` for a beat, and the filtered
+  // subset then arrives on a cold key with nothing to carry.
+  //
+  // The structural check is what makes the update terminate: a
+  // consumer whose handle identity churns re-sets state with an
+  // equal-but-fresh map forever without it. The real store forbids
+  // that churn (same key → same instance), so in the app it is defence
+  // in depth against a dropped `useHandle` memo; the fake seam in
+  // `useManyParents.test.tsx` is what exercises it.
   const [lastResolved, setLastResolved] =
     useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
   if (
     resolved &&
-    resolved !== lastResolved &&
+    ids.length > 0 &&
     !areSelectedValuesEqual(resolved, lastResolved)
   ) setLastResolved(resolved)
 
-  // Projected onto the current ids so the map's keys stay the ids you
-  // asked for. Both call sites only `.get(id)`, so this is contract
-  // hygiene rather than something they can observe.
+  // Projected onto the current ids so both branches keep one contract:
+  // the map's keys are the ids you asked for. Without it the carried
+  // map also retains ids that have LEFT the set, which a consumer that
+  // iterates (neither current one does) would render as ghost entries.
   const carried = useMemo(() => {
     const out = new Map<string, Block[]>()
     for (const id of ids) {
