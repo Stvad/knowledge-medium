@@ -433,6 +433,26 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     cancel()
   })
 
+  // A native scrollbar drag while the anchor is still hydrating emits no wheel,
+  // touch or key event, and there was no scroll watcher yet — so the row
+  // mounting later would snap the pane off the position the user chose.
+  it('gives up when the port is dragged before the anchor arrives', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 5000, fallbackScrollTop: 640})
+
+    port.scrollTop = 900
+    port.dispatchEvent(new Event('scroll'))
+
+    // The anchor finally hydrates — and must not be honoured.
+    addRow('row-b', 'panel:page', 300)
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(port.scrollTop).toBe(900)
+    cancel()
+  })
+
   it('does not use the offset once the anchor has been found', async () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0

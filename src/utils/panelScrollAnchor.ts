@@ -182,6 +182,7 @@ export const alignScrollportToRow = (
     scrollEl.removeEventListener('keydown', finish)
     watchedPort?.removeEventListener('scroll', onScroll)
     watchedPort = null
+    scrollEl.removeEventListener('scroll', onScrollWhileWaiting, {capture: true})
   }
 
   /** A scroll of the port we aligned that didn't come from us. Covers the ways
@@ -193,6 +194,21 @@ export const alignScrollportToRow = (
   const onScroll = () => {
     if (!aligned) return
     if (Math.abs(aligned.port.scrollTop - aligned.scrollTop) <= 1) return
+    finish()
+  }
+
+  /** Takeover during the WAIT, before anything has been aligned — a native
+   *  scrollbar drag while the anchor row is still hydrating, which emits none
+   *  of the gestures below. There is no expected value to compare against yet,
+   *  so any scroll counts; that is sound precisely because the anchor row is not
+   *  rendered during this phase, and the focus decorator's catch-up only fires
+   *  for a MOUNTED focused row. Whatever moved the pane, it wasn't the thing
+   *  this restore is racing.
+   *
+   *  Capturing, so a nested port (the video-notes aside) is covered too: scroll
+   *  does not bubble but does capture. */
+  const onScrollWhileWaiting = () => {
+    if (aligned) return
     finish()
   }
 
@@ -215,6 +231,8 @@ export const alignScrollportToRow = (
     watchedPort?.removeEventListener('scroll', onScroll)
     port.addEventListener('scroll', onScroll, {passive: true})
     watchedPort = port
+    // The value-comparing watcher takes over from here.
+    scrollEl.removeEventListener('scroll', onScrollWhileWaiting, {capture: true})
   }
 
   const beginCorrectionWindow = () => {
@@ -259,6 +277,7 @@ export const alignScrollportToRow = (
   scrollEl.addEventListener('wheel', finish, {passive: true})
   scrollEl.addEventListener('touchmove', finish, {passive: true})
   scrollEl.addEventListener('keydown', finish)
+  scrollEl.addEventListener('scroll', onScrollWhileWaiting, {capture: true, passive: true})
 
   attempt()
   observer.observe(scrollEl, {childList: true, subtree: true})
