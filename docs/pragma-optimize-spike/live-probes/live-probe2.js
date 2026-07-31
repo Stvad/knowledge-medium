@@ -34,6 +34,12 @@ for (const t of tables) await timed('limited400_' + t, 400, ['ANALYZE ' + t])
 await timed('full_block_references', 0, ['ANALYZE block_references'])
 await timed('full_blocks', 0, ['ANALYZE blocks'])
 
+// Connection-scoped, so none of the rollbacks above restored it. The last
+// `timed()` call happens to set 0, but relying on statement order for that is
+// how the production connection gets left sampling.
+await db.execute('PRAGMA analysis_limit=0')
+out.analysisLimitRestored = (await db.getAll('PRAGMA analysis_limit'))[0]?.analysis_limit
+
 out.stat1Unchanged = (await db.getAll(
   "SELECT stat FROM sqlite_stat1 WHERE tbl='block_references' AND idx='idx_block_references_ws_alias'"
 ))[0]?.stat

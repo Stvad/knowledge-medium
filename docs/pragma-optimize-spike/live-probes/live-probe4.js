@@ -63,6 +63,10 @@ try {
 } catch (e) { if (e !== ROLLBACK) r3.error = String(e?.message ?? e) }
 out.M3_staleStats_armedFirst = r3
 
+// Connection-scoped, so the rollbacks above did not restore it.
+await db.execute('PRAGMA analysis_limit=0')
+out.analysisLimitRestored = (await db.getAll('PRAGMA analysis_limit'))[0]?.analysis_limit
+
 out.leftUnchanged = {
   wsAlias: (await db.getAll(WS_ALIAS))[0]?.stat,
   blocksWs: (await db.getAll(BLOCKS_WS))[0]?.stat,

@@ -361,9 +361,13 @@ node docs/pragma-optimize-spike/validate-design.mjs # §3 coverage table
 | `samecon.mjs` | why a direct `sqlite_stat1` edit is invisible to the heuristic (the Q3 methodology note) |
 | `validate-design.mjs` | §3 — the proposed sequence against every case, end to end |
 
-`live-probes/*.js` are run against a real client through the agent bridge; each
+`live-probes/*.js` are run against a real client through the agent bridge. Each
 wraps its writes in a rolled-back transaction and asserts `sqlite_stat1` is
-unchanged afterwards:
+unchanged afterwards — and each resets `PRAGMA analysis_limit` to 0 on the way
+out, because it is CONNECTION-scoped and the rollback does *not* restore it.
+Leaving it at 400 would silently sample whatever ANALYZE ran next on that
+connection, including the deliberately-unbounded manual command. Both properties
+are easy to lose when editing these; keep them.
 
 ```bash
 pnpm agent --profile <name> eval "$(cat docs/pragma-optimize-spike/live-probes/live-probe6.js)"

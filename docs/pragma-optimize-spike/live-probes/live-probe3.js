@@ -27,10 +27,19 @@ const one = async limit => {
   return r
 }
 
-for (let i = 0; i < 3; i++) {
-  out.runs.push(await one(0))
-  out.runs.push(await one(400))
+try {
+  for (let i = 0; i < 3; i++) {
+    out.runs.push(await one(0))
+    out.runs.push(await one(400))
+  }
+} finally {
+  // `PRAGMA analysis_limit` is CONNECTION-scoped, not transaction-scoped: the
+  // rollback above restores sqlite_stat1 but NOT this. Left at 400 it would
+  // silently sample the next ANALYZE on this connection — including the manual
+  // command, whose whole point is being unbounded.
+  await db.execute('PRAGMA analysis_limit=0')
 }
+out.analysisLimitRestored = (await db.getAll('PRAGMA analysis_limit'))[0]?.analysis_limit
 out.unchanged = (await db.getAll(
   "SELECT stat FROM sqlite_stat1 WHERE tbl='block_references' AND idx='idx_block_references_ws_alias'",
 ))[0]?.stat
