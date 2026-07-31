@@ -433,6 +433,27 @@ describe('PanelRenderer', () => {
     expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), restored)
   })
 
+  // `writePanelContent` MANUFACTURES a cursor on the destination's top-level
+  // block when the snapshot has none, so peeking at the pane would read that
+  // invention and anchor to the top — throwing away the offset the snapshot
+  // exists to replay. Scrolling alone never creates a cursor, so this is the
+  // norm for anyone who scrolls without clicking.
+  it('replays the offset for a history visit that was scrolled but never focused', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, {
+        blockId: 'page-a',
+        renderScopeId: panelRenderScopeId('panel-a', 'page-a'),
+      })
+    }, {scope: ChangeScope.UiState, description: 'manufactured cursor'})
+    panelHistory.enqueueRestore('panel-a', {scrollTop: 512})
+
+    renderPanel(false)
+    const topLevel = await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).not.toHaveBeenCalled()
+    expect(topLevel.parentElement?.scrollTop).toBe(512)
+  })
+
   // A pane can be scrolled without ever being clicked or navigated in, so it
   // has no cursor to anchor to. The offset is still the best answer there.
   it('falls back to the stored scroll offset when the pane has no cursor', async () => {

@@ -169,7 +169,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
     const restore = panelHistory.consumeRestore(block.id)
     const scrollEl = scrollRef.current
     if (!scrollEl) return
-    const location = restore?.focusedLocation ?? peekFocusedBlockLocation(block)
+    // A history snapshot answers for itself. A visit that was scrolled but never
+    // focused captured a `scrollTop` and no cursor — and `writePanelContent`
+    // then MANUFACTURES a cursor on the destination's top-level block, so
+    // peeking at the pane here would read that invention and anchor to the top,
+    // throwing away the offset the snapshot exists to replay. That case is the
+    // norm for anyone who scrolls without clicking, since scrolling alone never
+    // creates a cursor.
+    const location = restore ? restore.focusedLocation : peekFocusedBlockLocation(block)
     if (location) return alignScrollportToRow(scrollEl, location)
     const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
     if (scrollTop != null) scrollEl.scrollTop = scrollTop

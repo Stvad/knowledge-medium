@@ -59,16 +59,17 @@ const inSameScrollport = (scrollEl: HTMLElement) => (el: HTMLElement): boolean =
 export const findAnchorRow = (
   scrollEl: HTMLElement,
   location: FocusedBlockLocation,
-): HTMLElement | null => {
+): {row: HTMLElement; exact: boolean} | null => {
   const blockSelector = `[data-block-id="${CSS.escape(location.blockId)}"]`
   const belongsHere = inSameScrollport(scrollEl)
   const exact = Array.from(scrollEl.querySelectorAll<HTMLElement>(
     `${blockSelector}[data-render-scope-id="${CSS.escape(location.renderScopeId)}"]`,
   )).find(belongsHere)
-  if (exact) return exact
-  return Array.from(scrollEl.querySelectorAll<HTMLElement>(
+  if (exact) return {row: exact, exact: true}
+  const anyScope = Array.from(scrollEl.querySelectorAll<HTMLElement>(
     `${blockSelector}[data-render-scope-id]`,
-  )).find(belongsHere) ?? null
+  )).find(belongsHere)
+  return anyScope ? {row: anyScope, exact: false} : null
 }
 
 /**
@@ -90,6 +91,28 @@ export const alignRowToScrollportTop = (rowEl: HTMLElement): HTMLElement | null 
   const delta = rowTop - port.getBoundingClientRect().top
   if (delta) port.scrollTop += delta
   return port
+}
+
+/**
+ * The scrollport `rowEl` moves, but only when it belongs to this pane.
+ *
+ * A STACKED panel doesn't own one: `LayoutRenderer` gives the whole stack a
+ * single `overflow-y-auto` and each stacked pane's own container is
+ * `overflow-visible`, so every pane in the stack resolves the SAME shared port.
+ * Letting each align it to its own cursor makes the stack's final position
+ * whichever pane restored last, and their scroll-cancellation listeners read
+ * each other's alignments as the user taking over. One shared scroll position
+ * isn't any single pane's to restore, so a stacked pane restores nothing —
+ * which is also what it did before this existed, since assigning `scrollTop` to
+ * its `overflow-visible` container was a no-op.
+ *
+ * Ports NESTED inside the pane (the video-notes aside) are its own and are
+ * handled here.
+ */
+const ownScrollportFor = (rowEl: HTMLElement, scrollEl: HTMLElement): HTMLElement | null => {
+  const port = nearestScrollableAncestor(rowEl)
+  if (!port) return null
+  return port === scrollEl || scrollEl.contains(port) ? port : null
 }
 
 export interface AlignScrollportOptions {
@@ -164,13 +187,18 @@ export const alignScrollportToRow = (
 
   const attempt = () => {
     if (done) return
-    const row = findAnchorRow(scrollEl, location)
-    if (!row) return
-    const port = alignRowToScrollportTop(row)
-    if (port) {
-      beginCorrectionWindow(aligned ? null : port)
-      aligned = {port, scrollTop: port.scrollTop}
-    }
+    const found = findAnchorRow(scrollEl, location)
+    if (!found) return
+    const port = ownScrollportFor(found.row, scrollEl)
+    if (!port) return
+    alignRowToScrollportTop(found.row)
+    // A scope-drift fallback is a guess, and acting on it must not END the
+    // search: the exact row can be a lazy copy in another surface that is still
+    // hydrating, and closing the correction window here would leave the pane
+    // anchored to the wrong copy for good. Align to the guess (better than the
+    // top of the page) but keep waiting for the real one.
+    if (found.exact) beginCorrectionWindow(aligned ? null : port)
+    aligned = {port, scrollTop: port.scrollTop}
   }
 
   const observer = new MutationObserver(attempt)

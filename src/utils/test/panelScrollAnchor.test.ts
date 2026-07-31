@@ -69,7 +69,7 @@ describe('findAnchorRow', () => {
     addRow('row-b', 'some-other-scope', 200)
     const exact = addRow('row-b', 'panel:page', 300)
 
-    expect(findAnchorRow(port, LOCATION)).toBe(exact)
+    expect(findAnchorRow(port, LOCATION)).toEqual({row: exact, exact: true})
   })
 
   // A scope id can shift under a stored location — the legacy `outline:`
@@ -78,7 +78,7 @@ describe('findAnchorRow', () => {
     const {port, addRow} = build()
     const drifted = addRow('row-b', 'outline:page', 300)
 
-    expect(findAnchorRow(port, LOCATION)).toBe(drifted)
+    expect(findAnchorRow(port, LOCATION)).toEqual({row: drifted, exact: false})
   })
 
   it('ignores rows belonging to another panel', () => {
@@ -290,6 +290,59 @@ describe('alignScrollportToRow', () => {
     fenceCancel()
 
     expect(port.scrollTop).toBe(300)
+    cancel()
+  })
+})
+
+describe('alignScrollportToRow — whose scrollport it is', () => {
+  // A stack shares ONE `overflow-y-auto` across several panes, each of whose own
+  // container is `overflow-visible`. If every pane aligned that shared port to
+  // its own cursor, the stack would land wherever the last pane restored, and
+  // their takeover listeners would read each other's alignments as the user.
+  it('does not move a scrollport the panel does not own', () => {
+    const stack = document.createElement('div')
+    stack.style.overflowY = 'auto'
+    stack.getBoundingClientRect = () => rectAt(0, 600)
+    document.body.appendChild(stack)
+
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'stacked')
+    stack.appendChild(panel)
+    // The pane's own container does not scroll — the stack above it does.
+    const inner = document.createElement('div')
+    panel.appendChild(inner)
+
+    const row = document.createElement('div')
+    row.setAttribute('data-block-id', 'row-b')
+    row.setAttribute('data-render-scope-id', 'panel:page')
+    row.getBoundingClientRect = () => rectAt(400, 30)
+    inner.appendChild(row)
+
+    stack.scrollTop = 0
+    const cancel = alignScrollportToRow(inner, LOCATION)
+    expect(stack.scrollTop).toBe(0)
+    cancel()
+  })
+
+  // The exact scoped row can be a lazy copy in another surface that is still
+  // hydrating. Aligning to the block-id fallback is a better guess than the top
+  // of the page, but closing the correction window on it would strand the pane
+  // on the wrong copy for good.
+  it('keeps waiting for the exact row after aligning to a scope-drift fallback', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+    addRow('row-b', 'some-other-scope', 300)
+
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 30})
+    expect(port.scrollTop).toBe(300)
+
+    // Well past the correction window the fallback would have opened.
+    await new Promise(resolve => setTimeout(resolve, 120))
+    addRow('row-b', 'panel:page', 800)
+
+    await vi.waitFor(() => {
+      expect(port.scrollTop).toBe(800)
+    })
     cancel()
   })
 })

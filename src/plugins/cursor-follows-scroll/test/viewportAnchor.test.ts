@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { resolveViewportAnchor } from '../viewportAnchor.ts'
+import { resolveSettledAnchor, resolveViewportAnchor } from '../viewportAnchor.ts'
 import { DEFAULT_NON_NAVIGABLE_SURFACES } from '@/plugins/spatial-navigation/walker.js'
 
 const SCOPE = 'panel:page'
@@ -177,5 +177,44 @@ describe('resolveViewportAnchor', () => {
     ])
 
     expect(anchorFor(panel, 'a')).toBeNull()
+  })
+})
+
+describe('resolveSettledAnchor', () => {
+  const settled = (
+    panel: HTMLElement,
+    armedFor: string,
+    overrides: {currentBlockId?: string; isEditing?: boolean} = {},
+  ) => resolveSettledAnchor({
+    panelEl: panel,
+    armedFor: {blockId: armedFor, renderScopeId: SCOPE},
+    currentLocation: {
+      blockId: overrides.currentBlockId ?? armedFor,
+      renderScopeId: SCOPE,
+    },
+    isEditing: overrides.isEditing ?? false,
+    excludedSurfaces: DEFAULT_NON_NAVIGABLE_SURFACES,
+  })
+
+  it('re-anchors when the cursor it was armed for is still the cursor', () => {
+    const panel = build([{blockId: 'a', top: -400}, {blockId: 'b', top: 20}])
+
+    expect(settled(panel, 'a')).toEqual({blockId: 'b', renderScopeId: SCOPE})
+  })
+
+  // The one the component can't pin: the effect cleanup cancels this timer on
+  // any focus change and wins in every ordering a test can stage through the
+  // component — but not when the timer is already due, and then this is all
+  // that stops the write clobbering a cursor move the user just made.
+  it('declines when the cursor moved between arming and firing', () => {
+    const panel = build([{blockId: 'a', top: -400}, {blockId: 'b', top: 20}])
+
+    expect(settled(panel, 'a', {currentBlockId: 'c'})).toBeNull()
+  })
+
+  it('declines while the panel is in edit mode', () => {
+    const panel = build([{blockId: 'a', top: -400}, {blockId: 'b', top: 20}])
+
+    expect(settled(panel, 'a', {isEditing: true})).toBeNull()
   })
 })

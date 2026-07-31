@@ -223,10 +223,12 @@ describe('PanelCursorFollowsScroll', () => {
 
     // The row hydrates, on screen, with no scroll event anywhere near it.
     dom.addRow('late', 200)
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-block-id="late"]')).not.toBeNull()
-    })
-    await new Promise(resolve => setTimeout(resolve, 50))
+    // Drain to the next macrotask rather than sleeping: MutationObserver
+    // delivers on the microtask checkpoint, so one turn of the loop is a
+    // guarantee the watcher has run, not a bet on how loaded the machine is.
+    // It has to have run BEFORE the scroll below — that scroll is one-shot, and
+    // after it the row is off screen, where no later sample can help.
+    await new Promise(resolve => setTimeout(resolve, 0))
 
     // One coarse gesture takes it straight off screen.
     dom.moveRow('a', 40)

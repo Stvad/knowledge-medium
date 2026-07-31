@@ -89,3 +89,38 @@ export const resolveViewportAnchor = (
   if (!location || sameFocusedBlockLocation(location, focusedLocation)) return null
   return location
 }
+
+/**
+ * The whole decision a settled scroll makes, as one pure call: geometry plus
+ * the two reasons not to act on it.
+ *
+ * Extracted from the timer callback so both refusals are reachable from a test.
+ * The staleness one in particular cannot be pinned through the component — the
+ * effect cleanup cancels the timer first in every ordering a test can stage —
+ * yet it is the only thing standing between an already-due timer and
+ * overwriting a cursor move the user just made.
+ */
+export const resolveSettledAnchor = ({
+  panelEl,
+  armedFor,
+  currentLocation,
+  isEditing,
+  excludedSurfaces,
+}: {
+  panelEl: HTMLElement
+  /** The cursor the settle timer was armed for. */
+  armedFor: FocusedBlockLocation
+  /** The panel's cursor right now, read at the moment of the write. */
+  currentLocation: FocusedBlockLocation | undefined
+  isEditing: boolean
+  excludedSurfaces: ReadonlySet<string>
+}): FocusedBlockLocation | null => {
+  // Superseded: something moved the cursor between arming and firing.
+  if (!sameFocusedBlockLocation(currentLocation, armedFor)) return null
+  // Moving focus clears edit mode (`focusBlock` preserves it only for an
+  // unchanged location), so re-anchoring mid-edit closes the editor under the
+  // user — and scrolling with the on-screen keyboard up is exactly how that
+  // happens on a phone.
+  if (isEditing) return null
+  return resolveViewportAnchor(panelEl, armedFor, excludedSurfaces)
+}
