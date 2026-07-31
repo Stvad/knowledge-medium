@@ -37,7 +37,15 @@ export const ensureLibraryRoot = async (repo: Repo, workspaceId: string): Promis
       // (a bare `{alias: ['…']}` stores a value nothing can decode), and the
       // tagger maintains a registry `{types: ['page']}` would bypass.
       onInsertedOrRestored: async (tx, id) => {
-        await tx.setProperty(id, aliasesProp, ['Readwise Library'])
+        // Aliases are workspace-unique, enforced by a trigger that ABORTS the
+        // whole tx. If the user already has a page by this name, claiming it
+        // would fail every sync from here on — so ask first. Leaving the root
+        // unnamed is the safe default (it is still reachable by id, and the
+        // user can rename it); a suffixed name is the other option.
+        const claimant = await tx.aliasLookup('Readwise Library', workspaceId)
+        if (!claimant || claimant.id === id) {
+          await tx.setProperty(id, aliasesProp, ['Readwise Library'])
+        }
         await repo.addTypeInTx(tx, id, 'page')
       },
     })
