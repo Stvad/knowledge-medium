@@ -1,0 +1,209 @@
+/** The writes that sit beside a session — layoff records, discarding, and
+ *  the user's `or`-group choices — against a real `Repo`.
+ *
+ *  The session path itself is covered in `session.test.ts`. What is here is
+ *  everything that outlived the draft: the layoff derivation (whose failure
+ *  mode is permanent, since a recorded gap becomes undetectable the moment
+ *  the comeback session joins history) and the two writes that destroy or
+ *  change user preference.
+ */
+
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+
+import {ChangeScope} from '@/data/api'
+import type {BlockData} from '@/data/api'
+import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
+import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
+import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
+import {deleteBlock} from '@/data/mutators'
+import {hasBlockType} from '@/data/properties'
+import type {Repo} from '@/data/repo'
+import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
+
+import {LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE} from '../../src/km/fields'
+import {buildLayoffs} from '../../src/km/history'
+import {dayToDate} from '../../src/km/day'
+import {finishSession, startSession} from '../../src/km/session'
+import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
+import {discardSession, readAltChoices, writeAltChoice, writeLayoff} from '../../src/km/store'
+import {
+  STRENGTH_PROPS,
+  STRENGTH_TYPES,
+  layoffFromProp,
+  statusProp,
+} from '../../src/km/schema'
+
+const WORKSPACE_ID = 'ws-1'
+const PAGE_ID = 'strength-log-page'
+const SETTINGS_ID = 'strength-settings-block'
+
+let sharedDb: TestDb
+let repo: Repo
+
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
+beforeEach(async () => {
+  await resetTestDb(sharedDb.db)
+  const created = createTestRepo({
+    db: sharedDb.db,
+    user: {id: 'lifter'},
+    extensions: [
+      ...STRENGTH_PROPS.map(prop => definitionSeedsFacet.of(prop, {source: 'test'})),
+      ...STRENGTH_TYPES.map(type => typeSeedsFacet.of(type, {source: 'test'})),
+      definitionSeedsFacet.of(todoStatusProp, {source: 'test'}),
+      typeSeedsFacet.of(todoType, {source: 'test'}),
+    ],
+  })
+  repo = created.repo
+  repo.setActiveWorkspaceId(WORKSPACE_ID)
+  await repo.tx(async tx => {
+    await tx.create({
+      id: PAGE_ID, workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'a0', content: 'Strength Log',
+    })
+    await tx.create({
+      id: SETTINGS_ID, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a0', content: 'Settings',
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'seed page'})
+})
+
+const lift = (exercise: string, over: Partial<PlannedLift> = {}): PlannedLift => ({
+  exercise,
+  occurrence: 0,
+  unit: 'lb',
+  prescribedSets: 1,
+  sets: [{weight: 135, reps: 8}],
+  ...over,
+})
+
+const plan = (over: Partial<SessionPlan> = {}): SessionPlan =>
+  ({day: '2026-07-24', session: 'A', lifts: [lift('Bench press')], ...over})
+
+const liveChildren = async (parentId: string, typeId: string): Promise<BlockData[]> =>
+  ((await repo.block(parentId).children.load()) ?? [])
+    .filter(row => !row.deleted && hasBlockType(row, typeId))
+
+/** Start a session and tick its only set, so it is finishable. */
+const startAndLog = async (over: Partial<SessionPlan> = {}): Promise<string> => {
+  const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan(over))
+  const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
+  const [set] = await liveChildren(entry.id, SET_TYPE)
+  await repo.tx(tx => tx.setProperty(set.id, todoStatusProp, 'done'),
+    {scope: ChangeScope.BlockDefault, description: 'tick'})
+  return workoutId
+}
+
+describe('discardSession — the one write that destroys', () => {
+  it('refuses a session that has already been finished, rather than tombstoning the record', async () => {
+    // Discard is enabled from what was last rendered, and a peer's finish can
+    // land between that render and the tap. Without the in-transaction
+    // re-check, the stale button erases a completed session and every set in it.
+    const workoutId = await startAndLog()
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    expect(await discardSession(repo, workoutId)).toBe('gone')
+    expect(await isBlockDeleted(repo, workoutId)).toBe(false)
+  })
+
+  it('still discards a session that is genuinely in progress', async () => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan())
+    expect(await discardSession(repo, workoutId)).toBe('discarded')
+    expect(await isBlockDeleted(repo, workoutId)).toBe(true)
+  })
+})
+
+describe('the layoff record and the finish that justifies it', () => {
+  const record = {from: '2026-07-01', to: '2026-07-24', days: 23, tierId: 'long', pct: 0.7}
+  const layoffOf = () => ({pageId: PAGE_ID, record})
+
+  it('lands in the same transaction as the finish', async () => {
+    const workoutId = await startAndLog()
+
+    expect(await finishSession(repo, workoutId, layoffOf())).toBe('done')
+
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))
+    expect(layoffs).toHaveLength(1)
+    expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
+  })
+
+  it('is one record per gap, however many workouts finish against it', async () => {
+    // Two clients coming back from the same break, each dating its return
+    // differently. With a minted id that is two layoff blocks, and
+    // `resolveReentry` takes the later `to` as most recent and restarts
+    // `sessionsBack`, re-applying loads already climbed out of. The gap's
+    // START is the identity, so the second write adopts the first's block.
+    const first = await startAndLog()
+    expect(await finishSession(repo, first, layoffOf())).toBe('done')
+
+    const second = await startAndLog({day: '2026-07-25', session: 'B', lifts: [lift('Row')]})
+    expect(await finishSession(repo, second, {
+      pageId: PAGE_ID,
+      record: {from: '2026-07-01', to: '2026-07-25', days: 24, tierId: 'long', pct: 0.7},
+    })).toBe('done')
+
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))
+    expect(layoffs).toHaveLength(1)
+    // The adopt leaves the record alone, so the FIRST return recorded stands —
+    // which is the one that actually happened.
+    expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
+  })
+
+  it('will not adopt a block whose `from` was edited to another gap', async () => {
+    // `strength:from` is an ordinary editable date, and `layoffAlreadyRecorded`
+    // reads THAT rather than the block id — so adopting purely on a matching
+    // id, while the block says it records a different gap, leaves the pending
+    // gap with no record at all. That loss is permanent.
+    const first = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+    await repo.tx(tx => tx.setProperty(first, layoffFromProp, dayToDate('2026-05-05')),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the gap start'})
+
+    const second = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+
+    expect(second).not.toBe(first)
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))
+    expect(layoffs.map(l => l.from).sort()).toEqual(['2026-05-05', '2026-07-01'])
+  })
+
+  it('re-finds the minted fallback instead of minting another every time', async () => {
+    // Once the derived seat holds a tombstone it holds one forever, so every
+    // later finish took the mint branch. Minting blind there put a fresh
+    // layoff block in the log each time — the duplicate the derivation exists
+    // to stop, arriving by another route, and with it the later stale `to`
+    // that restarts the ramp.
+    const derived = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+    await repo.tx(tx => tx.run(deleteBlock, {id: derived}),
+      {scope: ChangeScope.BlockDefault, description: 'the gap record is deleted'})
+
+    const minted = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+    const again = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+
+    expect(minted).not.toBe(derived)
+    expect(again).toBe(minted)
+    expect(buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))).toHaveLength(1)
+  })
+
+  it('is rolled back with a finish that records nothing', async () => {
+    // The reason it lives inside the finish transaction: the finish can
+    // REFUSE, and a layoff written beside it cannot be taken back — the break
+    // would stand as ending on a session that never happened.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan())
+
+    expect(await finishSession(repo, workoutId, layoffOf())).toBe('nothing-logged')
+
+    expect(await liveChildren(PAGE_ID, LAYOFF_TYPE)).toHaveLength(0)
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+})
+
+describe('or-group choices', () => {
+  it('upserts one block per group rather than growing a log', async () => {
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-a', 'Face pulls')
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-b', 'Band pull-aparts')
+    await writeAltChoice(repo, SETTINGS_ID, 'group-2', 'opt-c', 'Pallof press')
+
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({
+      'group-1': 'opt-b',
+      'group-2': 'opt-c',
+    })
+  })
+})

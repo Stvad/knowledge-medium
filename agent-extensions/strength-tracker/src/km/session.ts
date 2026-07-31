@@ -26,10 +26,11 @@ import {
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import {workingWeight} from '../engine/progression'
-import type {SessionType} from '../engine/types'
+import type {LayoffRecord, SessionType} from '../engine/types'
 import {dateToDay, dayToDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {escapeKeyPart, preferredLive} from './history'
+import {writeLayoffInTx} from './store'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
 import {
   dateProp,
@@ -139,6 +140,10 @@ const setSpec = (
   properties: [
     propertyValue(weightProp, set.weight),
     propertyValue(repsProp, set.reps),
+    // Denormalised onto the set, like `exercise` onto the entry: the row is
+    // rendered and edited on its own, and reading the unit off the parent
+    // would put a parent load in the render path of every set on screen.
+    propertyValue(unitProp, unit),
     ...(set.side !== undefined ? [propertyValue(sideProp, set.side)] : []),
     // Prescribed, not performed. The checkbox is the only thing that says
     // performed, and only you tick it.
@@ -266,6 +271,46 @@ export const startSession = async (
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(plan.session)}`})
 }
 
+// ──── editing a set ────
+
+const numberAt = (block: BlockData, field: string, fallback: number): number =>
+  typeof block.properties[field] === 'number' ? block.properties[field] as number : fallback
+
+/** Change what a set says you lifted.
+ *
+ *  ONE transaction for the properties and the content, because they are two
+ *  views of the same fact and the design has no room for a second truth: the
+ *  engine reads `strength:weight`/`strength:reps`, the outline shows the
+ *  text, and a reader who trusted the text while progression trusted the
+ *  properties would silently train off the wrong numbers. Writing both here
+ *  is what lets the block's rendered form BE its numbers.
+ */
+export const editSet = async (
+  repo: Repo,
+  setId: string,
+  patch: {weight?: number; reps?: number},
+): Promise<'written' | 'gone'> =>
+  repo.tx(async tx => {
+    // Merged over what the block holds right now, read inside the
+    // transaction — the caller's value came off a render that may be behind.
+    const block = await tx.get(setId)
+    if (!block || block.deleted) return 'gone' as const
+    const weight = Math.max(0, patch.weight ?? numberAt(block, FIELD.weight, 0))
+    const reps = Math.max(0, patch.reps ?? numberAt(block, FIELD.reps, 0))
+    const unit = typeof block.properties[FIELD.unit] === 'string'
+      ? block.properties[FIELD.unit] as string
+      : ''
+    const side = block.properties[FIELD.side] === 'L' || block.properties[FIELD.side] === 'R'
+      ? block.properties[FIELD.side] as 'L' | 'R'
+      : undefined
+    await tx.setProperties(setId, {set: [
+      propertyValue(weightProp, weight),
+      propertyValue(repsProp, reps),
+    ]})
+    await tx.update(setId, {content: setContent({weight, reps, ...(side ? {side} : {})}, unit)})
+    return 'written' as const
+  }, {scope: ChangeScope.BlockDefault, description: 'Edit set'})
+
 // ──── closing ────
 
 export type FinishOutcome =
@@ -312,8 +357,18 @@ const setRecord = (block: BlockData): {weight: number; reps: number; side?: 'L' 
 export const finishSession = async (
   repo: Repo,
   workoutId: string,
-): Promise<FinishOutcome> =>
-  repo.tx(async tx => {
+  /** A layoff to record in the SAME transaction, when this session is the
+   *  first one back from a break.
+   *
+   *  Atomic with the finish, not a write beside it: the gap stops being
+   *  detectable the moment the finish lands (`detectPendingLayoff` reads no
+   *  gap on any later day), so writing it separately and failing loses the
+   *  record for good — every session after the first back silently returns to
+   *  full loads. */
+  layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>},
+): Promise<FinishOutcome> => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  return repo.tx(async tx => {
     // Checked here rather than trusted from the caller: another client can
     // close this workout between the tap and this transaction opening.
     const workout = await tx.get(workoutId)
@@ -338,6 +393,10 @@ export const finishSession = async (
       if (weight !== undefined) await tx.setProperty(entry.id, workingWeightProp, weight)
     }
 
+    if (layoff) {
+      await writeLayoffInTx(repo, tx, workout.workspaceId, layoff.pageId, layoff.record, typeSnapshot)
+    }
     await tx.setProperty(workoutId, statusProp, 'done')
     return 'done' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Finish session'})
+}

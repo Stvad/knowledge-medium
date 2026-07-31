@@ -357,24 +357,30 @@ export const roundToProp = seedProperty({
 // an option leaves a dangling link you can see rather than a map entry that
 // silently stops matching.
 
+// 2: `changeScope` UserPrefs → BlockDefault. The choice is a preference, but
+// it is STORED as a block, and the two cannot disagree: creating the block
+// needs a `block-default` transaction (`core.createChild` refuses any other),
+// while a UserPrefs property can only be written from a `user-prefs` one. So
+// the first pick for any group — the only one that creates — threw, and the
+// choice never got recorded. Nothing had covered the create path.
 export const choiceGroupProp = seedProperty({
   seedKey: extensionPropertySeedKey('choice-group'),
-  revision: 1,
+  revision: 2,
   name: FIELD.choiceGroup,
   preset: 'optional-ref',
   config: {targetTypes: [ALT_GROUP_TYPE]},
   defaultValue: undefined,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 
 export const choiceOptionProp = seedProperty({
   seedKey: extensionPropertySeedKey('choice-option'),
-  revision: 1,
+  revision: 2,
   name: FIELD.choiceOption,
   preset: 'optional-ref',
   config: {targetTypes: [EXERCISE_DEF_TYPE]},
   defaultValue: undefined,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 
 // ──── Program (blocks in the plan outline) ────

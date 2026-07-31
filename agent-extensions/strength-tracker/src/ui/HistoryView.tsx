@@ -6,15 +6,14 @@
 import {useMemo} from 'react'
 
 import {asymmetries, exerciseSeries, milestoneProgress, type SeriesPoint} from '../engine/trends'
-import type {ProgramState} from './useProgram'
+import type {ProgramConfig, WorkoutRecord} from '../engine/types'
 
 interface Props {
-  program: ProgramState
+  config: ProgramConfig
+  history: readonly WorkoutRecord[]
 }
 
-export function HistoryView({program}: Props) {
-  const {config, history} = program
-
+export function HistoryView({config, history}: Props) {
   const milestones = useMemo(() => milestoneProgress(history, config), [history, config])
   const asym = useMemo(() => asymmetries(history, config), [history, config])
   // The load-progressed main lifts, in program order, that have any history.

@@ -1,10 +1,15 @@
-/** Block renderer for the Strength Log page.
+/** The look-back view, as a renderer you can put on a block.
  *
- *  Mirrors the SRS deck renderer: keep the default block frame, swap the
- *  content area for the tracker (Tonight + look-back). The page's child
- *  workout blocks still render below as a plain, hand-editable outline —
- *  the "data as blocks" view — so nothing is hidden behind the UI.
+ *  What it is NOT any more: the place logging happens. Sessions live in the
+ *  outline where you logged them, so this page is a lens over history —
+ *  milestones, trends, asymmetry — and nothing here owns state.
+ *
+ *  Selected by the Strength Log page's own type, but the same renderer is
+ *  addressable by `renderer: strength/history` on any block, which is how a
+ *  view gets parameterised in this design: by properties, not by syntax.
  */
+
+import {useEffect, useState} from 'react'
 
 import {DefaultBlockRenderer} from '@/components/renderer/DefaultBlockRenderer.js'
 import {useRepo} from '@/context/repo.js'
@@ -12,39 +17,41 @@ import {getBlockTypes} from '@/data/properties.js'
 import {useWorkspaceId} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 
+import type {ProgramConfig} from '../engine/types'
+import {DEFAULT_CONFIG} from '../program/defaults'
 import {STRENGTH_LOG_TYPE} from '../km/fields'
+import {readProgram} from '../km/tonight'
 import {HistoryView} from './HistoryView'
-import {TonightView} from './TonightView'
-import {useProgram} from './useProgram'
+import {useSessionRows} from './decorations/sessionRows'
 
 const StrengthLogContent: BlockRenderer = ({block}: BlockRendererProps) => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block)
-  return workspaceId ? (
-    <StrengthTracker repo={repo} workspaceId={workspaceId} pageId={block.id} />
-  ) : (
-    <div className="py-2 text-sm text-muted-foreground">Loading…</div>
-  )
-}
-StrengthLogContent.displayName = 'StrengthLogContent'
+  // History is reactive (it is just blocks); the plan is read once, since
+  // milestones and trend names come from the program and it does not change
+  // while you look at a chart. Seeded with the plan-faithful defaults so the
+  // view is usable the instant it mounts.
+  const [config, setConfig] = useState<ProgramConfig>(DEFAULT_CONFIG)
+  const {history} = useSessionRows(workspaceId)
 
-function StrengthTracker({
-  repo,
-  workspaceId,
-  pageId,
-}: {
-  repo: ReturnType<typeof useRepo>
-  workspaceId: string
-  pageId: string
-}) {
-  const program = useProgram(repo, workspaceId, pageId)
+  useEffect(() => {
+    if (!workspaceId) return
+    let cancelled = false
+    void readProgram(repo, workspaceId)
+      .then(snapshot => { if (!cancelled) setConfig(snapshot.config) })
+      .catch((error: unknown) => console.error('[strength] could not read the plan outline', error))
+    return () => { cancelled = true }
+  }, [repo, workspaceId])
+
+  if (!workspaceId) return <div className="py-2 text-sm text-muted-foreground">Loading…</div>
+
   return (
     <div className="strength-tracker flex w-full max-w-2xl flex-col gap-8 py-2">
-      <TonightView repo={repo} workspaceId={workspaceId} pageId={pageId} program={program} />
-      <HistoryView program={program} />
+      <HistoryView config={config} history={history}/>
     </div>
   )
 }
+StrengthLogContent.displayName = 'StrengthLogContent'
 
 export const StrengthLogRenderer: BlockRenderer = Object.assign(
   (props: BlockRendererProps) => (
