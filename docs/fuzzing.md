@@ -424,10 +424,22 @@ for likely-fragile functions. Product bugs it found:
   bogus multi-decade "ago" label instead of hiding the line. The copy is
   deleted rather than fixed.
 - The `searchSourcesFacet` merge resolved a duplicated block id
-  PAIRWISE, so which contribution's payload survived depended on the
-  order the sources happened to settle — a different answer run to run
-  over identical data (issue #450). Both the rule and its docblock are
-  now stated over the whole group.
+  PAIRWISE — "newest, else higher score" is non-associative, so which
+  contribution's payload survived depended on fold order (issue #450).
+  Fold order here is source REGISTRATION order, not settle order:
+  `Promise.all` preserves its input array, so `candidateLists.flat()`
+  is deterministic however the sources' promises resolve. Not run to
+  run, then — the same data merged differently depending on which
+  plugins had contributed a source and in what order. Both the rule and
+  its docblock are now stated over the whole group.
+  A follow-up: the fix gated the whole-group rule on `typeof ===
+  'number'`, which `NaN` passes and then loses every comparison to,
+  including `NaN !== NaN` — so `reduce` returned whatever it was
+  holding and fold-order dependence came straight back. `Number.isFinite`
+  now, and the generator emits `NaN`/`±Infinity` so the differential can
+  reach the branch at all. Caught by review, not by running: the arbitrary
+  drew only integers and `undefined`, AND the oracle carried the same
+  `typeof` gate, so the property agreed with the bug.
 - A raw `tx.restore` re-applies the tombstone's STORED alias bag, which
   can hold a claim some other live block took while the page was dead;
   the re-insert trips the uniqueness trigger and rolls back the caller's
