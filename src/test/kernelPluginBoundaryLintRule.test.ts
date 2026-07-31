@@ -616,6 +616,36 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
           data: { specifier: './todo/**' },
         }],
       },
+      // A `base` that itself points OUTSIDE the source root is legal, and used
+      // to fall back silently to the importer's own directory — resolving the
+      // pattern somewhere it does not live.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./src/plugins/todo/**', { base: '../..' })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './src/plugins/todo/**' },
+        }],
+      },
+      // A base behind a template whose interpolations are themselves static.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: "const m = import.meta.glob('./todo/**', { base: `/src/${'plugins'}` })",
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
+        }],
+      },
+      // Dot segments inside a ROOT-relative glob. The old root branch returned
+      // the remainder unnormalized, so the first segment read as core.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('/src/components/../plugins/todo/**')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '/src/components/../plugins/todo/**' },
+        }],
+      },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,
       // so it must not clear the call the way `!/src/plugins/**` does.
       {

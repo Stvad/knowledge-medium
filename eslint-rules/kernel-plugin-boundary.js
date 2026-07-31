@@ -158,32 +158,43 @@ const isInsidePlugin = (srcRelative) => /^plugins\/[^/]+\//.test(srcRelative)
 const isAllowedFile = (importerSrcRelative, allowIn = []) =>
   allowIn.some(allowed => normalizePath(allowed) === `src/${importerSrcRelative}`)
 
-/** Resolve an import specifier to a src-relative path, or undefined when it
- *  can't point inside `src/` (a bare package name, or a path that really does
- *  leave the tree). The `/src/…` form is not hypothetical — it is what
- *  `import.meta.glob` patterns use (see `plugins/agent-runtime/authoringCatalog.ts`).
+/** The absolute path a specifier points at, or undefined for a bare package
+ *  name. ONE resolver for every form, because the alternative — a branch per
+ *  shape, each reasoning in its own coordinate space — is what produced four
+ *  separate "broad pattern escapes" bugs in this rule: a root-relative glob, a
+ *  globby root segment, a brace spanning a `/`, and a pattern climbing above the
+ *  source root and back in. Absolute space collapses all of them, because
+ *  `posix.resolve` normalizes `..` and `//` for free and a path that leaves and
+ *  re-enters lands where it actually lands.
  *
- *  Every form is resolved in ABSOLUTE space and only then made src-relative.
- *  Slicing the prefix off and reasoning in src-relative space looks equivalent
- *  and isn't: a specifier that leaves the source root and comes back —
- *  `@/../src/plugins/todo/schema.js`, or `../../src/plugins/todo/schema.js`
- *  from `src/data/` — reduces to a `../…` string and reads as "escaped", while
- *  the bundler resolves both to the todo plugin. Absolute resolution collapses
- *  the round trip, so leaving and re-entering lands where it actually lands.
- *  Glob metacharacters survive this untouched — it is pure path arithmetic. */
-const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
+ *  Glob metacharacters ride through untouched — this is pure path arithmetic,
+ *  so the same function serves module specifiers and glob patterns. */
+const toAbsolute = (source, importerDir, sourceRoot) => {
   const specifier = normalizePath(source)
   const repoRoot = posix.dirname(sourceRoot)
-  const absolute =
-    // `slice(2)` then strip leading separators: `@//plugins/x` would otherwise
-    // hand `posix.resolve` an ABSOLUTE suffix, which discards sourceRoot and
-    // sends a real plugin import off to a filesystem path outside the tree.
-    specifier.startsWith('@/') ? posix.resolve(sourceRoot, specifier.slice(2).replace(/^\/+/, ''))
-    : specifier.startsWith('/src/') ? posix.resolve(repoRoot, specifier.slice(1))
-    : specifier.startsWith('src/') ? posix.resolve(repoRoot, specifier)
-    : specifier.startsWith('./') || specifier.startsWith('../')
-      ? posix.resolve(posix.dirname(posix.resolve(sourceRoot, importerSrcRelative)), specifier)
-      : undefined
+  // Leading separators are stripped so `posix.resolve` can't be handed an
+  // ABSOLUTE suffix, which would discard the base and send a real plugin import
+  // off to a filesystem path outside the tree (`@//plugins/x`).
+  const under = (base, rest) => posix.resolve(base, rest.replace(/^\/+/, ''))
+  if (specifier.startsWith('@/')) return under(sourceRoot, specifier.slice(2))
+  // Vite's filesystem-qualified form — the remainder is already absolute.
+  if (specifier.startsWith('/@fs/')) return under('/', specifier.slice('/@fs/'.length))
+  // Root-relative, i.e. relative to the Vite root. Not just `/src/…`: `/docs/…`
+  // resolves too and is then correctly found to be outside the source root.
+  if (specifier.startsWith('/')) return under(repoRoot, specifier)
+  if (specifier.startsWith('src/')) return posix.resolve(repoRoot, specifier)
+  if (specifier.startsWith('./') || specifier.startsWith('../')) return posix.resolve(importerDir, specifier)
+  return undefined
+}
+
+/** The directory a src-relative file sits in, absolute. */
+const absoluteDirOf = (srcRelative, sourceRoot) =>
+  posix.dirname(posix.resolve(sourceRoot, srcRelative))
+
+/** Resolve an import specifier to a src-relative path, or undefined when it
+ *  can't point inside `src/`. */
+const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
+  const absolute = toAbsolute(source, absoluteDirOf(importerSrcRelative, sourceRoot), sourceRoot)
   return absolute === undefined ? undefined : srcRelativePath(absolute, sourceRoot)
 }
 
@@ -194,8 +205,14 @@ const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
 const staticString = (node) => {
   const el = node?.type === 'TSLiteralType' ? node.literal : node
   if (el?.type === 'Literal') return typeof el.value === 'string' ? el.value : undefined
-  if (el?.type === 'TemplateLiteral' && el.expressions.length === 0) {
-    return el.quasis[0].value.cooked ?? undefined
+  // A template whose interpolations are THEMSELVES static folds to one string,
+  // exactly as literalSqlText does it: `` `/src/${'plugins'}` `` is knowable.
+  if (el?.type === 'TemplateLiteral') {
+    const parts = el.quasis.map(quasi => quasi.value.cooked)
+    if (parts.some(part => part === null || part === undefined)) return undefined
+    const filled = el.expressions.map(staticString)
+    if (filled.some(part => part === undefined)) return undefined
+    return parts.reduce((out, part, i) => out + (i === 0 ? '' : filled[i - 1]) + part, '')
   }
   // A `+` chain of static parts is as knowable as one literal, and Vite folds
   // it the same way. Same contract as no-raw-synced-table-writes' literalSqlText:
@@ -274,7 +291,7 @@ const expandBraces = (segment) => {
 }
 
 /** Whether one glob path segment can match a literal directory name.
- *  Conservative by design — see the note in `globReachesPluginLayer`. */
+ *  Conservative by design — see the note in `globReachesPluginRoot`. */
 const segmentCanMatch = (segment, literal) =>
   expandBraces(segment).some(candidate =>
     // A literal `plugins`, or anything still holding a glob metacharacter.
@@ -285,18 +302,32 @@ const segmentCanMatch = (segment, literal) =>
     // literals and is correctly left alone.
     candidate === literal || GLOB_METACHARACTER.test(candidate))
 
-const globReachesPluginLayer = (pattern) => {
-  const first = pattern?.split('/')[0]
-  if (first === undefined) return false
-  // A pattern that begins `**` is resolved from the project root and spans every
-  // directory under it, `src/plugins` included.
-  if (first === '**') return true
-  return segmentCanMatch(first, 'plugins')
+/** Whether a glob PATTERN — already absolute — can match anything inside the
+ *  plugin layer. Asked as one question in one coordinate space, instead of the
+ *  per-shape branches that kept letting the broadest patterns through.
+ *
+ *  Three cases, and only three:
+ *    1. the static head is already at or inside the plugin root — reaches;
+ *    2. the static head is somewhere else entirely (a sibling, another tree) —
+ *       a glob cannot climb sideways, so it never reaches;
+ *    3. the static head is ABOVE the plugin root — the globby remainder has to
+ *       span the gap, so match it segment by segment against the path down.
+ *  A leading `**` spans any depth, and a brace group that survives the segment
+ *  split unbalanced can't be reasoned about at all; both flag conservatively. */
+const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
+  if (absolutePattern === undefined) return false
+  const {head, rest} = staticHead(absolutePattern)
+  const headPath = posix.normalize(head)
+  if (!outsideRoot(posix.relative(pluginsRoot, headPath))) return true
+  const gap = posix.relative(headPath, pluginsRoot)
+  if (outsideRoot(gap)) return false
+  const restSegments = rest === '' ? [] : rest.split('/')
+  if (restSegments.length === 0) return false
+  if (restSegments[0] === '**' || restSegments.some(hasUnbalancedBrace)) return true
+  return gap.split('/').every((needed, i) =>
+    restSegments[i] !== undefined && segmentCanMatch(restSegments[i], needed))
 }
 
-/** A brace group that spans a `/` (`{src/plugins,src/components}`) survives the
- *  segment split as an unbalanced fragment, so no per-segment reasoning about it
- *  is sound. Flag and let the author opt out rather than guess. */
 /** Split a glob into its static leading segments and the globby remainder. */
 const staticHead = (pattern) => {
   const segments = pattern.split('/')
@@ -398,6 +429,9 @@ const noCoreToPluginImports = {
     const filename = getFilename(context)
     const sourceRoot = normalizePath(context.options[0].sourceRoot)
     const importerSrcRelative = srcRelativePath(filename, sourceRoot)
+    const importerDir = importerSrcRelative === undefined
+      ? undefined
+      : absoluteDirOf(importerSrcRelative, sourceRoot)
 
     // Only CORE files can violate this: a file outside `src/` isn't in either
     // layer, and a plugin importing a plugin is explicitly allowed. Checking
@@ -420,71 +454,48 @@ const noCoreToPluginImports = {
       // it is reported as one — it pulls in every plugin that matches, not one.
       const glob = templateGlob(sourceNode)
       if (glob !== undefined
-        && globReachesPluginLayer(resolveSpecifier(glob, importerSrcRelative, sourceRoot))) {
+        && globReachesPluginRoot(
+          toAbsolute(glob, importerDir, sourceRoot), posix.join(sourceRoot, 'plugins'),
+        )) {
         context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier: glob}})
       }
     }
 
-    /** Globs need their own classifier — see `globReachesPluginLayer`. A
+    /** Globs need their own classifier — see `globReachesPluginRoot`. A
      *  pattern names no single plugin, so the message names the layer. */
     const checkGlob = (node, sourceNode, optionsNode) => {
       const patterns = specifierLiterals(sourceNode)
-      // `import.meta.glob('./todo/**', {base: '/src/plugins'})` — a supported
-      // Vite form that resolves the pattern under the base, not under the
-      // importing file. Resolving against a synthetic file inside the base dir
-      // reuses the same relative-specifier path as everything else.
-      const base = staticString(propertyValue(optionsNode, 'base'))
-      const resolvedBase = base === undefined
-        ? undefined
-        : resolveSpecifier(base.endsWith('/') ? base : `${base}/`, importerSrcRelative, sourceRoot)
-      const importerForPattern = resolvedBase === undefined
-        ? importerSrcRelative
-        : posix.join(resolvedBase, '__glob_base__')
-      const resolve = (pattern) => {
-        // A bare leading `**` is root-relative, so it is not a module specifier
-        // at all — hand it through untouched for globReachesPluginLayer.
-        if (pattern.startsWith('**')) return pattern
-        // A root-relative GLOB may have a globby root segment (`/s[r]c/…`,
-        // `/{src,dist}/…`), which `resolveSpecifier`'s literal `/src/` prefix
-        // check rejects outright — so the broadest patterns slipped past while
-        // the plainly-spelled ones were caught. Decide the root segment the
-        // same way every other segment is decided.
-        if (pattern.startsWith('/')) {
-          const [root, ...rest] = pattern.slice(1).split('/')
-          // Hand the pattern back whole rather than naming a synthetic one:
-          // `globReachesPluginLayer` sees the `{` and flags it, and it matches no
-          // CLEARS_PLUGIN_LAYER entry, so an unbalanced-brace NEGATION cannot
-          // spuriously clear the call.
-          if (hasUnbalancedBrace(root)) return pattern.slice(1)
-          return segmentCanMatch(root, 'src') ? rest.join('/') : undefined
-        }
-        return resolveSpecifier(pattern, importerForPattern, sourceRoot)
-      }
+      const repoRoot = posix.dirname(sourceRoot)
+      const pluginsRoot = posix.join(sourceRoot, 'plugins')
+      // `import.meta.glob('./todo/**', {base: '/src/plugins'})` resolves the
+      // pattern under the base, not under the importing file. Kept ABSOLUTE: a
+      // base outside the source root (`base: '../..'`) is perfectly legal and
+      // used to fall back silently to the importer's own directory, quietly
+      // resolving the pattern somewhere it does not live.
+      const baseAbsolute = ((base) =>
+        base === undefined ? undefined : toAbsolute(`${base}/`, importerDir, sourceRoot)
+      )(staticString(propertyValue(optionsNode, 'base')))
+      const patternDir = baseAbsolute ?? importerDir
+      // A bare leading `**` is relative to the Vite root, not to the importer.
+      const absolute = (pattern) => pattern.startsWith('**')
+        ? posix.resolve(repoRoot, pattern)
+        : toAbsolute(pattern, patternDir, sourceRoot)
+
       // `import.meta.glob(['/src/**', '!/src/plugins/**'])` reaches no plugin at
-      // all — the exclusion is the whole point. Only the canonical
-      // whole-subtree spelling clears the call: a narrower exclusion
-      // (`!/src/plugins/todo/**`) still leaves every OTHER plugin in the
-      // expansion, so it is deliberately not honoured and the author opts out
-      // inline instead.
-      if (patterns.some(p => p.startsWith('!') && CLEARS_PLUGIN_LAYER.has(resolve(p.slice(1))))) return
-      // A relative glob can climb ABOVE the source root and descend back in:
-      // `../../**` + `/*.ts` from `src/extensions/` resolves to the repo root,
-      // and `**` from there sweeps `src/plugins` right back up. Resolving only
-      // the literal prefix said "outside the tree" and the whole pattern went
-      // unchecked — the same broad-patterns-escape shape as the root-segment
-      // bug. Only an ANCESTOR of the source root can descend back into it, and
-      // only a `**` can span the unknown depth between, so both are required.
-      const escapesAndReturns = (pattern) => {
-        if (!pattern.startsWith('./') && !pattern.startsWith('../')) return false
-        const {head, rest} = staticHead(pattern)
-        const importerDir = posix.dirname(posix.resolve(sourceRoot, importerForPattern))
-        return rest.startsWith('**')
-          && !outsideRoot(posix.relative(posix.resolve(importerDir, head), sourceRoot))
+      // all — the exclusion is the whole point. Only a whole-layer spelling
+      // clears the call: a narrower exclusion (`!/src/plugins/todo/**`) still
+      // leaves every OTHER plugin in the expansion, so the author opts out
+      // inline instead. Matched on the src-relative form when the pattern lands
+      // inside `src/`, and on the raw text for the project-wide spelling.
+      const clears = (pattern) => {
+        const inside = srcRelativePath(absolute(pattern) ?? '', sourceRoot)
+        return CLEARS_PLUGIN_LAYER.has(inside ?? posix.normalize(pattern))
       }
+      if (patterns.some(p => p.startsWith('!') && clears(p.slice(1)))) return
 
       for (const specifier of patterns) {
         if (specifier.startsWith('!')) continue
-        if (!escapesAndReturns(specifier) && !globReachesPluginLayer(resolve(specifier))) continue
+        if (!globReachesPluginRoot(absolute(specifier), pluginsRoot)) continue
         context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier}})
       }
     }
