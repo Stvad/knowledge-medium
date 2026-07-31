@@ -174,6 +174,22 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: "const m = await import(`./${'../data'}/${name}.ts`)",
       },
+      // A glob that can only reach a LOOSE file under `src/plugins/` depends on
+      // no plugin — same rule `owningPlugin` applies to ordinary imports, which
+      // the glob path was contradicting.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/plugins/shared.css')`,
+      },
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/plugins/*.css')`,
+      },
+      // A conditional whose branches are both core stays clean.
+      {
+        filename: core('data/repo.ts'),
+        code: `const m = await import(cond ? './typesPage.js' : './recentsPage.js')`,
+      },
       // `types=` names a package, not a path — and a `path=` to a core module is
       // the sanctioned direction.
       {
@@ -739,6 +755,34 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: './../plugins/todo/*.tsx' },
+        }],
+      },
+      // The assertion wrapping the OPTIONS OBJECT, not its members. Fifth site
+      // of the same unwrap fix — the type test ran before unwrapping again.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', ({ base: '/src/plugins' } as const))`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
+        }],
+      },
+      // Both branches of a conditional are real specifiers — the bundler emits
+      // a chunk for each. Checked in either position.
+      {
+        filename: core('data/repo.ts'),
+        code: `const m = await import(cond ? '@/plugins/todo/schema.js' : './typesPage.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: `const m = await import(cond ? './typesPage.js' : '@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,

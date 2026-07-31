@@ -277,29 +277,18 @@ const templateGlob = (node) => {
 }
 
 const specifierLiterals = (node) => {
-  // Unwrap FIRST: `['…'] as const` is idiomatic, and testing the node type
-  // before unwrapping saw a TSAsExpression and treated the whole array as a
-  // single non-static element.
-  const unwrapped = unwrap(node)
-  const elements = unwrapped?.type === 'ArrayExpression' ? unwrapped.elements : [unwrapped]
-  return elements
-    .map(staticString)
-    .filter(value => value !== undefined)
+  const el = unwrap(node)
+  // `import.meta.glob([...])` takes an array, and a conditional names TWO real
+  // specifiers — the bundler emits a chunk for each branch, folding the
+  // condition when it can. Recursive so an array of conditionals works too.
+  if (el?.type === 'ArrayExpression') return el.elements.flatMap(specifierLiterals)
+  if (el?.type === 'ConditionalExpression') {
+    return [el.consequent, el.alternate].flatMap(specifierLiterals)
+  }
+  const value = staticString(el)
+  return value === undefined ? [] : [value]
 }
 
-/** Whether a resolved `import.meta.glob` PATTERN can expand into the plugin
- *  layer. `owningPlugin` is the wrong test for a glob: it reads the pattern as
- *  a literal path, so `**` + `/*.ts` and `{components,plugins}/**` — both of
- *  which Vite expands into `src/plugins` — came back "not a plugin" and the
- *  broadest globs sailed through while only the explicitly-`plugins/`-prefixed
- *  one was caught.
- *
- *  Only the FIRST segment decides whether `src/plugins` is reachable at all, so
- *  that is all this inspects. Deliberately conservative: a `*` in the first
- *  segment matches the `plugins` directory like any other, so it counts even
- *  though the rest of the pattern might exclude every real plugin file. A glob
- *  is a coarse dependency by nature; a false alarm here is cheap to silence
- *  inline, a miss is invisible. */
 // Exclusions that remove the WHOLE plugin layer, so a broad positive alongside
 // one of them depends on no plugin. Line comments, not JSDoc: these patterns
 // contain `*` followed by `/`, which would close a block comment.
@@ -372,7 +361,18 @@ const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
   if (absolutePattern === undefined) return false
   const {head, rest} = staticHead(absolutePattern)
   const headPath = posix.normalize(head)
-  if (!outsideRoot(posix.relative(pluginsRoot, headPath))) return true
+  const insidePlugins = posix.relative(pluginsRoot, headPath)
+  if (!outsideRoot(insidePlugins)) {
+    // Inside `src/plugins/` is not enough: a loose file directly under it is
+    // CORE (same rule `owningPlugin` applies to ordinary imports), so the
+    // pattern has to be able to reach `plugins/<name>/<something>` — two
+    // segments down — before it depends on a plugin at all. `/src/plugins/*.css`
+    // and `/src/plugins/shared.css` reach exactly one, and are core→core.
+    const already = insidePlugins === '' ? 0 : insidePlugins.split('/').length
+    if (already >= 2) return true
+    const restSegments = rest === '' ? [] : rest.split('/')
+    return restSegments.includes('**') || already + restSegments.length >= 2
+  }
   const gap = posix.relative(headPath, pluginsRoot)
   if (outsideRoot(gap)) return false
   return canDescendTo(rest === '' ? [] : rest.split('/'), gap.split('/'))
@@ -410,7 +410,10 @@ const isImportMetaUrl = (node) =>
 /** The value node of a named property on an object literal, or undefined. Used
  *  to read `import.meta.glob`'s `base` option; a computed or spread property is
  *  not statically known and drops out. */
-const propertyValue = (objectNode, name) => {
+const propertyValue = (node, name) => {
+  // Unwrap before the type test — `({base: …} as const)` asserts the OBJECT, not
+  // its members, and testing first made the whole options literal invisible.
+  const objectNode = unwrap(node)
   if (objectNode?.type !== 'ObjectExpression') return undefined
   // Last write wins, and a spread of an object LITERAL is statically known —
   // Vite evaluates it the same way. A spread of an identifier (`{...GLOB_OPTS}`)
