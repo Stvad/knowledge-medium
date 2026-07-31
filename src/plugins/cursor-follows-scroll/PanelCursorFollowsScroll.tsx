@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { usePropertyValue } from '@/hooks/block.js'
 import {
   focusBlock,
@@ -68,6 +68,12 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
   const [isEditing] = usePropertyValue(block, isEditingProp)
   const focusedBlockId = focusedLocation?.blockId
   const renderScopeId = focusedLocation?.renderScopeId
+  // The live settle, reachable from the edit-mode effect below without making
+  // `isEditing` a dependency of the main one. It was a dependency for exactly
+  // one revision, and that made the retry INERT: re-running the effect resets
+  // `seenOnScreen`, and the row is off screen in the very case the retry
+  // exists for, so the retry's own precondition was never met.
+  const settleRef = useRef<(() => void) | null>(null)
 
   // Depend on the two primitives, not the decoded object: a fresh identity on
   // an unrelated re-render would re-run the effect and clear `seenOnScreen`
@@ -125,11 +131,9 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       settleTimer = setTimeout(settle, SCROLL_SETTLE_MS)
     }
 
+    settleRef.current = settle
+
     sample()
-    // Leaving edit mode re-runs the decision once, which is what makes the
-    // refusal above a deferral rather than a silent drop. Costs nothing when
-    // the cursor is still on screen: `resolveSettledAnchor` returns null.
-    if (seenOnScreen && !isEditing) settle()
     // The cursor's row often doesn't exist yet — a cold load, or a restore
     // waiting on `FocusedRowLazyMount` to materialize deferred ancestors. Watch
     // for it rather than leaving `seenOnScreen` to the next scroll event: a
@@ -153,8 +157,26 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       if (settleTimer) clearTimeout(settleTimer)
       clearTimeout(mountWatchDeadline)
       stopWatchingForMount()
+      settleRef.current = null
     }
-  }, [block, focusedBlockId, renderScopeId, isEditing])
+  }, [block, focusedBlockId, renderScopeId])
+
+  // Leaving the editor re-runs the decision once, which is what makes the
+  // edit-mode refusal a DEFERRAL rather than a silent drop: a scroll while the
+  // editor is open is declined, and without this nothing would reconsider until
+  // the user happened to scroll again — leaving the cursor on the row they
+  // scrolled away from, and the next motion or restore going back to it.
+  //
+  // Its own effect, so the main one keeps running across the transition and
+  // `seenOnScreen` survives it. Deliberately NOT gated on `seenOnScreen`: there
+  // is no catch-up scroll in flight when an editor closes, which is the only
+  // thing that gate protects against.
+  const wasEditing = useRef(false)
+  useEffect(() => {
+    const left = wasEditing.current && !isEditing
+    wasEditing.current = Boolean(isEditing)
+    if (left) settleRef.current?.()
+  }, [isEditing])
 
   return null
 }

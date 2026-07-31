@@ -167,6 +167,8 @@ export const alignScrollportToRow = (
   /** The port we last aligned, and the offset we left it at. Anything that
    *  moves it off that value afterwards is someone else scrolling. */
   let aligned: {port: HTMLElement; scrollTop: number} | null = null
+  /** The port the takeover listener is currently attached to. */
+  let watchedPort: HTMLElement | null = null
 
   const finish = () => {
     if (done) return
@@ -178,7 +180,8 @@ export const alignScrollportToRow = (
     scrollEl.removeEventListener('wheel', finish)
     scrollEl.removeEventListener('touchmove', finish)
     scrollEl.removeEventListener('keydown', finish)
-    aligned?.port.removeEventListener('scroll', onScroll)
+    watchedPort?.removeEventListener('scroll', onScroll)
+    watchedPort = null
   }
 
   /** A scroll of the port we aligned that didn't come from us. Covers the ways
@@ -200,10 +203,18 @@ export const alignScrollportToRow = (
    *  wait that may never end (a legacy `outline:` scope is rewritten out from
    *  under the stored location, so the exact row can never arrive). Leaving it
    *  to the window meant a scrollbar drag went unnoticed for the rest of that
-   *  wait and the next mutation snapped the pane back. */
+   *  wait and the next mutation snapped the pane back.
+   *
+   *  Tracked by PORT rather than as a one-shot flag: successive alignments can
+   *  land in different ports (a block-id fallback in the pane's own container,
+   *  then the exact copy inside a nested aside), and a flag would leave the
+   *  listener on the port we are no longer moving — unwatched where it matters
+   *  and leaked where it doesn't. */
   const watchForTakeover = (port: HTMLElement) => {
-    if (aligned) return
+    if (watchedPort === port) return
+    watchedPort?.removeEventListener('scroll', onScroll)
     port.addEventListener('scroll', onScroll, {passive: true})
+    watchedPort = port
   }
 
   const beginCorrectionWindow = () => {

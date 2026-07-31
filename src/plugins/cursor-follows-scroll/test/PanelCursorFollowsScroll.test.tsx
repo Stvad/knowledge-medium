@@ -273,6 +273,33 @@ describe('PanelCursorFollowsScroll', () => {
     expect(peekFocusedBlockLocation(panel)?.blockId).toBe('c')
   })
 
+  // The refusal above is a DEFERRAL, not a drop: scroll the open editor off
+  // screen, press Escape without scrolling again, and the cursor must catch up.
+  // The first attempt at this was inert — it re-ran the effect, which resets
+  // `seenOnScreen`, and the row is off screen in exactly this scenario.
+  it('catches up when the editor closes after being scrolled off screen', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE, edit: true})
+    expect(panel.peekProperty(isEditingProp)).toBe(true)
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+
+    // Scrolling with the editor open is refused — the cursor stays on `a`.
+    dom.moveRow('a', -400)
+    dom.moveRow('b', 20)
+    dom.scroll()
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
+
+    // Escape, with no further scrolling.
+    await panel.set(isEditingProp, false)
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
+    })
+  })
+
   // `focusBlock` only preserves edit mode for an unchanged location, so
   // re-anchoring mid-edit closes the editor under the user — which is what
   // scrolling with the on-screen keyboard up would otherwise do on a phone.

@@ -391,6 +391,48 @@ describe('alignScrollportToRow — when the anchor never appears', () => {
     cancel()
   })
 
+  // Successive alignments can land in different ports: a block-id fallback in
+  // the pane's own container, then the exact copy inside a nested aside. A
+  // one-shot arm left the listener on the port we were no longer moving —
+  // unwatched where it mattered, leaked where it didn't. The fallback has to
+  // land FIRST for the transition to happen at all.
+  it('rebinds takeover detection when the anchor moves to another port', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+    addRow('row-b', 'some-other-scope', 300)
+
+    const cancel = alignScrollportToRow(port, LOCATION, {realignWindowMs: 1000})
+    // Fallback alignment, in the pane's own port.
+    expect(port.scrollTop).toBe(300)
+
+    // NOW the exact scoped copy hydrates, inside a nested port.
+    const nested = document.createElement('div')
+    nested.style.overflowY = 'auto'
+    nested.getBoundingClientRect = () => rectAt(100, 400)
+    port.appendChild(nested)
+    const exact = document.createElement('div')
+    exact.setAttribute('data-block-id', 'row-b')
+    exact.setAttribute('data-render-scope-id', 'panel:page')
+    exact.getBoundingClientRect = () => rectAt(500, 30)
+    nested.appendChild(exact)
+    nested.scrollTop = 0
+
+    await vi.waitFor(() => {
+      expect(nested.scrollTop).toBe(400)
+    })
+
+    // The user drags THAT port's scrollbar — the one we are now moving.
+    nested.scrollTop = 50
+    nested.dispatchEvent(new Event('scroll'))
+
+    exact.getBoundingClientRect = () => rectAt(300, 30)
+    nested.appendChild(document.createElement('div'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(nested.scrollTop).toBe(50)
+    cancel()
+  })
+
   it('does not use the offset once the anchor has been found', async () => {
     const {port, addRow} = build(100)
     port.scrollTop = 0
