@@ -41,9 +41,39 @@ describe('decidePending', () => {
       .toEqual({pending: true, reason: 'pending'})
   })
 
-  it.each(['queued', 'done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
+  it.each(['done', 'error'] as const)('skips blocks already claimed with status=%s', status => {
     const source = block({properties: {[PROPS.status]: status}})
     expect(decidePending({source, nowMs: NOW}).pending).toBe(false)
+  })
+
+  describe('queued = deferred after a retryable infrastructure failure', () => {
+    it('holds the task until agent:retry-after comes due, then re-fires it', () => {
+      const waiting = block({properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW + 30_000}})
+      expect(decidePending({source: waiting, nowMs: NOW}))
+        .toEqual({pending: false, reason: 'retry-waiting'})
+
+      const due = block({properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW}})
+      expect(decidePending({source: due, nowMs: NOW}))
+        .toEqual({pending: true, reason: 'retry-due'})
+    })
+
+    it('re-fires a queued task with no readable retry-after rather than stranding it', () => {
+      // Nothing else moves a `queued` block, so "can't tell when" must mean
+      // "now" — the opposite choice wedges the task forever.
+      for (const retryAfter of [undefined, 0, 'soon', Number.NaN]) {
+        const source = block({properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: retryAfter}})
+        expect(decidePending({source, nowMs: NOW})).toEqual({pending: true, reason: 'retry-due'})
+      }
+    })
+
+    it('ignores the quiet and baseline gates — the task was already claimed once', () => {
+      const source = block({
+        properties: {[PROPS.status]: 'queued', [PROPS.retryAfter]: NOW},
+        editedAtMs: NOW - 1_000,
+      })
+      expect(decidePending({source, nowMs: NOW, quietMs: 60_000, baselineMs: NOW + 1_000}))
+        .toEqual({pending: true, reason: 'retry-due'})
+    })
   })
 
   it('skips a fresh running block but re-queues a stale one (crashed run)', () => {
