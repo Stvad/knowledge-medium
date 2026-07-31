@@ -94,12 +94,16 @@ const say = (k, v) => console.log(`\n### ${k}\n` + JSON.stringify(v, null, 2))
   b.exec('PRAGMA analysis_limit=400')
   const m = masks(b)
   b.exec('PRAGMA optimize')
+  // Derived from the stat row, not from `!!db` — that was truthy no matter what
+  // (a closed DatabaseSync is still an object), so it reported success even if
+  // the behaviour under test had regressed.
+  const wsAliasStat = b.prepare(
+    `SELECT stat FROM sqlite_stat1 WHERE tbl='block_references' AND idx='idx_block_references_ws_alias'`,
+  ).get()?.stat ?? null
   say('S4/new-index, nothing planned', {
     ...Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.filter(s => s.includes('block_references'))])),
-    actuallyFixed: !!db,
-    wsAliasStat: b.prepare(
-      `SELECT stat FROM sqlite_stat1 WHERE tbl='block_references' AND idx='idx_block_references_ws_alias'`,
-    ).get()?.stat ?? null,
+    actuallyFixed: wsAliasStat !== null,
+    wsAliasStat,
   })
   b.close()
 }

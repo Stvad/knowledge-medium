@@ -95,7 +95,13 @@ for (let i = 0; i < N_BLOCKS; i++) {
     : '[]'
   const refTarget = i < N_REF_TARGET ? blockId(Math.floor(rnd() * N_TARGETS)) : null
   const props = i < N_DAILY
-    ? `{"daily-note-date":"2026-${String((i % 12) + 1).padStart(2, '0')}-${String((i % 28) + 1).padStart(2, '0')}"}`
+    // `daily-note:date`, NOT `daily-note-date`: idx_blocks_daily_note_date is an
+    // expression index over json_extract(..., '$."daily-note:date"'), so the
+    // wrong key leaves it empty and the fixture silently stops modelling it.
+    // One row per DATE, like the live client (4164 rows, 1 per key): a daily note
+    // is unique per day, and repeating dates would model the index's selectivity
+    // wrong even with the row count right.
+    ? `{"daily-note:date":"${new Date(Date.UTC(2015, 0, 1 + i)).toISOString().slice(0, 10)}"}`
     : '{}'
   insBlock.run(
     blockId(i), wsId(w), parent, `a${i.toString(36)}`,

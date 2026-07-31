@@ -1574,13 +1574,22 @@ const readOptimizeRows = (result: unknown): string[] | null => {
  *  escape hatch whose entire point is being exact.
  *
  *  Scope, stated because it is not total: this serializes callers in ONE tab.
- *  PowerSync's shared worker owns the connection across tabs, so two tabs both
- *  running a maintenance pass within the same few milliseconds can still
- *  interleave. Closing that would mean holding a write lock across the whole
- *  sequence, which the {@link ClientSchemaBootstrapDb} surface (deliberately
- *  execute/getOptional only, so bootstrap shims satisfy it) cannot express. The
- *  residual is narrow and self-limiting: both tabs read the same database, so a
- *  pass that loses the limit is also a pass that had nothing to do. */
+ *  PowerSync's shared worker owns the connection across tabs, so two tabs can
+ *  still interleave, in BOTH directions — an earlier version of this comment
+ *  claimed the automatic direction was self-limiting ("a pass that loses the
+ *  limit is a pass with nothing to do"), which is wrong: the clobber can land
+ *  after that pass's dry run has already found work, so it analyzes real work
+ *  unbounded.
+ *
+ *  Not closed, deliberately. Closing it means holding a write lock across the
+ *  whole sequence, and {@link ClientSchemaBootstrapDb} is execute/getOptional
+ *  only so that bootstrap shims satisfy it — threading a lock through would mean
+ *  every statement here moving onto a transaction-scoped handle, where a stray
+ *  `db.execute` deadlocks against the lock its own caller holds. That risk is
+ *  worse than the bug: the cross-tab window is now ONE statement boundary (see
+ *  the ordering in {@link runAnalyzeIfStale}), and the cost of losing the race
+ *  is an unbounded single-table ANALYZE (measured 147ms vs 52ms on a 347k
+ *  client) or a manual pass that comes back sampled, which re-running fixes. */
 let analyzeChain: Promise<unknown> = Promise.resolve()
 const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
   // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
@@ -1602,10 +1611,19 @@ const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
 ): Promise<AnalyzeResult> => serializeAnalyze(async () => {
+  // Arm and dry-run BEFORE setting the limit, so the limit is set immediately
+  // before the only statement that consumes it. In-tab that is redundant
+  // ({@link serializeAnalyze} already excludes other callers); across tabs it is
+  // the whole mitigation, shrinking the window in which another tab's
+  // `analysis_limit=0` can land from five statement boundaries to one.
+  //
+  // Safe because the dry run does NOT depend on the limit — it reports WHICH
+  // tables are stale, not how many rows to sample. Verified rather than assumed:
+  // the proposal set is identical with and without the limit set.
+  await armAnalyzeProbes(db)
+  const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
   await db.execute(SET_ANALYZE_SAMPLE_LIMIT_SQL)
   try {
-    await armAnalyzeProbes(db)
-    const proposed = readOptimizeRows(await db.execute(ANALYZE_DRY_RUN_SQL))
     await db.execute(ANALYZE_OPTIMIZE_SQL)
     return {proposed}
   } finally {

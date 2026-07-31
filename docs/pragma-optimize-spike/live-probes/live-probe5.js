@@ -34,13 +34,24 @@ try {
   })
 } catch (e) { if (e !== ROLLBACK) out.error = String(e?.message ?? e) }
 
+// Reset the connection-scoped limit FIRST, before any validation read. On a
+// client that had never been analyzed, the rollback also removed the
+// `sqlite_stat1` the optimize created — so the read below throws "no such
+// table" and, if the reset came after it, the live connection would be left
+// sampling at 400.
+await db.execute('PRAGMA analysis_limit=0')
+out.analysisLimitRestored = (await db.getAll('PRAGMA analysis_limit'))[0]?.analysis_limit
+
 // Prove the rollback was clean: the throwaway index must be gone and the real
 // stats untouched.
 out.indexGoneAfterRollback = (await db.getAll(
   "SELECT name FROM sqlite_master WHERE name = 'idx_spike_tmp'",
 )).length === 0
-out.liveStatsUntouched = await db.getAll(
-  "SELECT idx, stat FROM sqlite_stat1 WHERE tbl = 'block_references' ORDER BY idx",
-)
-await db.execute('PRAGMA analysis_limit=0')
+out.liveStatsUntouched = (await db.getAll(
+  "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat1'",
+)).length === 0
+  ? '(no sqlite_stat1 — this client had never been analyzed)'
+  : await db.getAll(
+    "SELECT idx, stat FROM sqlite_stat1 WHERE tbl = 'block_references' ORDER BY idx",
+  )
 return out
