@@ -210,7 +210,9 @@ const extendSelectionVertical = async (
  * The one thing this cannot reach is a scope whose WRAPPER is still
  * deferred: an unmounted backlink entry keys itself
  * `backlink:<scope>:<id>`, invisible to both the walker and
- * `lazyBlockCacheKey`. Moving between entries is a scope transition,
+ * `lazyBlockCacheKey`. Reserved rows don't rescue it either — such a
+ * wrapper mints its scope inside itself, so it reserves an ANONYMOUS
+ * slot, which `reservedRowBetween` skips by design. Moving between entries is a scope transition,
  * which no model walk expresses either — it needs the list that owns
  * that ordering to say what comes next. Unsolved here, and it was
  * never solved by treating non-outline surfaces as a special case.
@@ -340,6 +342,17 @@ const moveVertical = async (
       current.contains(next) &&
       !current.contains(modelRowSlot)
 
+    // The same rows, reached from the other side. Walking UP, the model stops
+    // AT a collapsed row rather than descending into it
+    // (`getLastVisibleDescendant`), so ITS still-mounted descendants are the
+    // skipped ones — and they sit inside it, which reads as "on the near side"
+    // just the same. `next === modelRowSlot` is the legitimate arrival at that
+    // row; anything strictly inside it, in this scope, is hidden.
+    const descendantOfTheModelRow =
+      nextLocation?.renderScopeId === currentLocation.renderScopeId &&
+      next !== modelRowSlot &&
+      Boolean(modelRowSlot?.contains(next))
+
     const canTakeTheNeighbour = Boolean(
       nextLocation &&
       // Defence in depth, not load-bearing: no test can falsify it, because the
@@ -348,7 +361,8 @@ const moveVertical = async (
       // every cross-panel step the model still has rows ahead of.
       nextPanelId === uiStateBlock.id &&
       towardsTheModelRow &&
-      !descendantOfThisRow,
+      !descendantOfThisRow &&
+      !descendantOfTheModelRow,
     )
     if (!canTakeTheNeighbour) return false
   }

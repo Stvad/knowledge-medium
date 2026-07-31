@@ -1014,6 +1014,53 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // The same hidden rows, reached from below. Walking up, the model stops AT a
+  // collapsed row instead of descending into it, so the rows it skipped are
+  // inside THAT row rather than inside this one — and `k` walked straight into
+  // them, three keystrokes deep through a subtree the user can't see.
+  it('declines a descendant of the model row the walk stopped at', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+        {
+          blockId: 'B',
+          renderScopeId: 'panel:outline',
+          surface: 'outline',
+          // B is collapsed, but its child hasn't unmounted yet.
+          nested: [{blockId: 'B1', renderScopeId: 'panel:outline', surface: 'outline'}],
+        },
+        {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
+      ],
+    }])
+    await env.repo.block('B').set(isCollapsedProp, true)
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'C', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_up',
+      description: 'Move up',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('C'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    // The model's row is 'B' itself; the handler lands there, not on 'B1'.
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'C',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
   // Leaving a nested surface is the one step this scope's model can't judge:
   // it ends AT the edge, so nothing checks what the rendered neighbour skips.
   // A reserved row in between is part of the rendered order and gets the focus,
