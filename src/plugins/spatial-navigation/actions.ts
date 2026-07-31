@@ -41,7 +41,6 @@ import {
   locationOf,
   panelById,
   panelOf,
-  isOutlineSurface,
   panelInstances,
   resolveCurrentAnchor,
   verticalNeighbor,
@@ -180,31 +179,29 @@ const extendSelectionVertical = async (
  *
  * Return contract (intentionally different from "did we move?"):
  *   - `false` → "spatial nav declines; the model walk is the better
- *     answer here". Three live cases: (a) no usable anchor — no live
- *     focused instance, no recovery anchor, and no expected location
- *     to keep us in this panel; (b) an outline-surface row with no
- *     rendered neighbour, where the DOM has run out but the data
- *     model may not have (lazily mounted rows below the fold aren't
- *     in the DOM to be found); (c) an outline-surface row whose only
- *     rendered neighbour is in another panel of the stack while the
- *     model still has rows in this one.
- *   - `true` → "spatial nav handled this keystroke". Includes the
- *     no-neighbor case on every surface EXCEPT outline. We must NOT
- *     fall through to vim's `nextVisibleBlock` for a panel-boundary
- *     block on a non-outline surface (backlinks, embeds): vim's
- *     walker climbs the data-model parent chain of the source block,
- *     and a block reached that way, written as this panel's
- *     `focusedBlockLocation`, leaves `useInFocus(<anyone in this
- *     panel>)` returning false → normal-mode deactivates → all
- *     shortcuts go dead until the user clicks back into a block.
- *     (The climb itself stops at the surface's own `scopeRootId`, so
- *     the "lands on another page" version of this is theoretical;
- *     what's real is that the surface's scope/`renderScopeId` pairing
- *     is unexercised here. Either way: stay conservative.) On the
- *     outline surface the pairing is the panel's own, and swallowing
- *     the key instead strands the user at the bottom of the mounted
- *     window: no focus write means no scroll, no scroll means nothing
- *     new mounts, so `j` never works again.
+ *     answer here". Two cases: (a) no usable anchor — no live focused
+ *     instance, no recovery anchor, and no expected location to keep
+ *     us in this panel; (b) the model has a next row in this scope
+ *     that the rendered DOM can't offer, because it hasn't mounted.
+ *   - `true` → "spatial nav handled this keystroke", including the
+ *     genuine edge where neither the model nor the DOM has anywhere
+ *     left to go.
+ *
+ * Which SURFACE the row sits on doesn't enter into it. What matters is
+ * the scope, and every surface supplies its own `scopeRootId` (a
+ * backlink entry's is its shown block, not the page), so the model
+ * walk is always scope-local and cannot wander into another page.
+ * Rows inside a backlink entry are lazily mounted under the ordinary
+ * `block:<id>` key like any other row, so a model-resolved target
+ * there is mountable too.
+ *
+ * The one thing this cannot reach is a scope whose WRAPPER is still
+ * deferred: an unmounted backlink entry keys itself
+ * `backlink:<scope>:<id>`, invisible to both the walker and
+ * `lazyBlockCacheKey`. Moving between entries is a scope transition,
+ * which no model walk expresses either — it needs the list that owns
+ * that ordering to say what comes next. Unsolved here, and it was
+ * never solved by treating non-outline surfaces as a special case.
  */
 const moveVertical = async (
   deps: BlockShortcutDependencies,
@@ -240,76 +237,65 @@ const moveVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
-  // No neighbour in the rendered DOM. That is NOT the same as "no next
-  // block": rows are lazily mounted, so the outline continues past the last
-  // mounted instance with placeholders the walker can't see. On the outline
-  // surface, defer to vim's data-model walk — bounded by the panel's own
-  // scope root, so it can't leave the panel — which resolves the real next
-  // block whether or not it happens to be mounted; the panel's
-  // `FocusedRowLazyMount` then mounts whatever it lands on.
-  //
-  // Non-outline surfaces keep swallowing the keystroke. Not because their
-  // model walk would escape (it wouldn't: a backlink entry's `scopeRootId`
-  // is its own shown block, so the climb stops there) but because nothing
-  // here has been exercised against those surfaces' scope/`renderScopeId`
-  // pairing, and getting it wrong deactivates normal mode outright rather
-  // than merely failing to move. Deliberately conservative; widening it is
-  // a separate change with its own tests.
-  if (!next) return !isOutlineSurface(current)
-  const destPanel = next.closest<HTMLElement>('[data-panel-id]')
-  if (!destPanel) return true
-  const destPanelId = destPanel.dataset.panelId
-  const destLocation = locationOf(next)
-  if (!destPanelId || !destLocation) return true
+  const nextLocation = next ? locationOf(next) : null
+  const nextPanelId = next?.closest<HTMLElement>('[data-panel-id]')?.dataset.panelId
 
-  // Every step FROM an outline row gets checked against the model, not just
-  // the ones that visibly leave the outline. "The next MOUNTED row" and "the
-  // next row" diverge in more ways than running out: mounting is sticky and
-  // an `IntersectionObserver` only reports per-frame state, so a scrollbar
-  // drag leaves two mounted islands with a hole between them, and a
-  // just-mounted row's children arrive only when its `childIds` handle
-  // resolves while a later sibling is still mounted from before. In both the
-  // DOM's neighbour is a real, mounted, same-panel outline row — just the
-  // wrong one, hundreds of rows past what the user expects.
+  // WITHIN a render scope the model is authoritative; BETWEEN scopes the DOM
+  // is. That split is the whole rule, and it holds for every surface:
   //
-  // Within the outline the two orders are the same thing (it IS the model
-  // tree rendered in order), so agreement is the normal case and disagreement
-  // means the DOM is missing rows. On disagreement, decline: vim's handler
-  // resolves the model row and `FocusedRowLazyMount` mounts it.
+  //   - The model knows rows the DOM doesn't, because rows mount lazily.
+  //     "The next MOUNTED row" and "the next row" diverge in several ways —
+  //     running out at the bottom of the mounted window, a scrollbar drag
+  //     leaving two mounted islands with a hole between them, a just-mounted
+  //     row whose children arrive only when its `childIds` handle resolves
+  //     while a later sibling is still mounted from before.
+  //   - The DOM knows transitions the model can't express: outline → trailing
+  //     backlinks, one backlink entry → the next, panel → stacked panel. Each
+  //     surface's walk is bounded by its own `scopeRootId` (a backlink entry's
+  //     is its shown block, not the page), so the model simply ends there.
+  //
+  // So: ask the model for the next row in this scope. If it has one, the only
+  // acceptable DOM neighbour is that row in this scope — anything else is the
+  // DOM missing rows, and we decline so the model handler resolves it and
+  // `FocusedRowLazyMount` mounts it. If the model has none, we're at the edge
+  // of the scope and the DOM's answer is the right one.
   //
   // Costs one O(depth) walk per keystroke over handle-cached rows — the same
-  // walk vim's `move_down` does on its own when spatial nav is off. The
-  // second walk only happens on the rare disagreement, where a wrong jump is
-  // the alternative.
-  if (isOutlineSurface(current) && deps.scopeRootId) {
-    const modelNext = direction === 'down'
-      ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
-      : await previousVisibleBlock(block, deps.scopeRootId)
-    // A second keystroke or a click can land while the walk above is waiting
-    // on an uncached `childIds`. Everything from here is computed from a row
-    // that no longer holds focus, so hand the panel to whoever moved it
-    // rather than writing a move the user has already superseded.
-    if (
-      expectedLocation &&
-      !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
-    ) return true
+  // walk the model handler does on its own when spatial nav is off. The second
+  // walk only happens on the rare disagreement, where the alternative is a
+  // silently wrong jump.
+  const modelNext = deps.scopeRootId
+    ? (direction === 'down'
+        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
+        : await previousVisibleBlock(block, deps.scopeRootId))
+    : null
 
-    // The outline continues, so the only acceptable neighbour is that row, as
-    // an OUTLINE row, in this panel. Anything else — a trailing surface, a
-    // stack sibling, a far-away outline row across a hole, or a backlink /
-    // embed copy of that same block (one block renders under many scopes, and
-    // landing on the nested copy strands `j` in that surface) — would skip
-    // what's in between.
-    if (modelNext && (
-      destPanelId !== uiStateBlock.id ||
-      !isOutlineSurface(next) ||
-      modelNext.id !== destLocation.blockId
-    )) {
-      return false
-    }
-    // No model row left: the outline is genuinely done, so the DOM's answer
-    // (trailing surface, or the panel below) is the right one.
+  // A second keystroke or a click can land while that walk waits on an
+  // uncached `childIds`. Everything below is computed from a row that no
+  // longer holds focus, so hand the panel to whoever moved it rather than
+  // writing a move the user has already superseded.
+  if (
+    expectedLocation &&
+    !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
+  ) return true
+
+  if (modelNext) {
+    const domAgrees = Boolean(
+      nextLocation &&
+      nextPanelId === uiStateBlock.id &&
+      nextLocation.blockId === modelNext.id &&
+      // Same scope, not merely the same block: one block renders under many
+      // scopes, and landing on an embed or backlink copy of it stops `j` from
+      // continuing through the scope the user is actually in.
+      nextLocation.renderScopeId === currentLocation.renderScopeId,
+    )
+    if (!domAgrees) return false
   }
+
+  // Nothing in the model and nothing in the DOM — a real edge.
+  if (!next || !nextLocation || !nextPanelId) return true
+  const destPanelId = nextPanelId
+  const destLocation = nextLocation
 
   if (destPanelId === uiStateBlock.id) {
     // Same-panel step — identical to vim's `focusBlock` write.
