@@ -8,6 +8,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   focusBlock,
   focusedBlockLocationProp,
+  isCollapsedProp,
   selectionStateProp,
   topLevelBlockIdProp,
 } from '@/data/properties.js'
@@ -122,9 +123,14 @@ interface NavInstance {
 }
 
 /** A row whose mount is still deferred: `LazyViewportMount` renders no nav item
- *  for it, only a placeholder holding its place in document order. */
+ *  for it, only a placeholder holding its place in document order — labelled
+ *  with the occurrence it is holding that place for. */
 interface DeferredSlot {
   deferredBlockId: string
+  /** The scope the row will have once it mounts. Omitted models a wrapper that
+   *  mints its own scope inside itself (a backlink entry, a recents row), which
+   *  deliberately leaves its slot anonymous. */
+  deferredScopeId?: string
 }
 
 type NavChild = NavInstance | DeferredSlot
@@ -134,6 +140,9 @@ const appendInstances = (parentEl: HTMLElement, children: readonly NavChild[]): 
     if ('deferredBlockId' in child) {
       const slot = document.createElement('div')
       slot.dataset.lazyBlockId = child.deferredBlockId
+      if (child.deferredScopeId !== undefined) {
+        slot.dataset.lazyRenderScopeId = child.deferredScopeId
+      }
       parentEl.appendChild(slot)
       continue
     }
@@ -714,7 +723,7 @@ describe('spatial navigation vertical actions', () => {
       nested: [
         {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
         // 'B' sits between them in the model, still a placeholder.
-        {deferredBlockId: 'B'},
+        {deferredBlockId: 'B', deferredScopeId: 'panel:outline'},
         {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
       ],
     }])
@@ -835,7 +844,7 @@ describe('spatial navigation vertical actions', () => {
           nested: [{blockId: 'X', renderScopeId: 'embed:A:X', surface: 'embedded'}],
         },
         // 'B' follows 'A' in the model; its row is still a placeholder.
-        {deferredBlockId: 'B'},
+        {deferredBlockId: 'B', deferredScopeId: 'panel:outline'},
       ],
     }])
     const panel = env.repo.block('panel')
@@ -877,9 +886,9 @@ describe('spatial navigation vertical actions', () => {
         surface: 'outline',
         nested: [
           // top's children, none of them mounted yet...
-          {deferredBlockId: 'A'},
-          {deferredBlockId: 'B'},
-          {deferredBlockId: 'C'},
+          {deferredBlockId: 'A', deferredScopeId: 'panel:outline'},
+          {deferredBlockId: 'B', deferredScopeId: 'panel:outline'},
+          {deferredBlockId: 'C', deferredScopeId: 'panel:outline'},
           // ...and the trailing backlink list, which has.
           {blockId: 'X', renderScopeId: 'panel:backlink', surface: 'backlink'},
         ],
@@ -926,7 +935,7 @@ describe('spatial navigation vertical actions', () => {
           // The embed in B's content, mounted...
           {blockId: 'X', renderScopeId: 'embed:B:X', surface: 'embedded'},
           // ...and B's own first child, which is what the model walk returns.
-          {deferredBlockId: 'B1'},
+          {deferredBlockId: 'B1', deferredScopeId: 'panel:outline'},
         ],
       }],
     }])
@@ -956,6 +965,151 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // A scope's own rows nest inside each other in the DOM, and a COLLAPSED row's
+  // descendants can still be mounted for the commit or two before they go. They
+  // are same-scope rows the model walk skips on purpose, and they sit inside the
+  // row, so position alone reads them as "on the way".
+  it('declines a same-scope descendant the model walk skipped over', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+        {
+          blockId: 'B',
+          renderScopeId: 'panel:outline',
+          surface: 'outline',
+          // B's own child, in B's own scope, still mounted inside it.
+          nested: [{blockId: 'B1', renderScopeId: 'panel:outline', surface: 'outline'}],
+        },
+        {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
+      ],
+    }])
+    // ...but the model says B is collapsed, so its next row is 'C'.
+    await env.repo.block('B').set(isCollapsedProp, true)
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    // NOT 'B1': landing inside a collapsed subtree puts the cursor on a row the
+    // user can't see, which unmounts a commit later.
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'B',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
+  // Leaving a nested surface is the one step this scope's model can't judge:
+  // it ends AT the edge, so nothing checks what the rendered neighbour skips.
+  // A reserved row in between is part of the rendered order and gets the focus,
+  // which also mounts it — declining could not, since the model handler is
+  // bounded by the same exhausted scope and would swallow the keystroke.
+  it('steps onto a reserved row when leaving a nested surface, not past it', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {
+          blockId: 'B',
+          renderScopeId: 'panel:outline',
+          surface: 'outline',
+          nested: [
+            // The embed's last (only) row — where focus is.
+            {blockId: 'X', renderScopeId: 'embed:B:X', surface: 'embedded'},
+            // B's own child, deferred, right after the embed.
+            {deferredBlockId: 'B1', deferredScopeId: 'panel:outline'},
+          ],
+        },
+        // What the DOM would otherwise hand back: a mounted row past B1.
+        {blockId: 'A', renderScopeId: 'panel:backlink', surface: 'backlink'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'embed:B:X',
+      // An embed's scope root is the block it shows, so the walk ends here.
+      scopeRootId: 'X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'B1',
+        renderScopeId: 'panel:outline',
+      })
+    })
+  })
+
+  // An anonymous slot is one whose row will belong to a scope decided inside
+  // the wrapper (a backlink entry, a recents row). Reading the surrounding DOM
+  // for its scope would label it with the outline's — and then a slot sitting
+  // AFTER the mounted neighbour makes "the neighbour comes first" vacuously
+  // true, which is an accept, not a decline.
+  it('ignores an anonymous slot when deciding where the model row sits', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+        {blockId: 'X', renderScopeId: 'panel:backlink', surface: 'backlink'},
+        // A backlink entry's own deferred wrapper, which happens to be for the
+        // block the outline walk wants next. It says nothing about where the
+        // OUTLINE's copy of 'B' would render.
+        {deferredBlockId: 'B'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
   // A slot answers only for the occurrence it belongs to. One block renders
   // under many scopes, so an embed of a subtree that contains the model's next
   // row reserves a slot for the SAME block id — one that says nothing about
@@ -976,7 +1130,7 @@ describe('spatial navigation vertical actions', () => {
             surface: 'embedded',
             // The EMBED's copy of 'B' is deferred. The outline's own 'B' is not
             // rendered at all, so the outline still continues past what's here.
-            nested: [{deferredBlockId: 'B'}],
+            nested: [{deferredBlockId: 'B', deferredScopeId: 'embed:A:Z'}],
           }],
         },
         {blockId: 'X', renderScopeId: 'panel:backlink', surface: 'backlink'},
@@ -1023,7 +1177,7 @@ describe('spatial navigation vertical actions', () => {
           nested: [
             // B's last visible descendant — what `previousVisibleBlock` returns
             // for 'C' — is still a placeholder...
-            {deferredBlockId: 'B1'},
+            {deferredBlockId: 'B1', deferredScopeId: 'panel:outline'},
             // ...while B's own trailing list is mounted, below it.
             {blockId: 'X', renderScopeId: 'backlink:B', surface: 'backlink'},
           ],

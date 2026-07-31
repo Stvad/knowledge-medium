@@ -49,6 +49,16 @@ interface LazyViewportMountProps {
    *  `lazyMountRegistry`. Optional was tried and immediately drifted: the
    *  recents rows shipped without it. */
   blockId: string
+  /** The render scope the row WILL have once it mounts. Optional, and only
+   *  worth passing when the wrapper renders the row in the scope it already
+   *  sits in — `LazyBlockComponent` does; a surface that mints a new scope
+   *  inside the wrapper (a backlink entry, a recents embed) must NOT, because
+   *  the scope it would have to name isn't decided out here. Supplying it
+   *  publishes this placeholder as that row's reserved place in document
+   *  order (see `rowSlotIn` in the spatial-navigation walker); omitting it
+   *  leaves the placeholder anonymous, which costs only that a keyboard move
+   *  can't reason about the row until it mounts. */
+  renderScopeId?: string
 }
 
 /**
@@ -66,6 +76,7 @@ export function LazyViewportMount({
   children,
   renderPlaceholder,
   blockId,
+  renderScopeId,
 }: LazyViewportMountProps) {
   const [mounted, setMounted] = useState(
     () => typeof IntersectionObserver === 'undefined' || mountedCacheKeys.has(cacheKey),
@@ -136,14 +147,23 @@ export function LazyViewportMount({
   }
 
   return (
-    // `data-lazy-block-id` marks WHERE this row is reserved while it waits.
-    // Same reason the `blockId` prop is required at all: a deferred row must
-    // stay findable by block id. Mounting it needs the registry above; deciding
-    // whether a keyboard move would jump OVER it needs its position, which only
-    // the DOM has (see `rowSlotIn` in the spatial-navigation walker). Set on the
-    // placeholder branch only, so the attribute means "deferred", not "a row
-    // lives somewhere in here".
-    <div ref={containerRef} data-lazy-block-id={blockId}>
+    // These mark WHERE this row is reserved while it waits. Same reason the
+    // `blockId` prop is required at all: a deferred row must stay findable.
+    // Mounting it needs the registry above; deciding whether a keyboard move
+    // would jump OVER it needs its position, which only the DOM has (see
+    // `rowSlotIn` in the spatial-navigation walker). Set on the placeholder
+    // branch only, so they mean "deferred", not "a row lives somewhere here".
+    //
+    // The scope is what makes the slot USABLE for that: one block renders under
+    // many scopes, and a wrapper that mints its own inside itself (a backlink
+    // entry, a recents embed) reserves a place for a row that will NOT belong
+    // to the scope surrounding it. Such a wrapper passes no scope, and a
+    // consumer must then ignore the slot rather than guess from its neighbours.
+    <div
+      ref={containerRef}
+      data-lazy-block-id={blockId}
+      data-lazy-render-scope-id={renderScopeId}
+    >
       {renderPlaceholder({
         reservedHeight: measuredHeights.get(cacheKey) ?? estimatedHeightPx,
       })}

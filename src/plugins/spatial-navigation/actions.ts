@@ -42,6 +42,7 @@ import {
   panelById,
   panelOf,
   panelInstances,
+  reservedRowBetween,
   resolveCurrentAnchor,
   rowSlotIn,
   verticalNeighbor,
@@ -282,6 +283,18 @@ const moveVertical = async (
     !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
   ) return true
 
+  // The anchor itself can be torn out while the walk waits (a re-render, a
+  // recycled lazy row). Everything below reads the DOM through it, and a
+  // detached row still answers — from the dead tree, while `rowSlotIn` queries
+  // the live one. Decline rather than decide on two DOMs.
+  //
+  // Defence in depth: no test falsifies it, because every route out of a
+  // detached anchor already ends in "no move" (a detached row has no panel, so
+  // the neighbour is null, so the model-row check declines and the scope edge
+  // finds no slot). It buys the mixed-DOM case not existing, and an explicit
+  // decline where the current outcome is incidental.
+  if (!current.isConnected) return false
+
   // Read the neighbour AFTER the walk, never before: resolving the `childIds`
   // that walk awaits is itself what mounts the rows under this one, so a
   // neighbour read earlier can be a row that is no longer adjacent — and every
@@ -319,6 +332,20 @@ const moveVertical = async (
         : modelRowSlot.DOCUMENT_POSITION_FOLLOWING))
     )
 
+    // One thing position alone can't see: the DOM holds same-scope rows the
+    // model walk deliberately SKIPS — a collapsed row's descendants, still
+    // mounted for the commit or two before they unmount. They sit inside this
+    // row, so they precede whatever comes after it and read as "on the near
+    // side". The model descends into this row only when it is expanded, and
+    // then its row is in there too — so a descendant is a legitimate step only
+    // when the model went the same way.
+    const descendantOfThisRow = Boolean(
+      next &&
+      nextLocation?.renderScopeId === currentLocation.renderScopeId &&
+      current.contains(next) &&
+      !(modelRowSlot && current.contains(modelRowSlot)),
+    )
+
     const canTakeTheNeighbour = Boolean(
       nextLocation &&
       // Defence in depth, not load-bearing: no test can falsify it, because the
@@ -326,9 +353,25 @@ const moveVertical = async (
       // wholly before or after it — so the position test above already declines
       // every cross-panel step the model still has rows ahead of.
       nextPanelId === uiStateBlock.id &&
-      towardsTheModelRow,
+      towardsTheModelRow &&
+      !descendantOfThisRow,
     )
     if (!canTakeTheNeighbour) return false
+  }
+
+  // Scope edge: this scope's model has nothing more, so the rendered order
+  // decides — and a row with a place RESERVED is part of that order. Without
+  // this, stepping out of an embed whose owner's next rows are still deferred
+  // jumps to whatever happens to be mounted, which is the same skip one level
+  // out. Focusing the reserved row instead mounts it (`FocusedRowLazyMount`),
+  // where declining could not: the model handler is bounded by the same
+  // exhausted scope and would swallow the keystroke.
+  if (deps.scopeRootId && !modelNext) {
+    const reserved = reservedRowBetween(current, next, direction)
+    if (reserved) {
+      void focusBlock(uiStateBlock, reserved.blockId, {renderScopeId: reserved.renderScopeId})
+      return true
+    }
   }
 
   // Nothing in the model and nothing in the DOM — a real edge.

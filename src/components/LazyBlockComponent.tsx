@@ -26,6 +26,7 @@ import { BlockComponent } from './BlockComponent.tsx'
 import { BlockLoadingPlaceholder } from './BlockLoadingPlaceholder.tsx'
 import { LazyViewportMount } from './util/LazyViewportMount.tsx'
 import { lazyBlockCacheKey } from './util/lazyMountRegistry.ts'
+import { useBlockContext } from '@/context/block.js'
 
 /** Reserved height for a not-yet-measured block. Picked to roughly
  *  match a single-line bullet so the initial scrollHeight estimate is
@@ -42,10 +43,17 @@ interface LazyBlockComponentProps {
 }
 
 export function LazyBlockComponent({ blockId }: LazyBlockComponentProps) {
+  // The row mounts inside the context this wrapper already sits in, so its
+  // scope is the surrounding one — which is what lets the placeholder name the
+  // occurrence it holds a place for. A wrapper that mints a new scope INSIDE
+  // itself can't say this, and doesn't (see `LazyViewportMount`).
+  const {renderScopeId} = useBlockContext()
+
   return (
     <LazyViewportMount
       cacheKey={lazyBlockCacheKey(blockId)}
       blockId={blockId}
+      renderScopeId={typeof renderScopeId === 'string' ? renderScopeId : undefined}
       estimatedHeightPx={ESTIMATED_HEIGHT_PX}
       overscanPx={OVERSCAN_PX}
       renderPlaceholder={({reservedHeight}) => (

@@ -386,16 +386,17 @@ const instanceAt = (
  * reserves for it (`data-lazy-block-id`), which holds the row's place in
  * document order long before the row itself exists.
  *
- * A deferred row carries no render scope of its own — the placeholder is just a
- * wrapper — so the scope comes from the row that RENDERED it: children inherit
- * their parent row's scope, so the nearest enclosing nav item settles which
- * occurrence this slot belongs to. That is what keeps an embed's deferred copy
- * of a block from answering for the outline's.
+ * A slot names the occurrence it holds a place for, both block AND scope, so
+ * an embed's deferred copy of a block never answers for the outline's. The
+ * scope is NOT inferred from the surrounding DOM: a backlink entry and a
+ * recents row reserve their slot inside an outline row while the row that
+ * eventually mounts there belongs to a scope of their own, so "the nearest
+ * enclosing row's scope" would confidently mislabel exactly those.
  *
- * Null when the DOM has no place for the row at all: its parent's `childIds`
- * hasn't resolved yet (so nothing has rendered a slot), or its surface defers
- * the whole wrapper rather than the row. Callers must treat that as "the DOM
- * can't tell me", not as "the row isn't there".
+ * Null when the DOM has no place for the row: its parent's `childIds` hasn't
+ * resolved yet (nothing has rendered a slot), or its surface reserves the slot
+ * without naming a scope. Callers must treat that as "the DOM can't tell me",
+ * not as "the row isn't there".
  */
 export const rowSlotIn = (
   panelId: string,
@@ -406,14 +407,51 @@ export const rowSlotIn = (
   if (mounted) return mounted
   const panel = panelById(panelId)
   if (!panel) return null
-  const deferred = panel.querySelectorAll<HTMLElement>(
-    `[data-lazy-block-id="${CSS.escape(location.blockId)}"]`,
+  return panel.querySelector<HTMLElement>(
+    `[data-lazy-block-id="${CSS.escape(location.blockId)}"]` +
+    `[data-lazy-render-scope-id="${CSS.escape(location.renderScopeId)}"]`,
   )
-  for (const slot of deferred) {
-    const owner = slot.closest<HTMLElement>(NAV_ITEM_SELECTOR)
-    if (owner?.dataset.renderScopeId === location.renderScopeId) return slot
-  }
-  return null
+}
+
+/**
+ * The nearest row that is RESERVED but not yet mounted between `from` and the
+ * mounted neighbour `to` (or anywhere beyond `from`, when nothing is mounted
+ * that way). Document order, so "nearest" is the first one in the direction of
+ * travel.
+ *
+ * This is what a caller needs at a boundary its model can't see past: within a
+ * scope the model names the next row, but at the EDGE of one — stepping out of
+ * an embed, out of a backlink entry — the rendered order decides, and a row
+ * that has a place reserved is part of that order even though no walk names it
+ * and no query for mounted rows finds it.
+ */
+export const reservedRowBetween = (
+  from: HTMLElement,
+  to: HTMLElement | null,
+  direction: 'up' | 'down',
+): FocusedBlockLocation | null => {
+  const panel = panelOf(from)
+  if (!panel) return null
+  const ahead = direction === 'down'
+    ? from.DOCUMENT_POSITION_FOLLOWING
+    : from.DOCUMENT_POSITION_PRECEDING
+  const slots = Array.from(panel.querySelectorAll<HTMLElement>(
+    '[data-lazy-block-id][data-lazy-render-scope-id]',
+  )).filter(slot => {
+    if (!(from.compareDocumentPosition(slot) & ahead)) return false
+    // Past the mounted neighbour it isn't "between" — the neighbour is then the
+    // nearer answer and nothing is missing before it.
+    if (to && !(to.compareDocumentPosition(slot) & (direction === 'down'
+      ? to.DOCUMENT_POSITION_PRECEDING
+      : to.DOCUMENT_POSITION_FOLLOWING))) return false
+    return true
+  })
+  const nearest = direction === 'down' ? slots[0] : slots[slots.length - 1]
+  if (!nearest) return null
+  const {lazyBlockId, lazyRenderScopeId} = nearest.dataset
+  return lazyBlockId && lazyRenderScopeId
+    ? {blockId: lazyBlockId, renderScopeId: lazyRenderScopeId}
+    : null
 }
 
 /**
