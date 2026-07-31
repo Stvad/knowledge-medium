@@ -95,7 +95,14 @@ interface PanelPositionHint {
 const surfaceOf = (el: HTMLElement): string | undefined =>
   el.dataset.blockSurface
 
-const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
+/** The element whose rect decides whether a nav item counts as on screen: its
+ *  own content row, not the shell (a shell spans its whole subtree, so a parent
+ *  whose children fill the viewport would read as visible while its own row is
+ *  far above). The first match in document order is the item's own, since
+ *  content renders before children. This is the SAME element
+ *  `BlockFocusShellDecorator` measures through `contentRef`, which is what lets
+ *  a caller pick a row the decorator will then agree needs no scrolling. */
+export const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
   el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
 
 const isRecoveryTargetVisible = (el: HTMLElement): boolean =>

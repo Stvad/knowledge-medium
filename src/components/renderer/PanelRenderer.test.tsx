@@ -12,6 +12,7 @@ import {
   focusedBlockLocationProp,
   panelViewModeProp,
   peekFocusedBlockLocation,
+  scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
@@ -74,6 +75,17 @@ vi.mock('@/data/globalState', async () => {
 vi.mock('@/shortcuts/useActionContext', () => ({
   useActionContext: vi.fn(),
 }))
+
+// The aligner's own pixel math is pinned in `panelScrollAnchor.test.ts` (and
+// needs real layout, which happy-dom has none of). What belongs here is which
+// anchor the pane hands it — and whether it reaches for one at all.
+const alignScrollportToRow = vi.hoisted(() => vi.fn(() => () => {}))
+vi.mock('@/utils/panelScrollAnchor', async () => {
+  const actual = await vi.importActual<typeof import('@/utils/panelScrollAnchor')>(
+    '@/utils/panelScrollAnchor',
+  )
+  return {...actual, alignScrollportToRow}
+})
 
 vi.mock('@/components/BlockComponent.tsx', async () => {
   const {useBlockContext} = await vi.importActual<typeof import('@/context/block')>('@/context/block')
@@ -166,6 +178,7 @@ describe('PanelRenderer', () => {
     selectionStore.reset()
     vi.mocked(BlockComponent).mockClear()
     vi.mocked(useActionContext).mockClear()
+    alignScrollportToRow.mockClear()
     env = await setup()
   })
 
@@ -389,6 +402,49 @@ describe('PanelRenderer', () => {
     // Settle any mount effects, then confirm the shim did not touch it.
     await act(async () => {})
     expect(peekFocusedBlockLocation(env.panel)).toEqual(location)
+  })
+
+  // A stored pixel offset means a different place after a reload: rows mount
+  // lazily and their measured heights die with the page, so the document the
+  // offset was taken against no longer exists. The cursor is the anchor.
+  it('restores the pane by scrolling to its stored cursor row', async () => {
+    const location = {blockId: 'child-x', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, location)
+    }, {scope: ChangeScope.UiState, description: 'seed stored cursor'})
+
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), location)
+  })
+
+  it('prefers a history restore cursor over the one still on the pane', async () => {
+    const stale = {blockId: 'child-x', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    const restored = {blockId: 'child-y', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, stale)
+    }, {scope: ChangeScope.UiState, description: 'seed stored cursor'})
+    panelHistory.enqueueRestore('panel-a', {focusedLocation: restored})
+
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), restored)
+  })
+
+  // A pane can be scrolled without ever being clicked or navigated in, so it
+  // has no cursor to anchor to. The offset is still the best answer there.
+  it('falls back to the stored scroll offset when the pane has no cursor', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', scrollTopProp, 640)
+    }, {scope: ChangeScope.UiState, description: 'seed scroll offset'})
+
+    renderPanel(false)
+    const topLevel = await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).not.toHaveBeenCalled()
+    expect(topLevel.parentElement?.scrollTop).toBe(640)
   })
 
   it('captures the panel view mode in history snapshots', async () => {

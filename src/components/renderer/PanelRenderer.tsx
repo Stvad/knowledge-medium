@@ -26,6 +26,7 @@ import {
   panelHistory,
   usePanelHistory,
 } from '@/utils/panelHistory.js'
+import { alignScrollportToRow } from '@/utils/panelScrollAnchor.js'
 import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
@@ -157,13 +158,21 @@ export function PanelRenderer({block}: BlockRendererProps) {
   // synchronously by the helper (so the new render starts with the
   // right cursor); scroll restoration has to wait for the new content
   // to lay out, which is exactly what this post-effect window gives us.
+  //
+  // The cursor is the anchor, not the stored pixel offset: rows mount lazily
+  // and their measured heights die with the page, so the same `scrollTop`
+  // means a different place after a reload (see `panelScrollAnchor`). The
+  // offset is still the fallback for a pane with no cursor at all — a page
+  // opened and scrolled but never clicked or navigated in.
   useEffect(() => {
     if (!topLevelBlockId) return
     const restore = panelHistory.consumeRestore(block.id)
+    const scrollEl = scrollRef.current
+    if (!scrollEl) return
+    const location = restore?.focusedLocation ?? peekFocusedBlockLocation(block)
+    if (location) return alignScrollportToRow(scrollEl, location)
     const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
-    if (scrollTop != null && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollTop
-    }
+    if (scrollTop != null) scrollEl.scrollTop = scrollTop
   }, [topLevelBlockId, block])
 
   useEffect(() => flushScrollTop, [flushScrollTop])
