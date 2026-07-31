@@ -335,11 +335,13 @@ const segmentCanMatch = (segment, literal) =>
  *  per-shape branches that kept letting the broadest patterns through.
  *
  *  Three cases, and only three:
- *    1. the static head is already at or inside the plugin root — reaches;
+ *    1. the static head is already at or inside the plugin root — then it only
+ *       has to get two segments deep (see `reachesPluginContents`);
  *    2. the static head is somewhere else entirely (a sibling, another tree) —
  *       a glob cannot climb sideways, so it never reaches;
  *    3. the static head is ABOVE the plugin root — the globby remainder has to
- *       span the gap, so match it segment by segment against the path down.
+ *       span the gap, so match it segment by segment against the path down,
+ *       and then clear the same two-segment bar with whatever is LEFT.
  *  A leading `**` spans any depth, and a brace group that survives the segment
  *  split unbalanced can't be reasoned about at all; both flag conservatively. */
 /** Whether a glob's remaining segments can walk DOWN a concrete path — used to
@@ -350,13 +352,30 @@ const segmentCanMatch = (segment, literal) =>
  *  position — which is where the tests happened to put it — meant a zip
  *  comparison consumed it as exactly ONE segment and compared everything after
  *  it at the wrong depth. */
-const canDescendTo = (patternSegments, gapSegments) => {
-  if (gapSegments.length === 0) return true
-  if (patternSegments.length === 0) return false
+const SPANS_ANY_DEPTH = Symbol('spans any depth')
+
+const descendTo = (patternSegments, gapSegments) => {
+  if (gapSegments.length === 0) return patternSegments
+  if (patternSegments.length === 0) return undefined
   const [first, ...rest] = patternSegments
-  if (first === '**' || hasUnbalancedBrace(first)) return true
-  return segmentCanMatch(first, gapSegments[0]) && canDescendTo(rest, gapSegments.slice(1))
+  if (first === '**' || hasUnbalancedBrace(first)) return SPANS_ANY_DEPTH
+  return segmentCanMatch(first, gapSegments[0]) ? descendTo(rest, gapSegments.slice(1)) : undefined
 }
+
+// Landing ON `src/plugins` is not depending on a PLUGIN — a loose file directly
+// under it is core, the same rule `owningPlugin` applies to ordinary imports.
+// So the pattern must be able to reach `plugins/<name>/<something>`: two
+// segments below the plugin root, or a `**` that spans any number of them.
+//
+// Both branches of `globReachesPluginRoot` need this, and originally only the
+// inside-`plugins` one had it, so a pattern that reaches the plugins DIRECTORY
+// but nothing inside it was reported. Verified against the real tree with Vite's
+// own glob options (`expandDirectories: false`, files only): `/src/*` matches 15
+// files and `/src/*/*.ts` matches 301, NONE of them under `src/plugins/<name>/`;
+// adding one more segment matches 315 that are.
+// (Line comments, not a JSDoc block: these patterns contain `*` + `/`.)
+const reachesPluginContents = (already, restSegments) =>
+  restSegments.includes('**') || already + restSegments.length >= 2
 
 const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
   if (absolutePattern === undefined) return false
@@ -371,12 +390,14 @@ const globReachesPluginRoot = (absolutePattern, pluginsRoot) => {
     // and `/src/plugins/shared.css` reach exactly one, and are core→core.
     const already = insidePlugins === '' ? 0 : insidePlugins.split('/').length
     if (already >= 2) return true
-    const restSegments = rest === '' ? [] : rest.split('/')
-    return restSegments.includes('**') || already + restSegments.length >= 2
+    return reachesPluginContents(already, rest === '' ? [] : rest.split('/'))
   }
   const gap = posix.relative(headPath, pluginsRoot)
   if (outsideRoot(gap)) return false
-  return canDescendTo(rest === '' ? [] : rest.split('/'), gap.split('/'))
+  const leftover = descendTo(rest === '' ? [] : rest.split('/'), gap.split('/'))
+  if (leftover === undefined) return false
+  if (leftover === SPANS_ANY_DEPTH) return true
+  return reachesPluginContents(0, leftover)
 }
 
 /** Split a glob into its static leading segments and the globby remainder. */
@@ -397,6 +418,31 @@ const hasUnbalancedBrace = (segment) => segment.includes('{') && !segment.includ
  *  analysis turns it into an emitted chunk, so it creates exactly the same
  *  non-removable build-time edge. Also covers `new Worker(new URL(…))`, whose
  *  inner expression is this same node. */
+// Vite's `vite:asset-import-meta-url` transform SKIPS a `new URL(…)` carrying
+// an `@vite-ignore` block comment between `new URL(` and the specifier —
+// literally `hasViteIgnoreRE.test(code.slice(startIndex, urlStart))` — so no
+// chunk is emitted and the string stays an ordinary runtime URL. Reporting it
+// is a false positive, and a false positive here is worse than a miss: it
+// teaches people to reach for the disable comment, which is exactly the habit
+// this rule exists to prevent.
+//
+// The same slice, so the two agree by construction rather than by resemblance.
+const VITE_IGNORE = /\/\*\s*@vite-ignore\s*\*\//
+
+const hasViteIgnore = (node, sourceCode) =>
+  VITE_IGNORE.test(sourceCode.getText().slice(node.range[0], node.arguments[0].range[0]))
+
+// ...but the marker is NOT honoured inside `new Worker(…)`. Verified against the
+// installed Vite 8: `vite:worker-import-meta-url` has no such check, and its
+// regex runs over `stripLiteral(code)`, which blanks comments to SPACES
+// (`FILL_COMMENT = ' '`) — so `\s*` swallows the marker, the pattern still
+// matches, and the worker chunk is emitted regardless. Honouring the marker
+// unconditionally, as proposed in review, would have opened a real hole.
+const isWorkerConstructorArgument = (node) =>
+  node.parent?.type === 'NewExpression'
+  && (node.parent.callee?.name === 'Worker' || node.parent.callee?.name === 'SharedWorker')
+  && node.parent.arguments[0] === node
+
 const isImportMetaUrl = (node) =>
   node?.type === 'NewExpression'
   && node.callee?.name === 'URL'
@@ -620,7 +666,11 @@ const noCoreToPluginImports = {
         else if (node.callee?.name === 'require') check(node, node.arguments[0])
       },
       // `new URL('…', import.meta.url)`, incl. inside `new Worker(...)`.
-      NewExpression: (node) => isImportMetaUrl(node) && check(node, node.arguments[0]),
+      NewExpression: (node) => {
+        if (!isImportMetaUrl(node)) return
+        if (hasViteIgnore(node, context.sourceCode) && !isWorkerConstructorArgument(node)) return
+        check(node, node.arguments[0])
+      },
       // `/// <reference path="…" />`. Not a node at all — ESLint exposes it as a
       // comment — but TypeScript resolves and includes the target, so a core
       // .d.ts can pick up a plugin dependency the whole visitor set is blind to.

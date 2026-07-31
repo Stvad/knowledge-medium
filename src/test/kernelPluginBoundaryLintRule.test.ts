@@ -148,6 +148,26 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `const u = new URL('@/plugins/todo/worker.ts', base)`,
       },
+      // ...and so is one Vite is told to leave alone: `vite:asset-import-meta-url`
+      // skips the rewrite when this marker sits before the specifier, so no
+      // chunk is emitted. See `hasViteIgnore` for why `new Worker` is different.
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new URL(/* @vite-ignore */ '@/plugins/todo/worker.ts', import.meta.url)`,
+      },
+      // Globs that reach the plugins DIRECTORY but nothing inside it. Vite
+      // returns files, not directories (`expandDirectories: false`), so these
+      // match only loose files — which are core. Checked against the real tree
+      // with Vite's own glob options: 15 and 301 files respectively, none of
+      // them under `src/plugins/<name>/`.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/*')`,
+      },
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/*/*.ts')`,
+      },
       // `new.target` is a MetaProperty as well, so matching the node type alone
       // flagged an ordinary runtime base that Vite emits no chunk for.
       {
@@ -361,6 +381,24 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // One segment deeper and the same glob DOES reach plugin contents — 315
+      // files under `src/plugins/<name>/` in the real tree.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('/src/*/*/*.ts')`,
+        errors: [{ messageId: 'coreGlobsPluginLayer', data: { specifier: '/src/*/*/*.ts' } }],
+      },
+      // `@vite-ignore` is honoured for plain asset URLs but NOT inside
+      // `new Worker(…)` — `vite:worker-import-meta-url` never looks for the
+      // marker and bundles the plugin worker anyway.
+      {
+        filename: core('data/repo.ts'),
+        code: `const w = new Worker(new URL(/* @vite-ignore */ '@/plugins/todo/worker.ts', import.meta.url))`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/worker.ts' },
         }],
       },
       // TypeScript's import-equals form. The type-only spelling is the live
