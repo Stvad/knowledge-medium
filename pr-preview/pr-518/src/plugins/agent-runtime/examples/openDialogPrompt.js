@@ -5,6 +5,7 @@ var e=`// When you just need a one-shot prompt (no persistent mount, no
 import { actionsFacet } from '@/extensions/core.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { openDialog, type DialogContextProps } from '@/utils/dialogs.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { showError, showSuccess } from '@/utils/toast.js'
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -31,6 +32,12 @@ const ReadwiseTokenPrompt = ({ resolve, cancel }: DialogContextProps<string>) =>
 // A bare \`actionsFacet.of(...)\` at module scope contributes NOTHING — the
 // runtime only reads what the module's default export hands back.
 export default [
+  // \`openDialog\` is inert without DialogHost mounted: the promise below would
+  // never resolve. Pull the mount in here rather than hoping another enabled
+  // plugin happens to provide it — the resolver dedupes by contribution
+  // reference, so every dialog-using plugin importing this registers exactly
+  // one mount.
+  dialogAppMountExtension,
   actionsFacet.of({
     id: 'user.readwise.configure',
     description: 'Configure Readwise',

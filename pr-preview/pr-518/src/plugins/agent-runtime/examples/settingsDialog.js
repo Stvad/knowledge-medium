@@ -9,30 +9,22 @@ import {
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
+import { createToggleStore } from '@/utils/toggleStore.js'
 import { useState, useSyncExternalStore } from 'react'
 
 const TOKEN_KEY = 'knowledge-medium:readwise:token:v1'
 
-// Visibility is a tiny typed module store — NOT a window CustomEvent.
-// The configure action flips it directly; the mounted component reads
-// it with useSyncExternalStore, the same mechanism the app's own
-// DialogHost uses. (For a one-shot prompt that just returns a value,
-// prefer the imperative \`openDialog(Component)\` shape below instead.)
-let settingsOpen = false
-// eslint-disable-next-line callback-set/prefer-callback-set -- extension-facing example: CallbackSet is app-internal, not on the curated extension API
-const settingsListeners = new Set<() => void>()
-const setSettingsOpen = (next: boolean) => {
-  settingsOpen = next
-  settingsListeners.forEach(notify => notify())
-}
-const subscribeSettingsOpen = (notify: () => void) => {
-  settingsListeners.add(notify)
-  return () => void settingsListeners.delete(notify)
-}
+// Visibility is a typed module store — NOT a window CustomEvent, and not a
+// hand-rolled boolean + listener Set. \`createToggleStore\` is the blessed
+// toggle seam: the configure action flips it directly, the mounted component
+// reads it with useSyncExternalStore, the same mechanism the app's own
+// DialogHost uses. (For a one-shot prompt that just returns a value, prefer
+// the imperative \`openDialog(Component)\` shape below instead.)
+const settingsDialog = createToggleStore('readwise.settings')
 
 const ReadwiseSetupDialog = () => {
   const repo = useRepo()  // access Repo from inside an appMountsFacet component
-  const open = useSyncExternalStore(subscribeSettingsOpen, () => settingsOpen)
+  const open = useSyncExternalStore(settingsDialog.subscribe, settingsDialog.isOpen)
   const [token, setToken] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -50,14 +42,14 @@ const ReadwiseSetupDialog = () => {
       // repo is available here if you need to write workspace state too.
       void repo  // (silence unused — show the access pattern)
       showSuccess('Readwise connected.')
-      setSettingsOpen(false)
+      settingsDialog.close()
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={setSettingsOpen}>
+    <Dialog open={open} onOpenChange={settingsDialog.set}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Connect Readwise</DialogTitle>
@@ -91,7 +83,7 @@ export default [
     id: 'user.readwise.configure',
     description: 'Configure Readwise',
     context: ActionContextTypes.GLOBAL,
-    handler: () => setSettingsOpen(true),
+    handler: () => settingsDialog.open(),
   }, { source: 'readwise' }),
 ]
 `;export{e as default};
