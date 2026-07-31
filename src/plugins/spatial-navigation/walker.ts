@@ -150,6 +150,15 @@ const isNavigable = (el: HTMLElement, excludedSurfaces: ReadonlySet<string>): bo
   return true
 }
 
+/** The occurrence a deferred row's slot holds a place for, or null when the
+ *  element isn't a fully-labelled slot. */
+const slotLocationOf = (slot: HTMLElement): FocusedBlockLocation | null => {
+  const {lazyBlockId, lazyRenderScopeId} = slot.dataset
+  return lazyBlockId && lazyRenderScopeId
+    ? {blockId: lazyBlockId, renderScopeId: lazyRenderScopeId}
+    : null
+}
+
 /** Does `el` sit inside a row on an excluded surface? A not-yet-mounted row
  *  carries no surface of its own, so the enclosing one is all there is to go
  *  on. Deliberately conservative: an excluded surface's own subtree is the
@@ -497,14 +506,13 @@ export const reservedRowBetween = (
     // nearer answer and nothing is missing before it.
     (!to || aheadOf(slot, to, direction)) &&
     !(from.contains(slot) && slot.dataset.lazyRenderScopeId === fromScope) &&
-    !isInExcludedSurface(slot, excludedSurfaces),
+    !isInExcludedSurface(slot, excludedSurfaces) &&
+    // Never picks a half-labelled slot and then gives up on it, which would
+    // silently drop a valid one further along.
+    slotLocationOf(slot) !== null,
   )
   const nearest = direction === 'down' ? slots[0] : slots[slots.length - 1]
-  if (!nearest) return null
-  const {lazyBlockId, lazyRenderScopeId} = nearest.dataset
-  return lazyBlockId && lazyRenderScopeId
-    ? {blockId: lazyBlockId, renderScopeId: lazyRenderScopeId}
-    : null
+  return nearest ? slotLocationOf(nearest) : null
 }
 
 /**
