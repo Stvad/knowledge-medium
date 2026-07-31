@@ -161,8 +161,8 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'plugin-root-singleton',
       when: 'The plugin needs a stable workspace-scoped root block — e.g. a "Readwise Library" page that all imported books/highlights live under.',
-      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)` — same inputs, same id, so a re-install or a fresh device lands on the same block. Same helper for per-record ids, with a key like `book:${externalId}`. Write it with `tx.createOrGet`, never `repo.load` then `tx.create`.',
-      modules: ['@/data/api/index.js', '@/data/orderKey.js', '@/data/properties.js', '@/extensions/pluginIds.js'],
+      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)` — same inputs, same id, so a re-install or a fresh device lands on the same block. Same helper for per-record ids, with a key like `book:${externalId}`. Write through `createOrRestoreTargetBlock`; see the example for the two upsert shapes that look right and are not.',
+      modules: ['@/data/api/index.js', '@/data/orderKey.js', '@/data/properties.js', '@/data/targets.js', '@/extensions/pluginIds.js'],
       example: example(
         'Deterministic id for a plugin root block',
         pluginRootSingletonSource,
@@ -191,8 +191,8 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Declare source-id properties as seeds (`seedProperty` + `definitionSeedsFacet`) — a bare key in the raw `properties` object has no codec and `audit-extension` flags it. Derive each record\'s block id from its external id with `pluginBlockId`, write it with `tx.createOrGet`, and write the source-owned fields on BOTH outcomes: `inserted: false` means the row was already there and nothing was written, not that there is nothing to write.',
-      modules: ['@/data/api/index.js', '@/data/facets.js', '@/data/orderKey.js', '@/extensions/dynamicExtensionSeeds.js', '@/extensions/pluginIds.js'],
+      use: 'Declare source-id properties as seeds (`seedProperty` + `definitionSeedsFacet`) — a bare key in the raw `properties` object has no codec and `audit-extension` flags it. Derive each record\'s block id from its external id with `pluginBlockId`, write through `createOrRestoreTargetBlock`, and re-write the source-owned fields on EVERY outcome so a re-sync updates rather than keeping stale data.',
+      modules: ['@/data/api/index.js', '@/data/facets.js', '@/data/orderKey.js', '@/data/targets.js', '@/extensions/dynamicExtensionSeeds.js', '@/extensions/pluginIds.js'],
       example: example(
         'Tx mutation primitives — create/read/update inside a transaction',
         txMutationPrimitivesSource,
@@ -246,6 +246,7 @@ const guides: AuthoringGuide[] = [
       '@/data/stateBlocks.js',
       '@/extensions/dynamicExtensionSeeds.js',
       '@/extensions/pluginIds.js',
+      '@/data/targets.js',
       '@/context/repo.js',
       '@/utils/dialogs.js',
       '@/extensions/dialogAppMount.js',

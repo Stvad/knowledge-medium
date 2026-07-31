@@ -160,6 +160,10 @@ export type {
 } from '@/utils/dialogs.js'
 
 export type {
+  CreateOrRestoreArgs,
+} from '@/data/targets.js'
+
+export type {
   ToggleStore,
 } from '@/utils/toggleStore.js'
 

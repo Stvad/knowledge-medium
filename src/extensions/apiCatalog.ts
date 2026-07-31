@@ -269,6 +269,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'data',
+    importPath: '@/data/targets.js',
+    description: 'createOrRestoreTargetBlock — get-or-create at a deterministic id, inside your tx. Use over a bare tx.createOrGet, which throws on the tombstone a deleted block leaves behind.',
+    exports: ['createOrRestoreTargetBlock'],
+    types: ['CreateOrRestoreArgs'],
+  },
+  {
+    category: 'data',
     importPath: '@/extensions/pluginIds.js',
     description: 'pluginBlockId — deterministic (uuidv5) plugin-owned block ids for idempotent upserts.',
     exports: ['pluginBlockId'],
