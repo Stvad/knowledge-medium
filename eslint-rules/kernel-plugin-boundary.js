@@ -187,6 +187,14 @@ const toAbsolute = (source, importerDir, sourceRoot) => {
   if (specifier.startsWith('@/')) return under(sourceRoot, specifier.slice(2))
   // Vite's filesystem-qualified form — the remainder is already absolute.
   if (specifier.startsWith('/@fs/')) return under('/', specifier.slice('/@fs/'.length))
+  // A PLAIN filesystem-absolute path that already lands inside the source root.
+  // Vite accepts this spelling and bundles it (verified with a real build), and
+  // it has to be recognised BEFORE the Vite-root-relative branch below, which
+  // would strip the leading slash and re-resolve the whole thing under the repo
+  // root — landing outside the tree and reporting nothing.
+  if (specifier.startsWith('/') && !outsideRoot(posix.relative(sourceRoot, specifier))) {
+    return specifier
+  }
   // Root-relative, i.e. relative to the Vite root. Not just `/src/…`: `/docs/…`
   // resolves too and is then correctly found to be outside the source root.
   if (specifier.startsWith('/')) return under(repoRoot, specifier)
@@ -461,21 +469,21 @@ const hasUnbalancedBrace = (segment) => segment.includes('{') && !segment.includ
 // this rule exists to prevent.
 //
 // The same slice, so the two agree by construction rather than by resemblance.
+//
+// This holds inside `new Worker(…)` too. An earlier version of this rule made
+// an EXCEPTION there, reasoning that `vite:worker-import-meta-url` has no
+// marker check and that its regex runs over `stripLiteral(code)`, which blanks
+// comments to spaces. That reasoning read the handler and missed the gate: the
+// plugin declares `transform: {filter: {code: workerImportMetaUrlRE}, …}`, and
+// the FILTER is applied to raw code, where the comment sits between `new URL(`
+// and the literal and the pattern cannot match. The handler therefore never
+// runs. Confirmed by building it: with the marker only the entry chunk is
+// emitted and the URL survives verbatim in the output; without it, a separate
+// worker chunk appears.
 const VITE_IGNORE = /\/\*\s*@vite-ignore\s*\*\//
 
 const hasViteIgnore = (node, sourceCode) =>
   VITE_IGNORE.test(sourceCode.getText().slice(node.range[0], node.arguments[0].range[0]))
-
-// ...but the marker is NOT honoured inside `new Worker(…)`. Verified against the
-// installed Vite 8: `vite:worker-import-meta-url` has no such check, and its
-// regex runs over `stripLiteral(code)`, which blanks comments to SPACES
-// (`FILL_COMMENT = ' '`) — so `\s*` swallows the marker, the pattern still
-// matches, and the worker chunk is emitted regardless. Honouring the marker
-// unconditionally, as proposed in review, would have opened a real hole.
-const isWorkerConstructorArgument = (node) =>
-  node.parent?.type === 'NewExpression'
-  && (node.parent.callee?.name === 'Worker' || node.parent.callee?.name === 'SharedWorker')
-  && node.parent.arguments[0] === node
 
 // `unwrapTypeWrappers`, not `unwrap`, on BOTH the callee and the base — and the
 // distinction is load-bearing in each direction. Type wrappers are erased before
@@ -531,10 +539,17 @@ const propertyValue = (node, name) => {
 }
 
 const isImportMetaGlob = (node) => {
-  // Unwrap the callee too — `(import.meta.glob as any)(…)` is a TSAsExpression.
-  // Seventh site of this same fix; the lesson is that every node this rule
-  // pattern-matches on needs unwrapping, not the ones an example happened to name.
-  const callee = unwrap(node)
+  // Unwrap the callee — `(import.meta.glob as any)(…)` is a TSAsExpression.
+  // TYPE wrappers only: `import.meta.glob` is a compile-time MACRO with no
+  // runtime existence, and Vite's transform only recognises a direct callee, so
+  // `(0, import.meta.glob)('…')` survives into the output untransformed and
+  // emits nothing (verified by building it — the call is still there verbatim).
+  // Unwrapping value-forms here reported a dependency that isn't in the build.
+  //
+  // Contrast the `require` branch below, which DOES unwrap value-forms: that one
+  // is an ordinary function call, so `(0, require)(x)` really would invoke it
+  // with that specifier wherever `require` exists.
+  const callee = unwrapTypeWrappers(node)
   return callee?.type === 'MemberExpression'
     && callee.object?.type === 'MetaProperty'
     && callee.object.meta?.name === 'import'
@@ -741,7 +756,7 @@ const noCoreToPluginImports = {
       // `new URL('…', import.meta.url)`, incl. inside `new Worker(...)`.
       NewExpression: (node) => {
         if (!isImportMetaUrl(node)) return
-        if (hasViteIgnore(node, context.sourceCode) && !isWorkerConstructorArgument(node)) return
+        if (hasViteIgnore(node, context.sourceCode)) return
         checkAssetUrl(node)
       },
       // `/// <reference path="…" />`. Not a node at all — ESLint exposes it as a
@@ -781,7 +796,14 @@ const noCoreToPluginImports = {
         // compiler honours further down would otherwise be a silent miss, and
         // prose that happens to spell out `@jsxImportSource <path>` costs one
         // inline disable. Same conservative trade the glob classifier makes.
-        for (const comment of context.sourceCode.getAllComments()) {
+        // ...unless the file also selects the CLASSIC runtime, which has no
+        // import source at all — JSX compiles to `React.createElement` and the
+        // pragma is inert. Verified by building it: no plugin runtime in the
+        // output. Reporting it would force a disable onto a file with no
+        // dependency.
+        const comments = context.sourceCode.getAllComments()
+        if (comments.some(c => /@jsxRuntime\s+classic\b/.test(c.value))) return
+        for (const comment of comments) {
           const [, source] = comment.value.match(/@jsxImportSource\s+(\S+)/) ?? []
           if (source === undefined) continue
           const specifier = `${source}/jsx-runtime`

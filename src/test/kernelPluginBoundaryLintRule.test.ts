@@ -187,10 +187,33 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
       },
       // ...and so is one Vite is told to leave alone: `vite:asset-import-meta-url`
       // skips the rewrite when this marker sits before the specifier, so no
-      // chunk is emitted. See `hasViteIgnore` for why `new Worker` is different.
+      // chunk is emitted.
       {
         filename: core('data/repo.ts'),
         code: `const u = new URL(/* @vite-ignore */ '@/plugins/todo/worker.ts', import.meta.url)`,
+      },
+      // Inside `new Worker(…)` too. This case previously asserted the OPPOSITE,
+      // on the reasoning that the worker plugin has no marker check and its
+      // regex runs over comment-blanking `stripLiteral` output. That missed the
+      // `transform.filter`, which gates the handler on RAW code and cannot match
+      // across the comment. Built both ways: with the marker only the entry
+      // chunk is emitted; without it, a worker chunk appears.
+      {
+        filename: core('data/repo.ts'),
+        code: `const w = new Worker(new URL(/* @vite-ignore */ '@/plugins/todo/worker.ts', import.meta.url))`,
+      },
+      // `import.meta.glob` is a compile-time macro Vite only recognises as a
+      // DIRECT callee — a sequence-wrapped one survives untransformed and emits
+      // nothing, so unwrapping value-forms here invented a dependency.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = (0, import.meta.glob)('/src/plugins/*/index.ts')`,
+      },
+      // `@jsxRuntime classic` makes the import source inert — JSX compiles to
+      // `React.createElement` and no plugin runtime is imported.
+      {
+        filename: core('components/Editor.tsx'),
+        code: `/** @jsxRuntime classic */\n/** @jsxImportSource @/plugins/todo */\nexport const el = null`,
       },
       // Globs that reach the plugins DIRECTORY but nothing inside it. Vite
       // returns files, not directories (`expandDirectories: false`), so these
@@ -427,15 +450,16 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         code: `const m = import.meta.glob('/src/*/*/*.ts')`,
         errors: [{ messageId: 'coreGlobsPluginLayer', data: { specifier: '/src/*/*/*.ts' } }],
       },
-      // `@vite-ignore` is honoured for plain asset URLs but NOT inside
-      // `new Worker(…)` — `vite:worker-import-meta-url` never looks for the
-      // marker and bundles the plugin worker anyway.
+      // A plain filesystem-absolute path inside the source root. Vite accepts
+      // this spelling and bundles it (verified with a real build); the
+      // root-relative branch used to strip the leading slash and re-resolve it
+      // under the repo root, landing outside the tree.
       {
         filename: core('data/repo.ts'),
-        code: `const w = new Worker(new URL(/* @vite-ignore */ '@/plugins/todo/worker.ts', import.meta.url))`,
+        code: `import { s } from '${plugin('todo/schema.ts')}'`,
         errors: [{
           messageId: 'coreImportsPlugin',
-          data: { plugin: 'todo', specifier: '@/plugins/todo/worker.ts' },
+          data: { plugin: 'todo', specifier: plugin('todo/schema.ts') },
         }],
       },
       // `@jsxImportSource` makes the automatic runtime import
