@@ -2,6 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { ChangeScope, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -465,6 +466,36 @@ describe('PanelRenderer', () => {
     panelHistory.enqueueRestore('panel-a', {scrollTop: 512})
 
     renderPanel(false)
+    const topLevel = await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow).not.toHaveBeenCalled()
+    expect(topLevel.parentElement?.scrollTop).toBe(512)
+  })
+
+  // Under `StrictMode` — which `main.tsx` enables — the effect runs setup,
+  // cleanup, setup. `consumeRestore` is destructive, so the replay used to find
+  // nothing, peek the cursor `writePanelContent` manufactures for a cursorless
+  // visit, and anchor to the top, undoing the offset the first pass restored.
+  it('keeps a cursorless restore across the StrictMode effect replay', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, {
+        blockId: 'page-a',
+        renderScopeId: panelRenderScopeId('panel-a', 'page-a'),
+      })
+    }, {scope: ChangeScope.UiState, description: 'manufactured cursor'})
+    panelHistory.enqueueRestore('panel-a', {scrollTop: 512})
+
+    render(
+      <StrictMode>
+        <AppRuntimeContextProvider value={env.runtime}>
+          <BlockContextProvider
+            initialValue={{layoutBoundary: true, panelId: env.panel.id}}
+          >
+            <PanelRenderer block={env.panel}/>
+          </BlockContextProvider>
+        </AppRuntimeContextProvider>
+      </StrictMode>,
+    )
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()

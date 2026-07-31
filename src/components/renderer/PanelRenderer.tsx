@@ -25,6 +25,7 @@ import {
   goForwardInPanel,
   panelHistory,
   usePanelHistory,
+  type VisitState,
 } from '@/utils/panelHistory.js'
 import { alignScrollportToRow } from '@/utils/panelScrollAnchor.js'
 import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
@@ -86,6 +87,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const pendingScrollTopRef = useRef<number | undefined>(undefined)
   const scrollWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingActivationRef = useRef(false)
+  // The restore this pane already drained, kept so StrictMode's effect replay
+  // sees the same answer the first setup did. `consumeRestore` is destructive,
+  // and the replay would otherwise find nothing, peek the cursor
+  // `writePanelContent` MANUFACTURES for a cursorless visit, and anchor to the
+  // top — undoing the offset the first pass had just restored. Keyed by
+  // (pane, content) so a real navigation drains a fresh one; only ever one
+  // slot, so A → B → A re-consumes correctly.
+  const consumedRestoreRef = useRef<{key: string; state: VisitState | undefined} | null>(null)
 
   const activatePanel = useCallback(() => {
     if (!layoutSessionBlockId) return
@@ -166,7 +175,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
   // opened and scrolled but never clicked or navigated in.
   useEffect(() => {
     if (!topLevelBlockId) return
-    const restore = panelHistory.consumeRestore(block.id)
+    const restoreKey = `${block.id}:${topLevelBlockId}`
+    let restore: VisitState | undefined
+    if (consumedRestoreRef.current?.key === restoreKey) {
+      restore = consumedRestoreRef.current.state
+    } else {
+      restore = panelHistory.consumeRestore(block.id)
+      consumedRestoreRef.current = {key: restoreKey, state: restore}
+    }
     const scrollEl = scrollRef.current
     if (!scrollEl) return
     // A history snapshot answers for itself. A visit that was scrolled but never
