@@ -645,7 +645,8 @@ cli
   .option('--guide, --guides <id>', 'Show specific guide(s) (repeatable)')
   .option('--modules <text>', 'Filter modules (repeatable)')
   .option('--components <text>', 'Filter components (repeatable)')
-  .option('--storage', 'Include storage diagnostics')
+  .option('--storage', 'Include storage diagnostics (full worked sources for every storage pattern, even under --brief)')
+  .option('--brief', 'Authoring-only output: no actions/facets/modules/components, and storage examples reduced to a pointer')
   .option('--full', 'Force full output even when --guide is set')
   .action(async (options: Record<string, unknown>) => {
     const actions = toStringArray(options.actions)
@@ -664,6 +665,10 @@ cli
         || modules.length > 0
         || components.length > 0
     const briefImplied = guides.length > 0 && !heavyFilterPresent && !fullRequested
+    // Explicit --brief wins over --full: it's what the brief-mode storage
+    // pointer tells the agent to run, so it has to work on its own (without
+    // a --guide, which is the only thing that implies brief today).
+    const brief = Boolean(options.brief) || briefImplied
 
     await runAndPrint({
       type: 'describe-runtime',
@@ -673,7 +678,7 @@ cli
       ...(modules.length > 0 ? {modules} : {}),
       ...(components.length > 0 ? {components} : {}),
       ...(storage ? {storage: true} : {}),
-      ...(briefImplied ? {brief: true} : {}),
+      ...(brief ? {brief: true} : {}),
     })
   })
 

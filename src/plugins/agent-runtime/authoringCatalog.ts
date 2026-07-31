@@ -103,11 +103,20 @@ export interface AuthoringCatalogFilters {
   guides?: string[]
   modules?: string[]
   components?: string[]
-  /** When true, omit modules and components entirely. The
-   *  guide-only / `--brief` path uses this to keep the response
-   *  small — module/component glob dumps are 150KB of paths the
-   *  agent doesn't need while reading a guide. */
-  omitDiscoverableModules?: boolean
+  /** Guide-only / `--brief`. Two effects, both about not shipping what the
+   *  caller didn't ask for:
+   *    - omit the module + component glob dumps (150KB of internal paths);
+   *    - replace each STORAGE pattern's worked source with a pointer to the
+   *      command that fetches it. The guide the caller asked for still
+   *      carries its own examples in full, so the code that matches what
+   *      they're reading is always present — what goes is the worked source
+   *      for the patterns they didn't ask about, which was most of the
+   *      payload. */
+  brief?: boolean
+  /** Keep the storage worked sources even under `brief`. Set when the caller
+   *  explicitly asked for storage (`--storage`) — which is exactly what the
+   *  brief-mode pointer tells them to run, so the pointer is never a lie. */
+  storage?: boolean
 }
 
 type RuntimeModule = Record<string, unknown>
@@ -134,6 +143,26 @@ const internalModuleIndex = import.meta.glob([
  *  the compiled source file behind it. */
 const example = (label: string, source: string): AuthoringExample =>
   ({label, code: source.trimEnd()})
+
+const BRIEF_EXAMPLE_POINTER = [
+  '// Worked source omitted in --brief. Fetch it with:',
+  '//   pnpm agent describe-runtime --brief --storage',
+].join('\n')
+
+/** Keep the label (so the agent knows the example exists and what it shows)
+ *  and swap the body for the command that retrieves it. */
+const examplePointer = (source: AuthoringExample): AuthoringExample =>
+  ({label: source.label, code: BRIEF_EXAMPLE_POINTER})
+
+const briefStorage = (guide: AuthoringStorageGuide): AuthoringStorageGuide => ({
+  ...guide,
+  patterns: guide.patterns.map(pattern => pattern.example
+    ? {...pattern, example: examplePointer(pattern.example)}
+    : pattern),
+  credentials: guide.credentials.example
+    ? {...guide.credentials, example: examplePointer(guide.credentials.example)}
+    : guide.credentials,
+})
 
 const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
   eager: true,
@@ -671,7 +700,7 @@ export const describeAuthoringCatalog = (
   filters: AuthoringCatalogFilters = {},
   document?: Document,
 ): AuthoringCatalog => {
-  const modules = filters.omitDiscoverableModules
+  const modules = filters.brief
     ? []
     : mergeModules([
       ...generatedModules(),
@@ -680,7 +709,7 @@ export const describeAuthoringCatalog = (
       matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports, module.types),
     )
 
-  const components = filters.omitDiscoverableModules
+  const components = filters.brief
     ? []
     : generatedComponents().filter(component =>
       matchesTerms(filters.components, component.name, component.importPath, component.category, component.description, component.exports),
@@ -690,7 +719,9 @@ export const describeAuthoringCatalog = (
     guides: guides.filter(guide =>
       matchesTerms(filters.guides, guide.id, guide.title, guide.when, guide.relatedFacets),
     ),
-    storage: storageGuide,
+    storage: filters.brief && !filters.storage
+      ? briefStorage(storageGuide)
+      : storageGuide,
     modules,
     components,
   }

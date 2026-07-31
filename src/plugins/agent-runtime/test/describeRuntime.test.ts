@@ -347,8 +347,51 @@ describe('describeRuntime', () => {
     expect(description.authoring.storage.patterns.length).toBeGreaterThan(0)
     expect(description.apiSurface.modules.length).toBeGreaterThan(0)
 
+    // The guide the caller ASKED for keeps its worked sources in full. This is
+    // what makes reducing the storage examples safe: the code that matches
+    // what you're reading is always present.
+    const guide = description.authoring.guides.find(g => g.id === 'external-sync-plugin')
+    expect(guide?.examples?.length).toBeGreaterThan(0)
+    expect(guide?.examples?.[0]?.code).toContain('appMountsFacet')
+
+    // Storage patterns keep their `use` prose and their example LABELS, but
+    // the worked sources — four patterns the caller didn't ask about, and the
+    // bulk of the payload — are reduced to the command that fetches them.
+    for (const pattern of description.authoring.storage.patterns) {
+      if (!pattern.example) continue
+      expect(pattern.example.label.length).toBeGreaterThan(0)
+      expect(pattern.example.code).toContain('describe-runtime --brief --storage')
+    }
+
     // Whole brief-mode response should be small — the whole point.
     expect(JSON.stringify(description).length).toBeLessThan(40_000)
+  })
+
+  it('--brief --storage returns the worked sources the brief pointer names', async () => {
+    // The pointer is a promise to the agent. If this combination stopped
+    // returning real source, brief mode would be sending them to a dead end
+    // and the only symptom would be a confused agent.
+    const runtime = await resolveFacetRuntime([])
+    const description = await describeRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [],
+      renderers: {},
+    }, {
+      guides: ['external-sync-plugin'],
+      brief: true,
+      storage: true,
+    })
+
+    const userPrefs = description.authoring.storage.patterns.find(
+      pattern => pattern.id === 'user-prefs-config',
+    )
+    expect(userPrefs?.example?.code).toContain('getPluginPrefsBlock')
+    expect(userPrefs?.example?.code).not.toContain('describe-runtime --brief --storage')
+    // Still brief in every other respect — the escape hatch is storage-only.
+    expect(description.authoring.modules).toEqual([])
+    expect(description.actions).toEqual([])
   })
 
   it('exposes the authoring primitives plugins reach for first', () => {
