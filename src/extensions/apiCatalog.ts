@@ -253,10 +253,10 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/properties.js',
-    description: 'System UI-state props (collapsed, show-properties, top-level, focus location) + the atomic focusBlock transition.',
+    description: 'System UI-state props (collapsed, show-properties, top-level, focus location) + the page-name prop and the atomic focusBlock transition.',
     exports: [
-      'isCollapsedProp', 'showPropertiesProp', 'topLevelBlockIdProp', 'focusedBlockLocationProp',
-      'focusBlock',
+      'aliasesProp', 'isCollapsedProp', 'showPropertiesProp', 'topLevelBlockIdProp',
+      'focusedBlockLocationProp', 'focusBlock',
     ],
     types: ['FocusedBlockLocation'],
   },
