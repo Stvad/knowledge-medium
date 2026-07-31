@@ -127,8 +127,12 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // before the harness opens still gets backfilled.
   const backfillDb = {
     execute: (sql: string, params?: unknown[]) => db.execute(sql, params as never[] | undefined),
-    getOptional: async <T,>(sql: string) => {
-      const row = await db.getOptional<T>(sql)
+    // Forwards params, matching repoProvider's adapter. A shim that drops them
+    // silently binds NULL for any `?`, so a bootstrap probe never sees its own
+    // completion marker and re-runs its scan forever — and TypeScript can't
+    // catch it, since a narrower arity is always assignable.
+    getOptional: async <T,>(sql: string, params?: unknown[]) => {
+      const row = await db.getOptional<T>(sql, params as never[] | undefined)
       return row ?? null
     },
   }

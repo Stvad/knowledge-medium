@@ -14,6 +14,8 @@ import { typesProp } from '@/data/properties'
 import { definitionSeedsFacet, typeSeedsFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
+import { compileTypedBlockQuery } from './typedBlockQuery'
+import type { ResolvedTypedBlockQuery } from '@/data/api'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -625,5 +627,40 @@ describe('repo.countBlocksUsingProperty', () => {
     await create({id: 'miss', properties: {status: 'open'}})
 
     expect(await env.repo.countBlocksUsingProperty(weirdNameProp.name)).toBe(1)
+  })
+})
+
+// Why the type filter is a JOIN and not a correlated EXISTS, including the
+// crossover where it is SLOWER: see the block comment on `typeJoin` in
+// typedBlockQuery.ts. These tests pin the emitted shape and the param order.
+describe('compileTypedBlockQuery — type filter join order', () => {
+  const compileTypes = (types: string[], extra: Partial<ResolvedTypedBlockQuery> = {}) =>
+    compileTypedBlockQuery(
+      {workspaceId: WS, types, match: [], exclude: [], ...extra},
+      new Map(),
+      {projection: 'ids'},
+    )
+
+  it('joins block_types instead of probing it per candidate row', () => {
+    const {sql} = compileTypes(['property-schema'])
+    expect(sql).toContain('JOIN block_types bt')
+    expect(sql).not.toMatch(/EXISTS\s*\(\s*SELECT 1\s*FROM block_types/)
+  })
+
+  it('binds the type params in FROM-clause position, ahead of the WHERE params', () => {
+    // The join's `?` now precedes `b.workspace_id = ?` in the statement text,
+    // so a params array still ordered WHERE-first would silently filter by the
+    // wrong values rather than throw.
+    const {sql, params} = compileTypes(['property-schema', 'block-type'])
+    // Types arrive sorted — normalizeTypedBlockQuery canonicalises them so the
+    // compiled SQL is a stable cache key.
+    expect(params).toEqual(['block-type', 'property-schema', WS])
+    expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('b.workspace_id = ?'))
+  })
+
+  it('keeps referencedBy params in statement order when both are present', () => {
+    const {sql, params} = compileTypes(['todo'], {referencedBy: {id: 'target-1'}})
+    expect(params).toEqual(['todo', WS, 'target-1'])
+    expect(sql.indexOf('bt.type IN')).toBeLessThan(sql.indexOf('br.workspace_id = ?'))
   })
 })
