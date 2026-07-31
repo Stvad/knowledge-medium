@@ -9,6 +9,7 @@ import { typeSeedsFacet } from '@/data/facets'
 import {
   getOrCreateKernelPage,
   kernelPageBlockId,
+  predictKernelPageId,
 } from '@/data/kernelPage'
 import { Repo } from '@/data/repo'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
@@ -174,6 +175,38 @@ describe('getOrCreateKernelPage', () => {
     })
     expect(again.id).toBe('claimant')
     expect(await isBlockDeleted(env.repo, page.id)).toBe(true)
+  })
+
+  it('predictKernelPageId agrees with getOrCreateKernelPage about an adopted claimant', async () => {
+    // `predictKernelPageId` promises the same answer as
+    // `getOrCreateKernelPage` without writing, and the two build their
+    // adoption guards from separate expressions. If those drift — e.g. the
+    // predictor keeping `refuseTypedClaimant`'s bare `[PAGE_TYPE]` default
+    // while the writer widens to include the marker — then the moment the
+    // writer ADOPTS and marker-tags a claimant, the predictor starts
+    // refusing that same claimant as "already typed" and answering with the
+    // deterministic id instead: a tombstone whose alias the claimant now
+    // holds. Callers that predict-then-read (`typesPage.ts`) would read the
+    // wrong row, silently.
+    //
+    // Both now derive from `kernelPageTypes`, which is what this pins; the
+    // pre-adoption case can't distinguish them (an untyped claimant passes
+    // either guard), so the assertion has to come AFTER an adoption.
+    const spec = {namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE}
+    const page = await getOrCreateKernelPage(env.repo, WS, spec)
+    await env.repo.tx(tx => tx.delete(page.id), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'z0', content: 'Claimant'})
+      await tx.setProperty('claimant', aliasesProp, ['Foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const adopted = await getOrCreateKernelPage(env.repo, WS, spec)
+    expect(adopted.id).toBe('claimant')
+    // The claimant now carries PAGE_TYPE + the marker — the state a
+    // narrower guard would reject.
+    expect(adopted.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+
+    expect(await predictKernelPageId(env.repo, WS, spec)).toBe(adopted.id)
   })
 
   it('adopts a claimant that only appears between the pre-transaction read and the transaction', async () => {

@@ -21,8 +21,9 @@ import {
   addBlockTypeToProperties,
 } from '@/data/properties'
 import {BLOCK_TYPE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
-import {propertiesPageBlockId, getOrCreatePropertiesPage} from '@/data/propertiesPage'
-import {typesPageBlockId, getOrCreateTypesPage} from '@/data/typesPage'
+import {getOrCreatePropertiesPage} from '@/data/propertiesPage'
+import {getOrCreateTypesPage} from '@/data/typesPage'
+import type {Block} from '@/data/block'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
 
@@ -413,13 +414,21 @@ interface SeedMaterializationConfig<S extends {readonly seedKey: string; readonl
   readonly label: string
   /** Deterministic backing-block id for a seed key (`property`/`type` variant). */
   readonly idFor: (workspaceId: string, seedKey: string) => string
-  /** Deterministic parent page id (Properties / Types). */
-  readonly parentFor: (workspaceId: string) => string
-  /** Ensure the parent page (Properties / Types) exists before minting children.
-   *  Idempotent + deterministic-id; called only when there's pending work, so the
+  /** Ensure the parent page (Properties / Types) exists before minting children,
+   *  and RETURN it. Idempotent; called only when there's pending work, so the
    *  pass is self-sufficient rather than dependent on bootstrap ordering (see
-   *  `materializeSeeds`). */
-  readonly ensureParent: (repo: Repo, workspaceId: string) => Promise<unknown>
+   *  `materializeSeeds`).
+   *
+   *  The returned block's `id` is the parent — there is deliberately no
+   *  `parentFor(workspaceId)` companion that recomputes the deterministic id.
+   *  Since issue #378 these pages resolve ALIAS-FIRST, so the live page can sit
+   *  at a DIFFERENT id than `propertiesPageBlockId`/`typesPageBlockId`: when the
+   *  canonical row is deleted and a user page claims 'Properties'/'Types',
+   *  `getOrCreateKernelPage` adopts that page. Parenting to the recomputed
+   *  deterministic id then targets a tombstone, the parent-deleted trigger
+   *  rejects the create, and the whole pass aborts with `ParentDeletedError` —
+   *  permanently, on every re-run, leaving the definition registries empty. */
+  readonly ensureParent: (repo: Repo, workspaceId: string) => Promise<Block>
   readonly contentFor: (seed: S) => string
   /** Build the seed's on-block property bag. Receives `workspaceId` so the type
    *  pass can derive its `block-type:properties` refs' deterministic backing-block
@@ -521,11 +530,13 @@ const materializeSeeds = async <S extends {readonly seedKey: string; readonly re
   // exists, and concurrency-safe against bootstrap's own ensure (it re-checks
   // existence inside its tx) — makes the pass self-sufficient rather than a
   // spurious throw that waits for the next open/seed change.
-  await config.ensureParent(repo, workspaceId)
+  // Use the id `ensureParent` RESOLVED — not a recomputed deterministic id.
+  // Alias-first resolution (issue #378) can land the live page on an adopted
+  // user block; see `SeedMaterializationConfig.ensureParent`.
+  const parentId = (await config.ensureParent(repo, workspaceId)).id
 
   let created = 0
   let restored = 0
-  const parentId = config.parentFor(workspaceId)
   await repo.tx(async tx => {
     // `ensureParent` (and `repo.tx`'s own tx_context setup) awaited since the check
     // above; a switch-away can land in that window. Early-out here so an aborted
@@ -601,7 +612,6 @@ export const materializePropertySeeds = (
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializePropertySeeds',
     idFor: propertyDefinitionBlockId,
-    parentFor: propertiesPageBlockId,
     ensureParent: getOrCreatePropertiesPage,
     contentFor: seed => seed.name,
     propertiesFor: canonicalPropertySeedProperties,
@@ -660,7 +670,6 @@ export const materializeTypeSeeds = (
   materializeSeeds(repo, workspaceId, seeds, {
     label: 'materializeTypeSeeds',
     idFor: typeDefinitionBlockId,
-    parentFor: typesPageBlockId,
     ensureParent: getOrCreateTypesPage,
     contentFor: seed => seed.label,
     propertiesFor: canonicalTypeSeedProperties,

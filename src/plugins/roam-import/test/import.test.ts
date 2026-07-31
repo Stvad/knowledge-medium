@@ -496,6 +496,96 @@ describe('importRoam', {timeout: 30_000}, () => {
     expect(claimant?.parent_id).toBe(journalBlockId(WORKSPACE))
   })
 
+  // ──── daily PAGE reconciliation vs. an adopted note (issue #378) ────
+  //
+  // Distinct from the daily-shaped-[[alias]] case above: this is an imported
+  // daily PAGE — it brings descendants, aliases and promoted attributes that
+  // all have to land on whichever row is actually that day's note.
+  //
+  // A Roam daily page for 2026-04-27, plus a live claimant of that date's ISO
+  // alias already in the target workspace (a page the user made by hand, or a
+  // prior import run that already adopted it). Deliberately NOT today's date
+  // (the frozen clock is 2026-04-28) so `writeImportLog`'s own daily note is a
+  // different row and can't confound the assertions.
+  const APR27_ISO = '2026-04-27'
+  const dailyPageExport: RoamExport = [
+    {
+      title: 'April 27th, 2026',
+      uid: '04-27-2026',
+      children: [
+        {string: 'mood:: great', uid: 'dailyAttrC'},
+        {string: 'morning notes', uid: 'dailyChildC'},
+      ],
+    },
+  ]
+
+  it('lands an imported daily page on the ADOPTED note — descendants, aliases, promoted attrs (issue #378)', async () => {
+    // `reconcilePages` set `finalId: page.blockId` unconditionally for daily
+    // pages — the raw `dailyNoteBlockId` — while step 4's
+    // `getOrCreateDailyNote` resolves alias-first and ADOPTS the claimant,
+    // never minting a row at that deterministic id. Three separate losses
+    // followed, and none of them announced itself:
+    //   - `mergePageAliases(tx, recon.finalId, …)` silently no-ops on a
+    //     missing target → imported aliases dropped.
+    //   - `applyPromotedAttributes(tx, recon.finalId, …)` likewise → promoted
+    //     page properties dropped.
+    //   - `buildReparentMap` only maps `plannedId → finalId` when they DIFFER,
+    //     which for a daily page was never (same value by construction) → the
+    //     page's descendants kept `parentId` = the nonexistent raw id and their
+    //     `tx.create` failed the parent check, taking down the chunk tx.
+    const claimantId = 'preexisting-2026-04-27-page'
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: claimantId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a0', content: APR27_ISO,
+      })
+      await tx.setProperty(claimantId, aliasesProp, [APR27_ISO])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await importRoam(dailyPageExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    // Nothing was minted at the deterministic id — so anything still aimed
+    // there was aimed at a row that does not exist.
+    expect(await readBlock(dailyNoteBlockId(WORKSPACE, APR27_ISO))).toBeNull()
+
+    // Descendants landed under the adopted note.
+    const child = await readBlock(roamBlockId(WORKSPACE, 'dailyChildC'))
+    expect(child).not.toBeNull()
+    expect(child!.parent_id).toBe(claimantId)
+
+    const claimant = await readBlock(claimantId)
+    // Adopted as the day's note: re-parented under the journal, carrying both
+    // canonical aliases plus the imported page title.
+    expect(claimant!.parent_id).toBe(journalBlockId(WORKSPACE))
+    const aliases = JSON.parse(claimant!.properties_json)[aliasesProp.name] as string[]
+    expect(aliases).toContain(APR27_ISO)
+    expect(aliases).toContain('April 27th, 2026')
+    // Promoted attributes landed on the adopted note, not into the void.
+    const props = JSON.parse(claimant!.properties_json) as Record<string, unknown>
+    expect(props['roam:mood']).toBe('great')
+  })
+
+  it('a fresh daily-page import with no claimant still lands on the deterministic id (issue #378 control)', async () => {
+    // The alias-first path must not disturb the ordinary case: nobody claims
+    // the date, so the note is minted at `dailyNoteBlockId` exactly as before.
+    await importRoam(dailyPageExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const noteId = dailyNoteBlockId(WORKSPACE, APR27_ISO)
+    const note = await readBlock(noteId)
+    expect(note).not.toBeNull()
+    expect(note!.parent_id).toBe(journalBlockId(WORKSPACE))
+
+    const child = await readBlock(roamBlockId(WORKSPACE, 'dailyChildC'))
+    expect(child!.parent_id).toBe(noteId)
+    const props = JSON.parse(note!.properties_json) as Record<string, unknown>
+    expect(props['roam:mood']).toBe('great')
+  })
+
   it('resolves [[alias]] references to imported page final ids', async () => {
     await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

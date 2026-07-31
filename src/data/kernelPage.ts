@@ -88,6 +88,64 @@ export interface KernelPageSpec {
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
+/** The types a kernel page carries — `PAGE_TYPE`, plus the marker when the
+ *  spec names one.
+ *
+ *  Shared rather than inlined because it feeds TWO things that must agree:
+ *  the tags `getOrCreateKernelPage` applies, and the allow-list its adoption
+ *  guard (`refuseTypedClaimant`) is built from — in this function and in
+ *  `predictKernelPageId`. If those drift, a claimant this resolver adopted
+ *  and tagged on one call is refused by the other as "already typed",
+ *  which falls the caller back to a deterministic id whose alias the
+ *  claimant now holds — an `alias.collision` that rolls back the whole
+ *  transaction (issue #378).
+ *
+ *  The `undefined` check is here rather than at a call site for the same
+ *  reason: it is checked at all because the callers this is newly exposed to
+ *  are the ones the type does not reach — a dynamic extension is transpiled,
+ *  not typechecked. Without it the omission surfaces several frames down as
+ *  "type id undefined is not registered", which sends the author off to add a
+ *  type seed instead of to the field they left out. */
+const kernelPageTypes = (spec: KernelPageSpec): readonly string[] => {
+  if (spec.markerType === undefined) {
+    throw new Error(
+      'KernelPageSpec.markerType is required — pass a marker block-type to query the page by, or null for a page reached only by its id and alias.',
+    )
+  }
+  return spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
+}
+
+/** Read-only alias-first resolution: which block currently IS this kernel
+ *  page. Returns the same id `getOrCreateKernelPage` would resolve to — the
+ *  canonical-alias claimant if one is eligible, else the deterministic id —
+ *  but writes NOTHING: it neither creates, restores, nor repairs, and the
+ *  returned id may name a tombstone or no row at all.
+ *
+ *  For callers that need the page's IDENTITY without wanting to bring it into
+ *  existence — e.g. a read that should fail loudly when the page is missing,
+ *  or navigation that wants to check liveness itself. Callers that need the
+ *  page to exist must use `getOrCreateKernelPage` and take its returned
+ *  block's `.id`; per `canonicalAliasReaderFromTx`, a prediction taken outside
+ *  a write tx is a hint that must be re-resolved inside one before any write.
+ *
+ *  Mirrors `predictedJournalId` in `@/plugins/daily-notes`, and applies the
+ *  SAME adoption guard `getOrCreateKernelPage` does, so the two agree on which
+ *  claimants are eligible. */
+export const predictKernelPageId = async (
+  repo: Repo,
+  workspaceId: string,
+  spec: KernelPageSpec,
+): Promise<string> => {
+  const resolved = await resolveCanonicalAliasOwner(
+    canonicalAliasReaderFromRepo(repo),
+    [spec.alias],
+    workspaceId,
+    kernelPageBlockId(workspaceId, spec.namespace),
+    refuseTypedClaimant(kernelPageTypes(spec)),
+  )
+  return resolved.id
+}
+
 /** Get-or-create a per-workspace kernel page. Resolves ALIAS-FIRST (issue
  *  #378, repo-owner decision — "try id if not, use alias, everywhere"):
  *  if a live block already owns `spec.alias` (e.g. the canonical page was
@@ -115,18 +173,7 @@ export const getOrCreateKernelPage = async (
   const id = kernelPageBlockId(workspaceId, spec.namespace)
   const aliases: readonly string[] = [spec.alias]
   const orderKey = spec.orderKey ?? 'a0'
-  // Checked rather than trusted from the type, because the callers this is
-  // newly exposed to are the ones the type does not reach: a dynamic extension
-  // is transpiled, not typechecked. Without this the omission surfaces several
-  // frames down as "type id undefined is not registered", which sends the
-  // author off to add a type seed instead of to the field they left out.
-  if (spec.markerType === undefined) {
-    throw new Error(
-      'KernelPageSpec.markerType is required — pass a marker block-type to query the page by, or null for a page reached only by its id and alias.',
-    )
-  }
-  const types: readonly string[] =
-    spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
+  const types = kernelPageTypes(spec)
 
   /** `targetId` rather than the outer `id` because alias-first resolution can
    *  land this page on a claimant's id — see `guard` below. */

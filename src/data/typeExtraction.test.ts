@@ -26,6 +26,9 @@ import {
 } from '@/data/typeExtraction'
 
 const WS = 'ws-type-extraction'
+/** Stand-in "user page that claimed 'Types'" row for the issue-#378
+ *  adoption test. */
+const TYPES_CLAIMANT = '44444444-4444-4444-8444-444444444444'
 
 interface Harness {
   h: TestDb
@@ -265,6 +268,32 @@ describe('createTypeBlock', () => {
       label: 'Task',
       propertySchemaIds: [],
     })).rejects.toThrow(/no Types page for workspace ws-other-no-bootstrap/)
+  })
+
+  it('parents under an ADOPTED Types page, not the raw deterministic id (issue #378)', async () => {
+    // `getOrCreateTypesPage` resolves alias-first as of #378: with the
+    // canonical row deleted and a user page claiming 'Types', THAT page is the
+    // Types page. `createTypeBlock` used to compute `typesPageBlockId(ws)`
+    // itself and `repo.load` it — which filters tombstones, so it threw a
+    // misleading `no Types page for workspace` even though a live Types page
+    // existed. The user could not create a type at all.
+    env = await setup()
+    const rawTypesPageId = typesPageBlockId(WS)
+    await env.repo.tx(tx => tx.delete(rawTypesPageId), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: TYPES_CLAIMANT, workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Types',
+      })
+      await tx.setProperty(TYPES_CLAIMANT, aliasesProp, ['Types'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const typeId = await createTypeBlock(env.repo, {
+      workspaceId: WS, label: 'Task', propertySchemaIds: [],
+    })
+
+    const row = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [typeId])
+    expect(row.parent_id).toBe(TYPES_CLAIMANT)
   })
 })
 

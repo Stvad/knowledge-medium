@@ -9,6 +9,7 @@ import {
   navigateFromGlobalCommand,
   navigationIntentVerb,
   navigationVerb,
+  openAsyncBlockFromEvent,
   openBlockFromEvent,
   PASSTHROUGH,
   resolveGlobalCommandTarget,
@@ -710,6 +711,183 @@ describe('openBlockFromEvent (useBlockOpener wiring)', () => {
     const e = fakeMouseEvent()
     openBlockFromEvent(env.repo, e as unknown as OpenerEvent, {blockId: 'b-x'})
     expect(e.preventDefault).not.toHaveBeenCalled()
+  })
+})
+
+describe('openAsyncBlockFromEvent (useAsyncBlockOpener wiring)', () => {
+  // The opener for a surface whose target id only resolves asynchronously — a
+  // get-or-create kernel page, which since issue #378 can live at an adopted
+  // block's id rather than the deterministic one. The point of the split shape
+  // is that the event gating still happens SYNCHRONOUSLY, before the await, so
+  // these assert `preventDefault`/`stopPropagation` immediately on return and
+  // only then wait for the navigation.
+  const fakeMouseEvent = (
+    mods: Partial<{shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; button: number}> = {},
+  ) => ({
+    shiftKey: false, altKey: false, metaKey: false, ctrlKey: false, button: 0,
+    ...mods,
+    stopPropagation: vi.fn(),
+    preventDefault: vi.fn(),
+  })
+  type OpenerEvent = Parameters<typeof openAsyncBlockFromEvent>[1]
+  // A resolver that only settles when we let it, so the "gated before the
+  // await" claim is actually observable rather than incidentally true.
+  const deferredTarget = () => {
+    let release: (id: string) => void = () => {}
+    const promise = new Promise<string>(resolve => { release = resolve })
+    return {
+      resolve: async () => ({blockId: await promise}),
+      release,
+    }
+  }
+
+  it('gates the event synchronously, then navigates to the LATE-resolved id', async () => {
+    const e = fakeMouseEvent()
+    const target = deferredTarget()
+    openAsyncBlockFromEvent(env.repo, e as unknown as OpenerEvent, target.resolve, {plainClick: 'navigator'})
+    // Before the target has resolved at all: the event is already owned. This
+    // is the property the shape exists for — doing it after the await would be
+    // too late for any ancestor handler in the same click.
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(e.stopPropagation).toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+
+    target.release('b-late')
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-late'])
+    })
+  })
+
+  it('cmd-click is native passthrough — event untouched and the target never resolves', async () => {
+    const e = fakeMouseEvent({metaKey: true})
+    const resolve = vi.fn(async () => ({blockId: 'b-never'}))
+    openAsyncBlockFromEvent(env.repo, e as unknown as OpenerEvent, resolve, {plainClick: 'navigator'})
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(e.stopPropagation).not.toHaveBeenCalled()
+    // Not merely "didn't navigate": a passthrough must not do the async work
+    // either, since the browser is handling the gesture.
+    expect(resolve).not.toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('a vetoing policy suppresses before resolving the target', async () => {
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      () => () => SUPPRESS,
+    ])
+    const e = fakeMouseEvent()
+    const resolve = vi.fn(async () => ({blockId: 'b-veto-async'}))
+    openAsyncBlockFromEvent(env.repo, e as unknown as OpenerEvent, resolve, {plainClick: 'navigator'})
+    expect(e.preventDefault).toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
+    expect(await currentPanelBlockIds()).toEqual([])
+  })
+
+  it('builds the gesture from the event modifiers, and the PROBE id never lands', async () => {
+    // Two things at once: the modifier state is captured for intent resolution
+    // (the sync half), and the id the policy saw is the placeholder while the
+    // id that actually lands is the resolved one (the async half). The second
+    // assertion is what documents the placeholder trick — see
+    // `openAsyncBlockFromEvent`'s docblock.
+    const seen: NavigationGesture[] = []
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        seen.push(gesture as NavigationGesture)
+        return next(gesture)
+      },
+    ])
+    const e = fakeMouseEvent({shiftKey: true})
+    openAsyncBlockFromEvent(
+      env.repo, e as unknown as OpenerEvent,
+      async () => ({blockId: 'b-shift-async'}),
+      {plainClick: 'navigator'},
+    )
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({
+      role: 'navigator',
+      modifiers: expect.objectContaining({shiftKey: true}),
+    })
+    // Resolution ran against the placeholder, not the real target.
+    expect(seen[0]!.blockId).not.toBe('b-shift-async')
+
+    await vi.waitFor(async () => {
+      expect(await currentLayoutBlockIds()).toContain('b-shift-async')
+    })
+  })
+
+  it('honours a policy that redirects the blockId instead of overwriting it', async () => {
+    // A decorator may retarget the gesture to a block of its own. The sync
+    // opener honours that (the policy saw the real id), so this one must too —
+    // the placeholder is filled in only when the policy left it alone.
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'navigate'
+          ? goTo({...decision.input, blockId: 'b-policy-choice'})
+          : decision
+      },
+    ])
+    const e = fakeMouseEvent()
+    const resolve = vi.fn(async () => ({blockId: 'b-would-have-been'}))
+    openAsyncBlockFromEvent(env.repo, e as unknown as OpenerEvent, resolve, {plainClick: 'navigator'})
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-policy-choice'])
+    })
+    // And the resolver is never even CALLED: the motivating one is a
+    // get-or-create, so running it here would create a page nobody navigates
+    // to, and awaiting it would let its failure block a navigation that no
+    // longer depends on it.
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('a redirected navigation survives a resolver that never settles', async () => {
+    // The availability half of the same point: with the policy's target already
+    // chosen, a hung resolver must not hold the navigation hostage.
+    env.repo.setRuntimeContributions(navigationIntentVerb.decoratorsFacet, 'test-policy', [
+      next => gesture => {
+        const decision = next(gesture) as NavigationDecision
+        return decision.kind === 'navigate'
+          ? goTo({...decision.input, blockId: 'b-redirect-hung'})
+          : decision
+      },
+    ])
+    const e = fakeMouseEvent()
+    openAsyncBlockFromEvent(
+      env.repo, e as unknown as OpenerEvent,
+      () => new Promise(() => {}), // never settles
+      {plainClick: 'navigator'},
+    )
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-redirect-hung'])
+    })
+  })
+
+  it('a throwing resolver is logged, not an unhandled rejection', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const e = fakeMouseEvent()
+      openAsyncBlockFromEvent(
+        env.repo, e as unknown as OpenerEvent,
+        async () => { throw new Error('resolve boom') },
+        {plainClick: 'navigator'},
+      )
+      await vi.waitFor(() => {
+        expect(err).toHaveBeenCalledWith(
+          '[navigation] async open target failed', expect.any(Error),
+        )
+      })
+      expect(await currentPanelBlockIds()).toEqual([])
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it('no-ops when no workspace can be resolved', () => {
+    env.repo.setActiveWorkspaceId(null)
+    const e = fakeMouseEvent()
+    const resolve = vi.fn(async () => ({blockId: 'b-x-async'}))
+    openAsyncBlockFromEvent(env.repo, e as unknown as OpenerEvent, resolve, {plainClick: 'navigator'})
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
   })
 })
 
