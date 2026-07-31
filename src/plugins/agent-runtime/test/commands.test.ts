@@ -630,14 +630,36 @@ describe('agent runtime commands', () => {
         reload: false,
       }, env.context)).rejects.toThrow(InvalidBlockIdError)
 
-      // Validation runs before the tx (after only the read-only parent
-      // lookup), so not even the "Agent-installed extensions" root page
-      // should have been minted by this call.
+      // Validation runs before any lookup or write, so not even the
+      // "Agent-installed extensions" root page should have been minted.
       const root = await env.repo.query.aliasLookup({
         workspaceId: WS,
         alias: AGENT_EXTENSIONS_PARENT_ALIAS,
       }).load()
       expect(root).toBeNull()
+    })
+
+    // Separate clause from the one above, and NOT covered by it: this id is
+    // canonical after `.trim()`. install-extension used to trim before
+    // validating, so it stored the trimmed id and reported an id different
+    // from the string the caller passed — a silent normalization the case
+    // policy explicitly refuses elsewhere. Restoring the trim-then-validate
+    // order passes every other test in this suite and fails only this one.
+    // (An id whose last hex digit is REPLACED by a newline can't pin it: that
+    // string trims to 35 characters and is rejected on length either way.)
+    it.each([
+      ['a trailing newline', `${VALID_ID}\n`],
+      ['surrounding spaces', `  ${VALID_ID}  `],
+    ])('install-extension rejects an otherwise-canonical id with %s', async (_label, id) => {
+      await expect(executeCommand({
+        commandId: 'install-untrimmed',
+        type: 'install-extension',
+        source: 'export default []',
+        id,
+        reload: false,
+      }, env.context)).rejects.toThrow(InvalidBlockIdError)
+
+      expect(await env.repo.load(VALID_ID)).toBeNull()
     })
   })
 })

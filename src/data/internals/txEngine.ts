@@ -1133,6 +1133,16 @@ export class TxImpl implements Tx {
       // some non-tx path; we still try to restore. Engine fields
       // (createdAt/createdBy/updatedAt/updatedBy) come from the
       // captured target.
+      //
+      // NOT gated by `blockIdPolicy` (issue #456), deliberately: this
+      // restores an id that already existed, it does not mint one. Under a
+      // strict Repo the only way a non-canonical id reaches an undo snapshot
+      // is a path the contract already exempts — a sync-materialized row, or
+      // the trusted `eval` escape hatch. Gating here would not prevent that
+      // id from existing (it is already in the user's data); it would only
+      // make UNDO fail on it, turning a tolerated foreign id into lost user
+      // history. Restore is not a write boundary, for the same reason sync
+      // apply isn't.
       const inserted: BlockData = {
         ...target,
         updatedAt: now,
@@ -1258,11 +1268,13 @@ export class TxImpl implements Tx {
     opts: TxInsertOpts | undefined,
     context: string,
   ): BlockData {
-    // The block-id shape contract (issue #456). This is the whole enforcement
-    // point: `create` and `createOrGet` are the only two insert paths, and
-    // both build their row here, so every id this engine writes is checked
-    // once, by construction, rather than at each of the N call sites that can
-    // supply one.
+    // The block-id shape contract (issue #456). `create` and `createOrGet`
+    // are the two MINTING paths and both build their row here, so every id
+    // this engine brings into existence is checked once, by construction,
+    // rather than at each of the N call sites that can supply one.
+    //
+    // `applyRaw`'s re-INSERT is the third statement that can insert a row and
+    // is deliberately NOT gated — see the note at its missing-row branch.
     //
     // Checked on the RESOLVED id, not on `data.id`: the invariant is a
     // property of the ROW, so a Repo wired with a `newId` that mints

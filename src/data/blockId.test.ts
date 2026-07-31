@@ -6,7 +6,7 @@
  * blockId.ts's module docblock; that wiring is pinned in txEngine.test.ts.
  */
 import { describe, expect, it } from 'vitest'
-import { assertCanonicalBlockId, CANONICAL_BLOCK_ID_RE, InvalidBlockIdError } from './blockId.ts'
+import { assertCanonicalBlockId, InvalidBlockIdError } from './blockId.ts'
 
 const VALID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -65,7 +65,4 @@ describe('assertCanonicalBlockId', () => {
     expect(invalid.id).toBe(id)
   })
 
-  it('CANONICAL_BLOCK_ID_RE has no "i" flag — lowercase is required, not merely matched', () => {
-    expect(CANONICAL_BLOCK_ID_RE.flags).not.toContain('i')
-  })
 })

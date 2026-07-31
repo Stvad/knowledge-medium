@@ -32,12 +32,21 @@
  * A survey of the owner's live data found 0 non-conforming ids across 347,244
  * blocks in 3 workspaces, so there is no grandfather path to keep.
  *
- * NOT enforced here: rows arriving from SYNC. The Layout B observer
- * materializes `blocks_synced` into `blocks` directly, below this engine.
- * Rejecting a peer's row is a strictly stronger and riskier claim (it can
- * stall the sync stream on a row the server already accepted) and issue #456
- * calls it out as a separate decision. The outline-renderer hardening from
- * #447 stays regardless — it is what covers any id this guard didn't mint.
+ * NOT enforced, both deliberately, and both for the same reason — they carry
+ * an id that already exists rather than minting one:
+ *
+ *   - Rows arriving from SYNC. The Layout B observer materializes
+ *     `blocks_synced` into `blocks` directly, below this engine. Rejecting a
+ *     peer's row is a strictly stronger and riskier claim (it can stall the
+ *     sync stream on a row the server already accepted) and issue #456 calls
+ *     it out as a separate decision.
+ *   - `TxImpl.applyRaw`'s restore INSERT (undo/redo replay). Gating it would
+ *     not stop a foreign id from existing — it is already in the user's data
+ *     by one of the routes above — it would only make UNDO fail on it, which
+ *     trades a tolerated id for lost history.
+ *
+ * The outline-renderer hardening from #447 stays regardless: it is what
+ * covers any id this guard didn't mint.
  */
 import { UUID_RE_SOURCE } from './referenceBlock.js'
 
@@ -58,8 +67,14 @@ export type BlockIdPolicy = 'canonical' | 'any'
  *  Deliberately NO `i` flag — see the case-policy note on
  *  {@link InvalidBlockIdError}. Built from referenceBlock.ts's shared
  *  {@link UUID_RE_SOURCE} rather than a second copy of the character
- *  class. */
-export const CANONICAL_BLOCK_ID_RE: RegExp = new RegExp(`^${UUID_RE_SOURCE}$`)
+ *  class.
+ *
+ *  Module-private on purpose: {@link assertCanonicalBlockId} is the whole
+ *  API, so how the predicate is implemented stays free to change. Its case
+ *  behaviour is covered by the uppercase/mixed-case rejection cases in
+ *  blockId.test.ts, which hold for any implementation — an assertion on
+ *  `.flags` would only restate this line. */
+const CANONICAL_BLOCK_ID_RE = new RegExp(`^${UUID_RE_SOURCE}$`)
 
 /**
  * A block id that isn't a canonical UUID.
