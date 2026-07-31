@@ -647,7 +647,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000
     // sufficient — it awaits the already-fired job it rode in on, dirty bit and
     // all. Against a fresh job the deferral has not fired, so a bare drain has
     // nothing in `PendingIdleJobs` to await and returns having run nothing.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       expect(outstandingSeedPasses()).toBe(0)
     })
