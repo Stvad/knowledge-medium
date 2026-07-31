@@ -2,8 +2,8 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
-import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
-import { extensionPromptsExtension } from '@/extensions/extensionPromptMount.js'
+import { appUpdatePromptExtension } from '@/plugins/app-update-prompt'
+import { extensionPromptsExtension } from '@/plugins/extension-prompts'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
 import {
   defaultActionContextsExtension,
