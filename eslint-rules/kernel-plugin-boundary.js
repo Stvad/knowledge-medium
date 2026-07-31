@@ -479,6 +479,8 @@ const noCoreToPluginImports = {
     messages: {
       coreImportsPlugin:
         'Core cannot depend on plugins (plugins depend on core and on each other — never the reverse). This core module imports the `{{plugin}}` plugin via `{{specifier}}`, which makes that plugin non-removable and turns its seam into a hard edge. Do one of: (1) move the shared contract DOWN into core (`@/facets`, `@/data/api`, `@/utils`) and let the plugin import it from there; (2) INVERT it — declare a facet in core that the plugin contributes to, so core never names the plugin; (3) move this module INTO the plugin layer, since needing plugin code is evidence it belongs there. Registering plugins with the app is the composition root\'s job — new plugin wiring goes in `src/extensions/staticAppExtensions.ts` / `staticDataExtensions.ts`. If this import is genuinely unavoidable, add `// eslint-disable-next-line boundary/no-core-to-plugin-imports -- <why>`.',
+      coreGlobUnknownBase:
+        'This `import.meta.glob` has a `base` option that isn\'t a static string, so the boundary rule cannot tell which directory the pattern resolves against — and a glob that lands in `src/plugins` is core enumerating the plugin layer. Reported rather than assumed safe: guessing the importer\'s own directory would answer "no plugin here" to a question that was never asked. Make the base a literal (or a template / `+` chain of literals) so it can be followed, or add `// eslint-disable-next-line boundary/no-core-to-plugin-imports -- <why>`.',
       coreGlobsPluginLayer:
         'Core cannot depend on plugins, and a glob over the plugin layer (`{{specifier}}`) is the strongest form of it — core enumerating every plugin at build time. Nothing stays removable. Invert it: declare a facet in core and let each plugin contribute, or let the composition root (`src/extensions/staticAppExtensions.ts` / `staticDataExtensions.ts`) do the enumerating, which is its job. If this glob is genuinely unavoidable, add `// eslint-disable-next-line boundary/no-core-to-plugin-imports -- <why>`.',
     },
@@ -530,9 +532,25 @@ const noCoreToPluginImports = {
       // base outside the source root (`base: '../..'`) is perfectly legal and
       // used to fall back silently to the importer's own directory, quietly
       // resolving the pattern somewhere it does not live.
-      const baseAbsolute = ((base) =>
-        base === undefined ? undefined : toAbsolute(`${base}/`, importerDir, sourceRoot)
-      )(staticString(propertyValue(optionsNode, 'base')))
+      const baseNode = propertyValue(optionsNode, 'base')
+      const base = staticString(baseNode)
+      // A bare `base: 'plugins'` is importer-relative; `toAbsolute` only returns
+      // undefined for it because it looks like a package name.
+      const baseAbsolute = base === undefined
+        ? undefined
+        : toAbsolute(`${base}/`, importerDir, sourceRoot) ?? posix.resolve(importerDir, base)
+      // A `base` we cannot READ is the dangerous case, and chasing each new
+      // spelling (`['/src/plugins'][0]`, a const, a call) is unbounded. What is
+      // bounded is the consequence: without the base we do not know where the
+      // pattern points, and silently falling back to the importer's own
+      // directory answers "no plugin here" to a question we never asked. So say
+      // so instead. Nothing in `src/` passes `base` at all, so this costs
+      // nothing today, and the inline disable is there for a base the rule
+      // genuinely cannot follow.
+      if (baseNode !== undefined && base === undefined) {
+        context.report({node, messageId: 'coreGlobUnknownBase'})
+        return
+      }
       const patternDir = baseAbsolute ?? importerDir
       // A bare leading `**` is relative to the Vite root, not to the importer.
       const absolute = (pattern) => pattern.startsWith('**')

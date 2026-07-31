@@ -109,6 +109,12 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/apiCatalog.ts'),
         code: `const m = import.meta.glob(['/src/**', '!/src/plugins/**'])`,
       },
+      // A bare base is importer-relative, and readable, so it is followed rather
+      // than reported — the conservative path is only for a base we cannot read.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('./x/**', { base: 'components' })`,
+      },
       // A `base` that doesn't reach the plugin layer is fine.
       {
         filename: core('extensions/apiCatalog.ts'),
@@ -800,6 +806,21 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/src/plugins/todo/*.ts' },
         }],
+      },
+      // A `base` the rule cannot READ. Reported rather than assumed safe: without
+      // it we do not know which directory the pattern resolves against, and
+      // silently falling back to the importer's own directory answers "no
+      // plugin here" to a question that was never asked. Closes the whole class
+      // (a const, a call, an indexed literal) instead of one spelling.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { base: ['/src/plugins'][0] })`,
+        errors: [{ messageId: 'coreGlobUnknownBase' }],
+      },
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { base: SOME_CONST })`,
+        errors: [{ messageId: 'coreGlobUnknownBase' }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,
       // so it must not clear the call the way `!/src/plugins/**` does.
