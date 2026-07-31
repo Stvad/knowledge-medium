@@ -202,8 +202,28 @@ const resolveSpecifier = (source, importerSrcRelative, sourceRoot) => {
  *  template literal — `` import(`@/plugins/todo/index.js`) `` — is every bit as
  *  static as a quoted string and resolves to exactly one module, so it counts;
  *  only a template with interpolations is genuinely dynamic and drops out. */
+/** Strip the wrappers that carry no runtime meaning, so an assertion can't hide
+ *  a specifier from the resolver: `'@/plugins/x' as string`, `… as const`,
+ *  `…!`. esbuild erases all of these and the build imports the plugin as if
+ *  they were never written. Same shape as the `unwrap` in ambient-accessors.js,
+ *  plus `TSLiteralType` for type-position specifiers. */
+const unwrap = (node) => {
+  let current = node
+  while (
+    current?.type === 'ChainExpression'
+    || current?.type === 'TSNonNullExpression'
+    || current?.type === 'TSAsExpression'
+    || current?.type === 'TSSatisfiesExpression'
+    || current?.type === 'TSTypeAssertion'
+    || current?.type === 'TSLiteralType'
+  ) {
+    current = current.type === 'TSLiteralType' ? current.literal : current.expression
+  }
+  return current
+}
+
 const staticString = (node) => {
-  const el = node?.type === 'TSLiteralType' ? node.literal : node
+  const el = unwrap(node)
   if (el?.type === 'Literal') return typeof el.value === 'string' ? el.value : undefined
   // A template whose interpolations are THEMSELVES static folds to one string,
   // exactly as literalSqlText does it: `` `/src/${'plugins'}` `` is knowable.
@@ -236,7 +256,7 @@ const staticString = (node) => {
  *  matching module, which for that prefix is every plugin in the repo. So it is
  *  a glob wearing an import's clothes, and goes through the glob classifier. */
 const templateGlob = (node) => {
-  const el = node?.type === 'TSLiteralType' ? node.literal : node
+  const el = unwrap(node)
   if (el?.type !== 'TemplateLiteral' || el.expressions.length === 0) return undefined
   const parts = el.quasis.map(quasi => quasi.value.cooked)
   return parts.some(part => part === null || part === undefined) ? undefined : parts.join('*')
@@ -544,8 +564,13 @@ const noCoreToPluginImports = {
       // comment — but TypeScript resolves and includes the target, so a core
       // .d.ts can pick up a plugin dependency the whole visitor set is blind to.
       // A live idiom here: src/vite-env.d.ts opens with one.
-      Program: () => {
+      Program: (program) => {
+        // TypeScript honours reference directives only in the leading directive
+        // prologue. One sitting after real code is inert — tsc pulls in nothing
+        // — so reporting it would be a false positive on a non-dependency.
+        const firstStatement = program.body[0]
         for (const comment of context.sourceCode.getAllComments()) {
+          if (firstStatement !== undefined && comment.range[0] > firstStatement.range[0]) break
           if (comment.type !== 'Line') continue
           const [, referencePath] =
             comment.value.match(/^\/\s*<reference\s+path\s*=\s*["']([^"']+)["']/) ?? []

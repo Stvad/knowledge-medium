@@ -162,6 +162,12 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('extensions/apiCatalog.ts'),
         code: `const m = import.meta.glob('./**/*.ts')`,
       },
+      // TypeScript honours reference directives only in the leading prologue, so
+      // one after real code pulls in nothing and must not be reported.
+      {
+        filename: core('data/kernelTypes.d.ts'),
+        code: `export type X = 1\n/// <reference path="../plugins/todo/schema.ts" />`,
+      },
       // `types=` names a package, not a path — and a `path=` to a core module is
       // the sanctioned direction.
       {
@@ -677,6 +683,25 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '../plugins/todo/schema.ts' },
+        }],
+      },
+      // A transparent TS assertion carries no runtime meaning — esbuild erases
+      // it and the build imports the plugin as if it were never written.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = await import('@/plugins/todo/schema.js' as string)`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // ...including on a glob's `base` option, where `as const` is idiomatic.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { base: '/src/plugins' as const })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,
