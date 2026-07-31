@@ -958,7 +958,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
           {duplicates === 1
             ? 'Another unfinished session for tonight exists — this screen is logging into one of them. '
             : `${duplicates} other unfinished sessions for tonight exist — this screen is logging into one of them. `}
-          Open the Strength Log page to merge or discard the extras.
+          {/* Says where the extras actually ARE, instead of sending the user to
+              the page they are already on — this view is only ever mounted by
+              the Strength Log renderer. That renderer keeps the default block
+              frame, so the page's child workout blocks (the duplicates
+              included) render as a plain outline underneath, and that outline
+              is the surface that can open, edit and delete them. It is also
+              the only one: this view deliberately drives a single workout, so
+              a control here would have to pick which of two sessions it meant.
+              Point at the blocks rather than promise a merge that isn't. */}
+          The {duplicates === 1 ? 'other one is a block' : 'others are blocks'} in this page’s outline
+          below — open {duplicates === 1 ? 'it' : 'them'} to see what was logged there, and delete
+          {duplicates === 1 ? ' it' : ' them'} once you have moved across anything worth keeping.
         </div>
       )}
 

@@ -931,7 +931,16 @@ export const finishWorkout = async (
       // WORKOUT finished clean and stayed live.
       if (await mightHoldSet(tx, child.id)) untypedWithSets.push(child.id)
     }
-    if (untypedWithSets.length > 0 || (children.length > 0 && entries.length === 0)) {
+    // No entries AT ALL is the same refusal, and the `children.length > 0`
+    // qualifier this used to carry was the hole: an empty tree read as consent
+    // to commit an empty record, and it is never that. Finish is only
+    // reachable with at least one accepted set (`canFinish` in the view), so
+    // the tree HELD an entry when the user tapped — none here means another
+    // client, or a hand-edit in the outline, removed the last lift in the
+    // window between the view's flush and this read. Finishing anyway tells
+    // the user the session was logged, stamps a day `buildHistory` reads as
+    // training, and puts nothing in it.
+    if (untypedWithSets.length > 0 || entries.length === 0) {
       throw new Error(
         `finishWorkout: workout ${workoutId} has ${children.length} children, `
         + `${entries.length} typed "${EXERCISE_ENTRY_TYPE}"`

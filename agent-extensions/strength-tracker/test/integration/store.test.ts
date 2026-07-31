@@ -22,6 +22,7 @@ import type {BlockCache} from '@/data/blockCache'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
+import {deleteBlock} from '@/data/mutators'
 import {hasBlockType, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
@@ -400,6 +401,27 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
     expect(await isBlockDeleted(repo, row.setIds[0])).toBe(false)
+  })
+
+  it('refuses when the last lift was removed out from under it', async () => {
+    // The empty tree the `children.length > 0` qualifier used to wave through.
+    // Finish is only reachable with an accepted set (`canFinish`), so the tree
+    // HELD a lift when the user tapped; none by the time this transaction
+    // reads means another client — or a hand-edit in the outline — deleted the
+    // last one in between. Finishing there told the user the session was
+    // logged, and stamped a day `buildHistory` counts as training with nothing
+    // in it.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)]),
+    ]))
+    const [bench] = workout.exercises
+    expect(await writeSet(repo, bench.setIds[0], {weight: 185, reps: 5, done: true}, 'lb')).toBe('written')
+
+    await repo.tx(tx => tx.run(deleteBlock, {id: bench.id}),
+      {scope: ChangeScope.BlockDefault, description: 'a peer removes the last lift'})
+
+    await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 
   it('refuses to finish when only SOME entries lost their type tag', async () => {
