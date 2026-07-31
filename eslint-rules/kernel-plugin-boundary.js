@@ -469,16 +469,27 @@ const isWorkerConstructorArgument = (node) =>
   && (node.parent.callee?.name === 'Worker' || node.parent.callee?.name === 'SharedWorker')
   && node.parent.arguments[0] === node
 
+// `unwrapTypeWrappers`, not `unwrap`, on BOTH the callee and the base — and the
+// distinction is load-bearing in each direction. Type wrappers are erased before
+// Vite's regex runs, so they must be seen through: verified with a real
+// `vite build` that `new (URL as typeof URL)('./plugins/todo/asset.txt',
+// import.meta.url)` compiles to `new URL("data:…")` with the plugin asset
+// inlined. Value-forms survive, so `new (0, URL)(…)` and
+// `new URL(x, (0, import.meta.url))` never match `\bnew\s+URL\s*\(` /
+// `import\.meta\.url` in the emitted text, Vite emits nothing, and unwrapping
+// them here would invent a dependency that isn't in the build.
+const importMetaUrlBase = (node) => unwrapTypeWrappers(node.arguments[1])
+
 const isImportMetaUrl = (node) =>
   node?.type === 'NewExpression'
-  && node.callee?.name === 'URL'
-  && unwrap(node.arguments[1])?.type === 'MemberExpression'
-  && unwrap(node.arguments[1]).object?.type === 'MetaProperty'
+  && unwrapTypeWrappers(node.callee)?.name === 'URL'
+  && importMetaUrlBase(node)?.type === 'MemberExpression'
+  && importMetaUrlBase(node).object?.type === 'MetaProperty'
   // `new.target` is a MetaProperty too, so match the names — `new.target.url`
   // is an ordinary runtime base and Vite emits no chunk for it.
-  && unwrap(node.arguments[1]).object.meta?.name === 'import'
-  && unwrap(node.arguments[1]).object.property?.name === 'meta'
-  && unwrap(node.arguments[1]).property?.name === 'url'
+  && importMetaUrlBase(node).object.meta?.name === 'import'
+  && importMetaUrlBase(node).object.property?.name === 'meta'
+  && importMetaUrlBase(node).property?.name === 'url'
 
 /** The value node of a named property on an object literal, or undefined. Used
  *  to read `import.meta.glob`'s `base` option; a computed or spread property is

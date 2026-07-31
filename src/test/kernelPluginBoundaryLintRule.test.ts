@@ -144,6 +144,17 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `const u = new URL((0, '../plugins/todo/asset.txt'), import.meta.url)`,
       },
+      // The other two positions of the same distinction. A value-form around the
+      // CONSTRUCTOR or the BASE survives into the emitted code, so `\bnew\s+URL`
+      // / `import\.meta\.url` never match and Vite emits nothing.
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new (0, URL)('../plugins/todo/asset.txt', import.meta.url)`,
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new URL('../plugins/todo/asset.txt', (0, import.meta.url))`,
+      },
       // Unwrapping the callee must not make an ordinary core require report.
       {
         filename: core('data/repo.ts'),
@@ -836,6 +847,17 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/src/plugins/todo/**' },
+        }],
+      },
+      // ...and around the `new URL` CONSTRUCTOR, which the name check missed.
+      // Verified with a real `vite build`: this compiles to `new URL("data:…")`
+      // with the plugin asset inlined, so the assertion hides a live dependency.
+      {
+        filename: core('data/repo.ts'),
+        code: `const u = new (URL as typeof URL)('../plugins/todo/asset.txt', import.meta.url)`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../plugins/todo/asset.txt' },
         }],
       },
       // ...and an assertion around the `new URL` base.
