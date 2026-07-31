@@ -168,4 +168,21 @@ describe('LazyViewportMount', () => {
     renderLazy('block:wanted-twice')
     expect(screen.getByTestId('child')).toBeInTheDocument()
   })
+
+  // ...and a double cleanup must not spend the OTHER requester's want. Effect
+  // cleanups are supposed to run once, so this is defence in depth — but the
+  // failure it prevents is silent and remote: the second panel's focused row
+  // stays a placeholder, so its highlight, its DOM focus and normal mode all
+  // go quiet with nothing pointing back here.
+  it('ignores a withdrawal called twice', () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    const withdrawFirst = requestLazyMount('block:withdrawn-twice')
+    requestLazyMount('block:withdrawn-twice')
+    withdrawFirst()
+    withdrawFirst()
+
+    renderLazy('block:withdrawn-twice')
+    expect(screen.getByTestId('child')).toBeInTheDocument()
+  })
 })

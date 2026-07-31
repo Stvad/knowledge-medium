@@ -10,6 +10,7 @@ import type { Block } from '@/data/block.js'
 import { panelById } from '@/plugins/spatial-navigation/walker.js'
 import { resolveSpatialNavExclusions } from '@/plugins/spatial-navigation/exclusionsFacet.js'
 import { findInstance, isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
+import { createSettleScheduler } from './settleScheduler.ts'
 
 /** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
  *  a fling would otherwise write a focus location per frame, and the row we
@@ -93,7 +94,6 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     if (!panelEl) return
     const location = {blockId: focusedBlockId, renderScopeId}
 
-    let settleTimer: ReturnType<typeof setTimeout> | null = null
     let retriesLeft = 0
     let mountWatcher: MutationObserver | null = null
     let seenOnScreen = false
@@ -121,14 +121,6 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     // refusals are testable directly — the staleness one especially, which the
     // effect cleanup below hides in any ordering a test can stage.
     const settle = () => {
-      // Cancel rather than just forget: this runs both from the debounce and
-      // directly from the edit-exit effect, and the direct call used to leave
-      // an armed timeout behind that no cleanup could reach — free to fire
-      // mid-scroll later, against a debounce the next scroll had just armed.
-      // Clearing an already-fired timer id is a no-op, so the timer path is
-      // unaffected.
-      if (settleTimer) clearTimeout(settleTimer)
-      settleTimer = null
       const next = resolveSettledAnchor({
         panelEl,
         armedFor: location,
@@ -148,18 +140,18 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       const row = findInstance(panelEl, location, excluded())
       if (!row || isRowInViewport(row)) return
       retriesLeft -= 1
-      settleTimer = setTimeout(settle, SETTLE_RETRY_MS)
+      scheduler.schedule(SETTLE_RETRY_MS)
     }
+    const scheduler = createSettleScheduler(() => settle())
 
     const onScroll = () => {
       sample()
       if (!seenOnScreen) return
-      if (settleTimer) clearTimeout(settleTimer)
       retriesLeft = SETTLE_RETRIES
-      settleTimer = setTimeout(settle, SCROLL_SETTLE_MS)
+      scheduler.schedule(SCROLL_SETTLE_MS)
     }
 
-    settleRef.current = settle
+    settleRef.current = () => scheduler.runNow()
 
     sample()
     // The cursor's row often doesn't exist yet — a cold load, or a restore
@@ -182,7 +174,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     document.addEventListener('scroll', onScroll, {capture: true, passive: true})
     return () => {
       document.removeEventListener('scroll', onScroll, {capture: true})
-      if (settleTimer) clearTimeout(settleTimer)
+      scheduler.cancel()
       clearTimeout(mountWatchDeadline)
       stopWatchingForMount()
       settleRef.current = null
