@@ -45,8 +45,14 @@ const REALIGN_SAMPLE_MS = 50
  *  Both of the ways a pane's own content shifts its offset — Chromium's scroll
  *  anchoring swapping an estimated height for a measured one above the fold,
  *  and the browser clamping `scrollTop` as outgoing content shrinks the
- *  document on a back/forward swap — land in the same frame as the mutation
- *  that caused them. A hand on the scrollbar does not. */
+ *  document on a back/forward swap — land in the same frame as the change that
+ *  caused them. A hand on the scrollbar does not.
+ *
+ *  "Change" means childList OR geometry: an image above the fold decoding
+ *  changes heights with no childList record at all, and anchoring against it
+ *  can move `scrollTop` long after the last mutation. Both feed the timestamp
+ *  below, or this discriminator has a hole exactly where the file already
+ *  documents one. */
 const LAYOUT_SCROLL_GRACE_MS = 120
 
 const inSameScrollport = (scrollEl: HTMLElement) => (el: HTMLElement): boolean =>
@@ -185,6 +191,7 @@ export const alignScrollportToRow = (
     if (done) return
     done = true
     observer.disconnect()
+    contentObserver?.disconnect()
     clearTimeout(deadline)
     if (realignTimer) clearTimeout(realignTimer)
     if (sampler) clearInterval(sampler)
@@ -298,6 +305,13 @@ export const alignScrollportToRow = (
     lastMutationAt = Date.now()
     attempt()
   })
+  // Geometry-only settling — an image decoding, a font swapping — produces no
+  // mutation. Watching the scrolled CONTENT (not the port, whose own box
+  // doesn't change) catches the height changes that move the anchor.
+  const contentObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
+    lastMutationAt = Date.now()
+    attempt()
+  })
   const deadline = setTimeout(giveUp, waitMs)
 
   // Gestures the user aims at THIS panel. Scoped to the scroll container, not
@@ -317,6 +331,7 @@ export const alignScrollportToRow = (
 
   attempt()
   observer.observe(scrollEl, {childList: true, subtree: true})
+  for (const child of Array.from(scrollEl.children)) contentObserver?.observe(child)
 
   return finish
 }

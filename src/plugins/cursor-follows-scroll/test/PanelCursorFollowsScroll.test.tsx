@@ -20,6 +20,17 @@ const FENCE_PANEL_ID = 'fence-panel'
 const SCOPE = 'panel:page'
 const PORT_HEIGHT = 500
 
+/** happy-dom has no ResizeObserver and no layout to drive one. Collect the
+ *  callbacks so a test can fire them, which is what a growing row above the
+ *  cursor does in a real engine. */
+const resizeCallbacks: Array<() => void> = []
+class TestResizeObserver {
+  constructor(cb: () => void) { resizeCallbacks.push(cb) }
+  observe(): void {}
+  disconnect(): void {}
+}
+const fireContentResize = () => { for (const cb of [...resizeCallbacks]) cb() }
+
 const stubRect = (el: HTMLElement, top: number, height: number): void => {
   el.getBoundingClientRect = () => ({
     top, bottom: top + height, left: 0, right: 100, width: 100, height,
@@ -78,6 +89,8 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
+  resizeCallbacks.length = 0
+  vi.stubGlobal('ResizeObserver', TestResizeObserver)
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
@@ -89,6 +102,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
 
@@ -323,6 +337,55 @@ describe('PanelCursorFollowsScroll', () => {
     await vi.waitFor(() => {
       expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
     }, {timeout: 2000})
+  })
+
+  // Content ABOVE the cursor can grow and push it past the fold while
+  // `scrollTop` never moves — the norm on WebKit, which has no scroll
+  // anchoring, and anywhere an image decodes. A scroll-only trigger sees none
+  // of it and the cursor silently goes stale.
+  it('follows the cursor out of view when layout pushes it, with no scroll', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    // Seen on screen first, as any settled cursor is — and let the settle that
+    // scroll arms run to completion. Without this wait the rows below move
+    // BEFORE that timer fires, and it re-anchors on its own: the resize path
+    // under test would then be doing nothing while the test still went green.
+    dom.scroll()
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
+
+    // Rows above grow: `a` is shoved below the fold, `b` takes the top. No
+    // scroll event anywhere — `scrollTop` did not change.
+    dom.moveRow('a', 900)
+    dom.moveRow('b', 20)
+    fireContentResize()
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
+    })
+  })
+
+  // An action can move focus AND leave edit mode in one write (`focusBlock(x,
+  // {edit: false})`). The main effect re-runs first, so the edit-exit retry
+  // would run against the DESTINATION's settle — treating a row the app is
+  // still scrolling toward as a stale cursor and re-anchoring away from it.
+  it('does not re-anchor when leaving edit mode moved focus elsewhere', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200], ['far', 900]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE, edit: true})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    dom.scroll()
+
+    // One write moves the cursor to an off-screen row and closes the editor.
+    await focusBlock(panel, 'far', {renderScopeId: SCOPE, edit: false})
+
+    // Give the retry every chance to fire and clobber it.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('far')
   })
 
   // `focusBlock` only preserves edit mode for an unchanged location, so

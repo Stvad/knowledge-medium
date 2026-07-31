@@ -5,6 +5,8 @@ import {
   focusedBlockLocationProp,
   isEditingProp,
   peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
+  type FocusedBlockLocation,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block.js'
 import { panelById } from '@/plugins/spatial-navigation/walker.js'
@@ -151,6 +153,26 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       scheduler.schedule(SCROLL_SETTLE_MS)
     }
 
+    // The cursor can leave the viewport without any scroll at all: content
+    // ABOVE it grows and pushes it past the fold while `scrollTop` never
+    // changes. That is the norm on WebKit, which has no scroll anchoring
+    // (`LazyViewportMount` documents it) — every lazy row above the cursor
+    // swapping its estimate for a measured height shoves the cursor down — and
+    // it happens anywhere when an image decodes. A scroll-only trigger sees
+    // none of it, so the cursor silently goes stale and the next motion jumps
+    // back to it.
+    const onContentResize = () => {
+      sample()
+      if (!seenOnScreen) return
+      const row = findInstance(panelEl, location, excluded())
+      if (!row || isRowInViewport(row)) return
+      retriesLeft = SETTLE_RETRIES
+      scheduler.schedule(SCROLL_SETTLE_MS)
+    }
+    const contentObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(onContentResize)
+
     settleRef.current = () => scheduler.runNow()
 
     sample()
@@ -165,6 +187,13 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       mountWatcher.observe(panelEl, {childList: true, subtree: true})
     }
     const mountWatchDeadline = setTimeout(stopWatchingForMount, CURSOR_MOUNT_WATCH_MS)
+    if (contentObserver) {
+      // The scrolled content, not the port: the port's own box doesn't change
+      // when its contents grow.
+      for (const child of Array.from(panelEl.querySelectorAll<HTMLElement>('[data-block-nav-item="true"]'))) {
+        contentObserver.observe(child)
+      }
+    }
 
     // Capture at the document: scroll doesn't bubble, and which element
     // actually scrolls varies (the panel's own overflow container normally, an
@@ -175,6 +204,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     return () => {
       document.removeEventListener('scroll', onScroll, {capture: true})
       scheduler.cancel()
+      contentObserver?.disconnect()
       clearTimeout(mountWatchDeadline)
       stopWatchingForMount()
       settleRef.current = null
@@ -191,12 +221,24 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
   // `seenOnScreen` survives it. Deliberately NOT gated on `seenOnScreen`: there
   // is no catch-up scroll in flight when an editor closes, which is the only
   // thing that gate protects against.
-  const wasEditing = useRef(false)
+  // Holds the cursor that was being EDITED, so the retry can tell "the editor
+  // closed" from "focus moved somewhere else and the editor closed with it".
+  // An action can do the latter in a single write (`focusBlock(target, {edit:
+  // false})` sets both props in one tx), and the main effect re-runs first —
+  // so by the time this fires, `settleRef` already belongs to the DESTINATION.
+  // Running it then would treat a row the app is still scrolling toward as a
+  // stale off-screen cursor and re-anchor away from it, undoing the action.
+  const editedLocation = useRef<FocusedBlockLocation | null>(null)
   useEffect(() => {
-    const left = wasEditing.current && !isEditing
-    wasEditing.current = Boolean(isEditing)
-    if (left) settleRef.current?.()
-  }, [isEditing])
+    const wasEditing = editedLocation.current
+    const current = focusedBlockId && renderScopeId
+      ? {blockId: focusedBlockId, renderScopeId}
+      : undefined
+    editedLocation.current = isEditing ? (current ?? null) : null
+    if (!wasEditing || isEditing) return
+    if (!sameFocusedBlockLocation(wasEditing, current)) return
+    settleRef.current?.()
+  }, [isEditing, focusedBlockId, renderScopeId])
 
   return null
 }
