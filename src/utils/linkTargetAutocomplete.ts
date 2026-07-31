@@ -532,13 +532,24 @@ export const coreContentSearchSource: SearchSourceContribution = {
  *  it has one — a single timestamp-less candidate (a stale/legacy index
  *  copy that never recorded `userUpdatedAt`) hands the WHOLE group's
  *  decision to score, per the contract's "missing timestamp" fallback,
- *  not just that one candidate's own comparisons. Concretely:
- *   - every candidate has a numeric `userUpdatedAt` → newest wins; a
+ *  not just that one candidate's own comparisons.
+ *
+ *  "Has one" means FINITE, not `typeof === 'number'`. `NaN` passes the
+ *  typeof test and then loses every comparison it appears in, including
+ *  `NaN !== NaN`, so a group containing one would resolve to whichever
+ *  candidate the fold happened to be holding — order-dependent, which is
+ *  the exact defect this function exists to remove (issue #450, Codex
+ *  review on PR #449). `Infinity` is order-INdependent but wins
+ *  unconditionally, which is no better a claim for a corrupt row to
+ *  have. Both route to the score fallback instead.
+ *
+ *  Concretely:
+ *   - every candidate has a finite `userUpdatedAt` → newest wins; a
  *     timestamp tie falls back to higher score; a full tie keeps the
  *     earliest-encountered candidate (deterministic, arbitrary — group
  *     order is registration-then-within-source, see
  *     `searchBlocksAcrossSources`).
- *   - any candidate lacks a numeric `userUpdatedAt` → highest score wins
+ *   - any candidate lacks a finite `userUpdatedAt` → highest score wins
  *     across the WHOLE group (timestamps are ignored entirely, including
  *     the timed candidates' own), same earliest-encountered tie-break.
  *
@@ -563,13 +574,13 @@ export const coreContentSearchSource: SearchSourceContribution = {
 const freshestCandidatePayload = (
   candidates: readonly SearchSourceCandidate[],
 ): SearchSourceCandidate => {
-  const allTimed = candidates.every(c => typeof c.block.userUpdatedAt === 'number')
+  const allTimed = candidates.every(c => Number.isFinite(c.block.userUpdatedAt))
   if (!allTimed) {
     return candidates.reduce((best, candidate) => candidate.score > best.score ? candidate : best)
   }
   return candidates.reduce((best, candidate) => {
-    const bestTime = best.block.userUpdatedAt as number
-    const time = candidate.block.userUpdatedAt as number
+    const bestTime = best.block.userUpdatedAt
+    const time = candidate.block.userUpdatedAt
     if (time !== bestTime) return time > bestTime ? candidate : best
     return candidate.score > best.score ? candidate : best
   })

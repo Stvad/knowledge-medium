@@ -432,10 +432,14 @@ export interface SearchSourceArgs {
  *  be registered in (a real bug — issue #450 — and the earlier wording
  *  here, "falling back to the higher-scored one on a tie/missing
  *  timestamp", was ambiguous enough to produce two different wrong
- *  implementations). Precisely: if EVERY duplicate carries a numeric
+ *  implementations). Precisely: if EVERY duplicate carries a FINITE
  *  `userUpdatedAt`, the newest wins, ties broken by higher score; if ANY
  *  duplicate lacks one, timestamps are ignored entirely and the highest
- *  score wins across the whole group. A source that throws is logged and dropped so it can't take
+ *  score wins across the whole group. Finite, not merely `typeof
+ *  'number'` — `NaN` passes typeof and then loses every comparison
+ *  including against itself, which brings the order-dependence straight
+ *  back, and `Infinity` would win unconditionally; a source contributing
+ *  either gets the missing-timestamp fallback. A source that throws is logged and dropped so it can't take
  *  down another source's results — UNLESS every contributed source
  *  throws, in which case the merge point rethrows the first error
  *  rather than resolving to an empty result. Core registers its FTS

@@ -94,10 +94,11 @@ const tick = async (n: number): Promise<void> => {
 /** A minimal-but-valid `BlockData`. `content` carries a per-occurrence tag
  *  (`sourceId#candidateIndex`) so payload survival can be asserted by
  *  more than just `id`. `userUpdatedAt` is deliberately allowed to carry
- *  a non-number (via the `as number` cast) to exercise
- *  `freshestCandidatePayload`'s defensive `typeof aTime === 'number'`
- *  branch — real rows can't have this, but the check exists for a
- *  reason (a stale/legacy index copy), so the oracle has to cover it. */
+ *  `undefined` and non-finite numbers (via the `as number` cast) to
+ *  exercise `freshestCandidatePayload`'s `Number.isFinite` gate — the
+ *  typed row shape can't express these, but the gate exists for a reason
+ *  (a stale/legacy index copy), so the oracle has to cover it. See
+ *  `timestampArb`. */
 const makeBlockData = (id: string, userUpdatedAt: number | undefined, tag: string): BlockData => ({
   id,
   workspaceId: WS,
@@ -135,10 +136,28 @@ interface CandidateSpec {
   userUpdatedAt: number | undefined
 }
 
+/** Timestamps a stale/legacy index copy can actually carry. The `number |
+ *  undefined` type is the HAPPY path only — the values below it are the
+ *  reason this generator exists.
+ *
+ *  `NaN` and `±Infinity` are `typeof 'number'`, so an implementation
+ *  gating on typeof admits them: `NaN` then loses every comparison
+ *  (`NaN !== NaN`), which makes the group's winner depend on where the
+ *  fold started — order-dependence, the exact defect #450 is about — and
+ *  `Infinity` wins unconditionally. An earlier revision of this generator
+ *  emitted only integers and `undefined`, so it could not reach either;
+ *  Codex review on PR #449 found the NaN branch by reading, not by
+ *  running, which is what a domain this narrow costs you. */
+const timestampArb: fc.Arbitrary<number | undefined> = fc.oneof(
+  {arbitrary: fc.integer({min: 0, max: 1000}), weight: 8},
+  {arbitrary: fc.constant(undefined), weight: 3},
+  {arbitrary: fc.constantFrom(NaN, Infinity, -Infinity), weight: 2},
+)
+
 const candidateSpecArb: fc.Arbitrary<CandidateSpec> = fc.record({
   blockId: fc.constantFrom(...BLOCK_IDS),
   score: fc.integer({min: 0, max: 500}),
-  userUpdatedAt: fc.option(fc.integer({min: 0, max: 1000}), {nil: undefined}),
+  userUpdatedAt: timestampArb,
 })
 
 interface SourceSpec {
@@ -219,13 +238,25 @@ const makeRepo = (sources: readonly SearchSourceContribution[]): Repo => {
  *  `reduce`) keeps the earliest such candidate in group order, matching
  *  production's stable tie-break. */
 const pickFreshestPayload = (candidates: readonly Candidate[]): Candidate => {
-  const allTimed = candidates.every(c => typeof c.block.userUpdatedAt === 'number')
+  // Model "has a usable timestamp" by NORMALIZING first — a non-finite
+  // stamp becomes `undefined` here, so everything downstream reasons about
+  // one absent-ness. Production instead keeps the raw value and gates on
+  // `Number.isFinite`; same domain, different expression, which is the
+  // point of a differential oracle. (`NaN`/`±Infinity` count as missing:
+  // `NaN` makes the winner depend on fold position — the very defect #450
+  // is about — and `Infinity` wins unconditionally on a corrupt row.)
+  const stampOf = (c: Candidate): number | undefined => {
+    const raw = c.block.userUpdatedAt as number | undefined
+    if (typeof raw !== 'number') return undefined
+    return raw - raw === 0 ? raw : undefined
+  }
+  const allTimed = candidates.every(c => stampOf(c) !== undefined)
   if (!allTimed) {
     const bestScore = Math.max(...candidates.map(c => c.score))
     return candidates.find(c => c.score === bestScore)!
   }
-  const bestTime = Math.max(...candidates.map(c => c.block.userUpdatedAt as number))
-  const finalists = candidates.filter(c => c.block.userUpdatedAt === bestTime)
+  const bestTime = Math.max(...candidates.map(c => stampOf(c)!))
+  const finalists = candidates.filter(c => stampOf(c) === bestTime)
   const bestScore = Math.max(...finalists.map(c => c.score))
   return finalists.find(c => c.score === bestScore)!
 }
@@ -495,6 +526,30 @@ describe('searchBlocksAcrossSources — model differential over generated async 
       const result = await runDupGroup(order)
       expect(result, JSON.stringify(order)).toHaveLength(1)
       expect(result[0].content, JSON.stringify(order)).toBe(`${Y.score}:${Y.userUpdatedAt}`)
+    }
+  })
+
+  it('canary: a NaN timestamp is MISSING, not newest — it must not reintroduce order-dependence (Codex, PR #449)', async () => {
+    // The fix for #450 gated on `typeof === 'number'`, which NaN passes.
+    // Every subsequent comparison against it is then false — including
+    // `NaN !== NaN` — so `reduce` keeps whatever it was already holding:
+    // the winner became a function of fold position again, which is the
+    // one property this function exists to provide. Traced on the
+    // pre-fix expression: [N, M] → N (score 0 beats score 9), [M, N] → M.
+    //
+    // Treating non-finite as missing sends the group to score, so M
+    // (score 9) wins in both orders. `Infinity` is checked alongside:
+    // it is order-INdependent but wins unconditionally, which is not a
+    // claim a corrupt row should get to make either.
+    const M = {score: 9, userUpdatedAt: 20}
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      const N = {score: 0, userUpdatedAt: bad}
+      for (const order of [[N, M], [M, N]]) {
+        const label = `${String(bad)} ${JSON.stringify(order.map(c => c.score))}`
+        const result = await runDupGroup(order)
+        expect(result, label).toHaveLength(1)
+        expect(result[0].content, label).toBe(`${M.score}:${M.userUpdatedAt}`)
+      }
     }
   })
 })
