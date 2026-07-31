@@ -88,6 +88,14 @@ const uiDeleteSubtreeRestriction = {
   message: uiDeleteMessage,
 }
 
+// Every extension the toolchain can hand us as a source module. Used by BOTH the
+// parser block and every `src/`-scoped rule block below, because the two drifting
+// apart is a silent hole rather than an error: widening the boundary gate to
+// `.js` once left `src/data/syncedTableSqlRecognizer.js` — real shipped core
+// code — as a file that ONE rule checked and the delete guards, child-view and
+// synced-write guards did not. One constant, no drift.
+const SOURCE_GLOB = 'src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'
+
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
@@ -191,7 +199,7 @@ export default tseslint.config(
     //     structurally on purpose — order-key and sibling math must see every
     //     row — so it is only guarded in the pure display dirs below, and the
     //     mixed files spell visible intent with the `visibleChildrenOf` helper.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     plugins: {'child-view': childView},
     rules: {
       'child-view/require-explicit-child-view': ['error', {check: 'query'}],
@@ -202,7 +210,7 @@ export default tseslint.config(
     // ops tooling have no Block deletes at all — their zero-arg `.delete()`
     // calls are Supabase query builders — so linting them here would be pure
     // noise in files that can never have the defect.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     rules: {
       'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction, uiMutateDeleteRestriction],
     },
@@ -216,7 +224,7 @@ export default tseslint.config(
     // from `blockMerge` — which is exactly the mistake this rule exists to
     // catch. Non-UI callers out here (the agent bridge, processors) opt out
     // inline with a reason, same as the other selectors.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     ignores: ['src/data/**'],
     rules: {
       'no-restricted-syntax': [
@@ -233,7 +241,7 @@ export default tseslint.config(
     // Pure outline/display modules: every child traversal is a display read,
     // so `tx.childrenOf` is guarded here too.
     files: [
-      'src/components/**/*.{ts,tsx}',
+      'src/components/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
       'src/hooks/**/*.{ts,tsx}',
       'src/plugins/video-player/**/*.{ts,tsx}',
       'src/shortcuts/**/*.{ts,tsx}',
@@ -270,7 +278,7 @@ export default tseslint.config(
     // in this config currently lints, so renaming a file to `.js` was a
     // one-step way out of this boundary. Widening the whole config is a
     // separate call; widening this one rule is not.
-    files: ['src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
+    files: [SOURCE_GLOB],
     plugins: {boundary: kernelPluginBoundary},
     rules: {
       'boundary/no-core-to-plugin-imports': ['error', {
@@ -297,7 +305,7 @@ export default tseslint.config(
     // which the upload trigger is gated on — a raw SQL write to
     // blocks/workspaces/workspace_members from outside a tx leaves the row
     // local-only, with no error at write time.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     plugins: {'synced-write': noRawSyncedTableWrites},
     rules: {
       'synced-write/no-raw-synced-table-writes': 'error',

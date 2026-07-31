@@ -197,13 +197,18 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `import x from '../../scripts/plugins/thing.js'`,
       },
-      // Non-string sources (a template-literal dynamic import) are dropped
-      // rather than guessed at.
+      // Only a specifier assembled at RUNTIME is invisible. (An INTERPOLATED
+      // template is not — Vite compiles it to a glob; see the invalid case.)
       {
         filename: core('extensions/dynamicExtensions.ts'),
-        // Single-quoted so the `${name}` reaches the linted source as a literal
-        // template placeholder — that unresolvable specifier IS the case.
-        code: 'const m = await import(`@/plugins/${name}/index.js`)',
+        code: 'const m = await import(specifier)',
+      },
+      // A broad positive cleared by an exclusion that is equivalent to
+      // `!/src/plugins/**`: all it leaves behind is a loose file directly under
+      // src/plugins/, which this rule classifies as core.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob(['/src/**', '!/src/plugins/*/**'])`,
       },
     ]),
     invalid: withSourceRoot([
@@ -501,6 +506,32 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/src/{components/ui,plugins}/**' },
+        }],
+      },
+      // An interpolated specifier is NOT unknowable: vite:dynamic-import-vars
+      // compiles it into a static map of every match, so this pulls in every
+      // plugin at build time. Reported as the glob it becomes. An earlier
+      // version of this rule documented this as an accepted limitation, which
+      // was simply wrong about what Vite does.
+      {
+        filename: core('extensions/dynamicExtensions.ts'),
+        // Single-quoted so `${name}` reaches the linted source as a real
+        // template placeholder rather than being interpolated by this test.
+        code: 'const m = await import(`@/plugins/${name}/index.js`)',
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '@/plugins/*/index.js' },
+        }],
+      },
+      // `base` reached through a spread of an object literal. Vite evaluates it
+      // statically, so the boundary has to as well — the realistic shape is a
+      // shared options const, not the literal spread written out.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { ...{ base: '/src/plugins' } })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,

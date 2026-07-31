@@ -52,11 +52,11 @@
  * are not.
  *
  * Known gaps, deliberate:
- *   - a specifier that isn't statically known (`` import(`@/plugins/${id}/x.js`) ``
- *     — a template with INTERPOLATIONS; a no-substitution template is static and
- *     is checked) can't be resolved, so it is dropped rather than guessed at —
- *     the same "give up on the dynamic part" contract as
- *     no-raw-synced-table-writes. Nothing in `src/` loads a plugin that way.
+ *   - a specifier assembled at RUNTIME (`import(someVariable)`) can't be seen at
+ *     all. Note this does NOT cover an interpolated template: Vite compiles
+ *     `` import(`@/plugins/${id}/x.js`) `` into a static map of every match, so
+ *     it is a glob and is checked as one (see `templateGlob`). An earlier
+ *     version of this rule called that case unknowable; it isn't.
  *   - a static specifier passed to a helper that does the `import()` one call
  *     frame away (`load('@/plugins/todo/x.js')`) — the literal never reaches an
  *     import node, and chasing it needs interprocedural analysis a single-file
@@ -198,6 +198,18 @@ const staticString = (node) => {
  *  non-static elements drop out. Negated glob patterns (`!…`) are KEPT — a
  *  caller that only wants dependencies can skip them, but `checkGlob` has to
  *  see them, since an exclusion can be what makes a broad pattern safe. */
+/** The glob Vite compiles an INTERPOLATED specifier into — each `${…}` becomes
+ *  a single-segment wildcard. `` import(`@/plugins/${id}/index.js`) `` is not
+ *  unknowable: vite:dynamic-import-vars rewrites it into a static map of every
+ *  matching module, which for that prefix is every plugin in the repo. So it is
+ *  a glob wearing an import's clothes, and goes through the glob classifier. */
+const templateGlob = (node) => {
+  const el = node?.type === 'TSLiteralType' ? node.literal : node
+  if (el?.type !== 'TemplateLiteral' || el.expressions.length === 0) return undefined
+  const parts = el.quasis.map(quasi => quasi.value.cooked)
+  return parts.some(part => part === null || part === undefined) ? undefined : parts.join('*')
+}
+
 const specifierLiterals = (node) => {
   const elements = node?.type === 'ArrayExpression' ? node.elements : [node]
   return elements
@@ -218,6 +230,17 @@ const specifierLiterals = (node) => {
  *  though the rest of the pattern might exclude every real plugin file. A glob
  *  is a coarse dependency by nature; a false alarm here is cheap to silence
  *  inline, a miss is invisible. */
+// Exclusions that remove the WHOLE plugin layer, so a broad positive alongside
+// one of them depends on no plugin. Line comments, not JSDoc: these patterns
+// contain `*` followed by `/`, which would close a block comment.
+//
+// `plugins` + `/*/` + `**` is equivalent to `plugins/**` under this rule's own
+// definition — the only thing it leaves behind is a loose file directly under
+// `src/plugins/`, which is core. An enumerated set rather than glob algebra: a
+// narrower exclusion (`!plugins/todo/**`) leaves every other plugin in the
+// expansion and must still report.
+const CLEARS_PLUGIN_LAYER = new Set(['plugins/**', 'plugins/*/**', 'plugins/**/*'])
+
 const GLOB_METACHARACTER = /[*?[\](){}!+@]/
 
 /** Expand the simple brace alternations in a glob segment into the literal
@@ -265,14 +288,27 @@ const isImportMetaUrl = (node) =>
 /** The value node of a named property on an object literal, or undefined. Used
  *  to read `import.meta.glob`'s `base` option; a computed or spread property is
  *  not statically known and drops out. */
-const propertyValue = (objectNode, name) =>
-  objectNode?.type === 'ObjectExpression'
-    ? objectNode.properties.find(
-        property => property.type === 'Property'
-          && !property.computed
-          && (property.key?.name === name || property.key?.value === name),
-      )?.value
-    : undefined
+const propertyValue = (objectNode, name) => {
+  if (objectNode?.type !== 'ObjectExpression') return undefined
+  // Last write wins, and a spread of an object LITERAL is statically known —
+  // Vite evaluates it the same way. A spread of an identifier (`{...GLOB_OPTS}`)
+  // needs scope analysis and is not resolved; that is the realistic shape, so
+  // treat this as narrowing the gap rather than closing it.
+  let found
+  for (const property of objectNode.properties) {
+    if (property.type === 'SpreadElement') {
+      const nested = propertyValue(property.argument, name)
+      if (nested !== undefined) found = nested
+    } else if (
+      property.type === 'Property'
+      && !property.computed
+      && (property.key?.name === name || property.key?.value === name)
+    ) {
+      found = property.value
+    }
+  }
+  return found
+}
 
 const isImportMetaGlob = (callee) =>
   callee?.type === 'MemberExpression'
@@ -336,6 +372,13 @@ const noCoreToPluginImports = {
         if (plugin === undefined) continue
         context.report({node, messageId: 'coreImportsPlugin', data: {plugin, specifier}})
       }
+      // An interpolated specifier compiles to a glob (see `templateGlob`), so
+      // it is reported as one — it pulls in every plugin that matches, not one.
+      const glob = templateGlob(sourceNode)
+      if (glob !== undefined
+        && globReachesPluginLayer(resolveSpecifier(glob, importerSrcRelative, sourceRoot))) {
+        context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier: glob}})
+      }
     }
 
     /** Globs need their own classifier — see `globReachesPluginLayer`. A
@@ -363,7 +406,7 @@ const noCoreToPluginImports = {
       // (`!/src/plugins/todo/**`) still leaves every OTHER plugin in the
       // expansion, so it is deliberately not honoured and the author opts out
       // inline instead.
-      if (patterns.some(p => p.startsWith('!') && resolve(p.slice(1)) === 'plugins/**')) return
+      if (patterns.some(p => p.startsWith('!') && CLEARS_PLUGIN_LAYER.has(resolve(p.slice(1))))) return
       for (const specifier of patterns) {
         if (specifier.startsWith('!')) continue
         if (!globReachesPluginLayer(resolve(specifier))) continue
