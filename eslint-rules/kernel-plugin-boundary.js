@@ -312,6 +312,14 @@ const specifierLiterals = (node) => {
   if (el?.type === 'ConditionalExpression') {
     return [el.consequent, el.alternate].flatMap(specifierLiterals)
   }
+  // `||`, `&&` and `??` name candidate specifiers the same way a conditional
+  // does, and the bundler CONSTANT-FOLDS them: verified with a real
+  // `vite build` that `import(false || './plugins/todo/schema.ts')` emits the
+  // plugin chunk. Non-string operands drop out in `staticString`, so
+  // `import.meta.env.PROD && '@/plugins/x'` reports just the string side.
+  if (el?.type === 'LogicalExpression') {
+    return [el.left, el.right].flatMap(specifierLiterals)
+  }
   const value = staticString(el)
   return value === undefined ? [] : [value]
 }
@@ -760,6 +768,31 @@ const noCoreToPluginImports = {
             loc: comment.loc,
             messageId: 'coreImportsPlugin',
             data: {plugin, specifier: referencePath},
+          })
+        }
+        // `@jsxImportSource <source>` in a comment makes the automatic runtime
+        // import `<source>/jsx-runtime` — a real edge with no import node
+        // anywhere in the AST. Verified with a real `vite build`: a core .tsx
+        // opening with `@jsxImportSource ./plugins/todo` puts that plugin's
+        // jsx-runtime in the bundle.
+        //
+        // Every comment, not just the prologue (unlike the reference directives
+        // above, whose position tsc genuinely cares about) — a pragma the
+        // compiler honours further down would otherwise be a silent miss, and
+        // prose that happens to spell out `@jsxImportSource <path>` costs one
+        // inline disable. Same conservative trade the glob classifier makes.
+        for (const comment of context.sourceCode.getAllComments()) {
+          const [, source] = comment.value.match(/@jsxImportSource\s+(\S+)/) ?? []
+          if (source === undefined) continue
+          const specifier = `${source}/jsx-runtime`
+          const plugin = owningPlugin(
+            resolveSpecifier(specifier, importerSrcRelative, sourceRoot),
+          )
+          if (plugin === undefined) continue
+          context.report({
+            loc: comment.loc,
+            messageId: 'coreImportsPlugin',
+            data: {plugin, specifier},
           })
         }
       },

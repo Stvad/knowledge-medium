@@ -155,6 +155,14 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `const u = new URL('../plugins/todo/asset.txt', (0, import.meta.url))`,
       },
+      // A core jsx source stays clean, and `/src/**/plugins` is NOT reported as
+      // a false positive: it can match `src/plugins/todo/plugins`, an
+      // extensionless file inside a plugin. It matches nothing in the tree
+      // TODAY, which is a fact about the tree, not about the pattern.
+      {
+        filename: core('components/Editor.tsx'),
+        code: `/** @jsxImportSource react */\nexport const el = null`,
+      },
       // Unwrapping the callee must not make an ordinary core require report.
       {
         filename: core('data/repo.ts'),
@@ -428,6 +436,36 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo/worker.ts' },
+        }],
+      },
+      // `@jsxImportSource` makes the automatic runtime import
+      // `<source>/jsx-runtime` with no import node anywhere. Verified with a
+      // real `vite build`: the plugin's jsx-runtime lands in the bundle.
+      {
+        filename: core('components/Editor.tsx'),
+        code: `/** @jsxImportSource @/plugins/todo */\nexport const el = null`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/jsx-runtime' },
+        }],
+      },
+      // A logical expression is folded by the bundler exactly like a
+      // conditional. Verified with a real `vite build`: this emits the plugin
+      // chunk.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = await import(false || '@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = await import(import.meta.env.PROD && '@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
         }],
       },
       // TypeScript's import-equals form. The type-only spelling is the live
