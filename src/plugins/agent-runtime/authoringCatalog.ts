@@ -597,14 +597,14 @@ const guides: AuthoringGuide[] = [
       'Use block-backed config and sync checkpoints.',
       'Use a Dialog mounted through appMountsFacet for setup — never window.prompt/alert/confirm.',
       'Store credentials in window.localStorage; everything else (settings, checkpoints, imported data) lives in blocks.',
-      'Use stable external ids on imported records, or derive their block ids deterministically with uuidv5, so re-syncs upsert instead of duplicating.',
+      'Give imported records a stable external-id property AND a derived block id, via `getOrCreateTypedChild` with a `{namespace, key}` built from the external id, so a re-sync adopts instead of duplicating.',
     ],
     steps: [
       'Define typed properties for external ids and source metadata via `seedProperty` + `definitionSeedsFacet`. Persist sync checkpoints on a `getPluginPrefsBlock` sub-block, not localStorage.',
       'Render a Dialog component, mount it via `appMountsFacet`, and drive its open/closed state from a small typed module store the component reads with `useSyncExternalStore`. The configure action flips that store directly — never a `window` CustomEvent. Validate credentials against the provider\'s auth endpoint before saving. (For one-shot prompts, `openDialog(Component)` is the simpler imperative alternative — see the settings-dialog guide.)',
       'Add a manual sync action through `actionsFacet`. The handler reads the checkpoint from the prefs block, fetches incremental updates, and runs a single `repo.tx`. Wrap the body in `showProgress(...)` so the user sees per-page / per-book progress and a final summary.',
       'Anchor imported content under a plugin-owned root page created with `getOrCreateKernelPage` — see the `plugin-root-singleton` storage pattern.',
-      'Upsert child records the same way: derive the block id from the external id, or look up by an external-id property. Never create a second block for the same external record.',
+      'Write child records with `getOrCreateTypedChild`, keyed on the external id. Not a bare `tx.create` at a derived id — that throws `DuplicateIdError` on the second sync and takes the transaction with it — and not lookup-then-create, which duplicates under concurrent writers because the lookup answers for the moment it ran.',
       'For *background* sync (poll a webhook / poll on an interval) use `appEffectsFacet.of({id, start: ({repo}) => { ... return cleanup })`. Manual sync via an action is enough for most plugins — only reach for an effect when the data source itself pushes. The effect object must be a STABLE reference: define it once at module scope (not inline in a function-valued extension), and export your extension as an array, not a function — a fresh `{id, start}` every resolve reads as "code changed" and silently restarts the effect (dropping its connection / interval) on every unrelated extension toggle.',
     ],
     preferredModules: [

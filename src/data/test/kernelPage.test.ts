@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, seedType } from '@/data/api'
 import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -44,6 +44,7 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('getOrCreateKernelPage', () => {
   it('creates a deterministic page tagged with PAGE_TYPE plus the marker type', async () => {
@@ -143,6 +144,49 @@ describe('getOrCreateKernelPage', () => {
 
       // Still deleted — a tombstone in another workspace stays one.
       expect(await env.repo.load(id)).toBeNull()
+    })
+
+    /** The check runs at three points and the two tests above pin it only
+     *  COLLECTIVELY — each enters through the first one, so deleting any single
+     *  site leaves them green while another catches the case. The two below
+     *  isolate the sites that a plain foreign occupant never reaches. */
+    it('is refused even when it is shaped exactly like ours, so nothing needs repair', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0', content: 'Foo',
+        })
+        await tx.setProperty(id, aliasesProp, ['Foo'])
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+        await env.repo.addTypeInTx(tx, id, FOO_PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+
+      // A fully-shaped row makes `needsRepair` false, so the repair
+      // transaction — and the recheck inside it — is never reached. The
+      // pre-repair check is the only thing standing between this call and
+      // handing back another workspace's page as ours.
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+    })
+
+    it('is refused when it only becomes foreign between the read and the transaction', async () => {
+      const id = await foreignRow(false)
+      // Sync materialization rewrites every stored column except `id`,
+      // `workspace_id` included, so the row read before the transaction can
+      // belong to someone else by the time it opens. Simulated by making that
+      // read disagree with what is actually on disk.
+      const asIfOurs = {...(await env.repo.load(id))!, workspaceId: WS}
+      vi.spyOn(env.repo, 'load').mockResolvedValueOnce(asIfOurs)
+
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // The repair never ran: no alias claimed, no type tagged.
+      const row = await env.repo.load(id)
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
     })
   })
 })
