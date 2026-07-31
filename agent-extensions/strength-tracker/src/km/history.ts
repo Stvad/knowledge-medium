@@ -1,13 +1,9 @@
-/** Pure block → record readers.
- *
- *  These take the raw rows a typed-block query returns and assemble the
- *  engine's `WorkoutRecord` / `LayoffRecord` shapes. They import only field
- *  names and plain helpers — no runtime `@/` module — so the mapping is
- *  unit-testable in a plain node environment.
- *
- *  Property values on a row are codec-*encoded*: dates are ISO strings,
- *  everything the extension stores otherwise round-trips as identity JSON
- *  (numbers, strings, the sets array). So the only decode needed here is
+/** Pure block → record readers: take the raw rows a typed-block query
+ *  returns and assemble the engine's `WorkoutRecord` / `LayoffRecord` shapes.
+ *  Import only field names and plain helpers — no runtime `@/` module — so
+ *  the mapping is unit-testable in a plain node environment. Property values
+ *  on a row are codec-*encoded*: dates are ISO strings, everything else
+ *  round-trips as identity JSON — so the only decode needed here is
  *  ISO-string → Date for the two date fields.
  */
 
@@ -83,10 +79,9 @@ const toSetRecord = (row: RowLike): SetRecord => ({
 })
 
 /** Assemble workout records from the workout / exercise / set block trees.
- *  Only DONE workouts count as history (an in-progress session is the live
- *  logging state and must never feed its own prescription), and within a
- *  workout only DONE sets are counted (a pre-filled, un-accepted set records
- *  nothing). */
+ *  Only DONE workouts count as history (an in-progress session must never
+ *  feed its own prescription), and only DONE sets within a workout (a
+ *  pre-filled, un-accepted set records nothing). */
 export const buildHistory = (
   workoutRows: readonly RowLike[],
   exerciseRows: readonly RowLike[],
@@ -135,17 +130,12 @@ export const buildHistory = (
 }
 
 /** Which of several unfinished workouts for one day + session a client logs
- *  into.
- *
- *  WHICH one matters far less than every path picking the same one. The view
- *  reads `typedBlocks`, ordered `(created_at, id)`; the writer scans the
- *  page's children, ordered `(order_key, id)`. "The first one" therefore meant
- *  two different workouts: a tap wrote into one while the screen attached
- *  itself to the other, and the saved edit vanished from view.
- *
- *  The id is the tiebreak neither side can disagree about — order keys are
- *  hand-editable and creation clocks are per-device, while the id is the same
- *  string on every replica. */
+ *  into. WHICH one matters far less than every path picking the SAME one —
+ *  the view reads `typedBlocks` ordered `(created_at, id)`, the writer scans
+ *  children ordered `(order_key, id)`, so "the first one" would mean two
+ *  different workouts. The id is the tiebreak neither side can disagree
+ *  about: order keys are hand-editable and creation clocks are per-device,
+ *  but the id is the same string on every replica. */
 export const preferredLive = <T extends {id: string}>(candidates: readonly T[]): T | undefined =>
   candidates.reduce<T | undefined>((best, w) => (best === undefined || w.id < best.id ? w : best), undefined)
 
@@ -204,16 +194,13 @@ export const toLiveSet = (row: RowLike): LiveSet => ({
 })
 
 /** What identifies a lift WITHIN one workout: its plan block if it has one
- *  (so a rename mid-session changes nothing), else its name — plus which
- *  occurrence of that lift this is, because a session can prescribe the same
- *  lift twice and the two rows must not share an entry.
- *
- *  The one definition of "the same lift", used by all three sides that have to
- *  agree about it: the write path derives an entry's block id from exactly
- *  these (`exerciseIdentity` in store.ts), the draft stamps it on every row
- *  (`rowKey` in draft.ts), and the matcher below re-attaches the draft to the
- *  blocks. When they disagreed, the draft edited blocks the writer had
- *  assigned to a different row. */
+ *  (so a rename mid-session changes nothing), else its name, plus which
+ *  occurrence of that lift this is (a session can prescribe the same lift
+ *  twice, and the two rows must not share an entry). The one definition of
+ *  "the same lift", used by all three sides that must agree: the write path
+ *  derives an entry's block id from exactly these (`exerciseIdentity` in
+ *  store.ts), the draft stamps it on every row (`rowKey` in draft.ts), and
+ *  the matcher below re-attaches the draft to the blocks. */
 export const liftKey = (
   definitionId: string | undefined,
   exercise: string,
@@ -223,12 +210,9 @@ export const liftKey = (
 /** `|` separates the parts of every identity string here, so a lift whose
  *  NAME contains one could spell another row's identity: "Bench|1" at
  *  occurrence 0 and "Bench" at occurrence 1 both read as `Bench|1`, and two
- *  rows the matcher treats as different lifts would share one entry block —
- *  and, positionally, one set block per index. Escaping makes the parts
- *  recoverable, so the separator can only ever be the separator.
- *
- *  Exported because the WRITE side spells the same identity into a derived
- *  block id and has to escape it identically. */
+ *  different lifts would share one entry block. Escaping makes the parts
+ *  recoverable. Exported because the WRITE side spells the same identity
+ *  into a derived block id and must escape it identically. */
 export const escapeKeyPart = (part: string): string => part.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
 
 /** One lift, as either side names it. The draft calls its plan block `defId`;
@@ -252,51 +236,25 @@ export interface LiftEntry {
   occurrence?: number
 }
 
-/** Which live entry backs each draft row, keyed on `liftKey`.
- *
- *  Each live entry states which occurrence it is (`occurrencesOf`), so a lift
- *  prescribed twice in one session keeps its rows attached to the right blocks
- *  however the entries are ordered. Entries written before that property
- *  existed still fall back to block order — a deterministic total order
- *  (`compareByOrderKey` breaks ties on id), so stable against sync arrival
- *  order, but not against hand-reordering.
- *
- *  A row matches its plan block first, then falls back to the lift's NAME —
- *  because whether either side knows a lift's plan block is a property of WHEN
- *  it was written, not of which lift it is. `configLoaded` goes true even when
- *  the plan read FAILS (deliberately: blocking logging on an unreadable
- *  outline is worse than logging against the built-in names), so the mismatch
- *  arises for the same mundane reason in both directions:
- *
- *   - the entry has no plan block and the row does — logged while the outline
- *     was unreadable, and then it resolved;
- *   - the row has no plan block and the entry does — the outline is unreadable
- *     HERE, and the session was started somewhere it wasn't.
- *
- *  Either way, refusing to match orphans a live session. The sets are safe,
- *  since Finish reads the committed tree, but the view shows a pristine
- *  pre-filled session over real logged work, and the obvious response is to
- *  log it again — which builds a second entry tree beside the first.
- *
- *  The fallback is safe because a matched row's writes FOLLOW the match: a set
- *  that has a block writes to that block, and one that doesn't goes through the
- *  entry the row is attached to (`writeExercise`'s `entryId`) instead of
- *  re-deriving. The one restriction left is that a row WITH a plan block never
- *  falls back onto an entry carrying a DIFFERENT one — those are two genuinely
- *  different lifts that happen to share a name. */
+/** Which live entry backs each draft row, keyed on `liftKey`. A row matches
+ *  its plan block first, then falls back to the lift's NAME — whether either
+ *  side knows a lift's plan block is a property of WHEN it was written, and
+ *  `configLoaded` goes true even when the plan read FAILS (deliberately:
+ *  blocking logging on an unreadable outline is worse than logging against
+ *  the built-in names). Refusing to match orphans a live session — the
+ *  sets stay safe (Finish reads the committed tree), but the view shows a
+ *  pristine session over real logged work and invites logging it again,
+ *  building a second entry tree beside the first. Safe because a matched
+ *  row's writes FOLLOW the match, through the entry's `entryId` rather than
+ *  re-deriving; the one restriction is that a row WITH a plan block never
+ *  falls back onto an entry carrying a DIFFERENT one. */
 /** Which occurrence each live entry is — what it SAYS it is, falling back to
- *  its position among the entries for the same lift.
- *
- *  The block says so because position is not identity: a session can prescribe
- *  one lift twice, and dragging the two entries past each other in the outline
- *  used to swap which prescription row each backed — so the rows displayed,
- *  and then wrote, each other's weights and ticks.
- *
- *  A duplicated claim is no claim: if two entries for one lift both say
- *  occurrence 1, neither number can be believed and both fall back to order —
- *  the same rule the set overlay uses for a duplicated index, and for the same
- *  reason (believing the first would move it AND displace the second).
- *  Fallbacks fill the numbers a believed claim hasn't taken. */
+ *  its position among the entries for the same lift (position isn't identity:
+ *  dragging two entries for the same lift past each other would otherwise
+ *  swap which prescription row each backs). A duplicated claim is no claim:
+ *  if two entries both say occurrence 1, neither can be believed and both
+ *  fall back to order — the same rule the set overlay uses for a duplicated
+ *  index. */
 const occurrencesOf = <T extends LiftEntry>(entries: readonly T[]): Map<T, number> => {
   const baseOf = (entry: T): string => entry.definitionId ?? entry.exercise
   const stated = (entry: T): number | undefined =>
@@ -351,14 +309,10 @@ export const matchLiveExercises = <T extends LiftEntry>(
   const live = {exercises: entries}
 
   const byKey = new Map<string, T>()
-  /** Entries queued by name, in block order. A QUEUE rather than an
-   *  occurrence-keyed map, because the two sides count occurrences over
-   *  different things: a row counts within `defId ?? name`, an unplanned entry
-   *  only has its name. Two plan blocks sharing a display name, logged while
-   *  the outline was unreadable, gave both rows occurrence 0 — so both asked
-   *  for the same entry, the second was refused, and its next edit split the
-   *  log. Taking the next unclaimed one with that name has no such assumption.
-   */
+  /** Entries queued by name, in block order — a QUEUE rather than an
+   *  occurrence-keyed map, since a row counts occurrences within
+   *  `defId ?? name` while an unplanned entry only has its name, so two plan
+   *  blocks sharing a display name could otherwise collide on one occurrence. */
   const byName = new Map<string, T[]>()
   for (const [entry, occurrence] of occurrencesOf(live.exercises)) {
     byKey.set(liftKey(entry.definitionId, entry.exercise, occurrence), entry)
@@ -376,11 +330,9 @@ export const matchLiveExercises = <T extends LiftEntry>(
       // share a name. A row without one is free to take either.
       && (row.definitionId === undefined || entry.definitionId === undefined))
 
-  // TWO passes, exact first. A name-only row earlier in the list would
-  // otherwise fall back onto the very entry that a later row matches on its
-  // plan block — the later row then reads as unlogged even though an entry
-  // was free for the earlier one, and its next write attaches both rows to
-  // one derived entry.
+  // TWO passes, exact first: a name-only row earlier in the list would
+  // otherwise fall back onto the entry a later row matches on its plan
+  // block, leaving the later row reading as unlogged.
   const matched: (T | undefined)[] = rows.map(() => undefined)
   rows.forEach((row, i) => {
     const exact = byKey.get(liftKey(row.definitionId, row.exercise, row.occurrence))
