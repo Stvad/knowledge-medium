@@ -97,6 +97,12 @@ engine (a same-shape hand-built string parses fine). Not a product bug.
 
 ## The suites
 
+A curated tour, NOT an inventory — `git ls-files '*.fuzz.test.ts'` is
+the authoritative list and currently runs well ahead of what's written
+up below. Each suite's own docblock states its oracles and cites the
+lines they're grounded in; that's the thing to read before extending
+one.
+
 - `src/plugins/references/test/referenceParser.fuzz.test.ts` — span
   soundness on bracket salads; render→parse round-trips; rewriters vs a
   fragment-level reference model.
@@ -370,6 +376,86 @@ skips the trigger; V1 leaves those merges latent) aborted the WHOLE
 parse batch, permanently — `claimLiteralDateAliases` now swallows
 exactly the typed alias-collision abort and degrades to the pre-claim
 first-writer behavior for that target.
+
+Round 2 (roadmap #430, sub-issues #431–#435 + #378) picked its targets
+by mining the repo's OWN history — past fixes, incident postmortems and
+the regression tests they left behind — rather than by reading the code
+for likely-fragile functions. Product bugs it found:
+
+- `applyKeybindingOverrides` still disagreed with itself across layers
+  (issue #388, the residual Batch 3 left open): rule 1 installed the
+  override author's raw `keys` verbatim, while rule 2's collision-strip
+  index bucketed claims through `canonicalizeChord`. An override spelled
+  `ctrl+x` is dispatch-dead — tinykeys knows `Control`, not `ctrl` — yet
+  its canonical claim still stripped another action's live `Control+x`
+  default, so the chord fired NOTHING. Overrides now install through
+  `normalizeChordSequence`, and claim/install agreement is structural:
+  `canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)`.
+  Review then caught the fix's own edge — a naive `+` split turns the
+  settings-capture spelling of the `+` key (`Shift++`) into bare
+  `Shift`, rebinding the action to every shifted keystroke. The splitter
+  reuses tinykeys' own `(?<=\w|\])\+` lookbehind so the two tokenizers
+  cannot drift apart again.
+- `isLocalDbCorruptionError` / `toLocalDbOpenError` — the classifiers
+  deciding whether a bootstrap failure routes to the DESTRUCTIVE
+  Export + Reset recovery UI — threw on hostile error values. The
+  totality property hit `String(error)` on a null-prototype object; the
+  review round over the fix then found every other `[[Get]]` on the
+  error equally unguarded (`.message`, `.cause`, the `instanceof`
+  prototype walk). A throw here is worse than a misclassification: the
+  recovery UI never renders at all. Reads now go through
+  `safeGet`/`safeString`/`safeInstanceOf`.
+- `renderSubtreeOutline`'s anti-spoofing invariant (id-first, one line
+  per block) had been broken twice by a missed vertical-motion character
+  class, so the suite was written against it — and found it intact. The
+  review round over that suite found the actual hole: only CONTENT was
+  neutralized, the `[id]` token passed through raw, and `]` — the
+  grammar's own delimiter — was never escaped. Ids are now
+  percent-encoded categorically (`\p{C}` plus U+2028/U+2029, which
+  `\p{C}` does NOT cover, plus `%` and `]`, with a `%uXXXX` fallback for
+  the lone surrogates `encodeURIComponent` refuses), closing the
+  Trojan-Source gap that a hand-copied range list kept reopening.
+  Content deliberately keeps a NARROWER rule — `\p{Bidi_Control}`, not a
+  hand-enumerated list (which had missed U+061C) — so ZWJ/ZWNJ survive
+  and emoji, Persian and Hindi text still render.
+- `RecentsPageBlockRenderer` carried a private `formatRelative` guarding
+  only `now === 0`, where the shared `formatRelativeTime` guards
+  `!ts || !now`. A block with no `userUpdatedAt` yet (`ts = 0`) drew a
+  bogus multi-decade "ago" label instead of hiding the line. The copy is
+  deleted rather than fixed.
+- The `searchSourcesFacet` merge resolved a duplicated block id
+  PAIRWISE, so which contribution's payload survived depended on the
+  order the sources happened to settle — a different answer run to run
+  over identical data (issue #450). Both the rule and its docblock are
+  now stated over the whole group.
+- A raw `tx.restore` re-applies the tombstone's STORED alias bag, which
+  can hold a claim some other live block took while the page was dead;
+  the re-insert trips the uniqueness trigger and rolls back the caller's
+  entire transaction — the same shape Batch 3 fixed inside
+  `createOrRestoreTargetBlock`, still live at the kernel-page and
+  daily-note restore sites (issue #378). The restore's own property
+  patch now strips the aliases key and the caller re-claims the set it
+  means.
+
+Two more findings were about the SUITES, and both are the same defect:
+a test that could not fail.
+
+- fast-check 4.9's `fc.string()` defaults to `unit: 'grapheme-ascii'` —
+  printable ASCII. Several docblocks claimed "arbitrary unicode" over
+  the unqualified call, including the codec round-trips, which is
+  exactly where normalization and surrogate edges bite (issue #458).
+  Before trusting a green property, confirm its generator actually
+  reaches the domain its docblock names.
+- A flake filed as a product ordering bug (#455) was neither: the
+  prescribed fix was already implemented months earlier, and the real
+  mechanism was `awaitSeedMaterialization()` not meaning "done" —
+  `PendingIdleJobs.drain()` awaits only jobs ALREADY in `pending`, and a
+  fire-and-forget job enters `pending` only once its deferred callback
+  fires, so `drain()` can resolve before the job it should wait for
+  exists. A second issue (#459) claimed missing coverage that turned out
+  to exist. Both were settled by MUTATION — reintroduce the bug, run
+  only the pre-existing suites — not by reading. Do that before writing
+  a test whose value rests on a coverage gap being real.
 
 ## Adding a suite
 
