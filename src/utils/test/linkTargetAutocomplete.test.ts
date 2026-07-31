@@ -574,7 +574,10 @@ describe('link target autocomplete helpers', () => {
 
     expect(out[0]).toMatchObject({id: 'exact', label: 'dancer'})
     expect(out.map(candidate => candidate.id)).toContain('partial')
-  })
+    // 32 alias-bearing creates make this the one write-heavy test in the file
+    // (~0.8s idle); the rest are far under. Contention pushes it at the 5s
+    // default.
+  }, 20_000)
 
   it('builds value candidates with excluded labels', async () => {
     await create({id: 'page', content: 'Dating notes', aliases: ['Dating']})

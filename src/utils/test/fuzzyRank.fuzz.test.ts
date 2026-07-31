@@ -47,7 +47,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import {
   buildFilterPrefixes,
   rankCandidates,
@@ -96,15 +96,24 @@ describe('totality: tokenize / buildFilterPrefixes / scoreCandidate / rankCandid
       fuzzParams(300),
     )
     // Explicit budget: this property asserts only that nothing THROWS on
-    // adversarial unicode, so wall-clock is not what it is testing. It
-    // sits at ~3.2s of real work against vitest's 5s default (300 runs x
-    // `hasTypoSubstring`, which is O(label x token) with a slice per
-    // probe), and tips over on a loaded machine — verified failing on an
-    // unmodified ranker, so it is not a regression signal when it does.
-    // Making `hasTypoSubstring` allocation-free would earn the headroom
-    // back and speed up the real completion path; until then, don't let a
-    // busy CPU read as a code failure.
-  }, 30_000)
+    // adversarial unicode, so wall-clock is not what it is testing — and it
+    // timed out against vitest's 5s default on an unmodified ranker, i.e. a
+    // timeout here is not a regression signal.
+    //
+    // It is ~0.5s run alone (mostly fast-check/JIT warm-up, being the first
+    // `fc.assert` in the file's process — the steady-state property body is
+    // single-digit ms), but 2.9-4.4s inside a loaded full suite. That
+    // multiplier is well above the ~6x the suite sees at p99.9 because this
+    // property is pure CPU with no awaits: it never yields, so it takes the
+    // full brunt of one-worker-per-core contention instead of interleaving
+    // with it. 4.4s against a 5s default is a coin flip, which is what this
+    // was losing.
+    //
+    // Derived (`fuzzTestTimeout()`), never a hard-coded number: a per-test
+    // timeout OVERRIDES the `--testTimeout` that `pnpm fuzz` passes, so a
+    // literal here would silently cap a long deep/nightly pass whose
+    // FUZZ_TIME_MS budget exceeds it (see src/test/fuzz.ts).
+  }, fuzzTestTimeout())
 })
 
 // ──── Shared candidate-set generator (P2, P3, P4) ────
@@ -151,7 +160,7 @@ describe('rankCandidates: subset-soundness', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P3: determinism + idempotence ────
@@ -166,7 +175,7 @@ describe('rankCandidates: determinism + idempotence', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('re-ranking the ranked candidate set (same query/now/recentBlockIds) reproduces the same order', () => {
     fc.assert(
@@ -182,7 +191,7 @@ describe('rankCandidates: determinism + idempotence', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P4: comparator consistency ────
@@ -214,7 +223,7 @@ describe('rankCandidates: comparator consistency', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P5: exact-match dominance ────
@@ -252,7 +261,7 @@ describe('scoreCandidate / rankCandidates: exact-match dominance (SCORE_FULL_EXA
       }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P6: editDistanceAtMostOne symmetry, anchored against real scoreCandidate ────
@@ -380,7 +389,7 @@ describe("editDistanceAtMostOne / hasTypoSubstring mirror (not exported by the s
       }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('P6b: editDistanceAtMostOne mirror is symmetric — editDistanceAtMostOne(a,b) === editDistanceAtMostOne(b,a)', () => {
     fc.assert(
@@ -389,7 +398,7 @@ describe("editDistanceAtMostOne / hasTypoSubstring mirror (not exported by the s
       }),
       fuzzParams(300),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P7: literal-substring tokens never score null ────
@@ -408,7 +417,7 @@ describe("scoreCandidate: literal-substring tokens never score null (scoreToken'
       }),
       fuzzParams(150),
     )
-  })
+  }, fuzzTestTimeout())
 })
 
 // ──── P8: word-prefix-chain soundness ────
@@ -456,5 +465,5 @@ describe('scoreCandidate: word-prefix-chain soundness (matchesWordPrefixChain)',
       }),
       fuzzParams(300),
     )
-  })
+  }, fuzzTestTimeout())
 })
