@@ -20,7 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
-import { assertCanonicalBlockId } from '@/data/explicitBlockId.js'
+import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
@@ -441,10 +441,13 @@ const createRuntimeBlock = async (
   // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
   // from an agent/CLI caller can render ambiguously in the outline (control
   // characters, bidi reordering, homoglyphs — see PR #447's history) in a
-  // way no render-time filter alone can fully rule out. Internal minting
-  // (crypto.randomUUID() below, and every deterministic v5 helper elsewhere
-  // in the app) never goes through this function's explicitId, so it's
-  // unaffected.
+  // way no render-time filter alone can fully rule out.
+  //
+  // NOT the enforcement point — `tx.create` is (see @/data/blockId), and it
+  // would reject this id a few frames later regardless. This check is here
+  // for the MESSAGE: it names the command an agent actually typed, before any
+  // write, instead of surfacing a `tx.create:` rejection from three layers
+  // down mid-transaction. Deleting it loses that; it does not open the hole.
   if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
   const references = input.data?.references as BlockReference[] | undefined
 
@@ -849,9 +852,11 @@ const installRuntimeExtension = async (
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
   let installedId = input.id?.trim() || ''
-  // Same write-boundary guard as createBlock (issue #456) — fail before any
-  // write (the parent-container lookup above is read-only) rather than
-  // minting a non-UUID block id for a brand-new extension.
+  // Same message-quality check as createBlock (issue #456), and for the same
+  // reason it is not the enforcement point. It buys one extra thing here: the
+  // throw lands before the tx opens (the parent-container lookup above is
+  // read-only), so a bad id can't create the "Agent-installed extensions"
+  // root page as a side effect on its way to being rejected.
   if (installedId) assertCanonicalBlockId(installedId, 'installExtension')
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {

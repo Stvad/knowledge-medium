@@ -12,7 +12,7 @@ export type ExactReferenceBlockContent =
 // label) — that parser owns the form, and a whole-block reading that
 // accepted more would diverge from every inline reader of the same text.
 // Exported so other modules that need "what does a UUID-shaped id look
-// like" (e.g. explicitBlockId.ts's write-boundary validator) reuse this
+// like" (e.g. blockId.ts's write-boundary validator) reuse this
 // SOURCE instead of copying the character class a third time. Case
 // policy is a per-consumer choice, not baked in here: this file's own
 // UUID_RE below adds the `i` flag (parsing existing content accepts and

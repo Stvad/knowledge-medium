@@ -189,6 +189,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   isReadOnly: 'data field (writes go through the delegated setReadOnly)',
   mutators: 'data field',
   newId: 'pure generator function (no this)',
+  blockIdPolicy: 'readonly string literal set at construction; read into runTx params, never assigned',
   newTxSeq: 'pure generator function (no this)',
   now: 'pure clock function (no this)',
   processorRunner: 'collaborator constructor-bound to the real repo',

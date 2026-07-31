@@ -109,6 +109,7 @@ import {
   type ReferenceTargetLookups,
 } from './internals/referenceTargetProcessor'
 import { parseExactReferenceBlockContent } from './referenceBlock'
+import type { BlockIdPolicy } from './blockId'
 import type {
   PropertyDefinitionChange,
   PropertyDefinitionMigrationPlan,
@@ -367,6 +368,14 @@ export interface RepoOptions {
   /** UUID provider — default `crypto.randomUUID`. Injected for tests
    *  that want deterministic ids. */
   newId?: () => string
+  /** Block-id shape contract for every insert this Repo makes (issue #456).
+   *  Default `'canonical'`: `tx.create` / `tx.createOrGet` reject an id that
+   *  isn't a canonical lowercase UUID, whoever supplied it — the bridge, a
+   *  kernel mutator, `createTypedChild` in an agent-authored extension, or
+   *  `newId` itself. Production constructs a Repo without this option and so
+   *  gets the guard; `createTestRepo` sets `'any'` so tests can keep mnemonic
+   *  ids. See {@link BlockIdPolicy}. */
+  blockIdPolicy?: BlockIdPolicy
   /** Monotonic INTEGER tx-grouping key provider, written into
    *  `tx_context.tx_seq` and copied to `ps_crud.tx_id` by the upload
    *  triggers. Default: a counter seeded from `Date.now()` so values
@@ -465,6 +474,7 @@ export class Repo {
 
   private readonly now: () => number
   private readonly newId: () => string
+  private readonly blockIdPolicy: BlockIdPolicy
   private readonly newTxSeq: () => number
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
@@ -888,6 +898,10 @@ export class Repo {
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
     this.newId = opts.newId ?? uuidv4
+    // Strict unless a caller opts out, so a Repo built the way production
+    // builds one (context/repo.tsx passes no id options at all) enforces the
+    // block-id contract without having to remember to ask for it.
+    this.blockIdPolicy = opts.blockIdPolicy ?? 'canonical'
     // Default tx-seq provider: monotonic counter seeded above any
     // value a prior Repo instance could have written. Date.now() in
     // milliseconds is plenty of headroom (Number.MAX_SAFE_INTEGER /
@@ -1717,6 +1731,7 @@ export class Repo {
         newTxId: this.newId,
         newTxSeq: this.newTxSeq,
         newId: this.newId,
+        blockIdPolicy: this.blockIdPolicy,
         now: this.now,
         mutators: this.mutators,
         processors: this.processors,

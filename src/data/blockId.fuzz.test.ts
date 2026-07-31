@@ -25,7 +25,7 @@ import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid'
 import { fuzzParams } from '@/test/fuzz'
-import { assertCanonicalBlockId, InvalidBlockIdError } from './explicitBlockId.ts'
+import { assertCanonicalBlockId, InvalidBlockIdError } from './blockId.ts'
 
 /** Independent reference model — deliberately NOT built from
  *  CANONICAL_BLOCK_ID_RE or its source. Walks the string by index and

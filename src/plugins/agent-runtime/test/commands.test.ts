@@ -15,7 +15,7 @@ import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/
 import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
-import { InvalidBlockIdError } from '@/data/explicitBlockId'
+import { InvalidBlockIdError } from '@/data/blockId'
 import type { BlockData } from '@/data/api'
 
 const WS = 'ws-1'
@@ -540,12 +540,14 @@ describe('agent runtime commands', () => {
     }
   })
 
-  // Write-boundary guard (issue #456): a caller-supplied block id must be a
-  // canonical UUID. createBlock and installExtension are the two entry
-  // points that accept an explicit id from outside the app; see
-  // explicitBlockId.ts for why the guard lives there and not in tx.create /
-  // createChild (which stay id-agnostic for internal deterministic minting
-  // and mnemonic test ids).
+  // Block-id shape contract (issue #456), through the two bridge commands
+  // that accept an id from outside the app. The contract is ENFORCED by the
+  // tx engine (@/data/blockId, pinned in txEngine.test.ts) — these commands
+  // pre-check only so the error names the command. So this suite is about the
+  // agent-facing behaviour of that pair, not about where the guard lives:
+  // this `env` is a `createTestRepo` Repo, i.e. `blockIdPolicy: 'any'`, which
+  // means the engine-level guard is OFF here and every rejection below is
+  // genuinely the commands' own.
   describe('explicit block id validation (issue #456)', () => {
     // Must contain hex LETTERS (not just digits) — .toUpperCase() below
     // needs to actually change the string for the uppercase-rejection case.

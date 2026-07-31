@@ -1,12 +1,12 @@
 // @vitest-environment node
 /**
- * Write-boundary guard for caller-supplied block ids (issue #456). See
- * explicitBlockId.ts's module docblock for why this validator exists and
- * why it is NOT wired into internal minting (tx.create, createChild, the
- * deterministic v5 helpers).
+ * The block-id shape validator itself (issue #456) — the predicate in
+ * isolation. Where it is ENFORCED (the tx engine's insert path, under the
+ * Repo's `blockIdPolicy`) and why there rather than per-call-site is
+ * blockId.ts's module docblock; that wiring is pinned in txEngine.test.ts.
  */
 import { describe, expect, it } from 'vitest'
-import { assertCanonicalBlockId, CANONICAL_BLOCK_ID_RE, InvalidBlockIdError } from './explicitBlockId.ts'
+import { assertCanonicalBlockId, CANONICAL_BLOCK_ID_RE, InvalidBlockIdError } from './blockId.ts'
 
 const VALID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
