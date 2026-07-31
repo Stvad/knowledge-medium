@@ -1,6 +1,12 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty, type BlockData } from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  defineProperty,
+  type BlockData,
+  type PropertySchema,
+} from '@/data/api'
 import { Repo } from '@/data/repo'
 import { projectedPropertyDefinitionsFacet } from '@/data/facets'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -65,6 +71,69 @@ const create = async (args: {
 
 const load = (id: string): Promise<BlockData | null> =>
   env.repo.load(id)
+
+/** Flip WS to child-backed, register one projected definition, and set the
+ *  property on `owner` through the REAL dual-write (`tx.setProperty`), not
+ *  hand-built field/value rows — the flipped-workspace seeding pattern from
+ *  `inlineDeletedBlockRefsProcessor.test.ts` / `propertyChildren.test.ts`.
+ *  Returns the value child's id, which is the row every codec-guard test
+ *  below runs its replacement against. */
+const seedFlippedWorkspaceWithProperty = async <T>(args: {
+  fieldId: string
+  schema: PropertySchema<T>
+  value: T
+  /** Extra blocks to create in the same tx, for tests that need more than
+   *  the definition + owner (the alias claimant the ref cases rely on). */
+  alsoCreate?: ReadonlyArray<{id: string; content: string; properties?: Record<string, unknown>}>
+}): Promise<{valueId: string}> => {
+  await env.h.db.execute(
+    `INSERT INTO workspaces
+       (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
+     VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
+    [WS],
+  )
+  env.repo.setRuntimeContributions(
+    projectedPropertyDefinitionsFacet,
+    `test-${args.schema.name}-definition`,
+    [{
+      metadata: {
+        fieldId: args.fieldId,
+        workspaceId: WS,
+        createdAt: 1,
+        name: args.schema.name,
+        changeScope: args.schema.changeScope,
+        hidden: false,
+        origin: 'user' as const,
+      },
+      schema: args.schema,
+    }],
+    {workspaceId: WS},
+  )
+  await env.repo.tx(async tx => {
+    await tx.create({
+      id: args.fieldId, workspaceId: WS, parentId: null, orderKey: 'a0',
+      content: args.schema.name, properties: {types: ['property-schema']},
+    })
+    await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'owner'})
+    for (const [i, extra] of (args.alsoCreate ?? []).entries()) {
+      await tx.create({
+        id: extra.id, workspaceId: WS, parentId: null, orderKey: `a${i + 2}`,
+        content: extra.content, properties: extra.properties,
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault})
+  await env.repo.tx(tx => tx.setProperty('owner', args.schema, args.value),
+    {scope: ChangeScope.BlockDefault})
+
+  const [field] = await env.h.db.getAll<{id: string}>(
+    `SELECT id FROM blocks WHERE parent_id = 'owner' AND reference_target_id = ? AND deleted = 0`,
+    [args.fieldId],
+  )
+  const [value] = await env.h.db.getAll<{id: string}>(
+    `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`, [field!.id],
+  )
+  return {valueId: value!.id}
+}
 
 const search = (args: {
   query: string
@@ -204,57 +273,8 @@ describe('findReplaceDataExtension', () => {
       changeScope: ChangeScope.BlockDefault,
     })
 
-    const registerDefinition = (): void => {
-      env.repo.setRuntimeContributions(
-        projectedPropertyDefinitionsFacet,
-        'test-count-definition',
-        [{
-          metadata: {
-            fieldId: DEF,
-            workspaceId: WS,
-            createdAt: 1,
-            name: countSchema.name,
-            changeScope: countSchema.changeScope,
-            hidden: false,
-            origin: 'user' as const,
-          },
-          schema: countSchema,
-        }],
-        {workspaceId: WS},
-      )
-    }
-
-    /** Real dual-write machinery (`tx.setProperty`), not hand-built field/value
-     *  rows — the flipped-workspace seeding pattern from
-     *  `inlineDeletedBlockRefsProcessor.test.ts` / `propertyChildren.test.ts`. */
-    const seedFlippedWorkspaceWithCountProperty = async (): Promise<{valueId: string}> => {
-      await env.h.db.execute(
-        `INSERT INTO workspaces
-           (id, name, owner_user_id, create_time, update_time, encryption_mode, wk_canary, properties_migration)
-         VALUES (?, 'test ws', 'user-1', 1, 1, 'none', NULL, 'children')`,
-        [WS],
-      )
-      registerDefinition()
-      await env.repo.tx(async tx => {
-        await tx.create({
-          id: DEF, workspaceId: WS, parentId: null, orderKey: 'a0',
-          content: 'count', properties: {types: ['property-schema']},
-        })
-        await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'owner'})
-      }, {scope: ChangeScope.BlockDefault})
-      await env.repo.tx(tx => tx.setProperty('owner', countSchema, 42),
-        {scope: ChangeScope.BlockDefault})
-
-      const [field] = await env.h.db.getAll<{id: string}>(
-        `SELECT id FROM blocks WHERE parent_id = 'owner' AND reference_target_id = ? AND deleted = 0`,
-        [DEF],
-      )
-      const [value] = await env.h.db.getAll<{id: string}>(
-        `SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0`,
-        [field!.id],
-      )
-      return {valueId: value!.id}
-    }
+    const seedFlippedWorkspaceWithCountProperty = (): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({fieldId: DEF, schema: countSchema, value: 42})
 
     // The skip is reported in the RESULT, not through the error channel: the
     // dialog that ran the replace consumes this object directly and renders
@@ -425,6 +445,100 @@ describe('findReplaceDataExtension', () => {
         retryableSkips: [],
       })
       expect((await load('value2'))?.content).toBe('abc')
+    })
+  })
+
+  // #443 group 3. Both of these replacements produce content whose derived
+  // `reference_target_id` is NON-NULL, which is why the guard used to pass
+  // them: it resolved `deriveReferenceColumns` for the proposed text and asked
+  // a decode that trusted the column. So a replace could re-point a ref
+  // property at a block the user never named, or turn its value row into a
+  // field row and drop the key — with "replace succeeded" reported either way.
+  // Now the decode is a pure form check on the content and both are skips.
+  describe('#404 item 5 — ref-typed value guard is a form check on the proposed text', () => {
+    const REF_DEF = '66666666-6666-4666-8666-666666666666'
+    const TARGET = '77777777-7777-4777-8777-777777777777'
+    const relatedSchema = defineProperty<string>('related', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    /** Flipped workspace, one ref-typed property on `owner` holding `TARGET`,
+     *  plus a page claiming the alias `Mary` so a `[[Mary]]` replacement
+     *  genuinely RESOLVES — without a claimant the old guard would have
+     *  refused for the wrong reason and proved nothing. */
+    const seedRefProperty = (): Promise<{valueId: string}> =>
+      seedFlippedWorkspaceWithProperty({
+        fieldId: REF_DEF,
+        schema: relatedSchema,
+        value: TARGET,
+        alsoCreate: [{id: 'mary-page', content: 'Mary', properties: {alias: ['Mary']}}],
+      })
+
+    it('skips a replacement that turns the ref into a resolvable wikilink', async () => {
+      const {valueId} = await seedRefProperty()
+      const original = `((${TARGET}))`
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: original,
+          replace: '[[Mary]]',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: original}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect(result.unparseableProperties).toEqual([relatedSchema.name])
+      // The ref the user actually set is untouched in both row and cell.
+      expect((await load(valueId))?.content).toBe(original)
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe(TARGET)
+    })
+
+    it('skips a replacement that marks the value row into a field row', async () => {
+      const {valueId} = await seedRefProperty()
+      const original = `((${TARGET}))`
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: '((',
+          replace: '::((',
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: original}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(1)
+      expect((await load(valueId))?.content).toBe(original)
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe(TARGET)
+    })
+
+    it('still allows a replacement that retargets the ref to another id', async () => {
+      // Liveness: the guard must not have become "refuse every ref edit".
+      const {valueId} = await seedRefProperty()
+      const original = `((${TARGET}))`
+      const other = '88888888-8888-4888-8888-888888888888'
+
+      const result = await env.repo.run<ApplyContentReplaceResult>(
+        FIND_REPLACE_APPLY_CONTENT_REPLACE_MUTATOR,
+        {
+          workspaceId: WS,
+          find: TARGET,
+          replace: other,
+          options: {matchCase: false, wholeWord: false},
+          items: [{blockId: valueId, originalContent: original}],
+        },
+      )
+
+      expect(result.skippedUnparseableProperty).toBe(0)
+      expect(result.updatedBlocks).toBe(1)
+      expect((await load(valueId))?.content).toBe(`((${other}))`)
+      expect((await load('owner'))?.properties[relatedSchema.name]).toBe(other)
     })
   })
 })

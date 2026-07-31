@@ -3260,9 +3260,7 @@ export class Repo {
                     .filter(isFieldValueChild)
                   for (const value of values) {
                     try {
-                      const encoded = propertyChildContentToEncodedValue(
-                        schema, value.content, value.referenceTargetId ?? null,
-                      )
+                      const encoded = propertyChildContentToEncodedValue(schema, value.content)
                       if (!hasProjection) {
                         projected = encoded
                         hasProjection = true

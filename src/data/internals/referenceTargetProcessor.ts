@@ -33,7 +33,10 @@ import {
   defineSameTxProcessor,
   type Tx,
 } from '@/data/api'
-import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
+import {
+  isIdCarryingReference,
+  parseExactReferenceBlockContent,
+} from '@/data/referenceBlock'
 
 export const DERIVE_REFERENCE_TARGET_PROCESSOR_NAME = 'core.deriveReferenceTarget'
 
@@ -71,7 +74,7 @@ export const deriveReferenceColumns = async (
 ): Promise<DerivedReferenceColumns> => {
   const exact = parseExactReferenceBlockContent(content)
   if (!exact) return {targetId: null, isFieldForm: false}
-  if (exact.kind === 'blockRef' || exact.kind === 'aliasedBlockRef') {
+  if (isIdCarryingReference(exact)) {
     return {targetId: exact.id, isFieldForm: exact.fieldForm}
   }
 
