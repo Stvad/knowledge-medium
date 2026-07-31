@@ -253,10 +253,10 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/properties.js',
-    description: 'System UI-state props (collapsed, show-properties, top-level, focus location) + the atomic focusBlock transition.',
+    description: 'System UI-state props (collapsed, show-properties, top-level, focus location) + the page-name prop and the atomic focusBlock transition.',
     exports: [
-      'isCollapsedProp', 'showPropertiesProp', 'topLevelBlockIdProp', 'focusedBlockLocationProp',
-      'focusBlock',
+      'aliasesProp', 'isCollapsedProp', 'showPropertiesProp', 'topLevelBlockIdProp',
+      'focusedBlockLocationProp', 'focusBlock',
     ],
     types: ['FocusedBlockLocation'],
   },
@@ -266,6 +266,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     description: 'The built-in todo: type id + its `status` (open|done) property. Compose these onto your own record instead of declaring a private done flag — the block then renders as a checkbox and answers todo queries.',
     exports: ['TODO_TYPE', 'statusProp', 'todoType'],
     types: ['TodoStatus'],
+  },
+  {
+    category: 'data',
+    importPath: '@/data/targets.js',
+    description: 'createOrRestoreTargetBlock — get-or-create at a deterministic id, inside your tx. Use over a bare tx.createOrGet, which throws on the tombstone a deleted block leaves behind.',
+    exports: ['createOrRestoreTargetBlock'],
+    types: ['CreateOrRestoreArgs'],
   },
   {
     category: 'data',
@@ -314,6 +321,20 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     description: 'openDialog — imperative dialog primitive; the promise resolves with the user\'s choice (or null on cancel).',
     exports: ['openDialog'],
     types: ['DialogComponent', 'DialogContextProps'],
+  },
+  {
+    category: 'ui',
+    importPath: '@/extensions/dialogAppMount.js',
+    description: 'dialogAppMountExtension — the DialogHost mount `openDialog` needs. Include it in your extension: with no host the promise never resolves. Every dialog-using plugin imports it; the resolver dedupes.',
+    exports: ['dialogAppMountExtension', 'DialogHost'],
+    types: [],
+  },
+  {
+    category: 'ui',
+    importPath: '@/utils/toggleStore.js',
+    description: 'createToggleStore — typed open/closed store for a persistently-mounted surface (dialog, palette, sidebar). Read with useSyncExternalStore, flip from your action. Use instead of a hand-rolled boolean + listener Set or a window CustomEvent.',
+    exports: ['createToggleStore'],
+    types: ['ToggleStore'],
   },
   {
     category: 'ui',

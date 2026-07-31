@@ -20,19 +20,33 @@ import {
 // helper, a TypeScript syntax error), an agent faithfully follows the example,
 // the extension breaks at install time, and trust in the catalog erodes.
 //
-// This test sweeps every code example in the catalog and:
-//   1. Babel-transpiles it with the same presets the runtime uses
-//      (`react`, `typescript`) — catches syntax errors and JSX/TypeScript
-//      misuse before any agent is ever exposed to it.
+// The primary guard is no longer here: every example is a real source file
+// under `src/plugins/agent-runtime/examples/`, so `pnpm run check` compiles
+// and lints it like any other app module. The first test below pins exactly
+// that — each example's `code` must be the verbatim text of one of those
+// files, so nobody can reintroduce an uncompiled inline string.
+//
+// The rest cover what tsc doesn't:
+//   1. Babel-transpiles each example with the presets the *dynamic extension
+//      loader* uses (`react`, `typescript`) — the app is compiled by tsgo, so
+//      a construct tsgo accepts and Babel rejects would still break an agent
+//      that pastes the example into an extension.
 //   2. Parses every `import { ... } from '@/…'` and, for each specifier that
 //      is a curated-API module (`apiCatalog.ts`), confirms every imported name
-//      (runtime OR type) is one the catalog lists for that module. Catches the
-//      high-frequency "renamed/moved an export, forgot to update the catalog"
-//      failure mode — now across ALL curated modules, not just a single barrel.
+//      (runtime OR type) is one the catalog lists for that module. tsc only
+//      checks the import RESOLVES; this checks the agent can DISCOVER it —
+//      `describe-runtime` is the only module surface an extension author sees.
 //
 // Imports from modules the catalog does NOT curate (`@/components/ui/*`,
-// `@/hooks/*`, `react`) are not validated here — those have no centralized
-// export list; a renamed component would surface at runtime instead.
+// `@/hooks/*`, `react`) are not validated in (2) — those have no centralized
+// export list, and tsc already covers whether they exist.
+
+/** The example fixture files, as source text — the same `?raw` inlining the
+ *  catalog itself uses, resolved independently so the two can be compared. */
+const fixtureSources = import.meta.glob(
+  '/src/plugins/agent-runtime/examples/*.{ts,tsx}',
+  {query: '?raw', import: 'default', eager: true},
+) as Record<string, string>
 
 const collectExamples = (): Array<{path: string, example: AuthoringExample}> => {
   const catalog = describeAuthoringCatalog()
@@ -45,6 +59,13 @@ const collectExamples = (): Array<{path: string, example: AuthoringExample}> => 
         example: pattern.example,
       })
     }
+  }
+
+  if (catalog.storage.credentials.example) {
+    examples.push({
+      path: 'storage.credentials',
+      example: catalog.storage.credentials.example,
+    })
   }
 
   for (const guide of catalog.guides) {
@@ -65,6 +86,48 @@ const collectExamples = (): Array<{path: string, example: AuthoringExample}> => 
 }
 
 describe('authoring catalog example drift guard', () => {
+  it('every example is the verbatim text of a compiled fixture file', () => {
+    // The load-bearing invariant: an example the gate does NOT compile is an
+    // example that ships broken. Both directions are checked — a catalog entry
+    // built from an inline string fails the first assertion, a fixture nothing
+    // surfaces (dead file, never read by an agent) fails the second.
+    const byText = new Map(
+      Object.entries(fixtureSources).map(([path, source]) => [source.trimEnd(), path]),
+    )
+    expect(byText.size, 'no fixture files found under examples/').toBeGreaterThan(0)
+
+    const used = new Set<string>()
+    const uncompiled: string[] = []
+    for (const {path, example} of collectExamples()) {
+      const fixture = byText.get(example.code)
+      if (fixture) used.add(fixture)
+      else uncompiled.push(path)
+    }
+
+    expect(
+      uncompiled,
+      `${uncompiled.join(', ')} — example code must be the text of a file under ` +
+      'src/plugins/agent-runtime/examples/ (imported with ?raw), not an inline string',
+    ).toEqual([])
+    expect(
+      [...byText.values()].filter(path => !used.has(path)),
+      'fixture file compiled but never surfaced by the catalog',
+    ).toEqual([])
+  })
+
+  it('the fixture files stay out of the discoverable module/component lists', () => {
+    // They live under src/plugins/** so the gate compiles them, which also puts
+    // them in reach of the module-index glob. They are guidance text, not an
+    // API an extension should import — surfacing them would offer `@/plugins/
+    // agent-runtime/examples/settingsDialog.js` as something to import.
+    const catalog = describeAuthoringCatalog()
+    const leaked = [
+      ...catalog.modules.map(module => module.importPath),
+      ...catalog.components.map(component => component.importPath),
+    ].filter(path => path.includes('/agent-runtime/examples/'))
+    expect(leaked).toEqual([])
+  })
+
   it('every example transpiles cleanly through Babel (react + typescript presets)', () => {
     const examples = collectExamples()
     const failures: string[] = []
@@ -105,6 +168,7 @@ describe('authoring catalog example drift guard', () => {
     const expectedPaths = [
       'guides.block-backed-config.examples[0] (Define a prefs type and read/write a setting)',
       'guides.record-grain.examples[0] (A record per block: typed, composed with todo, linked back to its definition)',
+      'storage.patterns.imported-record-blocks',
       'storage.patterns.settings-via-property-editor-override',
       'storage.patterns.user-prefs-config',
     ].sort()
