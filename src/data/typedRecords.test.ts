@@ -406,12 +406,35 @@ describe('adoptTypedBlock', () => {
  * the record lands in a subtree the user deleted, where no parent-scoped read
  * finds it again.
  */
-describe('adoptTypedBlock — the record has to still be there', () => {
+describe('adoptTypedBlock — the record has to still be there, and still be ours', () => {
   /** The parameter is a `BlockData`, so a caller can hand over a snapshot read
-   *  outside the transaction. Reporting a since-deleted record `adopted` would
-   *  let a sync caller advance its checkpoint and write source-owned
-   *  properties onto a tombstone — a write `tx.update` permits and no reader
-   *  can see. Both branches of the guard are pinned: gone, and tombstoned. */
+   *  outside the transaction, and the row behind it can have changed in three
+   *  ways since: gone, tombstoned, or moved to another workspace by sync
+   *  materialization. Each is pinned separately below. */
+  it('refuses a block that moved to another workspace after the snapshot', async () => {
+    const id = await repo.tx(tx => createTypedChild(repo, tx, {
+      parentId: 'parent', types: [recordType.id], content: 'about to emigrate',
+    }), {scope: ChangeScope.BlockDefault})
+    const stale = cache.getSnapshot(id)!
+
+    // The shape sync materialization produces: every stored column rewritten
+    // except `id`, `workspace_id` among them. A raw write is the closest the
+    // suite gets, and fires no post-commit processor — also what a
+    // sync-applied row looks like.
+    await sharedDb.db.execute('UPDATE blocks SET workspace_id = ? WHERE id = ?', ['ws-elsewhere', id])
+
+    await expect(repo.tx(
+      tx => adoptTypedBlock(repo, tx, stale, [companionType.id]),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(/adoptTypedBlock: .* is in workspace ws-elsewhere/)
+
+    // The companion type was never tagged onto someone else's row.
+    const [row] = await sharedDb.db.getAll<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(row.properties_json).not.toContain(companionType.id)
+  })
+
   it('refuses a block that was deleted after the caller snapshotted it', async () => {
     const id = await repo.tx(tx => createTypedChild(repo, tx, {
       parentId: 'parent', types: [recordType.id], content: 'doomed record',

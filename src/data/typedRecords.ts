@@ -218,6 +218,18 @@ export const adoptTypedBlock = async (
       `adoptTypedBlock: ${block.id} is ${current ? 'deleted' : 'missing'} — it cannot be adopted. Re-read the record inside this transaction before adopting it.`,
     )
   }
+  // …and it has to be the same workspace's row. `tx.get` selects on id alone,
+  // and sync materialization rewrites every stored column except `id` —
+  // `workspace_id` included — so the row behind a snapshot taken outside this
+  // transaction can belong to someone else by now. Tagging it would write into
+  // a workspace the caller never named, and because this may be the
+  // transaction's FIRST write, the tx would pin itself to that workspace
+  // rather than reject it. Same transition `getOrCreateKernelPage` guards.
+  if (current.workspaceId !== block.workspaceId) {
+    throw new Error(
+      `adoptTypedBlock: ${block.id} is in workspace ${current.workspaceId}, not ${block.workspaceId} — it is not this caller's record to adopt.`,
+    )
+  }
 
   const missing = types.filter(typeId => !hasBlockType(current, typeId))
   for (const typeId of missing) {
