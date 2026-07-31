@@ -195,7 +195,16 @@ export interface DerivedChildSpec extends Omit<TypedChildSpec, 'id' | 'position'
  *  looks. A caller that answers `taken` by finding the real record another
  *  way — scanning a parent's children for the one it means — is doing the
  *  same adopt, and should not have to reimplement (or quietly skip) the
- *  repair to get it. */
+ *  repair to get it.
+ *
+ *  `block` is re-read inside the tx before anything is concluded from it.
+ *  The parameter is a `BlockData`, which invites passing a snapshot from
+ *  `repo.load` or a live query taken outside the transaction — and a record
+ *  deleted since that snapshot would otherwise come back `adopted`, letting a
+ *  sync caller advance its checkpoint and write source-owned properties onto
+ *  a tombstone (`tx.update` allows it) for a record no reader can see.
+ *  Throws instead: a concurrent delete is recoverable and worth surfacing,
+ *  where silently writing into a deleted row is neither. */
 export const adoptTypedBlock = async (
   repo: Repo,
   tx: Tx,
@@ -203,16 +212,23 @@ export const adoptTypedBlock = async (
   types: readonly string[],
   typeSnapshot?: TypeRegistrySnapshot,
 ): Promise<Extract<DerivedChildOutcome, {status: 'adopted'}>> => {
-  const missing = types.filter(typeId => !hasBlockType(block, typeId))
+  const current = await tx.get(block.id)
+  if (!current || current.deleted) {
+    throw new Error(
+      `adoptTypedBlock: ${block.id} is ${current ? 'deleted' : 'missing'} — it cannot be adopted. Re-read the record inside this transaction before adopting it.`,
+    )
+  }
+
+  const missing = types.filter(typeId => !hasBlockType(current, typeId))
   for (const typeId of missing) {
     await repo.addTypeInTx(tx, block.id, typeId, {}, typeSnapshot)
   }
-  // Re-read when we repaired something, so `block` describes the record as it
-  // is on the way out rather than as it was on the way in — a caller reading
-  // its types off the returned block would otherwise still see the tag
-  // missing that this call just added.
-  const repaired = missing.length > 0 ? await tx.get(block.id) : block
-  return {status: 'adopted', id: block.id, block: repaired ?? block}
+  // Re-read again when we repaired something, so the block handed back
+  // describes the record as it is on the way OUT — a caller reading its types
+  // off the result would otherwise still see the tag this call just added as
+  // missing.
+  const repaired = missing.length > 0 ? await tx.get(block.id) : current
+  return {status: 'adopted', id: block.id, block: repaired ?? current}
 }
 
 /**

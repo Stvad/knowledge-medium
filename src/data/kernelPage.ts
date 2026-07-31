@@ -72,8 +72,11 @@ export interface KernelPageSpec {
  *  a DIFFERENT id — same namespace, different formula. The old page does not
  *  come with it; it stays where it is with all of its children, and this mints
  *  an empty one beside it. Either leave the existing page on the id it already
- *  has, or re-parent its children and delete it as a deliberate one-shot
- *  migration. Nothing here detects the situation for you. */
+ *  has, or migrate deliberately — and in that order: clear the old page's
+ *  alias BEFORE calling `getOrCreateKernelPage`, because this claims the same
+ *  alias and aliases are unique per workspace, so the create aborts the whole
+ *  transaction while the old page still holds the name. Then re-parent its
+ *  children and delete it. Nothing here detects the situation for you. */
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 

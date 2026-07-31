@@ -404,6 +404,40 @@ describe('adoptTypedBlock', () => {
  * the record lands in a subtree the user deleted, where no parent-scoped read
  * finds it again.
  */
+describe('adoptTypedBlock — the record has to still be there', () => {
+  /** The parameter is a `BlockData`, so a caller can hand over a snapshot read
+   *  outside the transaction. Reporting a since-deleted record `adopted` would
+   *  let a sync caller advance its checkpoint and write source-owned
+   *  properties onto a tombstone — a write `tx.update` permits and no reader
+   *  can see. Both branches of the guard are pinned: gone, and tombstoned. */
+  it('refuses a block that was deleted after the caller snapshotted it', async () => {
+    const id = await repo.tx(tx => createTypedChild(repo, tx, {
+      parentId: 'parent', types: [recordType.id], content: 'doomed record',
+    }), {scope: ChangeScope.BlockDefault})
+    const stale = cache.getSnapshot(id)!
+
+    await repo.tx(tx => tx.delete(id), {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(
+      tx => adoptTypedBlock(repo, tx, stale, [companionType.id]),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(/adoptTypedBlock: .* is deleted/)
+  })
+
+  it('refuses a block that no longer exists at all', async () => {
+    const phantom = {
+      id: derivedBlockId(identity('never-written')),
+      workspaceId: 'ws-1', parentId: 'parent', orderKey: 'a1',
+      content: '', properties: {}, deleted: false,
+    } as unknown as Parameters<typeof adoptTypedBlock>[2]
+
+    await expect(repo.tx(
+      tx => adoptTypedBlock(repo, tx, phantom, [recordType.id]),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(/adoptTypedBlock: .* is missing/)
+  })
+})
+
 describe('getOrCreateTypedChild — the parent has to be there', () => {
   it('refuses a parent that does not exist', async () => {
     await expect(repo.tx(tx => getOrCreateTypedChild(repo, tx, {
