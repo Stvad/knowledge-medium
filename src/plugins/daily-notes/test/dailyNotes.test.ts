@@ -23,9 +23,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { Repo } from '@/data/repo'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
-  DAILY_NOTE_NS,
   DAILY_NOTE_TYPE,
-  JOURNAL_NS,
   addDaysIso,
   dailyNoteBlockId,
   dailyNotesDataExtension,
@@ -74,13 +72,9 @@ describe('deterministic ids', () => {
     expect(dailyNoteBlockId('ws-1', '2026-04-28')).not.toBe(dailyNoteBlockId('ws-2', '2026-04-28'))
   })
 
-  it('namespace constants are pinned', () => {
-    // Pinned so two clients deriving an id offline land on the same row
-    // once they sync. Drift on either side reintroduces the
-    // per-client duplicate-page bug.
-    expect(JOURNAL_NS).toBe('a304a5da-807a-4c20-8af3-53a033aa9df8')
-    expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
-  })
+  // The namespace literals are pinned inside the id formula itself, in
+  // src/data/derivedIds.test.ts — strictly stronger than asserting the
+  // constant equals itself, since it also catches a changed key shape.
 })
 
 describe('addDaysIso', () => {

@@ -1,6 +1,6 @@
 import { ChangeScope, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { Block } from '@/data/block'
-import { workspaceDerivedBlockId } from '@/data/derivedIds'
+import { derivedBlockId } from '@/data/derivedIds'
 import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
@@ -49,7 +49,7 @@ export const journalBlockId = (workspaceId: string): string =>
   kernelPageBlockId(workspaceId, JOURNAL_NS)
 
 export const dailyNoteBlockId = (workspaceId: string, iso: string): string =>
-  workspaceDerivedBlockId(DAILY_NOTE_NS, workspaceId, iso)
+  derivedBlockId({namespace: DAILY_NOTE_NS, key: `${workspaceId}:${iso}`})
 
 export const todayIso = (now: Date = new Date()): string =>
   formatIsoDate(now)
@@ -112,6 +112,7 @@ export const getOrCreateJournalBlock = async (
   getOrCreateKernelPage(repo, workspaceId, {
     namespace: JOURNAL_NS,
     alias: JOURNAL_ALIAS,
+    markerType: null,
   })
 
 /** Order key under the journal page. The tree uses normal ascending
@@ -139,7 +140,19 @@ const dailyNoteOrderKey = (iso: string): string => {
  *
  *  Runs under `repo.undoGroup`: journal bootstrap + note create/repair
  *  can be two txs — one undo entry for the pair, for every caller
- *  (callers handing us their own group facade fold us into theirs). */
+ *  (callers handing us their own group facade fold us into theirs).
+ *
+ *  NOT a kernel page, though it looks like one and the Journal above IS
+ *  one. The difference is that this row has a SECOND writer at the same
+ *  derived id: `ensureDailyNoteTarget` materialises it seat-shaped at
+ *  workspace root (content = iso, aliases = [iso]) when a `[[2026-07-24]]`
+ *  reference resolves before anyone opened the day. So the "repair" branch
+ *  below is not maintenance — it is the promotion of a seat-shaped row into
+ *  a note-shaped one, which is why it checks `parentId`/`orderKey` and
+ *  MERGES aliases rather than replacing them. A kernel page has one writer
+ *  and one shape and can never grow those checks, so folding this into
+ *  `getOrCreateKernelPage` would park seat-reconciliation behind a flag its
+ *  other callers can't reach. */
 export const getOrCreateDailyNote = async (
   repo: Repo,
   workspaceId: string,

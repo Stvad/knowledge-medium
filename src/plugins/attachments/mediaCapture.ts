@@ -43,7 +43,7 @@
  */
 
 import { ChangeScope } from '@/data/api'
-import { workspaceDerivedBlockId } from '@/data/derivedIds'
+import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
 import { keyAtEnd } from '@/data/orderKey'
@@ -82,7 +82,7 @@ const MEDIA_BLOCK_NS = 'a1f4c7e2-9b3d-4e6a-8c5f-2d0b1e7a4c93'
  *  workspaces) gets a distinct block per workspace, while two devices in the SAME
  *  workspace still converge on one id. */
 export const mediaBlockId = (workspaceId: string, contentKey: string): string =>
-  workspaceDerivedBlockId(MEDIA_BLOCK_NS, workspaceId, contentKey)
+  derivedBlockId({namespace: MEDIA_BLOCK_NS, key: `${workspaceId}:${contentKey}`})
 
 export interface MediaSource {
   readonly bytes: Uint8Array<ArrayBuffer>

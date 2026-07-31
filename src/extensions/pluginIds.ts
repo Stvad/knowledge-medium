@@ -1,4 +1,4 @@
-import { workspaceDerivedBlockId } from '@/data/derivedIds'
+import { derivedBlockId } from '@/data/derivedIds'
 
 /** Deterministic block id for a plugin-owned block — the ID ONLY.
  *
@@ -37,4 +37,4 @@ export const pluginBlockId = (
   workspaceId: string,
   pluginNamespace: string,
   key: string,
-): string => workspaceDerivedBlockId(pluginNamespace, workspaceId, key)
+): string => derivedBlockId({namespace: pluginNamespace, key: `${workspaceId}:${key}`})

@@ -282,7 +282,7 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/extensions/pluginIds.js',
-    description: 'pluginBlockId — deterministic (uuidv5) plugin-owned block ids for idempotent upserts.',
+    description: 'pluginBlockId — the deterministic id of a plugin-owned block, and ONLY the id. Usually not what you want: an id reads like a lookup and is not, so following it with repo.load + tx.create is exactly the race a derived id exists to remove. Reach for getOrCreateKernelPage (your root page) or getOrCreateTypedChild (the records under it) — they own the create, the adopt and the repair. This is for when you genuinely want the string: checking whether a block is one of yours, or handing a target id to something else.',
     exports: ['pluginBlockId'],
     types: [],
   },

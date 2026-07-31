@@ -218,22 +218,11 @@ export const adoptTypedBlock = async (
 /**
  * Get-or-create a record at a derived identity, inside the caller's tx.
  *
- * Reach for this whenever a record has a natural identity and something
- * other than you controls when the create fires — a UI gesture, a sync
- * callback, a bootstrap that runs on every launch. The alternative shape,
- * "query for it, then create if absent", cannot be made correct: the query
- * answers for the moment it ran, and two clients (or one client twice) both
- * read absent and both create. A derived id sidesteps the race instead of
- * narrowing it — both writers produce the SAME block id, so they converge on
- * one row at sync instead of leaving a duplicate nobody can reach.
- *
- * Know what that convergence is and isn't. It is row-level: you get one
- * record instead of two. It is NOT a merge — the losing insert is skipped
- * whole (`apply_block_creates` is insert-or-touch), and later edits settle
- * column-wise last-write-wins. So values only one writer ever wrote, and
- * which nothing re-asserts afterwards, are lost with the race. If a record's
- * FIELDS are genuinely written by two parties, this primitive gives you one
- * row and one winner, not both writers' data.
+ * Reach for this whenever a record has a natural identity and something other
+ * than you controls when the create fires — a UI gesture, a sync callback, a
+ * bootstrap that runs on every launch. `@/data/derivedIds` has the why: what
+ * the convergence is, what it is not (row-level, never a merge), and how to
+ * choose a namespace and a key.
  *
  * ONE identity, ONE id. There is no fallback id and no probing for a free
  * one, because a fallback can only be chosen from what THIS device happens to

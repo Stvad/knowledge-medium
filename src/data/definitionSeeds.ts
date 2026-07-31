@@ -1,5 +1,5 @@
 import {ChangeScope, type BlockData} from '@/data/api'
-import {workspaceDerivedBlockId} from '@/data/derivedIds'
+import {derivedBlockId} from '@/data/derivedIds'
 import {isPropertySeedKey, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
 import {isTypeSeedKey, type TypeSeedDeclaration} from '@/data/typeSeeds'
 import {
@@ -43,7 +43,7 @@ export const DEFINITION_SEED_NS = '737c2e9d-f3e9-4c99-94ef-e1cbec920e30'
  * the grammar checks live in the two public entry points so there is exactly one
  * hash expression to keep in sync. */
 const definitionBlockId = (workspaceId: string, seedKey: string): string =>
-  workspaceDerivedBlockId(DEFINITION_SEED_NS, workspaceId, seedKey)
+  derivedBlockId({namespace: DEFINITION_SEED_NS, key: `${workspaceId}:${seedKey}`})
 
 export const propertyDefinitionBlockId = (workspaceId: string, seedKey: string): string => {
   if (!isPropertySeedKey(seedKey)) {

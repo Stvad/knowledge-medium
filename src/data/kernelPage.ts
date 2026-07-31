@@ -45,11 +45,18 @@ export interface KernelPageSpec {
   /** Marker block-type tagged alongside `PAGE_TYPE`. The marker is what
    *  callers query for (`subscribeBlocks({types: [markerType]})`).
    *
-   *  Optional, for the page that is reached only by its derived id and its
-   *  alias — the Journal is the one such page today. Adding a marker to a kind
-   *  that shipped without one is a data change (every existing row needs the
-   *  tag), not a default. */
-  markerType?: string
+   *  `null` for a page reached only by its derived id and its alias — the
+   *  Journal is the one such page today. Required-but-nullable rather than
+   *  optional on purpose: a forgotten marker used to throw on the first run
+   *  (`addTypeInTx` rejects an unregistered type id), and if omitting it were
+   *  merely allowed, the page would instead be created with `PAGE_TYPE` alone
+   *  and every `types`-indexed query for it would come back empty forever —
+   *  including the repair path here, which derives from the same list and so
+   *  would never notice. Writing `null` makes that a decision.
+   *
+   *  Adding a marker to a kind that shipped without one is a data change
+   *  (every existing row needs the tag), not a default. */
+  markerType: string | null
   /** OrderKey for the page under the workspace root. Defaults to 'a0';
    *  kernel pages share this value and tiebreak by id (stable enough
    *  for navigation, no uniqueness invariant to maintain). */
@@ -57,7 +64,12 @@ export interface KernelPageSpec {
 }
 
 /** Deterministic block id for a kernel page in a given workspace. The
- *  workspace id IS the whole key — one page of each kind per workspace. */
+ *  workspace id IS the whole key — one page of each kind per workspace.
+ *
+ *  Note for anyone MOVING an existing page onto this: `pluginBlockId(ws, NS,
+ *  key)` hashes `${ws}:${key}`, so reusing its namespace constant here yields
+ *  a DIFFERENT id and strands whatever was filed under the old one. Same
+ *  namespace, different formula. */
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
@@ -73,7 +85,7 @@ export const getOrCreateKernelPage = async (
   const aliases: readonly string[] = [spec.alias]
   const orderKey = spec.orderKey ?? 'a0'
   const types: readonly string[] =
-    spec.markerType === undefined ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
+    spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 
   const tagTypes = async (tx: Tx, snapshot: TypeRegistrySnapshot): Promise<void> => {
     for (const type of types) {

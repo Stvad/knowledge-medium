@@ -21,11 +21,17 @@
 import { describe, expect, it } from 'vitest'
 import { v5 as uuidv5 } from 'uuid'
 
-import { derivedBlockId, workspaceDerivedBlockId } from './derivedIds'
+import { derivedBlockId } from './derivedIds'
 import { kernelPageBlockId } from './kernelPage'
+import { propertiesPageBlockId } from './propertiesPage'
+import { typesPageBlockId } from './typesPage'
+import { recentsPageBlockId } from './recentsPage'
 import { propertyDefinitionBlockId, typeDefinitionBlockId } from './definitionSeeds'
 import { computeAliasSeatId } from './targets'
-import { userPageBlockId } from './stateBlocks'
+import { stateChildBlockId, userPageBlockId } from './stateBlocks'
+import { locationsPageBlockId } from '@/plugins/geo/locationsPage'
+import { reviewDeckBlockId } from '@/plugins/srs-review/deck'
+import { ASSETS_NS } from '@/plugins/attachments/mediaBlock'
 import { pluginBlockId } from '@/extensions/pluginIds'
 import { dailyNoteBlockId, journalBlockId } from '@/plugins/daily-notes'
 import { roamBlockId } from '@/plugins/roam-import/ids'
@@ -54,11 +60,6 @@ describe('derivedBlockId', () => {
       .not.toBe(derivedBlockId({namespace: nsA, key: 'b'}))
   })
 
-  it('workspaceDerivedBlockId joins with a colon', () => {
-    const namespace = 'd4a1f0c8-2b93-4e57-9f6a-8c1d2e3b4a50'
-    expect(workspaceDerivedBlockId(namespace, WS, 'thing'))
-      .toBe(uuidv5(`${WS}:thing`, namespace))
-  })
 })
 
 /**
@@ -72,9 +73,45 @@ describe('the ids live rows are already at', () => {
       .toBe(uuidv5(`${WS}:library-root`, pluginNs))
   })
 
-  it('kernel pages (Properties, Types, Assets)', () => {
-    const pageNs = 'b6e4d9a1-2f47-4c3e-9a0d-7c1e8f5b2a36'
+  it('the kernel-page formula — the workspace id is the WHOLE key', () => {
+    const pageNs = 'd4a1f0c8-2b93-4e57-9f6a-8c1d2e3b4a50'
     expect(kernelPageBlockId(WS, pageNs)).toBe(uuidv5(WS, pageNs))
+  })
+
+  // Each kernel page's namespace, individually. The formula test above uses a
+  // throwaway namespace on both sides, so it pins the SHAPE and nothing about
+  // any real page — these are what stop a namespace constant from being edited
+  // into a fresh id while the gate stays green. Each of these constants appears
+  // exactly once in the app (its own declaration); this is its only other
+  // mention.
+  it('the Properties page — parent of every property definition block', () => {
+    expect(propertiesPageBlockId(WS))
+      .toBe(uuidv5(WS, '94f9a6d9-c651-4b75-aef3-a5c1bbef0e1a'))
+  })
+
+  it('the Types page — parent of every type definition block', () => {
+    expect(typesPageBlockId(WS))
+      .toBe(uuidv5(WS, 'fd2c1ba0-7c4e-49f7-8a6b-4d56b3e3a5c7'))
+  })
+
+  it('the Recents page', () => {
+    expect(recentsPageBlockId(WS))
+      .toBe(uuidv5(WS, '4f2c8d61-1a35-4a90-8b6f-2a3a0c8d9b41'))
+  })
+
+  it('the Locations page', () => {
+    expect(locationsPageBlockId(WS))
+      .toBe(uuidv5(WS, 'f9c4e2a8-3b71-4d6e-9f8a-2c5b8e1d4a7f'))
+  })
+
+  it('the review deck', () => {
+    expect(reviewDeckBlockId(WS))
+      .toBe(uuidv5(WS, 'c3f1a9d4-2b8e-4f57-bc6a-1e9d8a4f2c70'))
+  })
+
+  it('the Assets page — container of every media asset', () => {
+    expect(kernelPageBlockId(WS, ASSETS_NS))
+      .toBe(uuidv5(WS, 'b6e4d9a1-2f47-4c3e-9a0d-7c1e8f5b2a36'))
   })
 
   it('the Journal page', () => {
@@ -128,6 +165,15 @@ describe('the ids live rows are already at', () => {
     const userId = '2c9f8a71-4d3e-4b05-8e17-6a0f9c3d5b28'
     expect(userPageBlockId(WS, userId))
       .toBe(uuidv5(`${WS}:${userId}`, '99b1b4e5-6f58-4fd2-9089-dc3b358dd4df'))
+  })
+
+  // Every user preference, every ui-state row, every panel and layout session,
+  // and each plugin's own prefs sub-block hang off this one. Keyed on the
+  // PARENT block id, not a workspace.
+  it('state children (prefs, ui-state, panels, per-plugin prefs)', () => {
+    const parentId = '5e8b2c47-9f61-4a03-b7d2-3c1e6a9f8b50'
+    expect(stateChildBlockId(parentId, 'user-prefs'))
+      .toBe(uuidv5(`${parentId}:user-prefs`, '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'))
   })
 })
 

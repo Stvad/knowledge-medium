@@ -20,7 +20,7 @@ import {
   type User,
 } from '@/data/api'
 import { Block } from './block'
-import { derivedBlockId, workspaceDerivedBlockId } from './derivedIds'
+import { derivedBlockId } from './derivedIds'
 import type { Repo } from './repo'
 import type { BlockContextType } from '@/types'
 import {
@@ -52,9 +52,13 @@ const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
  *  namespace. Two offline clients derive the same id, so a user's page
  *  authored on one device resolves the same on every other. */
 export const userPageBlockId = (workspaceId: string, userId: string): string =>
-  workspaceDerivedBlockId(USER_PAGE_NS, workspaceId, userId)
+  derivedBlockId({namespace: USER_PAGE_NS, key: `${workspaceId}:${userId}`})
 
-const stateChildBlockId = (parentId: string, content: string): string =>
+/** Deterministic id of a named state child under `parentId`. Exported so
+ *  `derivedIds.test.ts` can pin the formula: every user preference, ui-state
+ *  row, panel and per-plugin prefs block hangs off one of these, so a change
+ *  to the key or the namespace orphans all of them at once. */
+export const stateChildBlockId = (parentId: string, content: string): string =>
   derivedBlockId({namespace: STATE_CHILD_NS, key: `${parentId}:${content}`})
 
 const snapshotIncludingType = (repo: Repo, type: TypeContribution): TypeRegistrySnapshot => {

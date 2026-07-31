@@ -56,10 +56,19 @@
  * Reach for one of those before hand-rolling a fourth. If none fits, the thing
  * you are about to write belongs here beside them.
  *
- * Every derived BLOCK id in the app resolves through this module. The one
- * remaining `uuidv5` call outside it — `workspaces.ts`, for the local-personal
- * workspace and its member row — stays out on purpose: those aren't blocks, so
- * none of the policy above applies to them.
+ * Every derived BLOCK id in `src/` resolves through this module. Two `uuidv5`
+ * calls outside it are deliberate, and they are deliberate for different
+ * reasons:
+ *
+ *  - `workspaces.ts` derives the local-personal workspace and its member row.
+ *    Those aren't blocks, so none of the policy above applies to them.
+ *  - `scripts/roam-ts-backfill/build_ts_map.mjs` re-declares `ROAM_IMPORT_NS`,
+ *    `DAILY_NOTE_NS` and both key shapes by hand, because it is a standalone
+ *    script that must not import the app. It is byte-identical to the
+ *    formulas here today, and it is aimed at a few hundred thousand live rows
+ *    in a backfill that has not run yet — so re-check it against
+ *    `derivedIds.test.ts` before running it, and again if either formula ever
+ *    changes. Nothing enforces that copy; a human has to.
  */
 
 import { v5 as uuidv5 } from 'uuid'
@@ -83,16 +92,3 @@ export interface DerivedIdentity {
  *  reference to what that device happens to hold. */
 export const derivedBlockId = (identity: DerivedIdentity): string =>
   uuidv5(identity.key, identity.namespace)
-
-/** Workspace-scoped identity: the common case, spelled once.
- *
- *  `${workspaceId}:${key}` is the delimiter convention every workspace-scoped
- *  id in this app already used before they shared an implementation, so
- *  routing them through this helper leaves each one byte-identical. Callers
- *  whose `key` can contain `:` and whose collision domain is more than one
- *  key shape should build the key themselves rather than rely on this. */
-export const workspaceDerivedBlockId = (
-  namespace: string,
-  workspaceId: string,
-  key: string,
-): string => derivedBlockId({namespace, key: `${workspaceId}:${key}`})
