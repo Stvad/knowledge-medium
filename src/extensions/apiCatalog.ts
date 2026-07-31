@@ -317,6 +317,20 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'ui',
+    importPath: '@/extensions/dialogAppMount.js',
+    description: 'dialogAppMountExtension — the DialogHost mount `openDialog` needs. Include it in your extension: with no host the promise never resolves. Every dialog-using plugin imports it; the resolver dedupes.',
+    exports: ['dialogAppMountExtension', 'DialogHost'],
+    types: [],
+  },
+  {
+    category: 'ui',
+    importPath: '@/utils/toggleStore.js',
+    description: 'createToggleStore — typed open/closed store for a persistently-mounted surface (dialog, palette, sidebar). Read with useSyncExternalStore, flip from your action. Use instead of a hand-rolled boolean + listener Set or a window CustomEvent.',
+    exports: ['createToggleStore'],
+    types: ['ToggleStore'],
+  },
+  {
+    category: 'ui',
     importPath: '@/utils/toast.js',
     description: 'Toast / user-feedback primitives — prefer over window.alert / confirm. showProgress returns an updatable handle.',
     exports: ['showError', 'showInfo', 'showSuccess', 'showProgress', 'showCustom', 'dismissToast'],

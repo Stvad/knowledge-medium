@@ -160,6 +160,10 @@ export type {
 } from '@/utils/dialogs.js'
 
 export type {
+  ToggleStore,
+} from '@/utils/toggleStore.js'
+
+export type {
   ProgressToast,
   ToastAction,
   ToastOptions,

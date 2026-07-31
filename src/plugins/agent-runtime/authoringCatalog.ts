@@ -161,7 +161,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'plugin-root-singleton',
       when: 'The plugin needs a stable workspace-scoped root block — e.g. a "Readwise Library" page that all imported books/highlights live under.',
-      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)`. Same inputs always produce the same id, so re-running the install (or running on a fresh device) lands on the same block and your upserts stay idempotent. Use the same helper for per-record ids by passing a key like `book:${externalId}`.',
+      use: 'Hardcode a UUID v4 once as your plugin\'s namespace constant, then derive every plugin-owned id with `pluginBlockId(workspaceId, NAMESPACE, key)` — same inputs, same id, so a re-install or a fresh device lands on the same block. Same helper for per-record ids, with a key like `book:${externalId}`. Write it with `tx.createOrGet`, never `repo.load` then `tx.create`.',
       modules: ['@/data/api/index.js', '@/data/orderKey.js', '@/data/properties.js', '@/extensions/pluginIds.js'],
       example: example(
         'Deterministic id for a plugin root block',
@@ -177,7 +177,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'settings-via-property-editor-override',
       when: 'Settings / configuration UI for a plugin — what a user sees when they want to change how the plugin behaves. Preferred over a modal dialog: configuration belongs *with* the block whose properties it edits, syncs naturally, and is browsable / scriptable like any other block.',
-      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `onChange`, `block`, `schema`). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
+      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `onChange`, `block`, `schema`). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs for *interactive* flows (search, picker) — see the settings-dialog guide.',
       modules: [
         '@/extensions/core.js', '@/shortcuts/types.js', '@/data/api/index.js',
         '@/data/facets.js', '@/extensions/dynamicExtensionSeeds.js',
@@ -191,8 +191,8 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'imported-record-blocks',
       when: 'External records such as Readwise books/highlights that should be queryable and editable as blocks.',
-      use: 'Define source-id properties (`readwise:user_book_id`, `readwise:highlight_id`, …) and either upsert by id-lookup or derive the block id from the external id with `pluginBlockId(workspaceId, NAMESPACE, `book:${id}`)`. Either way, the second sync of the same record must update the existing block, not create a duplicate.',
-      modules: ['@/data/api/index.js', '@/data/orderKey.js', '@/data/properties.js', '@/extensions/pluginIds.js'],
+      use: 'Declare source-id properties as seeds (`seedProperty` + `definitionSeedsFacet`) — a bare key in the raw `properties` object has no codec and `audit-extension` flags it. Derive each record\'s block id from its external id with `pluginBlockId`, write it with `tx.createOrGet`, and write the source-owned fields on BOTH outcomes: `inserted: false` means the row was already there and nothing was written, not that there is nothing to write.',
+      modules: ['@/data/api/index.js', '@/data/facets.js', '@/data/orderKey.js', '@/extensions/dynamicExtensionSeeds.js', '@/extensions/pluginIds.js'],
       example: example(
         'Tx mutation primitives — create/read/update inside a transaction',
         txMutationPrimitivesSource,
@@ -248,6 +248,8 @@ const guides: AuthoringGuide[] = [
       '@/extensions/pluginIds.js',
       '@/context/repo.js',
       '@/utils/dialogs.js',
+      '@/extensions/dialogAppMount.js',
+      '@/utils/toggleStore.js',
       '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
@@ -313,6 +315,8 @@ const guides: AuthoringGuide[] = [
       '@/data/stateBlocks.js',
       '@/context/repo.js',
       '@/utils/dialogs.js',
+      '@/extensions/dialogAppMount.js',
+      '@/utils/toggleStore.js',
       '@/utils/toast.js',
       '@/components/ui/dialog.js',
       '@/components/ui/input.js',
