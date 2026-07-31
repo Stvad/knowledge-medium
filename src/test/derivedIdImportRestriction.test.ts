@@ -29,8 +29,12 @@ const restrictionsAt = async (filePath: string, code = V5_IMPORT): Promise<strin
     .map(message => message.message)
 }
 
-// Loading the real flat config pulls in every plugin it references.
-describe('uuid v5 is restricted outside @/data/derivedIds', {timeout: 60_000}, () => {
+// Loading the real flat config pulls in every plugin it references, which is
+// most of the cost here: ~1.4s cold and ~0.7s warm for the whole file, standalone.
+// 30s is ~20x the cold figure — well past the ~6x the full gate stretches a
+// file to under load, and low enough that a genuine hang (a plugin resolving
+// off the network, a config that never settles) still reports in half a minute.
+describe('uuid v5 is restricted outside @/data/derivedIds', {timeout: 30_000}, () => {
   it('rejects a hand-rolled derivation in ordinary app code', async () => {
     const messages = await restrictionsAt('src/plugins/some-plugin/ids.ts')
     expect(messages).toHaveLength(1)
@@ -42,6 +46,24 @@ describe('uuid v5 is restricted outside @/data/derivedIds', {timeout: 60_000}, (
   it('rejects it in the data layer too, one file over from the exemption', async () => {
     expect(await restrictionsAt('src/data/somethingElse.ts')).toHaveLength(1)
   })
+
+  /** `src/` is TypeScript by convention, not by rule — `syncedTableSqlRecognizer.js`
+   *  is already there — so a `files` glob listing only `.ts`/`.tsx` leaves a
+   *  rename as the way around a guard whose whole job is to stop an id formula
+   *  being established off the pins.
+   *
+   *  `.cjs` is deliberately not in this list, and its absence is not an
+   *  oversight: the glob does cover it (ESLint reports the file as not
+   *  ignored), but a `.cjs` file resolves to `sourceType: 'commonjs'`, where
+   *  the derivation would be written `require('uuid')` and there is no import
+   *  declaration for `no-restricted-imports` to match. Closing that would take
+   *  a different rule, and nothing in `src/` is CommonJS today. */
+  it.each(['ids.js', 'ids.jsx', 'ids.mjs', 'ids.mts', 'ids.cts'])(
+    'rejects it in a shipped %s too, so a file extension is not a way out',
+    async (filename) => {
+      expect(await restrictionsAt(`src/plugins/some-plugin/${filename}`)).toHaveLength(1)
+    },
+  )
 
   it('allows the one implementation', async () => {
     expect(await restrictionsAt('src/data/derivedIds.ts')).toEqual([])

@@ -359,16 +359,18 @@ export default tseslint.config(
     // every row already written at the old id, silently and with nothing
     // failing. Only `v5` is restricted: `v4` is a fresh random id and has
     // nothing to do with this.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     ignores: [
       // The one implementation.
       'src/data/derivedIds.ts',
       // Workspace and member ids — not blocks, so none of the policy applies.
       'src/data/workspaces.ts',
       // The oracle hashes independently on purpose; that is what makes it an
-      // oracle rather than a mirror of the implementation.
-      '**/test/**/*.{ts,tsx}',
-      '**/*.test.{ts,tsx}',
+      // oracle rather than a mirror of the implementation. Extension-agnostic
+      // on purpose: `files` already fixes which extensions are in scope, so
+      // these only have to say WHERE the tests are.
+      '**/test/**',
+      '**/*.test.*',
     ],
     rules: {
       'no-restricted-imports': ['error', {

@@ -89,6 +89,60 @@ describe('getOrCreateKernelPage', () => {
     expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE])
   })
 
+  /**
+   * The repair of a LIVE page, one test per leg of `needsRepair`.
+   *
+   * Neither leg was pinned by anything above: create covers the empty id,
+   * restore covers the tombstone, and the cross-workspace tests never get as
+   * far as repairing. Delete either leg and the suite stayed green — while a
+   * page that lost its marker type is invisible to every `types`-indexed query
+   * that looks for it (including this function's own repair check, which reads
+   * the same list), and one that lost its alias is unreachable by name.
+   *
+   * Both fixtures are built damaged rather than created-then-damaged: a repair
+   * path that ran on the way in would launder the damage before the assertion.
+   */
+  describe('repairing a live page in this workspace', () => {
+    it('re-tags a marker type the page has lost', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+        await tx.setProperty(id, aliasesProp, ['Foo'])
+        // PAGE_TYPE only — the marker is what a caller queries for, and its
+        // absence is exactly the state no query can report.
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+
+      const page = await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+      expect(page.peekProperty(aliasesProp)).toEqual(['Foo'])
+      expect(page.peek()?.content).toBe('Foo')
+    })
+
+    it('re-claims an alias the page has lost, keeping any the user added', async () => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      const snapshot = env.repo.snapshotTypeRegistries()
+      await env.repo.tx(async tx => {
+        await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Foo'})
+        // Both types present, so this isolates the alias leg — and a second
+        // name the user chose, to pin that repair MERGES rather than replaces.
+        await tx.setProperty(id, aliasesProp, ['My Foo'])
+        await env.repo.addTypeInTx(tx, id, PAGE_TYPE, {}, snapshot)
+        await env.repo.addTypeInTx(tx, id, FOO_PAGE_TYPE, {}, snapshot)
+      }, {scope: ChangeScope.BlockDefault})
+
+      const page = await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(page.peekProperty(aliasesProp)).toEqual(['Foo', 'My Foo'])
+    })
+  })
+
   it('rejects an omitted markerType by name, rather than failing at the tagger', async () => {
     // The cast is the point: TypeScript already requires the field, so this
     // pins the guard for the callers the type does not reach — a dynamic
