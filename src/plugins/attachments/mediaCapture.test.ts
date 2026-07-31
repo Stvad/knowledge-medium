@@ -6,7 +6,7 @@ import { definitionSeedsFacet, typeSeedsFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPageBlockId } from '@/data/kernelPage'
-import { hasBlockType } from '@/data/properties'
+import { aliasesProp, hasBlockType } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { isBlockRefId, parseBlockRefs } from '@/plugins/references/referenceParser'
@@ -16,6 +16,7 @@ import { deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
 import type { GetMaterializability, Materializability } from '@/sync/transform.js'
 import { InMemoryByteStore } from './byteStore.js'
 import {
+  ASSETS_ALIAS,
   ASSETS_NS,
   ASSETS_TYPE,
   MEDIA_PROPERTY_SCHEMAS,
@@ -32,6 +33,8 @@ import { InMemoryByteUploadStore } from './uploadStore.js'
 
 const WS = 'ws-1'
 const USER = 'user-1'
+/** Stand-in for a user page that already claims the Assets alias. */
+const CLAIMANT_ASSETS_ID = '3f7b2c18-9d41-4a6e-8b05-7c2e1a94d630'
 const bytesOf = (n: number, seed = 0) =>
   new Uint8Array(Array.from({ length: n }, (_, i) => (i + seed) & 0xff)) as Uint8Array<ArrayBuffer>
 
@@ -147,6 +150,37 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     // the ASSETS container exists + is tagged
     const container = await env.repo.load(kernelPageBlockId(WS, ASSETS_NS))
     expect(hasBlockType(container!, ASSETS_TYPE)).toBe(true)
+  })
+
+  it('parents the asset under a live claimant of the Assets alias instead of the deterministic id (issue #378)', async () => {
+    // A page already claims 'Assets' at a DIFFERENT id than the raw
+    // deterministic one (e.g. the canonical Assets page was deleted and
+    // getOrCreateKernelPage adopted a claimant earlier). captureMedia must
+    // parent the new asset under the RESOLVED container, not silently
+    // recompute and use the raw deterministic id.
+    //
+    // A canonical UUID rather than a mnemonic id: this file builds a bare
+    // `Repo`, which enforces the production `blockIdPolicy: 'canonical'`
+    // (issue #456) — `createTestRepo`'s 'any' opt-out is not in play here.
+    await env.repo.tx(async (tx) => {
+      await tx.create({
+        id: CLAIMANT_ASSETS_ID, workspaceId: WS, parentId: null, orderKey: 'z0', content: 'My Assets',
+      })
+      await tx.setProperty(CLAIMANT_ASSETS_ID, aliasesProp, [ASSETS_ALIAS])
+    }, { scope: ChangeScope.BlockDefault })
+
+    const bytes = bytesOf(32)
+    const { assetBlockId } = await expectedIds(bytes, 'none', null)
+    const result = await captureMedia(
+      { workspaceId: WS, source: { bytes, mime: 'image/png' } },
+      deps(),
+    )
+    expect(result).toEqual({ ok: true, assetBlockId, deduped: false })
+
+    const asset = await env.repo.load(assetBlockId)
+    expect(asset?.parentId).toBe(CLAIMANT_ASSETS_ID)
+    expect(asset?.parentId).not.toBe(kernelPageBlockId(WS, ASSETS_NS))
+    expect(await env.repo.load(kernelPageBlockId(WS, ASSETS_NS))).toBeNull()
   })
 
   it('mints a UUID-shaped asset id, so the renderer’s ((id)) reference parses — not literal text', async () => {

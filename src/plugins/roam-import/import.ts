@@ -1033,10 +1033,20 @@ const resolveAliases = async (
     } else {
       const parsedDate = parseLiteralDailyPageTitle(alias)
       if (parsedDate) {
-        // Daily-shaped alias → deterministic id. The row is materialised
-        // by getOrCreateDailyNote in step 4 (which also links to the
-        // workspace's journal page); we just predict the id here so
-        // references[] can be patched in-memory before that call.
+        // Daily-shaped alias → prefer a live claimant of this EXACT
+        // literal, mirroring the plain-alias branch below. The row is
+        // otherwise materialised by getOrCreateDailyNote in step 4 (which
+        // also links to the workspace's journal page); we predict the id
+        // here so references[] can be patched in-memory before that call.
+        //
+        // The claimant check matters as of issue #378: getOrCreateDailyNote
+        // now resolves alias-first too — if a live block already owns this
+        // date's alias (e.g. a manually-created page in the target
+        // workspace, or an earlier re-run of this same import), step 4
+        // ADOPTS it instead of minting the deterministic id. Predicting the
+        // raw deterministic id here would leave references[] pointing at a
+        // row step 4 never actually materialises — a stable-wrong binding,
+        // not a crash, so nothing would ever re-parse to fix it.
         //
         // Strict literal-only check (not parseRelativeDate): chrono.casual
         // resolves "today" / "now" / "may" / "friday" to the *current*
@@ -1045,7 +1055,8 @@ const resolveAliases = async (
         // bloat today's backlinks with every block that ever mentioned
         // a relative-time word. Roam's own behavior is that `[[today]]`
         // is a regular page named "today", not the day's daily.
-        aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
+        const claimed = await repo.query.aliasLookup({workspaceId, alias}).load()
+        aliasIdMap.set(alias, claimed ? claimed.id : dailyNoteBlockId(workspaceId, parsedDate.iso))
       } else {
         const existing = await repo.query.aliasLookup({workspaceId, alias}).load()
         if (existing) {

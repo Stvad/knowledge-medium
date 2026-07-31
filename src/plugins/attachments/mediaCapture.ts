@@ -45,7 +45,7 @@
 import { ChangeScope } from '@/data/api'
 import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
-import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
+import { getOrCreateKernelPage } from '@/data/kernelPage'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock } from '@/data/targets'
 import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '@/sync/crypto/binaryEnvelope.js'
@@ -186,12 +186,17 @@ export const captureMedia = async (
   // at the caret per the text policy.
   let inserted = false
   await deps.repo.undoGroup(async (repo) => {
-    await getOrCreateKernelPage(repo, workspaceId, {
+    // Use the RETURNED block's id, not `kernelPageBlockId(workspaceId,
+    // ASSETS_NS)` — issue #378's alias-first resolution can ADOPT a live
+    // claimant of the Assets alias at a different id, and parenting the
+    // new asset block under the raw deterministic id would silently write
+    // it under a container nobody sees (or that no longer exists).
+    const assetsContainer = await getOrCreateKernelPage(repo, workspaceId, {
       namespace: ASSETS_NS,
       alias: ASSETS_ALIAS,
       markerType: ASSETS_TYPE,
     })
-    const containerId = kernelPageBlockId(workspaceId, ASSETS_NS)
+    const containerId = assetsContainer.id
     const typeSnapshot = repo.snapshotTypeRegistries()
 
     await repo.tx(async (tx) => {

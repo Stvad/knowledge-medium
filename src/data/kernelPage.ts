@@ -24,7 +24,14 @@ import { classifyOccupant, derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { restorePropertiesStrippingAliases } from '@/data/targets'
+import {
+  canonicalAliasReaderFromRepo,
+  canonicalAliasReaderFromTx,
+  refuseTypedClaimant,
+  resolveCanonicalAliasOwner,
+  restorePropertiesStrippingAliases,
+} from '@/data/targets'
+import { adoptTypedBlock } from '@/data/typedRecords'
 
 const stringListProperty = (raw: unknown): readonly string[] =>
   Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : []
@@ -81,9 +88,25 @@ export interface KernelPageSpec {
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
-/** Get-or-create a per-workspace kernel page. Repairs a live page that's
- *  missing the expected types or alias; restores a soft-deleted row;
- *  otherwise creates fresh. */
+/** Get-or-create a per-workspace kernel page. Resolves ALIAS-FIRST (issue
+ *  #378, repo-owner decision — "try id if not, use alias, everywhere"):
+ *  if a live block already owns `spec.alias` (e.g. the canonical page was
+ *  deleted and the user then aliased a different page to the same name),
+ *  ADOPT it — apply `PAGE_TYPE` and the marker, if there is one, to THAT
+ *  block — rather than minting/restoring at the deterministic id. Adoption
+ *  mutates the user's existing block (it gains the types); that's the point
+ *  of "their page becomes the kernel page", not a side effect. Falls back
+ *  to the deterministic id when nobody claims the alias (fresh workspace,
+ *  or the claimant is later deleted → re-mint) — including when an
+ *  eligible-looking claimant is refused by `resolveCanonicalAliasOwner`'s
+ *  guard (already-typed claimant — genuinely ambiguous, left unchanged;
+ *  see its docblock). Otherwise repairs a live page missing the expected
+ *  types/alias, or restores a soft-deleted row.
+ *
+ *  Alias-first is why the returned block's id is NOT always
+ *  `kernelPageBlockId(workspaceId, spec.namespace)`. Callers that need to
+ *  know WHERE the page is must read `.id` off the result rather than
+ *  re-deriving it. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
@@ -105,11 +128,25 @@ export const getOrCreateKernelPage = async (
   const types: readonly string[] =
     spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 
-  const tagTypes = async (tx: Tx, snapshot: TypeRegistrySnapshot): Promise<void> => {
+  /** `targetId` rather than the outer `id` because alias-first resolution can
+   *  land this page on a claimant's id — see `guard` below. */
+  const tagTypes = async (
+    tx: Tx, targetId: string, snapshot: TypeRegistrySnapshot,
+  ): Promise<void> => {
     for (const type of types) {
-      await repo.addTypeInTx(tx, id, type, {[aliasesProp.name]: aliases}, snapshot)
+      await repo.addTypeInTx(tx, targetId, type, {[aliasesProp.name]: aliases}, snapshot)
     }
   }
+
+  // The guard allows exactly the types this page itself applies, rather than
+  // `refuseTypedClaimant`'s bare `[PAGE_TYPE]` default: without the marker in
+  // the allow-list, a claimant THIS resolver adopted and marker-typed on a
+  // prior call would fail its own guard on the next call (the marker it just
+  // applied now reads as "extra"), permanently falling back to the dead
+  // deterministic id and colliding on re-claim. For a markerless page
+  // (`markerType: null` — the Journal) `types` is `[PAGE_TYPE]`, i.e. the
+  // default. See `refuseTypedClaimant`'s docblock.
+  const guard = refuseTypedClaimant(types)
 
   /** A row at this id belonging to some OTHER workspace is never ours to
    *  touch, whatever the namespace says.
@@ -125,6 +162,14 @@ export const getOrCreateKernelPage = async (
    *  restore paths need it said again. Raising the engine's own error keeps
    *  one meaning for the condition across every deterministic-id caller.
    *
+   *  The ALIAS-first path (issue #378) is the one occupant this never has to
+   *  judge, and not by omission: `aliasLookup` selects on
+   *  `block_aliases.workspace_id`, which the three alias triggers write from
+   *  `blocks.workspace_id` and rewrite on `UPDATE OF … workspace_id`, so an
+   *  alias claimant is in `workspaceId` by construction. That is why the error
+   *  below can name the outer `id` — the only occupant that can be foreign is
+   *  the one reached by id alone.
+   *
    *  What counts as foreign is `classifyOccupant`'s to say, not this file's —
    *  including that it outranks `tombstoned`, which is what stops the restore
    *  branch below from ever being offered another workspace's row. */
@@ -134,31 +179,59 @@ export const getOrCreateKernelPage = async (
     }
   }
 
-  const live = await repo.load(id)
+  const predicted = await resolveCanonicalAliasOwner(
+    canonicalAliasReaderFromRepo(repo), aliases, workspaceId, id, guard,
+  )
+
+  const live = await repo.load(predicted.id)
   if (live) {
     refuseForeign(live)
     const currentAliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       types.some(type => !hasBlockType(live, type)) ||
       !includesAll(currentAliases, aliases)
-    if (!needsRepair) return repo.block(id)
+    if (!needsRepair) return repo.block(predicted.id)
 
     const typeSnapshot = repo.snapshotTypeRegistries()
+    let finalId = predicted.id
     await repo.tx(async tx => {
-      const current = await tx.get(id)
+      // Re-resolve fresh inside the tx — see canonicalAliasReaderFromTx.
+      const resolved = await resolveCanonicalAliasOwner(
+        canonicalAliasReaderFromTx(tx), aliases, workspaceId, id, guard,
+      )
+      finalId = resolved.id
+      const current = await tx.get(resolved.id)
       if (!current || current.deleted) return
       refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
       if (!includesAll(txAliases, aliases)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
+        await tx.setProperty(resolved.id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
       }
-      await tagTypes(tx, typeSnapshot)
+      await tagTypes(tx, resolved.id, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault})
-    return repo.block(id)
+    return repo.block(finalId)
   }
 
   const typeSnapshot = repo.snapshotTypeRegistries()
+  let finalId = id
   await repo.tx(async tx => {
+    const resolved = await resolveCanonicalAliasOwner(
+      canonicalAliasReaderFromTx(tx), aliases, workspaceId, id, guard,
+    )
+    if (resolved.adopted) {
+      // A live block already owns `spec.alias` — adopt it instead of
+      // minting/restoring the deterministic id (issue #378). The alias is
+      // already theirs (that's how the lookup found them), so the whole adopt
+      // is the missing type tags — which is `adoptTypedBlock`'s job, and this
+      // is the "answered `taken`, then found the real record another way" case
+      // its docblock names. `tagTypes`' alias default is not lost by going
+      // through it: `addType`'s initial values are only-if-empty and a
+      // claimant necessarily has the alias property already.
+      finalId = resolved.id
+      await adoptTypedBlock(repo, tx, resolved.claimant, types, typeSnapshot)
+      return
+    }
+    finalId = id
     const existing = await tx.get(id)
     if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
@@ -167,11 +240,14 @@ export const getOrCreateKernelPage = async (
       // live block claimed while this page was dead (issue #378) —
       // restoring it as-is would re-insert that stale claim and abort
       // the whole tx. Strip it here; the setProperty below re-claims
-      // exactly the canonical alias set.
+      // exactly the canonical alias set. (The CANONICAL alias itself
+      // being squatted is handled above via `resolved.adopted` — this
+      // branch only runs when nobody claims it, so the reclaim below is
+      // safe.)
       const restoredProperties = await restorePropertiesStrippingAliases(tx, id)
       await tx.restore(id, {content: spec.alias, properties: restoredProperties})
       await tx.setProperty(id, aliasesProp, [...aliases])
-      await tagTypes(tx, typeSnapshot)
+      await tagTypes(tx, id, typeSnapshot)
       return
     }
     await tx.create({
@@ -181,8 +257,8 @@ export const getOrCreateKernelPage = async (
       orderKey,
       content: spec.alias,
     }, {systemMint: true})
-    await tagTypes(tx, typeSnapshot)
+    await tagTypes(tx, id, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
-  return repo.block(id)
+  return repo.block(finalId)
 }
