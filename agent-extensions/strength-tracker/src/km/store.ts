@@ -171,6 +171,13 @@ const LAYOFF_NS = 'cfa6899f-981a-4dac-8eae-978150c019a9'
 const layoffIdentity = (workspaceId: string, from: string): DerivedIdentity =>
   ({namespace: LAYOFF_NS, key: `${workspaceId}|${from}`})
 
+/** Does this block state that it records the gap starting on `from`? Read off
+ *  the raw bag the way `liveDay` reads a workout's date — the codec stores a
+ *  `date` as an ISO string, and one that no longer decodes is not this gap's
+ *  record either. */
+const isGapRecord = (block: BlockData, from: string): boolean =>
+  liveDay(block.properties[FIELD.layoffFrom]) === from
+
 /** One workout per workspace/day/session — the FIRST one. A second session of
  *  the same type on the same day has nothing left to key on (see
  *  `startWorkout`), so it is minted rather than derived. */
@@ -243,6 +250,28 @@ const exerciseIdentity = (workoutId: string, key: string, occurrence: number): D
   // block per index.
   const part = escapeKeyPart(key)
   return {namespace: EXERCISE_NS, key: occurrence === 0 ? `${workoutId}|${part}` : `${workoutId}|${part}|${occurrence}`}
+}
+
+/** Does the block at a row's derived entry id still claim to be that lift?
+ *
+ *  Exactly one clause, taken from `matchLiveExercises` and not a second copy
+ *  of it: a row that HAS a plan block never attaches to an entry carrying a
+ *  DIFFERENT one, because those are two genuinely different lifts. The
+ *  matcher's claimed-once, two-pass selection is not repeated here — this
+ *  answers a yes/no about one block, which is all `adoptable` gets to ask.
+ *
+ *  Deliberately silent about the NAME. An entry with no definition, or a row
+ *  whose plan read failed, still matches on the name alone, and that
+ *  asymmetry is load-bearing: which side knows a lift's plan block is a fact
+ *  about WHEN each was written, not about whether they are the same lift.
+ *  Tightening this to compare names would re-break the case the symmetric
+ *  fallback exists for — a session logged while the outline was unreadable,
+ *  met later by a client that can read it. */
+const stillNamesThisLift = (block: BlockData, ex: ExerciseDraft): boolean => {
+  const definition = block.properties[FIELD.definition]
+  return typeof definition !== 'string'
+    || ex.definitionId === undefined
+    || definition === ex.definitionId
 }
 
 /** Sets are positional within their entry — including the L/R rows of a
@@ -456,7 +485,16 @@ const writeExercise = async (
     // user dragged out of it is not this row's entry any more. Adopting one
     // would write the session's sets into another tree, where `finishWorkout`
     // — which reads the workout's children — can never see them again.
-    adoptable: block => block.parentId === workoutId,
+    //
+    // …and it has to still SAY it is this lift. The derived id was fixed when
+    // the entry was written; `strength:definition` is an ordinary editable
+    // ref, so point the entry at another lift in the outline and the id still
+    // resolves here. `matchLiveExercises` already refuses to attach a row to
+    // an entry naming a DIFFERENT plan block; on the derived path we adopted
+    // on parentage alone, so the session's sets landed under an entry
+    // attributed to something else — invisible to the row that wrote them, and
+    // recorded and progressed as the other lift.
+    adoptable: block => block.parentId === workoutId && stillNamesThisLift(block, ex),
     ...entrySpec,
   })
 
@@ -923,7 +961,7 @@ export const finishWorkout = async (
    *  full loads. Written first instead, a finish that REFUSES the tree leaves
    *  a break recorded as ending on a session that never happened. */
   layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>},
-): Promise<'finished' | 'gone'> => {
+): Promise<'finished' | 'gone' | 'nothing-accepted'> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
     // Still ours to finish, checked HERE rather than trusted from the caller.
@@ -1052,6 +1090,25 @@ export const finishWorkout = async (
       )
     }
     const plan = finishPlan(workoutId, exercises)
+    // Entries survived, but nothing accepted did. `canFinish` needs a done set,
+    // so one was there at the tap; none in the committed tree means a peer —
+    // or the native todo checkbox in the outline, which writes the status and
+    // tells this view nothing — unchecked or deleted the last one in between.
+    // The plan below then removes every set and every entry, and the workout
+    // still flips to `done`: the user is told the session was logged, and
+    // `buildHistory` gets a training day with no performed work in it. This is
+    // the general form of the zero-entry refusal above, which stays for its
+    // own reason — it fires before the per-entry scan and names a misread
+    // rather than an empty session.
+    //
+    // Its OWN outcome, and neither of the two that existed. A throw renders
+    // "check the connection and tap it again", which is wrong and
+    // unactionable — nothing failed. `'gone'` is worse: it means "someone else
+    // finished this", so the view releases the workout and says the session is
+    // logged, when in fact it is still in progress and now unattended. This is
+    // the third thing — the tree is fine, it just has nothing performed left
+    // in it — and the honest answer is to say so and let the view re-read.
+    if (plan.keep.length === 0) return 'nothing-accepted' as const
 
     // Subtree deletes, not `tx.delete`: a set block is a normal block, so a
     // note typed under it — and, in a child-backed workspace, its own property
@@ -1211,11 +1268,38 @@ const writeLayoffInTx = async (
     // somewhere else is still THIS gap's record — and rejecting it would
     // strand the real one and mint a duplicate beside it, which is the exact
     // divergence the derivation exists to prevent.
+    //
+    // It does have to still SAY it is this gap. `strength:from` is an ordinary
+    // editable date, and `layoffAlreadyRecorded` reads THAT rather than the id
+    // — so adopting a block whose `from` has been changed writes nothing for
+    // the gap actually pending, and the finish commits the comeback session
+    // without recording it. That session joins history immediately, which is
+    // what makes the loss permanent: `detectPendingLayoff` reads no gap on any
+    // later day, so the rest of the ramp never happens.
+    adoptable: block => isGapRecord(block, record.from),
     ...spec,
   })
-  // Taken by a tombstone, or by another workspace's row: this gap still needs
-  // a record and there is no second identity to derive one from.
-  return outcome.status === 'taken' ? createTypedChild(repo, tx, spec) : outcome.id
+  if (outcome.status !== 'taken') return outcome.id
+
+  // The derived seat is held by a tombstone, another workspace's row, or a
+  // block whose `from` now names a different gap. This gap still needs a
+  // record and there is no second identity to derive — so mint, and make the
+  // NEXT call find that mint rather than add to it, the same way
+  // `placeStraySets` re-finds a set by what it says it is. Minting blind meant
+  // every later finish (and every `writeLayoff` retry) against a tombstoned
+  // seat produced another record, so the duplicate this derivation was
+  // introduced to stop came back by a different route — and with it the later
+  // stale `to` that restarts the re-entry ramp.
+  //
+  // The page's children, because that is where a mint lands. A fallback the
+  // user has since filed elsewhere is out of reach here, which is the same
+  // bound `placeStraySets` works within.
+  const minted = (await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
+    .find(block => !block.deleted && block.id !== outcome.id
+      && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, record.from))
+  return minted !== undefined
+    ? (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id
+    : createTypedChild(repo, tx, spec)
 }
 
 export const writeLayoff = async (

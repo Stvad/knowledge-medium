@@ -39,6 +39,7 @@ import {
   dateProp,
   definitionProp,
   exerciseProp,
+  layoffFromProp,
   occurrenceProp,
   repsProp,
   rpeProp,
@@ -53,6 +54,7 @@ import {
   finishWorkout,
   materializeExercise,
   startWorkout,
+  writeLayoff,
   writeSet,
   type ExerciseDraft,
   type SetDraft,
@@ -336,10 +338,17 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
   it('leaves an untyped set that is not recognizable alone', async () => {
     // A note under the lift carries none of a set's numbers, so it is not
     // silently promoted into the record — it just keeps its entry alive.
+    //
+    // TWO lifts, like the test below it: the note's lift accepts nothing, and
+    // the session's real work is elsewhere. With one lift the whole workout
+    // has nothing accepted, so the finish now refuses before any pruning runs
+    // and every assertion here passes because NOTHING happened.
     const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
-      exerciseDraft('Bench press', [draftSet(135, 8)]),
+      exerciseDraft('Bench press', [draftSet(135, 8)]),                  // nothing accepted
+      exerciseDraft('Row', [draftSet(95, 10)], {occurrence: 1}),         // the session's real work
     ]))
     const bench = workout.exercises[0]
+    expect(await writeSet(repo, workout.exercises[1].setIds[0], {done: true}, 'lb')).toBe('written')
     await repo.tx(async tx => {
       await tx.create({
         id: 'form-note', workspaceId: WORKSPACE_ID, parentId: bench.id, orderKey: 'z0',
@@ -347,7 +356,7 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
       })
     }, {scope: ChangeScope.BlockDefault, description: 'a note under the lift'})
 
-    await finishWorkout(repo, workout.workoutId)
+    expect(await finishWorkout(repo, workout.workoutId)).toBe('finished')
 
     expect(hasBlockType(cache.getSnapshot('form-note')!, SET_TYPE)).toBe(false)
     expect(await isBlockDeleted(repo, 'form-note')).toBe(false)
@@ -402,6 +411,30 @@ describe('finishWorkout — assembling and pruning the committed tree', () => {
     await expect(finishWorkout(repo, workout.workoutId)).rejects.toThrow(/refusing to finish/)
     expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
     expect(await isBlockDeleted(repo, row.setIds[0])).toBe(false)
+  })
+
+  it('refuses when the last accepted set was unchecked out from under it', async () => {
+    // The entries survive; what goes away is every done set — unchecked from
+    // the outline through the native todo checkbox, which tells this view
+    // nothing, or deleted on another device. `canFinish` needed a done set at
+    // the tap, so one was there; none in the committed tree means it went
+    // while the finish was in flight. Finishing regardless prunes the tree to
+    // nothing and still flips the workout `done`, so the user is told the
+    // session was logged and `buildHistory` gets a training day holding no
+    // work at all.
+    const workout = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    const bench = workout.exercises[0]
+    expect(await writeSet(repo, bench.setIds[0], {done: true}, 'lb')).toBe('written')
+    expect(await writeSet(repo, bench.setIds[0], {done: false}, 'lb')).toBe('written')
+
+    // Not `gone` — that one means "someone else finished it", and the view
+    // answers it by releasing the workout and saying the session is logged.
+    // Both are false here: it is still in progress and still ours.
+    expect(await finishWorkout(repo, workout.workoutId)).toBe('nothing-accepted')
+    expect(repo.block(workout.workoutId).peekProperty(statusProp)).toBe('in-progress')
+    expect(await isBlockDeleted(repo, bench.id)).toBe(false)
+    expect(await isBlockDeleted(repo, bench.setIds[0])).toBe(false)
   })
 
   it('refuses when the last lift was removed out from under it', async () => {
@@ -694,6 +727,30 @@ describe('side round-trips and feeds finishPlan\'s working weight', () => {
 })
 
 describe('startWorkout — idempotent and adopting', () => {
+  it('will not adopt an entry that now names a different lift', async () => {
+    // The derived id was fixed when the entry was written; `strength:definition`
+    // is an ordinary editable ref, so pointing the entry at another lift in the
+    // outline leaves the id still resolving here. Adopting on parentage alone
+    // put this session's sets under an entry attributed to the other lift —
+    // where the row that wrote them cannot see them, and where Finish records
+    // and progresses them as that lift.
+    const draft = workoutDraft([
+      {...exerciseDraft('Bench press', [draftSet(135, 8)]), definitionId: 'def-bench'},
+    ])
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    const entry = first.exercises[0].id
+    await repo.tx(tx => tx.setProperty(entry, definitionProp, 'def-overhead-press'),
+      {scope: ChangeScope.BlockDefault, description: 'repoint the entry at another lift'})
+
+    const again = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+
+    expect(again.exercises[0].id).not.toBe(entry)
+    expect(repo.block(again.exercises[0].id).peekProperty(definitionProp)).toBe('def-bench')
+    // The repointed one is left exactly as the user set it — this refuses to
+    // write into it, it does not correct it.
+    expect(repo.block(entry).peekProperty(definitionProp)).toBe('def-overhead-press')
+  })
+
   it('continues a standing workout whose id was never derived', async () => {
     // The upgrade window. A session started by the version before derived ids
     // has a RANDOM id, so it leaves the derived seat empty however live it is
@@ -836,6 +893,7 @@ describe('startWorkout — idempotent and adopting', () => {
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
 
     const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, first.workoutId)
 
     const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
@@ -852,6 +910,7 @@ describe('startWorkout — idempotent and adopting', () => {
     // logs into a workout the screen is not showing.
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
     const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, first.workoutId)   // slot 0 is now taken
     await repo.tx(async tx => {
       await tx.create({
@@ -882,6 +941,7 @@ describe('startWorkout — idempotent and adopting', () => {
     // view. `preferredLive` is the tiebreak both sides share.
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
     const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, first.workoutId)
     const repeat = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
     // A peer's second unfinished session for the same slot, filed LAST on the
@@ -917,6 +977,7 @@ describe('startWorkout — idempotent and adopting', () => {
     // full set of open todo sets — each time.
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)])])
     const morning = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, morning.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, morning.workoutId)
 
     const evening = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
@@ -938,8 +999,10 @@ describe('startWorkout — idempotent and adopting', () => {
     // depending on which way the workout was found.
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
     const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, first.workoutId)
     const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, second.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, second.workoutId)
 
     const third = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
@@ -951,6 +1014,7 @@ describe('startWorkout — idempotent and adopting', () => {
   it('does not continue a repeat session belonging to another day or session type', async () => {
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])])
     const finished = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, draft)
+    expect(await writeSet(repo, finished.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
     await finishWorkout(repo, finished.workoutId)
     // A live session sitting on the same page, but a different day — the
     // lookup scans the whole page, so filtering it is the lookup's job.
@@ -1484,6 +1548,43 @@ describe('the layoff record and the finish that justifies it', () => {
     // The adopt leaves the record alone, so the FIRST return recorded is the
     // one that stands — which is the one that actually happened.
     expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
+  })
+
+  it('will not adopt a block whose `from` was edited to another gap', async () => {
+    // `strength:from` is an ordinary editable date, and `layoffAlreadyRecorded`
+    // reads THAT rather than the block id — so a block adopted purely because
+    // its id matches, while saying it records a different gap, means the
+    // pending gap gets no record at all. That loss is permanent: the comeback
+    // session joins history immediately, so `detectPendingLayoff` reads no gap
+    // on any later day and the rest of the ramp never happens.
+    const first = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, layoffOf().record)
+    await repo.tx(tx => tx.setProperty(first, layoffFromProp, dayToDate('2026-05-05')),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the gap start'})
+
+    const second = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, layoffOf().record)
+
+    expect(second).not.toBe(first)
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, 'strength-layoff'))
+    expect(layoffs.map(l => l.from).sort()).toEqual(['2026-05-05', '2026-07-01'])
+  })
+
+  it('re-finds the minted fallback instead of minting another every time', async () => {
+    // Once the derived seat holds a tombstone it holds one forever, so every
+    // later finish (and every retry) took the mint branch. Minting blind there
+    // put a fresh layoff block in the log each time — the duplicate the
+    // derivation exists to stop, arriving by a different route, and with it the
+    // later stale `to` that restarts the re-entry ramp. The mint is re-found by
+    // what it SAYS it is, the same way `placeStraySets` re-finds a set.
+    const derived = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, layoffOf().record)
+    await repo.tx(tx => tx.run(deleteBlock, {id: derived}),
+      {scope: ChangeScope.BlockDefault, description: 'the gap record is deleted'})
+
+    const minted = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, layoffOf().record)
+    const again = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, layoffOf().record)
+
+    expect(minted).not.toBe(derived)
+    expect(again).toBe(minted)
+    expect(buildLayoffs(await liveChildren(PAGE_ID, 'strength-layoff'))).toHaveLength(1)
   })
 
   it('is rolled back with a finish that refuses the tree', async () => {

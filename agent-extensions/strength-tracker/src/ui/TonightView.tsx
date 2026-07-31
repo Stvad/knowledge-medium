@@ -725,6 +725,18 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       // transaction, so nothing this view believes can prune a set the blocks
       // say was performed.
       const outcome = await finishWorkout(repo, wid, layoff)
+      if (outcome === 'nothing-accepted') {
+        // Every accepted set went away between this view's flush and the
+        // store's transaction — unchecked from the outline, or deleted on
+        // another device. Finishing would have pruned the tree to nothing and
+        // still reported the session logged, leaving a training day in the
+        // record with no work in it. The workout is untouched and still ours,
+        // so this is the same answer the per-set `gone` above gives: re-read
+        // and let the user look before they tap again.
+        setResync(n => n + 1)
+        setStatus('Something changed while saving — the log has been re-read. Check it and tap Finish again.')
+        return
+      }
       if (outcome === 'gone') {
         // Someone else finished it between this view's last check and the
         // store's transaction. The session IS logged — just not by us — so
