@@ -36,6 +36,7 @@ const renderLazy = (cacheKey: string, options?: {container?: HTMLElement; oversc
   render(
     <LazyViewportMount
       cacheKey={cacheKey}
+      blockId={cacheKey}
       estimatedHeightPx={32}
       overscanPx={options?.overscanPx ?? 0}
       renderPlaceholder={({reservedHeight}) => (

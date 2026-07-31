@@ -14,14 +14,29 @@ import {
 } from '@/data/properties.js'
 
 /**
- * Is this row on screen by the SAME measure `BlockFocusShellDecorator` uses to
- * decide whether a focused row needs scrolling into view?
+ * Is this row's own content on screen?
  *
- * That agreement is the whole reason re-anchoring doesn't kick off a scroll:
- * the decorator reacts to every focus change by measuring the new row, so a
- * pick it would disagree with becomes a scroll the user never asked for. Bounds
- * are resolved per row rather than once per panel so a row inside a nested
- * scrollport is judged against its own port.
+ * This is what makes re-anchoring safe from starting a scroll: the decorator
+ * reacts to every focus change by measuring the new row, so a pick it would
+ * disagree with becomes a scroll the user never asked for. The relationship is
+ * one of IMPLICATION, not equality — `shouldScrollFocusedBlockIntoView` declines
+ * to scroll when this predicate holds OR when a row taller than the viewport
+ * still shows about a line of its wrapper, so it is strictly the more permissive
+ * of the two. Every row this accepts, it accepts; that direction is the one the
+ * guarantee needs, and it holds without the two having to stay identical.
+ *
+ * The gap runs the other way: a focused block whose PROPERTY PANEL is taller
+ * than the viewport can have its content row scrolled off while the decorator
+ * still counts it as meaningfully visible, and this reports it off screen — so
+ * the cursor moves on while the user is still looking at that block's
+ * properties. Deliberately not matched, because the fix would make the cursor
+ * stickier on exactly the tall rows where a restore already can't recover the
+ * reader's position within the row (see `panelScrollAnchor`'s known limit), and
+ * a cursor that lags what is on screen is the drift this whole plugin exists to
+ * remove.
+ *
+ * Bounds are resolved per row rather than once per panel so a row inside a
+ * nested scrollport is judged against its own port.
  */
 export const isRowInViewport = (instance: HTMLElement): boolean => {
   const target = visibilityTargetFor(instance)

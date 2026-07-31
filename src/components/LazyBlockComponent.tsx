@@ -45,6 +45,7 @@ export function LazyBlockComponent({ blockId }: LazyBlockComponentProps) {
   return (
     <LazyViewportMount
       cacheKey={lazyBlockCacheKey(blockId)}
+      blockId={blockId}
       estimatedHeightPx={ESTIMATED_HEIGHT_PX}
       overscanPx={OVERSCAN_PX}
       renderPlaceholder={({reservedHeight}) => (

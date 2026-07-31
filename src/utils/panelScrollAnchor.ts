@@ -178,11 +178,23 @@ export const alignScrollportToRow = (
     finish()
   }
 
-  const beginCorrectionWindow = (port: HTMLElement | null) => {
+  /** Arm takeover detection on the port we just moved. Separate from the
+   *  correction window below because the two answer different questions: this
+   *  one is "has the user taken over from us", and it becomes true the moment
+   *  we have moved anything at all — including a fallback alignment during a
+   *  wait that may never end (a legacy `outline:` scope is rewritten out from
+   *  under the stored location, so the exact row can never arrive). Leaving it
+   *  to the window meant a scrollbar drag went unnoticed for the rest of that
+   *  wait and the next mutation snapped the pane back. */
+  const watchForTakeover = (port: HTMLElement) => {
+    if (aligned) return
+    port.addEventListener('scroll', onScroll, {passive: true})
+  }
+
+  const beginCorrectionWindow = () => {
     if (realignTimer) return
     realignTimer = setTimeout(finish, realignWindowMs)
     sampler = setInterval(attempt, REALIGN_SAMPLE_MS)
-    port?.addEventListener('scroll', onScroll, {passive: true})
   }
 
   const attempt = () => {
@@ -192,12 +204,13 @@ export const alignScrollportToRow = (
     const port = ownScrollportFor(found.row, scrollEl)
     if (!port) return
     alignRowToScrollportTop(found.row)
+    watchForTakeover(port)
     // A scope-drift fallback is a guess, and acting on it must not END the
     // search: the exact row can be a lazy copy in another surface that is still
     // hydrating, and closing the correction window here would leave the pane
     // anchored to the wrong copy for good. Align to the guess (better than the
     // top of the page) but keep waiting for the real one.
-    if (found.exact) beginCorrectionWindow(aligned ? null : port)
+    if (found.exact) beginCorrectionWindow()
     aligned = {port, scrollTop: port.scrollTop}
   }
 

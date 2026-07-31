@@ -42,10 +42,13 @@ interface LazyViewportMountProps {
   overscanPx: number
   children: ReactNode
   renderPlaceholder: (props: LazyViewportPlaceholderProps) => ReactNode
-  /** The block this row renders. Only needed when `cacheKey` is a surface's
-   *  own key rather than `lazyBlockCacheKey(blockId)`; it keeps the row
-   *  reachable by block id — see `lazyMountRegistry`. */
-  blockId?: string
+  /** The block this row renders. REQUIRED, even when `cacheKey` already is
+   *  `lazyBlockCacheKey(blockId)`: it is what keeps a row reachable by block
+   *  id whatever key its surface chose, and a surface that forgets it goes
+   *  silently unreachable to keyboard navigation and to scroll restore — see
+   *  `lazyMountRegistry`. Optional was tried and immediately drifted: the
+   *  recents rows shipped without it. */
+  blockId: string
 }
 
 /**

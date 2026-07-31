@@ -82,6 +82,7 @@ describe('FocusedRowLazyMount', () => {
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -112,6 +113,7 @@ describe('FocusedRowLazyMount', () => {
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -151,6 +153,7 @@ describe('FocusedRowLazyMount', () => {
         <div data-block-id="nested" data-render-scope-id="panel:nested"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -159,6 +162,7 @@ describe('FocusedRowLazyMount', () => {
         </LazyViewportMount>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('fence-parent')}
+          blockId="fence-parent"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="fence-placeholder"/>}
@@ -188,6 +192,7 @@ describe('FocusedRowLazyMount', () => {
         <div data-block-id="nested" data-render-scope-id="some-other-panel"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -222,6 +227,7 @@ describe('FocusedRowLazyMount', () => {
         <FocusedRowLazyMount block={panel} scopeRootId="top"/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('off-screen')}
+          blockId="off-screen"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="placeholder"/>}
@@ -289,6 +295,7 @@ describe('FocusedRowLazyMount', () => {
         <PanelHarness/>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('page2-row')}
+          blockId="page2-row"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="page2-placeholder"/>}
@@ -297,6 +304,7 @@ describe('FocusedRowLazyMount', () => {
         </LazyViewportMount>
         <LazyViewportMount
           cacheKey={lazyBlockCacheKey('page2-control')}
+          blockId="page2-control"
           estimatedHeightPx={32}
           overscanPx={600}
           renderPlaceholder={() => <div data-testid="page2-control-placeholder"/>}

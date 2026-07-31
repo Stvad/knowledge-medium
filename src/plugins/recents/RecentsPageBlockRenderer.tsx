@@ -53,6 +53,7 @@ function RecentRow({data, now}: RecentRowProps) {
   return (
     <LazyViewportMount
       cacheKey={`recents:${data.id}`}
+      blockId={data.id}
       estimatedHeightPx={ROW_ESTIMATED_HEIGHT_PX}
       overscanPx={ROW_OVERSCAN_PX}
       renderPlaceholder={(props) => <RecentRowPlaceholder {...props}/>}

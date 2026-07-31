@@ -324,6 +324,30 @@ describe('alignScrollportToRow — whose scrollport it is', () => {
     cancel()
   })
 
+  // A takeover has to be noticed during a fallback-only wait too. The legacy
+  // `outline:` rewrite changes the stored scope out from under the location, so
+  // the exact row may never arrive — without this the whole two-second wait ran
+  // with no takeover detection and the next mutation snapped the pane back.
+  it('notices a takeover after a fallback-only alignment', async () => {
+    const {port, addRow, moveRow} = build(100)
+    port.scrollTop = 0
+    const row = addRow('row-b', 'some-other-scope', 300)
+
+    const cancel = alignScrollportToRow(port, LOCATION)
+    expect(port.scrollTop).toBe(300)
+
+    port.scrollTop = 900
+    port.dispatchEvent(new Event('scroll'))
+
+    // A mutation that would otherwise re-align.
+    moveRow(row, 500)
+    port.appendChild(document.createElement('div'))
+    await new Promise(resolve => setTimeout(resolve, 120))
+
+    expect(port.scrollTop).toBe(900)
+    cancel()
+  })
+
   // The exact scoped row can be a lazy copy in another surface that is still
   // hydrating. Aligning to the block-id fallback is a better guess than the top
   // of the page, but closing the correction window on it would strand the pane

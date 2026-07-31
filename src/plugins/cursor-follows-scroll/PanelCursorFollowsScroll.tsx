@@ -33,11 +33,12 @@ const CURSOR_MOUNT_WATCH_MS = 3000
  *
  * Two things keep this from turning into a scroll fight:
  *
- *   - The row it picks is on screen by the SAME measure
- *     `BlockFocusShellDecorator` applies to every focus change
- *     (`isRowInViewport`), so the decorator agrees no scrolling is needed and
- *     does nothing. Picking a row the decorator disagreed with would scroll the
- *     panel out from under the user on every re-anchor.
+ *   - Every row it picks is one `BlockFocusShellDecorator` agrees needs no
+ *     scrolling, so the decorator does nothing on the focus change this writes.
+ *     `isRowInViewport` implies the decorator's own predicate rather than
+ *     equalling it (that one is strictly more permissive) — the implication is
+ *     the direction the guarantee needs; see its docblock for where they differ
+ *     and why that gap is left open.
  *   - It only fires for a cursor it has SEEN on screen since focus landed
  *     there. A focus write whose row starts off screen is a move the app is
  *     still catching up to — keyboard navigation to a row below the fold, or a
