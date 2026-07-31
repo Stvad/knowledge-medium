@@ -1,4 +1,4 @@
-import { v5 as uuidv5 } from 'uuid'
+import { workspaceDerivedBlockId } from '@/data/derivedIds'
 import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamPage } from './types'
@@ -11,7 +11,7 @@ export const ROAM_IMPORT_NS = 'b8d6f1c2-7e9a-4f4d-a4f1-2c0a3a6e7f01'
 // Deterministic id for a non-daily Roam block. Workspace-scoped so the
 // same Roam graph imported into two workspaces produces distinct ids.
 export const roamBlockId = (workspaceId: string, roamUid: string): string =>
-  uuidv5(`${workspaceId}:roam:${roamUid}`, ROAM_IMPORT_NS)
+  workspaceDerivedBlockId(ROAM_IMPORT_NS, workspaceId, `roam:${roamUid}`)
 
 export interface DailyPageInfo {
   iso: string

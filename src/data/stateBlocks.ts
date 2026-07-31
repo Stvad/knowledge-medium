@@ -12,7 +12,6 @@
  */
 
 import {memoize} from '@/utils/memoize'
-import { v5 as uuidv5 } from 'uuid'
 import {
   ChangeScope,
   type PropertySchema,
@@ -21,6 +20,7 @@ import {
   type User,
 } from '@/data/api'
 import { Block } from './block'
+import { derivedBlockId, workspaceDerivedBlockId } from './derivedIds'
 import type { Repo } from './repo'
 import type { BlockContextType } from '@/types'
 import {
@@ -52,10 +52,10 @@ const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
  *  namespace. Two offline clients derive the same id, so a user's page
  *  authored on one device resolves the same on every other. */
 export const userPageBlockId = (workspaceId: string, userId: string): string =>
-  uuidv5(`${workspaceId}:${userId}`, USER_PAGE_NS)
+  workspaceDerivedBlockId(USER_PAGE_NS, workspaceId, userId)
 
 const stateChildBlockId = (parentId: string, content: string): string =>
-  uuidv5(`${parentId}:${content}`, STATE_CHILD_NS)
+  derivedBlockId({namespace: STATE_CHILD_NS, key: `${parentId}:${content}`})
 
 const snapshotIncludingType = (repo: Repo, type: TypeContribution): TypeRegistrySnapshot => {
   const snapshot = repo.snapshotTypeRegistries()

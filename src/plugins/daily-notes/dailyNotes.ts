@@ -1,6 +1,7 @@
-import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { Block } from '@/data/block'
+import { workspaceDerivedBlockId } from '@/data/derivedIds'
+import { getOrCreateKernelPage, kernelPageBlockId } from '@/data/kernelPage'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
@@ -43,13 +44,12 @@ export const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
 export const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
 const JOURNAL_ALIAS = 'Journal'
-const JOURNAL_ALIASES = [JOURNAL_ALIAS]
 
 export const journalBlockId = (workspaceId: string): string =>
-  uuidv5(workspaceId, JOURNAL_NS)
+  kernelPageBlockId(workspaceId, JOURNAL_NS)
 
 export const dailyNoteBlockId = (workspaceId: string, iso: string): string =>
-  uuidv5(`${workspaceId}:${iso}`, DAILY_NOTE_NS)
+  workspaceDerivedBlockId(DAILY_NOTE_NS, workspaceId, iso)
 
 export const todayIso = (now: Date = new Date()): string =>
   formatIsoDate(now)
@@ -93,60 +93,26 @@ const includesAll = (existing: readonly string[], expected: readonly string[]): 
 
 const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
 
-/** Get-or-create the workspace's Journal page. Idempotent: a
- *  deterministic id derived from `workspaceId` means two clients
- *  booting offline converge on the same row. Soft-deleted journal
- *  rows are restored. */
+/** Get-or-create the workspace's Journal page.
+ *
+ *  The Journal is a kernel page — deterministic id from `workspaceId`, a
+ *  reserved alias, restored when soft-deleted, repaired when it has lost
+ *  its type or alias. So it IS one, rather than carrying its own copy of
+ *  that logic.
+ *
+ *  It is the one kernel page with no marker type: the Journal is reached
+ *  by its derived id and by its alias, never by a
+ *  `subscribeBlocks({types})` query. Giving it a marker now would mean
+ *  tagging every Journal row already written, which is a migration and
+ *  not this function's business. */
 export const getOrCreateJournalBlock = async (
   repo: Repo,
   workspaceId: string,
-): Promise<Block> => {
-  const id = journalBlockId(workspaceId)
-  const live = await repo.load(id)
-  if (live) {
-    const aliases = stringListProperty(live.properties[aliasesProp.name])
-    const needsRepair =
-      !hasBlockType(live, PAGE_TYPE) ||
-      !includesAll(aliases, JOURNAL_ALIASES)
-    if (!needsRepair) return repo.block(id)
-
-    const typeSnapshot = repo.snapshotTypeRegistries()
-    await repo.tx(async tx => {
-      const current = await tx.get(id)
-      if (!current || current.deleted) return
-      const currentAliases = stringListProperty(current.properties[aliasesProp.name])
-      if (!includesAll(currentAliases, JOURNAL_ALIASES)) {
-        await tx.setProperty(id, aliasesProp, mergeStrings([...JOURNAL_ALIASES, ...currentAliases]))
-      }
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-    }, {scope: ChangeScope.BlockDefault})
-    return repo.block(id)
-  }
-
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  await repo.tx(async tx => {
-    // Re-read inside the tx with the unfiltered `tx.get` so we see
-    // tombstones (`repo.load` filtered them out as null).
-    const existing = await tx.get(id)
-    if (existing && !existing.deleted) return
-    if (existing && existing.deleted) {
-      await tx.restore(id, {content: JOURNAL_ALIAS})
-      await tx.setProperty(id, aliasesProp, JOURNAL_ALIASES)
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-      return
-    }
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: null,
-      orderKey: 'a0',
-      content: JOURNAL_ALIAS,
-    }, {systemMint: true})
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
-  }, {scope: ChangeScope.BlockDefault})
-
-  return repo.block(id)
-}
+): Promise<Block> =>
+  getOrCreateKernelPage(repo, workspaceId, {
+    namespace: JOURNAL_NS,
+    alias: JOURNAL_ALIAS,
+  })
 
 /** Order key under the journal page. The tree uses normal ascending
  *  `(order_key, id)` ordering, so daily notes encode the date as its

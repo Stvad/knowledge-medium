@@ -144,6 +144,8 @@ export type {
   TypedChildSpec,
 } from '@/data/typedRecords.js'
 
+export type { KernelPageSpec } from '@/data/kernelPage.js'
+
 export type { TodoStatus } from '@/plugins/todo/schema.js'
 
 export type { FocusedBlockLocation } from '@/data/properties.js'

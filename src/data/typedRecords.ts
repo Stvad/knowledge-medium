@@ -16,7 +16,7 @@
  * hand-rolled record stays true here.
  */
 
-import { v5 as uuidv5 } from 'uuid'
+import { derivedBlockId, type DerivedIdentity } from './derivedIds'
 import type { AnyPropertyAssignment, BlockData, BlockReference, Tx, TypeRegistrySnapshot } from './api'
 import { DeletedConflictError, DeterministicIdCrossWorkspaceError } from './api/errors'
 import { createChild, orderKeyForInsert } from './mutators'
@@ -109,37 +109,16 @@ export const createTypedChild = async (
   return id
 }
 
-/**
- * A record whose block id is derived from what it IS, rather than minted at
- * random.
+/** Identity and id derivation live in `@/data/derivedIds` — shared with the
+ *  kernel pages and reference seats, which derive ids the same way but apply a
+ *  different policy to what they find. That module is also where the rules for
+ *  choosing a namespace and a key are written down. Re-exported here so a
+ *  caller of `getOrCreateTypedChild` has the type to hand.
  *
- * `namespace` is a uuid-v5 namespace, one per record kind — generate a fresh
- * random uuid for it and hard-code it. `key` is the record's natural
- * identity: everything that makes it *this* record and not another one
- * ("<workspaceId>|2026-07-24|A").
- *
- * The key is the WHOLE identity — `parentId` is not part of the derivation,
- * so a parent only scopes a record if the parent's own id is in the key (as
- * an exercise entry keys on its workout). Include the workspace id unless
- * something else in the key already implies it: two workspaces that derive
- * the same id collide, and one of them then finds its record `taken` by the
- * other's.
- *
- * If a key is built from user-supplied text, escape the separator: `"a|b"`
- * with occurrence 0 and `"a"` with occurrence 1 must not spell the same key.
- */
-export interface DerivedIdentity {
-  namespace: string
-  key: string
-}
-
-/** The one block id a `DerivedIdentity` resolves to.
- *
- *  A pure function of the identity and nothing else — which is the whole
- *  point: every device computes the same id from the same facts, with no
- *  reference to what that device happens to hold. */
-export const derivedBlockId = (identity: DerivedIdentity): string =>
-  uuidv5(identity.key, identity.namespace)
+ *  For a record, `parentId` is NOT part of the derivation: a parent scopes a
+ *  record only if the parent's own id is in the key, the way an exercise entry
+ *  keys on its workout. */
+export { derivedBlockId, type DerivedIdentity }
 
 export type DerivedChildOutcome =
   /** Nothing was there; the record was written from `spec`. */

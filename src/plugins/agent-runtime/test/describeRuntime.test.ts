@@ -299,7 +299,7 @@ describe('describeRuntime', () => {
     const rootSingleton = description.authoring.storage.patterns.find(
       pattern => pattern.id === 'plugin-root-singleton',
     )
-    expect(rootSingleton?.example?.code).toContain('pluginBlockId')
+    expect(rootSingleton?.example?.code).toContain('getOrCreateKernelPage')
 
     const userPrefs = description.authoring.storage.patterns.find(
       pattern => pattern.id === 'user-prefs-config',

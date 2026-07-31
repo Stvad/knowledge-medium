@@ -242,6 +242,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   },
   {
     category: 'data',
+    importPath: '@/data/kernelPage.js',
+    description: 'getOrCreateKernelPage — the per-workspace singleton PAGE at the workspace root: your plugin\'s "Library" or "Inbox" that everything else files under. One call gets you a deterministic id (so re-installing, or a second device, lands on the same page rather than a duplicate), the alias, the page + marker types, repair when a row has lost one of them, and restore when it was deleted. The marker type is what you query for later — `subscribeBlocks({types: [YOUR_MARKER]})`. Use this for the root; use getOrCreateTypedChild for the records under it. Deriving the id yourself and following it with `repo.load` then `tx.create` is the shape this replaces: the load answers for the moment it ran, so two writers both see nothing and the second one throws.',
+    exports: ['getOrCreateKernelPage', 'kernelPageBlockId'],
+    types: ['KernelPageSpec'],
+  },
+  {
+    category: 'data',
     importPath: '@/data/facets.js',
     description: 'Data-layer facets — definition seeds, property-editor overrides, block-type seeds.',
     exports: ['definitionSeedsFacet', 'propertyEditorOverridesFacet', 'typeSeedsFacet'],
