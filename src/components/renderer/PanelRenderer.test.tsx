@@ -416,7 +416,24 @@ describe('PanelRenderer', () => {
     renderPanel(false)
     await screen.findByTestId('panel-top-level-block')
 
-    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), location)
+    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), location, {})
+  })
+
+  // The offset rides along as the FLOOR, not the alternative: a cursor whose row
+  // can never be re-resolved (an embed target, a layout root with no shell)
+  // would otherwise strand the pane at the top — worse than the pixel restore.
+  it('hands the stored offset down as the fallback for an unreachable cursor', async () => {
+    const location = {blockId: 'child-x', renderScopeId: panelRenderScopeId('panel-a', 'page-a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, location)
+      await tx.setProperty('panel-a', scrollTopProp, 480)
+    }, {scope: ChangeScope.UiState, description: 'seed cursor and offset'})
+
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(alignScrollportToRow)
+      .toHaveBeenCalledWith(expect.anything(), location, {fallbackScrollTop: 480})
   })
 
   it('prefers a history restore cursor over the one still on the pane', async () => {
@@ -430,7 +447,7 @@ describe('PanelRenderer', () => {
     renderPanel(false)
     await screen.findByTestId('panel-top-level-block')
 
-    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), restored)
+    expect(alignScrollportToRow).toHaveBeenCalledWith(expect.anything(), restored, {})
   })
 
   // `writePanelContent` MANUFACTURES a cursor on the destination's top-level

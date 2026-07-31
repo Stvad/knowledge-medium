@@ -177,8 +177,16 @@ export function PanelRenderer({block}: BlockRendererProps) {
     // norm for anyone who scrolls without clicking, since scrolling alone never
     // creates a cursor.
     const location = restore ? restore.focusedLocation : peekFocusedBlockLocation(block)
-    if (location) return alignScrollportToRow(scrollEl, location)
     const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
+    if (location) {
+      // The offset rides along as the floor, not as the alternative: a cursor
+      // whose row can never be re-resolved (see `fallbackScrollTop`) would
+      // otherwise strand the pane at the top, which is worse than the pixel
+      // restore this replaced.
+      return alignScrollportToRow(scrollEl, location, {
+        ...(scrollTop != null ? {fallbackScrollTop: scrollTop} : {}),
+      })
+    }
     if (scrollTop != null) scrollEl.scrollTop = scrollTop
   }, [topLevelBlockId, block])
 

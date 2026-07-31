@@ -370,3 +370,50 @@ describe('alignScrollportToRow — whose scrollport it is', () => {
     cancel()
   })
 })
+
+describe('alignScrollportToRow — when the anchor never appears', () => {
+  // Restoring by cursor assumes the cursor's row can be re-resolved after a
+  // remount, and there are surfaces where it can't (a target inside an embed
+  // whose source row is lazy, a layout root that renders no shell, a backlink
+  // showing a promoted ancestor from local state). Every one that is missed
+  // would otherwise strand the pane at the TOP — worse than the pixel restore
+  // this replaced — so the offset is the floor rather than the alternative.
+  it('falls back to the stored offset', async () => {
+    const {port} = build(100)
+    port.scrollTop = 0
+
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 60, fallbackScrollTop: 640})
+    expect(port.scrollTop).toBe(0)
+
+    await vi.waitFor(() => {
+      expect(port.scrollTop).toBe(640)
+    })
+    cancel()
+  })
+
+  it('does not use the offset once the anchor has been found', async () => {
+    const {port, addRow} = build(100)
+    port.scrollTop = 0
+    addRow('row-b', 'panel:page', 300)
+
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 60, fallbackScrollTop: 640})
+    expect(port.scrollTop).toBe(300)
+
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(port.scrollTop).toBe(300)
+    cancel()
+  })
+
+  // Someone who has already taken over must not be moved when the wait expires.
+  it('does not use the offset after the user has taken over', async () => {
+    const {port} = build(100)
+    port.scrollTop = 0
+
+    const cancel = alignScrollportToRow(port, LOCATION, {waitMs: 60, fallbackScrollTop: 640})
+    port.dispatchEvent(new Event('wheel'))
+
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(port.scrollTop).toBe(0)
+    cancel()
+  })
+})

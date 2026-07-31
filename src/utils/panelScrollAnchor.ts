@@ -118,6 +118,21 @@ const ownScrollportFor = (rowEl: HTMLElement, scrollEl: HTMLElement): HTMLElemen
 export interface AlignScrollportOptions {
   waitMs?: number
   realignWindowMs?: number
+  /**
+   * Where to land if the anchor row never appears. Restoring by cursor assumes
+   * the cursor's row can be re-resolved after a remount, and there are surfaces
+   * where it can't: a target inside a block embed (its wrapper exists only once
+   * the embed's SOURCE row mounts, which the ancestor walk can't reach because
+   * it follows data parents), a video-notes layout root that renders no shell
+   * at all, a backlink entry showing a promoted ancestor held in local state.
+   *
+   * Enumerating those one at a time is a losing game, and each one that is
+   * missed strands the pane at the TOP — strictly worse than the pixel restore
+   * this replaced. So the pixel offset stays as the floor: a cursor that can be
+   * found gives an exact position, and one that can't gives roughly the old
+   * behaviour instead of nothing.
+   */
+  fallbackScrollTop?: number
 }
 
 /**
@@ -144,7 +159,7 @@ export const alignScrollportToRow = (
   location: FocusedBlockLocation,
   options: AlignScrollportOptions = {},
 ): (() => void) => {
-  const {waitMs = ROW_WAIT_MS, realignWindowMs = REALIGN_WINDOW_MS} = options
+  const {waitMs = ROW_WAIT_MS, realignWindowMs = REALIGN_WINDOW_MS, fallbackScrollTop} = options
 
   let done = false
   let realignTimer: ReturnType<typeof setTimeout> | null = null
@@ -214,8 +229,16 @@ export const alignScrollportToRow = (
     aligned = {port, scrollTop: port.scrollTop}
   }
 
+  /** The wait ran out. Distinct from `finish`, which is also how a user gesture
+   *  ends this — someone who has already taken over must not be moved. */
+  const giveUp = () => {
+    if (done) return
+    if (!aligned && fallbackScrollTop != null) scrollEl.scrollTop = fallbackScrollTop
+    finish()
+  }
+
   const observer = new MutationObserver(attempt)
-  const deadline = setTimeout(finish, waitMs)
+  const deadline = setTimeout(giveUp, waitMs)
 
   // Gestures the user aims at THIS panel. Scoped to the scroll container, not
   // the document: `keydown` bubbles from whatever inside the panel has focus,

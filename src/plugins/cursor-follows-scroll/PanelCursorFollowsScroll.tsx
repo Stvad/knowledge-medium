@@ -61,6 +61,11 @@ const CURSOR_MOUNT_WATCH_MS = 3000
  */
 export function PanelCursorFollowsScroll({block}: {block: Block}) {
   const [focusedLocation] = usePropertyValue(block, focusedBlockLocationProp)
+  // Subscribed, not just peeked: a scroll that happens while the editor is open
+  // is REFUSED, and nothing schedules another attempt — so leaving the editor
+  // has to be its own trigger, or the cursor stays on the row the user scrolled
+  // away from and the next motion (or restore) goes back to it.
+  const [isEditing] = usePropertyValue(block, isEditingProp)
   const focusedBlockId = focusedLocation?.blockId
   const renderScopeId = focusedLocation?.renderScopeId
 
@@ -121,6 +126,10 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     }
 
     sample()
+    // Leaving edit mode re-runs the decision once, which is what makes the
+    // refusal above a deferral rather than a silent drop. Costs nothing when
+    // the cursor is still on screen: `resolveSettledAnchor` returns null.
+    if (seenOnScreen && !isEditing) settle()
     // The cursor's row often doesn't exist yet — a cold load, or a restore
     // waiting on `FocusedRowLazyMount` to materialize deferred ancestors. Watch
     // for it rather than leaving `seenOnScreen` to the next scroll event: a
@@ -145,7 +154,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       clearTimeout(mountWatchDeadline)
       stopWatchingForMount()
     }
-  }, [block, focusedBlockId, renderScopeId])
+  }, [block, focusedBlockId, renderScopeId, isEditing])
 
   return null
 }
