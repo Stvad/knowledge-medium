@@ -14,6 +14,7 @@ import {useEffect, useRef, useState} from 'react'
 
 import type {Repo} from '@/data/repo.js'
 import {openDialog} from '@/utils/dialogs.js'
+import {useBlockOpener} from '@/utils/navigation.js'
 
 import {detectPendingLayoff, layoffAlreadyRecorded, layoffFromPending} from '../engine/reentry'
 import {detectLeftRightAsymmetry} from '../engine/shoulder'
@@ -93,12 +94,15 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
   const {prescription, session, setSession, config, history, layoffs, liveWorkouts, liveLoaded, configLoaded, day} = program
   const readOnly = repo.isReadOnly
   const unit = config.unit
+  // One subscription for the whole view — the duplicate-session warning below
+  // opens each duplicate from an onClick, not from a hook per list item.
+  const openBlock = useBlockOpener()
 
   const tonights = liveWorkouts.filter(w => w.day === day && w.session === session)
   const live = preferredLive(tonights)
   /** More than one unfinished session for tonight. This view can only log into
    *  one of them, so the others sit there with their sets — possibly open
-   *  todos — reachable from the outline and from nothing here.
+   *  todos — reachable from nowhere else on this screen.
    *
    *  A repeat session is MINTED rather than derived (see `startWorkout`),
    *  which is what makes this representable: two devices that both start the
@@ -107,6 +111,12 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
    *  you can see beats a silent write into someone else's finished record —
    *  and this is the part that makes "you can see it" true. */
   const duplicates = tonights.length - 1
+  /** The duplicates themselves — everything in `tonights` except whichever one
+   *  `preferredLive` picked for this screen to drive. Not necessarily filed
+   *  under this page: `liveWorkouts` is a workspace-wide query and a repeat
+   *  session can be started (and filed) anywhere, e.g. under a year heading —
+   *  so "open" rather than "see below" is the only claim that is always true. */
+  const duplicateWorkouts = tonights.filter(w => w.id !== live?.id)
 
   const [draft, setDraft] = useState<DraftExercise[]>(() => overlayLive(buildDraft(prescription, unit), live))
   const [busy, setBusy] = useState(false)
@@ -954,22 +964,25 @@ export function TonightView({repo, workspaceId, pageId, program}: Props) {
       )}
 
       {duplicates > 0 && (
-        <div className="text-xs text-amber-600 dark:text-amber-400">
-          {duplicates === 1
-            ? 'Another unfinished session for tonight exists — this screen is logging into one of them. '
-            : `${duplicates} other unfinished sessions for tonight exist — this screen is logging into one of them. `}
-          {/* Says where the extras actually ARE, instead of sending the user to
-              the page they are already on — this view is only ever mounted by
-              the Strength Log renderer. That renderer keeps the default block
-              frame, so the page's child workout blocks (the duplicates
-              included) render as a plain outline underneath, and that outline
-              is the surface that can open, edit and delete them. It is also
-              the only one: this view deliberately drives a single workout, so
-              a control here would have to pick which of two sessions it meant.
-              Point at the blocks rather than promise a merge that isn't. */}
-          The {duplicates === 1 ? 'other one is a block' : 'others are blocks'} in this page’s outline
-          below — open {duplicates === 1 ? 'it' : 'them'} to see what was logged there, and delete
-          {duplicates === 1 ? ' it' : ' them'} once you have moved across anything worth keeping.
+        <div className="flex flex-wrap items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+          <span>
+            {duplicates === 1
+              ? 'Another unfinished session for tonight exists — this screen is logging into one of them.'
+              : `${duplicates} other unfinished sessions for tonight exist — this screen is logging into one of them.`}
+          </span>
+          {/* Numbered once there is more than one: three buttons all reading
+              "Open" are indistinguishable to someone deciding which to press,
+              and to a screen reader announcing them in a row. */}
+          {duplicateWorkouts.map((w, i) => (
+            <button
+              key={w.id}
+              type="button"
+              className="underline underline-offset-2"
+              onClick={e => openBlock(e, {blockId: w.id, workspaceId})}
+            >
+              {duplicateWorkouts.length > 1 ? `Open #${i + 1}` : 'Open'}
+            </button>
+          ))}
         </div>
       )}
 

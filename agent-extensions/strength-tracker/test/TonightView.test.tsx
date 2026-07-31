@@ -28,6 +28,7 @@ import {DEFAULT_CONFIG} from '../src/program/defaults'
 import {TonightView} from '../src/ui/TonightView'
 import type {ProgramState} from '../src/ui/useProgram'
 import {setDialogAnswer} from './kernel/dialogs'
+import {openedBlocks, resetOpenedBlocks} from './kernel/navigation'
 
 vi.mock('../src/km/store', () => ({
   startWorkout: vi.fn(),
@@ -1087,6 +1088,14 @@ describe('TonightView', () => {
     await emit()
 
     expect(screen.getByText(/Another unfinished session for tonight exists/)).toBeTruthy()
+
+    // The warning names no location — `liveWorkouts` is workspace-wide and a
+    // repeat session can be filed anywhere, so the "Open" affordance is the
+    // only thing that has to be right: it must resolve to the OTHER
+    // workout's block ('w2'), not the one this screen is driving ('w1').
+    resetOpenedBlocks()
+    fireEvent.click(screen.getByRole('button', {name: 'Open'}))
+    expect(openedBlocks()).toEqual([{blockId: 'w2', workspaceId: 'ws'}])
   })
 
   it('does not wipe a session that arrived while the discard was in flight', async () => {

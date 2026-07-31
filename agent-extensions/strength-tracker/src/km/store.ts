@@ -26,6 +26,7 @@ import {FIELD} from './fields'
 import {
   ALT_CHOICE_TYPE,
   EXERCISE_ENTRY_TYPE,
+  LAYOFF_TYPE,
   SET_TYPE,
   WORKOUT_TYPE,
   choiceGroupProp,
@@ -149,6 +150,26 @@ type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 const WORKOUT_NS = '80ae2b6d-7bde-4de7-9790-04e2d24eeb02'
 const EXERCISE_NS = '6d216957-1c1f-45c8-8ee6-b44bb0e7f4aa'
 const SET_NS = 'feda0816-3421-4fe5-8249-ac2655cc962b'
+const LAYOFF_NS = 'cfa6899f-981a-4dac-8eae-978150c019a9'
+
+/** A layoff is keyed on where the gap STARTS, and deliberately not on the
+ *  whole range.
+ *
+ *  `to` is "when you came back", and that is exactly the field two clients
+ *  disagree about: you finish tonight's comeback session on one, and a second
+ *  device — holding a stale history snapshot, so its own `layoffAlreadyRecorded`
+ *  check also passes — finishes a different in-progress workout a day later.
+ *  Keyed on the range those are two records; `resolveReentry` then reads the
+ *  later `to` as the most recent layoff and restarts `sessionsBack`, putting
+ *  back the reduced loads you had already climbed out of. Keyed on `from` they
+ *  are one block, and the second finish ADOPTS it — which leaves the first
+ *  recorded return standing, since an adopt never overwrites properties.
+ *
+ *  Making the write atomic with its own finish (`28edb5b4a`) was necessary and
+ *  not sufficient: atomicity stops a layoff being lost, not two of them being
+ *  written from two workouts. */
+const layoffIdentity = (workspaceId: string, from: string): DerivedIdentity =>
+  ({namespace: LAYOFF_NS, key: `${workspaceId}|${from}`})
 
 /** One workout per workspace/day/session — the FIRST one. A second session of
  *  the same type on the same day has nothing left to key on (see
@@ -540,42 +561,62 @@ export const startWorkout = async (
       ],
       typeSnapshot,
     }
-    const derived = await getOrCreateTypedChild(repo, tx, {
-      identity: workoutIdentity(workspaceId, draft.day, draft.session),
-      adoptable: block => isTonightsLog(block, draft),
-      ...workoutSpec,
-    })
-
-    // `taken` — the day's first session of this type is finished, discarded,
-    // or hand-edited out of shape, and this is the second. Continue the one
-    // already standing if there is one (the same block the logging view would
-    // be showing), and only then start a new one.
-    let standing: BlockData | undefined
-    if (derived.status === 'taken') {
-      // The page's children AND anything the workspace-wide query knew about,
-      // deduped — the first is atomic with this write, the second is what the
-      // view can see. Each is re-read here, inside the transaction.
-      const seen = new Map<string, BlockData>()
-      for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
-        seen.set(block.id, block)
-      }
-      for (const id of known) {
-        if (seen.has(id)) continue
-        const block = await tx.get(id)
-        if (block) seen.set(id, block)
-      }
-      // `preferredLive`, not "the first one": this scan is ordered
-      // `(order_key, id)` while the VIEW reads a query ordered
-      // `(created_at, id)`, so taking either one's first match let the tap
-      // write into one workout while the screen attached to the other.
-      standing = preferredLive([...seen.values()]
-        .filter(block => block.id !== derived.id && !block.deleted && isTonightsLog(block, draft)))
+    // Is a session already standing? Asked BEFORE deriving, not only when the
+    // derived seat turns out to be occupied.
+    //
+    // A free seat does not mean no session is standing. A workout created by
+    // the version before derived ids carries a RANDOM id, so it leaves the
+    // derived seat empty however live it is — and deriving first then built a
+    // second workout beside it, both answering for the same day and session.
+    // `preferredLive` picks between those by id, so depending on which sorted
+    // lower, either the sets logged before the upgrade disappeared from the
+    // screen or the edit that had just been made did. The window is narrow —
+    // the first edit after upgrading mid-session — but what it costs is a
+    // split log, and the scan is a read this transaction was already prepared
+    // to do.
+    //
+    // Deriving still happens whenever nothing is standing, which is what keeps
+    // two devices convergent: neither sees a session, both derive the same id,
+    // and the two inserts collapse into one row.
+    //
+    // The page's children AND anything the workspace-wide query knew about,
+    // deduped — the first is atomic with this write, the second is what the
+    // view can see. Each is re-read here, inside the transaction.
+    const seen = new Map<string, BlockData>()
+    for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+      seen.set(block.id, block)
     }
-    const workout = derived.status !== 'taken'
-      ? derived
-      : standing !== undefined
-        ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
+    for (const id of known) {
+      if (seen.has(id)) continue
+      const block = await tx.get(id)
+      if (block) seen.set(id, block)
+    }
+    // `preferredLive`, not "the first one": this scan is ordered
+    // `(order_key, id)` while the VIEW reads a query ordered `(created_at,
+    // id)`, so taking either one's first match let the tap write into one
+    // workout while the screen attached to the other.
+    const standing = preferredLive([...seen.values()]
+      .filter(block => !block.deleted && isTonightsLog(block, draft)))
+
+    /** Nothing standing: take the derived seat, and mint beside it when that
+     *  seat is held by something this session cannot use — the day's first
+     *  session of this type finished, discarded, or hand-edited out of shape,
+     *  and this is the second. A repeat has nothing left to key on, so it is
+     *  the one record here that is minted rather than derived. */
+    const deriveOrMint = async () => {
+      const derived = await getOrCreateTypedChild(repo, tx, {
+        identity: workoutIdentity(workspaceId, draft.day, draft.session),
+        adoptable: block => isTonightsLog(block, draft),
+        ...workoutSpec,
+      })
+      return derived.status !== 'taken'
+        ? derived
         : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
+    }
+
+    const workout = standing !== undefined
+      ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
+      : await deriveOrMint()
 
     // A workout we did not just create already has entries, and they are not
     // necessarily the ones this draft would derive: a session logged while the
@@ -1050,7 +1091,7 @@ export const finishWorkout = async (
       await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
     }
     await tx.setProperty(workoutId, statusProp, 'done')
-    if (layoff) await writeLayoffInTx(repo, tx, layoff.pageId, layoff.record, typeSnapshot)
+    if (layoff) await writeLayoffInTx(repo, tx, workout.workspaceId, layoff.pageId, layoff.record, typeSnapshot)
     return 'finished' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Finish workout'})
 }
@@ -1144,22 +1185,37 @@ export const readAltChoices = async (
 const writeLayoffInTx = async (
   repo: Repo,
   tx: Tx,
+  workspaceId: string,
   pageId: string,
   record: Omit<LayoffRecord, 'id'>,
   typeSnapshot: TypeSnapshot,
 ): Promise<string> => {
-  const id = await tx.run(createChild, {
+  const spec = {
     parentId: pageId,
     content: `Layoff · ${record.days}-day gap → ${Math.round(record.pct * 100)}% (${record.tierId})`,
-    position: {kind: 'first'},
+    position: {kind: 'first'} as const,
+    types: [LAYOFF_TYPE],
+    properties: [
+      propertyValue(layoffFromProp, dayToDate(record.from)),
+      propertyValue(layoffToProp, dayToDate(record.to)),
+      propertyValue(layoffDaysProp, record.days),
+      propertyValue(layoffTierProp, record.tierId),
+      propertyValue(layoffPctProp, record.pct),
+    ],
+    typeSnapshot,
+  }
+  const outcome = await getOrCreateTypedChild(repo, tx, {
+    identity: layoffIdentity(workspaceId, record.from),
+    // No parentage check, unlike the workout/entry/set records. A layoff is
+    // about a gap in time, not about where it sits, so a block the user filed
+    // somewhere else is still THIS gap's record — and rejecting it would
+    // strand the real one and mint a duplicate beside it, which is the exact
+    // divergence the derivation exists to prevent.
+    ...spec,
   })
-  await tx.setProperty(id, layoffFromProp, dayToDate(record.from))
-  await tx.setProperty(id, layoffToProp, dayToDate(record.to))
-  await tx.setProperty(id, layoffDaysProp, record.days)
-  await tx.setProperty(id, layoffTierProp, record.tierId)
-  await tx.setProperty(id, layoffPctProp, record.pct)
-  await repo.addTypeInTx(tx, id, 'strength-layoff', {}, typeSnapshot)
-  return id
+  // Taken by a tombstone, or by another workspace's row: this gap still needs
+  // a record and there is no second identity to derive one from.
+  return outcome.status === 'taken' ? createTypedChild(repo, tx, spec) : outcome.id
 }
 
 export const writeLayoff = async (
@@ -1170,7 +1226,7 @@ export const writeLayoff = async (
 ): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(
-    tx => writeLayoffInTx(repo, tx, pageId, record, typeSnapshot),
+    tx => writeLayoffInTx(repo, tx, workspaceId, pageId, record, typeSnapshot),
     {scope: ChangeScope.BlockDefault, description: 'Record layoff'},
   )
 }

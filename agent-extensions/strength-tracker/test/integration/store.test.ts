@@ -16,13 +16,14 @@
 
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 
-import {ChangeScope} from '@/data/api'
+import {ChangeScope, propertyValue} from '@/data/api'
 import type {BlockData} from '@/data/api'
 import type {BlockCache} from '@/data/blockCache'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {deleteBlock} from '@/data/mutators'
+import {createTypedChild} from '@/data/typedRecords'
 import {hasBlockType, typesProp} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
@@ -693,6 +694,34 @@ describe('side round-trips and feeds finishPlan\'s working weight', () => {
 })
 
 describe('startWorkout — idempotent and adopting', () => {
+  it('continues a standing workout whose id was never derived', async () => {
+    // The upgrade window. A session started by the version before derived ids
+    // has a RANDOM id, so it leaves the derived seat empty however live it is
+    // — and a `startWorkout` that reached for that seat first created a second
+    // workout beside it. Both then answer for the same day and session, and
+    // `preferredLive` picks between them by id: depending on which sorts
+    // lower, either the sets logged before the upgrade vanish from the screen
+    // or the edit that was just made does. The scan for a standing session
+    // runs before the derivation, so this one is adopted instead.
+    const legacyId = await repo.tx(async tx => createTypedChild(repo, tx, {
+      parentId: PAGE_ID,
+      content: 'Session A · 2026-07-24',
+      types: [WORKOUT_TYPE],
+      properties: [
+        propertyValue(sessionProp, 'A'),
+        propertyValue(dateProp, dayToDate('2026-07-24')),
+        propertyValue(statusProp, 'in-progress'),
+      ],
+    }), {scope: ChangeScope.BlockDefault, description: 'a workout from before derived ids'})
+
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+
+    expect(started.workoutId).toBe(legacyId)
+    expect(await liveChildren(PAGE_ID, WORKOUT_TYPE)).toHaveLength(1)
+  })
+
+
   it('called twice for the same workspace/day/session returns the same ids and does not overwrite logged values', async () => {
     const draft = workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8), draftSet(135, 8)])])
 
@@ -1425,6 +1454,35 @@ describe('the layoff record and the finish that justifies it', () => {
 
     const layoffs = buildLayoffs(await liveChildren(PAGE_ID, 'strength-layoff'))
     expect(layoffs).toHaveLength(1)
+    expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
+  })
+
+  it('is one record per gap, however many workouts finish against it', async () => {
+    // Two clients coming back from the same break: you finish tonight's
+    // comeback session on one, and a second device — still holding the history
+    // snapshot from before, so its own `layoffAlreadyRecorded` check passes
+    // too — finishes a different in-progress workout, dating its return a day
+    // later. With a minted id that is two layoff blocks, and `resolveReentry`
+    // takes the later `to` as the most recent one and restarts `sessionsBack`,
+    // re-applying loads you had already climbed out of. The gap's START is the
+    // identity, so the second write adopts the first's block instead.
+    const first = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Bench press', [draftSet(135, 8)])]))
+    expect(await writeSet(repo, first.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    expect(await finishWorkout(repo, first.workoutId, layoffOf())).toBe('finished')
+
+    const second = await startWorkout(repo, WORKSPACE_ID, PAGE_ID,
+      workoutDraft([exerciseDraft('Row', [draftSet(95, 10)])], {day: '2026-07-25', session: 'B'}))
+    expect(await writeSet(repo, second.exercises[0].setIds[0], {done: true}, 'lb')).toBe('written')
+    expect(await finishWorkout(repo, second.workoutId, {
+      pageId: PAGE_ID,
+      record: {from: '2026-07-01', to: '2026-07-25', days: 24, tierId: 'long', pct: 0.7},
+    })).toBe('finished')
+
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, 'strength-layoff'))
+    expect(layoffs).toHaveLength(1)
+    // The adopt leaves the record alone, so the FIRST return recorded is the
+    // one that stands — which is the one that actually happened.
     expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
   })
 
