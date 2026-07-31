@@ -24,6 +24,14 @@ export interface MarkdownRenderContext {
   data: MarkdownRenderData
 }
 
+/** Note the absent `rehypePlugins` slot — it is load-bearing, not an
+ *  oversight. With no rehype stage, react-markdown's `post()` rewrites every
+ *  hast `raw` node back to `text`, so raw HTML in block content reaches the
+ *  reader as escaped literal characters. `remark-wikilinks` relies on that to
+ *  fold `html` nodes into a wikilink alias (`[[<taglike page>]]`), which is
+ *  only lossless while raw HTML renders as text. Adding this slot — or
+ *  `skipHtml`, which drops `raw` nodes outright — invalidates that reasoning;
+ *  revisit `childSourceForReassembly` before you do. */
 export interface MarkdownRenderConfig {
   remarkPlugins: PluggableList
   components: Components
