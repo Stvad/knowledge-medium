@@ -23,6 +23,16 @@
  * tests should pass `now: Date.now` (or keep a hand-rolled `new Repo`). This
  * bit invalidation/cycleDetection/typedBlockQuery — they stayed on `new Repo`.
  *
+ * MNEMONIC IDS — `blockIdPolicy: 'any'`: a production Repo enforces the
+ * canonical-lowercase-UUID block-id contract at `tx.create` / `tx.createOrGet`
+ * (issue #456, `@/data/blockId`). Test Repos opt out, because the default
+ * `newId` mints `gen-1` and call sites seed `'root'` / `'T2'` / `'block-1'` —
+ * ids chosen so a failing `expect(childIds).toEqual([...])` is readable at a
+ * glance, which 36 hex digits are not. This is the ONE declared relaxation;
+ * the guard itself is pinned by `blockId.test.ts`, and its presence on an
+ * unconfigured Repo (the shape production builds) by `txEngine.test.ts`. Pass
+ * `blockIdPolicy: 'canonical'` for a test that wants the production contract.
+ *
  * CAVEAT — multiple Repos over one db: each `createTestRepo()` call gets its OWN
  * fresh `newId`/`newTxSeq` counters (both restart at `gen-1` / 1). Two Repos
  * sharing one db in the same test will therefore mint COLLIDING block ids and
@@ -57,6 +67,10 @@ export interface CreateTestRepoOptions {
   now?: () => number
   newId?: () => string
   newTxSeq?: () => number
+  /** Block-id shape contract (issue #456). Default `'any'` — see the
+   *  module doc's MNEMONIC IDS note. Pass `'canonical'` to exercise a Repo
+   *  configured the way production is. */
+  blockIdPolicy?: RepoOptions['blockIdPolicy']
 }
 
 export interface TestRepo {
@@ -86,6 +100,8 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     user: opts.user ?? { id: 'test-user' },
     now: opts.now ?? (() => ++timeCursor),
     newId: opts.newId ?? (() => `gen-${++idCursor}`),
+    // See the MNEMONIC IDS note in the module doc.
+    blockIdPolicy: opts.blockIdPolicy ?? 'any',
     newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,

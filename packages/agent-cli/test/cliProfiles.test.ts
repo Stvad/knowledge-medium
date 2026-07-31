@@ -38,7 +38,12 @@ const runCli = async (
   },
 })
 
-describe('agent runtime CLI profiles', () => {
+// Every test here spawns the real compiled CLI two or three times over — the
+// wall-clock is dominated by Node process startup, which is exactly what gets
+// slow when the machine is oversubscribed (the full gate runs one worker per
+// core). Measured at 1.7s for the three-spawn case on an idle machine, so the
+// 5s default has under 3x headroom.
+describe('agent runtime CLI profiles', {timeout: 30_000}, () => {
   it('stores and lists independent named token profiles', async () => {
     await runCli(['--profile', 'work', 'connect', 'TOKEN-WORK'])
     await runCli(['connect', 'TOKEN-DEFAULT'])

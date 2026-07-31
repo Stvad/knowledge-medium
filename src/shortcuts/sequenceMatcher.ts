@@ -72,9 +72,24 @@ export const createSequenceMatcher = (
   }
 
   const next = (event: KeyboardEvent): SequenceVerdict => {
-    // Sequence expiry. tinykeys clears via a setTimeout; keying off the event
-    // timestamp is equivalent for dispatch — nothing observes the state
-    // between two events, so an unbounded gap only matters at the next press.
+    // Sequence expiry. This port OWNS dispatch timing — tinykeys'
+    // `createKeybindingsHandler` sequence loop (with its real
+    // `setTimeout`-driven clear) never runs in production; only its
+    // per-press primitives (`matchKeybindingPress`/`parseKeybinding`) do
+    // (HotkeyReconciler.tsx, useKeyInspector.ts). So tinykeys' timer is a
+    // spec reference for what "expire" should mean, not a live peer this
+    // code must bit-for-bit agree with at runtime.
+    //
+    // At exactly `gap === timeoutMs` that reference is itself
+    // underdetermined: `event.timeStamp` is privacy-coarsened by browsers,
+    // so a rounded gap of exactly `timeoutMs` can correspond to true
+    // elapsed time on either side of the boundary — tinykeys' timer may or
+    // may not have fired for the real press this event represents, and
+    // nothing observable here can tell which. Given that, we fail toward
+    // KEEPING the sequence alive (strict `>`, not `>=`): wrongly expiring a
+    // sequence silently drops a shortcut the user was mid-way through
+    // typing, while wrongly continuing one just means a chord they were
+    // already pressing completes — the asymmetric-harm direction.
     if (lastTimeStamp !== null && event.timeStamp - lastTimeStamp > timeoutMs) {
       state.clear()
     }

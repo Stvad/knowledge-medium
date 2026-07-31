@@ -1808,10 +1808,12 @@ describe('HotkeyReconciler', () => {
       it('hold-fired modal shadowing works with real timers and no extra act wrapping around the keydown', async () => {
         const baseHandler = vi.fn()
         const modalHandler = vi.fn()
+        let holdFired = false
         const enterAction = buildAction({
           id: 'test.hold-real-enter',
           handler: (_deps, _trigger, dispatch) => {
             dispatch?.activate(MODAL_CONTEXT, mockDeps)
+            holdFired = true
           },
           defaultBinding: {keys: 's', phase: 'hold', holdMs: 20},
         })
@@ -1837,25 +1839,32 @@ describe('HotkeyReconciler', () => {
           </Harness>,
         )
 
-        // Real-time hold: dispatch s, wait past holdMs, then dispatch h
-        // WITHOUT wrapping the h in another act(). Mirrors the browser
-        // path where the user's next keypress arrives between React's
-        // commit and useEffect flushing.
+        // Real-time hold — no fake timers anywhere in this test: `s` arms a
+        // genuine 20ms hold timer, whose callback activates the modal context.
         dispatchKeydown('s')
-        await new Promise(r => setTimeout(r, 80))
+
+        // Both fences below are on observable work, never on wall clock,
+        // because the `h` keydown is a ONE-SHOT event: dispatched too early it
+        // isn't merely late, it's lost — the reconciler routes it against the
+        // pre-activation binding set and nothing re-delivers it, so no wait
+        // afterwards can recover the modal handler. A fixed sleep is exactly
+        // the bet that loses under full-suite CPU contention.
+        //
+        // Fence 1: the hold timer actually elapsed and its handler ran.
+        await vi.waitFor(() => expect(holdFired).toBe(true), {timeout: 2000, interval: 5})
+        // Fence 2: React committed that activation AND flushed the passive
+        // effect — the reconciler installs the modal binding from a useEffect
+        // (HotkeyReconciler.tsx:401), so an uncommitted activation means the
+        // binding isn't there yet. Only the keydown below stays outside act();
+        // that unwrapped keypress is what this test exists to pin, and it
+        // mirrors the browser path where the next press arrives on a commit
+        // React drove itself.
+        await act(async () => {})
+
         dispatchKeydown('h')
-        // The modal handler fires once React flushes the post-hold commit.
-        // Wait for that observable outcome rather than a fixed settle, then
-        // assert the base-context handler was suppressed. (The 80ms above is a
-        // genuine real-time hold duration and stays.) This test runs on REAL
-        // timers, so under full-suite CPU contention the commit+flush can lag —
-        // give vi.waitFor a generous budget (default is 1000ms) to avoid a
-        // load-dependent flake; on success it still resolves the instant the
-        // handler fires.
-        await vi.waitFor(() => expect(modalHandler).toHaveBeenCalledTimes(1), {
-          timeout: 5000,
-          interval: 25,
-        })
+        // Synchronous: the coordinator dispatches the winning candidate inline
+        // on the event (same as the fake-timer sibling above).
+        expect(modalHandler).toHaveBeenCalledTimes(1)
         expect(baseHandler).not.toHaveBeenCalled()
       })
 

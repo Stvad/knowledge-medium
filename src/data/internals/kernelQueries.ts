@@ -478,6 +478,18 @@ export interface AliasMatchWithRecency extends AliasMatch {
   updatedAt: number
 }
 
+/** One `(block, type)` membership row from the `block_types` index. */
+export interface BlockTypeAssignment {
+  blockId: string
+  type: string
+}
+
+/** Live-claimant count for one alias string. */
+export interface AliasClaimantCount {
+  alias: string
+  claimants: number
+}
+
 // ════════════════════════════════════════════════════════════════════
 // Phase 4 chunk B — kernel queries as `queriesFacet` contributions
 // ════════════════════════════════════════════════════════════════════
@@ -1303,6 +1315,125 @@ export const aliasMatchesFuzzyQuery = defineQuery<
   },
 })
 
+/** Types of a bounded, already-chosen set of blocks — one row per
+ *  `(blockId, type)` pair, in the order the block declares them.
+ *
+ *  Exists for display hints on rows some other query already picked —
+ *  the type shown beside each wikilink completion candidate. It is
+ *  deliberately NOT a search predicate: callers pass the ids they are
+ *  about to render, so the cost is O(ids) and independent of workspace
+ *  size. Filtering blocks BY type is `byType` / `typedBlocks`, which go
+ *  through the `block_types` index instead.
+ *
+ *  Reads `properties_json.$.types` directly rather than that index,
+ *  because the index cannot answer this question faithfully: its
+ *  PRIMARY KEY is `(block_id, type)`, so it hands rows back
+ *  type-ascending and the block's own ordering is gone. Consumers show
+ *  the FIRST type, and `searchAliasLabels`' other path reads the
+ *  property array — so an index read made the hint change (`Author` →
+ *  `Person`) as soon as the user typed a character. Both are an
+ *  `id IN (...)` seek; this one just keeps `je.key` (the array index)
+ *  to sort by, and applies the same `typeof(je.value) = 'text'`
+ *  tolerance the `block_types` trigger does, so the two paths agree on
+ *  malformed values too. Measured at 20k pages / 50 ids it costs what
+ *  the index read did — 0.277ms vs 0.284ms, best-of-60 — so the
+ *  correctness is free. Folding it into one row per block with
+ *  `json_extract(...,'$.types')` is NOT free (4.3ms, ~15x worse);
+ *  don't "optimize" it into that shape.
+ *
+ *  Per-id row deps (not just per returned row): a block that has no
+ *  types yet returns nothing, and tagging it later has to invalidate
+ *  this handle too. */
+export const blockTypesByIdsQuery = defineQuery<
+  {workspaceId: string; blockIds: string[]},
+  BlockTypeAssignment[]
+>({
+  name: 'core.blockTypesByIds',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    // Capped so "bounded, already-chosen set" is enforced rather than
+    // merely documented: this is registered as `core.blockTypesByIds`,
+    // so any plugin can call it, and one `?` placeholder per id would
+    // otherwise let a caller blow SQLITE_MAX_VARIABLE_NUMBER and
+    // declare that many row deps to walk on every later invalidation.
+    // The completion path asks for at most its display limit (50).
+    blockIds: z.array(z.string()).max(200),
+  }),
+  resultSchema: z.array(z.object({
+    blockId: z.string(),
+    type: z.string(),
+  })),
+  resolve: async ({workspaceId, blockIds}, ctx) => {
+    if (!workspaceId || blockIds.length === 0) return []
+    for (const blockId of blockIds) ctx.depend({kind: 'row', id: blockId})
+    const placeholders = blockIds.map(() => '?').join(', ')
+    return ctx.db.getAll<BlockTypeAssignment>(
+      `SELECT b.id AS blockId, je.value AS type
+       FROM blocks b, json_each(b.properties_json, '$.types') je
+       WHERE b.workspace_id = ?
+         AND b.deleted = 0
+         AND b.id IN (${placeholders})
+         AND json_type(b.properties_json, '$.types') = 'array'
+         AND typeof(je.value) = 'text'
+       ORDER BY b.id, je.key`,
+      [workspaceId, ...blockIds],
+    )
+  },
+})
+
+/** How many LIVE blocks claim each of the given aliases.
+ *
+ *  Duplicate claimants are a documented latent state: the
+ *  `block_aliases_workspace_alias_unique` trigger only fires for local
+ *  user txs, so sync-applied rows can leave several. Consumers that
+ *  show something about "the block behind this alias" need to know,
+ *  because `aliasLookup` resolves the alias to the OLDEST claimant
+ *  regardless of how anything else ranked them.
+ *
+ *  Keyed by alias rather than block id on purpose: the caller has
+ *  already truncated its ranked rows to a display limit, so counting
+ *  claimants among THOSE would miss a claimant that ranked below the
+ *  cutoff and report a contested alias as uncontested. Index-backed by
+ *  `idx_block_aliases_ws_alias`. */
+export const aliasClaimantCountsQuery = defineQuery<
+  {workspaceId: string; aliases: string[]},
+  AliasClaimantCount[]
+>({
+  name: 'core.aliasClaimantCounts',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    // Same bound + reasoning as `blockTypesByIds`.
+    aliases: z.array(z.string()).max(200),
+  }),
+  resultSchema: z.array(z.object({
+    alias: z.string(),
+    claimants: z.number(),
+  })),
+  resolve: async ({workspaceId, aliases}, ctx) => {
+    if (!workspaceId || aliases.length === 0) return []
+    // The alias channel, not per-row deps: what matters here is a
+    // claimant entering or leaving the set for these aliases, which is
+    // exactly what this channel reports (and the rows that could do it
+    // are not knowable up front).
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
+    const placeholders = aliases.map(() => '?').join(', ')
+    return ctx.db.getAll<AliasClaimantCount>(
+      `SELECT ba.alias AS alias, count(*) AS claimants
+       FROM block_aliases ba
+       JOIN blocks b ON b.id = ba.block_id
+       WHERE ba.workspace_id = ?
+         AND ba.alias IN (${placeholders})
+         AND b.deleted = 0
+       GROUP BY ba.alias`,
+      [workspaceId, ...aliases],
+    )
+  },
+})
+
 /** Single-block lookup by exact alias in a workspace. */
 export const aliasLookupQuery = defineQuery<
   {workspaceId: string; alias: string},
@@ -1378,6 +1509,8 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   aliasesInWorkspaceQuery,
   aliasMatchesQuery,
   aliasMatchesFuzzyQuery,
+  blockTypesByIdsQuery,
+  aliasClaimantCountsQuery,
   aliasLookupQuery,
   findExtensionBlocksQuery,
 ]
@@ -1405,6 +1538,8 @@ declare module '@/data/api' {
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
     'core.aliasMatches': typeof aliasMatchesQuery
     'core.aliasMatchesFuzzy': typeof aliasMatchesFuzzyQuery
+    'core.blockTypesByIds': typeof blockTypesByIdsQuery
+    'core.aliasClaimantCounts': typeof aliasClaimantCountsQuery
     'core.aliasLookup': typeof aliasLookupQuery
     'core.findExtensionBlocks': typeof findExtensionBlocksQuery
   }

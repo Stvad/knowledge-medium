@@ -94,7 +94,10 @@ const findPageByAlias = async (h: TestDb, repo: Repo, alias: string): Promise<st
   return null
 }
 
-describe('seedTutorial', () => {
+// Each test seeds the whole tutorial outline into a real repo — hundreds of
+// blocks through the tx layer, ~1-1.6s of genuine work per test on an idle
+// machine, so the 5s default has ~3x headroom and loses it under contention.
+describe('seedTutorial', {timeout: 30_000}, () => {
   it('returns the default Tutorial root id (the landing target)', async () => {
     const tutorialId = await seedTutorial(env.repo, WS)
     expect(typeof tutorialId).toBe('string')

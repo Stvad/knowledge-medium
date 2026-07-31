@@ -32,16 +32,16 @@ import {approveExtensionHere} from '@/extensions/approveExtensionHere.js'
 import {
   extensionPromptDismissals,
   useExtensionPromptDismissals,
-} from '@/extensions/extensionPromptDismissals.js'
+} from './dismissals.js'
 import {
   pendingExtensionPrompts,
   extensionPromptStore,
   type PendingExtensionPrompt,
-} from '@/extensions/extensionPromptStore.js'
-import {extensionPromptDiagnosticContribution} from '@/extensions/extensionPromptStatus.js'
+} from './store.js'
+import {extensionPromptDiagnosticContribution} from './status.js'
 import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 import {dismissToast, showInfo} from '@/utils/toast.js'
-import {appMountsFacet} from './core.ts'
+import {appMountsFacet} from '@/extensions/core.js'
 import type {AppExtension} from '@/facets/facet.js'
 import type {Repo} from '@/data/repo'
 import {systemToggle} from '@/facets/togglable.js'
@@ -158,8 +158,8 @@ export const extensionPromptsExtension: AppExtension = systemToggle({
     'Surfaces extensions that need enabling or have an update outside the settings page — a per-extension toast plus a quiet indicator in the status chip.',
 }).of([
   appMountsFacet.of(
-    {id: 'core.extension-prompts', component: ExtensionPromptSurface},
-    {source: 'core'},
+    {id: 'extension-prompts.surface', component: ExtensionPromptSurface},
+    {source: 'extension-prompts'},
   ),
   extensionPromptDiagnosticContribution,
 ])
