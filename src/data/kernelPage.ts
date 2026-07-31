@@ -17,7 +17,8 @@
  *  converge on the same row at next sync.
  */
 
-import { ChangeScope, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { ChangeScope, type BlockData, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { Block } from '@/data/block'
 import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
@@ -68,8 +69,11 @@ export interface KernelPageSpec {
  *
  *  Note for anyone MOVING an existing page onto this: `pluginBlockId(ws, NS,
  *  key)` hashes `${ws}:${key}`, so reusing its namespace constant here yields
- *  a DIFFERENT id and strands whatever was filed under the old one. Same
- *  namespace, different formula. */
+ *  a DIFFERENT id — same namespace, different formula. The old page does not
+ *  come with it; it stays where it is with all of its children, and this mints
+ *  an empty one beside it. Either leave the existing page on the id it already
+ *  has, or re-parent its children and delete it as a deliberate one-shot
+ *  migration. Nothing here detects the situation for you. */
 export const kernelPageBlockId = (workspaceId: string, namespace: string): string =>
   derivedBlockId({namespace, key: workspaceId})
 
@@ -93,8 +97,28 @@ export const getOrCreateKernelPage = async (
     }
   }
 
+  /** A row at this id belonging to some OTHER workspace is never ours to
+   *  touch, whatever the namespace says.
+   *
+   *  Neither read that finds an occupant is workspace-scoped — `repo.load` and
+   *  `tx.get` both select on id alone — and the two branches they feed repair
+   *  properties and resurrect tombstones. Left unchecked, a colliding id lets
+   *  this rewrite aliases and types, or undelete content, in a workspace the
+   *  caller never named: the one thing a workspace-global write must not do.
+   *
+   *  The engine already refuses this inside `createOrGet`; the create path
+   *  below therefore cannot reach a foreign row, and only the adopt and
+   *  restore paths need it said again. Raising the engine's own error keeps
+   *  one meaning for the condition across every deterministic-id caller. */
+  const refuseForeign = (occupant: BlockData): void => {
+    if (occupant.workspaceId !== workspaceId) {
+      throw new DeterministicIdCrossWorkspaceError(id, occupant.workspaceId, workspaceId)
+    }
+  }
+
   const live = await repo.load(id)
   if (live) {
+    refuseForeign(live)
     const currentAliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       types.some(type => !hasBlockType(live, type)) ||
@@ -105,6 +129,7 @@ export const getOrCreateKernelPage = async (
     await repo.tx(async tx => {
       const current = await tx.get(id)
       if (!current || current.deleted) return
+      refuseForeign(current)
       const txAliases = stringListProperty(current.properties[aliasesProp.name])
       if (!includesAll(txAliases, aliases)) {
         await tx.setProperty(id, aliasesProp, mergeStrings([...aliases, ...txAliases]))
@@ -117,6 +142,7 @@ export const getOrCreateKernelPage = async (
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     const existing = await tx.get(id)
+    if (existing) refuseForeign(existing)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       await tx.restore(id, {content: spec.alias})

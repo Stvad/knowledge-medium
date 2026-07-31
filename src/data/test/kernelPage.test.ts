@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, seedType } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { typeSeedsFacet } from '@/data/facets'
@@ -75,5 +76,59 @@ describe('getOrCreateKernelPage', () => {
     expect(restored.peek()?.deleted).toBe(false)
     expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
     expect(restored.peekProperty(aliasesProp)).toEqual(['Foo'])
+  })
+
+  it('tags PAGE_TYPE alone when the page has no marker (the Journal shape)', async () => {
+    const page = await getOrCreateKernelPage(env.repo, WS, {
+      namespace: FOO_PAGE_NS,
+      alias: 'Foo',
+      markerType: null,
+    })
+
+    expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE])
+  })
+
+  /** This helper is extension-facing, so the namespace is chosen by code the
+   *  app does not control. Both reads that can find an occupant select on id
+   *  alone, and what they feed rewrites properties or undeletes rows — so a
+   *  foreign occupant must stop the call rather than be adopted. */
+  describe('a row at this id belonging to another workspace', () => {
+    const OTHER_WS = 'ws-someone-else'
+    const foreignRow = async (deleted: boolean): Promise<string> => {
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
+          content: 'someone else\'s page',
+        })
+        if (deleted) await tx.delete(id)
+      }, {scope: ChangeScope.BlockDefault})
+      return id
+    }
+
+    it('is refused rather than repaired', async () => {
+      const id = await foreignRow(false)
+
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // Untouched: no alias claimed, no type tagged, content as it was.
+      const row = await env.repo.load(id)
+      expect(row?.workspaceId).toBe(OTHER_WS)
+      expect(row?.content).toBe('someone else\'s page')
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+    })
+
+    it('is refused rather than resurrected', async () => {
+      const id = await foreignRow(true)
+
+      await expect(getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // Still deleted — a tombstone in another workspace stays one.
+      expect(await env.repo.load(id)).toBeNull()
+    })
   })
 })
