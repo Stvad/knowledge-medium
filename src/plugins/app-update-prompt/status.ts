@@ -12,15 +12,7 @@ import { RefreshCcw, RefreshCw } from 'lucide-react'
 import { appUpdate } from '@/appUpdate.js'
 import { checkForAppUpdate } from '@/registerServiceWorker.js'
 import { showInfo } from '@/utils/toast.js'
-import { actionsFacet } from './core.js'
-// Grandfathered core→plugin edge (issue #493). This module is core — it projects
-// the core-owned service-worker update signal into a status snapshot — yet the
-// diagnostics seam it contributes to lives in a plugin, whose own header calls
-// it "deliberately NOT in core". Resolving that contradiction is a layer move,
-// tracked separately. Keep this as `-next-line`: it covers exactly this one
-// import, so a new plugin import here still fails the gate. A block-form
-// `/* eslint-disable boundary/... */` would silently cover the whole file.
-// eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
+import { actionsFacet } from '@/extensions/core.js'
 import {
   diagnosticsFacet,
   type DiagnosticSnapshot,

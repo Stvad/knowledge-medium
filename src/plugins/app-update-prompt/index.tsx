@@ -13,16 +13,22 @@
  *
  * Distinct from the `update-indicator` plugin, which flags per-block
  * content edited by another user — this one is about the app build itself.
+ *
+ * Lives in the plugin layer (issue #493) because it contributes to
+ * `diagnosticsFacet`, which `plugins/diagnostics/facet.ts` declares is
+ * "deliberately NOT in core". It reads core's app-update signal
+ * (`@/appUpdate`, `@/registerServiceWorker`) — plugin depending on core, the
+ * sanctioned direction — instead of core reaching up into a plugin's facet.
  */
 import { useEffect } from 'react'
 import { appUpdate, useAppUpdateAvailable } from '@/appUpdate.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
-import { appMountsFacet } from './core.ts'
+import { appMountsFacet } from '@/extensions/core.js'
 import {
   appCheckForUpdatesActionContribution,
   appReloadActionContribution,
   appUpdateDiagnosticContribution,
-} from './appUpdateStatus.ts'
+} from './status.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 
@@ -48,8 +54,8 @@ export const appUpdatePromptExtension: AppExtension = systemToggle({
   description: 'Surfaces a newer app build as a reload prompt — a toast plus a quiet indicator in the status chip.',
 }).of([
   appMountsFacet.of(
-    {id: 'core.app-update-prompt', component: AppUpdatePrompt},
-    {source: 'core'},
+    {id: 'app-update-prompt.surface', component: AppUpdatePrompt},
+    {source: 'app-update-prompt'},
   ),
   // The chip presence (ambient dot + "Reload" row) goes through the diagnostics
   // seam, not chip-hardcoded knowledge of appUpdate.

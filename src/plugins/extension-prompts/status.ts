@@ -18,20 +18,13 @@
  *
  * The derived snapshot is memoized (see below) to stay referentially stable
  * (a `useDiagnostics`/`useSyncExternalStore` need).
+ *
+ * In the plugin layer (issue #493): it contributes to `diagnosticsFacet` and
+ * reuses `open_extensions_settings` from the extensions-settings plugin, both
+ * of which core may not name. The prompt STORE it reads moved here with it,
+ * since nothing outside this feature used it.
  */
-// Two grandfathered core→plugin edges (issue #493). This module is core — it
-// projects the core-owned extension-prompt store into a status snapshot — yet
-// it reaches into the diagnostics and extensions-settings plugins.
-// `plugins/diagnostics/facet.ts` says the diagnostics seam is "deliberately NOT
-// in core", which can't both be true while core contributes to it. Resolving
-// that is a layer move (facet down into core, or these projections up into the
-// plugin layer), not something to smuggle into the commit that adds the lint
-// rule. Keep these as `-next-line`: each covers exactly one import, so a NEW
-// plugin import here still fails the gate. A block-form
-// `/* eslint-disable boundary/... */` would silently cover the whole file.
-// eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
 import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/plugins/extensions-settings/actions.js'
-// eslint-disable-next-line boundary/no-core-to-plugin-imports -- pre-existing edge, see #493 above
 import {
   diagnosticsFacet,
   type DiagnosticSnapshot,
@@ -40,7 +33,7 @@ import {
 import {
   extensionPromptStore,
   type PendingExtensionPrompt,
-} from './extensionPromptStore.js'
+} from './store.js'
 
 const buildSnapshot = (
   prompts: readonly PendingExtensionPrompt[],

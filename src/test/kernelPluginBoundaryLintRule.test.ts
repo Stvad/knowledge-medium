@@ -43,11 +43,11 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
     valid: withSourceRoot([
       // Core importing core is the whole point of core.
       {
-        filename: core('extensions/appUpdateMount.tsx'),
+        filename: core('extensions/toastAppMount.tsx'),
         code: `import { keyedMapFacet } from '@/facets/facet.js'`,
       },
       {
-        filename: core('extensions/appUpdateMount.tsx'),
+        filename: core('extensions/toastAppMount.tsx'),
         code: `import { repo } from '../data/repo.js'`,
       },
       // The other half of the principle: a plugin MAY depend on another plugin
@@ -207,7 +207,11 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
       },
     ]),
     invalid: withSourceRoot([
-      // The live violations this rule was written for.
+      // The two edges this rule was written for. They are no longer live —
+      // the modules that had them moved into the plugin layer (issue #493) —
+      // but they are kept as the regression cases, since they are the exact
+      // shape that motivated the gate: a core module contributing to a
+      // plugin-owned facet.
       {
         filename: core('extensions/appUpdateStatus.ts'),
         code: `import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'`,
