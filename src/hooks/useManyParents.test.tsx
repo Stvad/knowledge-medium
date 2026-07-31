@@ -2,13 +2,14 @@
 /**
  * `useManyParents` carry-over at the hook seam. The panel repro
  * (`plugins/backlinks/test/linkedReferencesRefresh`) covers what the
- * user sees; this pins what it can't reach.
+ * user sees; this pins the two properties it doesn't reach — that an
+ * EMPTY id set passing through doesn't wipe the memory, and that the
+ * remembering guard holds in its STRUCTURAL form (the panel stays
+ * green with a plain `!==`, so only the fake below tells them apart).
  *
- * The fake handle deliberately mints a NEW object per lookup, unlike
- * the real store's same-key-same-instance guarantee. That is the point:
- * it reproduces the equal-but-fresh-map churn that the hook's
- * structural check exists to terminate — drop that check and this file
- * dies with "Too many re-renders".
+ * That fake mints a NEW handle per lookup, unlike the real store's
+ * same-key-same-instance guarantee; the equal-but-fresh maps it
+ * produces are what make the structural form necessary here.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -36,16 +37,15 @@ const fakeHandle = (value: AncestorsEntry[] | undefined): Handle<AncestorsEntry[
   status: () => value ? 'ready' : 'loading',
 })
 
-/** Resolves for `['a','b']` and for the empty set; anything else is
- *  still loading — i.e. every other key is freshly cold. */
+/** Resolves for `['a','b']` and for the empty set; every other key is
+ *  freshly cold. */
+const RESOLVED_KEYS = new Set(['a,b', ''])
+
 const repo = {
   block: (id: string) => ({id}) as Block,
   query: {
-    manyAncestors: ({ids}: {ids: readonly string[]}) => fakeHandle(
-      ids.length === 0 || (ids.length === 2 && ids[0] === 'a')
-        ? chainsFor(ids)
-        : undefined,
-    ),
+    manyAncestors: ({ids}: {ids: readonly string[]}) =>
+      fakeHandle(RESOLVED_KEYS.has(ids.join(',')) ? chainsFor(ids) : undefined),
   },
 }
 
@@ -73,9 +73,8 @@ describe('useManyParents', () => {
   })
 
   it('survives an empty id set passing through', () => {
-    // A list handle that re-keys (turning a backlinks filter on) reports
-    // `[]` for a beat. That resolves trivially, and remembering it would
-    // wipe the chains the very next render needs.
+    // A list handle that re-keys (turning a backlinks filter on)
+    // reports `[]` for a beat.
     const {result, rerender} = renderWith(['a', 'b'])
 
     rerender({blocks: []})

@@ -374,9 +374,9 @@ const EMPTY_PARENT_MAP: ReadonlyMap<string, Block[]> = new Map()
  *  unchanged. A resolved result holds one (possibly empty) entry per
  *  input id; the carried result below can be partial.
  *
- *  Sticky across id-set changes: the key IS the id set, so an add or a
- *  remove usually lands on an unresolved handle (`peek() === undefined`
- *  — a key used within the store's GC window can still be warm).
+ *  Sticky across id-set changes: an add or a remove usually lands on an
+ *  unresolved handle (`peek() === undefined` — a key used within the
+ *  store's GC window can still be warm).
  *  Rendering that as "nobody has ancestors" collapses the panel by a
  *  line per entry until the load lands, because `BreadcrumbList`
  *  renders null for an empty chain (repro: the jump in
@@ -409,8 +409,7 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // Memoized, not inline like the selectors above: it is one of
   // `useHandle`'s getSelection deps, so a per-render identity re-runs
   // this O(n) projection and its deep-equality check on every render.
-  // The RESULT identity is stable either way (`useHandle` hands back
-  // the committed reference when the new selection is equal).
+  // Not load-bearing for correctness, only for work avoided.
   const selectParents = useCallback(
     (data: readonly {startId: string; ancestors: readonly BlockData[]}[] | undefined) => {
       if (!data) return undefined
@@ -437,12 +436,18 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // a backlinks filter ON) reports `[]` for a beat, and the filtered
   // subset then arrives on a cold key with nothing to carry.
   //
-  // The structural check is what makes the update terminate: a
-  // consumer whose handle identity churns re-sets state with an
-  // equal-but-fresh map forever without it. The real store forbids
-  // that churn (same key → same instance), so in the app it is defence
-  // in depth against a dropped `useHandle` memo; the fake seam in
-  // `useManyParents.test.tsx` is what exercises it.
+  // SOME guard here is load-bearing everywhere, the app included:
+  // React applies no value-based bailout to a render-phase setState
+  // (`dispatchSetStateInternal` takes the `isRenderPhaseUpdate` branch
+  // before its eager `Object.is`), so an unconditional re-set loops
+  // even when `resolved` is identical — drop the clause and the PANEL
+  // repro dies with "Too many re-renders", not just the unit test.
+  // Making it STRUCTURAL rather than `resolved !== lastResolved` is
+  // the defence-in-depth half: the real store keeps `resolved`
+  // identical across renders, so identity alone would do in the app.
+  // The fake seam in `useManyParents.test.tsx` mints a fresh
+  // equal-but-distinct map per render, and is what pins the
+  // structural form.
   const [lastResolved, setLastResolved] =
     useState<ReadonlyMap<string, Block[]>>(EMPTY_PARENT_MAP)
   if (
@@ -454,7 +459,7 @@ export const useManyParents = (blocks: readonly Block[]): ReadonlyMap<string, Bl
   // Projected onto the current ids so both branches keep one contract:
   // the map's keys are the ids you asked for. Without it the carried
   // map also retains ids that have LEFT the set, which a consumer that
-  // iterates (neither current one does) would render as ghost entries.
+  // iterates would render as ghost entries.
   const carried = useMemo(() => {
     const out = new Map<string, Block[]>()
     for (const id of ids) {
