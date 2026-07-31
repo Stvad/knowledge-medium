@@ -683,8 +683,12 @@ const guides: AuthoringGuide[] = [
       '@/shortcuts/types.js',
       // The property-editor-override path + saving non-secret settings need
       // these (definePropertyEditorOverride, propertyEditorOverridesFacet,
-      // getPluginPrefsBlock); brief mode surfaces only preferredModules.
+      // getPluginPrefsBlock), and the storage steps name the two
+      // get-or-creates; brief mode surfaces only preferredModules, so a step
+      // whose helper has no module here sends the agent off to invent one.
       '@/data/api/index.js',
+      '@/data/kernelPage.js',
+      '@/data/typedRecords.js',
       '@/data/facets.js',
       '@/data/stateBlocks.js',
       '@/context/repo.js',

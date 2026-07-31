@@ -363,11 +363,22 @@ export const getOrCreateTypedChild = async (
       ...(childSpec.references !== undefined ? {references: [...childSpec.references]} : {}),
     }, {systemMint: true}))
   } catch (error) {
-    // The two ways the id can be occupied by something `tx.get` didn't show
-    // us: a tombstone, and a row of the same id in another workspace. Both
-    // mean "not ours" — the same conclusion the read above draws for every
-    // other occupant — so report it rather than aborting the caller's whole
-    // transaction over a record it may well be happy to step past.
+    // DEFENCE IN DEPTH — unreachable against the current engine, and left in
+    // deliberately rather than because a live path needs it.
+    //
+    // These are the two occupants `createOrGet` rejects outright: a tombstone
+    // and a row of the same id in another workspace. Against `TxEngine` the
+    // read above has already seen both — `SELECT_BY_ID_SQL` filters on neither
+    // `deleted` nor `workspace_id` — so `usable()` fails and the call returns
+    // `taken` long before it gets here. (An earlier version of this comment
+    // claimed `tx.get` hides them, which is why the branch read as
+    // load-bearing; it does not.)
+    //
+    // It stays because the alternative, if some other `Tx` ever filters its
+    // reads, is the caller's whole transaction aborting on a record this
+    // primitive had already promised to report rather than throw over. There
+    // is no way to reach it through the public path, so it has no test; do not
+    // read the absence of one as an oversight.
     if (error instanceof DeletedConflictError || error instanceof DeterministicIdCrossWorkspaceError) {
       return {status: 'taken', id, block: await tx.get(id)}
     }
@@ -375,11 +386,14 @@ export const getOrCreateTypedChild = async (
   }
 
   if (!inserted) {
-    // Belt and braces. `tx.get` and `createOrGet`'s own lookup are the same
+    // DEFENCE IN DEPTH, like the catch above, and unreachable for the same
+    // kind of reason: `tx.get` and `createOrGet`'s own lookup are the same
     // statement on the same connection inside one write transaction, so
-    // nothing can claim the id between them — but if that ever stops being
-    // true, the alternative is a caller's whole transaction aborting on a row
-    // we had already decided what to do about.
+    // nothing can claim the id between them and a miss above means a miss
+    // here. Untestable through the public path, therefore untested — read that
+    // as deliberate, not as a gap. It stays because if that ever stops holding,
+    // falling through would write this caller's types and properties onto
+    // someone else's row and report it `created`.
     const claimed = await tx.get(id)
     if (usable(claimed)) {
       return adoptTypedBlock(repo, tx, claimed as BlockData, childSpec.types, childSpec.typeSnapshot)
