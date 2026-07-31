@@ -1,2 +1,0 @@
-var e={gridTemplateColumns:`1.25rem minmax(8rem, 13rem) minmax(0, 1fr) 1.75rem`},t={gridTemplateColumns:`1.25rem minmax(8rem, 13rem) minmax(0, 1fr)`};export{t as METADATA_ROW_GRID_STYLE,e as PROPERTY_ROW_GRID_STYLE};
-//# sourceMappingURL=layout.js.map
