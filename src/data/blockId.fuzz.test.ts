@@ -24,7 +24,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { assertCanonicalBlockId, InvalidBlockIdError } from './blockId.ts'
 
 /** Independent reference model — deliberately NOT built from
@@ -63,7 +63,7 @@ describe('assertCanonicalBlockId (fuzz)', () => {
       }),
       fuzzParams(500),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('accepts every id the real minters can actually produce', () => {
     fc.assert(
@@ -78,7 +78,7 @@ describe('assertCanonicalBlockId (fuzz)', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 
   it('flipping any single hex letter to uppercase turns acceptance into rejection', () => {
     fc.assert(
@@ -99,5 +99,5 @@ describe('assertCanonicalBlockId (fuzz)', () => {
       }),
       fuzzParams(200),
     )
-  })
+  }, fuzzTestTimeout())
 })
