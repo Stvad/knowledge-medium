@@ -224,8 +224,17 @@ const unwrap = (node) => {
     || current?.type === 'TSSatisfiesExpression'
     || current?.type === 'TSTypeAssertion'
     || current?.type === 'TSLiteralType'
+    // A sequence expression's VALUE is its last operand, so reducing to it is
+    // sound at every site this helper is used: `(0, require)(…)` is a `require`
+    // call, and `import((log(), '@/plugins/x'))` imports that specifier. The
+    // comma form matters because it is precisely the idiom for making a bundler
+    // stop looking — which is also what it does to a rule that pattern-matches
+    // on the callee.
+    || current?.type === 'SequenceExpression'
   ) {
-    current = current.type === 'TSLiteralType' ? current.literal : current.expression
+    if (current.type === 'TSLiteralType') current = current.literal
+    else if (current.type === 'SequenceExpression') current = current.expressions.at(-1)
+    else current = current.expression
   }
   return current
 }
@@ -663,7 +672,11 @@ const noCoreToPluginImports = {
       // core module is most likely to reach for to "find all the plugins".
       CallExpression: (node) => {
         if (isImportMetaGlob(node.callee)) checkGlob(node, node.arguments[0], node.arguments[1])
-        else if (node.callee?.name === 'require') check(node, node.arguments[0])
+        // Unwrap here too — the EIGHTH site of this fix, and the one the
+        // seventh (`isImportMetaGlob`, right above) missed while standing next
+        // to it. `(0, require)(…)`, `(require as any)(…)` and `require!(…)` all
+        // reach this branch only after unwrapping.
+        else if (unwrap(node.callee)?.name === 'require') check(node, node.arguments[0])
       },
       // `new URL('…', import.meta.url)`, incl. inside `new Worker(...)`.
       NewExpression: (node) => {

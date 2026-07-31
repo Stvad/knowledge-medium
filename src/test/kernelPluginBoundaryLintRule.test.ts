@@ -131,6 +131,11 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('types/ast.d.ts'),
         code: `declare module '*.svg' { const c: string; export default c }`,
       },
+      // Unwrapping the callee must not make an ordinary core require report.
+      {
+        filename: core('data/repo.ts'),
+        code: `declare const require: (s: string) => unknown; const x = (0, require)('@/data/api/index.js')`,
+      },
       // Import-equals against a CORE module is ordinary, and the
       // namespace-alias form (`import X = A.B`) names no module at all — its
       // `moduleReference` is a TSQualifiedName with no `.expression`.
@@ -968,6 +973,35 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
       {
         filename: core('data/repo.ts'),
         code: `declare const require: (s: string) => unknown; const x = require('@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // ...and the callee needs unwrapping like every other node this rule
+      // matches on. The comma form is the idiom for making a bundler stop
+      // looking, so it is the one to expect if anyone ever reaches for it.
+      {
+        filename: core('data/repo.ts'),
+        code: `declare const require: (s: string) => unknown; const x = (0, require)('../plugins/todo/index.tsx')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '../plugins/todo/index.tsx' },
+        }],
+      },
+      {
+        filename: core('data/repo.ts'),
+        code: `declare const require: (s: string) => unknown; const x = (require as any)('@/plugins/todo/schema.js')`,
+        errors: [{
+          messageId: 'coreImportsPlugin',
+          data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
+        }],
+      },
+      // The same unwrap in SPECIFIER position, which the sequence case buys for
+      // free: a comma expression evaluates to its last operand.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = await import((0, '@/plugins/todo/schema.js'))`,
         errors: [{
           messageId: 'coreImportsPlugin',
           data: { plugin: 'todo', specifier: '@/plugins/todo/schema.js' },
