@@ -394,6 +394,30 @@ describe('PanelCursorFollowsScroll', () => {
     })
   })
 
+  // A shift can leave the row PARTLY visible — off screen by the predicate
+  // (which wants about a line) while still intersecting by any area ratio. The
+  // observer therefore can't be the decision: it reports, and the real
+  // predicate decides.
+  it('follows the cursor when it is left barely visible, still intersecting', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20], ['b', 200]])
+    await focusBlock(panel, 'a', {renderScopeId: SCOPE})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+    dom.scroll()
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
+
+    // Five pixels of `a` remain inside the port — less than a line, so the
+    // predicate calls it off screen, but it is still intersecting.
+    dom.moveRow('a', PORT_HEIGHT - 5)
+    fireIntersection(dom.targetOf('a'), true)
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('b')
+    })
+  })
+
   // An action can move focus AND leave edit mode in one write (`focusBlock(x,
   // {edit: false})`). The main effect re-runs first, so the edit-exit retry
   // would run against the DESTINATION's settle — treating a row the app is

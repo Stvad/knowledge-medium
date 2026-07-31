@@ -37,6 +37,12 @@ const CURSOR_MOUNT_WATCH_MS = 3000
 const SETTLE_RETRY_MS = 250
 const SETTLE_RETRIES = 4
 
+/** Ratios at which the cursor observer re-reports. Spread rather than the
+ *  default single `0` so a row sliding gradually out keeps producing callbacks
+ *  instead of one at the moment it leaves entirely — see `onIntersection`, which
+ *  re-measures with the real predicate each time. */
+const CURSOR_VISIBILITY_THRESHOLDS = [0, 0.01, 0.1, 0.5, 1]
+
 /**
  * Emacs's rule, per panel: scrolling the cursor out of the window moves the
  * cursor rather than leaving it behind. Without it the cursor and the viewport
@@ -169,15 +175,17 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     // video-notes aside holds rows that are siblings of nothing this could have
     // enumerated. Intersection asks the question that actually matters — is the
     // cursor still on screen — and answers it whatever moved.
-    const onIntersection = (entries: IntersectionObserverEntry[]) => {
-      const entry = entries[entries.length - 1]
-      if (!entry) return
-      if (entry.isIntersecting) {
-        seenOnScreen = true
-        stopWatchingForMount()
-        return
-      }
+    // The observer is a CHANGE SIGNAL, not the decision. Its thresholds are area
+    // ratios while `isRowInViewport` is a line-height minimum, so the two can't
+    // be made to coincide: a shift that leaves three pixels of the row showing
+    // is off screen by the predicate and still intersecting by any threshold.
+    // So every callback re-measures with the real predicate, and the thresholds
+    // exist only to make sure callbacks keep arriving as visibility changes.
+    const onIntersection = () => {
+      sample()
       if (!seenOnScreen) return
+      const row = findInstance(panelEl, location, excluded())
+      if (!row || isRowInViewport(row)) return
       retriesLeft = SETTLE_RETRIES
       scheduler.schedule(SCROLL_SETTLE_MS)
     }
@@ -188,6 +196,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       const target = visibilityTargetFor(row)
       cursorObserver = new IntersectionObserver(onIntersection, {
         root: nearestScrollableAncestor(target),
+        threshold: CURSOR_VISIBILITY_THRESHOLDS,
       })
       cursorObserver.observe(target)
     }
