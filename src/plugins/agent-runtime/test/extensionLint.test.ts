@@ -69,7 +69,7 @@ describe('lintExtensionSource — stored-plugin-block-id', () => {
     const warning = warnings.find(w => w.rule === 'stored-plugin-block-id')
     expect(warning).toBeDefined()
     expect(warning!.catalogPattern).toBe('plugin-root-singleton')
-    expect(warning!.message).toMatch(/pluginBlockId/)
+    expect(warning!.message).toMatch(/getOrCreateKernelPage/)
   })
 
   it('matches `rootBlockId` / `pluginId` / `blockId` substrings in the storage key', () => {

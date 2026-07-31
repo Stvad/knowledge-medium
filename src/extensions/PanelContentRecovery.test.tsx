@@ -117,10 +117,9 @@ const panel = () => env.repo.block(PANEL_ID)
  *     real-elapsed-time test exercise only the cleanup path and never reach
  *     the callback's OWN fire-time re-check — leaving that re-check
  *     un-mutation-tested. Firing the captured reference directly, bypassing
- *     the timer system, isolates it. Any real timer left pending afterward
- *     is explicitly cleared by the caller so it can't fire again later
- *     against a torn-down test. */
-const captureDebounceTimer = (): {
+ *     the timer system, isolates it — see `neutralize` for what happens to
+ *     the real timer in that case. */
+const captureDebounceTimer = ({neutralize = false}: {neutralize?: boolean} = {}): {
   clearSpy: ReturnType<typeof vi.spyOn>
   getId: () => ReturnType<typeof setTimeout> | undefined
   getCallback: () => (() => void) | undefined
@@ -128,11 +127,23 @@ const captureDebounceTimer = (): {
   let capturedId: ReturnType<typeof setTimeout> | undefined
   let capturedCallback: (() => void) | undefined
   const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
   vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: (...args: unknown[]) => void, ms?: number, ...rest: unknown[]) => {
     const id = originalSetTimeout(fn as never, ms as never, ...(rest as never[]))
     if (ms === RECOVERY_DEBOUNCE_MS) {
       capturedId = id
       capturedCallback = fn as () => void
+      // Cancel the real timer the instant it is armed, keeping only the
+      // reference to its callback. A test that fires the callback ITSELF owns
+      // the whole window between arming and that call — but the real timer is
+      // only RECOVERY_DEBOUNCE_MS (120ms) long, and the awaited `repo.tx` such
+      // a test performs in between (undo, navigate) can outlast it under CPU
+      // contention. The real timer then fires first, against the pre-change
+      // state, and recovery legitimately runs: a load-dependent failure of a
+      // test that is not about timer duration at all. Cancelled through the
+      // ORIGINAL clearTimeout so `clearSpy` still sees only the component's
+      // own calls.
+      if (neutralize) originalClearTimeout(id)
     }
     return id
   }) as typeof setTimeout)
@@ -165,7 +176,7 @@ describe('PanelContentRecovery', () => {
     await createPanel('a')
     panelHistory.push(PANEL_ID, {blockId: 'landing'})
 
-    const {getId, getCallback} = captureDebounceTimer()
+    const {getCallback} = captureDebounceTimer({neutralize: true})
     render(<PanelContentRecovery block={panel()} />)
     await act(async () => {}) // let the mount effect run while 'a' is still live
 
@@ -182,7 +193,6 @@ describe('PanelContentRecovery', () => {
     // captureDebounceTimer's doc). Isolates the callback's own fire-time
     // re-check, which must see the restored, live block and bail.
     getCallback()!()
-    clearTimeout(getId()) // the real timer is still pending too; don't let it fire again later
 
     expect(recoverSpy).not.toHaveBeenCalled()
     expect(panel().peekProperty(topLevelBlockIdProp)).toBe('a')
@@ -255,7 +265,7 @@ describe('PanelContentRecovery', () => {
     await createPanel('a')
     panelHistory.push(PANEL_ID, {blockId: 'landing'})
 
-    const {getId, getCallback} = captureDebounceTimer()
+    const {getCallback} = captureDebounceTimer({neutralize: true})
     render(<PanelContentRecovery block={panel()} />)
     await act(async () => {}) // let the mount effect run while 'a' is still live
 
@@ -269,7 +279,6 @@ describe('PanelContentRecovery', () => {
     // Its fire-time re-check compares against `topLevelBlockIdProp`'s
     // CURRENT value ('b'), not the 'a' it closed over, and must bail.
     getCallback()!()
-    clearTimeout(getId()) // the real timer is still pending too; don't let it fire again later
 
     expect(recoverSpy).not.toHaveBeenCalled()
     expect(panel().peekProperty(topLevelBlockIdProp)).toBe('b')

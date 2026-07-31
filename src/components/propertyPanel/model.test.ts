@@ -33,6 +33,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -72,6 +73,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -120,6 +122,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {},
@@ -160,6 +163,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -206,6 +210,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {[schema.name]: 'private'},
@@ -239,6 +244,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {[typesProp.name]: typesProp.codec.encode(['test'])},
@@ -277,6 +283,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {[metadataOnly.name]: encodedValue},
@@ -326,6 +333,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: 'block-1',
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {[metadataOnly.name]: {enabled: true}},
@@ -365,6 +373,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: seeded.fieldId,
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -414,6 +423,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: userDef.fieldId,
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -458,6 +468,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: seeded.blockId,
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {
@@ -502,6 +513,7 @@ describe('buildPropertyPanelModel', () => {
 
     const model = buildPropertyPanelModel({
       blockId: userType.blockId,
+      workspaceId: 'ws-1',
       updatedAt: 1700_000_000_000,
       updatedBy: 'user-1',
       properties: {

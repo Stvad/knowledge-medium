@@ -20,7 +20,7 @@
  */
 import {CallbackSet} from '@/utils/callbackSet.js'
 import type {ExtensionApprovalStatusMap} from '@/extensions/extensionApprovalStatus.js'
-import type {DismissalMap} from '@/extensions/extensionPromptDismissals.js'
+import type {DismissalMap} from './dismissals.js'
 
 export interface PendingExtensionPrompt {
   blockId: string

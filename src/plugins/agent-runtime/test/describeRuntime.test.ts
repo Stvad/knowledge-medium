@@ -233,7 +233,15 @@ describe('describeRuntime', () => {
     // friction for the right decision at orient time.
     expect(summary.capabilities.storage.principles.length).toBeGreaterThan(0)
     expect(summary.capabilities.storage.principles.join(' ')).toMatch(/credentials.*localStorage/i)
-    expect(summary.capabilities.storage.principles.join(' ')).toMatch(/pluginBlockId|UserPrefs/)
+    // Asserted per-principle, not over the join. An alternation across the
+    // whole joined string goes green as soon as ANY principle happens to
+    // mention one of the names — which is how the previous version of this
+    // survived the id-derivation principle being reworded out from under it.
+    const {principles} = summary.capabilities.storage
+    expect(principles.some(p => /UserPrefs/.test(p))).toBe(true)
+    expect(principles.some(p =>
+      p.includes('getOrCreateKernelPage') && p.includes('getOrCreateTypedChild'),
+    )).toBe(true)
     const patternIds = summary.capabilities.storage.patterns.map(p => p.id)
     expect(patternIds).toContain('user-prefs-config')
     expect(patternIds).toContain('plugin-root-singleton')
@@ -299,7 +307,7 @@ describe('describeRuntime', () => {
     const rootSingleton = description.authoring.storage.patterns.find(
       pattern => pattern.id === 'plugin-root-singleton',
     )
-    expect(rootSingleton?.example?.code).toContain('pluginBlockId')
+    expect(rootSingleton?.example?.code).toContain('getOrCreateKernelPage')
 
     const userPrefs = description.authoring.storage.patterns.find(
       pattern => pattern.id === 'user-prefs-config',

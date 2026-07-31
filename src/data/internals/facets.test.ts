@@ -76,6 +76,8 @@ beforeEach(async () => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
     // Start empty so setFacetRuntime is the only registration path.
     installKernelRuntime: false,
   })

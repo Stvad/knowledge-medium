@@ -12,6 +12,7 @@
  *  at chip size. */
 
 import type { TypeContribution } from '@/data/api'
+import { fnv1a32Hex } from '@/utils/fnv1a'
 
 export const DEFAULT_TYPE_COLORS: readonly string[] = [
   'oklch(0.62 0.21 25)',   // red
@@ -35,14 +36,8 @@ export const DEFAULT_TYPE_COLORS: readonly string[] = [
  *  Pure functions of the id collide (birthday problem), which is why
  *  type CREATION persists a least-used pick instead — this is the
  *  fallback for code-contributed and imported types. */
-export const defaultTypeColor = (typeId: string): string => {
-  let hash = 0x811c9dc5
-  for (let i = 0; i < typeId.length; i++) {
-    hash ^= typeId.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return DEFAULT_TYPE_COLORS[(hash >>> 0) % DEFAULT_TYPE_COLORS.length]
-}
+export const defaultTypeColor = (typeId: string): string =>
+  DEFAULT_TYPE_COLORS[parseInt(fnv1a32Hex(typeId), 16) % DEFAULT_TYPE_COLORS.length]
 
 /** The palette entry currently carried by the fewest TAG-LIKE types —
  *  what `createTypeBlock` stamps onto a new type so fresh types spread

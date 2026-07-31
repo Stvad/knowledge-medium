@@ -454,6 +454,48 @@ describe('materializePropertySeeds', () => {
       'SELECT parent_id FROM blocks WHERE id = ?', [propertyDefinitionBlockId(WS, seed.seedKey)])
     expect(row.parent_id).toBe(PROPERTIES_CLAIMANT)
   })
+
+  it('ensures its own Properties page when it does not exist yet (self-sufficient before bootstrap)', async () => {
+    // Mirrors the analogous TYPE-seed test below (added when that ordering fix
+    // landed — commit 1228828d2 / "C3d") but was missing on the property side.
+    // A `setActiveWorkspaceId`-driven reschedule (or any caller that races ahead
+    // of bootstrap's `ensureSystemPages`) can fire the property pass before the
+    // Properties page exists; without the pass ensuring its own parent,
+    // `tx.create` throws ParentNotFoundError ("parent block <id> does not
+    // exist"). `ensureParent` (definitionSeeds.ts) already guards this — this
+    // test pins that guarantee for the property kind with the parent's absence
+    // as a fixed starting condition, not a timing window.
+    //
+    // NOTE re #455: this direct-call, single-shot scenario is NOT itself the
+    // mechanism behind the CI flake — `ensureParent` already existed before
+    // #455 was filed. The flake's two symptoms have separate, verified causes:
+    // `awaitSeedMaterialization()` can resolve before a freshly (re)scheduled
+    // pass has even entered its pending set (see the fixed test below), and the
+    // `parent block ... does not exist` stderr traces to `ensureParent` and the
+    // seed's own `tx.create` being two separate write transactions — a window
+    // in which this test file's shared-db `resetTestDb()` (run by every test's
+    // `beforeEach`) can collide with a PRIOR test's still-in-flight, unawaited
+    // `PendingIdleJobs`-scheduled pass (nothing aborts/drains a test's dangling
+    // seed-materialization job when that test ends and a new `Repo` is built for
+    // the next one — `seedMaterializationGeneration` is a per-instance
+    // AbortController, so a later test's `Repo` cannot reach into and cancel an
+    // earlier one's). See the PR description for the reproduction of both.
+    const freshWs = 'ws-no-pages-property'
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [propertiesPageBlockId(freshWs)])).toBeNull()
+
+    expect(await materializePropertySeeds(repo, freshWs, [seed]))
+      .toEqual({created: 1, restored: 0, skippedReadOnly: false})
+
+    // The parent Properties page was materialized by the pass itself...
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
+      [propertiesPageBlockId(freshWs)])).not.toBeNull()
+    // ...and the backing block is parented under it.
+    const row = await sharedDb.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?',
+      [propertyDefinitionBlockId(freshWs, seed.seedKey)])
+    expect(row.parent_id).toBe(propertiesPageBlockId(freshWs))
+  })
 })
 
 describe('property seed materialization access', () => {
@@ -519,7 +561,68 @@ describe('property seed materialization access', () => {
   })
 })
 
-describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
+// Every test here drives a DEFERRED pass end to end — membership insert,
+// registry priming, one or more drains, and SQL reads against the shared DB —
+// which is real work, not waiting. Measured against the full suite these are
+// the slowest tests in the file (the deferred-pass test below was the single
+// worst load-sensitivity case in the suite: 0.5s solo, 3.3s with the machine
+// oversubscribed), so the 5s default leaves no room for CPU contention.
+describe('scheduled seed materialization (Repo wiring, §4.3)', {timeout: 30_000}, () => {
+  /** Poll for a deferred materialization outcome, retrying the drain.
+   *  `awaitSeedMaterialization` only awaits passes whose deferral timer has
+   *  ALREADY fired, so a single drain can legitimately return before the pass
+   *  even exists — retrying is the point. The explicit budget replaces
+   *  `vi.waitFor`'s 1000ms default, which under load allowed barely one
+   *  attempt (a drain plus a SQL read alone measured multiple seconds there)
+   *  and produced "Timed out in waitFor!" on perfectly healthy code. Kept
+   *  strictly below the describe's own timeout so a real failure surfaces as
+   *  this poll expiring — carrying the last assertion error — rather than as
+   *  an opaque test timeout. */
+  const waitForMaterialization = (check: () => Promise<void>): Promise<void> =>
+    vi.waitFor(check, {timeout: 15_000, interval: 50})
+
+  type WithRun = {runWorkspaceSeedMaterialization: (...a: unknown[]) => Promise<void>}
+
+  /** Number of seed-materialization passes currently scheduled or running. */
+  const outstandingSeedPasses = (): number => (repo as unknown as {
+    pendingSeedMaterializationWorkspaces: Set<string>
+  }).pendingSeedMaterializationWorkspaces.size
+
+  /** Run `schedule()` and return only once the pass it queued has finished.
+   *
+   *  `awaitSeedMaterialization()` alone can't do this: it drains
+   *  `PendingIdleJobs`, which only tracks jobs whose idle deferral has ALREADY
+   *  fired, and a job lands there when its deferred callback runs — not when it
+   *  was scheduled. Awaiting it right after a schedule is therefore a no-op that
+   *  resolves before the pass starts. Whatever is asserted next then reads
+   *  whatever an earlier pass left behind (an absence assertion passes for the
+   *  wrong reason), and the pass lands after the test body, writing through the
+   *  old `Repo` while the next test's `beforeEach` resets the shared database —
+   *  the cross-test race behind #455's `parent block … does not exist` stderr.
+   *
+   *  So fence on the pass itself: count completions under a spy, wait for one to
+   *  land at-or-after the schedule, then drain the job's tail. Passes coalesce
+   *  per workspace, so after `schedule()` there is exactly one job for it —
+   *  either freshly queued, or the pending one re-run via its dirty bit. */
+  const withSeedPassSettled = async (schedule: () => void): Promise<void> => {
+    const target = repo as unknown as WithRun
+    const original = target.runWorkspaceSeedMaterialization.bind(repo)
+    let completed = 0
+    const spy = vi.spyOn(target, 'runWorkspaceSeedMaterialization')
+      .mockImplementation(async (...args: unknown[]) => { await original(...args); completed += 1 })
+    try {
+      schedule()
+      // Same budget as the outcome polls: waiting on a real deferred pass, so
+      // `vi.waitFor`'s 1000ms default is the load-sensitivity trap b674052 fixed.
+      await waitForMaterialization(async () => expect(completed).toBeGreaterThanOrEqual(1))
+      // The pass above may have been one iteration of a job still looping on its
+      // dirty bit; its timer has fired, so the drain now genuinely covers it.
+      await repo.awaitSeedMaterialization()
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
   const insertEditorMembership = async (): Promise<void> => {
     await repo.db.execute(
       `INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time)
@@ -540,18 +643,48 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     const seedKeys = [...(repo.propertyDefinitions?.seedsByKey.keys() ?? [])]
     expect(seedKeys.length).toBeGreaterThan(0)
 
-    repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await repo.awaitSeedMaterialization()
+    // #455: fence on the pass THIS schedule queued, not on rows an earlier pass
+    // left behind — polling the rows alone is satisfied by the registry-priming
+    // pass's output while ours is still queued, and it then writes into the next
+    // test's freshly reset database. getOptional (not get) so a still-missing row
+    // is a legible assertion failure rather than an opaque adapter throw.
+    await withSeedPassSettled(() => repo.scheduleWorkspaceSeedMaterialization(WS, false))
 
     // Every registry seed now has a live definition block under Properties.
     for (const seedKey of seedKeys) {
       const id = propertyDefinitionBlockId(WS, seedKey)
-      const row = await sharedDb.db.get<{parent_id: string; deleted: number}>(
+      const row = await sharedDb.db.getOptional<{parent_id: string; deleted: number}>(
         'SELECT parent_id, deleted FROM blocks WHERE id = ?', [id],
       )
       expect(row?.parent_id).toBe(propertiesPageBlockId(WS))
       expect(row?.deleted).toBe(0)
     }
+  })
+
+  it('a scheduled pass cannot outlive the test that scheduled it', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+
+    // Pins `withSeedPassSettled`. The one precondition that makes the leak
+    // deterministic rather than timing-dependent: let the registry-priming pass
+    // finish, so the schedule below queues a FRESH job instead of coalescing
+    // onto a pending one. Coalescing is what makes a bare drain look
+    // sufficient — it awaits the already-fired job it rode in on, dirty bit and
+    // all. Against a fresh job the deferral has not fired, so a bare drain has
+    // nothing in `PendingIdleJobs` to await and returns having run nothing.
+    await waitForMaterialization(async () => {
+      await repo.awaitSeedMaterialization()
+      expect(outstandingSeedPasses()).toBe(0)
+    })
+
+    await withSeedPassSettled(() => repo.scheduleWorkspaceSeedMaterialization(WS, false))
+
+    // Swap the fence for a bare `awaitSeedMaterialization()` and this is 1 — no
+    // wall-clock needed to expose it, since the schedule populates the pending
+    // set synchronously. The pass would be left queued, free to write through
+    // this now-abandoned `Repo` while the next test's `beforeEach` resets the
+    // shared database.
+    expect(outstandingSeedPasses()).toBe(0)
   })
 
   it('re-runs once when a seed-set change coalesces mid-flight (dirty re-run)', async () => {
@@ -562,7 +695,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // Settle the registry-priming auto-schedule (drain does NOT advance the idle
     // timer, so poll until its pass has actually materialized) — the spy below
     // then only counts our scenario's passes.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.get('SELECT id FROM blocks WHERE id = ?',
         [propertyDefinitionBlockId(WS, firstSeedKey!)])
@@ -603,7 +736,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // Drive ONLY the wiring path (no direct materializeTypeSeeds call): the one
     // deferred pass must now materialize type seeds alongside property seeds.
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{parent_id: string; deleted: number}>(
         'SELECT parent_id, deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
@@ -639,7 +772,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     })
 
     repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, typeSeed.seedKey)],
@@ -665,7 +798,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(repo.typeDefinitions?.seedsByKey.get('system:test/type/b')).toBe(seedBContested)
     })
     // The winner (seedA) is backed via the auto-reschedule; the id-loser (seedB) is not.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const rowA = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedA.seedKey)])
@@ -682,7 +815,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     const seedBFixed = seedType({seedKey: 'system:test/type/b', revision: 1, id: 'dup-b', label: 'B'})
     repo.setRuntimeContributions(typeSeedsFacet, 'contested', [seedA, seedBFixed])
 
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const rowA = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [typeDefinitionBlockId(WS, seedA.seedKey)])
@@ -715,9 +848,10 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     })
 
     // Force a pass while contested: nothing is written (the keep-first winner is
-    // withheld, not persisted), even though `seedsByKey` holds it.
-    repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await repo.awaitSeedMaterialization()
+    // withheld, not persisted), even though `seedsByKey` holds it. The absence
+    // below is only evidence if the pass actually RAN first — a bare drain here
+    // returns before it starts, making this assertion vacuous.
+    await withSeedPassSettled(() => repo.scheduleWorkspaceSeedMaterialization(WS, false))
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [backingId])).toBeNull()
 
     // De-collide by dropping the duplicate. `seedsByKey` is byte-identical (the
@@ -726,7 +860,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // auto-reschedule under test.
     repo.setRuntimeContributions(typeSeedsFacet, 'contested-key', [first])
     await vi.waitFor(() => expect(repo.typeDefinitions?.contestedSeedKeys.has(DUP_KEY)).toBe(false))
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const row = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?', [backingId])
@@ -755,8 +889,10 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(repo.typeDefinitions?.seedKeyById.get('x')).toBe(K1)
     })
 
-    repo.scheduleWorkspaceSeedMaterialization(WS, false)
-    await repo.awaitSeedMaterialization()
+    // Same as above: fence on the pass having run, or the absences below prove
+    // nothing — and the pass outlives this test, which is the last one to
+    // schedule, leaving it to write into the next test's reset database.
+    await withSeedPassSettled(() => repo.scheduleWorkspaceSeedMaterialization(WS, false))
     // Neither the contested-key winner (K1) nor the id-loser (K2) gets a backing row.
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?',
       [typeDefinitionBlockId(WS, K1)])).toBeNull()
@@ -791,7 +927,7 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     })
     // ...and it materializes a backing block by the same path as any property seed, so
     // the type's block-type:properties ref resolves instead of dangling.
-    await vi.waitFor(async () => {
+    await waitForMaterialization(async () => {
       await repo.awaitSeedMaterialization()
       const propRow = await sharedDb.db.getOptional<{deleted: number}>(
         'SELECT deleted FROM blocks WHERE id = ?',

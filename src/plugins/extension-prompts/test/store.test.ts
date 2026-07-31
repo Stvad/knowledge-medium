@@ -3,7 +3,7 @@ import type {ExtensionApprovalStatus} from '@/extensions/dynamicExtensions.js'
 import {
   pendingExtensionPrompts,
   extensionPromptStore,
-} from '@/extensions/extensionPromptStore.js'
+} from '../store.js'
 
 const needsApproval = (name: string, liveHash: string): ExtensionApprovalStatus => ({
   kind: 'needs-approval',

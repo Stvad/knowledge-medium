@@ -54,6 +54,7 @@ import {
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
+import type { BlockIdPolicy } from '@/data/blockId'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
@@ -286,6 +287,10 @@ export interface RunTxParams<R> {
    *  uses a counter seeded from `Date.now()`. */
   newTxSeq: () => number
   newId: () => string
+  /** Block-id shape contract for this tx's inserts — forwarded verbatim to
+   *  the engine, which owns the enforcement. Required, not defaulted; see
+   *  the field on `TxImplContext` for why. */
+  blockIdPolicy: BlockIdPolicy
   now: () => number
   mutators: ReadonlyMap<string, AnyMutator>
   /** Processor registry snapshot, captured at tx start. Used by
@@ -360,7 +365,7 @@ export interface TxResult<R> {
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
   const {
     db, cache, fn, opts, user, isReadOnly,
-    newTxId, newTxSeq, newId, now,
+    newTxId, newTxSeq, newId, blockIdPolicy, now,
     mutators, processors, sameTxProcessors, propertySchemas,
     propertyDefinitionRegistryForWorkspace,
     propertySchemaWorkspaceId,
@@ -477,6 +482,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       sameTxEvents,
       now,
       newId,
+      blockIdPolicy,
       onWrite: (id, before, after) => {
         if (settleWrites) {
           let paths = settledFieldPaths.get(id)

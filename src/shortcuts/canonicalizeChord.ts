@@ -114,11 +114,33 @@ interface ParsedPress {
   readonly key: string
 }
 
+/** Split a press into tokens the way tinykeys itself does: it splits on a
+ *  `+` only when that `+` FOLLOWS a word character or `]`
+ *  (`press.split(/(?<=\w|\])\+/)` in tinykeys' `parseKeybinding`). That
+ *  lookbehind is what lets `+` be a KEY — `Shift++` is Shift plus the `+`
+ *  key, which is exactly what the settings capture path records when you
+ *  press it (`chordFromEvent` in keybindings-settings/keyCapture.ts pushes
+ *  `event.key`, i.e. `'+'`, after the modifier parts).
+ *
+ *  Splitting on every `+` and dropping empty tokens would silently eat the
+ *  key and leave the bare modifier — and since direct overrides are
+ *  INSTALLED through `normalizeChordSequence`, a user's `+` override would
+ *  come back rebound to Shift alone (found by Codex review on PR #427).
+ *  Using tinykeys' own regex also keeps the odd corners (a `(regex)` key
+ *  containing `+`) tokenized identically on both sides rather than
+ *  differently-wrong.
+ *
+ *  Whitespace around a separator is collapsed first, so spaced authoring
+ *  (`cmd + k`, which the settings UI can produce) still splits — the
+ *  lookbehind alone would not fire after a space. */
+const splitPressTokens = (press: string): string[] =>
+  press.trim().replace(/\s*\+\s*/g, '+').split(/(?<=\w|\])\+/)
+
 /** Parse a single press ('Cmd+Shift+K') into ordered, alias-folded
  *  modifiers plus the final key (case preserved). Modifier tokens in any
  *  position fold to a modifier; the remaining token is the key. */
 const parsePress = (press: string): ParsedPress => {
-  const tokens = press.split('+').map(t => t.trim()).filter(Boolean)
+  const tokens = splitPressTokens(press).map(t => t.trim()).filter(Boolean)
   const mods: Modifier[] = []
   let key = ''
   for (const token of tokens) {
@@ -160,6 +182,21 @@ const formatPress = ({mods, key}: ParsedPress): string =>
  */
 export const normalizeChord = (chord: string): string =>
   formatPress(parsePress(chord))
+
+/**
+ * Sequence-aware `normalizeChord` — normalises each space-separated press.
+ * Unlike `canonicalizeChord` (a COMPARISON key: also case-folds the final
+ * key), the output preserves the key's authored case, so it is the right
+ * form for INSTALLING a binding: modifier aliases fold to the names
+ * tinykeys actually dispatches (`ctrl` → `Control`, `cmd` → `$mod`) while
+ * the display spelling stays intact (`ArrowDown`, not `arrowdown`).
+ * Canonical-bucket agreement holds by construction:
+ * `canonicalizeChord(normalizeChordSequence(c)) === canonicalizeChord(c)`
+ * (both sides run the same parse/format; canonicalize just adds the case
+ * fold) — pinned by keybindingOverrides.fuzz.test.ts.
+ */
+export const normalizeChordSequence = (chord: string): string =>
+  splitSequence(chord).map(normalizeChord).join(' ')
 
 /**
  * `KeyboardEvent.code` key tokens that tinykeys can only match through its

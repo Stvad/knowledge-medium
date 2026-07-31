@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import {beforeEach, describe, expect, it} from 'vitest'
 import {ClientLocalSettings} from '@/utils/ClientLocalSettings.js'
-import {ExtensionPromptDismissalStore} from '@/extensions/extensionPromptDismissals.js'
+import {ExtensionPromptDismissalStore} from '../dismissals.js'
 
 /** In-memory localStorage stand-in so the store's persistence is observable
  *  without touching a real (jsdom) localStorage. */

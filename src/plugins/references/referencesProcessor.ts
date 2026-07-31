@@ -70,12 +70,12 @@ import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import {
   aliasSeatReaderFromDb,
   ensureAliasTarget,
+  generatedSeatFieldIds,
   isAliasSeatSlotId,
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
-import { aliasesProp, typesProp } from '@/data/properties'
-import { propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { aliasesProp } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -109,15 +109,6 @@ const hasLiveReferrer = async (
     SELECT_LIVE_REFERENCE_SOURCE_SQL,
     [workspaceId, targetId],
   )) !== null
-
-/** The definition ids whose field rows are a seat's own GENERATED
- *  property machinery in a child-backed workspace (alias / types,
- *  materialized at mint). One source of truth for both the reaper's
- *  read-phase children gate and `reapSeatsInTx`'s in-tx guard/sweep. */
-const generatedSeatFieldIds = (workspaceId: string): ReadonlySet<string> => new Set([
-  propertyDefinitionBlockId(workspaceId, aliasesProp.seedKey),
-  propertyDefinitionBlockId(workspaceId, typesProp.seedKey),
-])
 
 /** Parse-basis fingerprint of a row's parse-relevant columns (content,
  *  properties, references), serialized together so the write phase can
