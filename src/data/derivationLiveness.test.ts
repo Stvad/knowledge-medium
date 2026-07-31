@@ -514,3 +514,50 @@ describe('field row becoming ordinary → MATERIALIZE (same tx)', () => {
     expect(await liveFieldRows(fieldRow!.id, STATUS_FIELD_ID)).toEqual([])
   })
 })
+
+describe('rename backlinks → PROJECT (same tx)', () => {
+  // Matrix row: "references.renameBacklinks content → PROJECT". The rename
+  // rewriter became same-tx in #461, and what it rewrites is OTHER blocks'
+  // content — including property VALUE children, whose text IS the property's
+  // value. The owner's cell is projected from those children and PROJECT has
+  // already run by the time a plugin processor fires, so without the re-run
+  // the cell keeps the pre-rename value while the child holds the new one.
+  //
+  // This is also why rename is registered to fire in PASS ONE (immediately
+  // after `alias.sync`) instead of opting into `rerunOnDirtyRows`: from pass
+  // two, PROJECT's own re-run is already behind it and the cell stays stale
+  // until an unrelated edit to that child.
+  it('reprojects the owner cell when a rename rewrites a property value child', async () => {
+    const repo = await setup()
+    await repo.tx(async tx => {
+      await tx.create({id: 't', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'Old'})
+      await tx.setProperty('t', aliasesProp, ['Old'])
+      await tx.create({id: 'p', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'page'})
+      await tx.setProperty('p', statusSchema, 'see [[Old]]')
+    }, {scope: ChangeScope.BlockDefault})
+    await repo.awaitProcessors()
+
+    // Preconditions, asserted rather than assumed: the value child really
+    // holds the wikilink and its edge really is indexed. Without both, the
+    // rename below finds nothing and this test passes for the wrong reason.
+    const fieldRow = (await liveFieldRows('p', STATUS_FIELD_ID))[0]
+    expect(fieldRow).toBeDefined()
+    const valueChild = (await childrenOf(fieldRow!.id))[0]
+    expect(valueChild?.content).toBe('see [[Old]]')
+    expect(await sharedDb.db.getAll(
+      `SELECT 1 FROM block_references WHERE source_id = ? AND target_id = 't' AND source_field = ''`,
+      [valueChild!.id],
+    )).toHaveLength(1)
+
+    // Rename via the ordinary gesture — editing the TITLE. The alias diff
+    // rename reacts to is then written by `alias.sync` inside this same tx,
+    // which is what forces rename to run after it (see its ORDERING note).
+    await repo.tx(tx => tx.update('t', {content: 'New'}),
+      {scope: ChangeScope.BlockDefault})
+
+    // Read WITHOUT awaiting post-commit processors: both halves have to be
+    // right at commit time, not repaired by a later pass.
+    expect((await rowOf(valueChild!.id)).content).toBe('see [[New]]')
+    expect(await cellOf('p', statusSchema.name)).toBe('see [[New]]')
+  })
+})

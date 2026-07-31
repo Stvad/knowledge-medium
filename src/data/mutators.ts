@@ -96,8 +96,13 @@ type InsertPosition =
  *  and its neighbour on that side), breaking a tie by re-keying the run when one
  *  blocks the slot — so this MAY write to sibling rows (see `orderKeyPlacement`).
  *  Pass `excludeId` when relocating an EXISTING block (so it isn't treated as a
- *  sibling of itself / re-keyed by the move). */
-const orderKeyForInsert = async (
+ *  sibling of itself / re-keyed by the move).
+ *
+ *  Exported for deterministic-id creators (`getOrCreateTypedChild`), which
+ *  insert through `tx.createOrGet` rather than this file's `createChild`
+ *  mutator — they need `systemMint`, which `createChild` has no way to pass
+ *  — but must still place the row the way every other create does. */
+export const orderKeyForInsert = async (
   tx: Tx,
   parentId: string | null,
   workspaceId: string,

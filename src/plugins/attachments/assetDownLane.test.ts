@@ -43,7 +43,10 @@ let sharedDb: TestDb
 let repo: Repo
 
 const buildRepo = (userId: string = USER): Repo => {
-  const r = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: userId } })
+  // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+  const r = new Repo({
+    db: sharedDb.db, cache: new BlockCache(), user: { id: userId }, blockIdPolicy: 'any',
+  })
   r.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,

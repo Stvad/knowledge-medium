@@ -18,6 +18,11 @@
  *
  * The derived snapshot is memoized (see below) to stay referentially stable
  * (a `useDiagnostics`/`useSyncExternalStore` need).
+ *
+ * In the plugin layer (issue #493): it contributes to `diagnosticsFacet` and
+ * reuses `open_extensions_settings` from the extensions-settings plugin, both
+ * of which core may not name. The prompt STORE it reads moved here with it,
+ * since nothing outside this feature used it.
  */
 import {OPEN_EXTENSIONS_SETTINGS_ACTION_ID} from '@/plugins/extensions-settings/actions.js'
 import {
@@ -28,7 +33,7 @@ import {
 import {
   extensionPromptStore,
   type PendingExtensionPrompt,
-} from './extensionPromptStore.js'
+} from './store.js'
 
 const buildSnapshot = (
   prompts: readonly PendingExtensionPrompt[],

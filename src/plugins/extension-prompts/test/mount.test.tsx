@@ -16,9 +16,9 @@ import {
   ExtensionApprovalStatusProvider,
   ExtensionApprovalStatusStore,
 } from '@/extensions/extensionApprovalStatus.js'
-import {extensionPromptDismissals} from '@/extensions/extensionPromptDismissals.js'
-import {ExtensionPromptSurface} from '@/extensions/extensionPromptMount.js'
-import {extensionPromptStore} from '@/extensions/extensionPromptStore.js'
+import {extensionPromptDismissals} from '../dismissals.js'
+import {ExtensionPromptSurface} from '../index.js'
+import {extensionPromptStore} from '../store.js'
 import type {ToastOptions} from '@/utils/toast.js'
 
 const showInfo = vi.hoisted(() => vi.fn())

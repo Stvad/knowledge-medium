@@ -20,6 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { searchBlocksAcrossSources } from '@/utils/linkTargetAutocomplete.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
+import { assertCanonicalBlockId } from '@/data/blockId.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
@@ -437,6 +438,17 @@ const createRuntimeBlock = async (
   const content = input.content ?? (input.data?.content as string | undefined) ?? ''
   const properties = input.properties ?? (input.data?.properties as Record<string, unknown> | undefined)
   const explicitId = input.data?.id as string | undefined
+  // Caller-supplied ids must be canonical UUIDs (issue #456): a non-UUID id
+  // from an agent/CLI caller can render ambiguously in the outline (control
+  // characters, bidi reordering, homoglyphs — see PR #447's history) in a
+  // way no render-time filter alone can fully rule out.
+  //
+  // NOT the enforcement point — `tx.create` is (see @/data/blockId), and it
+  // would reject this id a few frames later regardless. This check is here
+  // for the MESSAGE: it names the command an agent actually typed, before any
+  // write, instead of surfacing a `tx.create:` rejection from three layers
+  // down mid-transaction. Deleting it loses that; it does not open the hole.
+  if (explicitId !== undefined) assertCanonicalBlockId(explicitId, 'createBlock')
   const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
@@ -771,6 +783,22 @@ const installRuntimeExtension = async (
   // skip writing it on first install". An explicit empty string clears it.
   const description = input.description === undefined ? null : input.description
 
+  // Message-quality check for a caller-supplied id (issue #456), as in
+  // createBlock — `tx.create` is the enforcement point and would reject this
+  // id anyway; this names the command, before any lookup or write.
+  //
+  // Validated RAW, and ahead of the `existing` lookup below, because both the
+  // trim on `installedId` and the lookup itself would otherwise LAUNDER a
+  // malformed value: `"<uuid>\n"` trims to a canonical id, so the block would
+  // be stored (or matched) under an id silently DIFFERENT from the string the
+  // caller passed — precisely the normalization @/data/blockId's case policy
+  // refuses to do for hex case, and inconsistent with create-block, which
+  // never trims. An id is an opaque token; whitespace in one is a caller bug
+  // worth reporting, not something to quietly absorb.
+  if (input.id !== undefined && input.id !== '') {
+    assertCanonicalBlockId(input.id, 'installExtension')
+  }
+
   const label = input.label?.trim() || null
   const workspaceId = resolveWorkspaceId(repo)
   // Use the direct-SQL lookup rather than the cached
@@ -839,6 +867,8 @@ const installRuntimeExtension = async (
     ? null
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
+  // Already validated raw at the top of the function; the trim is now only
+  // the `undefined`/`''` → "no id supplied, mint one" normalization.
   let installedId = input.id?.trim() || ''
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {

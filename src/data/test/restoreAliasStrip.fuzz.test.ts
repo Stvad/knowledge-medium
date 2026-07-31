@@ -1,9 +1,13 @@
 // @vitest-environment node
 /**
  * Fuzz suite for issue #378: raw `tx.restore` call sites
- * (`getOrCreateKernelPage` src/data/kernelPage.ts, `getOrCreateJournalBlock`
- * + `getOrCreateDailyNote` src/plugins/daily-notes/dailyNotes.ts) must not
- * resurrect a tombstone's stale alias claim.
+ * (`getOrCreateKernelPage` src/data/kernelPage.ts,
+ * `getOrCreateDailyNote` src/plugins/daily-notes/dailyNotes.ts) must not
+ * resurrect a tombstone's stale alias claim. `getOrCreateJournalBlock` has
+ * no raw restore call of its own — it's a thin wrapper over
+ * `getOrCreateKernelPage` — but is driven here as its own scenario anyway,
+ * since it's a distinct public entry point that shares the fix by
+ * delegation rather than by construction.
  *
  * Mechanism under test (cited from the code): `blocks_alias_update`
  * (clientSchema.ts:778-788) fires on the `deleted` flip and re-inserts

@@ -58,11 +58,16 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         properties: data.properties,
         userUpdatedAt: data.userUpdatedAt,
         updatedBy: data.updatedBy,
+        workspaceId: data.workspaceId,
       }
       : undefined,
   })
   const childIds = useChildIds(block)
-  const updatedByUser = useUserPage(blockData?.updatedBy ?? '')
+  // Resolve the author's user page in the BLOCK's own workspace (same rule as
+  // BlockMetaCard). Against the active workspace instead, a panel showing a
+  // block from another workspace looks up a page id derived from the wrong
+  // workspace, finds nothing, and "Changed by" degrades to the raw user id.
+  const updatedByUser = useUserPage(blockData?.updatedBy ?? '', blockData?.workspaceId)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
   const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
@@ -124,6 +129,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const model = useMemo(() => blockData
     ? buildPropertyPanelModel({
       blockId: blockData.id,
+      workspaceId: blockData.workspaceId,
       updatedAt: blockData.userUpdatedAt,
       updatedBy: updatedByUser.name,
       updatedByBlockId: updatedByUser.blockId,

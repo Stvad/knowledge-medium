@@ -13,8 +13,9 @@
  * tx.restore / tx.move) and `createTestDb` harness.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import { DeterministicIdCrossWorkspaceError } from '@/data/api/errors'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
@@ -23,9 +24,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { Repo } from '@/data/repo'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
-  DAILY_NOTE_NS,
   DAILY_NOTE_TYPE,
-  JOURNAL_NS,
   addDaysIso,
   dailyNoteBlockId,
   dailyNotesDataExtension,
@@ -61,6 +60,7 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe('deterministic ids', () => {
   it('journalBlockId is stable for a given workspace', () => {
@@ -74,13 +74,9 @@ describe('deterministic ids', () => {
     expect(dailyNoteBlockId('ws-1', '2026-04-28')).not.toBe(dailyNoteBlockId('ws-2', '2026-04-28'))
   })
 
-  it('namespace constants are pinned', () => {
-    // Pinned so two clients deriving an id offline land on the same row
-    // once they sync. Drift on either side reintroduces the
-    // per-client duplicate-page bug.
-    expect(JOURNAL_NS).toBe('a304a5da-807a-4c20-8af3-53a033aa9df8')
-    expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
-  })
+  // The namespace literals are pinned inside the id formula itself, in
+  // src/data/derivedIds.test.ts — strictly stronger than asserting the
+  // constant equals itself, since it also catches a changed key shape.
 })
 
 describe('addDaysIso', () => {
@@ -301,6 +297,95 @@ describe('getOrCreateDailyNote', () => {
     expect(aliases).toHaveLength(2)
     expect(aliases?.[1]).toBe(ISO)
     expect(env.repo.block('squatter').peekProperty(aliasesProp)).toEqual(['stale-extra'])
+  })
+
+  /** A row at this id belonging to another workspace is never ours to touch.
+   *
+   *  Both reads that can find an occupant select on id alone (`repo.load` and
+   *  `tx.get`), and what they feed rewrites aliases and types, resurrects
+   *  tombstones, and `tx.move`s the row under THIS workspace's journal — which
+   *  would pull a page out of someone else's tree.
+   *
+   *  One test per SITE. The guard runs at three points and each test below
+   *  enters through a different one, because a single test pins them only
+   *  collectively: a plain live occupant is caught by the first check and never
+   *  reaches the other two. */
+  describe('a row at this id belonging to another workspace', () => {
+    const OTHER_WS = 'ws-someone-else'
+    const foreignRow = async (deleted: boolean): Promise<string> => {
+      const id = dailyNoteBlockId(WS, ISO)
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
+          content: 'someone else\'s page',
+        })
+        if (deleted) await tx.delete(id)
+      }, {scope: ChangeScope.BlockDefault})
+      return id
+    }
+
+    it('is refused rather than repaired and re-parented', async () => {
+      const id = await foreignRow(false)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      // Untouched: still theirs, still where it was, no alias claimed.
+      const row = await env.repo.load(id)
+      expect(row?.workspaceId).toBe(OTHER_WS)
+      expect(row?.parentId).toBeNull()
+      expect(row?.content).toBe('someone else\'s page')
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+    })
+
+    it('is refused rather than resurrected', async () => {
+      // A tombstone is invisible to `repo.load`, so this enters through the
+      // CREATE transaction's `tx.get` — the site that would otherwise restore
+      // it, hand it this workspace's aliases, and move it under our journal.
+      const id = await foreignRow(true)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      expect(await env.repo.load(id)).toBeNull()
+    })
+
+    it('is refused even when it is shaped exactly like ours, so nothing needs repair', async () => {
+      // A correctly-shaped note makes `needsRepair` false, so the repair
+      // transaction — and the check inside it — is never reached, and the
+      // function returns the block handle directly. The check right after
+      // `repo.load` is the only thing between this call and handing another
+      // workspace's page back as this workspace's note for `ISO`.
+      //
+      // Built by creating the note properly and then relabelling the row the
+      // first read returns: the shape has to survive, and only the workspace
+      // may differ — which is exactly what sync materialization can produce.
+      const note = await getOrCreateDailyNote(env.repo, WS, ISO)
+      const shaped = {...note.peek()!, workspaceId: OTHER_WS}
+      vi.spyOn(env.repo, 'load').mockResolvedValueOnce(shaped)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+    })
+
+    it('is refused when it only becomes foreign between the read and the transaction', async () => {
+      // Sync materialization rewrites every stored column except `id`,
+      // `workspace_id` included, so the row read before the repair transaction
+      // can belong to someone else by the time it opens. Simulated by making
+      // that first read disagree with what is actually on disk — which is also
+      // the only way to reach the in-transaction check, since a row that is
+      // already foreign is stopped one site earlier.
+      const id = await foreignRow(false)
+      const asIfOurs = {...(await env.repo.load(id))!, workspaceId: WS}
+      vi.spyOn(env.repo, 'load').mockResolvedValueOnce(asIfOurs)
+
+      await expect(getOrCreateDailyNote(env.repo, WS, ISO))
+        .rejects.toThrow(DeterministicIdCrossWorkspaceError)
+
+      const row = await env.repo.load(id)
+      expect(row?.properties[aliasesProp.name]).toBeUndefined()
+      expect(row?.parentId).toBeNull()
+    })
   })
 })
 
