@@ -144,6 +144,24 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         filename: core('data/repo.ts'),
         code: `import '@/plugins/shared.css'`,
       },
+      // A project-wide exclusion clears the layer as surely as a src-relative
+      // one — it sweeps more than the plugin layer, but certainly all of it.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob(['/src/**', '!**/plugins/**'])`,
+      },
+      // Climbing out to a sibling directory does NOT come back — only an
+      // ancestor of the source root can, which is why both that and a leading
+      // `**` are required before flagging.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('../../docs/**/*.md')`,
+      },
+      // ...and a `**` that never leaves the importer's own subtree is fine.
+      {
+        filename: core('extensions/apiCatalog.ts'),
+        code: `const m = import.meta.glob('./**/*.ts')`,
+      },
       // A glob whose root segment cannot match `src` is still clean.
       {
         filename: core('extensions/apiCatalog.ts'),
@@ -567,6 +585,35 @@ describe('no-core-to-plugin-imports ESLint rule', () => {
         errors: [{
           messageId: 'coreGlobsPluginLayer',
           data: { specifier: '/{src/plugins,src/components}/**' },
+        }],
+      },
+      // A glob that climbs ABOVE the source root and descends back in. Resolving
+      // only the literal prefix said "outside the tree" and the pattern went
+      // unchecked — but `**` from the repo root sweeps src/plugins right back up.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('../../**/*.ts')`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: '../../**/*.ts' },
+        }],
+      },
+      // `base` behind a computed literal key, and behind a folded `+` chain —
+      // both statically known, and Vite evaluates both.
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { ['base']: '/src/plugins' })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
+        }],
+      },
+      {
+        filename: core('extensions/liveRuntime.ts'),
+        code: `const m = import.meta.glob('./todo/**', { base: '/src/' + 'plugins' })`,
+        errors: [{
+          messageId: 'coreGlobsPluginLayer',
+          data: { specifier: './todo/**' },
         }],
       },
       // A narrower exclusion still leaves every OTHER plugin in the expansion,

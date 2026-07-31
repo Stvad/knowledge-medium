@@ -108,7 +108,7 @@ const getFilename = (context) =>
  *  worth filesystem access inside a lint rule until someone actually hits it. */
 const srcRelativePath = (filename, sourceRoot) => {
   const relative = posix.relative(sourceRoot, filename)
-  return relative.startsWith('../') || posix.isAbsolute(relative) ? undefined : relative
+  return outsideRoot(relative) ? undefined : relative
 }
 
 /** Tells `plugins/registry.js` or `plugins/shared.css` (a loose FILE) from
@@ -197,6 +197,14 @@ const staticString = (node) => {
   if (el?.type === 'TemplateLiteral' && el.expressions.length === 0) {
     return el.quasis[0].value.cooked ?? undefined
   }
+  // A `+` chain of static parts is as knowable as one literal, and Vite folds
+  // it the same way. Same contract as no-raw-synced-table-writes' literalSqlText:
+  // fold when BOTH sides are static, give up otherwise.
+  if (el?.type === 'BinaryExpression' && el.operator === '+') {
+    const left = staticString(el.left)
+    const right = staticString(el.right)
+    return left === undefined || right === undefined ? undefined : left + right
+  }
   return undefined
 }
 
@@ -246,7 +254,12 @@ const specifierLiterals = (node) => {
 // `src/plugins/`, which is core. An enumerated set rather than glob algebra: a
 // narrower exclusion (`!plugins/todo/**`) leaves every other plugin in the
 // expansion and must still report.
-const CLEARS_PLUGIN_LAYER = new Set(['plugins/**', 'plugins/*/**', 'plugins/**/*'])
+const CLEARS_PLUGIN_LAYER = new Set([
+  'plugins/**', 'plugins/*/**', 'plugins/**/*',
+  // Written project-wide rather than src-relative. It sweeps more than the
+  // plugin layer, but it certainly sweeps all of it.
+  '**/plugins/**',
+])
 
 const GLOB_METACHARACTER = /[*?[\](){}!+@]/
 
@@ -284,6 +297,17 @@ const globReachesPluginLayer = (pattern) => {
 /** A brace group that spans a `/` (`{src/plugins,src/components}`) survives the
  *  segment split as an unbalanced fragment, so no per-segment reasoning about it
  *  is sound. Flag and let the author opt out rather than guess. */
+/** Split a glob into its static leading segments and the globby remainder. */
+const staticHead = (pattern) => {
+  const segments = pattern.split('/')
+  const globAt = segments.findIndex(segment => GLOB_METACHARACTER.test(segment))
+  return globAt === -1
+    ? {head: pattern, rest: ''}
+    : {head: segments.slice(0, globAt).join('/'), rest: segments.slice(globAt).join('/')}
+}
+
+const outsideRoot = (relative) => relative === '..' || relative.startsWith('../') || posix.isAbsolute(relative)
+
 const hasUnbalancedBrace = (segment) => segment.includes('{') && !segment.includes('}')
 
 /** `new URL('…', import.meta.url)` — Vite's idiom for referencing a worker,
@@ -318,8 +342,11 @@ const propertyValue = (objectNode, name) => {
       if (nested !== undefined) found = nested
     } else if (
       property.type === 'Property'
-      && !property.computed
-      && (property.key?.name === name || property.key?.value === name)
+      // A computed key that is itself a literal (`{['base']: …}`) names the
+      // property just as plainly as `{base: …}`.
+      && (property.computed
+        ? property.key?.type === 'Literal' && property.key.value === name
+        : (property.key?.name === name || property.key?.value === name))
     ) {
       found = property.value
     }
@@ -440,9 +467,24 @@ const noCoreToPluginImports = {
       // expansion, so it is deliberately not honoured and the author opts out
       // inline instead.
       if (patterns.some(p => p.startsWith('!') && CLEARS_PLUGIN_LAYER.has(resolve(p.slice(1))))) return
+      // A relative glob can climb ABOVE the source root and descend back in:
+      // `../../**` + `/*.ts` from `src/extensions/` resolves to the repo root,
+      // and `**` from there sweeps `src/plugins` right back up. Resolving only
+      // the literal prefix said "outside the tree" and the whole pattern went
+      // unchecked — the same broad-patterns-escape shape as the root-segment
+      // bug. Only an ANCESTOR of the source root can descend back into it, and
+      // only a `**` can span the unknown depth between, so both are required.
+      const escapesAndReturns = (pattern) => {
+        if (!pattern.startsWith('./') && !pattern.startsWith('../')) return false
+        const {head, rest} = staticHead(pattern)
+        const importerDir = posix.dirname(posix.resolve(sourceRoot, importerForPattern))
+        return rest.startsWith('**')
+          && !outsideRoot(posix.relative(posix.resolve(importerDir, head), sourceRoot))
+      }
+
       for (const specifier of patterns) {
         if (specifier.startsWith('!')) continue
-        if (!globReachesPluginLayer(resolve(specifier))) continue
+        if (!escapesAndReturns(specifier) && !globReachesPluginLayer(resolve(specifier))) continue
         context.report({node, messageId: 'coreGlobsPluginLayer', data: {specifier}})
       }
     }
