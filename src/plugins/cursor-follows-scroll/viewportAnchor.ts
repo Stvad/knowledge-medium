@@ -1,4 +1,8 @@
-import { getElementScrollportBounds, isElementProperlyVisible } from '@/utils/dom.js'
+import {
+  getElementScrollportBounds,
+  isElementProperlyVisible,
+  nearestScrollableAncestor,
+} from '@/utils/dom.js'
 import {
   locationOf,
   panelInstances,
@@ -24,6 +28,12 @@ export const isRowInViewport = (instance: HTMLElement): boolean => {
   return isElementProperlyVisible(target, getElementScrollportBounds(target))
 }
 
+/** The thing that actually scrolls this row. Null = the page itself, and two
+ *  nulls compare equal, which is what makes the filter below work for a panel
+ *  with no inner scroll container at all. */
+const scrollportOf = (instance: HTMLElement): HTMLElement | null =>
+  nearestScrollableAncestor(visibilityTargetFor(instance))
+
 export const findInstance = (
   panelEl: HTMLElement,
   location: FocusedBlockLocation,
@@ -48,6 +58,14 @@ export const findInstance = (
  * across outline, backlinks and embeds alike (minus the excluded surfaces), so
  * scrolling from the outline down into the backlinks moves the cursor into the
  * backlinks — the same places `j`/`k` already travel.
+ *
+ * SCROLLPORT-local, though. A panel can hold more than one: the video-notes
+ * layout renders the notes in an `overflow-y-auto` aside while the video
+ * block's own row sits in a section that never scrolls. That row is the first
+ * nav item in the panel and is permanently on screen, so an unfiltered search
+ * would hand it the cursor every time a note scrolled out of the aside.
+ * Candidates are therefore restricted to rows that move when the focused one
+ * moves.
  */
 export const resolveViewportAnchor = (
   panelEl: HTMLElement,
@@ -64,7 +82,8 @@ export const resolveViewportAnchor = (
   if (!focused) return null
   if (isRowInViewport(focused)) return null
 
-  const anchor = instances.find(isRowInViewport)
+  const port = scrollportOf(focused)
+  const anchor = instances.find(el => scrollportOf(el) === port && isRowInViewport(el))
   if (!anchor) return null
   const location = locationOf(anchor)
   if (!location || sameFocusedBlockLocation(location, focusedLocation)) return null

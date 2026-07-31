@@ -32,6 +32,7 @@ interface PanelDom {
   /** Move a row's content rect — the test's stand-in for scrolling, since
    *  happy-dom has no layout to move on its own. */
   moveRow: (blockId: string, top: number) => void
+  addRow: (blockId: string, top: number) => void
   scroll: () => void
 }
 
@@ -45,7 +46,7 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
   document.body.appendChild(panel)
 
   const targets = new Map<string, HTMLElement>()
-  for (const [blockId, top] of rows) {
+  const addRow = (blockId: string, top: number) => {
     const shell = document.createElement('div')
     shell.setAttribute('data-block-nav-item', 'true')
     shell.setAttribute('data-block-id', blockId)
@@ -57,9 +58,11 @@ const buildPanel = (panelId: string, rows: ReadonlyArray<[string, number]>): Pan
     port.appendChild(shell)
     targets.set(blockId, target)
   }
+  for (const [blockId, top] of rows) addRow(blockId, top)
 
   return {
     port,
+    addRow,
     moveRow: (blockId, top) => {
       const target = targets.get(blockId)
       if (target) stubRect(target, top, 30)
@@ -198,6 +201,36 @@ describe('PanelCursorFollowsScroll', () => {
     // Now the user scrolls back up, taking `b` off the bottom.
     dom.moveRow('a', 20)
     dom.moveRow('b', 900)
+    dom.scroll()
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(panel)?.blockId).toBe('a')
+    })
+  })
+
+  // On a cold load the cursor's row often doesn't exist when this mounts —
+  // it's a deferred placeholder waiting on `FocusedRowLazyMount`. If nothing
+  // watches for its arrival, one coarse gesture (a scrollbar drag, a fling) can
+  // take it from never-sampled straight to off-screen, where it is
+  // indistinguishable from a cursor the app is still scrolling toward — and
+  // following stays off until focus changes.
+  it('notices a cursor row that mounts after it starts watching', async () => {
+    const panel = repo.block(PANEL_ID)
+    const dom = buildPanel(PANEL_ID, [['a', 20]])
+    await focusBlock(panel, 'late', {renderScopeId: SCOPE})
+
+    render(<PanelCursorFollowsScroll block={panel}/>)
+
+    // The row hydrates, on screen, with no scroll event anywhere near it.
+    dom.addRow('late', 200)
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-block-id="late"]')).not.toBeNull()
+    })
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    // One coarse gesture takes it straight off screen.
+    dom.moveRow('a', 40)
+    dom.moveRow('late', 900)
     dom.scroll()
 
     await vi.waitFor(() => {

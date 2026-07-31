@@ -14,7 +14,8 @@ export const cursorFollowsScrollPlugin: AppExtension = systemToggle({
   description:
     'Scrolling the focused block out of view moves the cursor to the top visible block, ' +
     'so the cursor and the viewport never disagree. Turn it off for vim-style behaviour, ' +
-    'where the cursor stays put and the next motion snaps the view back to it.',
+    'where the cursor stays put and the next motion snaps the view back to it. ' +
+    'Requires Spatial navigation, which supplies the row tagging this reads.',
 }).of([
   panelMountsFacet.of(cursorFollowsScrollMount, {source: 'cursor-follows-scroll'}),
 ])

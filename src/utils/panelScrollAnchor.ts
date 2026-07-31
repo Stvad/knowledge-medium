@@ -35,6 +35,12 @@ const ROW_WAIT_MS = 2000
  *  scrolling yet, and any gesture cancels it anyway. */
 const REALIGN_WINDOW_MS = 250
 
+/** How often to re-measure during that window. Mutations are the main signal,
+ *  but not every shift is one: an image above the anchor that was already in
+ *  the DOM at zero height pushes everything down when it decodes, with no
+ *  childList record to react to. */
+const REALIGN_SAMPLE_MS = 50
+
 const inSameScrollport = (scrollEl: HTMLElement) => (el: HTMLElement): boolean =>
   el.closest<HTMLElement>('[data-panel-id]') === scrollEl.closest<HTMLElement>('[data-panel-id]')
 
@@ -100,6 +106,14 @@ export interface AlignScrollportOptions {
  * a cold load can push it past the point where the user has taken over, and
  * yanking someone who is already scrolling is worse than an anchor a few
  * hundred pixels off.
+ *
+ * KNOWN LIMIT: this restores to the top of the anchor row, so a cursor sitting
+ * on a row TALLER than the viewport loses the reader's position within it. The
+ * cursor doesn't move while such a row is being scrolled through (part of it
+ * stays visible, so `cursor-follows-scroll` has nothing to re-anchor to), and a
+ * block id alone can't say how far into it the user had read. Closing that
+ * needs an intra-row offset captured alongside the location; the error is
+ * bounded by one block's height, which is why it isn't captured today.
  */
 export const alignScrollportToRow = (
   scrollEl: HTMLElement,
@@ -110,6 +124,7 @@ export const alignScrollportToRow = (
 
   let done = false
   let realignTimer: ReturnType<typeof setTimeout> | null = null
+  let sampler: ReturnType<typeof setInterval> | null = null
 
   const finish = () => {
     if (done) return
@@ -117,9 +132,22 @@ export const alignScrollportToRow = (
     observer.disconnect()
     clearTimeout(deadline)
     if (realignTimer) clearTimeout(realignTimer)
+    if (sampler) clearInterval(sampler)
     scrollEl.removeEventListener('wheel', finish)
     scrollEl.removeEventListener('touchmove', finish)
     document.removeEventListener('keydown', finish)
+  }
+
+  const beginCorrectionWindow = () => {
+    if (realignTimer) return
+    realignTimer = setTimeout(finish, realignWindowMs)
+    sampler = setInterval(attempt, REALIGN_SAMPLE_MS)
+    // Only now is a keystroke a reason to stop. Before the first alignment
+    // nothing has moved, so there is nothing to yank — and this listener is on
+    // the document, which has no panel of its own: a key pressed in the pane
+    // the user is already working in would otherwise cancel the pending
+    // restores of every OTHER pane still waiting for its rows to hydrate.
+    document.addEventListener('keydown', finish)
   }
 
   const attempt = () => {
@@ -127,9 +155,7 @@ export const alignScrollportToRow = (
     const row = findAnchorRow(scrollEl, location)
     if (!row) return
     alignRowToScrollportTop(row)
-    // First hit starts the correction window; later mutations keep re-applying
-    // until it closes.
-    if (!realignTimer) realignTimer = setTimeout(finish, realignWindowMs)
+    beginCorrectionWindow()
   }
 
   const observer = new MutationObserver(attempt)
@@ -137,7 +163,6 @@ export const alignScrollportToRow = (
 
   scrollEl.addEventListener('wheel', finish, {passive: true})
   scrollEl.addEventListener('touchmove', finish, {passive: true})
-  document.addEventListener('keydown', finish)
 
   attempt()
   observer.observe(scrollEl, {childList: true, subtree: true})

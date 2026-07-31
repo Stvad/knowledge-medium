@@ -131,6 +131,43 @@ describe('resolveViewportAnchor', () => {
     expect(anchorFor(panel, 'a')).toBeNull()
   })
 
+  // The video-notes layout: the video block's own row sits in a section that
+  // never scrolls, ahead of the notes in DOM order and permanently on screen.
+  // Unfiltered, it would take the cursor every time a note scrolled out.
+  it('only considers rows that scroll with the cursor', () => {
+    const panel = document.createElement('div')
+    panel.setAttribute('data-panel-id', 'panel')
+    document.body.appendChild(panel)
+
+    const addRow = (parent: HTMLElement, blockId: string, top: number) => {
+      const shell = document.createElement('div')
+      shell.setAttribute('data-block-nav-item', 'true')
+      shell.setAttribute('data-block-id', blockId)
+      shell.setAttribute('data-render-scope-id', SCOPE)
+      const t = document.createElement('div')
+      t.setAttribute('data-block-visibility-target', 'true')
+      stubRect(t, top, 30)
+      shell.appendChild(t)
+      parent.appendChild(shell)
+    }
+
+    // Fixed pane — no scrollport of its own, always in view.
+    const fixed = document.createElement('div')
+    stubRect(fixed, PORT_TOP, 200)
+    panel.appendChild(fixed)
+    addRow(fixed, 'video', 20)
+
+    // Notes pane — its own scrollport.
+    const notes = document.createElement('div')
+    notes.style.overflowY = 'auto'
+    stubRect(notes, PORT_TOP, PORT_BOTTOM - PORT_TOP)
+    panel.appendChild(notes)
+    addRow(notes, 'note-a', -400)
+    addRow(notes, 'note-b', 60)
+
+    expect(anchorFor(panel, 'note-a')).toEqual({blockId: 'note-b', renderScopeId: SCOPE})
+  })
+
   // Two panels can show the same block; the cursor is a (block, scope) pair and
   // a row from another scope is not the cursor's row.
   it('matches the cursor on its render scope, not the block id alone', () => {

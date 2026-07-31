@@ -17,6 +17,13 @@ import { findInstance, isRowInViewport, resolveViewportAnchor } from './viewport
  *  gaps between momentum events without being perceptible. */
 const SCROLL_SETTLE_MS = 150
 
+/** How long to keep watching for the cursor's row to appear before giving up on
+ *  ever seeing it on screen — see `seenOnScreen` below. Covers a cold load
+ *  hydrating a deferred row and its ancestors; past that, a row that still
+ *  isn't there is one the user has scrolled away from, and the next scroll
+ *  samples it anyway. */
+const CURSOR_MOUNT_WATCH_MS = 3000
+
 /**
  * Emacs's rule, per panel: scrolling the cursor out of the window moves the
  * cursor rather than leaving it behind. Without it the cursor and the viewport
@@ -40,6 +47,15 @@ const SCROLL_SETTLE_MS = 150
  * Mounted per panel via `panelMountsFacet`. Toggleable: with the plugin off,
  * the cursor stays where it was put and the app behaves like vim (the view
  * snaps back to the cursor on the next motion) instead of like Emacs.
+ *
+ * Soft-depends on the spatial-navigation plugin, whose shell decorator writes
+ * the `data-block-nav-item` / `data-block-surface` tagging every lookup here
+ * reads. Turn that off with this left on and this goes inert — stated in the
+ * toggle's own description so the pairing is visible where it's switched.
+ * Reading core's shell attributes instead would remove the dependency but also
+ * the surface exclusions, making breadcrumb rows eligible anchors; and with
+ * spatial navigation off there is no `j`/`k` to teleport in the first place,
+ * which is the problem this exists to solve.
  */
 export function PanelCursorFollowsScroll({block}: {block: Block}) {
   const [focusedLocation] = usePropertyValue(block, focusedBlockLocationProp)
@@ -57,6 +73,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     const location = {blockId: focusedBlockId, renderScopeId}
 
     let settleTimer: ReturnType<typeof setTimeout> | null = null
+    let mountWatcher: MutationObserver | null = null
     let seenOnScreen = false
 
     // Re-resolved per use rather than captured: the facet runtime can be
@@ -64,10 +81,18 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     // `PanelFocusRecovery` does.
     const excluded = () => resolveSpatialNavExclusions(block.repo.facetRuntime)
 
+    const stopWatchingForMount = () => {
+      mountWatcher?.disconnect()
+      mountWatcher = null
+    }
+
     const sample = () => {
       if (seenOnScreen) return
       const row = findInstance(panelEl, location, excluded())
-      if (row && isRowInViewport(row)) seenOnScreen = true
+      if (row && isRowInViewport(row)) {
+        seenOnScreen = true
+        stopWatchingForMount()
+      }
     }
 
     const settle = () => {
@@ -90,6 +115,18 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     }
 
     sample()
+    // The cursor's row often doesn't exist yet — a cold load, or a restore
+    // waiting on `FocusedRowLazyMount` to materialize deferred ancestors. Watch
+    // for it rather than leaving `seenOnScreen` to the next scroll event: a
+    // single coarse gesture (a scrollbar drag, a fling) can move the row from
+    // never-sampled straight to off-screen, and it would then be mistaken for a
+    // cursor the app was still scrolling toward.
+    if (!seenOnScreen) {
+      mountWatcher = new MutationObserver(sample)
+      mountWatcher.observe(panelEl, {childList: true, subtree: true})
+    }
+    const mountWatchDeadline = setTimeout(stopWatchingForMount, CURSOR_MOUNT_WATCH_MS)
+
     // Capture at the document: scroll doesn't bubble, and which element
     // actually scrolls varies (the panel's own overflow container normally, an
     // ancestor for a stacked panel, a nested port inside a mode renderer).
@@ -99,6 +136,8 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     return () => {
       document.removeEventListener('scroll', onScroll, {capture: true})
       if (settleTimer) clearTimeout(settleTimer)
+      clearTimeout(mountWatchDeadline)
+      stopWatchingForMount()
     }
   }, [block, focusedBlockId, renderScopeId])
 
