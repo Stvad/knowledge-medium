@@ -208,7 +208,13 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // the live list would renumber the session under the user. We snapshot
   // ids once via the converge-during-render pattern, then read each card's
   // live state at grade time via `repo.block(id)`.
-  if (queue === null && dueCards.length > 0) {
+  //
+  // Gated on `dueLoaded` because the collection is now TWO independently
+  // resolving queries (due cards + tagged candidates). Freezing on the first
+  // non-empty list would capture whichever resolved first — typically the due
+  // cards alone — and strand that session's new cards until the queue ran out
+  // and the top-up path below picked them up as a second wave.
+  if (queue === null && dueLoaded && dueCards.length > 0) {
     setQueue(dueCards.map(c => c.id))
   }
 
@@ -631,24 +637,36 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           <ExternalLink className="h-3.5 w-3.5" />
           Open
         </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-          onClick={reschedule}
-          disabled={busy}
-        >
-          <CalendarClock className="h-3.5 w-3.5" />
-          Reschedule
-        </button>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-          onClick={() => void archive()}
-          disabled={busy}
-        >
-          <ArchiveX className="h-3.5 w-3.5" />
-          Archive
-        </button>
+        {/* Reschedule and Archive both operate on an ENROLLED card, and both
+            fail silently or confusingly on a new one: `archiveSrsCard`
+            returns false for a block with no SRS type (surfacing
+            "Couldn't archive this card" and leaving the card in place), and
+            the SRS date adapter doesn't claim an unenrolled block, so the
+            picker either no-ops or edits an unrelated date without enrolling
+            it. Grading is how a new card gets a schedule in the first place,
+            so offer these only once it has one. */}
+        {!currentIsNew && (
+          <>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+              onClick={reschedule}
+              disabled={busy}
+            >
+              <CalendarClock className="h-3.5 w-3.5" />
+              Reschedule
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+              onClick={() => void archive()}
+              disabled={busy}
+            >
+              <ArchiveX className="h-3.5 w-3.5" />
+              Archive
+            </button>
+          </>
+        )}
       </div>
     </div>
   )

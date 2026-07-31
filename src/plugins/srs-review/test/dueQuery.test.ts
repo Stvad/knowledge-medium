@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { BlockData } from '@/data/api'
 import { typesProp } from '@/data/properties'
-import { SRS_SM25_TYPE, srsArchivedProp } from '@/plugins/srs-rescheduling'
+import {
+  SRS_SM25_TYPE,
+  srsArchivedProp,
+  srsFactorProp,
+  srsGradeProp,
+  srsIntervalProp,
+  srsNextReviewDateProp,
+  srsReviewCountProp,
+  srsSnapshotHistoryProp,
+} from '@/plugins/srs-rescheduling'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
-import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling'
 import {
   UNRESOLVED_TAG_ID,
   buildDueCardsQuery,
@@ -74,8 +82,17 @@ describe('buildTaggedCandidatesQuery', () => {
     // would turn every bullet under a tagged page — answers included — into
     // a new card.
     const q = buildTaggedCandidatesQuery({workspaceId: ws, tagBlockId: 'tag-1'})
-    expect(q.referencedBy).toEqual({id: 'tag-1'})
+    expect(q.referencedBy).toEqual({id: 'tag-1', sourceField: ''})
     expect(q.match).toBeUndefined()
+  })
+
+  it('counts only content refs, so a typed ref property never enrols a block', () => {
+    // `block_references` carries a row per typed ref property too, with
+    // `source_field` set to the property name. Without this filter a block
+    // whose unrelated `project` ref points at the page being used as a deck
+    // tag would be enrolled — and enrolment writes.
+    expect(buildTaggedCandidatesQuery({workspaceId: ws, tagBlockId: 'tag-1'}).referencedBy)
+      .toMatchObject({sourceField: ''})
   })
 
   it('matches nothing for the untagged all-due deck', () => {
@@ -83,15 +100,19 @@ describe('buildTaggedCandidatesQuery', () => {
     // filter (pointed at the sentinel) is what stops it degrading into
     // "every block in the workspace".
     expect(buildTaggedCandidatesQuery({workspaceId: ws, tagBlockId: null}).referencedBy)
-      .toEqual({id: UNRESOLVED_TAG_ID})
+      .toMatchObject({id: UNRESOLVED_TAG_ID})
   })
 })
 
 describe('selectNewCards', () => {
-  const block = (id: string, types: string[]): BlockData => ({
+  const block = (
+    id: string,
+    types: string[],
+    extraProps: Record<string, unknown> = {},
+  ): BlockData => ({
     id,
     workspaceId: 'ws-1',
-    properties: {[typesProp.name]: typesProp.codec.encode(types)},
+    properties: {[typesProp.name]: typesProp.codec.encode(types), ...extraProps},
   } as unknown as BlockData)
 
   it('keeps tagged blocks that carry no SRS type', () => {
@@ -103,5 +124,37 @@ describe('selectNewCards', () => {
     // A card scheduled for next month is still a card — re-collecting it as
     // "new" would reset it to the SM-2.5 defaults on the next grade.
     expect(selectNewCards([block('card', [SRS_SM25_TYPE])])).toEqual([])
+  })
+
+  it('drops a de-typed card that still carries scheduling state (history guard)', () => {
+    // Removing the `srs-sm2.5` chip in the generic type editor rewrites ONLY
+    // the types array — `interval`, `factor` and `snapshot-history` survive,
+    // as does the deck tag. Enrolling that as "new" is destructive: the first
+    // grade runs `basisFromBlock`, which ignores stored properties when the
+    // type is absent, and reschedules from the SM-2.5 defaults — replacing a
+    // real review history with one fresh snapshot.
+    const deTyped = block('was-a-card', [], {
+      [srsIntervalProp.name]: srsIntervalProp.codec.encode(45),
+      [srsFactorProp.name]: srsFactorProp.codec.encode(2.7),
+      [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([
+        {reviewedAt: 'daily-1', grade: 4, interval: 30, factor: 2.7, reviewCount: 11},
+      ]),
+    })
+    expect(selectNewCards([deTyped])).toEqual([])
+  })
+
+  it.each([
+    ['interval', srsIntervalProp],
+    ['factor', srsFactorProp],
+    ['review-count', srsReviewCountProp],
+    ['grade', srsGradeProp],
+    ['archived', srsArchivedProp],
+  ] as const)('drops a de-typed card carrying only %s', (_name, prop) => {
+    // Each scheduling property independently proves prior enrolment — one
+    // surviving value is enough, so no single-property gap reopens the guard.
+    const partial = block('partial', [], {
+      [prop.name]: prop.codec.encode(prop.defaultValue as never),
+    })
+    expect(selectNewCards([partial])).toEqual([])
   })
 })

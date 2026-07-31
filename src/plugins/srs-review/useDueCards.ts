@@ -66,15 +66,14 @@ const useDueCardsQuery = (workspaceId: string, tagName: string): TypedBlockQuery
 export const useDueCards = (workspaceId: string, tagName: string): BlockData[] =>
   useBlockQuery(useDueCardsQuery(workspaceId, tagName))
 
-/** Whether the due-cards query has produced a result yet (vs. still
- *  loading). A loaded-but-empty deck reports `true` here while
- *  `useDueCards` returns `[]`, letting callers tell "nothing due" apart
- *  from "not loaded yet" — the query handle's data is `undefined` until
- *  the first resolve, then an array (possibly empty). Shares the handle
- *  with `useDueCards`, so it adds no extra query. */
-export const useDueCardsReady = (workspaceId: string, tagName: string): boolean => {
+/** Whether a typed-blocks query has produced a result yet (vs. still
+ *  loading). A loaded-but-empty query reports `true` here while
+ *  `useBlockQuery` returns `[]`, letting callers tell "nothing matched"
+ *  apart from "not loaded yet" — the handle's data is `undefined` until
+ *  the first resolve, then an array (possibly empty). Takes the built
+ *  query so it shares the caller's handle and adds no extra query. */
+const useQueryReady = (query: TypedBlockQuery): boolean => {
   const repo = useRepo()
-  const query = useDueCardsQuery(workspaceId, tagName)
   return useHandle(repo.query.typedBlocks(query), {
     selector: data => data !== undefined,
   }) as boolean
@@ -113,19 +112,26 @@ export const useReviewDeckCards = (
   workspaceId: string,
   tagName: string,
 ): ReviewDeckCards => {
-  const repo = useRepo()
-  const dueCards = useDueCards(workspaceId, tagName)
-  const dueReady = useDueCardsReady(workspaceId, tagName)
-
+  // Resolve the tag and today's cutoff ONCE and build both queries from them.
+  // Going through `useDueCards` + a separate ready hook would re-run
+  // `useDueCardsQuery` per call — three `aliasLookup` subscriptions and two
+  // identical 60s midnight timers for one screen's worth of state.
   const tagBlockId = useTagBlockId(workspaceId, tagName)
+  const startOfToday = useStartOfToday()
+
+  const dueQuery = useMemo(
+    () => buildDueCardsQuery({workspaceId, tagBlockId, now: new Date(startOfToday)}),
+    [workspaceId, tagBlockId, startOfToday],
+  )
   const candidatesQuery = useMemo(
     () => buildTaggedCandidatesQuery({workspaceId, tagBlockId}),
     [workspaceId, tagBlockId],
   )
+
+  const dueCards = useBlockQuery(dueQuery)
+  const dueReady = useQueryReady(dueQuery)
   const candidates = useBlockQuery(candidatesQuery)
-  const candidatesReady = useHandle(repo.query.typedBlocks(candidatesQuery), {
-    selector: data => data !== undefined,
-  }) as boolean
+  const candidatesReady = useQueryReady(candidatesQuery)
 
   return useMemo(() => {
     // The two sets are disjoint by their predicates (carries the SRS type

@@ -4,7 +4,12 @@ import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import {
   SRS_SM25_TYPE,
   srsArchivedProp,
+  srsFactorProp,
+  srsGradeProp,
+  srsIntervalProp,
   srsNextReviewDateProp,
+  srsReviewCountProp,
+  srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling'
 
 /** A tag id can never legitimately be this string, so a `referencedBy`
@@ -94,14 +99,52 @@ export const buildTaggedCandidatesQuery = ({
   tagBlockId,
 }: Pick<DueCardsQueryInput, 'workspaceId' | 'tagBlockId'>): TypedBlockQuery => ({
   workspaceId,
-  referencedBy: {id: tagBlockId || UNRESOLVED_TAG_ID},
+  // `sourceField: ''` restricts this to CONTENT references — the `[[Tag]]`
+  // the user actually typed into the block. `block_references` also holds a
+  // row per typed ref *property* (`source_field` = the property name; see
+  // `references/localSchema.ts`), so an unqualified filter would treat a
+  // block whose unrelated `project` ref happens to point at the deck's tag
+  // page as "tagged for review". Enrolment WRITES, so it takes the narrow
+  // reading; the due query stays unqualified because merely listing an
+  // existing card is harmless.
+  referencedBy: {id: tagBlockId || UNRESOLVED_TAG_ID, sourceField: ''},
   order: 'created-asc',
 })
 
+/** Names of every property `applySrsReschedulePlan` writes. Presence of ANY
+ *  of them means the block has been scheduled before, whatever its types
+ *  say. */
+const SRS_SCHEDULING_PROP_NAMES: readonly string[] = [
+  srsIntervalProp.name,
+  srsFactorProp.name,
+  srsNextReviewDateProp.name,
+  srsReviewCountProp.name,
+  srsGradeProp.name,
+  srsSnapshotHistoryProp.name,
+  srsArchivedProp.name,
+]
+
+const hasStoredSrsState = (data: BlockData): boolean =>
+  SRS_SCHEDULING_PROP_NAMES.some(name => data.properties[name] !== undefined)
+
 /** The tagged blocks that aren't cards yet — "tagged for SRS but with no
- *  SRS metadata". Carrying the type IS the metadata: every scheduling
- *  property is written in the same tx that adds it (`applySrsReschedulePlan`),
- *  so there is no half-enrolled state to distinguish, and a card that's
- *  merely not due today must NOT come back as new. */
+ *  SRS metadata".
+ *
+ *  Missing the type is NOT sufficient on its own, and treating it as such
+ *  would destroy review history. Removing a type is a generic, one-click
+ *  operation in the type editor (`TypesPropertyEditor` → `repo.setBlockTypes`),
+ *  and `_removeTypeInTx` rewrites ONLY the types array — a mature card whose
+ *  `srs-sm2.5` chip is removed keeps its `interval`, `factor` and its whole
+ *  `snapshot-history`, and keeps the deck's tag. Enrol that as "new" and the
+ *  first grade runs `basisFromBlock`, which ignores stored properties when
+ *  the type is absent (`hasSrsType ? data.properties : {}`) and reschedules
+ *  from the SM-2.5 defaults — overwriting real history with a single fresh
+ *  snapshot, under a "New" badge that reads as "nothing to lose".
+ *
+ *  So a candidate qualifies only if it carries neither the type NOR any
+ *  property the scheduler writes. A de-typed card falls through both tests
+ *  and stays invisible to the deck, exactly as before this feature existed;
+ *  re-adding its type restores it as the mature card it still is. */
 export const selectNewCards = (candidates: readonly BlockData[]): BlockData[] =>
-  candidates.filter(data => !getBlockTypes(data).includes(SRS_SM25_TYPE))
+  candidates.filter(data =>
+    !getBlockTypes(data).includes(SRS_SM25_TYPE) && !hasStoredSrsState(data))
