@@ -25,6 +25,7 @@
 import { BlockComponent } from './BlockComponent.tsx'
 import { BlockLoadingPlaceholder } from './BlockLoadingPlaceholder.tsx'
 import { LazyViewportMount } from './util/LazyViewportMount.tsx'
+import { lazyBlockCacheKey } from './util/lazyMountRegistry.ts'
 
 /** Reserved height for a not-yet-measured block. Picked to roughly
  *  match a single-line bullet so the initial scrollHeight estimate is
@@ -43,7 +44,7 @@ interface LazyBlockComponentProps {
 export function LazyBlockComponent({ blockId }: LazyBlockComponentProps) {
   return (
     <LazyViewportMount
-      cacheKey={`block:${blockId}`}
+      cacheKey={lazyBlockCacheKey(blockId)}
       estimatedHeightPx={ESTIMATED_HEIGHT_PX}
       overscanPx={OVERSCAN_PX}
       renderPlaceholder={({reservedHeight}) => (

@@ -8,23 +8,39 @@ const windowVisibilityBounds = (): VerticalVisibilityBounds => ({
   bottom: window.innerHeight || document.documentElement.clientHeight,
 })
 
-export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
-  const windowBounds = windowVisibilityBounds()
+/** The closest ancestor that scrolls `element` vertically, or null when the
+ *  page itself is the only scrollport. Callers that measure visibility want
+ *  its rect; callers that observe intersection want it as the observer root
+ *  (an `IntersectionObserver` `rootMargin` expands only the ROOT's rect —
+ *  clip rects of scrolling ancestors in between are applied unexpanded, so
+ *  an observer rooted at the viewport gets no overscan at all inside one of
+ *  these).
+ *
+ *  Note the predicate reads COMPUTED `overflowY`, which CSS propagates from
+ *  `overflow-x` — an `overflow-x: auto` element with no explicit `overflow-y`
+ *  computes `auto` here and counts as a match. Fine for today's callers (such
+ *  a wrapper still clips vertically), but it's why this asks about a
+ *  scrollport rather than claiming the element definitely scrolls. */
+export const nearestScrollableAncestor = (element: HTMLElement): HTMLElement | null => {
   let ancestor = element.parentElement
-
   while (ancestor) {
     const {overflowY} = window.getComputedStyle(ancestor)
-    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
-      const rect = ancestor.getBoundingClientRect()
-      return {
-        top: Math.max(windowBounds.top, rect.top),
-        bottom: Math.min(windowBounds.bottom, rect.bottom),
-      }
-    }
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') return ancestor
     ancestor = ancestor.parentElement
   }
+  return null
+}
 
-  return windowBounds
+export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
+  const windowBounds = windowVisibilityBounds()
+  const scrollport = nearestScrollableAncestor(element)
+  if (!scrollport) return windowBounds
+
+  const rect = scrollport.getBoundingClientRect()
+  return {
+    top: Math.max(windowBounds.top, rect.top),
+    bottom: Math.min(windowBounds.bottom, rect.bottom),
+  }
 }
 
 export const isElementProperlyVisible = (
