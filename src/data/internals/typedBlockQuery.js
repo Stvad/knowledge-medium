@@ -2,16 +2,14 @@ import{isRefCodec as e,isRefListCodec as t}from"../api/codecs.js";import"../api/
       SELECT 1 FROM ancestor_chain ac
       JOIN blocks anc ON anc.id = ac.anc_id
       WHERE ac.block_id = b.id AND ${n.length===0?`1`:n.join(` AND `)}
-    )`,params:r}},h=e=>e?e.filter(e=>{let t=e.where!==void 0&&Object.keys(e.where).length>0,n=e.referencedBy!==void 0,r=e.id!==void 0;return t||n||r}):[],g=e=>({workspaceId:e.workspaceId,types:e.types===void 0?void 0:Array.from(new Set(e.types.map(e=>e.trim()).filter(Boolean))).sort(),where:e.where,referencedBy:e.referencedBy,match:h(e.match),exclude:h(e.exclude),order:e.order}),_=e=>e.some(e=>e.scope===`ancestor`),v=e=>(e.scope??`self`)===`self`,y=e=>{if(e===null)return!1;if(typeof e!=`object`||e instanceof Date||Array.isArray(e))return!0;let t=Object.entries(e);if(t.length!==1)return!0;let[n,r]=t[0];return!(n===`exists`&&r===!1)},b=e=>e!==void 0&&Object.values(e).some(y),x=e=>e.id!==void 0||e.referencedBy!==void 0||b(e.where),S=e=>{let t=e.match??[],n=e.exclude??[];if(!(_(t)||_(n)))return;let r=e.types??[];if(!(e.referencedBy!==void 0||r.length>0||b(e.where)||t.some(e=>v(e)&&x(e))))throw Error(`[queryBlocks] ancestor-scoped predicates require at least one candidate filter (types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk`)},C=(e,t)=>{let n=g(e),r=n.types??[],i=n.match??[],a=n.exclude??[],o=[],s=[],c;if(n.referencedBy===void 0?(c=`FROM blocks b`,s.push(`b.workspace_id = ?`,`b.deleted = 0`),o.push(n.workspaceId)):(c=`FROM block_references br
-      JOIN blocks b ON b.id = br.source_id`,s.push(`br.workspace_id = ?`,`br.target_id = ?`,`b.deleted = 0`),o.push(n.workspaceId,n.referencedBy.id),n.referencedBy.sourceField!==void 0&&(s.push(`br.source_field = ?`),o.push(n.referencedBy.sourceField))),r.length>0&&(s.push(`
-      EXISTS (
-        SELECT 1
-        FROM block_types bt
-        WHERE bt.block_id = b.id
-          AND bt.workspace_id = b.workspace_id
-          AND bt.type IN (${r.map(()=>`?`).join(`, `)})
-      )
-    `.trim()),o.push(...r)),n.where!==void 0)for(let[e,r]of Object.entries(n.where).sort(([e],[t])=>e.localeCompare(t))){let n=d(e,r,t.get(e),`b.properties_json`,t);s.push(n.sql),o.push(...n.params)}for(let e of i){if(!v(e))continue;let n=p(e,`b`,t);s.push(n.sql),o.push(...n.params)}for(let e of a){if(!v(e))continue;let n=p(e,`b`,t);s.push(`(${n.sql}) IS NOT TRUE`),o.push(...n.params)}return{sql:`candidates AS (
+    )`,params:r}},h=e=>e?e.filter(e=>{let t=e.where!==void 0&&Object.keys(e.where).length>0,n=e.referencedBy!==void 0,r=e.id!==void 0;return t||n||r}):[],g=e=>({workspaceId:e.workspaceId,types:e.types===void 0?void 0:Array.from(new Set(e.types.map(e=>e.trim()).filter(Boolean))).sort(),where:e.where,referencedBy:e.referencedBy,match:h(e.match),exclude:h(e.exclude),order:e.order}),_=e=>e.some(e=>e.scope===`ancestor`),v=e=>(e.scope??`self`)===`self`,y=e=>{if(e===null)return!1;if(typeof e!=`object`||e instanceof Date||Array.isArray(e))return!0;let t=Object.entries(e);if(t.length!==1)return!0;let[n,r]=t[0];return!(n===`exists`&&r===!1)},b=e=>e!==void 0&&Object.values(e).some(y),x=e=>e.id!==void 0||e.referencedBy!==void 0||b(e.where),S=e=>{let t=e.match??[],n=e.exclude??[];if(!(_(t)||_(n)))return;let r=e.types??[];if(!(e.referencedBy!==void 0||r.length>0||b(e.where)||t.some(e=>v(e)&&x(e))))throw Error(`[queryBlocks] ancestor-scoped predicates require at least one candidate filter (types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk`)},C=(e,t)=>{let n=g(e),r=n.types??[],i=n.match??[],a=n.exclude??[],o=[],s=[],c,l=r.length>0?`
+      JOIN block_types bt
+        ON bt.block_id = b.id
+       AND bt.workspace_id = b.workspace_id
+       AND bt.type IN (${r.map(()=>`?`).join(`, `)})`:``;if(o.push(...r),n.referencedBy===void 0?(c=`FROM blocks b${l}`,s.push(`b.workspace_id = ?`,`b.deleted = 0`),o.push(n.workspaceId)):(c=`
+      FROM block_references br
+      JOIN blocks b ON b.id = br.source_id${l}
+    `.trim(),s.push(`br.workspace_id = ?`,`br.target_id = ?`,`b.deleted = 0`),o.push(n.workspaceId,n.referencedBy.id),n.referencedBy.sourceField!==void 0&&(s.push(`br.source_field = ?`),o.push(n.referencedBy.sourceField))),n.where!==void 0)for(let[e,r]of Object.entries(n.where).sort(([e],[t])=>e.localeCompare(t))){let n=d(e,r,t.get(e),`b.properties_json`,t);s.push(n.sql),o.push(...n.params)}for(let e of i){if(!v(e))continue;let n=p(e,`b`,t);s.push(n.sql),o.push(...n.params)}for(let e of a){if(!v(e))continue;let n=p(e,`b`,t);s.push(`(${n.sql}) IS NOT TRUE`),o.push(...n.params)}return{sql:`candidates AS (
       SELECT DISTINCT b.id
       ${c}
       WHERE ${s.join(`
