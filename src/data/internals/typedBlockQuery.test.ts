@@ -78,6 +78,8 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    // Mnemonic ids — see the MNEMONIC IDS note in createTestRepo.ts.
+    blockIdPolicy: 'any',
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
