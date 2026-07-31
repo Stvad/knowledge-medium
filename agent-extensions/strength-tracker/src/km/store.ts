@@ -581,7 +581,16 @@ export const materializeExercise = async (
     // …and only an attachment that still HOLDS may skip it — `entryId` can
     // name an entry since deleted or dragged out, which `writeExercise`
     // would reject and mint for anyway.
-    const attached = entryId !== undefined ? await stillAttached(tx, entryId, workoutId) : null
+    //
+    // …and only an attachment that still names THIS lift. `entryId` comes from
+    // the live query, so it can name an entry whose `strength:definition` has
+    // since been repointed at another lift by hand. Skipping the match on that
+    // one files this lift's sets under the other one, where the next emission
+    // no longer shows them and Finish progresses them against the wrong lift.
+    // Same predicate `adoptable` applies on the derived path — the shortcut
+    // must not be the weaker check.
+    const held = entryId !== undefined ? await stillAttached(tx, entryId, workoutId) : null
+    const attached = held && stillNamesThisLift(held, ex) ? held : null
     const matched = attached?.id ?? matchLiveExercises(
       [{definitionId: ex.definitionId, exercise: ex.exercise, occurrence: ex.occurrence}],
       await liveEntriesOf(tx, workoutId),

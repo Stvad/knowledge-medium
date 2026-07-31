@@ -70,12 +70,32 @@ export const useProgram = (repo: Repo, workspaceId: string, pageId: string): Pro
   const [reloadKey, setReloadKey] = useState(0)
   // Capture "now" once so a session that crosses midnight stays on one day.
   const [now] = useState(() => new Date())
-  /** Has the plan outline ever been read successfully? Decides which of two
-   *  quite different situations a failed read is. */
+  /** Has the plan outline ever been read successfully FOR THE PAGE ON SCREEN?
+   *  Decides which of two quite different situations a failed read is. */
   const planEverRead = useRef(false)
+  /** Which (workspace, page) `planEverRead` and `config` describe. The panel
+   *  swaps `topLevelBlockId` without remounting (`PanelRenderer` renders one
+   *  `BlockComponent` slot with no key), so moving between two Strength Log
+   *  pages re-runs the effect below while every ref survives. Without this,
+   *  a failed read on the SECOND page reads as a failed reload of the first:
+   *  the warning says "still using the copy read earlier", `config` keeps the
+   *  other page's plan, and logging is re-enabled against another workspace's
+   *  exercise definitions, weights and plan refs. */
+  const planContext = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    // A different page is not a reload of this one — keeping the old plan
+    // would be keeping someone else's. Drop back to the defaults and let the
+    // read below replace them, exactly as on a first mount.
+    const context = `${workspaceId}|${pageId}`
+    if (planContext.current !== context) {
+      planContext.current = context
+      planEverRead.current = false
+      setConfig(DEFAULT_CONFIG)
+      setPlanRootId(null)
+      setWarnings([])
+    }
     // Lock writing for the duration of every load, not just the first. This
     // latch says "the prescription on screen is the one the plan describes",
     // and a RELOAD (switching an `or`-group bumps `reloadKey`) makes that

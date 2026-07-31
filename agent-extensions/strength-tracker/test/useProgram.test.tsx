@@ -136,6 +136,47 @@ describe('a plan read that fails after one that succeeded', () => {
   })
 })
 
+describe('moving to a different Strength Log page', () => {
+  /** The panel swaps `topLevelBlockId` on one `BlockComponent` slot with no
+   *  key, so this happens WITHOUT a remount: the effect re-runs and every ref
+   *  survives. "Keep the last good plan" is right for a reload of the same
+   *  page and wrong here — that plan belongs to a different page, possibly in
+   *  a different workspace. */
+  it('does not carry one page\'s plan into another when the second read fails', async () => {
+    vi.mocked(loadConfig).mockResolvedValue(planned('plan-A'))
+    const {result, rerender} = renderHook(
+      ({ws, page}) => useProgram(repo, ws, page),
+      {initialProps: {ws: 'ws-1', page: 'page-A'}},
+    )
+    await waitFor(() => expect(result.current.planRootId).toBe('plan-A'))
+
+    vi.mocked(loadConfig).mockRejectedValue(new Error('outline unreadable'))
+    rerender({ws: 'ws-2', page: 'page-B'})
+    await waitFor(() => expect(result.current.configLoaded).toBe(true))
+
+    // Logging is re-enabled here, so what it records against has to be this
+    // page's plan or nothing — never the other workspace's exercise
+    // definitions, weights and plan refs.
+    expect(result.current.planRootId).toBeNull()
+    expect(result.current.config).toEqual(DEFAULT_CONFIG)
+    expect(result.current.warnings.join(' ')).toContain('built-in defaults')
+    expect(result.current.warnings.join(' ')).not.toContain('still using the copy read earlier')
+  })
+
+  it('replaces the plan outright when the second read succeeds', async () => {
+    vi.mocked(loadConfig).mockResolvedValue(planned('plan-A'))
+    const {result, rerender} = renderHook(
+      ({ws, page}) => useProgram(repo, ws, page),
+      {initialProps: {ws: 'ws-1', page: 'page-A'}},
+    )
+    await waitFor(() => expect(result.current.planRootId).toBe('plan-A'))
+
+    vi.mocked(loadConfig).mockResolvedValue(planned('plan-B'))
+    rerender({ws: 'ws-2', page: 'page-B'})
+    await waitFor(() => expect(result.current.planRootId).toBe('plan-B'))
+  })
+})
+
 describe('switching an or-group', () => {
   it('locks writing before the preference write lands, not when the reload starts', async () => {
     // In the gap between the tap and the reload the OLD card is still on

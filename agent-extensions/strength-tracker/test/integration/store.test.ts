@@ -1179,6 +1179,33 @@ describe('materializeExercise — explicit entryId', () => {
     expect(cache.getSnapshot(refilled.setIds[0])?.parentId).toBe(refilled.id)
   })
 
+  it('ignores an attached entry whose definition now names a different lift', async () => {
+    // `entryId` comes from the live query, so it can name an entry whose
+    // `strength:definition` has since been repointed — the property is
+    // hand-editable. Liveness and parentage both still hold, so the shortcut
+    // used to accept it: this lift's sets would land under a row attributed to
+    // the other lift, where the next emission no longer shows them and Finish
+    // records and progresses them against the wrong lift. The derived path
+    // rejects exactly this via `adoptable`; the shortcut must not be weaker.
+    const started = await startWorkout(repo, WORKSPACE_ID, PAGE_ID, workoutDraft([
+      exerciseDraft('Bench press', [draftSet(135, 8)], {definitionId: 'def-bench'}),
+    ]))
+    const entryId = started.exercises[0].id
+    await repo.tx(tx => tx.setProperty(entryId, definitionProp, 'def-overhead'),
+      {scope: ChangeScope.BlockDefault, description: 'repoint the entry at another lift'})
+
+    const refilled = await materializeExercise(
+      repo,
+      started.workoutId,
+      exerciseDraft('Bench press', [draftSet(135, 8), draftSet(145, 5)], {definitionId: 'def-bench'}),
+      entryId,
+    )
+
+    expect(refilled.id).not.toBe(entryId)
+    expect(cache.getSnapshot(refilled.id)?.parentId).toBe(started.workoutId)
+    expect(cache.getSnapshot(refilled.setIds[0])?.parentId).toBe(refilled.id)
+  })
+
   it('re-tags an attached entry whose type tag went missing', async () => {
     // The shortcut accepts an entry on liveness and parentage alone, skipping
     // the re-tag `getOrCreateTypedChild` does for what it adopts. Left
