@@ -1217,6 +1217,48 @@ describe('runAnalyzeIfStale — arming (stale-stats axis)', () => {
   })
 })
 
+describe('ANALYZE serialization', () => {
+  // `analysis_limit` is CONNECTION state and every statement is separately
+  // awaited, so overlapping callers interleave on it. Four schedulers point at
+  // these two functions. Both interleavings are harmful and they are mirror
+  // images: the manual clear landing inside an automatic pass makes that pass
+  // UNBOUNDED, and an automatic set landing inside the manual pass makes the
+  // escape hatch sampled.
+  const taggedDb = (tag: string, log: string[]) => ({
+    execute: async (sql: string) => {
+      log.push(`${tag}:${sql.trim()}`)
+      return {rows: {_array: h.db.prepare(sql).all()}}
+    },
+    getOptional: async <T,>(sql: string) => (h.db.prepare(sql).get() ?? null) as T | null,
+  })
+
+  it('never interleaves the automatic and manual sequences', async () => {
+    for (let i = 0; i < 8; i++) h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
+    const log: string[] = []
+    await Promise.all([
+      runAnalyzeIfStale(taggedDb('auto', log)),
+      runAnalyzeNow(taggedDb('manual', log)),
+    ])
+
+    // Whoever went first must have finished before the other's first statement.
+    const tags = log.map(entry => entry.split(':')[0])
+    const switches = tags.filter((tag, i) => i > 0 && tag !== tags[i - 1]).length
+    expect(switches).toBe(1)
+  })
+
+  it('a failed pass does not wedge the queue', async () => {
+    // The chain must not stay rejected — one throwing caller would otherwise
+    // take every later ANALYZE with it, for the life of the tab.
+    const {db: failing} = buildRecordingDb({failOn: /^PRAGMA optimize$/})
+    await expect(runAnalyzeIfStale(failing)).rejects.toThrow('forced failure')
+
+    h.insertBlock({id: 'after-failure'})
+    const {db, ranAnalyze} = buildRecordingDb()
+    await runAnalyzeNow(db)
+    expect(ranAnalyze()).toBe(true)
+  })
+})
+
 describe('ANALYZE_ARMING_PROBES', () => {
   it('are reads, so the synced-table write guard passes them through', () => {
     // The probes run through repoProvider's guarded `execute`. One written as a

@@ -1559,6 +1559,38 @@ const readOptimizeRows = (result: unknown): string[] | null => {
     .filter((sql): sql is string => typeof sql === 'string')
 }
 
+/** Serializes the two ANALYZE entry points against each other and against
+ *  themselves.
+ *
+ *  `analysis_limit` is CONNECTION state, not per-statement, and each statement
+ *  below is separately awaited — so without this, two overlapping callers
+ *  interleave on it. There are four schedulers pointed at these functions
+ *  (repoProvider's boot and first-sync checks, the Roam importer, the manual
+ *  command), and the boot/first-sync pair has overlapped before. The two ways it
+ *  goes wrong are mirror images: the manual path's `analysis_limit=0` landing
+ *  between an automatic pass's SET and its optimize turns that pass UNBOUNDED —
+ *  the multi-second park this whole mechanism exists to avoid — and an automatic
+ *  SET landing between the manual clear and its ANALYZE silently samples the
+ *  escape hatch whose entire point is being exact.
+ *
+ *  Scope, stated because it is not total: this serializes callers in ONE tab.
+ *  PowerSync's shared worker owns the connection across tabs, so two tabs both
+ *  running a maintenance pass within the same few milliseconds can still
+ *  interleave. Closing that would mean holding a write lock across the whole
+ *  sequence, which the {@link ClientSchemaBootstrapDb} surface (deliberately
+ *  execute/getOptional only, so bootstrap shims satisfy it) cannot express. The
+ *  residual is narrow and self-limiting: both tabs read the same database, so a
+ *  pass that loses the limit is also a pass that had nothing to do. */
+let analyzeChain: Promise<unknown> = Promise.resolve()
+const serializeAnalyze = <T>(run: () => Promise<T>): Promise<T> => {
+  // `.then(run, run)`, both arms deliberately: a throwing pass must not poison
+  // the queue for every later one. The rejection still reaches this call's own
+  // caller through `next` — only the chain swallows it.
+  const next = analyzeChain.then(run, run)
+  analyzeChain = next
+  return next
+}
+
 /** Re-ANALYZE whatever SQLite considers stale — a table whose index has no
  *  `sqlite_stat1` row (a freshly created index, or one whose table was dropped
  *  and rebuilt), or whose recorded row count has drifted ~10x from the live one.
@@ -1569,7 +1601,7 @@ const readOptimizeRows = (result: unknown): string[] | null => {
  *  cold fresh device that can be every table at once. */
 export const runAnalyzeIfStale = async (
   db: ClientSchemaBootstrapDb,
-): Promise<AnalyzeResult> => {
+): Promise<AnalyzeResult> => serializeAnalyze(async () => {
   await db.execute(SET_ANALYZE_SAMPLE_LIMIT_SQL)
   try {
     await armAnalyzeProbes(db)
@@ -1581,7 +1613,7 @@ export const runAnalyzeIfStale = async (
     // set would silently sample the manual full ANALYZE that a user runs next.
     await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
   }
-}
+})
 
 /** Unconditional, UNBOUNDED `ANALYZE` for the manual command-palette command.
  *
@@ -1592,12 +1624,14 @@ export const runAnalyzeIfStale = async (
  *  approximation. Reports the table size so the caller can surface it.
  *
  *  A multi-second scan holding the single SQLite worker, so it stays manual and
- *  off the render path. */
+ *  off the render path. Shares {@link serializeAnalyze} with the automatic path:
+ *  the clear and the ANALYZE are two statements, and an automatic pass setting
+ *  the sample limit between them would sample this one. */
 export const runAnalyzeNow = async (
   db: ClientSchemaBootstrapDb,
-): Promise<{count: number}> => {
+): Promise<{count: number}> => serializeAnalyze(async () => {
   const count = await getBlocksCount(db)
   await db.execute(CLEAR_ANALYZE_SAMPLE_LIMIT_SQL)
   await db.execute('ANALYZE')
   return {count}
-}
+})
