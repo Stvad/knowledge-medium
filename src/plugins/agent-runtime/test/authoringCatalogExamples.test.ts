@@ -115,6 +115,19 @@ describe('authoring catalog example drift guard', () => {
     ).toEqual([])
   })
 
+  it('the fixture files stay out of the discoverable module/component lists', () => {
+    // They live under src/plugins/** so the gate compiles them, which also puts
+    // them in reach of the module-index glob. They are guidance text, not an
+    // API an extension should import — surfacing them would offer `@/plugins/
+    // agent-runtime/examples/settingsDialog.js` as something to import.
+    const catalog = describeAuthoringCatalog()
+    const leaked = [
+      ...catalog.modules.map(module => module.importPath),
+      ...catalog.components.map(component => component.importPath),
+    ].filter(path => path.includes('/agent-runtime/examples/'))
+    expect(leaked).toEqual([])
+  })
+
   it('every example transpiles cleanly through Babel (react + typescript presets)', () => {
     const examples = collectExamples()
     const failures: string[] = []
