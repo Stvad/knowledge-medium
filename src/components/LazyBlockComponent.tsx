@@ -53,7 +53,7 @@ export function LazyBlockComponent({ blockId }: LazyBlockComponentProps) {
     <LazyViewportMount
       cacheKey={lazyBlockCacheKey(blockId)}
       blockId={blockId}
-      renderScopeId={typeof renderScopeId === 'string' ? renderScopeId : undefined}
+      renderScopeId={renderScopeId}
       estimatedHeightPx={ESTIMATED_HEIGHT_PX}
       overscanPx={OVERSCAN_PX}
       renderPlaceholder={({reservedHeight}) => (

@@ -1113,6 +1113,108 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // A caller only reaches the edge case because the model found NO next row in
+  // this scope — so this row has no visible children, and a slot of its own
+  // scope still sitting inside it is a subtree that was just collapsed and
+  // hasn't unmounted yet. Focusing it would put the cursor somewhere invisible.
+  it('skips a reserved row that is this row own hidden child', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {
+          blockId: 'B',
+          renderScopeId: 'panel:outline',
+          surface: 'outline',
+          nested: [{
+            blockId: 'X',
+            renderScopeId: 'embed:B:X',
+            surface: 'embedded',
+            // A child of the embed's own row, in the embed's scope, left over
+            // from a collapse. The model says the embed scope is done.
+            nested: [{deferredBlockId: 'A', deferredScopeId: 'embed:B:X'}],
+          }],
+        },
+        {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'embed:B:X',
+      scopeRootId: 'X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    // The mounted row after the embed, not the collapsed child inside it.
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'C',
+        renderScopeId: 'panel:outline',
+      })
+    })
+  })
+
+  // ...and a reserved row inside an excluded surface is not a step either: its
+  // rows aren't navigable, so the NEXT keystroke would find no anchor at all.
+  it('skips a reserved row inside an excluded surface', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {
+          blockId: 'B',
+          renderScopeId: 'panel:outline',
+          surface: 'outline',
+          nested: [{blockId: 'X', renderScopeId: 'embed:B:X', surface: 'embedded'}],
+        },
+        {
+          blockId: 'A',
+          renderScopeId: 'panel:crumb',
+          surface: 'breadcrumb',
+          nested: [{deferredBlockId: 'B1', deferredScopeId: 'panel:crumb'}],
+        },
+        {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
+      ],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'embed:B:X',
+      scopeRootId: 'X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+        blockId: 'C',
+        renderScopeId: 'panel:outline',
+      })
+    })
+  })
+
   // An anonymous slot is one whose row will belong to a scope decided inside
   // the wrapper (a backlink entry, a recents row). Reading the surrounding DOM
   // for its scope would label it with the outline's — and then a slot sitting

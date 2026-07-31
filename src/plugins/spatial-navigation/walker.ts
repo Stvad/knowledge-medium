@@ -24,6 +24,11 @@ import {
  *   Deferred row's slot:   `data-lazy-block-id="<block.id>"` (set by
  *                          `LazyViewportMount` while it shows a placeholder —
  *                          the row's reserved place in document order)
+ *                          `data-lazy-render-scope-id="<render scope>"` — the
+ *                          scope the row WILL have. Its absence is meaningful:
+ *                          a wrapper that mints its own scope inside itself
+ *                          can't name it out here, and an unnamed slot is
+ *                          ignored rather than attributed to its neighbours.
  *
  * Excluded surfaces: which `data-block-surface` values the walker skips
  * (core excludes `breadcrumb` only — see `DEFAULT_NON_NAVIGABLE_SURFACES`
@@ -133,10 +138,29 @@ export const locationOf = (el: HTMLElement): FocusedBlockLocation | null => {
   return blockId && renderScopeId ? {blockId, renderScopeId} : null
 }
 
+/** Does this element render `location`? For callers already holding the
+ *  instance array and walking it for more than one reason — the ones that
+ *  can't go through `instanceIn` without a second pass. */
+export const isInstanceAt = (el: HTMLElement, location: FocusedBlockLocation): boolean =>
+  sameFocusedBlockLocation(locationOf(el) ?? undefined, location)
+
 const isNavigable = (el: HTMLElement, excludedSurfaces: ReadonlySet<string>): boolean => {
   const surface = surfaceOf(el)
   if (surface && excludedSurfaces.has(surface)) return false
   return true
+}
+
+/** Does `el` sit inside a row on an excluded surface? A not-yet-mounted row
+ *  carries no surface of its own, so the enclosing one is all there is to go
+ *  on. Deliberately conservative: an excluded surface's own subtree is the
+ *  thing being skipped, and a false skip costs only the fallback to whatever is
+ *  mounted, while a false include lands focus where nothing can walk from. */
+const isInExcludedSurface = (
+  el: HTMLElement,
+  excludedSurfaces: ReadonlySet<string>,
+): boolean => {
+  const owner = el.closest<HTMLElement>(NAV_ITEM_SELECTOR)
+  return owner ? !isNavigable(owner, excludedSurfaces) : false
 }
 
 export const panelInstances = (
@@ -158,6 +182,19 @@ export const panelInstances = (
 
 export const panelOf = (el: HTMLElement): HTMLElement | null =>
   el.closest<HTMLElement>(PANEL_SELECTOR)
+
+/** Is `other` ahead of `anchor` in the direction of travel? The one place the
+ *  document-position masks are named: every caller that spelled this itself had
+ *  to flip the mask AND swap the arguments, and getting either backwards fails
+ *  silently — as a move that skips rows instead of declining. */
+export const aheadOf = (
+  anchor: HTMLElement,
+  other: HTMLElement,
+  direction: 'up' | 'down',
+): boolean =>
+  Boolean(anchor.compareDocumentPosition(other) & (direction === 'down'
+    ? anchor.DOCUMENT_POSITION_FOLLOWING
+    : anchor.DOCUMENT_POSITION_PRECEDING))
 
 export const panelById = (
   panelId: string,
@@ -338,7 +375,7 @@ export const findRecoveryAnchor = (
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location
-      ? candidates.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
+      ? candidates.find(el => isInstanceAt(el, location))
       : undefined
 
   const visibleByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined => {
@@ -373,9 +410,7 @@ export const instanceIn = (
   location: FocusedBlockLocation,
   excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): HTMLElement | null =>
-  panelInstances(panel, excludedSurfaces)
-    .find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
-    ?? null
+  panelInstances(panel, excludedSurfaces).find(el => isInstanceAt(el, location)) ?? null
 
 /** `instanceIn` for callers holding a panel id rather than its element. */
 export const instanceAt = (
@@ -432,28 +467,38 @@ export const rowSlotIn = (
  * an embed, out of a backlink entry — the rendered order decides, and a row
  * that has a place reserved is part of that order even though no walk names it
  * and no query for mounted rows finds it.
+ *
+ * Two kinds of reserved row are NOT part of that order, and both would be a
+ * focus write onto a row the user can't reach or see:
+ *
+ *   - `from`'s own hidden children. A caller only asks at an edge, which means
+ *     the model found no next row in this scope — so `from` has no VISIBLE
+ *     children, and a slot of its own scope still sitting inside it belongs to
+ *     a subtree that was just collapsed and hasn't unmounted yet. (A NESTED
+ *     surface's slot inside `from` carries a different scope and is a genuine
+ *     step in.)
+ *   - anything inside an excluded surface. Its rows are not navigable, so
+ *     landing there leaves the next keystroke with no anchor at all.
  */
 export const reservedRowBetween = (
   from: HTMLElement,
   to: HTMLElement | null,
   direction: 'up' | 'down',
+  excludedSurfaces: ReadonlySet<string> = DEFAULT_NON_NAVIGABLE_SURFACES,
 ): FocusedBlockLocation | null => {
   const panel = panelOf(from)
   if (!panel) return null
-  const ahead = direction === 'down'
-    ? from.DOCUMENT_POSITION_FOLLOWING
-    : from.DOCUMENT_POSITION_PRECEDING
+  const fromScope = from.dataset.renderScopeId
   const slots = Array.from(panel.querySelectorAll<HTMLElement>(
     '[data-lazy-block-id][data-lazy-render-scope-id]',
-  )).filter(slot => {
-    if (!(from.compareDocumentPosition(slot) & ahead)) return false
+  )).filter(slot =>
+    aheadOf(from, slot, direction) &&
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.
-    if (to && !(to.compareDocumentPosition(slot) & (direction === 'down'
-      ? to.DOCUMENT_POSITION_PRECEDING
-      : to.DOCUMENT_POSITION_FOLLOWING))) return false
-    return true
-  })
+    (!to || aheadOf(slot, to, direction)) &&
+    !(from.contains(slot) && slot.dataset.lazyRenderScopeId === fromScope) &&
+    !isInExcludedSurface(slot, excludedSurfaces),
+  )
   const nearest = direction === 'down' ? slots[0] : slots[slots.length - 1]
   if (!nearest) return null
   const {lazyBlockId, lazyRenderScopeId} = nearest.dataset
@@ -514,7 +559,8 @@ export const locateInstance = (
   if (instances.length === 0) return null
 
   if (hints.focusedLocation) {
-    const exact = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, hints.focusedLocation))
+    const focused = hints.focusedLocation
+    const exact = instances.find(el => isInstanceAt(el, focused))
     if (exact) return exact
   }
 

@@ -4,6 +4,7 @@ import {
   nearestScrollableAncestor,
 } from '@/utils/dom.js'
 import {
+  isInstanceAt,
   locationOf,
   panelInstances,
   visibilityTargetFor,
@@ -81,7 +82,7 @@ export const resolveViewportAnchor = (
 ): FocusedBlockLocation | null => {
   const instances = panelInstances(panelEl, excludedSurfaces)
   const focused = instances.find(
-    el => sameFocusedBlockLocation(locationOf(el) ?? undefined, focusedLocation),
+    el => isInstanceAt(el, focusedLocation),
   )
   // No row for the cursor in this panel at all. That's a disappearance, not a
   // scroll — `PanelFocusRecovery` owns it, and it picks by data-tree

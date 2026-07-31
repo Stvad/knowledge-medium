@@ -37,6 +37,7 @@ import {
   previousVisibleBlock,
 } from '@/utils/selection.js'
 import {
+  aheadOf,
   horizontalNeighborPanel,
   locationOf,
   panelById,
@@ -284,15 +285,13 @@ const moveVertical = async (
   ) return true
 
   // The anchor itself can be torn out while the walk waits (a re-render, a
-  // recycled lazy row). Everything below reads the DOM through it, and a
-  // detached row still answers — from the dead tree, while `rowSlotIn` queries
-  // the live one. Decline rather than decide on two DOMs.
-  //
-  // Defence in depth: no test falsifies it, because every route out of a
-  // detached anchor already ends in "no move" (a detached row has no panel, so
-  // the neighbour is null, so the model-row check declines and the scope edge
-  // finds no slot). It buys the mixed-DOM case not existing, and an explicit
-  // decline where the current outcome is incidental.
+  // recycled lazy row, the panel unmounting under it). Everything below reads
+  // the DOM through it, and a detached element still answers — from the dead
+  // tree. Load-bearing where the two lookups disagree: `rowSlotIn` goes through
+  // `panelById`, which queries the live document, while `reservedRowBetween`
+  // goes through `panelOf(current)`, which in a detached subtree returns the
+  // DEAD panel — so the scope edge would find a dead slot and write focus to a
+  // row that no longer exists. Declining here is what keeps both on one DOM.
   if (!current.isConnected) return false
 
   // Read the neighbour AFTER the walk, never before: resolving the `childIds`
@@ -326,10 +325,7 @@ const moveVertical = async (
     // No slot at all means the DOM can't answer — the row's parent hasn't
     // rendered its children yet — which is also a decline.
     const towardsTheModelRow = next && modelRowSlot && (
-      next === modelRowSlot ||
-      Boolean(modelRowSlot.compareDocumentPosition(next) & (direction === 'down'
-        ? modelRowSlot.DOCUMENT_POSITION_PRECEDING
-        : modelRowSlot.DOCUMENT_POSITION_FOLLOWING))
+      next === modelRowSlot || aheadOf(next, modelRowSlot, direction)
     )
 
     // One thing position alone can't see: the DOM holds same-scope rows the
@@ -339,12 +335,10 @@ const moveVertical = async (
     // side". The model descends into this row only when it is expanded, and
     // then its row is in there too — so a descendant is a legitimate step only
     // when the model went the same way.
-    const descendantOfThisRow = Boolean(
-      next &&
+    const descendantOfThisRow =
       nextLocation?.renderScopeId === currentLocation.renderScopeId &&
       current.contains(next) &&
-      !(modelRowSlot && current.contains(modelRowSlot)),
-    )
+      !current.contains(modelRowSlot)
 
     const canTakeTheNeighbour = Boolean(
       nextLocation &&
@@ -367,7 +361,7 @@ const moveVertical = async (
   // where declining could not: the model handler is bounded by the same
   // exhausted scope and would swallow the keystroke.
   if (deps.scopeRootId && !modelNext) {
-    const reserved = reservedRowBetween(current, next, direction)
+    const reserved = reservedRowBetween(current, next, direction, excludedSurfaces)
     if (reserved) {
       void focusBlock(uiStateBlock, reserved.blockId, {renderScopeId: reserved.renderScopeId})
       return true
