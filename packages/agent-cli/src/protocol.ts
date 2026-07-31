@@ -259,6 +259,12 @@ export const auditExtensionCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const auditPropertiesCommandSchema = z.looseObject({
+  type: z.literal('audit-properties'),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
 export const runActionCommandSchema = z.looseObject({
   type: z.literal('run-action'),
   id: z.string(),
@@ -481,6 +487,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   disableExtensionCommandSchema,
   uninstallExtensionCommandSchema,
   auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
   backlinksCommandSchema,
@@ -523,6 +530,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   setExtensionEnabledCommandSchema,
   uninstallExtensionCommandSchema,
   auditExtensionCommandSchema,
+  auditPropertiesCommandSchema,
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
@@ -672,6 +680,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     // classified read-only rather than quietly breaking a read-only token's
     // contract.
     readOnly: false,
+  },
+  'audit-properties': {
+    usage: 'kmagent audit-properties [--workspace <id>]',
+    description: 'List every property key present in the workspace\'s live blocks that the registry does NOT resolve — the keys property migration skips silently (propertyChildrenProcessor: no schema → `continue`), so they are the only property data a child-backed workspace cannot carry. Per key: cell count, sample blocks, the block types carrying it (which extension wrote it), the resolver\'s own reason (nothing declares it / broken definition / shadowed / ambiguous seed names) and the fix in the order §9 requires. Workspace-wide counterpart to `audit-extension`, which only sees blocks carrying one extension\'s declared types.',
+    readOnly: true,
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',
