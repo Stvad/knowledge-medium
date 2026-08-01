@@ -430,6 +430,50 @@ describe('srsReschedulingPlugin', () => {
     expect(baseSwipeRight).toHaveBeenCalledOnce()
   })
 
+  it('archives once, then lets the press fall through to the todo cycle', async () => {
+    // The archive claim is a latch, not a sink: before this, an SRS block
+    // swallowed cmd-enter forever and nothing downstream ever ran on it.
+    const { repo } = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      extensions: [
+        dailyNotesDataExtension,
+        todoDataExtension,
+        todoActionsExtension,
+        srsReschedulingPlugin,
+      ],
+    })
+    const runtime = repo.facetRuntime!
+
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'srs-latch',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a0',
+        content: 'SRS latch',
+      })
+      await repo.addTypeInTx(tx, 'srs-latch', SRS_SM25_TYPE, {}, snapshot)
+    }, {scope: ChangeScope.BlockDefault, description: 'seed latch block'})
+
+    const action = getEffectiveActions(runtime).find(it =>
+      it.id === TODO_CYCLE_ACTION_ID && it.context === ActionContextTypes.NORMAL_MODE
+    ) as ActionConfig<typeof ActionContextTypes.NORMAL_MODE> | undefined
+
+    const block = repo.block('srs-latch')
+    await block.load()
+
+    await dispatchForBlock(runtime, action, block)
+    expect(block.get(srsArchivedProp)).toBe(true)
+    expect(block.types).not.toContain(TODO_TYPE)
+
+    await dispatchForBlock(runtime, action, block)
+    expect(block.get(srsArchivedProp)).toBe(true)
+    expect(block.types).toContain(TODO_TYPE)
+    expect(block.get(statusProp)).toBe('open')
+  })
+
   it('decorates cmd-enter todo cycle actions to archive SRS blocks', async () => {
     const { repo } = createTestRepo({
       db: sharedDb.db,
