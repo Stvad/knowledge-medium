@@ -190,12 +190,13 @@ describe('sticky rows', () => {
    *  reviewed. Tests that care about the other exits pass their own. */
   const RETAIN_ALL = () => true
 
-  const Probe = ({live, onRender, retain = RETAIN_ALL}: {
+  const Probe = ({live, onRender, retain = RETAIN_ALL, ready = true}: {
     live: readonly BlockData[]
     onRender: (ids: string[], reset: () => void) => void
     retain?: (row: BlockData) => boolean
+    ready?: boolean
   }) => {
-    const [rows, reset] = useStickyRows(live, retain)
+    const [rows, reset] = useStickyRows(live, {shouldRetain: retain, ready})
     onRender(rows.map(r => r.id), reset)
     return <span>{rows.map(r => r.id).join(',')}</span>
   }
@@ -207,7 +208,7 @@ describe('sticky rows', () => {
     live: readonly BlockData[]
     onRender: (rows: readonly BlockData[]) => void
   }) => {
-    const [rows] = useStickyRows(live, RETAIN_ALL)
+    const [rows] = useStickyRows(live, {shouldRetain: RETAIN_ALL, ready: true})
     onRender(rows)
     return <span>{rows.map(r => `${r.id}@${r.parentId}`).join(',')}</span>
   }
@@ -287,6 +288,28 @@ describe('sticky rows', () => {
     // 'a' was reviewed; 'c' was deleted.
     await act(async () => {
       rerender(<Probe live={[row('b')]} onRender={capture} retain={retain}/>)
+    })
+
+    expect(latest).toEqual(['a', 'b'])
+  })
+
+  it('holds every row while the query is unresolved', async () => {
+    // The midnight case, and the one that made the retention predicate
+    // dangerous: a rollover changes the query key, so `useBlockQuery` hands
+    // back [] for the new unresolved handle. Reconciling that would read as
+    // "everything left the query" and drop the whole list — including the
+    // session's reviewed rows — and would keep them hidden for good if the
+    // replacement query then failed.
+    let latest: string[] = []
+    const capture = (ids: string[]) => { latest = ids }
+    const retainNone = () => false
+    const {rerender} = render(
+      <Probe live={[row('a'), row('b')]} onRender={capture} retain={retainNone}/>,
+    )
+    expect(latest).toEqual(['a', 'b'])
+
+    await act(async () => {
+      rerender(<Probe live={[]} onRender={capture} retain={retainNone} ready={false}/>)
     })
 
     expect(latest).toEqual(['a', 'b'])

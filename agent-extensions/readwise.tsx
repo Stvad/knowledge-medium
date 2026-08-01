@@ -31,7 +31,7 @@ import { getOrCreateKernelPage } from '@/data/kernelPage.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { LazyBlockEntry } from '@/plugins/backlinks/BlockEntry.js'
 import { dueByDailyNoteRef } from '@/plugins/daily-notes/dueQuery.js'
-import { useStartOfToday } from '@/plugins/daily-notes/today.js'
+import { localDayKey, useStartOfToday, useTodayKey } from '@/plugins/daily-notes/today.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
@@ -1970,10 +1970,20 @@ const useUnreviewedHighlightsReady = (workspaceId: string): boolean => {
  *  you did review it this session. */
 export const useStickyRows = (
   live: readonly BlockData[],
-  shouldRetain: (row: BlockData) => boolean,
+  {shouldRetain, ready}: {
+    shouldRetain: (row: BlockData) => boolean
+    /** False while the query handle is unresolved. `live` is `[]` then, which
+     *  is indistinguishable from "everything left the query" — and the day
+     *  rollover changes the query key, so this is not just a cold-start case:
+     *  at midnight an open backlog would drop every row it was showing,
+     *  including the session's reviewed ones, and would keep them hidden for
+     *  good if the replacement query failed. Reconciliation waits. */
+    ready: boolean
+  },
 ): readonly [readonly BlockData[], () => void] => {
   const [sticky, setSticky] = useState<readonly BlockData[]>(live)
   const merged = useMemo(() => {
+    if (!ready) return sticky
     const liveById = new Map(live.map(row => [row.id, row]))
     const next: BlockData[] = []
     for (const row of sticky) {
@@ -1989,7 +1999,7 @@ export const useStickyRows = (
     const unchanged = next.length === sticky.length
       && next.every((row, i) => row === sticky[i])
     return unchanged ? sticky : next
-  }, [sticky, live, shouldRetain])
+  }, [sticky, live, shouldRetain, ready])
   // Converge during render (React's "adjust state while rendering" path) so the
   // first paint after a query result already includes the new rows.
   if (merged !== sticky) setSticky(merged)
@@ -2109,7 +2119,7 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
     } catch { return false }
     return readReviewed(data)
   }, [repo])
-  const [rows, resetSticky] = useStickyRows(live, stillAReviewedHighlight)
+  const [rows, resetSticky] = useStickyRows(live, {shouldRetain: stillAReviewedHighlight, ready})
 
   const groups = useMemo(() => groupHighlightsBySection(rows), [rows])
   const sectionBlocks = useMemo(
@@ -2215,11 +2225,15 @@ const openReviewBacklogAction = {
 
 const BACKLOG_COUNT_TTL_MS = 5 * 60_000
 
-interface BacklogCount { workspaceId: string; value: number; at: number }
+/** A count is only meaningful for the DAY it was computed for: the query's
+ *  cutoff is "today or earlier", so a value fetched at 23:58 answers a
+ *  different question at 00:01. Stamping the day is what stops the TTL from
+ *  holding yesterday's answer across the rollover. */
+interface BacklogCount { workspaceId: string; value: number; at: number; day: string }
 
 let backlogCount: BacklogCount | null = null
 /** When we last TRIED, successfully or not — see `refreshBacklogCount`. */
-let backlogCountAttempt: { workspaceId: string; at: number } | null = null
+let backlogCountAttempt: { workspaceId: string; at: number; day: string } | null = null
 let backlogCountInFlight = false
 const backlogCountListeners = new CallbackSet('readwise.backlog-count')
 
@@ -2271,15 +2285,19 @@ export const invalidateBacklogCount = () => {
 const refreshBacklogCount = (repo: Repo, workspaceId: string): void => {
   if (backlogCountInFlight || !workspaceId) return
   const now = Date.now()
+  const day = localDayKey()
   const recentlyTried = backlogCountAttempt
     && backlogCountAttempt.workspaceId === workspaceId
+    // A rollover makes the previous attempt answer the wrong question, so the
+    // TTL must not carry it over.
+    && backlogCountAttempt.day === day
     && now - backlogCountAttempt.at < BACKLOG_COUNT_TTL_MS
   if (recentlyTried) return
 
-  backlogCountAttempt = { workspaceId, at: now }
+  backlogCountAttempt = { workspaceId, at: now, day }
   backlogCountInFlight = true
   repo.queryBlocks(buildUnreviewedHighlightsQuery(workspaceId))
-    .then(rows => ({ workspaceId, value: rows.length, at: Date.now() }))
+    .then(rows => ({ workspaceId, value: rows.length, at: Date.now(), day }))
     // A failed count is not worth a toast; leave the cache empty and let the
     // next window try again.
     .catch(() => null)
@@ -2300,6 +2318,12 @@ const refreshBacklogCount = (repo: Repo, workspaceId: string): void => {
  *  notify re-renders, the effect runs, the cache is gone, so it fetches. */
 const useBacklogCount = (workspaceId: string): number | null => {
   const repo = useRepo()
+  // Subscribing to the rollover is what makes the day stamp effective: it
+  // re-renders every consumer the minute the date turns, the effect runs, and
+  // the refresh now sees a stale-day attempt and refetches. Without it nothing
+  // would schedule that render — the sidebar in particular had no rollover
+  // awareness at all.
+  const today = useTodayKey()
   const snapshot = useSyncExternalStore(
     subscribeBacklogCount,
     backlogCountSnapshot,
@@ -2307,7 +2331,9 @@ const useBacklogCount = (workspaceId: string): number | null => {
   )
   useEffect(() => { refreshBacklogCount(repo, workspaceId) })
   const count = snapshot.count
-  return count && count.workspaceId === workspaceId ? count.value : null
+  return count && count.workspaceId === workspaceId && count.day === today
+    ? count.value
+    : null
 }
 
 const ReviewBacklogSidebarSection = ({ closeSidebar }: { closeSidebar: () => void }) => {

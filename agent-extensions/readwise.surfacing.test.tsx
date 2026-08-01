@@ -22,6 +22,7 @@ import {
 } from '@/extensions/blockInteraction.js'
 import type { AppExtension, FacetRuntime } from '@/facets/facet.js'
 import { getBlockTypes } from '@/data/properties.js'
+import { leftSidebarSectionsFacet } from '@/plugins/left-sidebar/facet.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { todoActionsExtension, TODO_CYCLE_ACTION_ID } from '@/plugins/todo/actions.js'
@@ -111,6 +112,27 @@ const renderDailyNote = async (
 }
 
 const hint = () => screen.queryByRole('button', {name: /Readwise highlight/})
+
+/** Render the extension's real left-sidebar contribution. Unlike the daily-note
+ *  hint it carries no date gate, so it isolates the count's own behaviour. */
+const renderSidebarSection = async (repo: Repo, runtime: FacetRuntime) => {
+  // The sidebar has no block to read a workspace off — it goes straight to
+  // `repo.activeWorkspaceId`, which a test Repo does not pin by default.
+  repo.setActiveWorkspaceId(WS)
+  const sections = runtime.read(leftSidebarSectionsFacet)
+  const section = sections.find(s => s.id === 'readwise.review-backlog')
+  expect(section, 'sidebar section not registered').toBeDefined()
+  const Section = section!.component
+  await act(async () => {
+    render(
+      <RepoContext.Provider value={repo}>
+        <Section closeSidebar={() => {}}/>
+      </RepoContext.Provider>,
+    )
+  })
+}
+
+const sidebarEntry = () => screen.queryByRole('button', {name: /Readwise review/})
 
 const press = (runtime: FacetRuntime, block: Block) => {
   const action = getEffectiveActions(runtime).find(it => it.id === TODO_CYCLE_ACTION_ID)
@@ -273,6 +295,71 @@ describe('daily-note backlog hint', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
 
       expect(hint()).toBeNull()
+    })
+
+    /** Set the clock to 23:58 today, then hand back the 00:01 that follows it —
+     *  a THREE MINUTE jump that crosses the date line. The gap has to stay
+     *  inside the 5-minute TTL, or elapsed time alone forces the refetch and
+     *  the day stamp is never what's under test. */
+    const justBeforeMidnight = () => {
+      const late = new Date()
+      late.setHours(23, 58, 0, 0)
+      vi.setSystemTime(late)
+      const after = new Date(late)
+      after.setDate(after.getDate() + 1)
+      after.setHours(0, 1, 0, 0)
+      return after
+    }
+
+    it('refetches the count when the day rolls over INSIDE the TTL', async () => {
+      // A count fetched at 23:58 answers "due through yesterday". Held by the
+      // TTL, it would hide every highlight scheduled for the new day — and
+      // since nothing schedules a render when a TTL merely lapses, "until
+      // 00:03" is optimistic.
+      const {repo, runtime} = setup()
+      await seedOverdueHighlight(repo, 'hl-1')
+      const afterMidnight = justBeforeMidnight()
+      const today = await getOrCreateDailyNote(repo, WS, todayIso())
+      await renderDailyNote(repo, runtime, today.id)
+      await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+
+      const queryBlocks = vi.spyOn(repo, 'queryBlocks')
+      vi.setSystemTime(afterMidnight)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+
+      await vi.waitFor(() => { expect(queryBlocks).toHaveBeenCalled() })
+    })
+
+    it('hides the previous day\'s count while the rollover refetch is pending', async () => {
+      // Between the rollover and the refetch landing, the cached value answers
+      // yesterday's question. Showing it would be a confidently wrong number.
+      //
+      // Driven through the SIDEBAR rather than the daily-note hint: the hint
+      // has its own date gate, which after midnight hides it whatever the count
+      // says, so asserting there would pass with the day stamp deleted. The
+      // sidebar has no date gate, so the stamp is the only thing that can hide
+      // this — and it is also the surface with no other rollover awareness.
+      const {repo, runtime} = setup()
+      await seedOverdueHighlight(repo, 'hl-1')
+      const afterMidnight = justBeforeMidnight()
+      await renderSidebarSection(repo, runtime)
+      await vi.waitFor(() => { expect(sidebarEntry()).not.toBeNull() })
+
+      // Hold the post-rollover refetch open so the window stays observable.
+      let release!: (rows: BlockData[]) => void
+      const pending = new Promise<BlockData[]>(resolve => { release = resolve })
+      vi.spyOn(repo, 'queryBlocks').mockReturnValueOnce(pending as Promise<BlockData[]>)
+      vi.setSystemTime(afterMidnight)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+
+      expect(sidebarEntry()).toBeNull()
+
+      // Settle it before leaving. The in-flight flag is module state, and a
+      // promise left pending would make every later test in this file see a
+      // refresh that is permanently mid-fetch. (Not something
+      // `invalidateBacklogCount` should clear — dropping the flag mid-query
+      // would let a second fetch race the first and publish out of order.)
+      await act(async () => { release([]) })
     })
 
     it('shows the hint on TOMORROW\'s note once midnight makes it today', async () => {
