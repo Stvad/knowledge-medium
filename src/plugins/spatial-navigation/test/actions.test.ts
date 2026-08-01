@@ -1161,6 +1161,66 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // ...and the same DOM once the anchor is torn out mid-walk — a re-render, a
+  // recycled lazy row, the panel unmounting under it. A detached element still
+  // ANSWERS, from the dead tree, and the two lookups then disagree: `rowSlotIn`
+  // queries the live document (`panelById`) while `reservedRowBetween` climbs
+  // from the anchor (`panelOf`) into the dead panel. The step above is exactly
+  // what that would resurrect — focus written to a row that is no longer on the
+  // page, where nothing can mount it and the next keystroke has no anchor.
+  it('declines when the focused row was detached while the model walk was in flight', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [{
+        blockId: 'B',
+        renderScopeId: 'panel:outline',
+        surface: 'outline',
+        nested: [
+          {blockId: 'X', renderScopeId: 'embed:B:X', surface: 'embedded'},
+          {deferredBlockId: 'B1', deferredScopeId: 'panel:outline'},
+        ],
+      }],
+    }])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
+
+    // The panel goes while the walk waits. Driven off `load()` for the same
+    // reason as the mounted-during-the-walk test: that IS the wait, and it lands
+    // after `currentInstance` has already resolved the anchor from the live DOM.
+    const detachPanelDuringWalk = new Proxy(env.repo.block('X'), {
+      get(target, prop) {
+        if (prop === 'load') {
+          return async () => {
+            document.querySelector('[data-panel-id="panel"]')!.remove()
+            return target.load()
+          }
+        }
+        const value = Reflect.get(target, prop, target) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+
+    const {modelWalk} = await pressNavigationKey('move_down', {
+      block: detachPanelDuringWalk,
+      uiStateBlock: panel,
+      renderScopeId: 'embed:B:X',
+      scopeRootId: 'X',
+    })
+
+    // The wrong step writes fire-and-forget (`void focusBlock`), so fence on a
+    // write we CAN await — transactions commit in order.
+    await panel.set(selectionStateProp, {selectedBlockIds: ['X'], anchorBlockId: 'X'})
+
+    // Not 'B1': its slot only exists in the detached tree.
+    expect(modelWalk).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X',
+      renderScopeId: 'embed:B:X',
+    })
+  })
+
   // A caller only reaches the edge case because the model found NO next row in
   // this scope — so this row has no visible children, and a slot of its own
   // scope still sitting inside it is a subtree that was just collapsed and
