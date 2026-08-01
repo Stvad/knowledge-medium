@@ -56,12 +56,65 @@ const LAYOFF_NS = 'cfa6899f-981a-4dac-8eae-978150c019a9'
  *  keying on the range would give the two finishes separate records —
  *  `resolveReentry` would then read the later `to` as most recent and restart
  *  `sessionsBack`, undoing loads already climbed back to. Keyed on `from`,
- *  the second finish ADOPTS the first record instead. */
+ *  the second finish ADOPTS the first record instead.
+ *
+ *  Adopting is not quite leaving it alone, though — see `refreshLayoff`. The
+ *  same seat is reached whenever the same break is re-measured, so the adopt
+ *  DEEPENS the record when the new measurement is more severe, and otherwise
+ *  returns it untouched. The two clients above still both write the same tier,
+ *  so the second stops before writing at all; what changes is that a comeback
+ *  since taken back no longer holds the ramp at the lighter tier it named. */
 const layoffIdentity = (workspaceId: string, from: string): DerivedIdentity =>
   ({namespace: LAYOFF_NS, key: `${workspaceId}|${from}`})
 
 const isGapRecord = (block: BlockData, from: string): boolean =>
   liveDay(block.properties[FIELD.layoffFrom]) === from
+
+const layoffContent = (days: unknown, pct: unknown, tierId: unknown): string =>
+  `Layoff · ${String(days)}-day gap → ${Math.round(Number(pct) * 100)}% (${String(tierId)})`
+
+/** Deepen a record already at this gap's seat, when the break has been
+ *  re-measured as worse than it says.
+ *
+ *  `getOrCreateTypedChild` deliberately does not apply `content`/`properties`
+ *  on adopt — the block on disk holds real state and a caller's defaults must
+ *  not flatten it — and tells callers wanting upsert semantics to write the
+ *  fields they changed themselves. This is that write, and a layoff record is
+ *  the shape it is meant for: every field on it is DERIVED from history, so
+ *  there is no user state to protect. Only `content` can have been touched by
+ *  hand, and that is checked before it is replaced.
+ *
+ *  Needed because the record is keyed on `from` alone, so the same seat is
+ *  reached whenever the same break is re-measured. See `layoffAlreadyRecorded`
+ *  for how a break gets re-measured (untick a comeback session and it stops
+ *  being a training day) and for why the comparison is severity rather than
+ *  the return date: a record only ever gets HARSHER, so clients converge on
+ *  the deepest measurement in any order, and this can never loosen a cut.
+ *
+ *  Re-checked here rather than trusted from the caller: this runs inside the
+ *  finish transaction, where the block on disk is the only current answer —
+ *  `layoffAlreadyRecorded` read a snapshot taken before it opened. */
+const refreshLayoff = async (
+  tx: Tx,
+  id: string,
+  record: Omit<LayoffRecord, 'id'>,
+  spec: {content: string; properties: ReturnType<typeof propertyValue>[]},
+): Promise<string> => {
+  const block = await tx.get(id)
+  const recorded = block?.properties[FIELD.layoffPct]
+  // Already at least this severe — including the equal case, which is two
+  // clients recording one comeback and is what keying on `from` is for.
+  if (!block || (typeof recorded === 'number' && recorded <= record.pct)) return id
+  // The generated label only. Renamed by hand, the text is the user's, and a
+  // stale number in it is a smaller loss than overwriting what they wrote.
+  if (block.content === layoffContent(
+    block.properties[FIELD.layoffDays],
+    recorded,
+    block.properties[FIELD.layoffTier],
+  )) await tx.update(id, {content: spec.content})
+  await tx.setProperties(id, {set: spec.properties})
+  return id
+}
 
 /** Exported for `finishSession`, which must write the layoff inside its OWN
  *  transaction — the gap stops being detectable the moment the finish lands,
@@ -85,7 +138,7 @@ export const writeLayoffInTx = async (
 ): Promise<string> => {
   const spec = {
     parentId: pageId,
-    content: `Layoff · ${record.days}-day gap → ${Math.round(record.pct * 100)}% (${record.tierId})`,
+    content: layoffContent(record.days, record.pct, record.tierId),
     position: {kind: 'first'} as const,
     types: [LAYOFF_TYPE],
     properties: [
@@ -107,7 +160,8 @@ export const writeLayoffInTx = async (
     adoptable: block => isGapRecord(block, record.from),
     ...spec,
   })
-  if (outcome.status !== 'taken') return outcome.id
+  if (outcome.status === 'created') return outcome.id
+  if (outcome.status === 'adopted') return refreshLayoff(tx, outcome.id, record, spec)
 
   // The derived seat is held by a tombstone, another workspace's row, or a
   // block whose `from` now names a different gap. There's no second identity
@@ -126,7 +180,9 @@ export const writeLayoffInTx = async (
     .find(block => !block.deleted && block.id !== outcome.id
       && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, record.from))
   return minted !== undefined
-    ? (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id
+    ? refreshLayoff(
+      tx, (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id, record, spec,
+    )
     : createTypedChild(repo, tx, spec)
 }
 

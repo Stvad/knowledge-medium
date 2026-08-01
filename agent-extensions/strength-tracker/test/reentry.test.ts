@@ -138,4 +138,35 @@ describe('layoff records', () => {
     expect(layoffAlreadyRecorded(pending, [existing])).toBe(true)
     expect(layoffAlreadyRecorded(pending, [])).toBe(false)
   })
+
+  it('re-records a break now measured into a deeper tier', () => {
+    // Finish a comeback, then untick every set of it — the only correction
+    // available once a session is closed. `buildHistory` stops counting it as
+    // a training day, so the next real return measures the SAME break across
+    // a longer gap. On `from` alone this said "already recorded" and wrote
+    // nothing, leaving the ramp on the retracted comeback's lighter tier.
+    const pending = detectPendingLayoff([workout('2026-07-03')], '2026-09-03', DEFAULT_CONFIG)!
+    const retracted: LayoffRecord = {
+      id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '2-4w', pct: 0.9,
+    }
+
+    expect(pending.tier.pct).toBeLessThan(retracted.pct)
+    expect(layoffAlreadyRecorded(pending, [retracted])).toBe(false)
+  })
+
+  it('leaves a record alone when the re-measurement is no worse', () => {
+    // Severity, not the return date, is what supersedes. Two clients coming
+    // back from one break can date the return differently because one has not
+    // synced the other's session, and that is indistinguishable from a
+    // retraction by looking at either history. Comparing dates would move a
+    // correctly-recorded return; comparing severity means a record only ever
+    // gets harsher, so this can never loosen a cut already recorded.
+    const pending = detectPendingLayoff([workout('2026-07-03')], '2026-07-24', DEFAULT_CONFIG)!
+    const deeper: LayoffRecord = {
+      id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '1-2mo', pct: 0.5,
+    }
+
+    expect(deeper.pct).toBeLessThan(pending.tier.pct)
+    expect(layoffAlreadyRecorded(pending, [deeper])).toBe(true)
+  })
 })

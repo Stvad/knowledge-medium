@@ -134,12 +134,38 @@ export const layoffFromPending = (pending: PendingLayoff): Omit<LayoffRecord, 'i
   pct: pending.tier.pct,
 })
 
-/** Convenience for the km layer: has this gap already been written down?
- *  Matching on `from` is enough — one break produces one pre-break session. */
+/** Convenience for the km layer: has this gap already been written down, at
+ *  least as severely as we are now measuring it?
+ *
+ *  `from` identifies the break — one break has one pre-break session, which is
+ *  why the record is keyed on it — but it does not settle how DEEP the break
+ *  was, and that is re-measurable. Finish a comeback session and then untick
+ *  every set of it (the only correction available once a session is closed)
+ *  and `buildHistory` stops counting it as a training day, so the next real
+ *  return measures the SAME break across a longer gap. On `from` alone that
+ *  read as "already recorded" and wrote nothing, leaving the record naming the
+ *  comeback that was taken back: a lighter tier, and an earlier `to` that
+ *  inflates `sessionsBack`, so `resolveReentry` ramps back to full loads
+ *  faster than the real break warrants.
+ *
+ *  Compared on SEVERITY (`pct`, the fraction of pre-break weights) rather than
+ *  on `to`, and this is the load-bearing choice. Two clients coming back from
+ *  one break can date the return differently — one has not synced the other's
+ *  session — and there is no way to tell that apart from a retraction by
+ *  looking at either one's history. Comparing dates would make the later write
+ *  win and move a correctly-recorded return; comparing severity means a record
+ *  only ever gets HARSHER. So the two clients converge on the deepest
+ *  measurement whatever order they land in, and a re-measurement can never
+ *  make re-entry more aggressive than the record it replaces — which is the
+ *  direction that would put weight on a bar.
+ *
+ *  The residue, stated: a retraction that does NOT cross a tier boundary
+ *  leaves `to` a little early, so `sessionsBack` runs one session ahead. Same
+ *  tier, same cut. */
 export const layoffAlreadyRecorded = (
   pending: PendingLayoff,
   layoffs: readonly LayoffRecord[],
-): boolean => layoffs.some(l => l.from === pending.from)
+): boolean => layoffs.some(l => l.from === pending.from && l.pct <= pending.tier.pct)
 
 /** Training day of a workout, re-exported here so callers building layoff
  *  records don't have to reach into `schedule` for one helper. */

@@ -13,7 +13,7 @@ import {getOrCreateKernelPage, kernelPageBlockId} from '@/data/kernelPage.js'
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 import {
-  adoptTypedBlock, createTypedChild, getOrCreateTypedChild, type DerivedIdentity,
+  adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild, type DerivedIdentity,
 } from '@/data/typedRecords.js'
 
 import {SETTINGS_TYPE, STRENGTH_LOG_TYPE} from './schema'
@@ -39,14 +39,34 @@ export const findStrengthLogPage = async (
   return block && !block.deleted ? id : null
 }
 
-/** The settings block if it already exists, WITHOUT creating it. */
+/** The settings block if it already exists, WITHOUT creating it.
+ *
+ *  Two lookups, in the same order `getOrCreateSettingsBlock` uses, because the
+ *  two must never name different blocks: whatever the writer would adopt is
+ *  what the reader has to read.
+ *
+ *  The typed query alone was not that. `getOrCreateSettingsBlock` deliberately
+ *  adopts the derived seat WITHOUT requiring the type tag — losing a tag is a
+ *  slip, losing the config is not — so an untagged settings block is one the
+ *  writer repairs and the reader could not see at all. That gap is not
+ *  theoretical for the flow that matters: `readProgram` runs on the Start path
+ *  and must not bootstrap, so it never reaches the writer. Start would read no
+ *  settings, fall back to the built-in program, and stamp a session from it —
+ *  ignoring the plan root, rollover hour and every `or`-group choice already
+ *  recorded — until the user happened to open the log page. */
 export const findSettingsBlock = async (
   repo: Repo,
   workspaceId: string,
   pageId: string,
-): Promise<string | null> =>
-  (await repo.queryBlocks({workspaceId, types: [SETTINGS_TYPE]}))
-    .find(block => block.parentId === pageId)?.id ?? null
+): Promise<string | null> => {
+  const tagged = (await repo.queryBlocks({workspaceId, types: [SETTINGS_TYPE]}))
+    .find(block => block.parentId === pageId)
+  if (tagged) return tagged.id
+  // Same conditions the writer's `adoptable` applies, and no type check, so
+  // the two agree on an untagged seat as well as a tagged one.
+  const seat = await repo.load(derivedBlockId(settingsIdentity(pageId)))
+  return seat && !seat.deleted && seat.parentId === pageId ? seat.id : null
+}
 
 export const getOrCreateStrengthLogPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {

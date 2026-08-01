@@ -188,6 +188,29 @@ describe('ensureStrengthHome', () => {
     expect(await liveChildren(pageId, SETTINGS_TYPE)).toHaveLength(1)
   })
 
+  it('READS a settings block whose type was removed, without repairing it first', async () => {
+    // The repair above is a WRITE, and the path that matters most never
+    // reaches it: `readProgram` runs on the Start flow and must not bootstrap,
+    // so a typed-only lookup meant an untagged settings block was invisible
+    // exactly where it counts. Start read no settings, fell back to the
+    // built-in program, and stamped a session from it — ignoring the plan
+    // root, rollover hour and every recorded `or`-group choice — until the
+    // user happened to open the log page.
+    const fresh = 'ws-with-nothing-in-it'
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    await repo.tx(async tx => {
+      await tx.setProperties(settingsBlockId, {set: [propertyValue(rolloverHourProp, 5)]})
+    }, {scope: ChangeScope.UserPrefs, description: 'a configured rollover hour'})
+    await repo.removeType(settingsBlockId, SETTINGS_TYPE)
+
+    expect(await findSettingsBlock(repo, fresh, pageId)).toBe(settingsBlockId)
+    // And the config it holds actually reaches the reader, which is the point
+    // — the id alone would pass with the settings still unread.
+    expect((await readProgram(repo, fresh)).config.dayRolloverHour).toBe(5)
+    // Still no write: a read that bootstraps is what this path exists to avoid.
+    expect(hasBlockType(repo.block(settingsBlockId).peek()!, SETTINGS_TYPE)).toBe(false)
+  })
+
   it('does not adopt a settings block dragged off the page', async () => {
     // Parentage is still checked, even though the type no longer is, because
     // `findSettingsBlock` is parent-scoped: adopting a block filed elsewhere
@@ -269,6 +292,61 @@ describe('the layoff record and the finish that justifies it', () => {
     // The adopt leaves the record alone, so the FIRST return recorded stands —
     // which is the one that actually happened.
     expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
+  })
+
+  it('deepens the record when the same break is re-measured as worse', async () => {
+    // The other side of "one record per gap". A comeback recorded, then taken
+    // back by unticking every set of it — after which `buildHistory` stops
+    // counting that day as training, so the next real return measures the SAME
+    // `from` across a longer gap and lands on the SAME derived seat.
+    // `adoptTypedBlock` does not apply properties, so without a deliberate
+    // write the record kept naming the retracted comeback: a lighter tier, and
+    // an earlier `to` that inflates `sessionsBack`. Both feed `resolveReentry`,
+    // so the ramp returned to full loads faster than the real break warrants.
+    const light = {from: '2026-07-01', to: '2026-07-15', days: 14, tierId: '1-2w', pct: 0.9}
+    const seat = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, light)
+
+    const deeper = {from: '2026-07-01', to: '2026-09-01', days: 62, tierId: '2mo+', pct: 0.5}
+    const again = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, deeper)
+
+    // Same block — one break, one record — carrying the deeper measurement.
+    expect(again).toBe(seat)
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))
+    expect(layoffs).toHaveLength(1)
+    expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-09-01', days: 62, pct: 0.5})
+    // The generated label moved with it, or the block reads as a gap it no
+    // longer records.
+    expect(repo.block(seat).peek()?.content).toContain('62-day gap')
+  })
+
+  it('will not loosen a record that already names a deeper break', async () => {
+    // Severity is the merge rule, so it is order-independent: whichever client
+    // writes second, the harsher measurement survives. This is the half that
+    // keeps two clients dating one return differently from moving it.
+    const deeper = {from: '2026-07-01', to: '2026-09-01', days: 62, tierId: '2mo+', pct: 0.5}
+    const seat = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, deeper)
+
+    const light = {from: '2026-07-01', to: '2026-07-15', days: 14, tierId: '1-2w', pct: 0.9}
+    expect(await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, light)).toBe(seat)
+
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))
+    expect(layoffs[0]).toMatchObject({to: '2026-09-01', days: 62, pct: 0.5})
+  })
+
+  it('keeps a label you renamed, even while correcting the numbers', async () => {
+    // The properties are derived and ours to rewrite; the text is not. A stale
+    // number in a line you wrote yourself is a smaller loss than replacing
+    // what you wrote.
+    const light = {from: '2026-07-01', to: '2026-07-15', days: 14, tierId: '1-2w', pct: 0.9}
+    const seat = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, light)
+    await repo.tx(tx => tx.update(seat, {content: 'the shoulder thing'}),
+      {scope: ChangeScope.BlockDefault, description: 'rename the record'})
+
+    await writeLayoff(repo, WORKSPACE_ID, PAGE_ID,
+      {from: '2026-07-01', to: '2026-09-01', days: 62, tierId: '2mo+', pct: 0.5})
+
+    expect(repo.block(seat).peek()?.content).toBe('the shoulder thing')
+    expect(buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))[0]).toMatchObject({days: 62})
   })
 
   it('will not adopt a block whose `from` was edited to another gap', async () => {
