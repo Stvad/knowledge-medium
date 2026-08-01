@@ -1,5 +1,5 @@
 import {
-  actionsFacet, appEffectsFacet, appMountsFacet,
+  actionsFacet, appEffectsFacet, appMountsFacet, blockRenderersFacet,
 } from '@/extensions/core.js'
 import {
   actionDispatchWrap, type ActionDispatchDecorator,
@@ -15,6 +15,7 @@ import {
   type PropertyEditorProps,
   type PropertySchema,
   type PropertySeedDeclaration,
+  type TypedBlockQuery,
 } from '@/data/api/index.js'
 import { definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet } from '@/data/facets.js'
 import { safeDecodeRowProperty } from '@/data/rowProperty.js'
@@ -25,6 +26,12 @@ import { extensionPropertySeedKey, extensionTypeSeedKey } from '@/extensions/dyn
 import { showError, showInfo, showProgress, showSuccess } from '@/utils/toast.js'
 import { useRepo } from '@/context/repo.js'
 import type { Block } from '@/data/block.js'
+import type { Repo } from '@/data/repo.js'
+import { getOrCreateKernelPage } from '@/data/kernelPage.js'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+import { LazyBlockEntry } from '@/plugins/backlinks/BlockEntry.js'
+import { dueByDailyNoteRef } from '@/plugins/daily-notes/dueQuery.js'
+import { useStartOfToday } from '@/plugins/daily-notes/today.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
@@ -49,12 +56,14 @@ import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { Textarea } from '@/components/ui/textarea.js'
-import { navigate, useOpenBlock } from '@/utils/navigation.js'
+import {
+  navigate, navigateFromGlobalCommand, useBlockOpener, useOpenBlock,
+} from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
-import { useHandle } from '@/hooks/block.js'
+import { useBlockQuery, useHandle, useManyParents } from '@/hooks/block.js'
 import type { BlockData, BlockRenderer, BlockRendererProps } from '@/types.js'
 import {
-  useEffect, useMemo, useState, useSyncExternalStore,
+  useCallback, useEffect, useMemo, useState, useSyncExternalStore,
   type ComponentType, type CSSProperties,
 } from 'react'
 
@@ -1824,6 +1833,293 @@ const autoSyncEffect = {
 }
 
 // ---------------------------------------------------------------------------
+// review backlog
+//
+// `readwise:review_date` schedules a highlight's first review onto one daily
+// note, and the reviewed latch marks it done. That works per-day — the ref is
+// indexed, so the day's highlights show in that daily note's linked references
+// — but nothing rolls the MISSED days up, so a highlight scheduled three weeks
+// ago is only reachable by navigating back to a date you'd have to know about.
+// This page is that roll-up. It is a VIEW, not a reschedule: nothing here
+// rewrites `review_date`, so the record of when something was scheduled (and
+// the reference index built on it) stays intact.
+
+// The three named exports below are this section's TESTABLE SEAM. Everything
+// else in the file is reached only through the default contribution list, but
+// the backlog's whole value is "which highlights does it show, in what order,
+// and what happens when you mark one" — and asserting that through
+// `DefaultBlockRenderer` would mean standing up the entire renderer stack to
+// test a query, a grouping and a `useState`. See readwise.backlog.test.tsx.
+
+const REVIEW_BACKLOG_TYPE = 'readwise-review-backlog'
+/** Fresh uuid-v5 namespace, so the backlog is a per-workspace singleton on one
+ *  deterministic row: reopening it reuses the same block rather than spawning a
+ *  new page each time. Must not collide with any other kernel page's. */
+const REVIEW_BACKLOG_NS = 'd23b647e-9eb2-41fa-b672-12e75987c60d'
+const REVIEW_BACKLOG_ALIAS = 'Readwise Review'
+const OPEN_REVIEW_BACKLOG_ACTION_ID = 'readwise.open-review-backlog'
+
+const readwiseReviewBacklogType = seedType({
+  seedKey: extensionTypeSeedKey('review-backlog'),
+  revision: 1,
+  id: REVIEW_BACKLOG_TYPE,
+  label: 'Readwise review backlog',
+  // Plumbing for the renderer's `canRender`, not something to tag blocks with.
+  hideFromCompletion: true,
+})
+
+const getOrCreateReviewBacklog = (repo: Repo, workspaceId: string): Promise<Block> =>
+  getOrCreateKernelPage(repo, workspaceId, {
+    namespace: REVIEW_BACKLOG_NS,
+    alias: REVIEW_BACKLOG_ALIAS,
+    markerType: REVIEW_BACKLOG_TYPE,
+  })
+
+/** Highlights scheduled for today or earlier that haven't been marked reviewed.
+ *
+ *  `exclude` rather than `match {reviewed: false}` is deliberate: SQL equality
+ *  never matches a NULL cell, so a match would silently drop every highlight
+ *  whose `reviewed` property was never written — a pre-latch import, or a row
+ *  that arrived raw over sync. Same shape and cost, survives more. */
+export const buildUnreviewedHighlightsQuery = (
+  workspaceId: string,
+  now?: Date,
+): TypedBlockQuery => ({
+  workspaceId,
+  types: [READWISE_HIGHLIGHT_TYPE],
+  where: dueByDailyNoteRef(reviewDateProp.name, now),
+  exclude: [{ scope: 'self', where: { [reviewedProp.name]: true } }],
+  order: 'created-asc',
+})
+
+const useUnreviewedHighlights = (workspaceId: string): BlockData[] => {
+  // Drives the cutoff off today's local midnight, which advances overnight, so
+  // a backlog left open past midnight picks up the new day instead of staying
+  // pinned to yesterday's boundary.
+  const startOfToday = useStartOfToday()
+  const query = useMemo(
+    () => buildUnreviewedHighlightsQuery(workspaceId, new Date(startOfToday)),
+    [workspaceId, startOfToday],
+  )
+  return useBlockQuery(query)
+}
+
+/** Rows in the order they first appeared, never dropped.
+ *
+ *  Marking a highlight reviewed takes it out of the live query. Rendering the
+ *  live list directly would make the row vanish and everything below it jump
+ *  up under the cursor — which is exactly the problem SRS review answers with a
+ *  frozen queue, a persisted index, a day-rollover invalidation and a reconcile
+ *  pass. We don't need any of that: the reviewed highlight stays exactly where
+ *  it was and dims (the reviewed content decorator does that), so "where was I"
+ *  is answered by the screen. `reset` re-syncs to live and clears the done ones.
+ *
+ *  Only `id` and `parentId` are read off the retained rows, and neither changes
+ *  under us, so keeping the pre-review snapshot of a row costs nothing. */
+export const useStickyRows = (
+  live: readonly BlockData[],
+): readonly [readonly BlockData[], () => void] => {
+  const [sticky, setSticky] = useState<readonly BlockData[]>(live)
+  const merged = useMemo(() => {
+    const known = new Set(sticky.map(row => row.id))
+    const additions = live.filter(row => !known.has(row.id))
+    return additions.length === 0 ? sticky : [...sticky, ...additions]
+  }, [sticky, live])
+  // Converge during render (React's "adjust state while rendering" path) so the
+  // first paint after a query result already includes the new rows.
+  if (merged !== sticky) setSticky(merged)
+  const reset = useCallback(() => setSticky(live), [live])
+  return [merged, reset]
+}
+
+const EMPTY_ANCESTORS: readonly Block[] = []
+
+interface BacklogGroup {
+  /** The highlights' shared parent — the document's "Highlights" section. */
+  sectionId: string
+  items: readonly BlockData[]
+}
+
+/** Group by the highlights' immediate parent. Readwise files every highlight
+ *  under its document's "Highlights" section, so the parent id IS the document
+ *  grouping — no ancestor query needed to work it out, and no guessing when a
+ *  highlight has been moved somewhere unexpected (it just groups under wherever
+ *  it actually lives). Map insertion order preserves the query's `created-asc`
+ *  order, so groups come out oldest-first; since `review_date` is stamped at
+ *  import, creation order tracks scheduling order. */
+export const groupHighlightsBySection = (rows: readonly BlockData[]): BacklogGroup[] => {
+  const byParent = new Map<string, BlockData[]>()
+  for (const row of rows) {
+    const key = row.parentId ?? ''
+    const bucket = byParent.get(key)
+    if (bucket) bucket.push(row)
+    else byParent.set(key, [row])
+  }
+  return [...byParent.entries()].map(([sectionId, items]) => ({ sectionId, items }))
+}
+
+const BacklogGroupTitle = ({ documentBlock }: { documentBlock: Block }) => {
+  const label = useHandle(documentBlock, {
+    selector: (data: BlockData | null | undefined) => decodeAliasLabel(data ?? undefined),
+  }) as string | undefined
+  return <>{label ?? 'Untitled document'}</>
+}
+
+const BacklogGroupSection = ({
+  group,
+  ancestors,
+  workspaceId,
+}: {
+  group: BacklogGroup
+  /** The section's own ancestor chain, root-first. */
+  ancestors: readonly Block[]
+  workspaceId: string
+}) => {
+  const repo = useRepo()
+  const openBlock = useBlockOpener()
+  // The section's immediate parent is the document page. Taking the last
+  // ancestor rather than scanning for the document TYPE keeps this honest for a
+  // highlight filed somewhere unusual: the header names wherever it really
+  // lives, and each entry's own breadcrumb still shows the full chain.
+  const documentBlock = ancestors.at(-1)
+  // Each highlight's parents = the section's ancestors plus the section itself.
+  // Handing these to the entry saves it firing its own ancestor query per row.
+  const itemParents = useMemo(
+    () => [...ancestors, repo.block(group.sectionId)],
+    [ancestors, repo, group.sectionId],
+  )
+
+  return (
+    <section className="space-y-1">
+      <header className="flex items-baseline gap-2 border-b border-border/60 pb-1">
+        {documentBlock
+          ? (
+              <button
+                type="button"
+                className="min-w-0 flex-1 truncate text-left text-sm font-semibold hover:underline"
+                onClick={event => openBlock(event, { blockId: documentBlock.id, workspaceId })}
+              >
+                <BacklogGroupTitle documentBlock={documentBlock}/>
+              </button>
+            )
+          : (
+              // Ancestors haven't resolved yet (or the section is a root):
+              // render the group without a title rather than blocking its items.
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-muted-foreground">
+                Highlights
+              </span>
+            )}
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {group.items.length}
+        </span>
+      </header>
+      {group.items.map(item => (
+        <LazyBlockEntry
+          key={item.id}
+          block={repo.block(item.id)}
+          initialParents={itemParents}
+          scopeId={`readwise-backlog:${item.id}`}
+        />
+      ))}
+    </section>
+  )
+}
+
+const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
+  const repo = useRepo()
+  const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+  const live = useUnreviewedHighlights(workspaceId)
+  const [rows, resetSticky] = useStickyRows(live)
+
+  const groups = useMemo(() => groupHighlightsBySection(rows), [rows])
+  const sectionBlocks = useMemo(
+    () => groups.map(group => repo.block(group.sectionId)),
+    [groups, repo],
+  )
+  // ONE ancestor round-trip for every group, rather than one per group — this
+  // is exactly the case `useManyParents` documents itself for.
+  const ancestorsBySection = useManyParents(sectionBlocks)
+
+  const liveIds = useMemo(() => new Set(live.map(row => row.id)), [live])
+  const doneCount = rows.filter(row => !liveIds.has(row.id)).length
+
+  if (rows.length === 0) {
+    return (
+      <div className="mx-auto w-full max-w-3xl py-6 text-sm text-muted-foreground">
+        Nothing scheduled for review today or earlier.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-3xl space-y-6 py-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Readwise review</h2>
+          <p className="text-sm text-muted-foreground">
+            {live.length} unreviewed, scheduled today or earlier
+            {doneCount > 0 ? ` · ${doneCount} done this session` : ''}
+          </p>
+        </div>
+        {doneCount > 0 && (
+          <Button variant="ghost" size="sm" onClick={resetSticky}>
+            Clear done
+          </Button>
+        )}
+      </div>
+
+      {groups.map(group => (
+        <BacklogGroupSection
+          key={group.sectionId}
+          group={group}
+          ancestors={ancestorsBySection.get(group.sectionId) ?? EMPTY_ANCESTORS}
+          workspaceId={workspaceId}
+        />
+      ))}
+    </div>
+  )
+}
+ReviewBacklogContent.displayName = 'ReadwiseReviewBacklogContent'
+
+/** Keep the default block frame, swap the content area for the backlog. Same
+ *  shape as the SRS review deck renderer and the block-type renderer. */
+const ReviewBacklogRenderer: BlockRenderer = Object.assign(
+  (props: BlockRendererProps) => (
+    <DefaultBlockRenderer
+      {...props}
+      ContentRenderer={ReviewBacklogContent}
+      EditContentRenderer={ReviewBacklogContent}
+    />
+  ),
+  {
+    canRender: ({ block }: BlockRendererProps): boolean => {
+      const data = block.peek()
+      if (!data) return false
+      try {
+        return getBlockTypes(data).includes(REVIEW_BACKLOG_TYPE)
+      } catch {
+        return false
+      }
+    },
+    priority: () => 100,
+  },
+)
+ReviewBacklogRenderer.displayName = 'ReadwiseReviewBacklogRenderer'
+
+const openReviewBacklogAction = {
+  id: OPEN_REVIEW_BACKLOG_ACTION_ID,
+  description: 'Readwise: open review backlog',
+  context: ActionContextTypes.GLOBAL,
+  handler: async ({ uiStateBlock }: { uiStateBlock: any }) => {
+    const repo = uiStateBlock.repo
+    const workspaceId = repo.activeWorkspaceId
+    if (!workspaceId) return
+    const page = await getOrCreateReviewBacklog(repo, workspaceId)
+    navigateFromGlobalCommand(repo, { blockId: page.id, workspaceId })
+  },
+}
+
+// ---------------------------------------------------------------------------
 // editor overrides
 
 const connectedEditor = definePropertyEditorOverride(connectedHintProp, {
@@ -1872,6 +2168,7 @@ export default [
   typeSeedsFacet.of(readwiseDocumentType, { source }),
   typeSeedsFacet.of(readwiseHighlightType, { source }),
   typeSeedsFacet.of(readwiseNoteType, { source }),
+  typeSeedsFacet.of(readwiseReviewBacklogType, { source }),
 
   definitionSeedsFacet.of(lastSyncedAtProp, { source }),
   definitionSeedsFacet.of(syncSinceProp, { source }),
@@ -1901,9 +2198,15 @@ export default [
   blockContentDecoratorsFacet.of(readwiseDocumentContentDecorator, { source }),
   blockContentDecoratorsFacet.of(readwiseReviewedContentDecorator, { source }),
 
+  blockRenderersFacet.of(
+    { id: 'readwiseReviewBacklog', renderer: ReviewBacklogRenderer },
+    { source },
+  ),
+
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
   actionsFacet.of(connectAction, { source }),
+  actionsFacet.of(openReviewBacklogAction, { source }),
   actionDispatchWrap(readwiseSwipeRightDecorator,
     { source, precedence: READWISE_REVIEW_PRECEDENCE }),
   ...readwiseTodoCycleDecorators.map(decorator =>
