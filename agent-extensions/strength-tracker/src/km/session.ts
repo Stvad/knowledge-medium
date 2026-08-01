@@ -768,26 +768,31 @@ export interface FinishExpectation {
    *  one branch where writing nothing is the whole point is the one branch that
    *  never re-checked its reason.
    *
-   *  `from` and `pct` travel with the id because a record that survives but no
-   *  longer names this gap, or has been loosened below the tier the decision
-   *  accepted, is as good as absent — the same test `layoffAlreadyRecorded`
-   *  applies, re-asked against the row on disk. */
-  layoffOnRecord?: {id: string; from: string; pct: number}
+   *  Carries the fields that DECIDE, not the one that is merely stored. A
+   *  record surviving is not a record covering: re-point `strength:from` and it
+   *  names another break, change `strength:tier` or `strength:gapDays` and the
+   *  cut it applies changes with them — `resolveReentry` resolves the tier from
+   *  those two and never reads `strength:reentryPct`, so fencing the percentage
+   *  watched a field nothing consults. Compared as stored values because that
+   *  is all a transaction can do; `coveringLayoff` re-judges severity properly
+   *  on the next pass, which is where a `changed` sends this. */
+  layoffOnRecord?: {id: string; from: string; tierId: string; days: number}
 }
 
 /** Does the record the caller leaned on still cover the gap it was leaned on
- *  for? Live, still a layoff, still this gap's, still at least this severe. */
+ *  for? Live, still a layoff, still this gap's, and still describing the same
+ *  break — see `FinishExpectation.layoffOnRecord` for why those last two are
+ *  the tier inputs rather than the stored percentage. */
 const layoffStillCovers = async (
   tx: Tx,
-  expected: {id: string; from: string; pct: number},
+  expected: {id: string; from: string; tierId: string; days: number},
 ): Promise<boolean> => {
   const block = await tx.get(expected.id)
   if (!block || block.deleted) return false
   if (!hasBlockType(block, LAYOFF_TYPE)) return false
-  const raw = block.properties[FIELD.layoffFrom]
-  if (liveDay(raw) !== expected.from) return false
-  const pct = block.properties[FIELD.layoffPct]
-  return typeof pct === 'number' && pct <= expected.pct
+  if (liveDay(block.properties[FIELD.layoffFrom]) !== expected.from) return false
+  return block.properties[FIELD.layoffTier] === expected.tierId
+    && block.properties[FIELD.layoffDays] === expected.days
 }
 
 /** Is any of these still a session history would count, still on the day it

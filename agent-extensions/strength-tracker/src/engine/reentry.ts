@@ -62,6 +62,26 @@ export const detectPendingLayoff = (
   return {from: last, to: day, days: gap, tier}
 }
 
+/** The tier a RECORDED layoff actually applies — the one resolution, used by
+ *  everything that asks how deep a recorded break was.
+ *
+ *  `strength:reentryPct` is stored on the record too, but nothing reads it to
+ *  decide anything: the load factor comes from this tier's `pct` and
+ *  `rampPerSession`. Both are ordinary editable properties, so they can be
+ *  edited apart — and a comparison against the stored percentage then passes
+ *  while the tier that actually governs says something else entirely. That is
+ *  not only a race: a record whose `strength:tier` reads `on-schedule` applies
+ *  NO cut however deep its stored percentage claims to be.
+ *
+ *  `days` is the fallback because an unrecognised tier id (renamed in the plan,
+ *  or typed by hand) still has a gap length to classify by — the same rule
+ *  `detectPendingLayoff` used to pick the tier in the first place. */
+export const effectiveTier = (
+  record: {tierId: string; days: number},
+  config: ProgramConfig,
+): ReentryTier | undefined =>
+  config.reentry.find(tier => tier.id === record.tierId) ?? tierFor(record.days, config.reentry)
+
 const factorFor = (tier: ReentryTier, sessionsBack: number): number =>
   Math.min(1, tier.pct + tier.rampPerSession * sessionsBack)
 
@@ -103,8 +123,7 @@ export const resolveReentry = (
   const latest = [...layoffs].sort((a, b) => a.to.localeCompare(b.to)).at(-1)
   if (!latest) return undefined
 
-  const tier =
-    config.reentry.find(t => t.id === latest.tierId) ?? tierFor(latest.days, config.reentry)
+  const tier = effectiveTier(latest, config)
   if (!tier || isOnScheduleTier(tier)) return undefined
 
   const sessionsBack = fullSessionDays(history, config.dayRolloverHour)
@@ -161,11 +180,29 @@ export const layoffFromPending = (pending: PendingLayoff): Omit<LayoffRecord, 'i
  *
  *  The residue, stated: a retraction that does NOT cross a tier boundary
  *  leaves `to` a little early, so `sessionsBack` runs one session ahead. Same
- *  tier, same cut. */
+ *  tier, same cut.
+ *
+ *  Severity is read through `effectiveTier`, NOT off the record's stored
+ *  `pct`. The stored value decides nothing — `resolveReentry` takes the factor
+ *  from the tier — so comparing it accepted a record whose `strength:tier` had
+ *  been edited to something shallower, or to `on-schedule`, which applies no
+ *  cut at all. An unresolvable tier is treated as covering nothing, since a
+ *  record that cannot say how deep the break was cannot stand in for one. */
+export const coveringLayoff = (
+  pending: PendingLayoff,
+  layoffs: readonly LayoffRecord[],
+  config: ProgramConfig,
+): LayoffRecord | undefined => layoffs.find(record => {
+  if (record.from !== pending.from) return false
+  const tier = effectiveTier(record, config)
+  return tier !== undefined && !isOnScheduleTier(tier) && tier.pct <= pending.tier.pct
+})
+
 export const layoffAlreadyRecorded = (
   pending: PendingLayoff,
   layoffs: readonly LayoffRecord[],
-): boolean => layoffs.some(l => l.from === pending.from && l.pct <= pending.tier.pct)
+  config: ProgramConfig,
+): boolean => coveringLayoff(pending, layoffs, config) !== undefined
 
 /** Training day of a workout, re-exported here so callers building layoff
  *  records don't have to reach into `schedule` for one helper. */

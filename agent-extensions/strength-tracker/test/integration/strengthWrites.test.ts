@@ -37,6 +37,7 @@ import {
   STRENGTH_TYPES,
   dateProp,
   layoffFromProp,
+  layoffTierProp,
   rolloverHourProp,
   sessionProp,
   statusProp,
@@ -449,10 +450,26 @@ describe('the layoff record and the finish that justifies it', () => {
       {scope: ChangeScope.BlockDefault, description: 'a peer deletes the layoff'})
 
     expect(await finishSession(repo, tonight, undefined, {
-      layoffOnRecord: {id: covering, from: '2026-07-14', pct: 0.9},
+      layoffOnRecord: {id: covering, from: '2026-07-14', tierId: '1-2w', days: 10},
     })).toBe('changed')
 
     expect(repo.block(tonight).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('refuses when the record survives but its TIER was edited', async () => {
+    // The field that decides is `strength:tier`, not the stored percentage —
+    // `resolveReentry` resolves the tier and never reads `strength:reentryPct`.
+    // Edit one and leave the other and the record applies a different cut, or
+    // none, while a percentage check waves it through.
+    const {tonight} = await twoPriorSessions()
+    const covering = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID,
+      {from: '2026-07-14', to: '2026-07-24', days: 10, tierId: '1-2w', pct: 1})
+    await repo.tx(tx => tx.setProperty(covering, layoffTierProp, 'on-schedule'),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the tier'})
+
+    expect(await finishSession(repo, tonight, undefined, {
+      layoffOnRecord: {id: covering, from: '2026-07-14', tierId: '1-2w', days: 10},
+    })).toBe('changed')
   })
 
   it('refuses when the record survives but no longer names this gap', async () => {
@@ -466,7 +483,7 @@ describe('the layoff record and the finish that justifies it', () => {
       {scope: ChangeScope.BlockDefault, description: 'hand-edit the gap start'})
 
     expect(await finishSession(repo, tonight, undefined, {
-      layoffOnRecord: {id: covering, from: '2026-07-14', pct: 0.9},
+      layoffOnRecord: {id: covering, from: '2026-07-14', tierId: '1-2w', days: 10},
     })).toBe('changed')
   })
 
@@ -478,7 +495,7 @@ describe('the layoff record and the finish that justifies it', () => {
       {from: '2026-07-14', to: '2026-07-24', days: 10, tierId: '1-2w', pct: 0.9})
 
     expect(await finishSession(repo, tonight, undefined, {
-      layoffOnRecord: {id: covering, from: '2026-07-14', pct: 0.9},
+      layoffOnRecord: {id: covering, from: '2026-07-14', tierId: '1-2w', days: 10},
     })).toBe('done')
   })
 

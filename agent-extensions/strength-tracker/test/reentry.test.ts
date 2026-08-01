@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest'
 
 import {
   detectPendingLayoff,
+  effectiveTier,
   layoffAlreadyRecorded,
   layoffFromPending,
   resolveReentry,
@@ -135,8 +136,8 @@ describe('layoff records', () => {
     const existing: LayoffRecord = {
       id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '2-4w', pct: 0.9,
     }
-    expect(layoffAlreadyRecorded(pending, [existing])).toBe(true)
-    expect(layoffAlreadyRecorded(pending, [])).toBe(false)
+    expect(layoffAlreadyRecorded(pending, [existing], DEFAULT_CONFIG)).toBe(true)
+    expect(layoffAlreadyRecorded(pending, [], DEFAULT_CONFIG)).toBe(false)
   })
 
   it('re-records a break now measured into a deeper tier', () => {
@@ -150,8 +151,8 @@ describe('layoff records', () => {
       id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '2-4w', pct: 0.9,
     }
 
-    expect(pending.tier.pct).toBeLessThan(retracted.pct)
-    expect(layoffAlreadyRecorded(pending, [retracted])).toBe(false)
+    expect(pending.tier.pct).toBeLessThan(effectiveTier(retracted, DEFAULT_CONFIG)!.pct)
+    expect(layoffAlreadyRecorded(pending, [retracted], DEFAULT_CONFIG)).toBe(false)
   })
 
   it('leaves a record alone when the re-measurement is no worse', () => {
@@ -166,7 +167,35 @@ describe('layoff records', () => {
       id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '1-2mo', pct: 0.5,
     }
 
-    expect(deeper.pct).toBeLessThan(pending.tier.pct)
-    expect(layoffAlreadyRecorded(pending, [deeper])).toBe(true)
+    expect(effectiveTier(deeper, DEFAULT_CONFIG)!.pct).toBeLessThan(pending.tier.pct)
+    expect(layoffAlreadyRecorded(pending, [deeper], DEFAULT_CONFIG)).toBe(true)
+  })
+
+  it('does not treat a record whose TIER says on-schedule as covering the gap', () => {
+    // `strength:reentryPct` is stored on the record but decides nothing —
+    // `resolveReentry` takes the factor from the tier. So a record can claim a
+    // deep 50% while its tier applies no cut at all, and comparing the stored
+    // percentage accepted it: the finish wrote no replacement and the ramp
+    // never happened. Needs no race — the two are separately editable.
+    const pending = detectPendingLayoff([workout('2026-07-03')], '2026-09-03', DEFAULT_CONFIG)!
+    const hollow: LayoffRecord = {
+      id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: 'on-schedule', pct: 0.5,
+    }
+
+    expect(hollow.pct).toBeLessThan(pending.tier.pct) // the stored value says "deeper"…
+    expect(layoffAlreadyRecorded(pending, [hollow], DEFAULT_CONFIG)).toBe(false) // …the tier does not
+  })
+
+  it('does not lean on a record whose tier cannot be resolved at all', () => {
+    // An unrecognised id falls back to classifying by `days`, and a record
+    // that still cannot say how deep the break was cannot stand in for one.
+    const pending = detectPendingLayoff([workout('2026-07-03')], '2026-09-03', DEFAULT_CONFIG)!
+    const byDays: LayoffRecord = {
+      id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: 'renamed-in-the-plan', pct: 0.5,
+    }
+
+    // Classified by its 20 days → `2-4w`, which is shallower than a 62-day gap.
+    expect(effectiveTier(byDays, DEFAULT_CONFIG)?.id).toBe('2-4w')
+    expect(layoffAlreadyRecorded(pending, [byDays], DEFAULT_CONFIG)).toBe(false)
   })
 })

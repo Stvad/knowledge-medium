@@ -12,7 +12,7 @@ import type {Repo} from '@/data/repo.js'
 
 import {prescribe} from '../engine/prescribe'
 import {
-  detectPendingLayoff, lastFullSessionBasis, layoffAlreadyRecorded, layoffFromPending,
+  coveringLayoff, detectPendingLayoff, lastFullSessionBasis, layoffFromPending,
 } from '../engine/reentry'
 import {trainingDay} from '../engine/schedule'
 import type {
@@ -214,11 +214,11 @@ export const closeSession = async (
   const pending = isMini ? null : detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
   // WHICH record satisfied the check, not merely that one did — writing nothing
   // because a record already covers the gap is a decision resting on that row,
-  // and it has to travel into the transaction like any other. Same test
-  // `layoffAlreadyRecorded` applies, so the two cannot disagree about what
-  // "already covered" means.
+  // and it has to travel into the transaction like any other. Through
+  // `coveringLayoff`, which IS the predicate `layoffAlreadyRecorded` asks, so
+  // the two cannot disagree about what "already covered" means.
   const covering = pending
-    ? snapshot.layoffs.find(l => l.from === pending.from && l.pct <= pending.tier.pct)
+    ? coveringLayoff(pending, snapshot.layoffs, snapshot.config)
     : undefined
   const record = pending && !covering ? layoffFromPending(pending) : undefined
   // Both facts the decision above rests on travel INTO the transaction, and
@@ -235,7 +235,10 @@ export const closeSession = async (
     mini: isMini,
     basis: lastFullSessionBasis(snapshot.history, snapshot.config),
     ...(covering !== undefined
-      ? {layoffOnRecord: {id: covering.id, from: covering.from, pct: covering.pct}}
+      ? {layoffOnRecord: {
+        id: covering.id, from: covering.from,
+        tierId: covering.tierId, days: covering.days,
+      }}
       : {}),
   }
   if (!record) return finishSession(repo, workoutId, undefined, expected)
