@@ -540,15 +540,19 @@ export const setType = seedType({
   seedKey: extensionTypeSeedKey('set'),
   // 2: `setIndexProp` joined the declared shape — and left again when the
   // outline became the state. Sets are created once in order and never
-  // refilled, so position IS the index and `order_key` carries it. Revision
-  // stays at 2: materialization never repairs a stored payload, so a bump
-  // would change nothing on disk and warn on every client.
-  revision: 2,
+  // refilled, so position IS the index and `order_key` carries it. The
+  // revision did NOT move for that removal: materialization never repairs a
+  // stored payload, so a bump would change nothing on disk and warn on every
+  // client.
+  // 3: `catchUpRpeProp` joined — copied down from the prescription so a set
+  // row knows whether an RPE it collects feeds anything, without loading the
+  // lift. Same denormalisation as `unitProp` on the set, same reason.
+  revision: 3,
   id: SET_TYPE,
   label: 'Set',
   description: 'One set within an exercise entry.',
   hideFromCompletion: true,
-  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp],
+  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp, catchUpRpeProp],
 })
 
 export const layoffType = seedType({

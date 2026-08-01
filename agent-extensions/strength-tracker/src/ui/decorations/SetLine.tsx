@@ -9,6 +9,12 @@
  *  Reps are nudged only — ±1 is the whole range of the gesture. Weight also
  *  takes a typed value, because a lift with no history stamps at 0 and
  *  dialling that to 135 with a button is 27 taps.
+ *
+ *  RPE appears only on the sets whose lift can spend it — the ones the plan
+ *  gave a catch-up increment, which is the single rule in the engine that
+ *  reads an RPE back. Everywhere else the control is absent rather than
+ *  optional: a field that changes nothing is worse than no field, and every
+ *  row here is competing for the width of a phone.
  */
 
 import {useState} from 'react'
@@ -18,7 +24,7 @@ import {usePropertyValue} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 
 import {adjustSet} from '../../km/session'
-import {unitProp, weightProp} from '../../km/schema'
+import {catchUpRpeProp, rpeProp, unitProp, weightProp} from '../../km/schema'
 
 /** Load steps in the unit the set records. Deliberately not the plan's
  *  `roundTo`: this is a thumb correcting a number, and a plate you can
@@ -51,9 +57,17 @@ const REFUSED: Record<'closed' | 'gone', string> = {
   gone: 'That set is no longer there.',
 }
 
+/** The range worth offering. Below 5 is a warm-up, not a working set, and 10
+ *  is failure — anything the plan's ceiling could sensibly be sits inside. */
+const RPE_CHOICES = [5, 6, 7, 8, 9, 10] as const
+
 const SetLine = ({block, Inner}: Props) => {
   const [unit] = usePropertyValue(block, unitProp)
   const [weight] = usePropertyValue(block, weightProp)
+  const [rpe] = usePropertyValue(block, rpeProp)
+  // Stamped at Start from the plan, so a set logged before the lift had a
+  // catch-up rule — or before this control existed — simply doesn't ask.
+  const [rpeCeiling] = usePropertyValue(block, catchUpRpeProp)
   const [problem, setProblem] = useState<string | null>(null)
   /** Keystrokes live here until blur, so the shared block never holds a
    *  half-typed number and nothing has to reconcile one. */
@@ -116,6 +130,36 @@ const SetLine = ({block, Inner}: Props) => {
           <span aria-hidden className="px-0.5 text-xs text-muted-foreground">reps</span>
           <Nudge label="One rep fewer" onPress={nudge({reps: -1})}>−</Nudge>
           <Nudge label="One rep more" onPress={nudge({reps: 1})}>+</Nudge>
+          {/* A select, not a row of buttons: five more tap targets do not fit
+              beside the load controls on a phone, and the native picker is
+              the better one-thumb gesture anyway. Blank is a real choice —
+              leaving it unset is what withholds the catch-up jump. */}
+          {rpeCeiling === undefined ? null : (
+            <select
+              aria-label="RPE"
+              title={`Rate of perceived exertion — every set at ${rpeCeiling} or below earns the bigger jump next time`}
+              data-block-interaction="ignore"
+              className="h-7 rounded border border-border bg-transparent px-1 text-xs tabular-nums"
+              value={rpe === undefined ? '' : String(rpe)}
+              onClick={event => event.stopPropagation()}
+              onChange={event => {
+                const raw = event.currentTarget.value
+                write({set: {rpe: raw === '' ? null : Number(raw)}})
+              }}
+            >
+              <option value="">RPE</option>
+              {/* A hand-typed 7.5 is a legitimate RPE and is not on the list.
+                  Without a matching option the select falls back to showing
+                  the blank one, reading as "not logged" while the block says
+                  otherwise — and the next change would quietly round it. */}
+              {rpe !== undefined && !RPE_CHOICES.includes(rpe as typeof RPE_CHOICES[number]) ? (
+                <option value={String(rpe)}>{`RPE ${rpe}`}</option>
+              ) : null}
+              {RPE_CHOICES.map(value => (
+                <option key={value} value={value}>{`RPE ${value}`}</option>
+              ))}
+            </select>
+          )}
         </div>
       )}
     </div>

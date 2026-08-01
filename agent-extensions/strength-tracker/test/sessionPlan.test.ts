@@ -45,6 +45,37 @@ describe('planFromPrescription', () => {
     expect(lifts[0].sets.map(s => s.side)).toEqual(['L', 'R', 'L', 'R'])
   })
 
+  it('copies the RPE ceiling onto every set of a lift that has one', () => {
+    // The set row decides whether to ask for an RPE from the SET alone, so a
+    // ceiling reaching only the first row would leave the rest of the lift
+    // silently unloggable — and the catch-up jump needs every set to carry
+    // one, so a half-collected lift progresses at the normal increment.
+    const {lifts} = planFromPrescription(
+      prescription([exercise({exercise: 'Deadlift', sets: 2, catchUpRpe: 7})]),
+      'lb',
+    )
+
+    expect(lifts[0].sets).toHaveLength(2)
+    expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([7, 7])
+  })
+
+  it('copies it onto both sides of single-arm work', () => {
+    const {lifts} = planFromPrescription(
+      prescription([exercise({exercise: 'Waiter carry', sets: 2, perSide: true, catchUpRpe: 8})]),
+      'lb',
+    )
+
+    expect(lifts[0].sets).toHaveLength(4)
+    expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([8, 8, 8, 8])
+  })
+
+  it('leaves it off a lift without one, which is what suppresses the control', () => {
+    const {lifts} = planFromPrescription(prescription([exercise()]), 'lb')
+
+    expect(lifts[0].sets).toHaveLength(3)
+    expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([undefined, undefined, undefined])
+  })
+
   it('stamps zero rather than nothing when there is no history to load from', () => {
     // The block is created either way — a set you have to type a number into
     // is the same gesture as correcting a suggestion you disagree with, and

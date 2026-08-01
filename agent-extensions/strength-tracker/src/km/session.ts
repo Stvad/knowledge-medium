@@ -33,6 +33,7 @@ import {escapeKeyPart} from './history'
 import {writeLayoffInTx} from './store'
 import {matchEntries, namesThisLift, type PlannedLift, type PlannedSet, type SessionPlan} from './sessionPlan'
 import {
+  catchUpRpeProp,
   completedAtProp,
   dateProp,
   definitionProp,
@@ -41,6 +42,7 @@ import {
   prescribedSetsProp,
   prescribedWeightProp,
   repsProp,
+  rpeProp,
   sessionProp,
   sideProp,
   statusProp,
@@ -212,6 +214,11 @@ const setSpec = (
     // would put a parent load in the render path of every set on screen.
     propertyValue(unitProp, unit),
     ...(set.side !== undefined ? [propertyValue(sideProp, set.side)] : []),
+    // Only where the plan gives RPE something to do. Absent on every other
+    // set, and that absence is what the row reads to decide not to ask —
+    // so a stray control never appears on a lift whose progression would
+    // ignore the answer.
+    ...(set.catchUpRpe !== undefined ? [propertyValue(catchUpRpeProp, set.catchUpRpe)] : []),
     // Prescribed, not performed. The checkbox is the only thing that says
     // performed, and only you tick it.
     propertyValue(todoStatusProp, 'open' as const),
@@ -415,8 +422,18 @@ export const adjustSet = async (
    *  typing a starting weight: a lift with no history stamps at 0, and
    *  dialling that to 135 with a ± button is 27 taps. It is deliberately a
    *  different field, so the delta path cannot be accidentally handed an
-   *  absolute and lose a tap. */
-  delta: {weight?: number; reps?: number; set?: {weight?: number; reps?: number}},
+   *  absolute and lose a tap.
+   *
+   *  `set.rpe` has no delta form on purpose: an RPE is a judgement about the
+   *  set you just did, not a number you dial up from the last one. `null`
+   *  clears it, because a mis-tap has to be undoable — and an ABSENT rpe is
+   *  load-bearing, being exactly what stops the catch-up jump firing on
+   *  evidence that was never given. */
+  delta: {
+    weight?: number
+    reps?: number
+    set?: {weight?: number; reps?: number; rpe?: number | null}
+  },
 ): Promise<'written' | 'gone' | 'closed'> =>
   repo.tx(async tx => {
     const block = await tx.get(setId)
@@ -457,10 +474,18 @@ export const adjustSet = async (
     const shape = (w: number, r: number): string =>
       setContent({weight: w, reps: r, ...(side ? {side} : {})}, unit)
 
-    await tx.setProperties(setId, {set: [
-      propertyValue(weightProp, weight),
-      propertyValue(repsProp, reps),
-    ]})
+    const rpe = delta.set?.rpe
+    await tx.setProperties(setId, {
+      set: [
+        propertyValue(weightProp, weight),
+        propertyValue(repsProp, reps),
+        ...(typeof rpe === 'number' ? [propertyValue(rpeProp, rpe)] : []),
+      ],
+      // Cleared, not written as undefined: `unset` is the only thing that
+      // takes the key back OUT of the bag, and `allSetsAtOrBelowRpe` asks
+      // whether the value is there at all.
+      ...(rpe === null ? {unset: [rpeProp]} : {}),
+    })
     // We only own the text we wrote. Restoring `Inner` made the set line
     // editable again, so "185lb × 5 — felt easy" is something you can
     // legitimately have typed — and rewriting it from the properties threw

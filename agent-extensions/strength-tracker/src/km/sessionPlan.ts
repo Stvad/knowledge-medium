@@ -25,6 +25,11 @@ export interface PlannedSet {
   weight: number
   reps: number
   side?: 'L' | 'R'
+  /** Copied down from the prescription so the set row can decide, from the
+   *  set alone, whether to ask for an RPE — the same denormalisation as
+   *  `unit`, and for the same reason: this is the most-rendered row in the
+   *  app and it should not have to load its parent to draw itself. */
+  catchUpRpe?: number
 }
 
 export interface PlannedLift {
@@ -59,10 +64,11 @@ const setsFor = (exercise: PrescribedExercise): PlannedSet[] => {
   const reps = exercise.repMax ?? exercise.repMin
     ?? exercise.lastTime?.reps.find(count => count > 0) ?? 0
   const weight = exercise.weight ?? 0
+  const asks = exercise.catchUpRpe !== undefined ? {catchUpRpe: exercise.catchUpRpe} : {}
   const rows: PlannedSet[] = []
   for (let i = 0; i < Math.max(0, exercise.sets); i += 1) {
-    if (exercise.perSide) rows.push({weight, reps, side: 'L'}, {weight, reps, side: 'R'})
-    else rows.push({weight, reps})
+    if (exercise.perSide) rows.push({weight, reps, side: 'L', ...asks}, {weight, reps, side: 'R', ...asks})
+    else rows.push({weight, reps, ...asks})
   }
   return rows
 }

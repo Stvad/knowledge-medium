@@ -256,6 +256,16 @@ export interface PrescribedExercise {
   videos?: readonly ExerciseVideo[]
   altGroupKey?: string
   altOptions?: readonly AltOption[]
+  /** The RPE ceiling this lift's catch-up jump needs — and the only reason to
+   *  log an RPE at all.
+   *
+   *  Set only when the lift ALSO has a `catchUpIncrement`, because
+   *  `incrementFor` reads the two together: a ceiling with no bigger jump
+   *  behind it changes no prescription, and surfacing an RPE control for it
+   *  would collect a number nothing reads. Carried through onto the stamped
+   *  set blocks, so the row that asks for RPE knows whether it matters
+   *  without loading the plan. */
+  catchUpRpe?: number
   /** One line explaining where `weight` came from. Always shown: the
    *  plan's whole point is that the number is never a mystery. */
   rationale: string

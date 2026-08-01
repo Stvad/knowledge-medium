@@ -207,3 +207,28 @@ describe('prescribe — notes', () => {
     expect(notes.some(n => /90% of last weights/i.test(n))).toBe(true)
   })
 })
+
+describe('prescribe — the RPE ceiling', () => {
+  it('carries it for a lift the plan gave a catch-up jump', () => {
+    // Deadlift is the one lift in the plan with a catch-up rule, and this is
+    // the only route by which the set rows learn to ask for an RPE at all.
+    const result = run({history: [], now: '2026-07-19T23:00:00'})
+
+    expect(forExercise(result, 'Deadlift').catchUpRpe).toBe(7)
+    expect(forExercise(result, 'Squat').catchUpRpe).toBeUndefined()
+  })
+
+  it('withholds a ceiling that has no catch-up increment behind it', () => {
+    // `incrementFor` reads the two together, so a ceiling on its own changes
+    // no prescription. Carrying it anyway would put an RPE control on the
+    // row and collect a number nothing ever reads back.
+    const config = {
+      ...DEFAULT_CONFIG,
+      exercises: DEFAULT_CONFIG.exercises.map(e =>
+        e.name === 'Deadlift' ? {...e, catchUpIncrement: undefined} : e),
+    }
+    const result = prescribe({history: [], layoffs: [], config, now: '2026-07-19T23:00:00'})
+
+    expect(forExercise(result, 'Deadlift').catchUpRpe).toBeUndefined()
+  })
+})

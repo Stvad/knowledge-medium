@@ -18,7 +18,8 @@ import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, TODO_TYPE, todoType} from '@/plugins/todo/schema'
 
-import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
+import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
+import {nextWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
 import {adjustSet, finishSession, loggedSetCount, startSession} from '../../src/km/session'
@@ -27,6 +28,7 @@ import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
+  catchUpRpeProp,
   completedAtProp,
   dateProp,
   definitionProp,
@@ -35,6 +37,7 @@ import {
   sessionProp,
   prescribedSetsProp,
   repsProp,
+  rpeProp,
   sideProp,
   statusProp,
   unitProp,
@@ -418,6 +421,51 @@ describe('adjustSet', () => {
     const {setId} = await oneSet()
     await adjustSet(repo, setId, {weight: 5, reps: -1})
     expect(repo.block(setId).peek()?.content).toBe('140lb × 7')
+  })
+
+  it('records an RPE without disturbing the load', async () => {
+    const {setId} = await oneSet()
+
+    expect(await adjustSet(repo, setId, {set: {rpe: 7}})).toBe('written')
+
+    expect(repo.block(setId).peekProperty(rpeProp)).toBe(7)
+    expect(repo.block(setId).peekProperty(weightProp)).toBe(135)
+    expect(repo.block(setId).peekProperty(repsProp)).toBe(8)
+  })
+
+  it('clears an RPE back to absent rather than to a number', async () => {
+    // Absence is the load-bearing state: `allSetsAtOrBelowRpe` asks whether
+    // the value is THERE, so a clear that wrote 0 would be evidence the set
+    // was easy — the opposite of the mis-tap it is meant to undo.
+    const {setId} = await oneSet()
+    await adjustSet(repo, setId, {set: {rpe: 7}})
+
+    expect(await adjustSet(repo, setId, {set: {rpe: null}})).toBe('written')
+
+    expect(repo.block(setId).peekProperty(rpeProp)).toBeUndefined()
+    expect(repo.block(setId).peek()?.properties[FIELD.rpe]).toBeUndefined()
+  })
+
+  it('leaves an RPE alone on a nudge that does not mention it', async () => {
+    const {setId} = await oneSet()
+    await adjustSet(repo, setId, {set: {rpe: 7}})
+
+    await adjustSet(repo, setId, {weight: 5})
+
+    expect(repo.block(setId).peekProperty(rpeProp)).toBe(7)
+  })
+
+  it('refuses an RPE on a closed session, like every other edit', async () => {
+    // The guard sits above the whole write, and it has to stay there: an RPE
+    // added after the fact is exactly the input the next prescription's
+    // catch-up jump reads, so a late tap would move a weight already logged.
+    const {setId, workoutId} = await oneSet()
+    await tick(setId)
+    await finishSession(repo, workoutId)
+
+    expect(await adjustSet(repo, setId, {set: {rpe: 7}})).toBe('closed')
+
+    expect(repo.block(setId).peekProperty(rpeProp)).toBeUndefined()
   })
 
   it('takes the unit from the lift when the set does not carry one', async () => {
@@ -901,5 +949,103 @@ describe('a set moved far from its workout', () => {
       {scope: ChangeScope.BlockDefault, description: 'move the set deep'})
 
     expect(await adjustSet(repo, sets[1].id, {weight: 5})).toBe('closed')
+  })
+})
+
+describe('RPE, from the plan to the next prescription', () => {
+  /** A lift the plan gave a catch-up rule, at the top of its rep range. */
+  const deadlift = (over: Partial<PlannedLift> = {}): PlannedLift => lift('Deadlift', 2, {
+    definitionId: 'def-deadlift',
+    sets: [
+      {weight: 275, reps: 5, catchUpRpe: 7},
+      {weight: 275, reps: 5, catchUpRpe: 7},
+    ],
+    ...over,
+  })
+
+  const config = {
+    sets: 2, repMax: 5, freeform: false, increment: 10, catchUpIncrement: 20, catchUpRpe: 7,
+  }
+
+  it('stamps the ceiling only on the sets of a lift that has one', async () => {
+    // This property IS the control's on-switch. Stamped on every set it would
+    // ask for an RPE on bench too, where nothing reads the answer.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      deadlift(),
+      lift('Bench press', 2),
+    ]))
+    const [dl, bench] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+
+    const dlSets = await childrenOf(dl.id, SET_TYPE)
+    expect(dlSets).toHaveLength(2)
+    expect(dlSets.map(s => repo.block(s.id).peekProperty(catchUpRpeProp))).toEqual([7, 7])
+
+    const benchSets = await childrenOf(bench.id, SET_TYPE)
+    expect(benchSets).toHaveLength(2)
+    expect(benchSets.map(s => repo.block(s.id).peekProperty(catchUpRpeProp)))
+      .toEqual([undefined, undefined])
+  })
+
+  it('earns the catch-up jump once every set carries an RPE at or below the ceiling', async () => {
+    // The whole chain in one test: stamped ceiling → the control's write →
+    // the todo tick → finish → `buildHistory` → `nextWeight`. Every previous
+    // link was already tested in isolation and the feature was still inert,
+    // because nothing wrote an RPE at all.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([deadlift()]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    for (const set of sets) {
+      await adjustSet(repo, set.id, {set: {rpe: 7}})
+      await tick(set.id)
+    }
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    const history = buildHistory(
+      [repo.block(workoutId).peek()!],
+      await childrenOf(workoutId, EXERCISE_ENTRY_TYPE),
+      await childrenOf(entry.id, SET_TYPE),
+    )
+    const logged = history[0].exercises[0]
+
+    expect(logged.sets.map(s => s.rpe)).toEqual([7, 7])
+    expect(nextWeight(logged, config)).toEqual({weight: 295, progressed: true})
+  })
+
+  it('progresses at the normal increment when the RPE was never logged', async () => {
+    // The graceful degradation the plan documents, and the state every set is
+    // in until the control is touched: the same session, minus the RPE, tops
+    // out and still progresses — just by +10 rather than +20.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([deadlift()]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    for (const set of await childrenOf(entry.id, SET_TYPE)) await tick(set.id)
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    const history = buildHistory(
+      [repo.block(workoutId).peek()!],
+      await childrenOf(workoutId, EXERCISE_ENTRY_TYPE),
+      await childrenOf(entry.id, SET_TYPE),
+    )
+
+    expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true})
+  })
+
+  it('withholds the jump when only some of the sets were rated', async () => {
+    // Half-collected evidence is not evidence. A lifter who rates the first
+    // set and forgets the second must not be handed the bigger jump on the
+    // strength of the one they did rate.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([deadlift()]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await adjustSet(repo, sets[0].id, {set: {rpe: 7}})
+    for (const set of sets) await tick(set.id)
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    const history = buildHistory(
+      [repo.block(workoutId).peek()!],
+      await childrenOf(workoutId, EXERCISE_ENTRY_TYPE),
+      await childrenOf(entry.id, SET_TYPE),
+    )
+
+    expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true})
   })
 })

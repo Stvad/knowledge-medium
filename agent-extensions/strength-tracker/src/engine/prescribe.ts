@@ -87,6 +87,12 @@ const prescribeExercise = (
     videos: exercise.videos,
     altGroupKey: exercise.altGroupKey,
     altOptions: exercise.altOptions,
+    // Both, or neither: `incrementFor` only consults the ceiling when there
+    // is a bigger jump to award, so a plan that sets one without the other
+    // would otherwise have the UI collecting an RPE nothing ever reads.
+    ...(exercise.catchUpIncrement !== undefined && exercise.catchUpRpe !== undefined
+      ? {catchUpRpe: exercise.catchUpRpe}
+      : {}),
     lastTime,
   }
 
