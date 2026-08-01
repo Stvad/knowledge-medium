@@ -3,6 +3,7 @@ import {
 } from '@/extensions/core.js'
 import {
   blockContentDecoratorsFacet,
+  cachedContentDecorator,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
@@ -22,7 +23,7 @@ import { showError, showInfo, showProgress, showSuccess } from '@/utils/toast.js
 import { useRepo } from '@/context/repo.js'
 import type { Block } from '@/data/block.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
-import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
+import { aliasesProp, getBlockTypes, showPropertiesProp, typesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
@@ -48,9 +49,12 @@ import { Label } from '@/components/ui/label.js'
 import { Textarea } from '@/components/ui/textarea.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
-import { useHandle } from '@/hooks/block.js'
+import { useHandle, usePropertyValue } from '@/hooks/block.js'
 import type { BlockData, BlockRenderer, BlockRendererProps } from '@/types.js'
-import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import {
+  useEffect, useMemo, useState, useSyncExternalStore,
+  type ComponentType, type CSSProperties,
+} from 'react'
 
 // ---------------------------------------------------------------------------
 // constants
@@ -823,6 +827,71 @@ const readwiseDocumentContentDecorator: BlockContentDecoratorContribution = ctx 
   if (!ctx.types.includes(READWISE_DOCUMENT_TYPE)) return null
   if (ctx.blockContext?.isBreadcrumb) return null
   return decorateReadwiseDocument
+}
+
+// ---------------------------------------------------------------------------
+// reviewed-highlight decoration
+//
+// Marking a highlight reviewed is otherwise INVISIBLE — nothing else in the app
+// reads `readwise:reviewed`. That made the review pass read as broken (press,
+// nothing happens) and made the first visible feedback the *second* press, which
+// falls through and turns the highlight into a todo. So: dim a reviewed
+// highlight, and give it a check the user can click to un-review — the same
+// affordance the properties-panel checkbox provides, without going and finding it.
+
+const ReviewedHighlightDecorator = ({ block, Inner }: BlockRendererProps & { Inner: BlockRenderer }) => {
+  // Both reads are reactive: a highlight can gain the type (first sync) or flip
+  // `reviewed` (the latch, another device, the properties panel) while mounted.
+  const [types] = usePropertyValue(block, typesProp)
+  const [reviewed, setReviewed] = usePropertyValue(block, reviewedProp)
+
+  if (!types.includes(READWISE_HIGHLIGHT_TYPE) || !reviewed) return <Inner block={block}/>
+
+  return (
+    <div className="flex items-start gap-2">
+      <button
+        type="button"
+        aria-label="Mark highlight unreviewed"
+        title="Reviewed — click to undo"
+        data-block-interaction="ignore"
+        disabled={block.repo.isReadOnly}
+        className="mt-1 shrink-0 text-muted-foreground hover:text-foreground disabled:pointer-events-none"
+        onClick={event => {
+          event.stopPropagation()
+          void setReviewed(false)
+        }}
+      >
+        {/* Inlined rather than imported: an installed extension resolves imports
+            through the page importmap, which maps only `react`, `react-dom` and
+            `@/` — a bare `lucide-react` specifier would pass the test here and
+            404 on the user's device. */}
+        <svg
+          aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"
+          fill="none" stroke="currentColor" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round"
+        >
+          <path d="M3 8.5 6.5 12 13 4"/>
+        </svg>
+      </button>
+      <div className="min-w-0 flex-1 text-muted-foreground">
+        <Inner block={block}/>
+      </div>
+    </div>
+  )
+}
+
+const decorateReviewedHighlight = cachedContentDecorator(
+  ReviewedHighlightDecorator as ComponentType<{ block: Block, Inner: BlockRenderer }>,
+  'WithReadwiseReviewedHighlight',
+)
+
+/** Keyed on the TYPE, not on `reviewed`: the decorator is attached to every
+ *  highlight and the component decides per render, so flipping `reviewed` shows
+ *  up immediately instead of waiting for the decorator set to be re-resolved. */
+const readwiseReviewedContentDecorator: BlockContentDecoratorContribution = ctx => {
+  if (!ctx.types.includes(READWISE_HIGHLIGHT_TYPE)) return null
+  if (ctx.blockContext?.isBreadcrumb) return null
+  return decorateReviewedHighlight
 }
 
 // ---------------------------------------------------------------------------
@@ -1798,6 +1867,7 @@ export default [
   appMountsFacet.of({ id: 'readwise.setup-dialog', component: ReadwiseSetupDialog }, { source }),
   appEffectsFacet.of(autoSyncEffect, { source }),
   blockContentDecoratorsFacet.of(readwiseDocumentContentDecorator, { source }),
+  blockContentDecoratorsFacet.of(readwiseReviewedContentDecorator, { source }),
 
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
