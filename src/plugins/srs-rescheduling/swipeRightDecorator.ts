@@ -45,10 +45,10 @@ const decorateActionToArchiveSrsBlock = (
   // mirrors the old `await action.handler(...)` — an async wrap can't propagate
   // the inner sync `false` sentinel (`ActionHandlerResult` forbids
   // `Promise<false>`), so it resolves to `Promise<void>` (handled).
-  wrap: async (deps, trigger, next) => {
+  wrap: async (deps, trigger, next, dispatch) => {
     const block = (deps as BlockShortcutDependencies).block
     if (block && (await archiveSrsBlock(block))) return
-    await next(deps, trigger)
+    await next(deps, trigger, dispatch)
   },
 })
 
