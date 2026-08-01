@@ -155,6 +155,10 @@ export const startSessionAction: ActionConfig<typeof ActionContextTypes.NORMAL_M
       content: data.content,
       orderKey: data.orderKey,
       hasChildren: children.some(child => !child.deleted),
+      // Types live in the bag, so this is also how "is it an empty todo, or a
+      // property-schema definition, or any other record whose content is blank
+      // by design" gets asked — see `isExpendableLine`.
+      properties: data.properties,
     }))
   },
   defaultBinding: {keys: 'Control+Shift+l'},

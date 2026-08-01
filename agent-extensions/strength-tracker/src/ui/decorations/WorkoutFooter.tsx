@@ -34,6 +34,9 @@ const message = (outcome: FinishOutcome): string | null => {
     case 'misfiled':
       return 'A set or a lift is indented somewhere your history cannot read it — '
         + 'outdent it so every set sits directly under its lift, then finish.'
+    case 'edit-failed':
+      return 'A change to one of your sets did not save, so finishing now would '
+        + 'record the old number. Check the set, then finish.'
   }
 }
 

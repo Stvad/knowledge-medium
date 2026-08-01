@@ -22,7 +22,7 @@ import {configFor, loadPlanSource, type PlanSource} from './config'
 import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {buildHistory, buildLayoffs} from './history'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
-import {finishSession, type FinishOutcome} from './session'
+import {finishBlocker, finishSession, setEditsSettled, type FinishOutcome} from './session'
 
 export interface ProgramSnapshot {
   config: ProgramConfig
@@ -185,6 +185,11 @@ export const closeSession = async (
   workspaceId: string,
   workoutId: string,
 ): Promise<FinishOutcome> => {
+  // BEFORE the read, so what follows sees the edit's result. Finish is one tap
+  // after a blur, and the blur's `adjustSet` is a transaction of its own that
+  // nothing awaits — overtake it and the session closes around the number you
+  // had already replaced, while the edit refuses as `closed`.
+  if (await setEditsSettled() === 'failed') return 'edit-failed'
   const snapshot = await readProgram(repo, workspaceId)
   // The gap ends on the day the session was PERFORMED, not the day you got
   // round to tapping Finish. Train Friday night, finish Saturday morning, and
@@ -212,14 +217,27 @@ export const closeSession = async (
   const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
     ? layoffFromPending(pending)
     : undefined
-  // The page is created HERE, not at read time — a gap record needs a home,
-  // and this is the first moment one is actually being written.
-  const layoff = record
-    ? {
-      pageId: (await ensureStrengthHome(repo, workspaceId)).pageId,
-      record,
-      knownIds: snapshot.layoffs.map(entry => entry.id),
-    }
-    : undefined
-  return finishSession(repo, workoutId, layoff, workout?.properties[FIELD.date])
+  if (!record) return finishSession(repo, workoutId, undefined, workout?.properties[FIELD.date])
+
+  // A gap record needs a home, and the page is created HERE rather than at
+  // read time — but creating it is a WRITE, and every refusal below is
+  // documented as writing nothing. Bootstrapped before the checks, a Finish
+  // that then returns `gone` / `misfiled` / `nothing-logged` left a Strength
+  // Log page and a settings block behind it. So ask first, with the same
+  // questions Finish asks, and only build the home once they all pass.
+  //
+  // Advisory, not a guarantee: `finishSession` re-asks inside the transaction
+  // that writes, so a peer changing the tree in this window can still refuse
+  // after the home exists. That window is a few awaits wide instead of the
+  // whole of Finish, and it cannot be closed without putting page creation
+  // inside the finishing transaction — which `ensureStrengthHome` cannot be,
+  // running transactions of its own.
+  const blocker = await finishBlocker(repo, workoutId, workout?.properties[FIELD.date])
+  if (blocker) return blocker
+
+  return finishSession(repo, workoutId, {
+    pageId: (await ensureStrengthHome(repo, workspaceId)).pageId,
+    record,
+    knownIds: snapshot.layoffs.map(entry => entry.id),
+  }, workout?.properties[FIELD.date])
 }

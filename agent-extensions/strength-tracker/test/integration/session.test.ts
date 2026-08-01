@@ -1287,6 +1287,90 @@ describe('taking the place of the empty line you ran it on', () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     expect(await takePlaceOf(repo, workoutId, {parentId: PAGE_ID})).toBe('nothing-to-do')
   })
+
+  // The delete cascades, and `replaces` is a snapshot from before the dialog
+  // opened — which you can leave open for as long as you like, in another pane
+  // or on another device. Each of these is a way that line stops being scratch
+  // space in the window between the decision and the delete.
+  describe('leaves the line alone when it stopped being an empty one', () => {
+    const startOverAnEmptyLine = async (): Promise<string> => {
+      await emptyLine('blank', 'a5')
+      return startSession(
+        repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'last'},
+      )
+    }
+    const replace = (workoutId: string) =>
+      takePlaceOf(repo, workoutId, {parentId: PAGE_ID, replaces: {id: 'blank', orderKey: 'a5'}})
+
+    it('when someone typed into it', async () => {
+      const workoutId = await startOverAnEmptyLine()
+      await repo.tx(async tx => { await tx.update('blank', {content: 'note to self'}) },
+        {scope: ChangeScope.BlockDefault, description: 'typed into the line'})
+
+      expect(await replace(workoutId)).toBe('kept-the-line')
+
+      expect(await isBlockDeleted(repo, 'blank')).toBe(false)
+      expect(repo.block('blank').peek()!.content).toBe('note to self')
+    })
+
+    it('when something was indented under it', async () => {
+      // The worst case: `deleteBlock` cascades, so this would take the child
+      // with it — and the child is the thing that was never blank.
+      const workoutId = await startOverAnEmptyLine()
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'nested', workspaceId: WORKSPACE_ID, parentId: 'blank', orderKey: 'a1',
+          content: 'the thing I actually wrote',
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'indented under the line'})
+
+      expect(await replace(workoutId)).toBe('kept-the-line')
+
+      expect(await isBlockDeleted(repo, 'blank')).toBe(false)
+      expect(await isBlockDeleted(repo, 'nested')).toBe(false)
+    })
+
+    it('when it became a typed record while still looking blank', async () => {
+      // An empty todo renders as an empty line with a checkbox. Content alone
+      // cannot tell them apart, which is why the rule reads the property bag.
+      const workoutId = await startOverAnEmptyLine()
+      await repo.tx(async tx => {
+        await tx.setProperties('blank', {set: [propertyValue(todoStatusProp, 'open')]})
+      }, {scope: ChangeScope.BlockDefault, description: 'became a todo'})
+
+      expect(await replace(workoutId)).toBe('kept-the-line')
+      expect(await isBlockDeleted(repo, 'blank')).toBe(false)
+    })
+
+    it('when it moved somewhere else entirely', async () => {
+      const workoutId = await startOverAnEmptyLine()
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'other-page', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'b1',
+          content: 'Elsewhere',
+        })
+        await tx.move('blank', {parentId: 'other-page', orderKey: 'a1'})
+      }, {scope: ChangeScope.BlockDefault, description: 'dragged away'})
+
+      expect(await replace(workoutId)).toBe('kept-the-line')
+      expect(await isBlockDeleted(repo, 'blank')).toBe(false)
+    })
+
+    it('and leaves the session where it was stamped rather than half-moving it', async () => {
+      // A session one slot lower than you pointed at is a far smaller thing
+      // than a deleted block — but it must not land in the line's slot either,
+      // because the line is still using it.
+      const workoutId = await startOverAnEmptyLine()
+      const stamped = repo.block(workoutId).peek()!.orderKey
+      await repo.tx(async tx => { await tx.update('blank', {content: 'mine'}) },
+        {scope: ChangeScope.BlockDefault, description: 'typed into the line'})
+
+      await replace(workoutId)
+
+      expect(repo.block(workoutId).peek()!.orderKey).toBe(stamped)
+      expect(repo.block(workoutId).peek()!.parentId).toBe(PAGE_ID)
+    })
+  })
 })
 
 describe('what a stamped record declares', () => {

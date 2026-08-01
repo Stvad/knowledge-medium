@@ -21,7 +21,37 @@ export interface FocusRow {
   /** Whether it already holds anything. An empty block with children is a
    *  heading you are pointing at, not a slot you just opened. */
   hasChildren: boolean
+  /** Its property bag, INCLUDING `types` — which is a property here, so this
+   *  one field answers "does it carry a type" too. See `isExpendableLine`. */
+  properties: Readonly<Record<string, unknown>>
 }
+
+/** Whether this line is the blank one you just opened with Enter — the only
+ *  thing a session is allowed to take the place of, because taking a line's
+ *  place DELETES it, cascading over anything under it.
+ *
+ *  Blank text is not enough. A block's types live in its property bag, so a
+ *  blank line can be an empty todo, a property-schema definition, or any other
+ *  typed record whose content is empty by design — in this workspace 1003
+ *  blank blocks carry properties and 402 of those carry a type. Treating one
+ *  of those as scratch space would delete a record because you happened to run
+ *  a command while pointing at it.
+ *
+ *  So: carries nothing at all. A blank line with only view state on it
+ *  (`system:collapsed`) fails this too and merely gets the session as a child,
+ *  which is the harmless side of the trade.
+ */
+export const isExpendableLine = <
+  T extends Pick<FocusRow, 'content' | 'parentId' | 'hasChildren' | 'properties'>,
+>(
+  row: T,
+  // A guard, not a boolean: "expendable" always implies a parent to put the
+  // session under, and saying so here is what lets the caller use it.
+): row is T & {parentId: string} =>
+  row.content.trim() === ''
+  && row.parentId !== null
+  && !row.hasChildren
+  && Object.keys(row.properties).length === 0
 
 export interface Placement {
   parentId: string
@@ -48,7 +78,7 @@ export const placeOnPage = (pageId: string): Placement =>
 
 /** The shortcut: where the cursor is.
  *
- *  An EMPTY focused block is the slot you just opened with Enter, so the
+ *  An EXPENDABLE focused block is the slot you just opened with Enter, so the
  *  session takes its place — appended to its parent, which is where that
  *  empty block was sitting, and the block itself goes away rather than
  *  staying on as a blank wrapper. Anything else is a block you are pointing
@@ -59,7 +89,7 @@ export const placeOnPage = (pageId: string): Placement =>
  *  because you ran a command on it is not a trade anyone wants.
  */
 export const placeAtFocus = (focus: FocusRow): Placement =>
-  focus.content.trim() === '' && focus.parentId !== null && !focus.hasChildren
+  isExpendableLine(focus)
     ? {
       parentId: focus.parentId,
       // Stamped at the end and moved into the slot after; `last` is the

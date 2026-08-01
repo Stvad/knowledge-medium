@@ -28,6 +28,9 @@ import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import {workingWeight} from '../engine/progression'
 import type {LayoffRecord, SessionType} from '../engine/types'
+// The placement DECISION and the delete that carries it out share one
+// predicate on purpose — see `takePlaceOf`. A pure rule, no repo behind it.
+import {isExpendableLine} from '../ui/placement'
 import {dateToDay, dayToDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {escapeKeyPart} from './history'
@@ -168,11 +171,33 @@ export const takePlaceOf = async (
   repo: Repo,
   workoutId: string,
   placement: {parentId: string; replaces?: {id: string; orderKey: string}},
-): Promise<'took-its-place' | 'cleared-only' | 'nothing-to-do'> => {
+): Promise<'took-its-place' | 'cleared-only' | 'kept-the-line' | 'nothing-to-do'> => {
   const replaces = placement.replaces
   if (replaces === undefined || replaces.id === workoutId) return 'nothing-to-do'
   const landed = await repo.block(workoutId).load()
   return repo.tx(async tx => {
+    // Re-decided HERE, against the line as it is now, not as it was when the
+    // action started. `replaces` is a snapshot from before the dialog opened,
+    // and this delete cascades: type into that line from another pane, or
+    // indent something under it, or let a peer do either while the dialog sits
+    // open, and clearing it on a minutes-old read destroys work nobody asked
+    // us to touch. The SAME predicate the placement decision used, so the
+    // delete can never take something the decision would have spared.
+    const line = await tx.get(replaces.id)
+    const stillExpendable = line !== null && !line.deleted
+      && line.parentId === placement.parentId
+      && isExpendableLine({
+        content: line.content,
+        parentId: line.parentId,
+        properties: line.properties,
+        hasChildren: (await tx.childrenOf(replaces.id, undefined, {hidePropertyChildren: true}))
+          .some(child => !child.deleted),
+      })
+    // Left where `startSession` put it — appended under the same parent — and
+    // the line left alone. A session one slot lower than you pointed at is a
+    // far smaller thing than a deleted block.
+    if (!stillExpendable) return 'kept-the-line' as const
+
     // Only when the session actually landed where we asked. `startSession`
     // ADOPTS one already started for this training day, and that one can live
     // anywhere — dragging it out of wherever it is kept because you happened
@@ -448,7 +473,13 @@ const numberAt = (block: BlockData, field: string, fallback: number): number =>
  *  reader trusting the text while progression trusts the properties would
  *  train off the wrong numbers.
  */
-export const adjustSet = async (
+export interface SetAdjustment {
+  weight?: number
+  reps?: number
+  set?: {weight?: number; reps?: number; rpe?: number | null}
+}
+
+const writeSet = async (
   repo: Repo,
   setId: string,
   /** A relative nudge, or — for `set` — an outright value. `set` exists for
@@ -462,11 +493,7 @@ export const adjustSet = async (
    *  clears it, because a mis-tap has to be undoable — and an ABSENT rpe is
    *  load-bearing, being exactly what stops the catch-up jump firing on
    *  evidence that was never given. */
-  delta: {
-    weight?: number
-    reps?: number
-    set?: {weight?: number; reps?: number; rpe?: number | null}
-  },
+  delta: SetAdjustment,
 ): Promise<'written' | 'gone' | 'closed'> =>
   repo.tx(async tx => {
     const block = await tx.get(setId)
@@ -531,6 +558,51 @@ export const adjustSet = async (
     return 'written' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Adjust set'})
 
+/** Set edits that have been started and have not landed yet.
+ *
+ *  Finish is one tap away from a blur, and nothing awaits the blur's write:
+ *  the weight field commits on blur (mousedown), the button commits on click
+ *  (mouseup), and the two run as independent transactions. Lose that race and
+ *  the session closes around the OLD number while the edit then refuses as
+ *  `closed` — telling you to reopen a session the extension offers no way to
+ *  reopen, with the number you typed nowhere in the record.
+ *
+ *  A module-level set rather than plumbing through React because the two ends
+ *  are different components with no relationship: `SetLine` writes, and
+ *  `WorkoutFooter` — anywhere in the tree — is what must not overtake it.
+ */
+const inFlight = new Set<Promise<unknown>>()
+
+/** Let the set edits that were ALREADY running finish, and say whether any of
+ *  them failed.
+ *
+ *  One drain of what is in flight now, not a loop until quiet: writes started
+ *  after this was called are not part of the gesture that called it, and
+ *  waiting for those would let a stuck field block Finish indefinitely.
+ */
+export const setEditsSettled = async (): Promise<'settled' | 'failed'> => {
+  const running = [...inFlight]
+  if (running.length === 0) return 'settled'
+  const results = await Promise.allSettled(running)
+  return results.some(result => result.status === 'rejected') ? 'failed' : 'settled'
+}
+
+/** @see writeSet — this is that, with the write registered so Finish can wait
+ *  for it. The caller still gets the real promise, refusals and all. */
+export const adjustSet = (
+  repo: Repo,
+  setId: string,
+  delta: SetAdjustment,
+): Promise<'written' | 'gone' | 'closed'> => {
+  const write = writeSet(repo, setId, delta)
+  inFlight.add(write)
+  // Both arms, so a rejected write is counted as handled here and its failure
+  // still reaches `setEditsSettled` through `allSettled` — and its own caller.
+  const forget = () => inFlight.delete(write)
+  write.then(forget, forget)
+  return write
+}
+
 // ──── closing ────
 
 export type FinishOutcome =
@@ -547,6 +619,9 @@ export type FinishOutcome =
   /** The workout's `strength:date` is missing or unreadable, so nothing can
    *  file it on a training day. Writes nothing. */
   | 'undated'
+  /** A set edit was still in flight and did not land, so closing now would
+   *  record a number you had already replaced. Writes nothing. */
+  | 'edit-failed'
 
 /** Anything typed as a set or a lift that is NOT in the one position history
  *  can read it from.
@@ -616,12 +691,76 @@ const setRecord = (block: BlockData): {weight: number; reps: number; side?: 'L' 
     : {}),
 })
 
+/** Every reason Finish would refuse, asked in the order it asks them.
+ *
+ *  Split out so the same questions can be asked WITHOUT writing — see
+ *  `finishBlocker`. One implementation, because a second one drifts and the
+ *  drift shows up as a caller preparing for a finish that then refuses.
+ *
+ *  Hands back the tree it read when there is nothing in the way, so the
+ *  transaction that goes on to write does not walk it twice.
+ */
+type FinishCheck =
+  | {blocked: FinishOutcome}
+  | {blocked: null; workout: BlockData; tree: {entry: BlockData; sets: BlockData[]}[]}
+
+const checkFinishable = async (
+  tx: Tx,
+  workoutId: string,
+  expectedDate?: unknown,
+): Promise<FinishCheck> => {
+  // Read here rather than trusted from the caller: another client can close
+  // this workout between the tap and this transaction opening.
+  const workout = await tx.get(workoutId)
+  if (!workout || workout.deleted) return {blocked: 'gone'}
+  if (workout.properties[FIELD.status] !== 'in-progress') return {blocked: 'gone'}
+
+  // Checked before anything is written: closing around a set history cannot
+  // read would report the session recorded while progression never sees the
+  // work.
+  if (expectedDate !== undefined && workout.properties[FIELD.date] !== expectedDate) {
+    return {blocked: 'undated'}
+  }
+
+  if ((await misfiled(tx, workoutId)).length > 0) return {blocked: 'misfiled'}
+
+  const tree = await setsOf(tx, workoutId)
+  // Counted before anything is written, so the refusal below leaves the
+  // session exactly as it was rather than half-closed.
+  const logged = tree.reduce((n, {sets}) => n + sets.filter(isDone).length, 0)
+  if (logged === 0) return {blocked: 'nothing-logged'}
+
+  return {blocked: null, workout, tree}
+}
+
+/** Would Finish refuse, and why — without writing anything.
+ *
+ *  For the one caller that has to WRITE something before it can finish (the
+ *  layoff record needs a page to live on, and that page may not exist yet).
+ *  Bootstrapping it eagerly left a Strength Log page behind every time Finish
+ *  went on to refuse, on paths documented as writing nothing.
+ *
+ *  Advisory, never authoritative: `finishSession` asks the same questions
+ *  again inside its own transaction, which is the answer that counts.
+ */
+export const finishBlocker = async (
+  repo: Repo,
+  workoutId: string,
+  expectedDate?: unknown,
+): Promise<FinishOutcome | null> =>
+  // A transaction that writes nothing costs nothing — `repo.tx` pins no
+  // workspace and records no undo entry for one — and it is the only way to
+  // reach `misfiled`/`setsOf`, which read through `tx.childrenOf`.
+  repo.tx(
+    async tx => (await checkFinishable(tx, workoutId, expectedDate)).blocked,
+    {scope: ChangeScope.BlockDefault, description: 'Check whether the session can be finished'},
+  )
+
 /** Close the session.
  *
- *  Nothing is deleted. A set you did not do stops being a TODO — it drops the
- *  `todo` type, so it leaves every open-task query — but stays a `strength-set`
- *  block recording what was prescribed and not performed. That is the truthful
- *  record, and re-tagging it `todo` is the whole of the undo.
+ *  Nothing is deleted and nothing is untagged. A set you did not do stays a
+ *  `strength-set` and stays a todo, recording what was prescribed and not
+ *  performed; done-ness is the `status` property, which is what history reads.
  */
 export const finishSession = async (
   repo: Repo,
@@ -652,26 +791,12 @@ export const finishSession = async (
 ): Promise<FinishOutcome> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
-    // Checked here rather than trusted from the caller: another client can
-    // close this workout between the tap and this transaction opening.
-    const workout = await tx.get(workoutId)
-    if (!workout || workout.deleted) return 'gone' as const
-    if (workout.properties[FIELD.status] !== 'in-progress') return 'gone' as const
-
-    // Checked before anything is written: closing around a set history cannot
-    // read would report the session recorded while progression never sees the
-    // work, and would strip the todo that is your only sign it is there.
-    if (expectedDate !== undefined && workout.properties[FIELD.date] !== expectedDate) {
-      return 'undated' as const
-    }
-
-    if ((await misfiled(tx, workoutId)).length > 0) return 'misfiled' as const
-
-    const tree = await setsOf(tx, workoutId)
-    // Counted before anything is written, so the refusal below leaves the
-    // session exactly as it was rather than half-closed.
-    const logged = tree.reduce((n, {sets}) => n + sets.filter(isDone).length, 0)
-    if (logged === 0) return 'nothing-logged' as const
+    // Asked again HERE, inside the transaction that writes — a caller's read
+    // is several awaits old and a peer can close, misfile or untick in that
+    // window. This is the answer that counts.
+    const check = await checkFinishable(tx, workoutId, expectedDate)
+    if (check.blocked !== null) return check.blocked
+    const {workout, tree} = check
 
     // Finish is the moment we know the work happened by. The native todo
     // checkbox writes only `status`, so without this nothing stamps

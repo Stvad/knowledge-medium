@@ -19,13 +19,13 @@ import {deleteBlock} from '@/data/mutators'
 import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
-import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension'
 
 import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
-import {finishSession, startSession} from '../../src/km/session'
+import {findStrengthLogPage} from '../../src/km/page'
+import {adjustSet, finishSession, startSession} from '../../src/km/session'
 import {closeSession, ensureStrengthHome, mostRecentlyStarted, readProgram, standingSession} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -61,10 +61,6 @@ beforeEach(async () => {
       ...STRENGTH_TYPES.map(type => typeSeedsFacet.of(type, {source: 'test'})),
       definitionSeedsFacet.of(todoStatusProp, {source: 'test'}),
       typeSeedsFacet.of(todoType, {source: 'test'}),
-      // The real daily-note types, because `sessionParent` calls the real
-      // `getOrCreateDailyNote` — a fake would accept any string and so could
-      // never have caught the ISO-format bug this pins.
-      dailyNotesDataExtension,
     ],
   })
   repo = created.repo
@@ -313,6 +309,10 @@ describe('the day a layoff is measured to', () => {
 
     const workoutId = await startAndLog({day: performedOn, session: 'B', lifts: [lift('Row')]})
     expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
+    // The home IS bootstrapped when the finish lands — the record needs
+    // somewhere to live. The test below is that it is not bootstrapped when
+    // the finish refuses, which only means anything if this holds.
+    expect(await findStrengthLogPage(repo, WORKSPACE_ID)).not.toBeNull()
 
     // Queried by type, not under the test's page: `closeSession` resolves the
     // real Strength Log page itself, which is where the record lands.
@@ -321,6 +321,58 @@ describe('the day a layoff is measured to', () => {
     expect(layoffs).toHaveLength(1)
     expect(layoffs[0].to).toBe(performedOn)
     expect(layoffs[0].days).toBe(35)
+  })
+
+  it('bootstraps no page at all when the finish it was for refuses', async () => {
+    // A gap record needs a home, and creating that home is a WRITE — while
+    // every Finish refusal is documented as writing nothing. Built eagerly, a
+    // refusal left a real synced Strength Log page and settings block behind
+    // for a session that was never recorded, on the one path that is reached
+    // once per comeback and so is exactly where you notice it least.
+    const oldId = await startAndLog({day: dayBefore(60)})
+    expect(await finishSession(repo, oldId)).toBe('done')
+    expect(await findStrengthLogPage(repo, WORKSPACE_ID)).toBeNull()
+
+    // Started, nothing ticked: a pending gap, and a finish that will refuse.
+    const workoutId = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan({day: dayBefore(25), session: 'B', lifts: [lift('Row')]}))
+
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('nothing-logged')
+
+    expect(await findStrengthLogPage(repo, WORKSPACE_ID)).toBeNull()
+  })
+})
+
+describe('an edit still in flight when Finish is tapped', () => {
+  /** A repo whose writes reject, standing in for the ordinary ways a write
+   *  fails (offline, read-only, a rejected transaction). `adjustSet` reaches
+   *  the repo through `repo.tx` alone, so this is the whole surface. */
+  const writesFail = {tx: async () => { await Promise.resolve(); throw new Error('the write failed') }}
+
+  it('refuses rather than closing around the number that never landed', async () => {
+    // The blur commits the weight field, the click commits the session, and
+    // the two are independent transactions with nothing sequencing them. Lose
+    // that race and the record keeps the OLD number while the edit refuses as
+    // `closed` — pointing you at a reopen the extension does not offer.
+    const workoutId = await startAndLog()
+
+    const write = adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+    write.catch(() => {})
+    // Called with the write still in flight — no await between them, which is
+    // exactly the gap between mousedown and mouseup on the Finish button.
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('edit-failed')
+
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('closes normally once the edits that were in flight have landed', async () => {
+    const workoutId = await startAndLog()
+    const write = adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+    await write.catch(() => {})
+
+    // A write that already failed is not this gesture's business: you were
+    // told at the time, and the session is still yours to close.
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
   })
 })
 
