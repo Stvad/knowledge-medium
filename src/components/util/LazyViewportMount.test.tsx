@@ -71,12 +71,9 @@ afterEach(() => {
 // without these the producer and the consumer could drift apart silently and
 // every suite would stay green.
 //
-// Still unpinned, for want of a component harness that renders a real block
-// tree: that `BlockChildren` PASSES its context scope down to each
-// `LazyBlockComponent`. Dropping that prop leaves every suite green. The
-// degradation is the safe direction — an unlabelled slot is ignored, so a move
-// declines to the model handler exactly as it did before slots existed — but it
-// silently turns the feature off.
+// The other end of it — that `BlockChildren` SUPPLIES the scope — is pinned in
+// `components/test/blockChildrenSlots.component.test.tsx`, against a real block
+// tree, since neither half means anything alone.
 describe('LazyViewportMount — the slot a deferred row reserves', () => {
   it('marks the placeholder with the block and the scope the row will have', () => {
     vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
