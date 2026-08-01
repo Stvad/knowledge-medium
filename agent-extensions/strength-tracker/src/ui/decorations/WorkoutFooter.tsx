@@ -120,10 +120,19 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
               }
               setBusy(true)
               try {
-                const outcome = await discardSession(block.repo, block.id)
-                setProblem(outcome === 'discarded'
-                  ? null
-                  : 'Already closed elsewhere — nothing to discard.')
+                // The count goes IN, so the delete applies to the tree that
+                // was confirmed. Between the count and here sits a dialog you
+                // can leave open indefinitely — and, when nothing was logged,
+                // no dialog but still several awaits. Either way a peer can
+                // tick a set in the gap, and the reading that skips the
+                // warning entirely is exactly "nothing is logged".
+                const outcome = await discardSession(block.repo, block.id, logged)
+                setProblem(
+                  outcome === 'discarded' ? null
+                    : outcome === 'changed'
+                      ? 'A set was logged while that was open — press Discard again to see what it would delete.'
+                      : 'Already closed elsewhere — nothing to discard.',
+                )
               } catch (error: unknown) {
                 console.error('[strength] could not discard the session', error)
                 setProblem('Could not discard — the change was not saved.')

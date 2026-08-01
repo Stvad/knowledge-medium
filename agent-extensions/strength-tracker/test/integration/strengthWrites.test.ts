@@ -29,7 +29,8 @@ import {finishSession, startSession} from '../../src/km/session'
 import {closeSession, ensureStrengthHome, sessionParent} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
-import {discardSession, readAltChoices, writeAltChoice, writeLayoff, writeLayoffInTx} from '../../src/km/store'
+import {derivedBlockId} from '@/data/typedRecords'
+import {choiceIdentity, discardSession, readAltChoices, writeAltChoice, writeLayoff, writeLayoffInTx} from '../../src/km/store'
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
@@ -218,6 +219,72 @@ describe('or-group choices', () => {
     // the map above reads correctly even if every call appended a new block,
     // which is exactly the "grows a log" this claims not to do.
     expect(await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)).toHaveLength(2)
+  })
+
+  it('makes a later pick stick even when the group already has duplicate blocks', async () => {
+    // Two offline clients answering the same group for the first time each
+    // saw no child and each minted one. `readAltChoices` folds in order and
+    // keeps the LAST, while the writer used to update only the FIRST match —
+    // so the duplicate kept overriding every later pick, permanently, with
+    // nothing on screen to explain why the choice would not take.
+    const DUPES = ['choice-a', 'choice-b'] as const
+    await repo.tx(async tx => {
+      for (const [index, id] of DUPES.entries()) {
+        await tx.create({
+          id, workspaceId: WORKSPACE_ID, parentId: SETTINGS_ID, orderKey: `a${index}`,
+          content: 'Tracking: Face pulls',
+        })
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'two blocks for one group'})
+    // A second transaction: inside the creating one the cache has no row yet,
+    // so the property bag to merge into cannot be read.
+    await repo.tx(async tx => {
+      for (const id of DUPES) {
+        await tx.update(id, {properties: {
+          ...repo.block(id).peek()!.properties,
+          types: [ALT_CHOICE_TYPE],
+          'strength:group': 'group-1',
+          'strength:option': 'opt-a',
+        }})
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'type the duplicates'})
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({'group-1': 'opt-a'})
+
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-b', 'Band pull-aparts')
+
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({'group-1': 'opt-b'})
+    // Both were rewritten, so which one the fold lands on stops mattering.
+    expect(repo.block('choice-a').peek()?.properties['strength:option']).toBe('opt-b')
+    expect(repo.block('choice-b').peek()?.properties['strength:option']).toBe('opt-b')
+  })
+
+  it('mints the group\'s block AT its derived seat', async () => {
+    // The seat is what makes two offline first-picks converge: both clients
+    // compute the same id, so after sync there is one row rather than two.
+    // Asserted on the id directly, because a random-id mint behaves
+    // identically on one device and only forks once a peer is involved.
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-a', 'Face pulls')
+
+    const [block] = await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)
+    expect(block.id).toBe(derivedBlockId(choiceIdentity(SETTINGS_ID, 'group-1')))
+  })
+
+  it('mints one seat per group, so two first picks converge instead of forking', async () => {
+    // The block id is derived from the settings block and the group, so a
+    // client that mints while offline lands on the same row as its peer.
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-a', 'Face pulls')
+    const [first] = await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)
+
+    await repo.tx(async tx => { await tx.run(deleteBlock, {id: first.id}) },
+      {scope: ChangeScope.BlockDefault, description: 'peer deleted it'})
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-b', 'Band pull-aparts')
+
+    // A tombstone on the seat is the one case that cannot reuse it. It mints
+    // beside rather than throwing, and the scan adopts that mint next time.
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({'group-1': 'opt-b'})
+    await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-c', 'Face pulls')
+    expect(await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)).toHaveLength(1)
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({'group-1': 'opt-c'})
   })
 })
 

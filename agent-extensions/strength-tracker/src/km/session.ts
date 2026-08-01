@@ -31,6 +31,7 @@ import {dateToDay, dayToDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {escapeKeyPart} from './history'
 import {writeLayoffInTx} from './store'
+import {countLoggedSets} from './subtree'
 import {matchEntries, namesThisLift, type PlannedLift, type PlannedSet, type SessionPlan} from './sessionPlan'
 import {
   catchUpRpeProp,
@@ -153,27 +154,14 @@ const ancestorsOf = async (tx: Tx, block: BlockData): Promise<BlockData[]> => {
   return chain
 }
 
-/** Done sets anywhere under a workout, however they have been rearranged.
+/** What Discard is about to destroy, read before the confirmation.
  *
- *  Deliberately NOT the canonical-shape walk the finish uses: this answers
- *  "would discarding destroy logged work", and a set indented under a note is
- *  still work you did — it just cannot be recorded where it sits. Counting
- *  only the canonical positions would skip the warning for exactly the tree
- *  Finish refuses, and delete it unannounced. */
-export const loggedSetCount = async (repo: Repo, workoutId: string): Promise<number> => {
-  const seen = new Set<string>([workoutId])
-  let count = 0
-  const walk = async (parentId: string): Promise<void> => {
-    for (const child of (await repo.block(parentId).children.load()) ?? []) {
-      if (child.deleted || seen.has(child.id)) continue
-      seen.add(child.id)
-      if (hasBlockType(child, SET_TYPE) && child.properties[FIELD.todoStatus] === 'done') count += 1
-      await walk(child.id)
-    }
-  }
-  await walk(workoutId)
-  return count
-}
+ *  The same walk `discardSession` re-runs inside its transaction — see
+ *  `countLoggedSets`. Two implementations of "is there logged work here?" is
+ *  how the warning ends up describing a tree the delete no longer applies to.
+ */
+export const loggedSetCount = async (repo: Repo, workoutId: string): Promise<number> =>
+  countLoggedSets(async id => (await repo.block(id).children.load()) ?? [], workoutId)
 
 /** The `taken` fallback, in the shape `getOrCreateTypedChild`'s contract
  *  prescribes: look for the record you mean inside this same transaction,
@@ -532,24 +520,28 @@ const misfiled = async (tx: Tx, workoutId: string): Promise<BlockData[]> => {
   // guard exists to stop. A visited set is what keeps hand-edited parentage
   // from looping, and it does that without deciding how deep is too deep.
   const seen = new Set<string>([workoutId])
-  // Depth is counted from the WORKOUT: its children are lifts, their children
-  // are sets. Those two positions are the whole canonical shape; a typed block
-  // anywhere else is one neither reader can reach.
-  const walk = async (parentId: string, depth: number): Promise<void> => {
+  // The canonical shape stated as the rule the readers use, not as a DEPTH.
+  // An entry is a direct child of the workout; a set is a direct child of one
+  // of those entries. Depth was a proxy for that, and it was the wrong one:
+  // `workout → note → set` puts a set at depth 1 with an untyped block in
+  // between, so the guard called it filed while `setsOf` — which descends
+  // only into typed entries — could not reach it. Finish then closed around a
+  // set that never entered history and kept its checkbox.
+  const walk = async (parentId: string, parentIsEntry: boolean): Promise<void> => {
     for (const child of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
       if (seen.has(child.id)) continue
       seen.add(child.id)
       if (child.deleted) continue
-      const entryHere = depth === 0 && hasBlockType(child, EXERCISE_ENTRY_TYPE)
-      const setHere = depth === 1 && hasBlockType(child, SET_TYPE)
+      const entryHere = parentId === workoutId && hasBlockType(child, EXERCISE_ENTRY_TYPE)
+      const setHere = parentIsEntry && hasBlockType(child, SET_TYPE)
       if (!entryHere && !setHere
         && (hasBlockType(child, SET_TYPE) || hasBlockType(child, EXERCISE_ENTRY_TYPE))) {
         found.push(child)
       }
-      await walk(child.id, depth + 1)
+      await walk(child.id, entryHere)
     }
   }
-  await walk(workoutId, 0)
+  await walk(workoutId, false)
   return found
 }
 

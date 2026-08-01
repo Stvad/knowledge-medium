@@ -24,6 +24,7 @@ import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
 import {adjustSet, finishSession, loggedSetCount, startSession} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
+import {discardSession} from '../../src/km/store'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {
   STRENGTH_PROPS,
@@ -1047,5 +1048,137 @@ describe('RPE, from the plan to the next prescription', () => {
     )
 
     expect(nextWeight(history[0].exercises[0], config)).toEqual({weight: 285, progressed: true})
+  })
+})
+
+describe('a set filed under a note that sits directly under the workout', () => {
+  it('is refused, not silently dropped from the record', async () => {
+    // `workout → note → set` puts the set two levels down, which a depth-based
+    // guard read as canonical. `setsOf` descends only into typed entries, so
+    // it never saw this set: Finish closed the session, the set never entered
+    // history, and its checkbox stayed live with nothing left to tick it into.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [canonical] = await childrenOf(entry.id, SET_TYPE)
+    await tick(canonical.id)
+
+    const strayId = 'set-under-a-note'
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'note-under-workout', workspaceId: WORKSPACE_ID, parentId: workoutId,
+        orderKey: 'zz', content: 'felt good tonight',
+      })
+      await tx.create({
+        id: strayId, workspaceId: WORKSPACE_ID, parentId: 'note-under-workout',
+        orderKey: 'a0', content: '225lb × 5',
+      })
+      await tx.setProperties(strayId, {set: [propertyValue(todoStatusProp, 'done')]})
+    }, {scope: ChangeScope.BlockDefault, description: 'a set under a note'})
+    await repo.tx(async tx => {
+      await tx.update(strayId, {properties: {
+        ...repo.block(strayId).peek()!.properties,
+        types: [SET_TYPE, TODO_TYPE],
+      }})
+    }, {scope: ChangeScope.BlockDefault, description: 'type the stray set'})
+
+    expect(await finishSession(repo, workoutId)).toBe('misfiled')
+
+    // Refused means refused: nothing moved, so the session is still yours to
+    // fix rather than a closed record with a hole in it.
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+    expect(repo.block(canonical.id).peekProperty(todoStatusProp)).toBe('done')
+  })
+
+  it('refuses a LIFT indented under a note too, not only a set', async () => {
+    // The entry half of the same rule. `setsOf` reads entries as direct
+    // children of the workout, so a lift one level further down takes its
+    // whole set tree out of history — and the guard has to notice the lift
+    // itself, since nothing under it looks wrong relative to it.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Bench press', 1),
+      lift('Barbell row', 1),
+    ]))
+    const [bench, row] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [benchSet] = await childrenOf(bench.id, SET_TYPE)
+    await tick(benchSet.id)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'note-holding-a-lift', workspaceId: WORKSPACE_ID, parentId: workoutId,
+        orderKey: 'zz', content: 'accessories',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a note under the workout'})
+    await repo.tx(async tx => {
+      await tx.move(row.id, {parentId: 'note-holding-a-lift', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'indent the lift under it'})
+    // The move is the whole premise, and `tx.update({parentId})` is a silent
+    // no-op — asserted so this cannot pass by never having moved anything.
+    expect(repo.block(row.id).peek()?.parentId).toBe('note-holding-a-lift')
+
+    expect(await finishSession(repo, workoutId)).toBe('misfiled')
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('still accepts the ordinary shape, so the rule did not just get stricter', async () => {
+    // The other half of the mutation: a guard that refuses everything passes
+    // the test above for the wrong reason.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    for (const set of await childrenOf(entry.id, SET_TYPE)) await tick(set.id)
+
+    expect(await finishSession(repo, workoutId)).toBe('done')
+  })
+})
+
+describe('discarding what was actually confirmed', () => {
+  const started = async (): Promise<{workoutId: string; setId: string}> => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+    return {workoutId, setId: set.id}
+  }
+
+  it('refuses when work was logged after the count the caller confirmed', async () => {
+    // The caller counted zero — which is the reading that shows NO dialog —
+    // and a peer ticked a set before the delete opened. Deleting here is
+    // destroying logged work with nothing having asked.
+    const {workoutId, setId} = await started()
+    await tick(setId)
+
+    expect(await discardSession(repo, workoutId, 0)).toBe('changed')
+
+    expect(await isBlockDeleted(repo, workoutId)).toBe(false)
+    expect(repo.block(setId).peekProperty(todoStatusProp)).toBe('done')
+  })
+
+  it('goes ahead when the tree still matches what was confirmed', async () => {
+    const {workoutId, setId} = await started()
+    await tick(setId)
+
+    expect(await discardSession(repo, workoutId, 1)).toBe('discarded')
+
+    expect(await isBlockDeleted(repo, workoutId)).toBe(true)
+  })
+
+  it('counts logged work wherever it sits, including where Finish refuses it', async () => {
+    // The in-transaction count has to agree with the one that decided whether
+    // to warn — a canonical-positions-only recount would report zero for the
+    // very tree the warning was shown for, and delete it as unchanged.
+    const {workoutId, setId} = await started()
+    await repo.tx(async tx => {
+      await tx.move(setId, {parentId: workoutId, orderKey: 'zz'})
+    }, {scope: ChangeScope.BlockDefault, description: 'outdent a set to the workout'})
+    expect(repo.block(setId).peek()?.parentId).toBe(workoutId)
+    await tick(setId)
+
+    expect(await discardSession(repo, workoutId, 0)).toBe('changed')
+    expect(await discardSession(repo, workoutId, 1)).toBe('discarded')
+  })
+
+  it('deletes whatever is there when no count is offered', async () => {
+    const {workoutId, setId} = await started()
+    await tick(setId)
+
+    expect(await discardSession(repo, workoutId)).toBe('discarded')
   })
 })
