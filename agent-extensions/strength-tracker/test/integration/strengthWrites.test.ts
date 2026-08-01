@@ -20,7 +20,7 @@ import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
-import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
+import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
@@ -615,6 +615,38 @@ describe('the day a layoff is measured to', () => {
   })
 })
 
+describe('a set control still pointing at a block that left the strength world', () => {
+  it('refuses the adjustment instead of rewriting an untyped block', async () => {
+    // The fourth reader to need this, and the same rule as `isStandingToday`,
+    // `checkFinishable` and `discardSession`: `strength:weight`/`strength:reps`
+    // survive an untag, so a ± control rendered before another pane removed
+    // `strength-set` went on rewriting the numbers AND restamping a
+    // `135lb × 8` content line over whatever the block says now.
+    const workoutId = await startAndLog()
+    const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await liveChildren(entry.id, SET_TYPE)
+    await repo.tx(tx => tx.update(set.id, {content: 'a note now, not a set'}),
+      {scope: ChangeScope.BlockDefault, description: 'repurpose the block'})
+    await repo.removeType(set.id, SET_TYPE)
+
+    expect(await adjustSet(repo, set.id, {weightSteps: 1})).toBe('gone')
+
+    expect(repo.block(set.id).peek()?.content).toBe('a note now, not a set')
+    expect(repo.block(set.id).peek()?.properties[FIELD.weight]).toBe(135)
+  })
+
+  it('still adjusts a set that is genuinely still a set', async () => {
+    // The other half of the mutation: a guard that refuses everything passes
+    // the test above for the wrong reason.
+    const workoutId = await startAndLog()
+    const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await liveChildren(entry.id, SET_TYPE)
+
+    expect(await adjustSet(repo, set.id, {weightSteps: 1})).toBe('written')
+    expect(repo.block(set.id).peek()?.properties[FIELD.weight]).toBe(140)
+  })
+})
+
 describe('an edit still in flight when Finish is tapped', () => {
   /** A repo whose writes reject, standing in for the ordinary ways a write
    *  fails (offline, read-only, a rejected transaction). `adjustSet` reaches
@@ -712,6 +744,41 @@ describe('an edit still in flight when Finish is tapped', () => {
     await adjustSet(writesFail as unknown as Repo, 'never-existed', {weight: 5}).catch(() => {})
 
     expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
+  })
+
+  it('takes the warning back when a retry of the same set lands', async () => {
+    // The marker was write-once: correct the set, watch it save, and Finish
+    // still refused with "a change did not save" — pointing you at a value
+    // that is already stored. Nothing was wrong except the record of it.
+    const workoutId = await startAndLog()
+    const setId = await aSetOf(workoutId)
+    await adjustSet(writesFail as unknown as Repo, setId, {set: {weight: 145}}).catch(() => {})
+
+    // The retry, against the real repo this time.
+    expect(await adjustSet(repo, setId, {set: {weight: 145}})).toBe('written')
+
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
+  })
+
+  it('does not wait on an edit belonging to another workout', async () => {
+    // Two live sessions is supported, and the drain snapshotted every edit in
+    // the module — so a slow write in A held Finish on B, which has no pending
+    // edit of its own. A's write is held open for the duration and released at
+    // the end, rather than left never-settling: an unsettled promise outlives
+    // the test in module state, and the next test to drain would wait on it.
+    const mine = await startAndLog()
+    const theirs = await startAndLog({day: '2026-07-25', session: 'B', lifts: [lift('Row')]})
+    let release = (): void => {}
+    const held = new Promise<never>((_, reject) => { release = () => reject(new Error('let go')) })
+    const slow = {tx: () => held}
+    const pending = adjustSet(slow as unknown as Repo, await aSetOf(theirs), {set: {weight: 145}})
+    pending.catch(() => {})
+
+    // Returns while A's write is still running. Before the split it could not.
+    expect(await closeSession(repo, WORKSPACE_ID, mine)).toBe('done')
+
+    release()
+    await pending.catch(() => {})
   })
 
   it('does not carry a reported failure into an unrelated later Finish', async () => {

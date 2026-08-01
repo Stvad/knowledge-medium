@@ -102,7 +102,7 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
     // `lastTimeShape` owns the sets-not-rows rule AND the "did every set
     // actually match?" one — see its docblock. Both are decisions rather
     // than formatting, which is why they are not inline here.
-    const shape = lastTimeShape(previous.entry.sets, previous.entry.prescribedSets)
+    const shape = lastTimeShape(previous.entry.sets)
     parts.push(`last ${day}: ${shape} @ ${previousWeight}${unit ?? ''}`)
   }
 

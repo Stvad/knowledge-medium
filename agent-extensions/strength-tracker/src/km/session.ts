@@ -473,6 +473,13 @@ const writeSet = async (
   repo.tx(async tx => {
     const block = await tx.get(setId)
     if (!block || block.deleted) return 'gone' as const
+    // The TYPE, not just liveness — the fourth reader to need this and the
+    // same rule as `isStandingToday` / `checkFinishable` / `discardSession`.
+    // `strength:weight` and `strength:reps` survive an untag, so a control
+    // rendered from a block that has since left the strength world would go on
+    // rewriting its numbers AND its content line, restamping a `135lb × 8`
+    // over whatever it says now.
+    if (!hasBlockType(block, SET_TYPE)) return 'gone' as const
 
     // Walked, not hopped: a set tabbed under its neighbour or outdented up to
     // the workout is an ordinary outline gesture, and a fixed set→entry→
@@ -539,8 +546,16 @@ const writeSet = async (
  *  nothing here can reopen.
  *
  *  Module-level rather than threaded through React: `SetLine` writes and
- *  `WorkoutFooter` (anywhere in the tree) must not overtake it. */
-const inFlight = new Set<Promise<unknown>>()
+ *  `WorkoutFooter` (anywhere in the tree) must not overtake it.
+ *
+ *  Keyed by SET, so the drain can be narrowed to one session's edits. Two
+ *  in-progress workouts is a supported state, and draining the module-wide set
+ *  made finishing B wait on a slow edit in A — a session with no pending edit
+ *  of its own, blocked on one it does not own. The owning workout is resolved
+ *  at drain time rather than recorded here for the same reason `failedEdits`
+ *  does it: a write does not know its workout, and the walk from the set is
+ *  what answers that. */
+const inFlight = new Map<string, Set<Promise<unknown>>>()
 
 /** A set edit that rejected and has not been superseded.
  *
@@ -601,12 +616,28 @@ export const setEditsSettled = (
   if (existing !== undefined) return existing
 
   const drain = (async () => {
+    // Which of the running edits are THIS session's, decided before waiting on
+    // any of them — the set is still in the tree while its write runs, so the
+    // walk answers now, and resolving it afterwards would mean having already
+    // waited on the edits we are trying to exclude.
+    const owners = await Promise.all(
+      [...inFlight.keys()].map(async setId => ({setId, owner: await workoutOf(repo, setId)})),
+    )
+    // A set that resolves to no workout is skipped, matching what the verdict
+    // below does with an unattributable FAILURE: neither can be shown to be
+    // this session's, and waiting on one re-creates exactly the coupling this
+    // split removes — an edit belonging to nothing would block every session's
+    // Finish for as long as it ran.
+    const waiting = owners
+      .filter(({owner}) => owner === workoutId)
+      .flatMap(({setId}) => [...(inFlight.get(setId) ?? [])])
+
     // Waited on for its own sake — an edit still running has to land before
     // anything reads the tree. The VERDICT comes from `failedEdits`, which is
     // scoped to a workout; a rejected write is added there by the handler
     // `adjustSet` attached before `allSettled` attached its own, so every
     // rejection among these is recorded by the time this resumes.
-    await Promise.allSettled([...inFlight])
+    await Promise.allSettled(waiting)
 
     const mine: string[] = []
     for (const setId of [...failedEdits]) {
@@ -642,13 +673,24 @@ export const adjustSet = (
   delta: SetAdjustment,
 ): Promise<'written' | 'gone' | 'closed'> => {
   const write = writeSet(repo, setId, delta)
-  inFlight.add(write)
+  const running = inFlight.get(setId) ?? new Set<Promise<unknown>>()
+  running.add(write)
+  inFlight.set(setId, running)
+  const done = () => {
+    running.delete(write)
+    if (running.size === 0 && inFlight.get(setId) === running) inFlight.delete(setId)
+  }
   // Both arms, so a rejected write is counted as handled here and its failure
   // still reaches `setEditsSettled` — through `allSettled` while it is running,
   // and through the sticky flag once it is not.
   write.then(
-    () => inFlight.delete(write),
-    () => { inFlight.delete(write); failedEdits.add(setId) },
+    // Cleared on success, so a retry that lands takes the warning back with
+    // it. Without this the marker was write-once: correct the set, watch it
+    // save, and Finish still refused with "a change did not save" — pointing
+    // at a value that is already stored. Last settle wins, which is the
+    // honest reading of "does the tree hold what you typed".
+    () => { done(); failedEdits.delete(setId) },
+    () => { done(); failedEdits.add(setId) },
   )
   return write
 }

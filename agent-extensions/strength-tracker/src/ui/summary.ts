@@ -20,26 +20,27 @@ import type {SetRecord} from '../engine/types'
  *  printing `prescribedSets` would tell the same lie by another route.
  *  Counted over the rows progression reads, so single-arm work (an L and an R
  *  per prescribed set) is not called six. */
-export const lastTimeShape = (
-  sets: readonly SetRecord[],
-  prescribedSets: number | undefined,
-): string => {
+export const lastTimeShape = (sets: readonly SetRecord[]): string => {
   const performed = progressionSets(sets)
   const reps = performed.map(set => set.reps)
   if (reps.length === 0) return '?'
   if (!reps.every(count => count === reps[0])) return reps.join('/')
-  // The one case the row count cannot answer: entries predating
-  // `strength:side` store both sides as bare rows, so a three-set lift reads
-  // as six. Identified POSITIVELY — exactly twice the prescribed count, no row
-  // claiming a side — rather than by preferring `prescribedSets` wherever it
-  // is stated, which turned every partial session into a complete-looking one.
+  // What you PERFORMED, with no correction on top of it.
   //
-  // The side clause is defence in depth: `progressionSets` returns every row
-  // precisely when none has a side, so the count test alone decides for
-  // anything this extension wrote. It earns its place only on a half-sided
-  // entry, which is hand-edited and pinned directly.
-  const doubledLegacyRows = prescribedSets !== undefined
-    && reps.length === prescribedSets * 2
-    && performed.every(set => set.side === undefined)
-  return `${doubledLegacyRows ? prescribedSets : reps.length}×${reps[0]}`
+  // There used to be one: entries predating `strength:side` stored both sides
+  // as bare rows, so a three-set single-arm lift read as six, and this inferred
+  // that from "exactly twice the prescribed count, and no row claims a side".
+  // That inference cannot be told apart from doing double the prescribed
+  // volume — three extra sets on a prescribed three, all at the same reps, is
+  // an ordinary session — and it reported those six as `3×10`. Under-reporting
+  // what you did, on the line you load the next bar against, is the worse of
+  // the two errors, and it lands on live sessions rather than pre-migration
+  // ones.
+  //
+  // Nothing is left for it to catch: single-arm work is identified by the
+  // explicit `strength:side`, which `progressionSets` reads directly (an L/R
+  // pair per prescribed set collapses to one row), and the live workspace has
+  // no un-sided doubled entry at all — all 33 of its sided rows carry the
+  // property, because the migration stamped them.
+  return `${reps.length}×${reps[0]}`
 }
