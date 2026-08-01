@@ -480,12 +480,12 @@ export const rowSlotIn = (
  * Two kinds of reserved row are NOT part of that order, and both would be a
  * focus write onto a row the user can't reach or see:
  *
- *   - `from`'s own hidden children. A caller only asks at an edge, which means
- *     the model found no next row in this scope — so `from` has no VISIBLE
- *     children, and a slot of its own scope still sitting inside it belongs to
- *     a subtree that was just collapsed and hasn't unmounted yet. (A NESTED
- *     surface's slot inside `from` carries a different scope and is a genuine
- *     step in.)
+ *   - anything in `from`'s OWN scope. A caller only asks at an edge, which
+ *     means the model found no next row in this scope — so a slot claiming to
+ *     be one is stale: a just-collapsed subtree's child, a deleted sibling's
+ *     reservation. The model is what validates a row of this scope, everywhere,
+ *     and at an edge it has already said there is none. (A NESTED surface's
+ *     slot carries a different scope, and stepping into that is the point.)
  *   - anything inside an excluded surface. Its rows are not navigable, so
  *     landing there leaves the next keystroke with no anchor at all.
  */
@@ -505,7 +505,7 @@ export const reservedRowBetween = (
     // Past the mounted neighbour it isn't "between" — the neighbour is then the
     // nearer answer and nothing is missing before it.
     (!to || aheadOf(slot, to, direction)) &&
-    !(from.contains(slot) && slot.dataset.lazyRenderScopeId === fromScope) &&
+    slot.dataset.lazyRenderScopeId !== fromScope &&
     !isInExcludedSurface(slot, excludedSurfaces) &&
     // Never picks a half-labelled slot and then gives up on it, which would
     // silently drop a valid one further along.

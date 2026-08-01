@@ -1007,6 +1007,97 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // ...and the same staleness at a genuine model EDGE, where there is no model
+  // row for a neighbour to be. The rendered order decides what comes after the
+  // last row of a scope — but only for OTHER scopes; a row of this one is a
+  // node the model has already dropped.
+  it('declines a stale same-scope neighbour at the end of the scope', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+        {blockId: 'B', renderScopeId: 'panel:outline', surface: 'outline'},
+        {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
+      ],
+    }])
+    // 'B' and 'C' are gone, so 'A' — which has no children — is the last visible
+    // row and the walk genuinely ends at it. Their nodes are still here.
+    await env.repo.tx(async tx => {
+      await tx.delete('B')
+      await tx.delete('C')
+    }, {scope: ChangeScope.UiState})
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
+  // The same at the edge, for a row that only has a place RESERVED. Its slot
+  // claims this scope, which the model has just said is finished.
+  it('declines a stale same-scope reserved row at the end of the scope', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+        {deferredBlockId: 'C', deferredScopeId: 'panel:outline'},
+      ],
+    }])
+    await env.repo.tx(async tx => {
+      await tx.delete('B')
+      await tx.delete('C')
+    }, {scope: ChangeScope.UiState})
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    // The same-panel focus write is fire-and-forget, so a bare assertion here
+    // would pass before a wrong one could land. Transactions commit in order:
+    // once this one is through, anything queued ahead of it has landed too.
+    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
+
+    // Not 'C': focusing it would also force-mount a row that is on its way out.
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
   // A scope's own rows nest inside each other in the DOM, and a COLLAPSED row's
   // descendants can still be mounted for the commit or two before they go. They
   // are same-scope rows the model walk skips on purpose, and they sit inside the

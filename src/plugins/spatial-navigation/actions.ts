@@ -359,12 +359,21 @@ const moveVertical = async (
   // out. Focusing the reserved row instead mounts it (`FocusedRowLazyMount`),
   // where declining could not: the model handler is bounded by the same
   // exhausted scope and would swallow the keystroke.
+  //
+  // What the rendered order does NOT get to decide is a row of THIS scope. A
+  // same-scope row is checked against the model wherever it turns up, and here
+  // there is no model row for one to be — so a same-scope neighbour at an edge
+  // is stale DOM by definition: a deleted sibling's node, a collapsed parent's
+  // surviving child. Only another scope's rows are genuinely unnameable by this
+  // walk, so only they can be taken on an edge. (`reservedRowBetween` applies
+  // the same rule to slots.)
   if (deps.scopeRootId && !modelNext) {
     const reserved = reservedRowBetween(current, next, direction, excludedSurfaces)
     if (reserved) {
       void focusBlock(uiStateBlock, reserved.blockId, {renderScopeId: reserved.renderScopeId})
       return true
     }
+    if (nextLocation?.renderScopeId === currentLocation.renderScopeId) return false
   }
 
   // Nothing in the model and nothing in the DOM — a real edge.
