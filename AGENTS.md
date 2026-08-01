@@ -52,10 +52,11 @@ testing:
 
 verifying a guard or fix (a green suite is weak evidence on its own):
 - after adding or changing a guard, REVERT it and confirm a specific named test fails. If nothing fails, the guard is unpinned and will regress silently. Do this per-CLAUSE, not per-commit: a narrow clause hides behind a broader one in the same predicate (a content check masked an identity check that was the actual fix).
-- three ways a test passes for the wrong reason, all hit in one session:
+- four ways a test passes for the wrong reason, all hit in single sessions:
   - another layer independently catches the case, so the guard is unpinnable through the public path. Pin it with a direct unit test and say at the declaration that it is defence in depth rather than leaving a comment that implies it is load-bearing.
   - a repair path launders the damage before the assertion runs — a re-claim through `repo.tx` queues its own rename that reverts the bad rewrite; dropping a reference schedules a re-parse that rebuilds it. Write the setup so no repair is scheduled: a RAW `db.writeTransaction` write still maintains the trigger-backed side indexes (`block_aliases`, `block_references`) but fires no post-commit processor, which is also the shape a sync-applied row has.
   - the scenario never reached the code under test (un-flipped workspace, unstamped derived column, wrong branch of a disjunction) so an unrelated leg vetoed first. Assert the precondition explicitly in the test.
+  - **an "it is absent" assertion ran before the thing that would make it PRESENT had resolved.** Any `expect(x).toBeNull()` on a surface fed by a query, an effect-driven fetch, or a subscription passes trivially on first render — so it stays green with the guard under test deleted. Hit three times in one session (a date gate, a read-only guard, a count stamp). Fixes, cheapest first: PRIME the async precondition and prove it (`vi.waitFor` the positive case, then `cleanup()`, then render the negative); or assert on the CAUSE instead of the absence (`expect(repo.tx).not.toHaveBeenCalled()`, an unchanged `queryBlocks` spy count). A negative test that has never once been seen to fail is not evidence — mutate the guard away and watch it stay green.
 - when the claim is "X renders wrong", drive the REAL plugin and assert on node VALUES, not node counts. Counting nodes ("one blockref came out, so it's fine") hid a mangled label for two review rounds.
 
 git history in cloud / remote sessions:
