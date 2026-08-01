@@ -89,10 +89,10 @@ vi.mock('../useGroupedBacklinksConfig.ts', () => ({
   useGroupedBacklinksConfig: () => state.groupingConfig,
 }))
 
-vi.mock('@/plugins/backlinks/BacklinkEntry.tsx', async () => {
+vi.mock('@/plugins/backlinks/BlockEntry.tsx', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
   return {
-    LazyBacklinkItem: ({block}: {block: {id: string}}) => {
+    LazyBlockEntry: ({block}: {block: {id: string}}) => {
       const [mountId] = React.useState(() => ++state.backlinkMounts)
       return React.createElement(
         'div',

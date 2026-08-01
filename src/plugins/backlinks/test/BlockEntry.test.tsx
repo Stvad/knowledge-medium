@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import { BlockContextProvider } from '@/context/block'
-import { LazyBacklinkItem } from '../BacklinkEntry.tsx'
+import { LazyBlockEntry } from '../BlockEntry.tsx'
 
 const mocks = vi.hoisted(() => ({
   openBlock: vi.fn(),
@@ -38,14 +38,14 @@ afterEach(() => {
   mocks.repo.block.mockClear()
 })
 
-describe('BacklinkEntry breadcrumbs', () => {
+describe('BlockEntry breadcrumbs', () => {
   it('routes shift-clicks through the block opener', () => {
     const source = {id: 'source-block'} as Block
     const parent = {id: 'parent-block'} as Block
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBacklinkItem block={source} initialParents={[parent]} scopeId="test:source-block" />
+        <LazyBlockEntry block={source} initialParents={[parent]} scopeId="test:source-block" />
       </BlockContextProvider>,
     )
 

@@ -5,7 +5,7 @@ import { useWorkspaceId } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
 import { useBlockOpener } from '@/utils/navigation.js'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.js'
-import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.js'
+import { LazyBlockEntry } from '@/plugins/backlinks/BlockEntry.js'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
 import { BacklinksEmptyState } from '@/plugins/backlinks-view/BacklinksEmptyState.js'
 import {
@@ -398,7 +398,7 @@ const GroupItems = ({
       {open && (
         <div className="mt-1 flex flex-col gap-2">
           {sourceBlocks.map(source => (
-            <LazyBacklinkItem
+            <LazyBlockEntry
               key={source.id}
               block={source}
               scopeId={`group:${group.groupId}:${source.id}`}
