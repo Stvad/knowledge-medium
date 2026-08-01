@@ -1,120 +1,73 @@
-/** A set block, rendered as its numbers.
+/** ± controls beside a set block, for correcting a load under a barbell.
  *
- *  The decoration renders INSTEAD of the block's text, not beside it. That is
- *  the point: `strength:weight` / `strength:reps` are what progression reads,
- *  and a free-text line beside them is a second place the same fact can be
- *  written. Editing the numbers here writes both (see `editSet`), so the text
- *  stays a faithful human-readable copy rather than a rival source of truth.
+ *  The controls sit BESIDE the block's own content, never instead of it. The
+ *  set's checkbox is the todo plugin's, rendered by a decorator further down
+ *  this same chain — ours wraps it, so dropping `Inner` would delete the one
+ *  gesture the whole extension is built around, along with the text editor,
+ *  the type chips and everything else contributed below.
  *
- *  Done-ness is NOT here — the built-in todo checkbox already renders it, and
- *  re-implementing it would give a set two different ways to be ticked.
+ *  Which is also why the buttons show no numbers: the block's text already
+ *  says `135lb × 8`, and `adjustSet` rewrites that text from the properties
+ *  on every tap. One place to read the value, one place to change it.
  */
 
-import type {ComponentType} from 'react'
-
 import type {Block} from '@/data/block.js'
-import {typesProp} from '@/data/properties.js'
+import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
 import {usePropertyValue} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 
-import {SET_TYPE} from '../../km/fields'
-import {editSet} from '../../km/session'
-import {repsProp, sideProp, unitProp, weightProp} from '../../km/schema'
+import {adjustSet} from '../../km/session'
+import {unitProp} from '../../km/schema'
 
-/** Load steps in the unit the set records. Deliberately not read from the
- *  plan's `roundTo`: this is a thumb on a phone correcting a number, not a
- *  prescription, and a plate you can actually add is the useful increment. */
+/** Load steps in the unit the set records. Deliberately not the plan's
+ *  `roundTo`: this is a thumb correcting a number, and a plate you can
+ *  actually add is the useful increment. */
 const weightStep = (unit: string): number => (unit === 'kg' ? 2.5 : 5)
 
-interface StepperProps {
+const Nudge = ({label, onPress, children}: {
   label: string
-  value: number
-  step: number
-  onChange: (next: number) => void
-  suffix?: string
-}
-
-const Stepper = ({label, value, step, onChange, suffix}: StepperProps) => (
-  <span className="inline-flex items-center gap-1">
-    <button
-      type="button"
-      aria-label={`${label} down`}
-      data-block-interaction="ignore"
-      className="h-8 w-8 shrink-0 rounded border border-border text-base leading-none text-muted-foreground hover:bg-accent"
-      onClick={event => {
-        event.stopPropagation()
-        onChange(Math.max(0, value - step))
-      }}
-    >−</button>
-    <span className="min-w-[3.5ch] text-center tabular-nums">{value}{suffix}</span>
-    <button
-      type="button"
-      aria-label={`${label} up`}
-      data-block-interaction="ignore"
-      className="h-8 w-8 shrink-0 rounded border border-border text-base leading-none text-muted-foreground hover:bg-accent"
-      onClick={event => {
-        event.stopPropagation()
-        onChange(value + step)
-      }}
-    >+</button>
-  </span>
+  onPress: () => void
+  children: string
+}) => (
+  <button
+    type="button"
+    aria-label={label}
+    data-block-interaction="ignore"
+    className="h-7 min-w-7 shrink-0 rounded border border-border px-1 text-xs leading-none text-muted-foreground hover:bg-accent"
+    onClick={event => {
+      event.stopPropagation()
+      onPress()
+    }}
+  >{children}</button>
 )
 
-const SetControls = ({block}: {block: Block}) => {
-  const [weight] = usePropertyValue(block, weightProp)
-  const [reps] = usePropertyValue(block, repsProp)
-  const [side] = usePropertyValue(block, sideProp)
-  const [unit] = usePropertyValue(block, unitProp)
-
-  const readOnly = block.repo.isReadOnly
-  const write = (patch: {weight?: number; reps?: number}) => {
-    if (readOnly) return
-    void editSet(block.repo, block.id, patch)
-  }
-
-  if (readOnly) {
-    return (
-      <span className="tabular-nums">
-        {side ? `${side} ` : ''}{weight ?? 0}{unit ?? ''} × {reps ?? 0}
-      </span>
-    )
-  }
-
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-      {side ? (
-        <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">{side}</span>
-      ) : null}
-      <Stepper
-        label="Weight"
-        value={weight ?? 0}
-        step={weightStep(unit ?? '')}
-        suffix={unit ?? ''}
-        onChange={next => write({weight: next})}
-      />
-      <span className="text-muted-foreground">×</span>
-      <Stepper label="Reps" value={reps ?? 0} step={1} onChange={next => write({reps: next})}/>
-    </span>
-  )
-}
-
-interface DecoratorProps extends BlockRendererProps {
+interface Props extends BlockRendererProps {
   Inner: BlockRenderer
 }
 
-const SetLine = ({block, Inner}: DecoratorProps) => {
-  const [types] = usePropertyValue(block, typesProp)
-  if (!types.includes(SET_TYPE)) return <Inner block={block}/>
-  return <SetControls block={block}/>
+const SetLine = ({block, Inner}: Props) => {
+  const [unit] = usePropertyValue(block, unitProp)
+  const step = weightStep(unit ?? '')
+  // Deltas, so a burst of taps composes instead of each one re-sending an
+  // absolute value computed from whichever render it happened to see.
+  const nudge = (delta: {weight?: number; reps?: number}) => () => {
+    void adjustSet(block.repo, block.id, delta)
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <div className="min-w-0 flex-1"><Inner block={block}/></div>
+      {block.repo.isReadOnly ? null : (
+        <div className="flex shrink-0 items-center gap-1">
+          <Nudge label={`Reduce weight by ${step}${unit ?? ''}`} onPress={nudge({weight: -step})}>−</Nudge>
+          <Nudge label={`Add ${step}${unit ?? ''} of weight`} onPress={nudge({weight: step})}>+</Nudge>
+          <span aria-hidden className="px-0.5 text-xs text-muted-foreground">reps</span>
+          <Nudge label="One rep fewer" onPress={nudge({reps: -1})}>−</Nudge>
+          <Nudge label="One rep more" onPress={nudge({reps: 1})}>+</Nudge>
+        </div>
+      )}
+    </div>
+  )
 }
 
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-export const decorateSetContent = (inner: BlockRenderer): BlockRenderer => {
-  const cached = cache.get(inner)
-  if (cached) return cached
-  const Decorated: ComponentType<{block: Block}> = ({block}) => <SetLine block={block} Inner={inner}/>
-  Decorated.displayName = 'StrengthSetLine'
-  cache.set(inner, Decorated)
-  return Decorated
-}
+export const decorateSetContent = cachedContentDecorator(SetLine, 'StrengthSetLine')

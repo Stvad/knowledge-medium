@@ -19,11 +19,14 @@ import {deleteBlock} from '@/data/mutators'
 import {hasBlockType} from '@/data/properties'
 import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
+import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension'
 
 import {LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE} from '../../src/km/fields'
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {finishSession, startSession} from '../../src/km/session'
+import {closeSession, sessionParent} from '../../src/km/tonight'
+import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {discardSession, readAltChoices, writeAltChoice, writeLayoff} from '../../src/km/store'
 import {
@@ -53,6 +56,10 @@ beforeEach(async () => {
       ...STRENGTH_TYPES.map(type => typeSeedsFacet.of(type, {source: 'test'})),
       definitionSeedsFacet.of(todoStatusProp, {source: 'test'}),
       typeSeedsFacet.of(todoType, {source: 'test'}),
+      // The real daily-note types, because `sessionParent` calls the real
+      // `getOrCreateDailyNote` — a fake would accept any string and so could
+      // never have caught the ISO-format bug this pins.
+      dailyNotesDataExtension,
     ],
   })
   repo = created.repo
@@ -205,5 +212,58 @@ describe('or-group choices', () => {
       'group-1': 'opt-b',
       'group-2': 'opt-c',
     })
+  })
+})
+
+describe('where a session gets filed', () => {
+  it('files it in the training day\'s daily note, whose ISO contract the engine\'s day already satisfies', async () => {
+    // `getOrCreateDailyNote` parses `^\d{4}-\d{2}-\d{2}$` and THROWS on
+    // anything else. Passing a full timestamp threw before a single block was
+    // stamped, and no test saw it because nothing exercised the start action
+    // and a fake daily-note module would have accepted any string. This calls
+    // the real one, with a day straight out of `trainingDay`.
+    const day = trainingDay(new Date('2026-07-24T19:30:00'), 4)
+    expect(day).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+
+    const parentId = await sessionParent(repo, WORKSPACE_ID, day)
+    const workoutId = await startSession(repo, WORKSPACE_ID, parentId, plan({day}))
+
+    expect(repo.block(workoutId).peek()?.parentId).toBe(parentId)
+    // Same day, same note — not a second one beside it.
+    expect(await sessionParent(repo, WORKSPACE_ID, day)).toBe(parentId)
+  })
+})
+
+describe('the day a layoff is measured to', () => {
+  const dayBefore = (n: number): string => {
+    const d = new Date()
+    d.setDate(d.getDate() - n)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  it('is the day the session was performed, not the day you got round to finishing it', async () => {
+    // Train, forget to tap Finish, finish the next morning. Measuring to the
+    // finish clock reports one day more — enough to drop a tier — and dates
+    // the comeback to a day this session is not on, so `resolveReentry` never
+    // counts it as a session back and the ramp runs one session long. Both
+    // are permanent: the record is keyed on `from`, so a later finish adopts
+    // the wrong one rather than correcting it.
+    const lastTrained = dayBefore(60)
+    const performedOn = dayBefore(25)
+
+    // History: one finished session long ago, so there is a gap to classify.
+    const oldId = await startAndLog({day: lastTrained})
+    expect(await finishSession(repo, oldId)).toBe('done')
+
+    const workoutId = await startAndLog({day: performedOn, session: 'B', lifts: [lift('Row')]})
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
+
+    // Queried by type, not under the test's page: `closeSession` resolves the
+    // real Strength Log page itself, which is where the record lands.
+    const layoffs = buildLayoffs(
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load())
+    expect(layoffs).toHaveLength(1)
+    expect(layoffs[0].to).toBe(performedOn)
+    expect(layoffs[0].days).toBe(35)
   })
 })

@@ -11,16 +11,14 @@
  */
 
 import type {Repo} from '@/data/repo.js'
-import {getOrCreateDailyNote} from '@/plugins/daily-notes/dailyNotes.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {openDialog} from '@/utils/dialogs.js'
 import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
-import {dayToDate} from '../km/day'
 import {startSession} from '../km/session'
 import {planFromPrescription} from '../km/sessionPlan'
 import {writeAltChoice} from '../km/store'
-import {prescribeFor, readProgram} from '../km/tonight'
+import {prescribeFor, readProgram, sessionParent} from '../km/tonight'
 import {StartSessionDialog, type StartSessionResult} from './StartSessionDialog'
 
 export const START_SESSION_ACTION_ID = 'strength.startSession'
@@ -37,6 +35,7 @@ const runStartSession = async (repo: Repo): Promise<void> => {
 
   const picks = await openDialog(StartSessionDialog, {
     initialSession: prescribeFor(snapshot, now).session,
+    warnings: snapshot.warnings,
     prescribeFor: (result: StartSessionResult) =>
       prescribeFor(snapshot, now, result.session, result.choices),
   })
@@ -44,8 +43,8 @@ const runStartSession = async (repo: Repo): Promise<void> => {
 
   const prescription = prescribeFor(snapshot, now, picks.session, picks.choices)
   const plan = planFromPrescription(prescription, snapshot.config.unit)
-  const note = await getOrCreateDailyNote(repo, workspaceId, dayToDate(prescription.day).toISOString())
-  const workoutId = await startSession(repo, workspaceId, note.id, plan)
+  const parentId = await sessionParent(repo, workspaceId, prescription.day)
+  const workoutId = await startSession(repo, workspaceId, parentId, plan)
 
   // Recorded only now the session exists, so a cancelled dialog leaves the
   // tracked variant exactly as it was. After the stamp rather than before,

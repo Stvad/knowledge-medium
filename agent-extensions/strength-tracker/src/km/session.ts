@@ -19,7 +19,7 @@ import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/in
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 import {
-  adoptTypedBlock, createTypedChild, getOrCreateTypedChild, type DerivedIdentity,
+  adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild, type DerivedIdentity,
 } from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: the todo type + its `status`
 // prop make done-ness the native checkbox and reuse todo tooling.
@@ -126,6 +126,44 @@ const both = (
   b: (block: BlockData) => boolean,
 ) => (block: BlockData): boolean => a(block) && b(block)
 
+/** Newest first, id as the tiebreak so every device orders ties the same. */
+const newestFirst = (a: BlockData, b: BlockData): number =>
+  (b.createdAt ?? 0) - (a.createdAt ?? 0) || (a.id < b.id ? -1 : 1)
+
+/** Does this block say it is the entry for this lift — the re-find key for a
+ *  mint, so a second Start tap adopts what the first one made. Stricter than
+ *  `stillNamesLift`, which only has to avoid stealing someone else's entry:
+ *  here we are choosing one, so the plan block must match when both sides
+ *  have one, and the name when they do not. */
+const namesThisLift = (block: BlockData, lift: PlannedLift): boolean => {
+  if ((block.properties[FIELD.occurrence] ?? 0) !== lift.occurrence) return false
+  const definition = block.properties[FIELD.definition]
+  if (lift.definitionId !== undefined && typeof definition === 'string') {
+    return definition === lift.definitionId
+  }
+  return block.properties[FIELD.exercise] === lift.exercise
+}
+
+/** The `taken` fallback, in the shape `getOrCreateTypedChild`'s contract
+ *  prescribes: look for the record you mean inside this same transaction,
+ *  adopt it if it is there, mint only if it is not. Without the lookup the
+ *  mint is unfindable next time, and a permanently-rejected seat mints again
+ *  on every call. */
+const adoptOrMint = async (
+  repo: Repo,
+  tx: Tx,
+  parentId: string,
+  spec: Parameters<typeof createTypedChild>[2],
+  isTheOne: (block: BlockData) => boolean,
+  typeSnapshot: TypeSnapshot,
+): Promise<string> => {
+  const existing = (await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true}))
+    .find(block => !block.deleted && isTheOne(block))
+  return existing !== undefined
+    ? (await adoptTypedBlock(repo, tx, existing, spec.types, typeSnapshot)).id
+    : createTypedChild(repo, tx, spec)
+}
+
 // ──── stamping ────
 
 const setSpec = (
@@ -190,13 +228,18 @@ export const startSession = async (
   plan: SessionPlan,
 ): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  // Candidate ids for the standing-session scan, from the same workspace-wide
+  // Candidates for the standing-session scan, from the same workspace-wide
   // population the readers use — a page-children-only scan would miss a
-  // session filed under a year heading. Ids only, read before the transaction
-  // (`Tx` has no arbitrary queries) and re-checked inside it, so a stale list
-  // can only cause a mint, never a bad adoption.
+  // session filed under a year heading, which is exactly where the sessions
+  // logged before this redesign live. Filtered HERE, on rows already loaded,
+  // so the in-transaction re-read below is bounded by the handful that could
+  // plausibly be tonight rather than by every workout ever recorded — those
+  // `tx.get`s hold the write lock while every other write queues behind them.
+  // Re-checked inside the transaction regardless, so a stale list can only
+  // cause a mint, never a bad adoption.
   const known = (await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load())
-    .map((row: {id: string}) => row.id)
+    .filter((row: BlockData) => isTonightsLog(row, plan))
+    .map((row: BlockData) => row.id)
 
   return repo.tx(async tx => {
     const workoutSpec = {
@@ -224,11 +267,18 @@ export const startSession = async (
       const block = await tx.get(id)
       if (block) seen.set(id, block)
     }
-    // `preferredLive` rather than "the first": this scan is ordered by
-    // `(order_key, id)` and other readers order by `(created_at, id)`, so
-    // "first" would mean different workouts to different callers.
-    const standing = preferredLive([...seen.values()]
-      .filter(block => !block.deleted && isTonightsLog(block, plan)))
+    // More than one can look standing: a device that has received the second
+    // session's create row but not yet the FIRST one's status update sees both
+    // as in-progress. Prefer the derived seat, then the newest — "the session
+    // you are in", not "the lowest id". Picking arbitrarily (which is all
+    // `preferredLive` promises — it exists to make two READERS agree, not to
+    // choose a write target) stamped tonight into a session the other device
+    // had already closed, which is the very thing derived ids exist to stop.
+    const derivedSeat = derivedBlockId(workoutIdentity(workspaceId, plan.day, plan.session))
+    const candidates = [...seen.values()]
+      .filter(block => !block.deleted && isTonightsLog(block, plan))
+    const standing = candidates.find(block => block.id === derivedSeat)
+      ?? [...candidates].sort(newestFirst)[0]
 
     const workout = standing !== undefined
       ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
@@ -249,12 +299,24 @@ export const startSession = async (
         adoptable: both(stillUnder(workout.id), stillNamesLift(lift)),
         ...entrySpec(workout.id, lift, typeSnapshot),
       })
-      // A rejected seat means the block there answers for something else —
-      // hand-repointed, or dragged out. Mint beside it rather than writing
-      // this lift's sets into it.
       const entryId = entry.status !== 'taken'
         ? entry.id
-        : await createTypedChild(repo, tx, entrySpec(workout.id, lift, typeSnapshot))
+        // A rejected seat is PERMANENT — a tombstone stays one, and a block
+        // the user dragged out or repointed keeps failing `adoptable` — so a
+        // blind mint here adds another entry (and another whole set tree) on
+        // every Start tap, forever. Look for the mint the last tap made
+        // before making a new one: the same lookup-then-mint the layoff path
+        // does, and the reason `startSession` can claim to be idempotent.
+        : await adoptOrMint(repo, tx, workout.id, entrySpec(workout.id, lift, typeSnapshot),
+          block => hasBlockType(block, EXERCISE_ENTRY_TYPE) && namesThisLift(block, lift),
+          typeSnapshot)
+
+      // Read once, and kept up to date as we mint: a set's re-find key is its
+      // POSITION among its lift's live sets, which is the same thing its
+      // derived id encodes. Re-reading per index would miss the sets minted
+      // earlier in this very loop.
+      const liveSets = (await tx.childrenOf(entryId, undefined, {hidePropertyChildren: true}))
+        .filter(block => !block.deleted && hasBlockType(block, SET_TYPE))
 
       for (const [index, set] of lift.sets.entries()) {
         const seat = await getOrCreateTypedChild(repo, tx, {
@@ -262,8 +324,10 @@ export const startSession = async (
           adoptable: stillUnder(entryId),
           ...setSpec(entryId, set, lift.unit, typeSnapshot),
         })
-        if (seat.status === 'taken') {
-          await createTypedChild(repo, tx, setSpec(entryId, set, lift.unit, typeSnapshot))
+        if (seat.status === 'taken' && liveSets[index] === undefined) {
+          const minted = await createTypedChild(repo, tx, setSpec(entryId, set, lift.unit, typeSnapshot))
+          const block = await tx.get(minted)
+          if (block) liveSets[index] = block
         }
       }
     }
@@ -276,30 +340,52 @@ export const startSession = async (
 const numberAt = (block: BlockData, field: string, fallback: number): number =>
   typeof block.properties[field] === 'number' ? block.properties[field] as number : fallback
 
-/** Change what a set says you lifted.
+/** Nudge what a set says you lifted, by a DELTA rather than to a value.
+ *
+ *  Deltas because the caller is a thumb on a ± button, and the value it would
+ *  otherwise send is read off a render. Two taps before the first write lands
+ *  both compute `135 + 5`, so tapping quickly to dial 135 up to 185 silently
+ *  loses increments — and the number lost is the one the whole progression
+ *  engine reads. A delta resolved against the row inside the transaction
+ *  cannot lose a tap, whatever the render was showing.
  *
  *  ONE transaction for the properties and the content, because they are two
- *  views of the same fact and the design has no room for a second truth: the
- *  engine reads `strength:weight`/`strength:reps`, the outline shows the
- *  text, and a reader who trusted the text while progression trusted the
- *  properties would silently train off the wrong numbers. Writing both here
- *  is what lets the block's rendered form BE its numbers.
+ *  views of the same fact: the engine reads
+ *  `strength:weight`/`strength:reps`, the outline shows the text, and a
+ *  reader trusting the text while progression trusts the properties would
+ *  train off the wrong numbers.
  */
-export const editSet = async (
+export const adjustSet = async (
   repo: Repo,
   setId: string,
-  patch: {weight?: number; reps?: number},
-): Promise<'written' | 'gone'> =>
+  delta: {weight?: number; reps?: number},
+): Promise<'written' | 'gone' | 'closed'> =>
   repo.tx(async tx => {
-    // Merged over what the block holds right now, read inside the
-    // transaction — the caller's value came off a render that may be behind.
     const block = await tx.get(setId)
     if (!block || block.deleted) return 'gone' as const
-    const weight = Math.max(0, patch.weight ?? numberAt(block, FIELD.weight, 0))
-    const reps = Math.max(0, patch.reps ?? numberAt(block, FIELD.reps, 0))
+
+    // The entry above it, for the two things the set alone cannot answer.
+    const entry = block.parentId ? await tx.get(block.parentId) : null
+    const workout = entry?.parentId ? await tx.get(entry.parentId) : null
+    // A closed session is a record, not a form. The old per-set writer
+    // refused once the workout was finished, and dropping that guard while
+    // WIDENING the surface from one view to every set block in the outline is
+    // how one stray tap silently rewrites the baseline the next prescription
+    // is derived from — and leaves the entry's stamped working weight
+    // disagreeing with its own sets.
+    if (workout && workout.properties[FIELD.status] === 'done') return 'closed' as const
+
+    const weight = Math.max(0, numberAt(block, FIELD.weight, 0) + (delta.weight ?? 0))
+    const reps = Math.max(0, numberAt(block, FIELD.reps, 0) + (delta.reps ?? 0))
+    // Sets logged before this redesign carry no `strength:unit` — it lived on
+    // the entry — so reading the set alone would rewrite "185lb × 5" as
+    // "185 × 5" on the first tap, quietly stripping the unit from a record
+    // that is supposed to stay meaningful without the extension.
     const unit = typeof block.properties[FIELD.unit] === 'string'
       ? block.properties[FIELD.unit] as string
-      : ''
+      : typeof entry?.properties[FIELD.unit] === 'string'
+        ? entry.properties[FIELD.unit] as string
+        : ''
     const side = block.properties[FIELD.side] === 'L' || block.properties[FIELD.side] === 'R'
       ? block.properties[FIELD.side] as 'L' | 'R'
       : undefined
@@ -309,7 +395,7 @@ export const editSet = async (
     ]})
     await tx.update(setId, {content: setContent({weight, reps, ...(side ? {side} : {})}, unit)})
     return 'written' as const
-  }, {scope: ChangeScope.BlockDefault, description: 'Edit set'})
+  }, {scope: ChangeScope.BlockDefault, description: 'Adjust set'})
 
 // ──── closing ────
 

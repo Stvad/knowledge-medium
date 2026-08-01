@@ -8,6 +8,7 @@
 
 import type {BlockData} from '@/data/api/index.js'
 import {hasBlockType} from '@/data/properties.js'
+import {getOrCreateDailyNote} from '@/plugins/daily-notes/dailyNotes.js'
 import type {Repo} from '@/data/repo.js'
 
 import {prescribe} from '../engine/prescribe'
@@ -19,7 +20,7 @@ import type {
   LayoffRecord, Prescription, ProgramConfig, SessionType, WorkoutRecord,
 } from '../engine/types'
 import {configFor, loadPlanSource, type PlanSource} from './config'
-import {EXERCISE_ENTRY_TYPE, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
+import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {buildHistory, buildLayoffs} from './history'
 import {getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
 import {finishSession, type FinishOutcome} from './session'
@@ -109,13 +110,37 @@ export const prescribeFor = (
  *  never happened; written after, a failure loses the record for good, since
  *  the gap becomes undetectable the moment this session is the latest one.
  */
+/** Where tonight's session gets filed: the training day's daily note.
+ *
+ *  `day` is a training day (`YYYY-MM-DD`), which is exactly the calendar-ISO
+ *  string `getOrCreateDailyNote` takes — it parses `^\d{4}-\d{2}-\d{2}$` and
+ *  throws on anything else, a full timestamp included. Kept as a named
+ *  function so the contract between the engine's day and the daily-note API
+ *  has somewhere to be tested. */
+export const sessionParent = async (
+  repo: Repo,
+  workspaceId: string,
+  day: string,
+): Promise<string> => (await getOrCreateDailyNote(repo, workspaceId, day)).id
+
 export const closeSession = async (
   repo: Repo,
   workspaceId: string,
   workoutId: string,
 ): Promise<FinishOutcome> => {
   const snapshot = await readProgram(repo, workspaceId)
-  const pending = detectPendingLayoff(snapshot.history, snapshot.day, snapshot.config)
+  // The gap ends on the day the session was PERFORMED, not the day you got
+  // round to tapping Finish. Train Friday night, finish Saturday morning, and
+  // the clock would report one day more — enough to drop you a re-entry tier —
+  // and would date the comeback to a day this session isn't on, so
+  // `resolveReentry` wouldn't count it as a session back and the ramp would
+  // run one session long. Both are permanent: the record is keyed on `from`,
+  // so a later finish adopts the wrong one rather than correcting it.
+  const workout = await repo.load(workoutId)
+  const performedOn = typeof workout?.properties[FIELD.date] === 'string'
+    ? trainingDay(workout.properties[FIELD.date] as string, snapshot.config.dayRolloverHour)
+    : snapshot.day
+  const pending = detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
   const layoff = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
     ? {pageId: snapshot.pageId, record: layoffFromPending(pending)}
     : undefined

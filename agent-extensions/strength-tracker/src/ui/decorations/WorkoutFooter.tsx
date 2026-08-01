@@ -30,11 +30,11 @@ const message = (outcome: FinishOutcome): string | null => {
 export const WorkoutFooter = ({block}: {block: Block}) => {
   const workspaceId = useWorkspaceId(block)
   const [status] = usePropertyValue(block, statusProp)
-  const {exercises, setsOf} = useSessionRows(workspaceId)
+  const {entriesOf, setsOf} = useSessionRows(workspaceId)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
 
-  const lifts = exercises.filter(entry => entry.parentId === block.id)
+  const lifts = entriesOf(block.id)
   const sets = lifts.flatMap(entry => [...setsOf(entry.id)])
   const done = sets.filter(set => set.properties[FIELD.todoStatus] === 'done')
   const unit = done[0]?.properties[FIELD.unit]

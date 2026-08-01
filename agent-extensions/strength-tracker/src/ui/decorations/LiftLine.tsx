@@ -7,15 +7,13 @@
  *  override by tapping, not a cache of a computation.
  */
 
-import type {ComponentType} from 'react'
-
 import type {Block} from '@/data/block.js'
-import {typesProp} from '@/data/properties.js'
+import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
 import {useContent, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
-import type {BlockRenderer, BlockRendererProps} from '@/types.js'
+import type {BlockRenderer} from '@/types.js'
 
 import {lastEntryFor, workingWeight} from '../../engine/progression'
-import {EXERCISE_ENTRY_TYPE, FIELD} from '../../km/fields'
+import {FIELD} from '../../km/fields'
 import {
   definitionProp,
   exerciseProp,
@@ -69,23 +67,7 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   )
 }
 
-interface DecoratorProps extends BlockRendererProps {
-  Inner: BlockRenderer
-}
-
-const LiftLine = ({block, Inner}: DecoratorProps) => {
-  const [types] = usePropertyValue(block, typesProp)
-  if (!types.includes(EXERCISE_ENTRY_TYPE)) return <Inner block={block}/>
-  return <LiftSummary block={block} Inner={Inner}/>
-}
-
-const cache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-export const decorateLiftContent = (inner: BlockRenderer): BlockRenderer => {
-  const cached = cache.get(inner)
-  if (cached) return cached
-  const Decorated: ComponentType<{block: Block}> = ({block}) => <LiftLine block={block} Inner={inner}/>
-  Decorated.displayName = 'StrengthLiftLine'
-  cache.set(inner, Decorated)
-  return Decorated
-}
+// No type re-check inside: the contribution already gated on `context.types`,
+// which comes from the same reactive read, so the branch could never be taken
+// — it only bought a second subscription on every decorated block.
+export const decorateLiftContent = cachedContentDecorator(LiftSummary, 'StrengthLiftLine')

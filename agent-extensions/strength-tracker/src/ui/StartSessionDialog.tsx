@@ -25,6 +25,12 @@ export interface StartSessionProps {
    *  list Start will stamp, rather than the one the defaults would have. */
   prescribeFor: (result: StartSessionResult) => Prescription
   initialSession: SessionType
+  /** Anything wrong with the plan read. Shown rather than logged: the session
+   *  is about to become blocks, and a plan that could not be read stamps the
+   *  BUILT-IN program under your own lift names — which then keys the entries
+   *  differently from every session logged when the plan was readable. You
+   *  can still start; you just get to know what you are starting. */
+  warnings: readonly string[]
 }
 
 const SESSIONS: readonly {value: SessionType; label: string}[] = [
@@ -58,6 +64,7 @@ const Segmented = <T extends string>({
 export const StartSessionDialog = ({
   prescribeFor,
   initialSession,
+  warnings,
   resolve,
   cancel,
 }: DialogContextProps<StartSessionResult> & StartSessionProps) => {
@@ -81,6 +88,12 @@ export const StartSessionDialog = ({
             : `Scheduled for ${prescription.day}.`}
         </p>
       </div>
+
+      {warnings.length > 0 ? (
+        <ul className="flex flex-col gap-1 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+          {warnings.map(warning => <li key={warning}>{warning}</li>)}
+        </ul>
+      ) : null}
 
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Session</span>
