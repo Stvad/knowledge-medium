@@ -215,7 +215,14 @@ export const closeSession = async (
   const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
     ? layoffFromPending(pending)
     : undefined
-  if (!record) return finishSession(repo, workoutId, undefined, workout.properties[FIELD.date])
+  // Both facts the decision above rests on travel INTO the transaction, and
+  // `isMini` is the one that goes wrong silently: this branch writes no layoff,
+  // so a flip from `mini` to `A` between the read and the commit closes the
+  // session as a full one with no record — after which the gap is undetectable
+  // on every later day and the re-entry cut is gone for good, rather than
+  // merely misfiled. See `FinishExpectation`.
+  const expected = {date: workout.properties[FIELD.date], mini: isMini}
+  if (!record) return finishSession(repo, workoutId, undefined, expected)
 
   // A gap record needs a home, but creating one is a WRITE and every refusal
   // below is documented as writing nothing — bootstrapped eagerly, a Finish
@@ -226,12 +233,12 @@ export const closeSession = async (
   // peer can still refuse after the home exists. That window cannot be closed
   // without putting page creation inside the finishing transaction, which
   // `ensureStrengthHome` cannot be — it runs transactions of its own.
-  const blocker = await finishBlocker(repo, workoutId, workout.properties[FIELD.date])
+  const blocker = await finishBlocker(repo, workoutId, expected)
   if (blocker) return blocker
 
   return finishSession(repo, workoutId, {
     pageId: (await ensureStrengthHome(repo, workspaceId)).pageId,
     record,
     knownIds: snapshot.layoffs.map(entry => entry.id),
-  }, workout.properties[FIELD.date])
+  }, expected)
 }

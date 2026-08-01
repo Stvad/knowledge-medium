@@ -672,6 +672,39 @@ export type FinishOutcome =
   /** A set edit was still in flight and did not land, so closing now would
    *  record a number you had already replaced. Writes nothing. */
   | 'edit-failed'
+  /** Something the caller's layoff decision rested on is no longer true of the
+   *  workout. Writes nothing; pressing Finish again decides afresh. */
+  | 'changed'
+
+/** What the caller had already read when it decided what this Finish means,
+ *  re-checked inside the transaction that writes.
+ *
+ *  One bag rather than a positional argument per fact, because the list grows:
+ *  every input to the layoff decision is a hand-editable property read several
+ *  awaits before the transaction opens, and each one that is not in here is a
+ *  way for the finish to commit a decision its own premise no longer supports.
+ *  Two of the three findings against this path were a missing entry. */
+export interface FinishExpectation {
+  /** The RAW `strength:date` the caller validated and computed the layoff
+   *  against. Hand-editable, so a clear makes `buildHistory` drop the session
+   *  whole and a change files the layoff against the wrong day.
+   *
+   *  The raw value, not a decoded day: decoding on both sides let the two
+   *  decoders disagree (`trainingDay` shifts by `rolloverHour`, `dateToDay`
+   *  does not), which made every workout permanently unfinishable at any
+   *  rollover past 12. Comparing the stored string needs no decoder. */
+  date?: unknown
+  /** Whether the caller decided this was a MINI day, which is the whole of
+   *  what `strength:session` contributed to that decision — so it is the
+   *  boolean that gets fenced rather than the raw value. A mini day does not
+   *  end a break and records no return; flip `strength:session` from `mini` to
+   *  `A` in another panel after the read and the session closed as a full one
+   *  with NO layoff record, after which the gap is no longer detectable on any
+   *  later day and the re-entry cut is lost for good. Fencing the raw string
+   *  instead would also refuse an A→B edit, which changes nothing here, and
+   *  could not tell an absent property from an unfenced one. */
+  mini?: boolean
+}
 
 /** Anything typed as a set or a lift that is NOT in the one position history
  *  can read it from.
@@ -766,7 +799,7 @@ type FinishCheck =
 const checkFinishable = async (
   tx: Tx,
   workoutId: string,
-  expectedDate?: unknown,
+  expected?: FinishExpectation,
 ): Promise<FinishCheck> => {
   // Read here rather than trusted from the caller: another client can close
   // this workout between the tap and this transaction opening.
@@ -781,8 +814,15 @@ const checkFinishable = async (
   // Checked before anything is written: closing around a set history cannot
   // read would report the session recorded while progression never sees the
   // work.
-  if (expectedDate !== undefined && workout.properties[FIELD.date] !== expectedDate) {
+  if (expected?.date !== undefined && workout.properties[FIELD.date] !== expected.date) {
     return {blocked: 'undated'}
+  }
+  // The session KIND, for the same reason: it decided whether a layoff is
+  // recorded at all, and closing on a decision its premise no longer supports
+  // loses the record permanently rather than merely misfiling it.
+  if (expected?.mini !== undefined
+    && (workout.properties[FIELD.session] === 'mini') !== expected.mini) {
+    return {blocked: 'changed'}
   }
 
   if ((await misfiled(tx, workoutId)).length > 0) return {blocked: 'misfiled'}
@@ -809,13 +849,13 @@ const checkFinishable = async (
 export const finishBlocker = async (
   repo: Repo,
   workoutId: string,
-  expectedDate?: unknown,
+  expected?: FinishExpectation,
 ): Promise<FinishOutcome | null> =>
   // A transaction that writes nothing costs nothing — `repo.tx` pins no
   // workspace and records no undo entry for one — and it is the only way to
   // reach `misfiled`/`setsOf`, which read through `tx.childrenOf`.
   repo.tx(
-    async tx => (await checkFinishable(tx, workoutId, expectedDate)).blocked,
+    async tx => (await checkFinishable(tx, workoutId, expected)).blocked,
     {scope: ChangeScope.BlockDefault, description: 'Check whether the session can be finished'},
   )
 
@@ -837,23 +877,15 @@ export const finishSession = async (
    *  record for good — every session after the first back silently returns to
    *  full loads. */
   layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>; knownIds?: readonly string[]},
-  /** The RAW `strength:date` the caller validated and computed the layoff
-   *  against, re-checked in-transaction: it is hand-editable and the caller's
-   *  read is several awaits old, so a clear makes `buildHistory` drop the
-   *  session whole and a change files the layoff against the wrong day.
-   *
-   *  The raw value, not a decoded day: decoding on both sides let the two
-   *  decoders disagree (`trainingDay` shifts by `rolloverHour`, `dateToDay`
-   *  does not), which made every workout permanently unfinishable at any
-   *  rollover past 12. Comparing the stored string needs no decoder. */
-  expectedDate?: unknown,
+  /** What the caller's layoff decision rested on — see `FinishExpectation`. */
+  expected?: FinishExpectation,
 ): Promise<FinishOutcome> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
     // Asked again HERE, inside the transaction that writes — a caller's read
     // is several awaits old and a peer can close, misfile or untick in that
     // window. This is the answer that counts.
-    const check = await checkFinishable(tx, workoutId, expectedDate)
+    const check = await checkFinishable(tx, workoutId, expected)
     if (check.blocked !== null) return check.blocked
     const {workout, tree} = check
 

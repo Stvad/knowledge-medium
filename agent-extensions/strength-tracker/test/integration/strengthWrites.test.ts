@@ -294,6 +294,55 @@ describe('the layoff record and the finish that justifies it', () => {
     expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
   })
 
+  it('refuses to close when the session kind flipped under the layoff decision', async () => {
+    // `isMini` is read before the transaction, and it decides whether a layoff
+    // is recorded AT ALL. Flip `strength:session` from `mini` to `A` in another
+    // panel after that read and the session closed as a full one with no
+    // record — after which the gap is undetectable on every later day, so the
+    // re-entry cut is lost for good rather than merely misfiled. Refused here
+    // so the next press decides afresh.
+    const workoutId = await startAndLog()
+
+    expect(await finishSession(repo, workoutId, undefined, {mini: true})).toBe('changed')
+
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('still closes when the session kind is what the caller decided against', async () => {
+    // The other half of the mutation: a fence that refuses everything passes
+    // the test above for the wrong reason.
+    const workoutId = await startAndLog()
+
+    expect(await finishSession(repo, workoutId, undefined, {mini: false})).toBe('done')
+  })
+
+  it('carries the session kind from closeSession into the finish, not just accepts one', async () => {
+    // Driving `closeSession`, because the fence above is only worth having if
+    // the caller that makes the layoff decision actually passes it — and with
+    // `finishSession` tested directly, dropping `mini` at the call site broke
+    // no test at all. The flip is landed from inside the finishing
+    // transaction's own opening, which is the real window: `closeSession`
+    // reads the workout, and several awaits later the transaction commits.
+    const workoutId = await startAndLog({session: 'mini'})
+    const realTx = repo.tx.bind(repo)
+    let armed = true
+    repo.tx = (async (fn: never, opts: {description?: string}) => {
+      if (armed && opts?.description === 'Finish session') {
+        armed = false
+        await realTx(tx => tx.setProperty(workoutId, sessionProp, 'A'),
+          {scope: ChangeScope.BlockDefault, description: 'another panel changes the session kind'})
+      }
+      return realTx(fn, opts as never)
+    }) as typeof repo.tx
+
+    try {
+      expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('changed')
+    } finally {
+      repo.tx = realTx
+    }
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
   it('deepens the record when the same break is re-measured as worse', async () => {
     // The other side of "one record per gap". A comeback recorded, then taken
     // back by unticking every set of it — after which `buildHistory` stops
@@ -733,7 +782,7 @@ describe('the finish transaction re-checks what the caller validated', () => {
     // to the old one.
     const workoutId = await startAndLog()
 
-    expect(await finishSession(repo, workoutId, undefined, 'a different stored value')).toBe('undated')
+    expect(await finishSession(repo, workoutId, undefined, {date: 'a different stored value'})).toBe('undated')
 
     expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
@@ -744,7 +793,7 @@ describe('the finish transaction re-checks what the caller validated', () => {
     // disagree, and any rollover past 12 then made every workout permanently
     // unfinishable.
     const stored = repo.block(workoutId).peek()?.properties['strength:date']
-    expect(await finishSession(repo, workoutId, undefined, stored)).toBe('done')
+    expect(await finishSession(repo, workoutId, undefined, {date: stored})).toBe('done')
   })
 })
 

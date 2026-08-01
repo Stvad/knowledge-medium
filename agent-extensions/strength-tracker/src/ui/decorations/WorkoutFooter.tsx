@@ -37,6 +37,8 @@ const message = (outcome: FinishOutcome): string | null => {
     case 'edit-failed':
       return 'A change to one of your sets did not save, so finishing now would '
         + 'record the old number. Check the set, then finish.'
+    case 'changed':
+      return 'This session changed while that was open — press Finish again.'
   }
 }
 
