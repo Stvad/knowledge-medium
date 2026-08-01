@@ -112,6 +112,33 @@ export const prescribeFor = (
   ...(session !== undefined ? {session} : {}),
 })
 
+/** Which of several live sessions a tap continues.
+ *
+ *  Most recently STARTED. Two can look live at once while a peer's `done`
+ *  update is still in flight, and an id has nothing to do with chronology —
+ *  so taking the lowest could send you to the session you already finished,
+ *  whose set checkboxes are (deliberately) still live, and log tonight's work
+ *  into last night's record. `created_at` is the creating device's clock at
+ *  insert, and the systemMint path zeroes `updated_at` only, so it survives a
+ *  derived-id mint intact.
+ *
+ *  Id breaks the tie so every device names the same one. Pulled out as a pure
+ *  function because that tie-break is otherwise untestable: the query happens
+ *  to return rows in an order that produces the same answer, so a test
+ *  through `standingSession` passes whether the clause is there or not.
+ */
+export const mostRecentlyStarted = (
+  rows: readonly {id: string; createdAt: number}[],
+): string | null => {
+  let best: {id: string; createdAt: number} | null = null
+  for (const row of rows) {
+    if (best === null
+      || row.createdAt > best.createdAt
+      || (row.createdAt === best.createdAt && row.id < best.id)) best = row
+  }
+  return best?.id ?? null
+}
+
 /** The in-progress workout for the training day this snapshot describes, if
  *  there is one — the same three fields the readers file a workout by.
  *
@@ -130,11 +157,7 @@ export const standingSession = async (
     && row.properties[FIELD.status] === 'in-progress'
     && typeof row.properties[FIELD.date] === 'string'
     && trainingDay(row.properties[FIELD.date] as string, snapshot.config.dayRolloverHour) === day)
-  // Lowest id when there are somehow several, so every device names the same
-  // one — this only chooses where to NAVIGATE, never where to write.
-  let best: string | null = null
-  for (const row of live) if (best === null || row.id < best) best = row.id
-  return best
+  return mostRecentlyStarted(live)
 }
 
 /** The log page and its settings block, created if they are not there yet.

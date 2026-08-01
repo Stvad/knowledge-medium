@@ -10,7 +10,7 @@
 
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
 
-import {ChangeScope} from '@/data/api'
+import {ChangeScope, propertyValue} from '@/data/api'
 import type {BlockData} from '@/data/api'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
@@ -21,12 +21,12 @@ import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension'
 
-import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE} from '../../src/km/fields'
+import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
 import {finishSession, startSession} from '../../src/km/session'
-import {closeSession, ensureStrengthHome} from '../../src/km/tonight'
+import {closeSession, ensureStrengthHome, mostRecentlyStarted, readProgram, standingSession} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {derivedBlockId} from '@/data/typedRecords'
@@ -34,8 +34,10 @@ import {choiceIdentity, discardSession, readAltChoices, writeAltChoice, writeLay
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
+  dateProp,
   layoffFromProp,
   rolloverHourProp,
+  sessionProp,
   statusProp,
 } from '../../src/km/schema'
 
@@ -404,5 +406,73 @@ describe('the day-rollover setting', () => {
       {scope: ChangeScope.UserPrefs, description: 'midnight rollover'})
 
     expect((await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.dayRolloverHour).toBe(0)
+  })
+})
+
+describe('which live session a tap continues', () => {
+  const DAY = '2026-07-24'
+  const NOW = new Date(`${DAY}T20:00:00`)
+
+  /** A workout row with an explicit birth time, so the ordering under test is
+   *  the one asserted rather than whatever two same-millisecond inserts
+   *  happened to produce. */
+  const liveWorkout = async (id: string, createdAt: number, status = 'in-progress'): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a1', content: 'session',
+      }, {sourceTimestamps: {createdAt, userUpdatedAt: createdAt}})
+      await tx.setProperties(id, {set: [
+        propertyValue(statusProp, status as 'in-progress' | 'done'),
+        propertyValue(sessionProp, 'A'),
+        propertyValue(dateProp, dayToDate(DAY)),
+      ]})
+      await repo.addTypeInTx(tx, id, WORKOUT_TYPE, {}, repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault, description: 'a session'})
+  }
+
+  const standing = async (): Promise<string | null> =>
+    standingSession(repo, WORKSPACE_ID, await readProgram(repo, WORKSPACE_ID), NOW)
+
+  it('finds nothing when nothing is under way', async () => {
+    expect(await standing()).toBeNull()
+  })
+
+  it('ignores a session that is already done', async () => {
+    await liveWorkout('aaaaaaaa-1111-4111-8111-111111111111', 1_000, 'done')
+    expect(await standing()).toBeNull()
+  })
+
+  it('takes the most recently started when two look live', async () => {
+    // A device holding the second session's create row but not yet the first's
+    // `done` update sees both as in-progress. The ids are chosen so that the
+    // OLDER one sorts first: picking the lowest would send you to the session
+    // you already finished, whose set checkboxes are still live, and log
+    // tonight's work into last night's record.
+    await liveWorkout('aaaaaaaa-1111-4111-8111-111111111111', 1_000)
+    await liveWorkout('ffffffff-2222-4222-8222-222222222222', 2_000)
+
+    expect(await standing()).toBe('ffffffff-2222-4222-8222-222222222222')
+  })
+
+  // Directly, not through `standingSession`: the query happens to return rows
+  // in an order that yields the same answer, so a test through it passes with
+  // the tie-break clause deleted. Both orderings, since the whole point of the
+  // clause is that the answer does not depend on the order rows arrive in.
+  it('breaks a tie on id, so every device names the same one', () => {
+    const older = {id: 'aaaa', createdAt: 5_000}
+    const newer = {id: 'ffff', createdAt: 5_000}
+    expect(mostRecentlyStarted([older, newer])).toBe('aaaa')
+    expect(mostRecentlyStarted([newer, older])).toBe('aaaa')
+  })
+
+  it('prefers the later start whichever order the rows arrive in', () => {
+    const first = {id: 'ffff', createdAt: 1_000}
+    const second = {id: 'aaaa', createdAt: 2_000}
+    expect(mostRecentlyStarted([first, second])).toBe('aaaa')
+    expect(mostRecentlyStarted([second, first])).toBe('aaaa')
+  })
+
+  it('has no answer for an empty list', () => {
+    expect(mostRecentlyStarted([])).toBeNull()
   })
 })
