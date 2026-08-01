@@ -35,7 +35,11 @@ import { useStartOfToday } from '@/plugins/daily-notes/today.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
-import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
+import {
+  addDaysIso, dailyNoteBlockId, getOrCreateDailyNote, todayIso,
+} from '@/plugins/daily-notes/dailyNotes.js'
+import { leftSidebarSectionsFacet } from '@/plugins/left-sidebar/facet.js'
+import { CallbackSet } from '@/utils/callbackSet.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
 import {
@@ -1262,6 +1266,9 @@ const markHighlightReviewed = async (block: Block): Promise<boolean> => {
 
   if (!block.repo.isReadOnly) {
     await block.set(reviewedProp, true)
+    // The backlog count is cached rather than subscribed; this is the one write
+    // in the app that changes it, so it's also the one place that has to say so.
+    invalidateBacklogCount()
   }
   return true
 }
@@ -2120,6 +2127,161 @@ const openReviewBacklogAction = {
 }
 
 // ---------------------------------------------------------------------------
+// backlog surfacing
+//
+// Two places tell you the backlog exists. Neither may hold a live subscription:
+// the sidebar one is cheap because the sidebar UNMOUNTS when closed, but the
+// daily-note one rides along on a page you open constantly, and a subscribed
+// typed-block query there would re-resolve on every write touching a highlight.
+// So the count is a one-shot `queryBlocks` behind a module-level cache with a
+// TTL. It is a nudge, not a number anyone acts on to the unit — being a few
+// minutes stale is the intended trade.
+
+const BACKLOG_COUNT_TTL_MS = 5 * 60_000
+
+interface BacklogCount { workspaceId: string; value: number; at: number }
+
+let backlogCount: BacklogCount | null = null
+/** When we last TRIED, successfully or not — see `refreshBacklogCount`. */
+let backlogCountAttempt: { workspaceId: string; at: number } | null = null
+let backlogCountInFlight = false
+const backlogCountListeners = new CallbackSet('readwise.backlog-count')
+
+const backlogCountSnapshot = (): BacklogCount | null => backlogCount
+const subscribeBacklogCount = (notify: () => void) => backlogCountListeners.add(notify)
+
+/** Drop the cache so the next render refetches. Called when the latch marks a
+ *  highlight reviewed, which is the only thing that changes the count from
+ *  inside this app — so the number stays honest where the user is looking
+ *  without anything subscribing. */
+export const invalidateBacklogCount = () => {
+  backlogCount = null
+  backlogCountAttempt = null
+  backlogCountListeners.notify()
+}
+
+/** Rate-limits ATTEMPTS, not successes — which is the whole reason
+ *  `backlogCountAttempt` exists separately from the cached value.
+ *
+ *  The hook below runs this from an effect with no dependency array, and every
+ *  settled fetch notifies subscribers (so an invalidation turns into a
+ *  refetch). Gate on the cached VALUE's age and a query that keeps failing
+ *  leaves the cache empty forever: settle → notify → render → effect → fetch,
+ *  with nothing to break the cycle. Gating on when we last tried bounds it to
+ *  one attempt per window whatever the outcome. */
+const refreshBacklogCount = (repo: Repo, workspaceId: string): void => {
+  if (backlogCountInFlight || !workspaceId) return
+  const now = Date.now()
+  const recentlyTried = backlogCountAttempt
+    && backlogCountAttempt.workspaceId === workspaceId
+    && now - backlogCountAttempt.at < BACKLOG_COUNT_TTL_MS
+  if (recentlyTried) return
+
+  backlogCountAttempt = { workspaceId, at: now }
+  backlogCountInFlight = true
+  repo.queryBlocks(buildUnreviewedHighlightsQuery(workspaceId))
+    .then(rows => { backlogCount = { workspaceId, value: rows.length, at: Date.now() } })
+    // A failed count is not worth a toast; leave the cache empty and let the
+    // next window try again.
+    .catch(() => {})
+    .finally(() => {
+      backlogCountInFlight = false
+      backlogCountListeners.notify()
+    })
+}
+
+/** The cached count, or null while nothing has been fetched yet. The effect has
+ *  no dependency array on purpose: it runs after every render, and
+ *  `refreshBacklogCount` returns immediately unless the cache is missing or
+ *  past its TTL. That is what lets an invalidation turn into a refetch — the
+ *  notify re-renders, the effect runs, the cache is gone, so it fetches. */
+const useBacklogCount = (workspaceId: string): number | null => {
+  const repo = useRepo()
+  const snapshot = useSyncExternalStore(
+    subscribeBacklogCount,
+    backlogCountSnapshot,
+    backlogCountSnapshot,
+  )
+  useEffect(() => { refreshBacklogCount(repo, workspaceId) })
+  return snapshot && snapshot.workspaceId === workspaceId ? snapshot.value : null
+}
+
+const ReviewBacklogSidebarSection = ({ closeSidebar }: { closeSidebar: () => void }) => {
+  const repo = useRepo()
+  const workspaceId = repo.activeWorkspaceId ?? ''
+  const count = useBacklogCount(workspaceId)
+  if (!count) return null
+
+  return (
+    <button
+      type="button"
+      className="flex h-10 w-full items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-accent"
+      onClick={() => {
+        closeSidebar()
+        void getOrCreateReviewBacklog(repo, workspaceId).then(page => {
+          navigateFromGlobalCommand(repo, { blockId: page.id, workspaceId })
+        })
+      }}
+    >
+      <span className="min-w-0 flex-1 truncate">Readwise review</span>
+      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-semibold tabular-nums">
+        {count}
+      </span>
+    </button>
+  )
+}
+
+const readwiseBacklogSidebarSection = {
+  id: 'readwise.review-backlog',
+  component: ReviewBacklogSidebarSection,
+}
+
+const DailyNoteBacklogHint = ({ block, Inner }: BlockRendererProps & { Inner: BlockRenderer }) => {
+  const repo = useRepo()
+  const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+  const count = useBacklogCount(workspaceId)
+
+  return (
+    <>
+      <Inner block={block}/>
+      {!!count && (
+        <button
+          type="button"
+          data-block-interaction="ignore"
+          className="mt-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+          onClick={event => {
+            event.stopPropagation()
+            void getOrCreateReviewBacklog(repo, workspaceId).then(page => {
+              navigateFromGlobalCommand(repo, { blockId: page.id, workspaceId })
+            })
+          }}
+        >
+          {count} Readwise {count === 1 ? 'highlight' : 'highlights'} to review →
+        </button>
+      )}
+    </>
+  )
+}
+
+const decorateDailyNoteWithBacklogHint = cachedContentDecorator(
+  DailyNoteBacklogHint as ComponentType<{ block: Block, Inner: BlockRenderer }>,
+  'WithReadwiseBacklogHint',
+)
+
+/** Only on TODAY's daily note, and only when it is the focal document. Every
+ *  past daily note carrying this would be noise, and `isTopLevel` keeps it off
+ *  breadcrumbs, embeds and backlink entries — where it would render once per
+ *  occurrence. */
+const readwiseDailyNoteBacklogDecorator: BlockContentDecoratorContribution = ctx => {
+  if (!ctx.types.includes(DAILY_NOTE_TYPE)) return null
+  if (!ctx.isTopLevel) return null
+  const workspaceId = ctx.block.peek()?.workspaceId
+  if (!workspaceId) return null
+  if (ctx.block.id !== dailyNoteBlockId(workspaceId, todayIso())) return null
+  return decorateDailyNoteWithBacklogHint
+}
+
+// ---------------------------------------------------------------------------
 // editor overrides
 
 const connectedEditor = definePropertyEditorOverride(connectedHintProp, {
@@ -2197,6 +2359,8 @@ export default [
   appEffectsFacet.of(autoSyncEffect, { source }),
   blockContentDecoratorsFacet.of(readwiseDocumentContentDecorator, { source }),
   blockContentDecoratorsFacet.of(readwiseReviewedContentDecorator, { source }),
+  blockContentDecoratorsFacet.of(readwiseDailyNoteBacklogDecorator, { source }),
+  leftSidebarSectionsFacet.of(readwiseBacklogSidebarSection, { source }),
 
   blockRenderersFacet.of(
     { id: 'readwiseReviewBacklog', renderer: ReviewBacklogRenderer },
