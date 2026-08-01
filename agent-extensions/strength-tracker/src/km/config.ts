@@ -71,11 +71,21 @@ export interface LoadedConfig {
   planRootId: string | null
 }
 
+/** A training day rolls over in the small hours — "a Sunday session logged at
+ *  1:10am Monday is Sunday's". Past NOON the idea stops meaning that, and it
+ *  actively breaks: workout dates are stored at local noon, so a rollover
+ *  above 12 shifts a stored date onto the previous day while any reader that
+ *  does not re-apply it stays on the stored one. Two decoders of one value
+ *  then disagree, which is how a hand-set 13 made every workout permanently
+ *  unfinishable. Clamped here, where the setting is read, so no caller has to
+ *  know — and 0 is left reachable, since "midnight" is a legitimate answer. */
+const MAX_ROLLOVER_HOUR = 12
+
 /** Merge engine-knob overrides from the settings block into a base config. */
 const applySettings = (base: ProgramConfig, settings: BlockData | null): ProgramConfig => ({
   ...base,
   roundTo: read(settings, roundToProp),
-  dayRolloverHour: read(settings, rolloverHourProp),
+  dayRolloverHour: Math.min(MAX_ROLLOVER_HOUR, Math.max(0, read(settings, rolloverHourProp))),
   perLiftCadenceDays: read(settings, cadenceDaysProp),
 })
 

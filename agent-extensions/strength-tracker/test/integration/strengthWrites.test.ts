@@ -24,8 +24,9 @@ import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension'
 import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE} from '../../src/km/fields'
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
+import {loadConfig} from '../../src/km/config'
 import {finishSession, startSession} from '../../src/km/session'
-import {closeSession, sessionParent} from '../../src/km/tonight'
+import {closeSession, ensureStrengthHome, sessionParent} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {discardSession, readAltChoices, writeAltChoice, writeLayoff, writeLayoffInTx} from '../../src/km/store'
@@ -33,6 +34,7 @@ import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
   layoffFromProp,
+  rolloverHourProp,
   statusProp,
 } from '../../src/km/schema'
 
@@ -328,5 +330,31 @@ describe('a layoff mint filed away from the log page', () => {
     expect(buildLayoffs(
       await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load(),
     )).toHaveLength(1)
+  })
+})
+
+describe('the day-rollover setting', () => {
+  it('is clamped to noon, so one stored date cannot decode two ways', async () => {
+    // Workout dates are stored AT local noon. A rollover above 12 shifts a
+    // stored date onto the previous day for any reader that re-applies it,
+    // while readers that do not stay on the stored day — two decoders of one
+    // value, which is how a hand-set 13 made every workout unfinishable.
+    const {settingsBlockId} = await ensureStrengthHome(repo, WORKSPACE_ID)
+    await repo.tx(tx => tx.setProperty(settingsBlockId, rolloverHourProp, 20),
+      {scope: ChangeScope.UserPrefs, description: 'a nonsensical rollover'})
+
+    const {config} = await loadConfig(repo, WORKSPACE_ID, settingsBlockId)
+
+    expect(config.dayRolloverHour).toBe(12)
+    // A stored noon date decodes to the same day either way at the clamp.
+    expect(trainingDay(dayToDate('2026-07-24'), config.dayRolloverHour)).toBe('2026-07-24')
+  })
+
+  it('still allows midnight', async () => {
+    const {settingsBlockId} = await ensureStrengthHome(repo, WORKSPACE_ID)
+    await repo.tx(tx => tx.setProperty(settingsBlockId, rolloverHourProp, 0),
+      {scope: ChangeScope.UserPrefs, description: 'midnight rollover'})
+
+    expect((await loadConfig(repo, WORKSPACE_ID, settingsBlockId)).config.dayRolloverHour).toBe(0)
   })
 })

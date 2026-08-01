@@ -21,7 +21,7 @@ import {statusProp as todoStatusProp, TODO_TYPE, todoType} from '@/plugins/todo/
 import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
-import {adjustSet, finishSession, startSession} from '../../src/km/session'
+import {adjustSet, finishSession, loggedSetCount, startSession} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {
@@ -850,5 +850,56 @@ describe('a session that cannot be filed on a day', () => {
 
     expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
     expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(true)
+  })
+})
+
+describe('what Discard is about to destroy', () => {
+  it('counts logged sets wherever they sit, including where Finish refuses them', async () => {
+    // Discard cascades, so the warning has to be about the whole subtree. The
+    // canonical-shape walk cannot see a performed set indented under a note —
+    // which is exactly the tree Finish refuses, so it is the one shape most
+    // likely to still be sitting there when someone reaches for Discard.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+    await tick(sets[1].id)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'a-note', workspaceId: WORKSPACE_ID, parentId: entry.id, orderKey: 'z0', content: 'note',
+      })
+      await tx.move(sets[1].id, {parentId: 'a-note', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'indent one under a note'})
+
+    expect(await loggedSetCount(repo, workoutId)).toBe(2)
+  })
+
+  it('is zero for a session where nothing was ticked', async () => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    expect(await loggedSetCount(repo, workoutId)).toBe(0)
+  })
+})
+
+describe('a set moved far from its workout', () => {
+  it('still cannot be edited once the session is closed', async () => {
+    // The ancestor walk had a hop cutoff, so a set moved deep enough lost
+    // sight of the workout and the closed-session guard never fired.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    let parent = entry.id
+    for (const [depth, id] of ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7'].entries()) {
+      await repo.tx(tx => tx.create({
+        id, workspaceId: WORKSPACE_ID, parentId: parent, orderKey: 'z0', content: `note ${depth}`,
+      }), {scope: ChangeScope.BlockDefault, description: 'nest'})
+      parent = id
+    }
+    await repo.tx(tx => tx.move(sets[1].id, {parentId: 'd7', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault, description: 'move the set deep'})
+
+    expect(await adjustSet(repo, sets[1].id, {weight: 5})).toBe('closed')
   })
 })

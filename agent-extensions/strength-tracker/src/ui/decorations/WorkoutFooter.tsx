@@ -9,12 +9,15 @@
 
 import {useState} from 'react'
 
+import {openDialog} from '@/utils/dialogs.js'
+
 import type {Block} from '@/data/block.js'
 import {usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 
 import {FIELD} from '../../km/fields'
-import type {FinishOutcome} from '../../km/session'
+import {loggedSetCount, type FinishOutcome} from '../../km/session'
 import {statusProp} from '../../km/schema'
+import {ConfirmDialog} from '../ConfirmDialog'
 import {closeSession} from '../../km/tonight'
 import {discardSession} from '../../km/store'
 import {useSessionRows} from './sessionRows'
@@ -98,20 +101,36 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
           className="rounded px-2 py-1 text-muted-foreground underline decoration-dotted hover:text-foreground disabled:opacity-50"
           onClick={event => {
             event.stopPropagation()
-            if (done.length > 0 && !confirm(
-              `Discard this session? ${done.length} logged ${done.length === 1 ? 'set' : 'sets'} will be deleted.`,
-            )) return
-            setBusy(true)
             setProblem(null)
-            void discardSession(block.repo, block.id)
-              .then(outcome => setProblem(outcome === 'discarded'
-                ? null
-                : 'Already closed elsewhere — nothing to discard.'))
-              .catch((error: unknown) => {
+            void (async () => {
+              // Counted over the whole subtree, not the canonical positions:
+              // a performed set indented under a note is still work Discard
+              // destroys, and `done` above cannot see it — so the warning was
+              // skipped for exactly the tree Finish refuses.
+              const logged = await loggedSetCount(block.repo, block.id)
+              if (logged > 0) {
+                const go = await openDialog(ConfirmDialog, {
+                  title: 'Discard this session?',
+                  body: `${logged} logged ${logged === 1 ? 'set' : 'sets'} will be deleted. `
+                    + 'This cannot be undone from here.',
+                  confirmLabel: 'Discard',
+                  destructive: true,
+                })
+                if (!go) return
+              }
+              setBusy(true)
+              try {
+                const outcome = await discardSession(block.repo, block.id)
+                setProblem(outcome === 'discarded'
+                  ? null
+                  : 'Already closed elsewhere — nothing to discard.')
+              } catch (error: unknown) {
                 console.error('[strength] could not discard the session', error)
                 setProblem('Could not discard — the change was not saved.')
-              })
-              .finally(() => setBusy(false))
+              } finally {
+                setBusy(false)
+              }
+            })()
           }}
         >Discard</button>
       ) : null}

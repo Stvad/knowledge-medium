@@ -186,6 +186,11 @@ export const closeSession = async (
   // so a later finish adopts the wrong one rather than correcting it.
   const workout = await repo.load(workoutId)
   const stored = workout?.properties[FIELD.date]
+  // `trainingDay`, matching `detectPendingLayoff`, which decodes the history
+  // it compares against the same way (`fullSessionDays`). Decoding this one
+  // call site differently would put the gap's two ends on different scales.
+  // What made the two disagree was an unbounded `rolloverHour`; that is
+  // constrained where it is read — see `applySettings`.
   const performedOn = typeof stored === 'string' && !Number.isNaN(new Date(stored).getTime())
     ? trainingDay(stored, snapshot.config.dayRolloverHour)
     : null

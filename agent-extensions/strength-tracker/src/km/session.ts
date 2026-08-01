@@ -131,17 +131,46 @@ const both = (
 const newestFirst = (a: BlockData, b: BlockData): number =>
   (b.createdAt ?? 0) - (a.createdAt ?? 0) || (a.id < b.id ? -1 : 1)
 
-/** The chain above a block, nearest first, bounded so a cycle in hand-edited
- *  parentage cannot spin. */
+/** The chain above a block, nearest first.
+ *
+ *  A visited set rather than a hop limit: a cutoff dropped the workout out of
+ *  reach for a set moved deep enough, and `adjustSet` then missed the
+ *  closed-session guard entirely and let the controls rewrite a finished
+ *  record. Cycles are what the bound is actually for, so that is what it
+ *  guards against. */
 const ancestorsOf = async (tx: Tx, block: BlockData): Promise<BlockData[]> => {
   const chain: BlockData[] = []
+  const seen = new Set<string>([block.id])
   let current: BlockData | null = block
-  for (let hop = 0; hop < 6 && current?.parentId; hop += 1) {
+  while (current?.parentId && !seen.has(current.parentId)) {
+    seen.add(current.parentId)
     current = await tx.get(current.parentId)
     if (!current || current.deleted) break
     chain.push(current)
   }
   return chain
+}
+
+/** Done sets anywhere under a workout, however they have been rearranged.
+ *
+ *  Deliberately NOT the canonical-shape walk the finish uses: this answers
+ *  "would discarding destroy logged work", and a set indented under a note is
+ *  still work you did — it just cannot be recorded where it sits. Counting
+ *  only the canonical positions would skip the warning for exactly the tree
+ *  Finish refuses, and delete it unannounced. */
+export const loggedSetCount = async (repo: Repo, workoutId: string): Promise<number> => {
+  const seen = new Set<string>([workoutId])
+  let count = 0
+  const walk = async (parentId: string): Promise<void> => {
+    for (const child of (await repo.block(parentId).children.load()) ?? []) {
+      if (child.deleted || seen.has(child.id)) continue
+      seen.add(child.id)
+      if (hasBlockType(child, SET_TYPE) && child.properties[FIELD.todoStatus] === 'done') count += 1
+      await walk(child.id)
+    }
+  }
+  await walk(workoutId)
+  return count
 }
 
 /** The `taken` fallback, in the shape `getOrCreateTypedChild`'s contract
