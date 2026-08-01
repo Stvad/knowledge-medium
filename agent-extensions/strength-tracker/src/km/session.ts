@@ -90,7 +90,7 @@ const workoutIdentity = (workspaceId: string, day: string, session: SessionType)
 /** One entry per lift, keyed on the plan block where there is one so a lift
  *  renamed mid-session stays the same entry. `escapeKeyPart` so a lift NAMED
  *  "Bench|1" cannot derive the same id as "Bench" at occurrence 1. */
-const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity => {
+export const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity => {
   const part = escapeKeyPart(key)
   return {
     namespace: EXERCISE_NS,
@@ -251,7 +251,12 @@ export const takePlaceOf = async (
     const mine = workout !== null && !workout.deleted
       && workout.parentId === placement.parentId
     if (mine) {
-      await tx.move(workoutId, {parentId: placement.parentId, orderKey: replaces.orderKey})
+      // `line.orderKey`, not the snapshot's: another pane can reorder the
+      // still-empty line under the same parent while the dialog sits open, and
+      // the pre-dialog key then names a slot it has left — putting the session
+      // somewhere it never was, possibly across unrelated siblings, before
+      // deleting the line from where it actually is.
+      await tx.move(workoutId, {parentId: placement.parentId, orderKey: line.orderKey})
     }
     // Cleared either way: the line was opened to hold a session and now has
     // one — here, or wherever the adopted one lives.
@@ -510,6 +515,19 @@ export const startSession = async (
       .filter(block => !block.deleted && hasBlockType(block, EXERCISE_ENTRY_TYPE))
     // Settled for every row at once, before any of them writes.
     const {matched: continues, claimed} = matchEntries(plan.lifts, liveEntries)
+    // Everything already spoken for: what the matcher handed out, plus what
+    // each row below is given as it goes. The exclusion has to reach the mint
+    // fallback too — see there.
+    //
+    // The `claimed` seed is the load-bearing half. Growing it inside the loop
+    // is defence in depth, and provably so today: the fallback finds an entry
+    // only if `namesThisLift` accepts it, which is the exact predicate
+    // `matchEntries`' second pass uses — so anything the fallback could reach
+    // was already claimed, and a row that reaches the fallback at all is one
+    // no entry fits. Mutation-tested: dropping the in-loop growth breaks
+    // nothing. It is kept because the day those two predicates stop being the
+    // same function is the day one entry quietly serves two lifts again.
+    const assigned = new Set<string>(claimed)
 
     for (const [row, lift] of plan.lifts.entries()) {
       const already = continues[row]
@@ -523,7 +541,7 @@ export const startSession = async (
           // name a bare row still carries is enough. `stillNamesLift` would
           // wave it through, and both lifts would share one set tree.
           adoptable: both(
-            block => !claimed.has(block.id),
+            block => !assigned.has(block.id),
             both(stillUnder(workout.id), stillNamesLift(lift)),
           ),
           ...entrySpec(workout.id, lift, typeSnapshot),
@@ -536,9 +554,18 @@ export const startSession = async (
         // every Start tap, forever. Look for the mint the last tap made
         // before making a new one: the same lookup-then-mint the layoff path
         // does, and the reason `startSession` can claim to be idempotent.
+        // Excluding what is already spoken for, exactly as the seat above
+        // does. Dropped here, the fallback matched purely on the NAME — so
+        // two same-named lifts with different definition refs, one of whose
+        // seats is permanently taken, both landed on the one bare legacy
+        // entry and shared a single set tree. `assigned` rather than
+        // `claimed`: a row given an entry earlier in THIS loop is spoken for
+        // too, and the matcher never saw that handout.
         : await adoptOrMint(repo, tx, workout.id, entrySpec(workout.id, lift, typeSnapshot),
-          block => hasBlockType(block, EXERCISE_ENTRY_TYPE) && namesThisLift(block, lift),
+          block => !assigned.has(block.id)
+            && hasBlockType(block, EXERCISE_ENTRY_TYPE) && namesThisLift(block, lift),
           typeSnapshot)
+      assigned.add(entryId)
 
       // Read once, and kept up to date as we mint: a set's re-find key is its
       // POSITION among its lift's live sets, which is the same thing its

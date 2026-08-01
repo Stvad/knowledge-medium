@@ -12,6 +12,7 @@ import {ChangeScope, propertyValue} from '@/data/api'
 import type {BlockData} from '@/data/api'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
+import {derivedBlockId} from '@/data/typedRecords'
 import {deleteBlock} from '@/data/mutators'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {hasBlockType} from '@/data/properties'
@@ -22,7 +23,7 @@ import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from '../../src/km/f
 import {nextWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
-import {adjustSet, finishSession, loggedSetCount, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
+import {adjustSet, exerciseIdentity, finishSession, loggedSetCount, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
 import {discardSession} from '../../src/km/store'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -312,6 +313,38 @@ describe('finishSession — closing without deleting anything', () => {
 })
 
 describe('a rejected seat is permanent, so the mint must be re-findable', () => {
+  it('will not hand one entry to two lifts when a seat is permanently taken', async () => {
+    // Two same-named lifts with DIFFERENT definition refs. The matcher gives
+    // the bare legacy entry to the first; the second derives a seat that is
+    // permanently taken, so it falls back — and the fallback matched purely on
+    // the name, so it found the very entry just handed out. Both prescriptions
+    // then shared one entry and one set tree.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Row', 1, {definitionId: 'def-a'}),
+    ]))
+    const [first] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    // Bare: no definition ref, so it matches EITHER lift by name.
+    await repo.tx(async tx => { await tx.setProperties(first.id, {unset: [definitionProp]}) },
+      {scope: ChangeScope.BlockDefault, description: 'a legacy entry with no ref'})
+    // …and tombstone the second lift's derived seat, so it can never be had.
+    const takenSeat = derivedBlockId(
+      exerciseIdentity(workoutId, 'def-b', 0))
+    await repo.tx(async tx => {
+      await tx.create({
+        id: takenSeat, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'zq', content: 'squatter',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'the seat is occupied'})
+
+    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Row', 1, {definitionId: 'def-a'}),
+      lift('Row', 1, {definitionId: 'def-b', occurrence: 0}),
+    ]))
+
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries).toHaveLength(2)
+    expect(new Set(entries.map(entry => entry.id)).size).toBe(2)
+  })
+
   it('does not add another entry on every later tap', async () => {
     // `taken` never becomes untaken — a tombstone stays one, and a repointed
     // block keeps failing `adoptable`. A blind mint therefore adds an entry
@@ -1560,6 +1593,20 @@ describe('taking the place of the empty line you ran it on', () => {
 
       expect(await replace(workoutId)).toBe('kept-the-line')
       expect(await isBlockDeleted(repo, 'blank')).toBe(false)
+    })
+
+    it('follows the line to its new slot when a peer reordered it', async () => {
+      // Still expendable, still under the same parent, just moved — so the
+      // pre-dialog `orderKey` names a slot the line has left. Using it put the
+      // session where the line USED to be, potentially across unrelated
+      // siblings, and then deleted the line from where it actually is.
+      const workoutId = await startOverAnEmptyLine()
+      await repo.tx(async tx => { await tx.move('blank', {parentId: PAGE_ID, orderKey: 'zz'}) },
+        {scope: ChangeScope.BlockDefault, description: 'a peer reordered the line'})
+
+      expect(await replace(workoutId)).toBe('took-its-place')
+
+      expect(repo.block(workoutId).peek()!.orderKey).toBe('zz')
     })
 
     it('and leaves the session where it was stamped rather than half-moving it', async () => {

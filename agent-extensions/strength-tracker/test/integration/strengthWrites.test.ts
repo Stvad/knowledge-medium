@@ -477,6 +477,19 @@ describe('an edit still in flight when Finish is tapped', () => {
   })
 })
 
+describe('closeSession, before the finish transaction', () => {
+  it('says the workout is gone rather than undated when a peer discarded it', async () => {
+    // Reading a date off a row that is not there produced `undefined`, which
+    // this path reads as an unreadable date — so the footer told you to set a
+    // date on a workout that no longer exists. `finishSession` would have said
+    // `gone`; this says it too, and one await earlier.
+    const workoutId = await startAndLog()
+    expect(await discardSession(repo, workoutId)).toBe('discarded')
+
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('gone')
+  })
+})
+
 describe('the finish transaction re-checks what the caller validated', () => {
   it('refuses when the date changed between the read and the transaction', async () => {
     // `strength:date` is hand-editable and the caller's read is several awaits

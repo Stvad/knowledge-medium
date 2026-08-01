@@ -12,11 +12,10 @@ import {useState} from 'react'
 import {openDialog} from '@/utils/dialogs.js'
 
 import type {Block} from '@/data/block.js'
-import {usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
+import {useData, useWorkspaceId} from '@/hooks/block.js'
 
 import {FIELD} from '../../km/fields'
 import {loggedSetCount, type FinishOutcome} from '../../km/session'
-import {statusProp} from '../../km/schema'
 import {ConfirmDialog} from '../ConfirmDialog'
 import {closeSession} from '../../km/tonight'
 import {discardSession} from '../../km/store'
@@ -42,7 +41,14 @@ const message = (outcome: FinishOutcome): string | null => {
 
 export const WorkoutFooter = ({block}: {block: Block}) => {
   const workspaceId = useWorkspaceId(block)
-  const [status] = usePropertyValue(block, statusProp)
+  // The RAW value, not `usePropertyValue`: `strength:status` has a schema
+  // default of `in-progress`, so a block you hand-tagged as a Workout — or
+  // whose status you cleared — reads as live here while `finishSession` and
+  // `discardSession` (which compare the stored string) refuse it as `gone` and
+  // `buildHistory` (same) files it as a completed session. Three readers, three
+  // answers, and the two controls the block offers can never succeed. Absent
+  // means absent, which is what the other two already say.
+  const status = useData(block)?.properties[FIELD.status]
   const {entriesOf, setsOf} = useSessionRows(workspaceId)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)

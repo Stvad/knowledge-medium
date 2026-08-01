@@ -176,7 +176,12 @@ export const closeSession = async (
   // run one session long. Both are permanent: the record is keyed on `from`,
   // so a later finish adopts the wrong one rather than correcting it.
   const workout = await repo.load(workoutId)
-  const stored = workout?.properties[FIELD.date]
+  // Asked before the date is: a peer discarding this workout while the program
+  // was being read leaves no row at all, and reading a date off `undefined`
+  // turns that into `undated` — which tells you to set a date on a workout
+  // that is not there. `finishSession` would say `gone`; say it here too.
+  if (!workout || workout.deleted) return 'gone'
+  const stored = workout.properties[FIELD.date]
   // `trainingDay`, matching `detectPendingLayoff`, which decodes the history
   // it compares against the same way (`fullSessionDays`). Decoding this one
   // call site differently would put the gap's two ends on different scales.
@@ -194,7 +199,7 @@ export const closeSession = async (
   const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
     ? layoffFromPending(pending)
     : undefined
-  if (!record) return finishSession(repo, workoutId, undefined, workout?.properties[FIELD.date])
+  if (!record) return finishSession(repo, workoutId, undefined, workout.properties[FIELD.date])
 
   // A gap record needs a home, and the page is created HERE rather than at
   // read time — but creating it is a WRITE, and every refusal below is
@@ -209,12 +214,12 @@ export const closeSession = async (
   // whole of Finish, and it cannot be closed without putting page creation
   // inside the finishing transaction — which `ensureStrengthHome` cannot be,
   // running transactions of its own.
-  const blocker = await finishBlocker(repo, workoutId, workout?.properties[FIELD.date])
+  const blocker = await finishBlocker(repo, workoutId, workout.properties[FIELD.date])
   if (blocker) return blocker
 
   return finishSession(repo, workoutId, {
     pageId: (await ensureStrengthHome(repo, workspaceId)).pageId,
     record,
     knownIds: snapshot.layoffs.map(entry => entry.id),
-  }, workout?.properties[FIELD.date])
+  }, workout.properties[FIELD.date])
 }
