@@ -82,7 +82,21 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
 
 /** Get-or-create a per-workspace kernel page. Repairs a live page that's
  *  missing the expected types or alias; restores a soft-deleted row;
- *  otherwise creates fresh. */
+ *  otherwise creates fresh.
+ *
+ *  On a READ-ONLY workspace it only GETS: every write below is skipped and the
+ *  handle is returned as-is. `repo.tx` does not itself refuse a read-only
+ *  session — it writes locally and the rows are RLS-rejected on sync — so
+ *  without this, merely opening a kernel-page surface as a viewer leaves
+ *  never-syncing junk in a workspace you do not own. The ordinary read-only
+ *  case still works: the id is deterministic, so a page the owner has already
+ *  created has synced and resolves normally. Where the owner has none, the
+ *  caller gets a handle to a block that doesn't exist and the surface renders
+ *  empty — the right outcome for a viewer, and strictly better than writing.
+ *
+ *  This belongs here rather than in each surface because every one of them —
+ *  daily notes, SRS review, locations, media capture, the Readwise backlog —
+ *  reaches the same writes through this one function. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
@@ -101,6 +115,11 @@ export const getOrCreateKernelPage = async (
       'KernelPageSpec.markerType is required — pass a marker block-type to query the page by, or null for a page reached only by its id and alias.',
     )
   }
+  // AFTER the spec validation above, so a malformed call still fails loudly
+  // for the author rather than silently no-op-ing on whichever session happens
+  // to be read-only.
+  if (repo.isReadOnly) return repo.block(id)
+
   const types: readonly string[] =
     spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 
