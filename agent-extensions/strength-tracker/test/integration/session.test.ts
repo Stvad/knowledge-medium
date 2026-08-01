@@ -1522,6 +1522,24 @@ describe('taking the place of the empty line you ran it on', () => {
     expect(await isBlockDeleted(repo, 'blank')).toBe(true)
   })
 
+  it('will not slot a session this call did not create, same parent or not', async () => {
+    // Losing the post-dialog start race hands back a PEER's session. It can
+    // easily sit under the same page you are pointing at — both devices start
+    // from the Strength Log — and the parentage test then read shared parent
+    // as ownership and dragged their session into your cursor's slot.
+    const theirs = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const wasAt = repo.block(theirs).peek()!.orderKey
+    await emptyLine('blank', 'a5')
+
+    expect(await takePlaceOf(
+      repo, theirs, {parentId: PAGE_ID, replaces: {id: 'blank', orderKey: 'a5'}}, false,
+    )).toBe('cleared-only')
+
+    expect(repo.block(theirs).peek()!.orderKey).toBe(wasAt)
+    // Still cleared: the line was opened to hold a session and now there is one.
+    expect(await isBlockDeleted(repo, 'blank')).toBe(true)
+  })
+
   it('does nothing when there is no line to replace', async () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     expect(await takePlaceOf(repo, workoutId, {parentId: PAGE_ID})).toBe('nothing-to-do')

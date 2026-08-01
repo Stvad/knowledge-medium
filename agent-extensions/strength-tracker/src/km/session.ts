@@ -211,6 +211,12 @@ export const takePlaceOf = async (
   repo: Repo,
   workoutId: string,
   placement: {parentId: string; replaces?: {id: string; orderKey: string}},
+  /** Whether THIS call is the one that created the session — `startSession`'s
+   *  `stamped`. Sharing a parent is not ownership: a peer that won the start
+   *  race and filed its workout under the same page passed the parent check,
+   *  so the line's slot was applied to somebody else's session, reordering it
+   *  for a placement this call never made. */
+  placedByUs = true,
 ): Promise<'took-its-place' | 'cleared-only' | 'kept-the-line' | 'nothing-to-do'> => {
   const replaces = placement.replaces
   if (replaces === undefined || replaces.id === workoutId) return 'nothing-to-do'
@@ -247,8 +253,14 @@ export const takePlaceOf = async (
     // pre-transaction load is old by the time the write lock is held, and
     // acting on it drags a workout back out of wherever a concurrent filing
     // gesture just put it.
+    //
+    // `placedByUs` first: the parentage test was standing in for "did this
+    // call put it here", and it answers wrong for a peer's session that
+    // happens to live under the same page. It stays as the secondary check —
+    // a session we created but that has since been moved is no longer ours to
+    // slot either.
     const workout = await tx.get(workoutId)
-    const mine = workout !== null && !workout.deleted
+    const mine = placedByUs && workout !== null && !workout.deleted
       && workout.parentId === placement.parentId
     if (mine) {
       // `line.orderKey`, not the snapshot's: another pane can reorder the

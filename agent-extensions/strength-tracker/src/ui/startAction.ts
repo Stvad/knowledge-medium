@@ -106,7 +106,11 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
 
   // Reported, not thrown: the session is real, and a leftover blank line is a
   // smaller thing than the action appearing to have failed.
-  await takePlaceOf(repo, workoutId, placement)
+  // `stamped` goes in: losing the start race hands back a peer's session, and
+  // that one is not ours to move into the cursor's slot even when it happens
+  // to sit under the same parent. The blank line is still cleared — it was
+  // opened to hold a session and now there is one.
+  await takePlaceOf(repo, workoutId, placement, stamped)
     .catch((error: unknown) => console.error('[strength] could not clear the empty line', error))
 
   // Navigate FIRST. The session exists from the line above, and a failure to
