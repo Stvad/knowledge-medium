@@ -188,6 +188,39 @@ describe('ensureStrengthHome', () => {
     expect(await liveChildren(pageId, SETTINGS_TYPE)).toHaveLength(1)
   })
 
+  it('rescues a pre-seat settings block that also lost its type', async () => {
+    // Blocks minted before the derived seat existed carry RANDOM ids — the live
+    // workspace has one — so neither the typed query nor the seat can reach one
+    // that has also lost its tag, and the next open minted a blank block at the
+    // seat while the real plan root, rollover hour and choice children sat in
+    // the outline. `typedRecords.ts` requires exactly this when a derived id is
+    // retrofitted onto a kind with rows already out there.
+    //
+    // Identified by the VALUES it carries rather than by content or position,
+    // so what is matched is the thing worth rescuing.
+    const fresh = 'ws-with-nothing-in-it'
+    const {pageId} = await ensureStrengthHome(repo, fresh)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'legacy-settings', workspaceId: fresh, parentId: pageId,
+        orderKey: 'a1', content: 'Strength settings',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a settings block from before the seat'})
+    await repo.tx(async tx => {
+      await tx.setProperties('legacy-settings', {set: [propertyValue(rolloverHourProp, 5)]})
+    }, {scope: ChangeScope.UserPrefs, description: 'configured, which is what is at stake'})
+    // Nothing at the seat and nothing tagged, which is the state after the
+    // legacy block loses its type.
+    await repo.tx(tx => tx.run(deleteBlock, {id: derivedBlockId(settingsIdentity(pageId))}),
+      {scope: ChangeScope.BlockDefault, description: 'no seat block'})
+
+    expect(await findSettingsBlock(repo, fresh, pageId)).toBe('legacy-settings')
+    expect((await readProgram(repo, fresh)).config.dayRolloverHour).toBe(5)
+    // …and the writer agrees rather than minting beside it, then repairs the tag.
+    expect(await getOrCreateSettingsBlock(repo, fresh, pageId)).toBe('legacy-settings')
+    expect(hasBlockType(repo.block('legacy-settings').peek()!, SETTINGS_TYPE)).toBe(true)
+  })
+
   it('READS a settings block whose type was removed, without repairing it first', async () => {
     // The repair above is a WRITE, and the path that matters most never
     // reaches it: `readProgram` runs on the Start flow and must not bootstrap,
@@ -401,6 +434,90 @@ describe('the layoff record and the finish that justifies it', () => {
     expect(buildLayoffs(
       await repo.queryBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}),
     )[0]).toMatchObject({from: '2026-07-14', to: '2026-07-24', days: 10})
+  })
+
+  it('refuses to close when the record it was relying on has gone', async () => {
+    // The branch where writing nothing is the POINT is the one that never
+    // re-checked its reason. `layoffAlreadyRecorded` says "a record already
+    // covers this gap", so Finish writes none — and if that record is deleted
+    // in the window, the gap ends up recorded nowhere and is undetectable on
+    // every later day once this session joins history.
+    const {tonight} = await twoPriorSessions()
+    const covering = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID,
+      {from: '2026-07-14', to: '2026-07-24', days: 10, tierId: '1-2w', pct: 0.9})
+    await repo.tx(tx => tx.run(deleteBlock, {id: covering}),
+      {scope: ChangeScope.BlockDefault, description: 'a peer deletes the layoff'})
+
+    expect(await finishSession(repo, tonight, undefined, {
+      layoffOnRecord: {id: covering, from: '2026-07-14', pct: 0.9},
+    })).toBe('changed')
+
+    expect(repo.block(tonight).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('refuses when the record survives but no longer names this gap', async () => {
+    // Surviving is not covering. `strength:from` is hand-editable, so a record
+    // re-pointed at another break leaves this one with nothing — the same test
+    // `layoffAlreadyRecorded` applies, re-asked against the row on disk.
+    const {tonight} = await twoPriorSessions()
+    const covering = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID,
+      {from: '2026-07-14', to: '2026-07-24', days: 10, tierId: '1-2w', pct: 0.9})
+    await repo.tx(tx => tx.setProperty(covering, layoffFromProp, dayToDate('2026-05-05')),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the gap start'})
+
+    expect(await finishSession(repo, tonight, undefined, {
+      layoffOnRecord: {id: covering, from: '2026-07-14', pct: 0.9},
+    })).toBe('changed')
+  })
+
+  it('still closes while the record it relied on is intact', async () => {
+    // The other half of the mutation: a fence that refuses everything passes
+    // both tests above for the wrong reason.
+    const {tonight} = await twoPriorSessions()
+    const covering = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID,
+      {from: '2026-07-14', to: '2026-07-24', days: 10, tierId: '1-2w', pct: 0.9})
+
+    expect(await finishSession(repo, tonight, undefined, {
+      layoffOnRecord: {id: covering, from: '2026-07-14', pct: 0.9},
+    })).toBe('done')
+  })
+
+  it('carries the relied-on record from closeSession into the finish', async () => {
+    // Pins the CALL SITE, not just the check — the lesson from the two fences
+    // before this, where testing `finishSession` directly left `closeSession`
+    // free to pass nothing. Tonight is a ten-day gap, so the decision is
+    // "already covered, write none"; the record is deleted from inside the
+    // finishing transaction's own opening.
+    // ONE prior session, so tonight really is a ten-day gap and the decision
+    // reached is "already covered, write none" — `twoPriorSessions` leaves a
+    // four-day gap, where there is no pending layoff to rely on a record for.
+    const older = await startAndLog({day: '2026-07-14'})
+    expect(await finishSession(repo, older)).toBe('done')
+    const tonight = await startAndLog()
+    const covering = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID,
+      {from: '2026-07-14', to: '2026-07-24', days: 10, tierId: '1-2w', pct: 1})
+    const realTx = repo.tx.bind(repo)
+    let armed = true
+    repo.tx = (async (fn: never, opts: {description?: string}) => {
+      if (armed && opts?.description === 'Finish session') {
+        armed = false
+        await realTx(tx => tx.run(deleteBlock, {id: covering}),
+          {scope: ChangeScope.BlockDefault, description: 'a peer deletes the layoff'})
+      }
+      return realTx(fn, opts as never)
+    }) as typeof repo.tx
+
+    try {
+      expect(await closeSession(repo, WORKSPACE_ID, tonight)).toBe('changed')
+    } finally {
+      repo.tx = realTx
+    }
+    // And pressing Finish again decides afresh: with no record left, the gap
+    // gets written rather than silently lost.
+    expect(await closeSession(repo, WORKSPACE_ID, tonight)).toBe('done')
+    expect(buildLayoffs(
+      await repo.queryBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}),
+    ).some(l => l.from === '2026-07-14')).toBe(true)
   })
 
   it('refuses to close when the session kind flipped under the layoff decision', async () => {

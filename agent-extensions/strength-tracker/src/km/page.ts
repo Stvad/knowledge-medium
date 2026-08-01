@@ -8,6 +8,7 @@
  */
 
 import {ChangeScope} from '@/data/api/index.js'
+import type {BlockData} from '@/data/api/index.js'
 import type {Block} from '@/data/block.js'
 import {getOrCreateKernelPage, kernelPageBlockId} from '@/data/kernelPage.js'
 import {hasBlockType} from '@/data/properties.js'
@@ -16,6 +17,7 @@ import {
   adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild, type DerivedIdentity,
 } from '@/data/typedRecords.js'
 
+import {FIELD} from './fields'
 import {SETTINGS_TYPE, STRENGTH_LOG_TYPE} from './schema'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
@@ -41,31 +43,60 @@ export const findStrengthLogPage = async (
 
 /** The settings block if it already exists, WITHOUT creating it.
  *
- *  Two lookups, in the same order `getOrCreateSettingsBlock` uses, because the
- *  two must never name different blocks: whatever the writer would adopt is
- *  what the reader has to read.
- *
- *  The typed query alone was not that. `getOrCreateSettingsBlock` deliberately
- *  adopts the derived seat WITHOUT requiring the type tag — losing a tag is a
- *  slip, losing the config is not — so an untagged settings block is one the
- *  writer repairs and the reader could not see at all. That gap is not
- *  theoretical for the flow that matters: `readProgram` runs on the Start path
- *  and must not bootstrap, so it never reaches the writer. Start would read no
- *  settings, fall back to the built-in program, and stamp a session from it —
- *  ignoring the plan root, rollover hour and every `or`-group choice already
- *  recorded — until the user happened to open the log page. */
+ *  Reading must not bootstrap: `readProgram` runs on the Start path, and this
+ *  returning `null` where the writer would have found something is how Start
+ *  came to stamp a session from the built-in program while a configured
+ *  settings block sat in the outline — plan root, rollover hour and every
+ *  `or`-group choice ignored until the log page happened to be opened. So the
+ *  rule itself lives in `locateSettings`, shared with the writer. */
 export const findSettingsBlock = async (
   repo: Repo,
   workspaceId: string,
   pageId: string,
-): Promise<string | null> => {
+): Promise<string | null> => (await locateSettings(repo, workspaceId, pageId))?.id ?? null
+
+/** Any of the settings values, which is what makes a block the settings block
+ *  when its type tag is not there to say so. */
+const carriesSettings = (block: BlockData): boolean =>
+  [FIELD.planRoot, FIELD.rolloverHour, FIELD.cadenceDays, FIELD.roundTo]
+    .some(name => block.properties[name] !== undefined)
+
+/** The one ordered rule for "where are this page's settings", used by the
+ *  reader AND the writer so they cannot name different blocks — which they did
+ *  twice: once when the reader demanded a type tag the writer had stopped
+ *  demanding, and once when their two lookups ran in different orders.
+ *
+ *  1. The TAGGED block under the page. Ordinary, and what everything that has
+ *     been opened once since the derived seat landed will hit.
+ *  2. The derived SEAT, tag or no tag. What repairs a block that lost its type
+ *     — `getOrCreateSettingsBlock` says why losing a tag must not lose config.
+ *  3. An untagged page child that CARRIES settings values. Blocks minted
+ *     before the seat existed have random ids, so neither of the above can
+ *     reach one that has also lost its tag, and the next open would mint a
+ *     blank one at the seat and abandon the plan root, rollover hour, cadence
+ *     and choice children still sitting in the outline. `typedRecords.ts`
+ *     requires exactly this when a derived id is retrofitted onto a kind that
+ *     already has rows out there, and this workspace has one.
+ *
+ *     Keyed on the VALUES rather than on content or position, so it identifies
+ *     the block by the thing worth rescuing. A legacy block holding no settings
+ *     is not matched — and has nothing to lose by not being. */
+const locateSettings = async (
+  repo: Repo,
+  workspaceId: string,
+  pageId: string,
+): Promise<BlockData | null> => {
   const tagged = (await repo.queryBlocks({workspaceId, types: [SETTINGS_TYPE]}))
     .find(block => block.parentId === pageId)
-  if (tagged) return tagged.id
-  // Same conditions the writer's `adoptable` applies, and no type check, so
-  // the two agree on an untagged seat as well as a tagged one.
+  if (tagged) return tagged
+
   const seat = await repo.load(derivedBlockId(settingsIdentity(pageId)))
-  return seat && !seat.deleted && seat.parentId === pageId ? seat.id : null
+  // The same conditions the writer's `adoptable` applies, and no type check.
+  if (seat && !seat.deleted && seat.parentId === pageId) return seat
+
+  const legacy = ((await repo.block(pageId).children.load()) ?? [])
+    .find(block => !block.deleted && carriesSettings(block))
+  return legacy ?? null
 }
 
 export const getOrCreateStrengthLogPage = (repo: Repo, workspaceId: string): Promise<Block> =>
@@ -106,11 +137,20 @@ export const getOrCreateSettingsBlock = async (
   workspaceId: string,
   pageId: string,
 ): Promise<string> => {
-  const existing = await repo.queryBlocks({workspaceId, types: [SETTINGS_TYPE]})
-  const here = existing.find(b => b.parentId === pageId)
-  if (here) return here.id
-
+  // The SAME ordered rule the reader uses, not a lookup of its own — see
+  // `locateSettings`. When it finds a block the writer's job is to make sure it
+  // is tagged, which is all `adoptTypedBlock` does; when it finds nothing, fall
+  // through to the seat.
+  const found = await locateSettings(repo, workspaceId, pageId)
   const typeSnapshot = repo.snapshotTypeRegistries()
+  if (found) {
+    if (hasBlockType(found, SETTINGS_TYPE)) return found.id
+    return repo.tx(
+      async tx => (await adoptTypedBlock(repo, tx, found, [SETTINGS_TYPE], typeSnapshot)).id,
+      {scope: ChangeScope.BlockDefault, description: 'Repair strength settings'},
+    )
+  }
+
   return repo.tx(async tx => {
     const seat = await getOrCreateTypedChild(repo, tx, {
       identity: settingsIdentity(pageId),

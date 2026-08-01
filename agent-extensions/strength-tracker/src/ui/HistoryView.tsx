@@ -7,6 +7,7 @@ import {useMemo} from 'react'
 
 import {asymmetries, exerciseSeries, milestoneProgress, type SeriesPoint} from '../engine/trends'
 import type {ProgramConfig, WorkoutRecord} from '../engine/types'
+import {dateToDay} from '../km/day'
 
 interface Props {
   config: ProgramConfig
@@ -137,7 +138,15 @@ export function HistoryView({config, history}: Props) {
                   <span className="font-medium">
                     {w.session === 'mini' ? 'Mini' : `Session ${w.session}`}
                   </span>
-                  <span className="text-xs text-muted-foreground">{w.date.slice(0, 10)}</span>
+                  {/* `dateToDay`, not the ISO prefix. `WorkoutRecord.date` is
+                      an INSTANT — local noon for anything this extension wrote
+                      — so its UTC prefix is the day BEFORE anywhere east of
+                      UTC+12, and every session there listed a day early while
+                      progression filed it correctly. Slicing an ISO string is
+                      reading a local calendar day off a UTC rendering. */}
+                  <span className="text-xs text-muted-foreground">
+                    {dateToDay(new Date(w.date))}
+                  </span>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {w.exercises

@@ -38,7 +38,7 @@ import type {LayoffRecord, SessionType} from '../engine/types'
 // predicate on purpose — see `takePlaceOf`. A pure rule, no repo behind it.
 import {isExpendableLine} from '../ui/placement'
 import {dateToDay, dayToDate, storedDate} from './day'
-import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
+import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {writeLayoffInTx} from './store'
 import {discardTally, type DiscardTally} from './subtree'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
@@ -758,6 +758,36 @@ export interface FinishExpectation {
    *  — no transaction here can, having no workspace-wide query. Empty means
    *  there was no prior full session to depend on, so nothing to fence. */
   basis?: readonly BasisWorkout[]
+  /** The layoff record the caller relied on ALREADY covering this gap, when
+   *  that is why it is closing without writing one.
+   *
+   *  The mirror of `basis`, and the same permanent loss: `layoffAlreadyRecorded`
+   *  says "no record needed", and if that record is deleted or untagged before
+   *  the commit the finish still succeeds — with the gap now recorded nowhere,
+   *  and undetectable on every later day once this session joins history. The
+   *  one branch where writing nothing is the whole point is the one branch that
+   *  never re-checked its reason.
+   *
+   *  `from` and `pct` travel with the id because a record that survives but no
+   *  longer names this gap, or has been loosened below the tier the decision
+   *  accepted, is as good as absent — the same test `layoffAlreadyRecorded`
+   *  applies, re-asked against the row on disk. */
+  layoffOnRecord?: {id: string; from: string; pct: number}
+}
+
+/** Does the record the caller leaned on still cover the gap it was leaned on
+ *  for? Live, still a layoff, still this gap's, still at least this severe. */
+const layoffStillCovers = async (
+  tx: Tx,
+  expected: {id: string; from: string; pct: number},
+): Promise<boolean> => {
+  const block = await tx.get(expected.id)
+  if (!block || block.deleted) return false
+  if (!hasBlockType(block, LAYOFF_TYPE)) return false
+  const raw = block.properties[FIELD.layoffFrom]
+  if (liveDay(raw) !== expected.from) return false
+  const pct = block.properties[FIELD.layoffPct]
+  return typeof pct === 'number' && pct <= expected.pct
 }
 
 /** Is any of these still a session history would count, still on the day it
@@ -919,6 +949,13 @@ const checkFinishable = async (
   // recorded stops being detectable the moment this session joins history.
   if (expected?.basis !== undefined && expected.basis.length > 0
     && !(await anyStillATrainingDay(tx, expected.basis))) {
+    return {blocked: 'changed'}
+  }
+  // And, on the branch that writes no layoff BECAUSE one already exists, that
+  // record itself. Closing on a reason that has since evaporated leaves the
+  // gap recorded nowhere at all.
+  if (expected?.layoffOnRecord !== undefined
+    && !(await layoffStillCovers(tx, expected.layoffOnRecord))) {
     return {blocked: 'changed'}
   }
 

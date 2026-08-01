@@ -212,9 +212,15 @@ export const closeSession = async (
   // the actual return.
   const isMini = workout.properties[FIELD.session] === 'mini'
   const pending = isMini ? null : detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
-  const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
-    ? layoffFromPending(pending)
+  // WHICH record satisfied the check, not merely that one did — writing nothing
+  // because a record already covers the gap is a decision resting on that row,
+  // and it has to travel into the transaction like any other. Same test
+  // `layoffAlreadyRecorded` applies, so the two cannot disagree about what
+  // "already covered" means.
+  const covering = pending
+    ? snapshot.layoffs.find(l => l.from === pending.from && l.pct <= pending.tier.pct)
     : undefined
+  const record = pending && !covering ? layoffFromPending(pending) : undefined
   // Both facts the decision above rests on travel INTO the transaction, and
   // `isMini` is the one that goes wrong silently: this branch writes no layoff,
   // so a flip from `mini` to `A` between the read and the commit closes the
@@ -228,6 +234,9 @@ export const closeSession = async (
     date: workout.properties[FIELD.date],
     mini: isMini,
     basis: lastFullSessionBasis(snapshot.history, snapshot.config),
+    ...(covering !== undefined
+      ? {layoffOnRecord: {id: covering.id, from: covering.from, pct: covering.pct}}
+      : {}),
   }
   if (!record) return finishSession(repo, workoutId, undefined, expected)
 
