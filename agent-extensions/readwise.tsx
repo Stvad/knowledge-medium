@@ -2006,6 +2006,28 @@ export const groupHighlightIds = (
   return [...byParent.entries()].map(([sectionId, items]) => ({ sectionId, items }))
 }
 
+/** How many seen ids left the live query BECAUSE they were reviewed.
+ *
+ *  Leaving is not the same as being done: a highlight also drops out when its
+ *  review date is cleared or pushed into the future, and counting those as
+ *  "done this session" would be a quietly wrong number next to a button that
+ *  offers to clear them. Answered from current block state, like everything
+ *  else derived from the id set. */
+export const countReviewedDepartures = (
+  seen: readonly string[],
+  liveIds: readonly string[],
+  read: (id: string) => BlockData | null | undefined,
+): number => {
+  const live = new Set(liveIds)
+  let done = 0
+  for (const id of seen) {
+    if (live.has(id)) continue
+    const data = read(id)
+    if (data && !data.deleted && readReviewed(data)) done++
+  }
+  return done
+}
+
 const BacklogGroupTitle = ({ documentBlock }: { documentBlock: Block }) => {
   const label = useHandle(documentBlock, {
     selector: (data: BlockData | null | undefined) => decodeAliasLabel(data ?? undefined),
@@ -2095,23 +2117,31 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   // Everything below the id set is derived from CURRENT block state, so a
   // highlight that was moved, deleted or untagged since you saw it can never
   // render from a stale copy of itself.
+  //
+  // `live` is in the deps, not just `seen`: moving a highlight leaves the id
+  // set untouched (same ids, same order) but changes the row the query returns,
+  // and without that dependency the grouping would keep the old parent — the
+  // one staleness the id-set design does NOT remove on its own.
   const groups = useMemo(
     () => groupHighlightIds(seen, id => repo.block(id).peek()),
-    [seen, repo],
+    [seen, live, repo],
   )
+  // Keyed on the section ids themselves rather than the `groups` array: groups
+  // is rebuilt whenever the query re-resolves, and handing `useManyParents` a
+  // fresh array each time would churn its handle for an unchanged id set.
+  const sectionKey = groups.map(group => group.sectionId).join('\u0000')
   const sectionBlocks = useMemo(
-    () => groups.filter(group => group.sectionId).map(group => repo.block(group.sectionId)),
-    [groups, repo],
+    () => sectionKey.split('\u0000').filter(Boolean).map(id => repo.block(id)),
+    [sectionKey, repo],
   )
   // ONE ancestor round-trip for every group, rather than one per group — this
   // is exactly the case `useManyParents` documents itself for.
   const ancestorsBySection = useManyParents(sectionBlocks)
 
-  const liveIdSet = useMemo(() => new Set(liveIds), [liveIds])
   const shown = groups.reduce((n, group) => n + group.items.length, 0)
   // Gated on `ready`: while the handle is unresolved `live` is [], which would
   // otherwise read as "every row is done".
-  const doneCount = ready ? seen.filter(id => !liveIdSet.has(id)).length : 0
+  const doneCount = ready ? countReviewedDepartures(seen, liveIds, id => repo.block(id).peek()) : 0
 
   if (shown === 0) {
     return (

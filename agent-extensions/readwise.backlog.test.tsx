@@ -22,6 +22,7 @@ import type { BlockRendererProps } from '@/types.js'
 
 import readwiseContributions, {
   buildUnreviewedHighlightsQuery,
+  countReviewedDepartures,
   groupHighlightIds,
   useStickyIds,
 } from './readwise.tsx'
@@ -219,6 +220,36 @@ describe('grouping', () => {
       ['orphan', 'x'], reader({orphan: typed('orphan', null), x: typed('x', 'sec-a')}),
     )
     expect(groups.map(g => g.sectionId)).toEqual(['', 'sec-a'])
+  })
+})
+
+describe('done count', () => {
+  const reader = (rows: Record<string, BlockData | null>) =>
+    (id: string) => rows[id] ?? null
+  const hl = (id: string, reviewed: boolean, deleted = false) =>
+    ({
+      id, parentId: 'sec', deleted,
+      properties: {
+        [typesProp.name]: typesProp.codec.encode([HIGHLIGHT_TYPE]),
+        [REVIEWED_PROP]: reviewed,
+      },
+    } as unknown as BlockData)
+
+  it('counts a departure that was reviewed', () => {
+    expect(countReviewedDepartures(['a', 'b'], ['b'], reader({a: hl('a', true), b: hl('b', false)})))
+      .toBe(1)
+  })
+
+  it('does NOT count a departure that was merely rescheduled', () => {
+    // Leaving the query is not the same as being done: clearing or postponing
+    // the review date drops a highlight out too, and calling that "done this
+    // session" is a quietly wrong number beside a button offering to clear it.
+    expect(countReviewedDepartures(['a'], [], reader({a: hl('a', false)}))).toBe(0)
+  })
+
+  it('does not count a deleted or vanished departure', () => {
+    const rows = {gone: hl('gone', true, true), missing: null}
+    expect(countReviewedDepartures(['gone', 'missing'], [], reader(rows))).toBe(0)
   })
 })
 
