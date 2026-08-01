@@ -879,6 +879,70 @@ describe('closing a session takes nothing away from you', () => {
   })
 })
 
+describe('a closed session corrected back to empty', () => {
+  const untick = async (setId: string): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.setProperties(setId, {set: [propertyValue(todoStatusProp, 'open')]})
+    }, {scope: ChangeScope.BlockDefault, description: 'that one did not happen'})
+  }
+
+  const historyNow = async () => {
+    const rows = await repo.query.typedBlocks({
+      workspaceId: WORKSPACE_ID, types: [WORKOUT_TYPE, EXERCISE_ENTRY_TYPE, SET_TYPE],
+    }).load() as BlockData[]
+    return buildHistory(
+      rows.filter(r => hasBlockType(r, WORKOUT_TYPE)),
+      rows.filter(r => hasBlockType(r, EXERCISE_ENTRY_TYPE)),
+      rows.filter(r => hasBlockType(r, SET_TYPE)))
+  }
+
+  it('stops counting as a training day once every set is unticked', async () => {
+    // Finish refuses a session with nothing ticked (`nothing-logged`), so the
+    // only route here is a CORRECTION after the fact — which is deliberately
+    // supported and means "I did not actually do that". The blocks stay
+    // exactly as they are; the session just stops counting as work.
+    //
+    // It has to leave HISTORY, not merely the progression baseline, because
+    // every clock keyed on a session's date reads this same list and none of
+    // them look at the sets. `fullSessionDays` counts a record by its session
+    // type alone, so an emptied A/B session resets the layoff gap and
+    // increments `sessionsBack` — the next real session skips a load cut it
+    // was owed, or advances a comeback ramp on a night that did not happen.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+    expect(await finishSession(repo, workoutId)).toBe('done')
+    // The precondition, asserted so this cannot pass by never having counted.
+    expect((await historyNow()).map(w => w.id)).toEqual([workoutId])
+
+    await untick(sets[0].id)
+
+    expect(await historyNow()).toEqual([])
+    // Nothing was taken away from the outline — the record is still there to
+    // re-tick, which is the whole point of the correction being supported.
+    expect(await isBlockDeleted(repo, workoutId)).toBe(false)
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('done')
+  })
+
+  it('still counts when even one set is left ticked', async () => {
+    // The other half: "no work performed" is the rule, not "the user edited
+    // the ticks", so a partly-corrected session is still a training day.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+    await tick(sets[1].id)
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    await untick(sets[1].id)
+
+    const history = await historyNow()
+    expect(history.map(w => w.id)).toEqual([workoutId])
+    expect(history[0].exercises[0].sets).toHaveLength(1)
+  })
+})
+
 describe('typing a starting weight', () => {
   it('sets the value outright rather than nudging from it', async () => {
     // A lift with no history stamps at 0; reaching 135 with the ± button is

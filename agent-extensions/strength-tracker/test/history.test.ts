@@ -73,11 +73,60 @@ describe('buildHistory', () => {
   })
 
   it('orders workouts by logged date', () => {
+    // Each carries a done set, because a closed workout with none is not
+    // history at all — see the test below.
     const mk = (id: string, day: string) => block(id, 'page', 'a0', encode([
       [FIELD.session, 'A'], [FIELD.date, dayToDate(day)], [FIELD.status, 'done'],
     ]))
-    const history = buildHistory([mk('w2', '2026-07-23'), mk('w1', '2026-07-16')], [], [])
+    const history = buildHistory(
+      [mk('w2', '2026-07-23'), mk('w1', '2026-07-16')],
+      [block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press']])),
+       block('e2', 'w2', 'a0', encode([[FIELD.exercise, 'Bench press']]))],
+      [setBlock('s1', 'e1', 'a0', 135, 5), setBlock('s2', 'e2', 'a0', 135, 5)])
     expect(history.map(w => w.id)).toEqual(['w1', 'w2'])
+  })
+
+  it('excludes a closed workout that has no done sets left', () => {
+    // Finish refuses to close one, so this is a CORRECTION after the fact —
+    // unticking everything, which means "I did not actually do that". It must
+    // leave history rather than merely lose its progression baseline:
+    // `fullSessionDays` counts a record by its session TYPE alone, so an
+    // emptied A/B session would still reset the layoff gap and increment
+    // `sessionsBack`, and `resolveSession` would still read it as "A was done
+    // recently" when choosing what to prescribe next.
+    const emptied = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, dayToDate('2026-07-16')], [FIELD.status, 'done'],
+    ]))
+    const bench = block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press']]))
+    const untickedSet = block('s1', 'e1', 'a0',
+      encode([[FIELD.weight, 135], [FIELD.reps, 5], [FIELD.todoStatus, 'open']]))
+
+    expect(buildHistory([emptied], [bench], [untickedSet])).toHaveLength(0)
+    // …and one set left ticked is still a training day: the rule is "no work
+    // performed", not "the ticks were edited".
+    expect(buildHistory([emptied], [bench], [setBlock('s1', 'e1', 'a0', 135, 5)])).toHaveLength(1)
+  })
+
+  it('keeps a session where one lift was done and another skipped entirely', () => {
+    // EVERY entry, not some. Skipping a lift outright — no set ticked on it —
+    // is an ordinary night, and reading the rule as "any empty entry" would
+    // drop the whole session from history over the accessory you left out,
+    // taking the working lift's progression with it.
+    const workout = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, dayToDate('2026-07-16')], [FIELD.status, 'done'],
+    ]))
+    const done = block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press']]))
+    const skipped = block('e2', 'w1', 'a1', encode([[FIELD.exercise, 'Face pulls']]))
+
+    const history = buildHistory([workout], [done, skipped], [
+      setBlock('s1', 'e1', 'a0', 135, 5),
+      block('s2', 'e2', 'a0', encode([[FIELD.weight, 30], [FIELD.reps, 15], [FIELD.todoStatus, 'open']])),
+    ])
+
+    expect(history).toHaveLength(1)
+    // The skipped lift stays in the record as an entry with no sets — it was
+    // prescribed and not performed, and `lastEntryFor` keeps looking past it.
+    expect(history[0].exercises.map(e => e.sets.length)).toEqual([1, 0])
   })
 })
 

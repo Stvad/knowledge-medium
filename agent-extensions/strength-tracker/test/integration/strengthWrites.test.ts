@@ -159,6 +159,62 @@ describe('ensureStrengthHome', () => {
     expect(settingsBlockId).toBe(derivedBlockId(settingsIdentity(pageId)))
   })
 
+  it('repairs a settings block whose type was removed, instead of replacing it', async () => {
+    // Removing the type is a slip; the CONFIG is not, and the two must not be
+    // the same event. The typed pre-query misses an untagged block, so the
+    // derived seat is the only thing that can still find it — and it can,
+    // because the id resolves whatever tags the block carries. Demanding the
+    // tag in `adoptable` rejected it, and a rejected seat is permanent, so
+    // every later open minted a BLANK settings block and read the empty one:
+    // plan root, rollover hour, cadence and every `or`-group choice child
+    // silently abandoned while still sitting in the outline.
+    const fresh = 'ws-with-nothing-in-it'
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    // A setting worth losing, so this cannot pass on the id alone.
+    await repo.tx(async tx => {
+      await tx.setProperties(settingsBlockId, {set: [propertyValue(rolloverHourProp, 5)]})
+      // UserPrefs, not BlockDefault: the settings BLOCK is structural, but each
+      // setting value carries its own scope. See `getOrCreateSettingsBlock`.
+    }, {scope: ChangeScope.UserPrefs, description: 'a configured rollover hour'})
+    await repo.removeType(settingsBlockId, SETTINGS_TYPE)
+    expect(hasBlockType(repo.block(settingsBlockId).peek()!, SETTINGS_TYPE)).toBe(false)
+
+    const again = await getOrCreateSettingsBlock(repo, fresh, pageId)
+
+    expect(again).toBe(settingsBlockId)
+    // …and the adopt repaired the tag rather than leaving it half-typed.
+    expect(hasBlockType(repo.block(settingsBlockId).peek()!, SETTINGS_TYPE)).toBe(true)
+    expect(repo.block(settingsBlockId).peekProperty(rolloverHourProp)).toBe(5)
+    expect(await liveChildren(pageId, SETTINGS_TYPE)).toHaveLength(1)
+  })
+
+  it('does not adopt a settings block dragged off the page', async () => {
+    // Parentage is still checked, even though the type no longer is, because
+    // `findSettingsBlock` is parent-scoped: adopting a block filed elsewhere
+    // would hand this caller knobs that `readProgram` cannot find, so half the
+    // app would read the real config and half the defaults, invisibly.
+    //
+    // The dragged block's config IS abandoned either way — a fresh blank one
+    // appears under the page — which is a known gap, not a happy outcome. It
+    // is the lesser of the two: two visible "Strength settings" blocks you can
+    // merge by hand, rather than a silent split brain. Making the seat AND the
+    // reader id-based would fix it properly; this test pins today's rule so
+    // that change has to be deliberate.
+    const fresh = 'ws-with-nothing-in-it'
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'elsewhere', workspaceId: fresh, parentId: null, orderKey: 'z0', content: 'Elsewhere',
+      })
+      await tx.move(settingsBlockId, {parentId: 'elsewhere', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'drag the settings away'})
+
+    const again = await getOrCreateSettingsBlock(repo, fresh, pageId)
+
+    expect(again).not.toBe(settingsBlockId)
+    expect(await liveChildren(pageId, SETTINGS_TYPE)).toHaveLength(1)
+  })
+
   it('adds no second settings block once the derived seat holds a tombstone', async () => {
     // The seat never becomes untaken, so every open after a delete has to fall
     // back to the mint — and must find the previous one rather than making

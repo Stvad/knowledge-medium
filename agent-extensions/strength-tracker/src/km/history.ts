@@ -80,8 +80,9 @@ const toSetRecord = (row: RowLike): SetRecord => ({
 
 /** Assemble workout records from the workout / exercise / set block trees.
  *  Only DONE workouts count as history (an in-progress session must never
- *  feed its own prescription), and only DONE sets within a workout (a
- *  pre-filled, un-accepted set records nothing). */
+ *  feed its own prescription), only DONE sets within a workout (a pre-filled,
+ *  un-ticked set records nothing) — and a closed workout left with no done
+ *  sets at all is not history either. See the check at the bottom. */
 export const buildHistory = (
   workoutRows: readonly RowLike[],
   exerciseRows: readonly RowLike[],
@@ -114,23 +115,41 @@ export const buildHistory = (
     // that property existed have neither, which is the behaviour they already
     // had. See `finishedAtProp`.
     const orderedAt = recordedAt ?? optNum(row, FIELD.finishedAt)
+    const exercises = entries.map(entry => ({
+      exercise: str(entry, FIELD.exercise),
+      definitionId: optStr(entry, FIELD.definition),
+      occurrence: optNum(entry, FIELD.occurrence),
+      prescribedWeight: optNum(entry, FIELD.prescribedWeight),
+      prescribedSets: optNum(entry, FIELD.prescribedSets),
+      sets: (setsByExercise.get(entry.id) ?? [])
+        .slice()
+        .sort(compareByOrderKey)
+        .filter(isDone)
+        .map(toSetRecord),
+    }))
+    // A session with nothing performed is not a training day.
+    //
+    // Finish already refuses to close one (`nothing-logged`), so the only way
+    // here is a CORRECTION afterwards — unticking every set, which is
+    // deliberately supported and means "I did not actually do that". The
+    // record is left exactly as it is; it just stops counting as work.
+    //
+    // It has to be dropped from history rather than only from the re-entry
+    // maths, because every clock keyed on a session's DATE reads the same
+    // list and none of them look at the sets: `fullSessionDays` counts it by
+    // session type alone, so an emptied A/B record resets the layoff gap AND
+    // increments `sessionsBack` — the next real session can then skip a load
+    // cut it was owed, or advance a comeback ramp on a night that happened.
+    // `resolveSession` would likewise read it as "A was done recently" when
+    // choosing what to prescribe. Progression is the one reader already
+    // immune, since `lastEntryFor` skips an entry with no sets.
+    if (exercises.every(entry => entry.sets.length === 0)) continue
     workouts.push({
       id: row.id,
       date: d.toISOString(),
       session,
       ...(orderedAt !== undefined ? {recordedAt: orderedAt} : {}),
-      exercises: entries.map(entry => ({
-        exercise: str(entry, FIELD.exercise),
-        definitionId: optStr(entry, FIELD.definition),
-        occurrence: optNum(entry, FIELD.occurrence),
-        prescribedWeight: optNum(entry, FIELD.prescribedWeight),
-        prescribedSets: optNum(entry, FIELD.prescribedSets),
-        sets: (setsByExercise.get(entry.id) ?? [])
-          .slice()
-          .sort(compareByOrderKey)
-          .filter(isDone)
-          .map(toSetRecord),
-      })),
+      exercises,
     })
   }
   return workouts.sort(compareRecords)

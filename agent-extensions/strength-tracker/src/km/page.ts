@@ -94,10 +94,27 @@ export const getOrCreateSettingsBlock = async (
   return repo.tx(async tx => {
     const seat = await getOrCreateTypedChild(repo, tx, {
       identity: settingsIdentity(pageId),
-      // Still under this page, and still saying it is settings: a block
-      // dragged out from under the page is not this page's settings any more,
-      // and adopting it would put the knobs where the readers do not look.
-      adoptable: block => block.parentId === pageId && hasBlockType(block, SETTINGS_TYPE),
+      // Parentage only — deliberately NOT the type as well.
+      //
+      // `getOrCreateTypedChild` re-tags a missing type on adopt, which is
+      // exactly the repair this record wants: the derived id resolves to this
+      // page's settings block whatever tags it carries, so a block that lost
+      // `strength-settings` is still findable and still holds the real plan
+      // root, rollover hour, cadence and `or`-group choice children. Demanding
+      // the tag here rejected it, and a rejected seat is permanent — the
+      // fallback below then minted a BLANK settings block beside it and every
+      // later read silently used the empty one. Losing the tag is a slip; the
+      // config is not, and the two must not be the same event.
+      //
+      // (`isStandingToday` requires its type, and the difference is that a
+      // workout has no id-based lookup at all — it is found by a workspace-wide
+      // scan BY type, so tolerating a missing tag there is unimplementable
+      // rather than merely stricter.)
+      //
+      // Parentage stays, because `findSettingsBlock` is parent-scoped: adopting
+      // a block dragged off the page would hand back knobs the reader cannot
+      // find, so the two would disagree about which block the settings are in.
+      adoptable: block => block.parentId === pageId,
       ...settingsSpec(pageId, typeSnapshot),
     })
     if (seat.status !== 'taken') return seat.id
