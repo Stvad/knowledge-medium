@@ -99,6 +99,28 @@ export const planFromPrescription = (
   return {day: prescription.day, session: prescription.session, lifts}
 }
 
+/** Which of the dialog's picks the confirmed prescription actually stands
+ *  behind.
+ *
+ *  The start dialog lets you flip an `or`-group and THEN change session, so
+ *  `choices` can carry a group belonging to a session you did not start.
+ *  Recording it would quietly retrack a future session you never opened —
+ *  and, with no exercise in this prescription to take a name from, the
+ *  writer's label fell through to the option's raw block id, which is what
+ *  then appears as the choice's name in the settings outline.
+ *
+ *  Structurally narrow rather than a check at the call site: the label and
+ *  the decision to record come from the same lookup, so there is no shape in
+ *  which one is found and the other guessed. */
+export const choicesToRecord = (
+  choices: Readonly<Record<string, string>>,
+  exercises: readonly {exercise: string; altGroupKey?: string}[],
+): {groupKey: string; optionKey: string; label: string}[] =>
+  Object.entries(choices).flatMap(([groupKey, optionKey]) => {
+    const option = exercises.find(exercise => exercise.altGroupKey === groupKey)
+    return option === undefined ? [] : [{groupKey, optionKey, label: option.exercise}]
+  })
+
 export const definitionOf = (block: EntryRow): string | undefined =>
   typeof block.properties[FIELD.definition] === 'string'
     ? block.properties[FIELD.definition] as string

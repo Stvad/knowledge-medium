@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import type {PrescribedExercise, Prescription} from '../src/engine/types'
-import {matchEntries, planFromPrescription, type PlannedLift} from '../src/km/sessionPlan'
+import {choicesToRecord, matchEntries, planFromPrescription, type PlannedLift} from '../src/km/sessionPlan'
 
 const exercise = (over: Partial<PrescribedExercise> = {}): PrescribedExercise => ({
   exercise: 'Bench press',
@@ -210,5 +210,34 @@ describe('matchEntries reports what it claimed', () => {
 
     expect(matched[0]).toBe(a)
     expect([...claimed]).toEqual(['a'])
+  })
+})
+
+describe('choicesToRecord', () => {
+  const exercises = [
+    {exercise: 'Face pulls', altGroupKey: 'group-pull'},
+    {exercise: 'Bench press'},
+  ]
+
+  it('records a pick the confirmed session actually prescribes, under its name', () => {
+    expect(choicesToRecord({'group-pull': 'opt-face-pulls'}, exercises))
+      .toEqual([{groupKey: 'group-pull', optionKey: 'opt-face-pulls', label: 'Face pulls'}])
+  })
+
+  it('drops a pick belonging to a session that was previewed and then switched away from', () => {
+    // Flip a variant while Session A is showing, change the picker to B, and
+    // press Start: A's group is still in `picks`. Recorded, it retracks a
+    // session you never started — and with no exercise here to name it, the
+    // writer's label used to fall through to the option's raw block id, so a
+    // UUID appeared as the choice's name in the settings outline.
+    expect(choicesToRecord({'group-squat': 'opt-front-squat'}, exercises)).toEqual([])
+  })
+
+  it('keeps the surviving picks when only some belong to this session', () => {
+    const kept = choicesToRecord(
+      {'group-pull': 'opt-face-pulls', 'group-squat': 'opt-front-squat'},
+      exercises,
+    )
+    expect(kept.map(c => c.groupKey)).toEqual(['group-pull'])
   })
 })

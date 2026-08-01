@@ -16,7 +16,7 @@ import {openDialog} from '@/utils/dialogs.js'
 import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
 import {startSession} from '../km/session'
-import {planFromPrescription} from '../km/sessionPlan'
+import {choicesToRecord, planFromPrescription} from '../km/sessionPlan'
 import {writeAltChoice} from '../km/store'
 import {ensureStrengthHome, prescribeFor, readProgram, sessionParent, standingSession} from '../km/tonight'
 import {StartSessionDialog, type StartSessionResult} from './StartSessionDialog'
@@ -63,24 +63,31 @@ const runStartSession = async (repo: Repo): Promise<void> => {
   // the history underneath them is refreshed.
   const fresh = await readProgram(repo, workspaceId)
 
+  // ONE value for everything after this point. Only history and layoffs come
+  // from the refreshed read: the PLAN stays the one that was previewed and
+  // approved, because refreshing that too would stamp different lifts — or
+  // the built-in fallback, if the outline stopped resolving mid-dialog —
+  // than the list you confirmed.
+  //
+  // The knobs travel with the plan for the same reason, and one of them is
+  // load-bearing twice over: `dayRolloverHour` decides which training day
+  // this is. Checking for an arrival with the fresh hour while stamping with
+  // the approved one asks about a day the session will not land on, so a
+  // peer's standing workout goes unseen and gets its alternative stamped
+  // beside the one chosen here — exactly what the check exists to stop.
+  const confirmed = {...fresh, planSource: snapshot.planSource, config: snapshot.config}
+
   // Asked AGAIN. Another client can start the same training day while this
   // dialog sits open, and stamping into it adds whichever alternative was
   // chosen here beside the one chosen there — the both-alternatives session
   // the pre-dialog check exists to prevent, arriving through the back door.
-  const arrived = await standingSession(repo, workspaceId, fresh, now)
+  const arrived = await standingSession(repo, workspaceId, confirmed, now)
   if (arrived) {
     await navigateFromGlobalCommand(repo, {blockId: arrived, workspaceId})
     return
   }
 
-  // Only history and layoffs are taken from the refreshed read: the PLAN stays
-  // the one that was previewed and approved. Refreshing that too would stamp
-  // different lifts — or the built-in fallback, if the outline stopped
-  // resolving mid-dialog — than the list you confirmed.
-  const prescription = prescribeFor(
-    {...fresh, planSource: snapshot.planSource, config: snapshot.config},
-    now, picks.session, picks.choices,
-  )
+  const prescription = prescribeFor(confirmed, now, picks.session, picks.choices)
   const plan = planFromPrescription(prescription, snapshot.config.unit)
   const parentId = await sessionParent(repo, workspaceId, prescription.day)
   const workoutId = await startSession(repo, workspaceId, parentId, plan)
@@ -92,14 +99,19 @@ const runStartSession = async (repo: Repo): Promise<void> => {
   await navigateFromGlobalCommand(repo, {blockId: workoutId, workspaceId})
 
   // Recorded only now the session exists, so a cancelled dialog leaves the
-  // tracked variant exactly as it was. The home is created here rather than
-  // at read time — this is the first moment anything is written to it.
-  if (Object.keys(picks.choices).length === 0) return
+  // tracked variant exactly as it was. Narrowed to the groups the confirmed
+  // prescription actually contains — flipping a variant while previewing one
+  // session and then switching to another leaves the first session's group in
+  // `picks`, and recording it would retrack a session you never started.
+  const recording = choicesToRecord(picks.choices, prescription.exercises)
+  // Nothing to record means nothing to bootstrap either: the home is created
+  // here rather than at read time, and a discarded pick must not be the thing
+  // that brings a settings block into existence.
+  if (recording.length === 0) return
   try {
     const {settingsBlockId} = await ensureStrengthHome(repo, workspaceId)
-    for (const [groupKey, optionKey] of Object.entries(picks.choices)) {
-      const option = prescription.exercises.find(exercise => exercise.altGroupKey === groupKey)
-      await writeAltChoice(repo, settingsBlockId, groupKey, optionKey, option?.exercise ?? optionKey)
+    for (const {groupKey, optionKey, label} of recording) {
+      await writeAltChoice(repo, settingsBlockId, groupKey, optionKey, label)
     }
   } catch (error) {
     // Reported, not thrown: the session is real and on screen, and losing a
