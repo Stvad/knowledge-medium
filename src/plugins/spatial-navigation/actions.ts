@@ -33,14 +33,19 @@ import {
   blockIdsInOrderedSelectionRange,
   commitSelectionRange,
   findBestSelectionAnchorIndex,
+  nextVisibleBlock,
+  previousVisibleBlock,
 } from '@/utils/selection.js'
 import {
+  aheadOf,
   horizontalNeighborPanel,
   locationOf,
   panelById,
   panelOf,
   panelInstances,
+  reservedRowBetween,
   resolveCurrentAnchor,
+  rowSlotIn,
   verticalNeighbor,
 } from './walker.ts'
 import { resolveSpatialNavExclusions } from './exclusionsFacet.ts'
@@ -152,6 +157,16 @@ const extendSelectionVertical = async (
   }
 
   const next = verticalNeighbor(current, direction, excludedSurfaces)
+  // NOT the same call as `moveVertical`'s boundary, though it looks like it.
+  // Declining here doesn't extend the selection by one row: the structural
+  // base re-derives the WHOLE range from the model, which sweeps in every
+  // unmounted row the spatial (DOM-order) range had skipped — one keystroke
+  // silently adding rows the user has never seen, straight into the path of
+  // `d` / delete. So the selection edge stays "handled", as the
+  // hidden-structural-siblings test above it has always specified. Shift+j
+  // therefore still stops at the last mounted row while `j` walks on; making
+  // those agree means teaching this path to extend onto a model-resolved row
+  // spatially, which is its own change.
   if (!next) return true
   await extendSelectionToSpatialTarget(deps, next)
   return true
@@ -166,21 +181,41 @@ const extendSelectionVertical = async (
  * off the same prop. Adding our own DOM mutations would just race.
  *
  * Return contract (intentionally different from "did we move?"):
- *   - `false` → "no anchor; please fall through to the underlying
- *     vim handler". Only the `!current` early return takes this
- *     path — neither a live focused instance nor a recovery anchor
- *     exists, so vim's data-model walk is a legitimate fallback.
- *   - `true` → "spatial nav handled this keystroke". Includes the
- *     no-neighbor / panel-boundary case. We must NOT fall through
- *     to vim's `nextVisibleBlock` for a panel-boundary block on a
- *     non-outline surface (backlinks, embeds): vim's walker climbs
- *     the data-model parent chain of the source block, which for a
- *     backlink entry lives in some other page entirely. Following
- *     that chain returns a block from elsewhere in the workspace,
- *     and writing it as the panel's `focusedBlockLocation` leaves
- *     `useInFocus(<anyone in this panel>)` returning false →
- *     normal-mode deactivates → all shortcuts go dead until the
- *     user clicks back into a block.
+ *   - `false` → "spatial nav declines; the model walk is the better
+ *     answer here". Two cases: (a) no usable anchor — no live focused
+ *     instance, no recovery anchor, and no expected location to keep
+ *     us in this panel; (b) taking the rendered neighbour would SKIP
+ *     the model's next row in this scope — the neighbour sits past
+ *     that row's place in the document, or the DOM has no place for
+ *     it yet to compare against.
+ *   - `true` → "spatial nav handled this keystroke", including the
+ *     genuine edge where neither the model nor the DOM has anywhere
+ *     left to go.
+ *
+ * Which SURFACE the row sits on doesn't enter into it. What matters is
+ * the scope, and every surface supplies its own `scopeRootId` (a
+ * backlink entry's is its shown block, not the page), so the model
+ * walk is always scope-local and cannot wander into another page.
+ * Rows inside a backlink entry are lazily mounted under the ordinary
+ * `block:<id>` key like any other row, so a model-resolved target
+ * there is mountable too.
+ *
+ * Equally: the model walk names only the rows of ONE scope, while the
+ * rendered order interleaves the nested surfaces those rows contain —
+ * an embed inside the content, an embed inside a property value, a
+ * trailing backlink list. Those rows are navigable and the user can
+ * see them, so a DOM neighbour that the model can't name is the normal
+ * case, not evidence of a missing row. See the rule at the check.
+ *
+ * The one thing this cannot reach is a scope whose WRAPPER is still
+ * deferred: an unmounted backlink entry keys itself
+ * `backlink:<scope>:<id>`, invisible to both the walker and
+ * `lazyBlockCacheKey`. Reserved rows don't rescue it either — such a
+ * wrapper mints its scope inside itself, so it reserves an ANONYMOUS
+ * slot, which `reservedRowBetween` skips by design. Moving between entries is a scope transition,
+ * which no model walk expresses either — it needs the list that owns
+ * that ordering to say what comes next. Unsolved here, and it was
+ * never solved by treating non-outline surfaces as a special case.
  */
 const moveVertical = async (
   deps: BlockShortcutDependencies,
@@ -215,13 +250,136 @@ const moveVertical = async (
     return true
   }
 
+  // The model knows rows the DOM doesn't, because rows mount lazily. "The next
+  // MOUNTED row" and "the next row" diverge in several ways — running out at
+  // the bottom of the mounted window, a scrollbar drag leaving two mounted
+  // islands with a hole between them, a just-mounted row whose children arrive
+  // only when its `childIds` handle resolves while a later sibling is still
+  // mounted from before. In all of them the DOM's neighbour is a real row, just
+  // hundreds of rows past what the user expects.
+  //
+  // But the DOM order is a SUPERSET of this scope's model order, not a
+  // different ordering of the same rows: nested surfaces (an embed in the
+  // content, an embed in a property value, a trailing backlink list) render
+  // rows of their OWN scope in between, and no walk of this scope can name
+  // them. So "the DOM's neighbour isn't the model's next row" doesn't mean the
+  // DOM is wrong — it usually means the DOM has MORE.
+  //
+  // What actually matters is only this: can we take the DOM's neighbour without
+  // SKIPPING the model's next row? That is a question about POSITION, and the
+  // DOM answers it even for a row that hasn't mounted — see the check below.
+  //
+  // Costs one O(depth) walk per keystroke over handle-cached rows — the same
+  // walk the model handler does on its own when spatial nav is off.
+  const modelNext = deps.scopeRootId
+    ? (direction === 'down'
+        ? await nextVisibleBlock(block, deps.scopeRootId, deps.scopeRootForcesOpen)
+        : await previousVisibleBlock(block, deps.scopeRootId))
+    : null
+
+  // A second keystroke or a click can land while that walk waits on an
+  // uncached `childIds`. Everything below is computed from a row that no
+  // longer holds focus, so hand the panel to whoever moved it rather than
+  // writing a move the user has already superseded.
+  if (
+    expectedLocation &&
+    !sameFocusedBlockLocation(peekFocusedBlockLocation(uiStateBlock), expectedLocation)
+  ) return true
+
+  // The anchor itself can be torn out while the walk waits (a re-render, a
+  // recycled lazy row, the panel unmounting under it). Everything below reads
+  // the DOM through it, and a detached element still answers — from the dead
+  // tree. Load-bearing where the two lookups disagree: `rowSlotIn` goes through
+  // `panelById`, which queries the live document, while `reservedRowBetween`
+  // goes through `panelOf(current)`, which in a detached subtree returns the
+  // DEAD panel — so the scope edge would find a dead slot and write focus to a
+  // row that no longer exists. Declining here is what keeps both on one DOM.
+  if (!current.isConnected) return false
+
+  // Read the neighbour AFTER the walk, never before: resolving the `childIds`
+  // that walk awaits is itself what mounts the rows under this one, so a
+  // neighbour read earlier can be a row that is no longer adjacent — and every
+  // test below is about adjacency. Taking that stale row while the mounted set
+  // says the model's row has since arrived would skip exactly the row that
+  // just mounted.
   const next = verticalNeighbor(current, direction, excludedSurfaces)
-  if (!next) return true // boundary — handled, no move
-  const destPanel = next.closest<HTMLElement>('[data-panel-id]')
-  if (!destPanel) return true
-  const destPanelId = destPanel.dataset.panelId
-  const destLocation = locationOf(next)
-  if (!destPanelId || !destLocation) return true
+  const nextLocation = next ? locationOf(next) : null
+  const nextPanelId = next ? panelOf(next)?.dataset.panelId : undefined
+
+  if (modelNext) {
+    // Where the model's row sits in the rendered panel — its own nav item if
+    // mounted, else the placeholder holding its place (`rowSlotIn`). Asking for
+    // the POSITION rather than "is it mounted" is what makes one test cover
+    // every surface: a nested surface's rows, a trailing footer list, and a
+    // hole left by lazy mounting differ only in where they fall relative to it.
+    const modelRowSlot = rowSlotIn(
+      uiStateBlock.id,
+      {blockId: modelNext.id, renderScopeId: currentLocation.renderScopeId},
+      excludedSurfaces,
+    )
+
+    // Within this scope, document order IS model order, so the only same-scope
+    // row that can come next is the model's own. Anything else is DOM the model
+    // has already moved past and React hasn't caught up with — a collapsed
+    // row's descendants, a deleted or reordered row's node — and every one of
+    // those reads as "on the near side" of whatever follows.
+    const takesTheModelRow = next !== null && next === modelRowSlot
+
+    // The relaxation is for nested surfaces and reaches no further. Their rows
+    // belong to their OWN scope, so no walk of this one can name them, and
+    // position is the only thing left to judge them by: fine as long as taking
+    // one can't skip the model's row — at, or on the near side of, its slot. On
+    // the far side the rows between are missing from the DOM, so we decline and
+    // let the model handler resolve the row and `FocusedRowLazyMount` mount it.
+    //
+    // No slot at all means the DOM can't answer — the row's parent hasn't
+    // rendered its children yet — which is also a decline.
+    const stepsIntoANestedSurface = Boolean(
+      next && modelRowSlot &&
+      nextLocation?.renderScopeId !== currentLocation.renderScopeId &&
+      aheadOf(next, modelRowSlot, direction),
+    )
+
+    const canTakeTheNeighbour = Boolean(
+      nextLocation &&
+      // Defence in depth, not load-bearing: no test can falsify it, because the
+      // slot is looked up INSIDE this panel and a stack sibling's rows sit
+      // wholly before or after it — so the position test above already declines
+      // every cross-panel step the model still has rows ahead of.
+      nextPanelId === uiStateBlock.id &&
+      (takesTheModelRow || stepsIntoANestedSurface),
+    )
+    if (!canTakeTheNeighbour) return false
+  }
+
+  // Scope edge: this scope's model has nothing more, so the rendered order
+  // decides — and a row with a place RESERVED is part of that order. Without
+  // this, stepping out of an embed whose owner's next rows are still deferred
+  // jumps to whatever happens to be mounted, which is the same skip one level
+  // out. Focusing the reserved row instead mounts it (`FocusedRowLazyMount`),
+  // where declining could not: the model handler is bounded by the same
+  // exhausted scope and would swallow the keystroke.
+  //
+  // What the rendered order does NOT get to decide is a row of THIS scope. A
+  // same-scope row is checked against the model wherever it turns up, and here
+  // there is no model row for one to be — so a same-scope neighbour at an edge
+  // is stale DOM by definition: a deleted sibling's node, a collapsed parent's
+  // surviving child. Only another scope's rows are genuinely unnameable by this
+  // walk, so only they can be taken on an edge. (`reservedRowBetween` applies
+  // the same rule to slots.)
+  if (deps.scopeRootId && !modelNext) {
+    const reserved = reservedRowBetween(current, next, direction, excludedSurfaces)
+    if (reserved) {
+      void focusBlock(uiStateBlock, reserved.blockId, {renderScopeId: reserved.renderScopeId})
+      return true
+    }
+    if (nextLocation?.renderScopeId === currentLocation.renderScopeId) return false
+  }
+
+  // Nothing in the model and nothing in the DOM — a real edge.
+  if (!next || !nextLocation || !nextPanelId) return true
+  const destPanelId = nextPanelId
+  const destLocation = nextLocation
 
   if (destPanelId === uiStateBlock.id) {
     // Same-panel step — identical to vim's `focusBlock` write.
@@ -310,6 +468,13 @@ const crossPanelFocus = async (
  * can still `j` into. Same return contract as `moveVertical`: `false`
  * means "no live panel DOM — fall through to vim's data-model handler"
  * (SSR/headless, or the panel hasn't mounted); `true` means handled.
+ *
+ * Known divergence from `moveVertical`: the sequence this bounds is the
+ * MOUNTED one, so `Shift+G` lands on the last mounted row rather than the
+ * last row of the page, while `j` now walks past it via the model. Left
+ * as-is deliberately — declining here would hand the edges to a data-tree
+ * walk that skips the trailing surfaces this exists to include, and picking
+ * the right answer per surface needs its own change and tests.
  */
 const jumpToPanelEdge = async (
   deps: BlockShortcutDependencies,

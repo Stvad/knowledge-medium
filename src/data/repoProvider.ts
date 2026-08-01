@@ -63,7 +63,7 @@ import {
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   captureDbOpenCorruption,
@@ -416,8 +416,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     // backfills must go through repo.tx (workspaceBackfillsFacet).
     execute: guardSyncedTableWrites((sql: string, params?: unknown[]) =>
       powerSyncDb.execute(sql, params as never[] | undefined)),
-    getOptional: async <T,>(sql: string) => {
-      const row = await powerSyncDb.getOptional<T>(sql)
+    // Forwards params. Dropping them silently bound NULL for any `?` in a
+    // bootstrap read, so the query matched nothing and the caller read that as
+    // "not done yet" — a backfill/marker probe that can never see its own
+    // completion re-runs its scan on every boot.
+    getOptional: async <T,>(sql: string, params?: unknown[]) => {
+      const row = await powerSyncDb.getOptional<T>(sql, params as never[] | undefined)
       return row ?? null
     },
   }
@@ -433,20 +437,32 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `sqlite_stat1`, so the planner makes pessimal join-order choices on
   // `blocks` once a workspace is large (a 4-id `json_each` lookup can
   // degenerate to a 4-second scan of the workspace partial index).
-  // `runAnalyzeIfStale` re-runs only when the live `blocks` count has
-  // drifted from the count the stats were built on (see clientSchema), so
-  // a stable workspace pays nothing and a grown one self-corrects. Both
-  // the count probe and ANALYZE run on the single SQLite worker, so every
-  // trigger below is idle-deferred — never on the first-paint path.
+  // `runAnalyzeIfStale` asks SQLite what is stale (`PRAGMA optimize`) and
+  // re-analyzes only that — a settled workspace pays ~nothing, and the boot
+  // after a release that adds an index pays one table rather than the whole
+  // file. See clientSchema / docs/pragma-optimize-spike.
   //
-  // (a) Boot: catches anything that changed since the last session — a
-  // prior-session import, organic growth, or the legacy "0 0" stats bug.
+  // scheduleDEEPIdle, not scheduleIdle: the latter's 2s cap means it WILL run
+  // inside the cold-start window on a busy load (its own doc says so). When
+  // this DOES fire it runs a real ANALYZE on the single SQLite worker — on a
+  // cold fresh device, potentially every table at once — and parking that
+  // worker for seconds IS the freeze this whole change is about, so it must
+  // not land on first paint.
+  //
   const scheduleAnalyzeCheck = (reason: string) => {
-    scheduleIdle(() => {
-      void runAnalyzeIfStale(backfillDb).catch(error => {
+    scheduleDeepIdle(() => {
+      void runAnalyzeIfStale(backfillDb).then(({proposed}) => {
+        // Silent when nothing was stale, which is every boot after the first —
+        // but when it DOES park the worker, say which tables it was for.
+        // Otherwise the only symptom of a mis-tuned staleness rule is an
+        // unexplained pause.
+        if (proposed && proposed.length > 0) {
+          console.info(`[Repo] ANALYZE (${reason}):`, proposed.join(', '))
+        }
+      }).catch(error => {
         console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
       })
-    })
+    }, CATCHUP_DEEP_IDLE)
   }
   scheduleAnalyzeCheck('boot')
 

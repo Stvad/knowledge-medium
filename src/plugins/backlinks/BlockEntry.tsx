@@ -208,6 +208,7 @@ export const LazyBlockEntry = ({
   return (
     <LazyViewportMount
       cacheKey={`backlink:${scopeId}:${block.id}`}
+      blockId={block.id}
       estimatedHeightPx={ENTRY_ESTIMATED_HEIGHT_PX}
       overscanPx={ENTRY_OVERSCAN_PX}
       renderPlaceholder={(props) => <BlockEntryPlaceholder {...props} />}

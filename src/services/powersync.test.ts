@@ -371,7 +371,7 @@ describe('uploadTransactionsWithFallback', () => {
     // 23503; classifier marks permanent; per-tx fallback applies
     // tx1 (succeeds), tx2 (fails — recorded), tx3 (succeeds). All
     // three end up complete()'d so ps_crud drains; only tx2 lands
-    // in ps_crud_rejected.
+    // in ps_crud_rejected. Fixing commit: 58140b90d (issue #459).
     const tx1 = fakeTx(10, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
     const tx2 = fakeTx(20, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 20, {deleted: true})])
     const tx3 = fakeTx(30, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
@@ -405,7 +405,7 @@ describe('uploadTransactionsWithFallback', () => {
     // batch every ~5s, re-running apply_block_creates and re-touching every
     // already-landed create (tx1) — a real WAL write + fleet echo each — for the
     // life of the transient. tx1 drains once; tx2 stays queued (not recorded —
-    // transient is not a rejection).
+    // transient is not a rejection). Fixing commit: 05fe86074 (issue #459).
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
     const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
@@ -716,7 +716,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // PowerSync retries the same oversized batch forever and the queue never
     // drains. Cap the per-RPC size so each call stays well under the timeout;
     // the patches are column-narrow and idempotent, so splitting them across
-    // separate RPC transactions is safe.
+    // separate RPC transactions is safe. Fixing commit: 9fc1b8729 (issue #459).
     supabaseRef.rpc.mockResolvedValue({data: null, error: null})
     const total = MAX_PATCHES_PER_SUPABASE_RPC * 2 + 1
     const patches = Array.from({length: total}, (_, i) => ({
@@ -787,6 +787,7 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // a code, so it gets a retry budget then quarantine. Note: unlike the
     // standalone classifier tests, this error carries no `.status` of its own —
     // it gets one only because the sink threads it (the production shape).
+    // Fixing commit: 71bd72efe (issue #459).
     supabaseRef.rpc.mockResolvedValueOnce({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyBlockPatchesRpcForTest([
@@ -998,6 +999,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
+    // Fixing commit: 71bd72efe (issue #459).
     supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyCompactedBlockOperationsForTest(
@@ -1013,6 +1015,7 @@ describe('defaultBlockUploadSink create/delete — status threading', () => {
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the DELETE sink', async () => {
+    // Fixing commit: 71bd72efe (issue #459).
     const eq = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
     const del = vi.fn().mockReturnValue({eq})
     supabaseRef.from.mockReturnValue({delete: del})
@@ -1061,6 +1064,7 @@ describe('recordRejectionToTable — atomic + idempotent', () => {
   }
 
   it('records every entry in one writeTransaction, led by a DELETE-by-tx_id', async () => {
+    // Fixing commit: 267558e29 (issue #459).
     const {db, calls, directExecute, writeTxCount} = collectWrites()
     const tx = fakeTx(42, [
       new CrudEntry(1, UpdateType.PATCH, 'blocks', 'block-a', 42, {content: 'A'}),

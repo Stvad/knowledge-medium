@@ -159,7 +159,12 @@ const readChildren = (parentId: string) =>
     [parentId],
   )
 
-describe('importRoam', () => {
+// The report-building tests here run a whole Roam export through the importer
+// against a real repo — the heaviest of them are ~1.1s on an idle machine, so
+// the 5s default has under 5x headroom and loses it when the machine is
+// oversubscribed. Raised for the describe because every new import test is the
+// same shape.
+describe('importRoam', {timeout: 30_000}, () => {
   it('writes pages and descendants to the repo with planned ids', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

@@ -65,6 +65,7 @@ import {
   scopePoliciesEquivalent,
 } from '@/data/api'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
+import { assertCanonicalBlockId, type BlockIdPolicy } from '@/data/blockId'
 import {
   BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
@@ -244,6 +245,13 @@ export interface TxImplContext {
   propertySchemaResolverFor: (workspaceId: string) => PropertySchemaResolver
   /** UUID generator — injected for testability. */
   newId: () => string
+  /** Block-id shape contract for this tx's inserts (issue #456) — see
+   *  `@/data/blockId`. REQUIRED, with no default here or in `RunTxParams`,
+   *  even though `RepoOptions.blockIdPolicy` has one: a default on the
+   *  plumbing would mean a context that simply forgot to pass the policy
+   *  silently gets a policy, which is the failure mode this whole change
+   *  exists to remove. `Repo` is the one place that decides. */
+  blockIdPolicy: BlockIdPolicy
   /** Write observation hook for the commit pipeline's derivation re-run
    *  pass (issue #402): called once per recorded row write, from the same
    *  choke point as `recordWrite`, with THIS write's (before, after) pair
@@ -453,7 +461,7 @@ export class TxImpl implements Tx {
     this.checkWorkspace(data.workspaceId)
     await this.requireParentInWorkspace(data.parentId, data.workspaceId)
     const id = data.id ?? this.ctx.newId()
-    const row = this.buildNewBlockRow(id, data, opts)
+    const row = this.buildNewBlockRow(id, data, opts, 'tx.create')
     try {
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
     } catch (e) {
@@ -475,7 +483,7 @@ export class TxImpl implements Tx {
 
     if (existing === null) {
       await this.requireParentInWorkspace(data.parentId, data.workspaceId)
-      const row = this.buildNewBlockRow(data.id, data, opts)
+      const row = this.buildNewBlockRow(data.id, data, opts, 'tx.createOrGet')
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
       this.markSystemMint(data.id, opts)
       this.pinWorkspace(data.workspaceId)
@@ -1125,6 +1133,16 @@ export class TxImpl implements Tx {
       // some non-tx path; we still try to restore. Engine fields
       // (createdAt/createdBy/updatedAt/updatedBy) come from the
       // captured target.
+      //
+      // NOT gated by `blockIdPolicy` (issue #456), deliberately: this
+      // restores an id that already existed, it does not mint one. Under a
+      // strict Repo the only way a non-canonical id reaches an undo snapshot
+      // is a path the contract already exempts — a sync-materialized row, or
+      // the trusted `eval` escape hatch. Gating here would not prevent that
+      // id from existing (it is already in the user's data); it would only
+      // make UNDO fail on it, turning a tolerated foreign id into lost user
+      // history. Restore is not a write boundary, for the same reason sync
+      // apply isn't.
       const inserted: BlockData = {
         ...target,
         updatedAt: now,
@@ -1248,7 +1266,22 @@ export class TxImpl implements Tx {
     id: string,
     data: NewBlockData,
     opts: TxInsertOpts | undefined,
+    context: string,
   ): BlockData {
+    // The block-id shape contract (issue #456). `create` and `createOrGet`
+    // are the two MINTING paths and both build their row here, so every id
+    // this engine brings into existence is checked once, by construction,
+    // rather than at each of the N call sites that can supply one.
+    //
+    // `applyRaw`'s re-INSERT is the third statement that can insert a row and
+    // is deliberately NOT gated — see the note at its missing-row branch.
+    //
+    // Checked on the RESOLVED id, not on `data.id`: the invariant is a
+    // property of the ROW, so a Repo wired with a `newId` that mints
+    // something non-canonical is just as much a violation as a caller passing
+    // one, and should fail the same way instead of writing a row the guard
+    // claims cannot exist.
+    if (this.ctx.blockIdPolicy === 'canonical') assertCanonicalBlockId(id, context)
     const now = this.ctx.now()
     const userId = this.meta.user.id
     // `updated_at` is the row-version. A speculative `systemMint` default and a

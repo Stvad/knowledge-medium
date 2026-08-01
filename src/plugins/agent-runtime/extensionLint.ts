@@ -185,7 +185,7 @@ const rules: LintRule[] = [
     rule: 'stored-plugin-block-id',
     catalogPattern: 'plugin-root-singleton',
     message:
-      'Persisting a plugin\'s root or per-record block id (e.g. in localStorage or a config block) means a cache clear or fresh device creates a duplicate. Derive ids deterministically with `pluginBlockId(workspaceId, NAMESPACE, key)` — same inputs always return the same id, so re-installs land on the existing block.',
+      'Persisting a plugin\'s root or per-record block id (e.g. in localStorage or a config block) means a cache clear or fresh device creates a duplicate. Derive the block from what it IS instead — `getOrCreateKernelPage` for a root page, `getOrCreateTypedChild` for the records under it — so the same inputs always resolve to the same block and a re-install lands on the existing one.',
     testLine(line) {
       // Heuristic: an assignment or write that pairs an `id`-shaped
       // key with the localStorage / state-blob layer. Catches

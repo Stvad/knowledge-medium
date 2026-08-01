@@ -47,13 +47,13 @@
  * deterministic-id flows can import it from `@/data/targets`.
  */
 
-import { v5 as uuidv5 } from 'uuid'
 import {
   DeletedConflictError,
   type ProcessorReadDb,
   type Tx,
   type TypeRegistrySnapshot,
 } from '@/data/api'
+import { derivedBlockId } from '@/data/derivedIds'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp, addBlockTypeToProperties, typesProp } from './properties'
@@ -178,7 +178,7 @@ export const computeAliasSeatId = (
   alias: string,
   workspaceId: string,
   index: number = 0,
-): string => uuidv5(`${workspaceId}:${alias}:${index}`, ALIAS_NS)
+): string => derivedBlockId({namespace: ALIAS_NS, key: `${workspaceId}:${alias}:${index}`})
 
 /** Single source of truth for the freshly-materialised alias-seat
  *  shape. `ensureAliasTarget` writes a row whose `(content, properties)`

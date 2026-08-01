@@ -5,19 +5,18 @@ import { showProgress } from '@/utils/toast.js'
 import { DatabaseZap } from 'lucide-react'
 
 /** Command-palette command that runs SQLite `ANALYZE` on demand,
- *  repopulating `sqlite_stat1` so the query planner stops mis-ranking
- *  join orders on a large `blocks` table.
+ *  unconditionally.
  *
- *  The app normally re-analyzes itself when the table drifts from the
- *  recorded stats (boot / first-sync / post-import — see
- *  `clientSchema.runAnalyzeIfStale`), so this is the manual escape hatch:
- *  a user hitting query freezes can force it without waiting for a
- *  trigger. Unlike the automatic path it bypasses the drift gate
- *  (`runAnalyzeNow`) — the user asked, so always run.
+ *  The data layer re-analyzes on its own whenever SQLite reports stats as stale
+ *  (see clientSchema.runAnalyzeIfStale), so this is the manual escape hatch for
+ *  the case that heuristic cannot model: stats that are present and
+ *  schema-current but wrong for the current query mix. It is also the only
+ *  UNBOUNDED pass — the automatic path samples (`ANALYZE_SAMPLE_LIMIT`), this
+ *  one deliberately does not.
  *
- *  ANALYZE is a multi-second scan on a large DB that holds the single
- *  SQLite worker, so the handler surfaces a progress toast rather than
- *  running silently. */
+ *  No drift gate — the user asked, so always run. ANALYZE is a multi-second
+ *  scan holding the single SQLite worker, which is why the handler wraps it in
+ *  a `showProgress` toast rather than running it silently. */
 export const rebuildQueryStatsAction = ({repo}: {repo: Repo}): ActionConfig => ({
   id: 'rebuild_query_stats',
   description: 'Rebuild query statistics (ANALYZE)',

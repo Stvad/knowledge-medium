@@ -9,6 +9,7 @@ import blockSubscriptions from './eslint-rules/block-subscriptions.js'
 import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
 import childView from './eslint-rules/child-view.js'
 import noRawSyncedTableWrites from './eslint-rules/no-raw-synced-table-writes.js'
+import kernelPluginBoundary from './eslint-rules/kernel-plugin-boundary.js'
 
 // DI-lens audit (PR #357) / follow-up (PR #424): every ambient-global
 // restriction the audit produced now lives in ambientAccessors.data.js and
@@ -82,10 +83,53 @@ const uiTxDeleteRestriction = {
   message: uiDeleteMessage,
 }
 
+const derivedIdMessage = 'Derive block ids through `derivedBlockId` (@/data/derivedIds), not a local uuidv5 — the formulas there are pinned by derivedIds.test.ts, and an unpinned one can silently re-point a whole kind at fresh ids. For a get-or-create, use getOrCreateTypedChild (records) or getOrCreateKernelPage (root pages).'
+
+/** The dynamic half of the derived-id guard below. `no-restricted-imports`
+ *  inspects import DECLARATIONS only, so `const {v5} = await import('uuid')`
+ *  sails past it and can establish an id formula off the pins — the exact
+ *  silent-orphaning outcome the static rule exists to prevent.
+ *
+ *  Coarser than its static counterpart on purpose: a syntax selector sees the
+ *  module specifier but not which binding the caller destructures, so this
+ *  catches a dynamic `v4` import too. Nothing in the tree imports uuid
+ *  dynamically at all, and a lazily-loaded random-id generator would be odd —
+ *  so the false-positive cost is a disable-with-a-reason, same as the other
+ *  selectors here.
+ *
+ *  Lives with the selectors rather than in the derived-id block because
+ *  `no-restricted-syntax` REPLACES rather than merges across matching blocks:
+ *  configuring it in a later, narrower block would silently drop the B3 and
+ *  UI-delete restrictions for every file that block matched. It is listed in
+ *  both `src/`-wide selector blocks below for the same reason, and left out of
+ *  the test block so tests can still hash independently.
+ *
+ *  Two specifier forms, and the boundary between covered and not is
+ *  deliberate. A string literal and a zero-substitution template literal are
+ *  both statically the module name — equally easy to type by accident, so both
+ *  are caught. A specifier that has to be COMPUTED (`'uu' + 'id'`, a variable,
+ *  a template with substitutions) is not, and chasing it would be theatre: no
+ *  selector can evaluate arbitrary expressions, and anyone assembling the
+ *  string at runtime is routing around a rule they can read. The pin that does
+ *  not care how the import was spelled is `derivedIds.test.ts`, which hashes
+ *  every live formula independently — this rule only has to stop the accident. */
+const derivedIdDynamicImportRestriction = {
+  selector: "ImportExpression[source.value='uuid'], ImportExpression[source.expressions.length=0][source.quasis.0.value.cooked='uuid']",
+  message: derivedIdMessage,
+}
+
 const uiDeleteSubtreeRestriction = {
   selector: "CallExpression[callee.name='deleteSubtreeInTx']",
   message: uiDeleteMessage,
 }
+
+// Every extension the toolchain can hand us as a source module. Used by BOTH the
+// parser block and every `src/`-scoped rule block below, because the two drifting
+// apart is a silent hole rather than an error: widening the boundary gate to
+// `.js` once left `src/data/syncedTableSqlRecognizer.js` — real shipped core
+// code — as a file that ONE rule checked and the delete guards, child-view and
+// synced-write guards did not. One constant, no drift.
+const SOURCE_GLOB = 'src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'
 
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
@@ -103,7 +147,13 @@ export default tseslint.config(
   { ignores: ['dist', '**/dist/**', '.claude/**', '.codex/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
-    files: ['**/*.{ts,tsx}'],
+    // `.mts`/`.cts`/`.jsx` are here so the TypeScript parser actually covers
+    // every extension the boundary gate below claims: without it a
+    // toolchain-valid `const x: number = 1` in a `.mts` file is handed to
+    // espree and dies with a parse error before any rule runs. None exist
+    // today — this keeps the two globs from drifting apart the first time one
+    // does.
+    files: ['**/*.{ts,tsx,mts,cts,jsx}'],
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
@@ -184,7 +234,7 @@ export default tseslint.config(
     //     structurally on purpose — order-key and sibling math must see every
     //     row — so it is only guarded in the pure display dirs below, and the
     //     mixed files spell visible intent with the `visibleChildrenOf` helper.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     plugins: {'child-view': childView},
     rules: {
       'child-view/require-explicit-child-view': ['error', {check: 'query'}],
@@ -195,9 +245,15 @@ export default tseslint.config(
     // ops tooling have no Block deletes at all — their zero-arg `.delete()`
     // calls are Supabase query builders — so linting them here would be pure
     // noise in files that can never have the defect.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     rules: {
-      'no-restricted-syntax': ['error', b3CustomEventRestriction, uiDeleteRestriction, uiMutateDeleteRestriction],
+      'no-restricted-syntax': [
+        'error',
+        b3CustomEventRestriction,
+        uiDeleteRestriction,
+        uiMutateDeleteRestriction,
+        derivedIdDynamicImportRestriction,
+      ],
     },
   },
   {
@@ -209,7 +265,7 @@ export default tseslint.config(
     // from `blockMerge` — which is exactly the mistake this rule exists to
     // catch. Non-UI callers out here (the agent bridge, processors) opt out
     // inline with a reason, same as the other selectors.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     ignores: ['src/data/**'],
     rules: {
       'no-restricted-syntax': [
@@ -219,6 +275,7 @@ export default tseslint.config(
         uiMutateDeleteRestriction,
         uiTxDeleteRestriction,
         uiDeleteSubtreeRestriction,
+        derivedIdDynamicImportRestriction,
       ],
     },
   },
@@ -226,7 +283,7 @@ export default tseslint.config(
     // Pure outline/display modules: every child traversal is a display read,
     // so `tx.childrenOf` is guarded here too.
     files: [
-      'src/components/**/*.{ts,tsx}',
+      'src/components/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
       'src/hooks/**/*.{ts,tsx}',
       'src/plugins/video-player/**/*.{ts,tsx}',
       'src/shortcuts/**/*.{ts,tsx}',
@@ -238,13 +295,59 @@ export default tseslint.config(
     },
   },
   {
+    // THE central architecture principle, as a gate: **core cannot depend on
+    // plugins; plugins may depend on core and on each other.** Core declares
+    // seams (facets, mutators, queries, actions, renderers) and plugins fill
+    // them — the moment a core module names a plugin, that plugin stops being
+    // removable and the seam stops being a seam.
+    //
+    // A lint rule rather than a paragraph because this repo is built primarily
+    // by agents, and the erosion is always one line: a core module wants one
+    // constant or one type that happens to live in a plugin, and nothing
+    // objects. Prose doesn't survive that; a failing gate does.
+    //
+    // Where the boundary is, what counts as a dependency, and why `scripts/` +
+    // `packages/` are out of scope all live in the rule's own docstring —
+    // eslint-rules/kernel-plugin-boundary.js. Deliberately NOT restated here;
+    // it was, and the duplicated prose (down to a file count) is two copies to
+    // keep in sync by hand.
+    //
+    // Config-specific, with no home in the rule file: this glob covers every
+    // module extension the toolchain accepts, not just the ones present today,
+    // while every other block in this config is `{ts,tsx}`-only. That gap is
+    // real, not theoretical —
+    // `src/data/syncedTableSqlRecognizer.js` is shipped core code that NO rule
+    // in this config currently lints, so renaming a file to `.js` was a
+    // one-step way out of this boundary. Widening the whole config is a
+    // separate call; widening this one rule is not.
+    files: [SOURCE_GLOB],
+    plugins: {boundary: kernelPluginBoundary},
+    rules: {
+      'boundary/no-core-to-plugin-imports': ['error', {
+        // Anchor the layer split on THIS file's directory, not the cwd. Derived
+        // from the cwd, the rule failed open — running `eslint` from `src/`
+        // made every path escape and the rule reported nothing at all.
+        sourceRoot: `${import.meta.dirname}/src`,
+        // The composition root — the two files whose entire job is registering
+        // every plugin with the app. Importing all of them is not a leak here,
+        // it is the definition of the file. This is the ONLY blanket exemption;
+        // genuine debt elsewhere carries an inline disable + a reason, so a
+        // NEW plugin import in an already-compromised file still fails.
+        allowIn: [
+          'src/extensions/staticAppExtensions.ts',
+          'src/extensions/staticDataExtensions.ts',
+        ],
+      }],
+    },
+  },
+  {
     // Static half of the "raw write to a synced table silently never
     // uploads" bug class (src/data/syncedTableWriteGuard.ts; GitHub issue
     // #404 item 1). Only a `repo.tx(...)` write sets `tx_context.source`,
     // which the upload trigger is gated on — a raw SQL write to
     // blocks/workspaces/workspace_members from outside a tx leaves the row
     // local-only, with no error at write time.
-    files: ['src/**/*.{ts,tsx}'],
+    files: [SOURCE_GLOB],
     plugins: {'synced-write': noRawSyncedTableWrites},
     rules: {
       'synced-write/no-raw-synced-table-writes': 'error',
@@ -291,6 +394,37 @@ export default tseslint.config(
     },
   },
   {
+    // Every derived BLOCK id resolves through `@/data/derivedIds` — see that
+    // module's header for why, and `derivedIds.test.ts` for the formulas it
+    // pins. A hand-rolled `uuidv5` for a block id is how a namespace or a key
+    // shape drifts out from under those pins, and a drifted formula orphans
+    // every row already written at the old id, silently and with nothing
+    // failing. Only `v5` is restricted: `v4` is a fresh random id and has
+    // nothing to do with this.
+    files: [SOURCE_GLOB],
+    ignores: [
+      // The one implementation.
+      'src/data/derivedIds.ts',
+      // Workspace and member ids — not blocks, so none of the policy applies.
+      'src/data/workspaces.ts',
+      // The oracle hashes independently on purpose; that is what makes it an
+      // oracle rather than a mirror of the implementation. Extension-agnostic
+      // on purpose: `files` already fixes which extensions are in scope, so
+      // these only have to say WHERE the tests are.
+      '**/test/**',
+      '**/*.test.*',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: 'uuid',
+          importNames: ['v5'],
+          message: derivedIdMessage,
+        }],
+      }],
+    },
+  },
+  {
     // Tests legitimately dispatch synthetic CustomEvents to drive
     // components, so the B3 selector above doesn't apply to them. (The
     // ambient-accessors table rule, unlike B3, applies to tests too — see
@@ -299,11 +433,31 @@ export default tseslint.config(
     // the CallbackSet nudge is off there too. Test fixtures/harnesses also
     // legitimately poke synced tables directly (seeding rows, asserting on
     // raw SQL shapes) without going through repo.tx.
-    files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
+    //
+    // The core→plugin boundary is off here for the same reason `scripts/` is
+    // out of scope: the invariant is about the SHIPPED module graph, and a test
+    // is a top-level consumer sitting above both layers, not part of core's
+    // dependency closure. A core integration test proving that core and several
+    // plugin data extensions compose (systemPagesCollision.test.ts installs
+    // four of them) is the correct shape for such a test, and the type-parity
+    // fixture (extensions/test/apiCatalogTypeParity.ts) exists precisely to
+    // name every type the catalog advertises — including the two the catalog
+    // sources from plugins. Enforcing here would mean ~24 disable comments
+    // saying "this is a test", which teaches nothing.
+    // Mirrors the boundary rule's `files` glob above, and vitest's own
+    // `include` (`**/*.{test,spec}.{ts,tsx}` — note `spec`, which this override
+    // used to miss): an exemption narrower than the gate leaves a real test
+    // failing as if it were shipped core code. The other rules turned off here
+    // never applied to these extensions anyway, so widening costs them nothing.
+    files: [
+      '**/test/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+      '**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
+    ],
     rules: {
       'no-restricted-syntax': 'off',
       'callback-set/prefer-callback-set': 'off',
       'synced-write/no-raw-synced-table-writes': 'off',
+      'boundary/no-core-to-plugin-imports': 'off',
     },
   },
 )
