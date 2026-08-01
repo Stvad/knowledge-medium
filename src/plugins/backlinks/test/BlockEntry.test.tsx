@@ -72,7 +72,7 @@ describe('BlockEntry breadcrumbs', () => {
   })
 })
 
-describe('BacklinkEntry structural-edit scope', () => {
+describe('BlockEntry structural-edit scope', () => {
   // The entry's shown block is the root of the only subtree this surface
   // renders, so it must declare itself the scope root. That single
   // override is what makes `resolveStructuralEditPolicy` treat `o` /
@@ -85,7 +85,7 @@ describe('BacklinkEntry structural-edit scope', () => {
 
     render(
       <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
-        <LazyBacklinkItem block={source} initialParents={[parent]} scopeId="test:source-block" />
+        <LazyBlockEntry block={source} initialParents={[parent]} scopeId="test:source-block" />
       </BlockContextProvider>,
     )
 
