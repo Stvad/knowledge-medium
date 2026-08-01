@@ -24,7 +24,7 @@ import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
 import {STRENGTH_PROPS, STRENGTH_TYPES} from './km/schema'
-import {getOrCreateStrengthLogPage} from './km/page'
+import {ensureStrengthHome} from './km/tonight'
 import {strengthDecorations} from './ui/decorations'
 import {StrengthLogRenderer} from './ui/StrengthPageRenderer'
 import {startSessionAction} from './ui/startAction'
@@ -41,8 +41,20 @@ const openStrengthLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     const repo = uiStateBlock.repo
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    const page = await getOrCreateStrengthLogPage(repo, workspaceId)
-    await navigateFromGlobalCommand(repo, {blockId: page.id, workspaceId})
+    // The page AND its settings block. Creating only the page left a fresh
+    // workspace with nowhere to configure the plan root, the rollover hour,
+    // the cadence or the rounding: the settings type is hidden from
+    // completion, and `ensureStrengthHome` otherwise runs only when a layoff
+    // or an `or`-group choice is recorded — so someone who did neither never
+    // got one, and had no way to make one.
+    //
+    // Here rather than in the renderer, which is where it looks like it
+    // belongs: this is an explicit gesture that already creates the page, so
+    // one more block alongside it is no surprise, while a mount effect would
+    // write from every panel that renders the page, in every tab, including
+    // one you merely navigated past. Reading still bootstraps nothing.
+    const {pageId} = await ensureStrengthHome(repo, workspaceId)
+    await navigateFromGlobalCommand(repo, {blockId: pageId, workspaceId})
   },
 }
 

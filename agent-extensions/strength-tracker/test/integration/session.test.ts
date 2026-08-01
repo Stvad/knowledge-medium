@@ -365,12 +365,39 @@ describe('which standing session a tap continues', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'a peer session'})
   }
 
-  it('continues the one at the derived seat when two look live', async () => {
+  /** Stamped straight onto the row, because the clock is too coarse to
+   *  separate two blocks created microseconds apart in a test — and a tie
+   *  falls through to the id, which would decide this by uuid spelling rather
+   *  than by the rule under test. */
+  const startedAt = async (id: string, when: number): Promise<void> => {
+    await sharedDb.db.execute('update blocks set created_at = ? where id = ?', [when, id])
+  }
+
+  it('continues the most recently started of two that look live', async () => {
     // A device that has the SECOND session's create row but not yet the
-    // first's status update sees both as in-progress. Picking arbitrarily
-    // stamps tonight into a session the other device already closed.
+    // first's status update sees both as in-progress. The one you are IN is
+    // the one you started last — and, decisively, it is the one
+    // `standingSession` sends you to a moment before this runs. Preferring the
+    // derived seat here made the two disagree, so a session arriving in that
+    // window got tonight's lifts stamped into it while you looked at another.
     const derived = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
-    await standingWorkout('11111111-1111-4111-8111-111111111111')
+    const peer = '11111111-1111-4111-8111-111111111111'
+    await standingWorkout(peer)
+    await startedAt(derived, 1_000)
+    await startedAt(peer, 2_000)
+
+    expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(peer)
+  })
+
+  it('continues the derived one when IT is the one started last', async () => {
+    // The mirror, so the test above cannot be passing merely because the
+    // derived seat stopped being preferred: the rule is chronological, and it
+    // has to pick the derived row when that is the newest.
+    const derived = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const peer = '11111111-1111-4111-8111-111111111111'
+    await standingWorkout(peer)
+    await startedAt(peer, 1_000)
+    await startedAt(derived, 2_000)
 
     expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(derived)
   })
@@ -400,6 +427,40 @@ describe('adjustSet', () => {
     const [set] = await childrenOf(entry.id, SET_TYPE)
     return {setId: set.id, entryId: entry.id, workoutId}
   }
+
+  describe('a ± tap is a step, sized where the unit is actually known', () => {
+    const kgSetWithoutItsOwnUnit = async (): Promise<string> => {
+      const workoutId = await startSession(
+        repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1, {unit: 'kg'})]))
+      const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+      const [set] = await childrenOf(entry.id, SET_TYPE)
+      // The shape of every set the PREVIOUS logger wrote: the unit lived on
+      // the entry, never on the set.
+      await repo.tx(async tx => { await tx.setProperties(set.id, {unset: [unitProp]}) },
+        {scope: ChangeScope.BlockDefault, description: 'a set from before the unit moved'})
+      return set.id
+    }
+
+    it('inherits kg from the entry rather than taking the schema default', async () => {
+      // `strength:unit` defaults to `lb`, so a set with none reads back as lb
+      // to any caller — while this same function goes on to WRITE the row as
+      // kg, from the ancestor walk. Sizing the step in the caller made one "+"
+      // tap add 5 to a row labelled kg. The step is a count now, and only the
+      // writer, which already resolved the unit, turns it into a number.
+      const setId = await kgSetWithoutItsOwnUnit()
+
+      expect(await adjustSet(repo, setId, {weightSteps: 1})).toBe('written')
+
+      expect(repo.block(setId).peekProperty(weightProp)).toBe(137.5)
+      expect(repo.block(setId).peek()!.content).toContain('kg')
+    })
+
+    it('is 5 in lb, where the set does say what it is', async () => {
+      const {setId} = await oneSet()
+      expect(await adjustSet(repo, setId, {weightSteps: -1})).toBe('written')
+      expect(repo.block(setId).peekProperty(weightProp)).toBe(130)
+    })
+  })
 
   it('applies the delta to what the block holds now, not to what the caller last saw', async () => {
     // The property that makes a burst of ± taps safe. An absolute value

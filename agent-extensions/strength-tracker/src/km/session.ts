@@ -135,9 +135,37 @@ const both = (
   b: (block: BlockData) => boolean,
 ) => (block: BlockData): boolean => a(block) && b(block)
 
-/** Newest first, id as the tiebreak so every device orders ties the same. */
-const newestFirst = (a: BlockData, b: BlockData): number =>
-  (b.createdAt ?? 0) - (a.createdAt ?? 0) || (a.id < b.id ? -1 : 1)
+/** Which of several live sessions a tap continues.
+ *
+ *  Most recently STARTED. Two can look live at once while a peer's `done`
+ *  update is still in flight, and an id has nothing to do with chronology —
+ *  so taking the lowest could send you to the session you already finished,
+ *  whose set checkboxes are (deliberately) still live, and log tonight's work
+ *  into last night's record. `created_at` is the creating device's clock at
+ *  insert, and the systemMint path zeroes `updated_at` only, so it survives a
+ *  derived-id mint intact.
+ *
+ *  Id breaks the tie so every device names the same one. Pulled out as a pure
+ *  function because that tie-break is otherwise untestable: the query happens
+ *  to return rows in an order that produces the same answer, so a test
+ *  through `standingSession` passes whether the clause is there or not.
+ *
+ *  Lives HERE, beside the stamp, rather than in `tonight.ts` where it was
+ *  written: the pre-dialog check and the transaction that actually adopts have
+ *  to agree about which session you are in, and two implementations of "which
+ *  one" is exactly how a tap navigates to one session and stamps into another.
+ */
+export const mostRecentlyStarted = (
+  rows: readonly {id: string; createdAt?: number}[],
+): string | null => {
+  let best: {id: string; createdAt?: number} | null = null
+  for (const row of rows) {
+    if (best === null
+      || (row.createdAt ?? 0) > (best.createdAt ?? 0)
+      || ((row.createdAt ?? 0) === (best.createdAt ?? 0) && row.id < best.id)) best = row
+  }
+  return best?.id ?? null
+}
 
 /** The chain above a block, nearest first.
  *
@@ -174,7 +202,6 @@ export const takePlaceOf = async (
 ): Promise<'took-its-place' | 'cleared-only' | 'kept-the-line' | 'nothing-to-do'> => {
   const replaces = placement.replaces
   if (replaces === undefined || replaces.id === workoutId) return 'nothing-to-do'
-  const landed = await repo.block(workoutId).load()
   return repo.tx(async tx => {
     // Re-decided HERE, against the line as it is now, not as it was when the
     // action started. `replaces` is a snapshot from before the dialog opened,
@@ -203,7 +230,14 @@ export const takePlaceOf = async (
     // anywhere — dragging it out of wherever it is kept because you happened
     // to run this on an empty line is not a placement, it is a move nobody
     // asked for.
-    const mine = landed?.parentId === placement.parentId && !landed.deleted
+    //
+    // Read in the transaction for the same reason the line above it is: a
+    // pre-transaction load is old by the time the write lock is held, and
+    // acting on it drags a workout back out of wherever a concurrent filing
+    // gesture just put it.
+    const workout = await tx.get(workoutId)
+    const mine = workout !== null && !workout.deleted
+      && workout.parentId === placement.parentId
     if (mine) {
       await tx.move(workoutId, {parentId: placement.parentId, orderKey: replaces.orderKey})
     }
@@ -363,16 +397,17 @@ export const startSession = async (
     }
     // More than one can look standing: a device that has received the second
     // session's create row but not yet the FIRST one's status update sees both
-    // as in-progress. Prefer the derived seat, then the newest — "the session
-    // you are in", not "the lowest id". Picking arbitrarily (which is all
-    // picking the lowest id would — that rule exists to make two READERS
-    // agree, not to choose a write target) stamped tonight into a session the
-    // other device had already closed, which derived ids exist to stop.
-    const derivedSeat = derivedBlockId(workoutIdentity(workspaceId, plan.day, plan.session))
+    // as in-progress. Most recently STARTED — "the session you are in", not
+    // "the lowest id", and not "the derived one" either. Preferring the
+    // derived seat here made this disagree with `standingSession`, which is
+    // the check that decided a moment ago which workout to send you to: a
+    // session arriving between the two reaches this selection instead, and the
+    // tap then stamps tonight's lifts into a session you are not looking at.
+    // One rule, one function, both ends.
     const candidates = [...seen.values()]
       .filter(block => !block.deleted && isTonightsLog(block, plan))
-    const standing = candidates.find(block => block.id === derivedSeat)
-      ?? [...candidates].sort(newestFirst)[0]
+    const continuesId = mostRecentlyStarted(candidates)
+    const standing = candidates.find(block => block.id === continuesId)
 
     const workout = standing !== undefined
       ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
@@ -473,9 +508,24 @@ const numberAt = (block: BlockData, field: string, fallback: number): number =>
  *  reader trusting the text while progression trusts the properties would
  *  train off the wrong numbers.
  */
+/** Load steps in the unit the set records. Deliberately not the plan's
+ *  `roundTo`: this is a thumb correcting a number under a bar, and a plate you
+ *  can actually add is the useful increment. */
+export const weightStep = (unit: string): number => (unit === 'kg' ? 2.5 : 5)
+
 export interface SetAdjustment {
   weight?: number
   reps?: number
+  /** ± one plate, sized HERE rather than by the caller.
+   *
+   *  The unit is resolved inside the transaction by walking to the nearest
+   *  ancestor that has one, and the caller cannot do that: `strength:unit` has
+   *  a schema default of `lb`, so a set logged before the unit lived on the
+   *  set reads back as `lb` in the UI however the workout is actually kept.
+   *  The two answers then disagreed in the worst possible way — a 5 lb step
+   *  applied to a row this same function goes on to write as kg. Ask for a
+   *  step and only one of them has to be right. */
+  weightSteps?: number
   set?: {weight?: number; reps?: number; rpe?: number | null}
 }
 
@@ -515,19 +565,24 @@ const writeSet = async (
     // from — and leaves the stamped working weight disagreeing with its sets.
     if (workout && workout.properties[FIELD.status] === 'done') return 'closed' as const
 
-    const previousWeight = numberAt(block, FIELD.weight, 0)
-    const previousReps = numberAt(block, FIELD.reps, 0)
-    const weight = Math.max(0, delta.set?.weight ?? previousWeight + (delta.weight ?? 0))
-    const reps = Math.max(0, delta.set?.reps ?? previousReps + (delta.reps ?? 0))
     // Sets logged before this redesign carry no `strength:unit` — it lived on
     // the entry — so reading the set alone would rewrite "185lb × 5" as
     // "185 × 5", stripping the unit from a record meant to stay readable
     // without the extension. Nearest ancestor that has one, for the same
     // reason the workout is walked to rather than hopped to.
+    //
+    // Resolved BEFORE the weight, because it is what sizes a `weightSteps`
+    // nudge — see `SetAdjustment`.
     const unit = typeof block.properties[FIELD.unit] === 'string'
       ? block.properties[FIELD.unit] as string
       : (ancestors.find(row => typeof row.properties[FIELD.unit] === 'string')
         ?.properties[FIELD.unit] as string | undefined) ?? ''
+
+    const previousWeight = numberAt(block, FIELD.weight, 0)
+    const previousReps = numberAt(block, FIELD.reps, 0)
+    const nudged = (delta.weight ?? 0) + (delta.weightSteps ?? 0) * weightStep(unit)
+    const weight = Math.max(0, delta.set?.weight ?? previousWeight + nudged)
+    const reps = Math.max(0, delta.set?.reps ?? previousReps + (delta.reps ?? 0))
     const side = block.properties[FIELD.side] === 'L' || block.properties[FIELD.side] === 'R'
       ? block.properties[FIELD.side] as 'L' | 'R'
       : undefined

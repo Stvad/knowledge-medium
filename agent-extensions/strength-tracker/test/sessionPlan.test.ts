@@ -59,14 +59,20 @@ describe('planFromPrescription', () => {
     expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([7, 7])
   })
 
-  it('copies it onto both sides of single-arm work', () => {
+  it('asks for it on the left side only, which is the side progression reads', () => {
+    // `progressionSets` drops `side: 'R'` rows and `allSetsAtOrBelowRpe` reads
+    // through it, so a rating on the right is never read by anything. The
+    // control exists under one rule — it appears only where it can change a
+    // future prescription — and a prompt per side breaks that rule while
+    // costing a tap per set on the narrowest screen the app has.
     const {lifts} = planFromPrescription(
       prescription([exercise({exercise: 'Waiter carry', sets: 2, perSide: true, catchUpRpe: 8})]),
       'lb',
     )
 
     expect(lifts[0].sets).toHaveLength(4)
-    expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([8, 8, 8, 8])
+    expect(lifts[0].sets.map(s => s.side)).toEqual(['L', 'R', 'L', 'R'])
+    expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([8, undefined, 8, undefined])
   })
 
   it('leaves it off a lift without one, which is what suppresses the control', () => {

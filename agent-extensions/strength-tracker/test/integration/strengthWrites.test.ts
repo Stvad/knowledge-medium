@@ -24,9 +24,9 @@ import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYP
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
-import {findStrengthLogPage} from '../../src/km/page'
-import {adjustSet, finishSession, startSession} from '../../src/km/session'
-import {closeSession, ensureStrengthHome, mostRecentlyStarted, readProgram, standingSession} from '../../src/km/tonight'
+import {findSettingsBlock, findStrengthLogPage} from '../../src/km/page'
+import {adjustSet, finishSession, mostRecentlyStarted, startSession} from '../../src/km/session'
+import {closeSession, ensureStrengthHome, readProgram, standingSession} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {derivedBlockId} from '@/data/typedRecords'
@@ -117,6 +117,23 @@ describe('discardSession — the one write that destroys', () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan())
     expect(await discardSession(repo, workoutId)).toBe('discarded')
     expect(await isBlockDeleted(repo, workoutId)).toBe(true)
+  })
+})
+
+describe('ensureStrengthHome', () => {
+  it('creates the settings block alongside the page, not just the page', async () => {
+    // What "open the log" now goes through. Creating only the page left a
+    // fresh workspace with nowhere to set the plan root, the rollover hour,
+    // the cadence or the rounding: the settings type is hidden from
+    // completion, and the only other callers are recording a layoff and
+    // recording an `or`-group choice — so someone who did neither had no
+    // settings block and no way to make one.
+    const fresh = 'ws-with-nothing-in-it'
+
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+
+    expect(await findStrengthLogPage(repo, fresh)).toBe(pageId)
+    expect(await findSettingsBlock(repo, fresh, pageId)).toBe(settingsBlockId)
   })
 })
 

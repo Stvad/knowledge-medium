@@ -20,16 +20,12 @@
 import {useState} from 'react'
 
 import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
-import {usePropertyValue} from '@/hooks/block.js'
+import {useData, usePropertyValue} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
 
-import {adjustSet} from '../../km/session'
-import {catchUpRpeProp, rpeProp, unitProp, weightProp} from '../../km/schema'
-
-/** Load steps in the unit the set records. Deliberately not the plan's
- *  `roundTo`: this is a thumb correcting a number, and a plate you can
- *  actually add is the useful increment. */
-const weightStep = (unit: string): number => (unit === 'kg' ? 2.5 : 5)
+import {FIELD} from '../../km/fields'
+import {adjustSet, weightStep} from '../../km/session'
+import {catchUpRpeProp, rpeProp, weightProp} from '../../km/schema'
 
 const Nudge = ({label, onPress, children}: {
   label: string
@@ -62,7 +58,14 @@ const REFUSED: Record<'closed' | 'gone', string> = {
 const RPE_CHOICES = [5, 6, 7, 8, 9, 10] as const
 
 const SetLine = ({block, Inner}: Props) => {
-  const [unit] = usePropertyValue(block, unitProp)
+  // The RAW value, not `usePropertyValue`: `strength:unit` has a schema
+  // default of `lb`, so a set that predates the unit living on the set reads
+  // back as `lb` here however the workout is actually kept — and this label
+  // would then name a step `adjustSet` is not going to apply. Absent means
+  // absent; the write resolves it from the entry, and says so generically.
+  const unit = useData(block)?.properties[FIELD.unit]
+  const step = typeof unit === 'string' ? weightStep(unit) : undefined
+  const amount = step !== undefined ? `${step}${unit as string}` : 'one step'
   const [weight] = usePropertyValue(block, weightProp)
   const [rpe] = usePropertyValue(block, rpeProp)
   // Stamped at Start from the plan, so a set logged before the lift had a
@@ -72,7 +75,6 @@ const SetLine = ({block, Inner}: Props) => {
   /** Keystrokes live here until blur, so the shared block never holds a
    *  half-typed number and nothing has to reconcile one. */
   const [typing, setTyping] = useState<string | null>(null)
-  const step = weightStep(unit ?? '')
 
   const write = (patch: Parameters<typeof adjustSet>[2]) => {
     setProblem(null)
@@ -87,8 +89,9 @@ const SetLine = ({block, Inner}: Props) => {
   }
 
   // Deltas, so a burst of taps composes instead of each one re-sending an
-  // absolute value computed from whichever render it happened to see.
-  const nudge = (delta: {weight?: number; reps?: number}) => () => write(delta)
+  // absolute value computed from whichever render it happened to see. Weight
+  // travels as a COUNT of steps rather than an amount — see `SetAdjustment`.
+  const nudge = (delta: {weightSteps?: number; reps?: number}) => () => write(delta)
 
   const commitTyped = () => {
     const raw = typing
@@ -107,7 +110,7 @@ const SetLine = ({block, Inner}: Props) => {
       {problem ? <span className="text-xs text-destructive">{problem}</span> : null}
       {block.repo.isReadOnly ? null : (
         <div className="flex shrink-0 items-center gap-1">
-          <Nudge label={`Reduce weight by ${step}${unit ?? ''}`} onPress={nudge({weight: -step})}>−</Nudge>
+          <Nudge label={`Reduce weight by ${amount}`} onPress={nudge({weightSteps: -1})}>−</Nudge>
           {/* Typed, not only nudged: a lift with no history stamps at 0, and
               dialling that to 135 with the ± button is 27 taps. Local state
               until commit, so a half-typed number is never written. */}
@@ -126,7 +129,7 @@ const SetLine = ({block, Inner}: Props) => {
               if (event.key === 'Escape') setTyping(null)
             }}
           />
-          <Nudge label={`Add ${step}${unit ?? ''} of weight`} onPress={nudge({weight: step})}>+</Nudge>
+          <Nudge label={`Add ${amount} of weight`} onPress={nudge({weightSteps: 1})}>+</Nudge>
           <span aria-hidden className="px-0.5 text-xs text-muted-foreground">reps</span>
           <Nudge label="One rep fewer" onPress={nudge({reps: -1})}>−</Nudge>
           <Nudge label="One rep more" onPress={nudge({reps: 1})}>+</Nudge>

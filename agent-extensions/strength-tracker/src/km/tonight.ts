@@ -22,7 +22,11 @@ import {configFor, loadPlanSource, type PlanSource} from './config'
 import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {buildHistory, buildLayoffs} from './history'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
-import {finishBlocker, finishSession, setEditsSettled, type FinishOutcome} from './session'
+// `mostRecentlyStarted` lives beside the stamp, not here: this pre-check and
+// the transaction that adopts have to name the SAME session.
+import {
+  finishBlocker, finishSession, mostRecentlyStarted, setEditsSettled, type FinishOutcome,
+} from './session'
 
 export interface ProgramSnapshot {
   config: ProgramConfig
@@ -111,33 +115,6 @@ export const prescribeFor = (
   now,
   ...(session !== undefined ? {session} : {}),
 })
-
-/** Which of several live sessions a tap continues.
- *
- *  Most recently STARTED. Two can look live at once while a peer's `done`
- *  update is still in flight, and an id has nothing to do with chronology —
- *  so taking the lowest could send you to the session you already finished,
- *  whose set checkboxes are (deliberately) still live, and log tonight's work
- *  into last night's record. `created_at` is the creating device's clock at
- *  insert, and the systemMint path zeroes `updated_at` only, so it survives a
- *  derived-id mint intact.
- *
- *  Id breaks the tie so every device names the same one. Pulled out as a pure
- *  function because that tie-break is otherwise untestable: the query happens
- *  to return rows in an order that produces the same answer, so a test
- *  through `standingSession` passes whether the clause is there or not.
- */
-export const mostRecentlyStarted = (
-  rows: readonly {id: string; createdAt: number}[],
-): string | null => {
-  let best: {id: string; createdAt: number} | null = null
-  for (const row of rows) {
-    if (best === null
-      || row.createdAt > best.createdAt
-      || (row.createdAt === best.createdAt && row.id < best.id)) best = row
-  }
-  return best?.id ?? null
-}
 
 /** The in-progress workout for the training day this snapshot describes, if
  *  there is one — the same three fields the readers file a workout by.

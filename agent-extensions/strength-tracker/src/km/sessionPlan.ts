@@ -71,7 +71,12 @@ const setsFor = (exercise: PrescribedExercise): PlannedSet[] => {
   const asks = exercise.catchUpRpe !== undefined ? {catchUpRpe: exercise.catchUpRpe} : {}
   const rows: PlannedSet[] = []
   for (let i = 0; i < Math.max(0, exercise.sets); i += 1) {
-    if (exercise.perSide) rows.push({weight, reps, side: 'L', ...asks}, {weight, reps, side: 'R', ...asks})
+    // The RPE prompt goes on the LEFT row only. `progressionSets` drops
+    // `side: 'R'` rows and `allSetsAtOrBelowRpe` reads through it, so a rating
+    // on the right is never read by anything — asking for it breaks the rule
+    // the control exists under (it appears only where it can change a future
+    // prescription) and costs a tap per set on the narrowest screen there is.
+    if (exercise.perSide) rows.push({weight, reps, side: 'L', ...asks}, {weight, reps, side: 'R'})
     else rows.push({weight, reps, ...asks})
   }
   return rows
