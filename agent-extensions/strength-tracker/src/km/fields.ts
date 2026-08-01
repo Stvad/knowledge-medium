@@ -27,14 +27,6 @@ export const ALT_GROUP_TYPE = 'strength-alt-group'
  *  leaves a visible dangling link instead of a silently ignored map entry. */
 export const ALT_CHOICE_TYPE = 'strength-alt-choice'
 
-/** Shoulder-policy block referenced by auto-created consult todos.
- *
- *  Here rather than in `config.ts` for the reason above: it is a bare id, and
- *  the logging view needs nothing else from that module — so importing it
- *  from there pulled the whole seed + parser graph, and its `@/` runtime
- *  imports, into the view's module graph for one string. */
-export const SHOULDER_POLICY_BLOCK_ID = '3f8866f6-7143-4bbe-b9a0-fa60abf12be5'
-
 export const FIELD = {
   // workout
   session: 'strength:session',
@@ -56,8 +48,7 @@ export const FIELD = {
   /** Which time in THIS session this lift is — 0-based, and the same number
    *  its block id is derived from.
    *
-   *  Stored for the same reason `setIndex` is: position among siblings is not
-   *  identity. A session can prescribe one lift twice, and counting the
+   *  Stored because position among siblings is not identity. A session can prescribe one lift twice, and counting the
    *  entries in block order gives the second one occurrence 1 only while
    *  nobody has reordered them — drag them past each other in the outline and
    *  the two rows swap blocks, then write each other's weights and ticks. */
@@ -75,17 +66,6 @@ export const FIELD = {
   /** Explicit completion time — kept separate rather than inferred from the
    *  row's update time (which is noisy). */
   completedAt: 'strength:completedAt',
-  /** Which set of the lift this is — 0-based, and the same number its block id
-   *  is derived from.
-   *
-   *  Stored rather than inferred from position among the siblings, because
-   *  position is not identity here: delete the second of three sets and the
-   *  survivors are still sets 1 and 3, but a reader counting the compacted
-   *  list sees 1 and 2, hands set 3's block to the row that means set 2, and
-   *  the next edit to set 3 overwrites it. The reader can't recover the
-   *  number from the block id (it's a uuid) and shouldn't re-derive one, so
-   *  the block says what it is. */
-  setIndex: 'strength:setIndex',
   // layoff
   layoffFrom: 'strength:from',
   layoffTo: 'strength:to',
@@ -124,15 +104,3 @@ export const FIELD = {
 } as const
 
 export type WorkoutStatus = 'in-progress' | 'done'
-
-/** In-memory shape of one logged set — reconstructed from a set block, and
- *  the unit the engine reasons over. */
-export interface StoredSet {
-  weight: number
-  reps: number
-  rpe?: number
-  side?: 'L' | 'R'
-  done: boolean
-  /** Epoch ms when the set was marked complete during the session. */
-  completedAt?: number
-}

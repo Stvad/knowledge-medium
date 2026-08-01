@@ -11,7 +11,6 @@
  *  on every tap. One place to read the value, one place to change it.
  */
 
-import type {Block} from '@/data/block.js'
 import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
 import {usePropertyValue} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'

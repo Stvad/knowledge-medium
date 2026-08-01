@@ -4,9 +4,10 @@
  *  outline where you logged them, so this page is a lens over history —
  *  milestones, trends, asymmetry — and nothing here owns state.
  *
- *  Selected by the Strength Log page's own type, but the same renderer is
- *  addressable by `renderer: strength/history` on any block, which is how a
- *  view gets parameterised in this design: by properties, not by syntax.
+ *  Selected by the Strength Log page's own type. Making it droppable on any
+ *  block — the parameterised-view idea — would mean registering it under an
+ *  id a `renderer:` property can name, and it is not registered that way
+ *  today, so don't read this as already true.
  */
 
 import {useEffect, useState} from 'react'

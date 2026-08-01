@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest'
 
-import {buildAltChoices, buildHistory, buildLayoffs, buildLiveWorkouts} from '../src/km/history'
+import {buildAltChoices, buildHistory, buildLayoffs} from '../src/km/history'
 import {dateToDay, dayToDate} from '../src/km/day'
 import {FIELD} from '../src/km/fields'
 import {detectLeftRightAsymmetry, shoulderChecklist} from '../src/engine/shoulder'
@@ -79,24 +79,6 @@ describe('buildHistory', () => {
     ]))
     const history = buildHistory([mk('w2', '2026-07-23'), mk('w1', '2026-07-16')], [], [])
     expect(history.map(w => w.id)).toEqual(['w1', 'w2'])
-  })
-})
-
-describe('buildLiveWorkouts', () => {
-  it('surfaces only in-progress workouts, keeping every set (done or not) with its id', () => {
-    const wip = block('w9', 'page', 'a0', encode([
-      [FIELD.session, 'B'], [FIELD.date, dayToDate('2026-07-19')], [FIELD.status, 'in-progress'],
-    ]))
-    const squat = block('e9', 'w9', 'a0', encode([[FIELD.exercise, 'Squat'], [FIELD.unit, 'lb']]))
-    const sets = [
-      setBlock('s1', 'e9', 'a0', 185, 8),
-      block('s2', 'e9', 'a1', encode([[FIELD.weight, 185], [FIELD.reps, 8], [FIELD.todoStatus, 'open']])),
-    ]
-    const live = buildLiveWorkouts([wip], [squat], sets)
-    expect(live).toHaveLength(1)
-    expect(live[0]).toMatchObject({id: 'w9', day: '2026-07-19', session: 'B'})
-    expect(live[0].exercises[0].id).toBe('e9')
-    expect(live[0].exercises[0].sets.map(s => [s.id, s.done])).toEqual([['s1', true], ['s2', false]])
   })
 })
 

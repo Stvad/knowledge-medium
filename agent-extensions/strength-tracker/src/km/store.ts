@@ -14,7 +14,7 @@
  */
 
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/index.js'
-import {createChild, deleteBlock} from '@/data/mutators.js'
+import {deleteBlock} from '@/data/mutators.js'
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 import {
@@ -34,7 +34,6 @@ import {
 } from './schema'
 import {dateToDay, dayToDate} from './day'
 
-export {buildHistory, buildLayoffs, type RowLike} from './history'
 import {buildAltChoices} from './history'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
@@ -197,30 +196,4 @@ export const readAltChoices = async (
 ): Promise<Record<string, string>> => {
   const children = await repo.block(settingsBlockId).children.load()
   return buildAltChoices((children ?? []).filter(child => !child.deleted))
-}
-
-// ──── shoulder ────
-
-/** Create a todo referencing the shoulder-policy block. `((id))` in the
- *  content plus an explicit reference makes the todo show up in the policy
- *  block's backlinks regardless of when the reference parser runs. */
-export const writeShoulderTodo = async (
-  repo: Repo,
-  workspaceId: string,
-  pageId: string,
-  triggers: readonly string[],
-  policyBlockId: string,
-): Promise<string> => {
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  const reason = triggers.join('; ')
-  return repo.tx(async tx => {
-    const id = await tx.run(createChild, {
-      parentId: pageId,
-      content: `Book shoulder consult — ${reason} ((${policyBlockId}))`,
-      references: [{id: policyBlockId, alias: policyBlockId}],
-      position: {kind: 'first'},
-    })
-    await repo.addTypeInTx(tx, id, 'todo', {}, typeSnapshot)
-    return id
-  }, {scope: ChangeScope.BlockDefault, description: 'Shoulder trigger → consult todo'})
 }

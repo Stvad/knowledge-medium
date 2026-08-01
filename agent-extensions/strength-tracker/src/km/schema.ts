@@ -56,7 +56,6 @@ export {
   SETTINGS_TYPE,
   STRENGTH_LOG_TYPE,
   WORKOUT_TYPE,
-  type StoredSet,
 } from './fields'
 
 // ──── Workout ────
@@ -132,7 +131,7 @@ export const definitionProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Derived modal working weight — kept in sync with the set blocks on every write.
+/** Derived modal working weight, stamped by `finishSession` from the sets that were actually performed.
  *  Exists purely so the plan's SQL requirement is a flat column read; the
  *  engine always recomputes from `sets`, never trusts this. */
 export const workingWeightProp = seedProperty({
@@ -175,8 +174,7 @@ export const prescribedSetsProp = seedProperty({
 
 /** Which time in this session the lift is — the same 0-based number the entry
  *  block id was derived from, stored because position among siblings stops
- *  being identity as soon as the user reorders them. See `FIELD.occurrence`,
- *  and `setIndexProp` for the same decision one level down. */
+ *  being identity as soon as the user reorders them. See `FIELD.occurrence`. */
 export const occurrenceProp = seedProperty({
   seedKey: extensionPropertySeedKey('occurrence'),
   revision: 1,
@@ -184,8 +182,8 @@ export const occurrenceProp = seedProperty({
   preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  // Bookkeeping, like `setIndexProp`: the readable copy of an identity the
-  // block id already fixes, so editing it is always wrong.
+  // Bookkeeping: the readable copy of an identity the block id already
+  // fixes, so editing it is always wrong.
   hidden: true,
 })
 
@@ -210,23 +208,6 @@ export const repsProp = seedProperty({
   preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
-})
-
-/** Which set of the lift this is — the same 0-based number the block id was
- *  derived from, stored because position among siblings stops being identity
- *  the moment one of them is deleted. See `FIELD.setIndex`. */
-export const setIndexProp = seedProperty({
-  seedKey: extensionPropertySeedKey('set-index'),
-  revision: 1,
-  name: FIELD.setIndex,
-  preset: 'optional-number',
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
-  // Bookkeeping, not something to curate beside weight and reps: it is the
-  // readable copy of an identity the block id already fixes, so an edit to it
-  // is always wrong. `hidden` files it under the panel's Hidden section
-  // rather than offering it for editing next to the numbers that matter.
-  hidden: true,
 })
 
 export const rpeProp = seedProperty({
@@ -502,9 +483,10 @@ export const workoutType = seedType({
 
 export const exerciseEntryType = seedType({
   seedKey: extensionTypeSeedKey('exercise'),
-  // 2: `occurrenceProp` joined the declared shape, for the same reason
-  // `setIndexProp` joined the set's — an entry that leaves its own identity
-  // field out of what an entry IS.
+  // 2: `occurrenceProp` joined the declared shape. A session can prescribe
+  // one lift twice, and sibling order is not identity — so the entry states
+  // which occurrence it is, and both the derived id and the mint re-find
+  // read it back.
   revision: 2,
   id: EXERCISE_ENTRY_TYPE,
   label: 'Exercise entry',
@@ -556,15 +538,17 @@ export const altGroupType = seedType({
 
 export const setType = seedType({
   seedKey: extensionTypeSeedKey('set'),
-  // 2: `setIndexProp` joined the declared shape. Every set stores it and the
-  // read path places sets by it, so a set type that didn't name it left its
-  // own identity field out of what a set IS.
+  // 2: `setIndexProp` joined the declared shape — and left again when the
+  // outline became the state. Sets are created once in order and never
+  // refilled, so position IS the index and `order_key` carries it. Revision
+  // stays at 2: materialization never repairs a stored payload, so a bump
+  // would change nothing on disk and warn on every client.
   revision: 2,
   id: SET_TYPE,
   label: 'Set',
   description: 'One set within an exercise entry.',
   hideFromCompletion: true,
-  properties: [weightProp, repsProp, setIndexProp, rpeProp, sideProp, completedAtProp],
+  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp],
 })
 
 export const layoffType = seedType({
@@ -621,7 +605,6 @@ export const STRENGTH_PROPS = [
   occurrenceProp,
   weightProp,
   repsProp,
-  setIndexProp,
   rpeProp,
   sideProp,
   completedAtProp,

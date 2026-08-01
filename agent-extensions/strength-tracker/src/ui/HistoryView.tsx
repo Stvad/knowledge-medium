@@ -1,6 +1,6 @@
 /** The "look back" surface: milestones, per-lift trend sparklines,
- *  left/right asymmetry, and the recent-session log. Richer than Tonight and
- *  most useful on a wider screen, but degrades fine on mobile.
+ *  left/right asymmetry, and the recent-session log. Most useful on a wider
+ *  screen, but degrades fine on mobile.
  */
 
 import {useMemo} from 'react'
@@ -29,7 +29,7 @@ export function HistoryView({config, history}: Props) {
   if (history.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No sessions logged yet. Log tonight above and trends will appear here.
+        No sessions logged yet. Start a session (⌃⇧L) and trends will appear here.
       </p>
     )
   }

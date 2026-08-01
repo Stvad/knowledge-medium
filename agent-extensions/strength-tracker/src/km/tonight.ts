@@ -102,14 +102,6 @@ export const prescribeFor = (
   ...(session !== undefined ? {session} : {}),
 })
 
-/** Finish, recording the break this session ends if there is one.
- *
- *  Decided from history as it stands BEFORE this session joins it, and handed
- *  to `finishSession` so both land in one transaction: written first, a
- *  finish that then refuses leaves a break recorded against a session that
- *  never happened; written after, a failure loses the record for good, since
- *  the gap becomes undetectable the moment this session is the latest one.
- */
 /** Where tonight's session gets filed: the training day's daily note.
  *
  *  `day` is a training day (`YYYY-MM-DD`), which is exactly the calendar-ISO
@@ -123,6 +115,14 @@ export const sessionParent = async (
   day: string,
 ): Promise<string> => (await getOrCreateDailyNote(repo, workspaceId, day)).id
 
+/** Finish, recording the break this session ends if there is one.
+ *
+ *  Decided from history as it stands BEFORE this session joins it, and handed
+ *  to `finishSession` so both land in one transaction: written first, a
+ *  finish that then refuses leaves a break recorded against a session that
+ *  never happened; written after, a failure loses the record for good, since
+ *  the gap becomes undetectable the moment this session is the latest one.
+ */
 export const closeSession = async (
   repo: Repo,
   workspaceId: string,

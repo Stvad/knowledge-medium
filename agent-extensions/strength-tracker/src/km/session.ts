@@ -29,7 +29,7 @@ import {workingWeight} from '../engine/progression'
 import type {LayoffRecord, SessionType} from '../engine/types'
 import {dateToDay, dayToDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
-import {escapeKeyPart, preferredLive} from './history'
+import {escapeKeyPart} from './history'
 import {writeLayoffInTx} from './store'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
 import {
@@ -272,9 +272,9 @@ export const startSession = async (
     // session's create row but not yet the FIRST one's status update sees both
     // as in-progress. Prefer the derived seat, then the newest — "the session
     // you are in", not "the lowest id". Picking arbitrarily (which is all
-    // `preferredLive` promises — it exists to make two READERS agree, not to
-    // choose a write target) stamped tonight into a session the other device
-    // had already closed, which is the very thing derived ids exist to stop.
+    // picking the lowest id would — that rule exists to make two READERS
+    // agree, not to choose a write target) stamped tonight into a session the
+    // other device had already closed, which derived ids exist to stop.
     const derivedSeat = derivedBlockId(workoutIdentity(workspaceId, plan.day, plan.session))
     const candidates = [...seen.values()]
       .filter(block => !block.deleted && isTonightsLog(block, plan))
