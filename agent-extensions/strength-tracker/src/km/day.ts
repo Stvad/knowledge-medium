@@ -13,6 +13,16 @@ export const dayToDate = (day: string): Date => {
   return new Date(y, m - 1, d, 12, 0, 0, 0)
 }
 
+const isUtcMidnight = (value: Date): boolean =>
+  value.getUTCHours() === 0 && value.getUTCMinutes() === 0
+  && value.getUTCSeconds() === 0 && value.getUTCMilliseconds() === 0
+
+/** Could `dayToDate` have written this? Local noon exactly, which is the only
+ *  thing it produces. */
+const isOurLocalNoon = (value: Date): boolean =>
+  value.getHours() === 12 && value.getMinutes() === 0
+  && value.getSeconds() === 0 && value.getMilliseconds() === 0
+
 /** A stored date property as the local-noon Date this extension means by it.
  *
  *  TWO shapes reach `strength:date` and the layoff dates. This extension writes
@@ -25,12 +35,29 @@ export const dayToDate = (day: string): Date => {
  *  alike.
  *
  *  A UTC-midnight timestamp is a date-ONLY value, so its UTC parts name the day
- *  meant; anything else is a real instant, and its LOCAL parts do. Local noon
- *  is itself UTC midnight at exactly UTC+12, where both readings give the same
- *  day — so the rule stays single-valued and this stays idempotent. */
+ *  meant; anything else is a real instant, and its LOCAL parts do.
+ *
+ *  Except that local noon IS UTC midnight at two offsets, not one. At UTC+12
+ *  both readings give the same day and nothing is at stake. At UTC-12 they
+ *  differ by a day, and the loser is OUR OWN encoding: `dayToDate('2026-08-01')`
+ *  serialises to `2026-08-02T00:00:00.000Z`, which the UTC reading calls the
+ *  2nd. Every session stamped there was filed a day forward — including past
+ *  `standingSession`, so Start could not find the session it had just made.
+ *
+ *  So the date-only reading is refused for anything `dayToDate` could have
+ *  written. At every offset but ±12 that check is inert (our writes are not UTC
+ *  midnight, the editor's are not local noon), and at ±12 it keeps our own
+ *  writes correct.
+ *
+ *  The cost, stated rather than glossed: at exactly UTC-12 the two encodings
+ *  are the same instant, so no predicate over one `Date` can separate them, and
+ *  an editor-typed date there now reads a day early — the bug this function
+ *  exists to fix, surviving in the one place it cannot be fixed. That trade is
+ *  deliberate: our writes are every session, the editor's are the occasional
+ *  hand-repair, and UTC-12 (Baker and Howland Islands) has no permanent
+ *  population to hit either way. */
 export const storedDate = (value: Date): Date =>
-  value.getUTCHours() === 0 && value.getUTCMinutes() === 0
-    && value.getUTCSeconds() === 0 && value.getUTCMilliseconds() === 0
+  isUtcMidnight(value) && !isOurLocalNoon(value)
     ? new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), 12, 0, 0, 0)
     : value
 

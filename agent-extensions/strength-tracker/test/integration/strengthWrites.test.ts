@@ -294,6 +294,89 @@ describe('the layoff record and the finish that justifies it', () => {
     expect(layoffs[0]).toMatchObject({from: '2026-07-01', to: '2026-07-24', days: 23})
   })
 
+  /** Two finished sessions six days apart, then tonight's, open and ticked.
+   *  Six days is on-schedule and so is the four to tonight — so nothing here
+   *  records a layoff. Retract the RECENT one and the basis falls back to the
+   *  older, making tonight a ten-day gap: a `1-2w` layoff that has to be
+   *  recorded. That flip from "no record needed" to "record needed" is the
+   *  whole scenario. */
+  const twoPriorSessions = async (): Promise<{recent: string; tonight: string}> => {
+    const older = await startAndLog({day: '2026-07-14'})
+    expect(await finishSession(repo, older)).toBe('done')
+    const recent = await startAndLog({day: '2026-07-20', session: 'B', lifts: [lift('Row')]})
+    expect(await finishSession(repo, recent)).toBe('done')
+    // Workspace-wide, NOT under PAGE_ID: `closeSession` files layoffs on the
+    // real kernel log page via `ensureStrengthHome`, so a page-scoped check
+    // here would read empty whether or not one was written.
+    expect(await repo.queryBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}))
+      .toHaveLength(0)
+    return {recent, tonight: await startAndLog()}
+  }
+
+  const untick = async (workoutId: string): Promise<void> => {
+    const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await liveChildren(entry.id, SET_TYPE)
+    await repo.tx(tx => tx.setProperty(set.id, todoStatusProp, 'open'),
+      {scope: ChangeScope.BlockDefault, description: 'take back a session'})
+  }
+
+  it('refuses to close when the history the gap was measured across moved', async () => {
+    // The gap is measured FROM the last full session day, which is a history
+    // read rather than a property of the workout being closed — so
+    // `finishSession` re-checking the target saw nothing wrong. Retract that
+    // session and the real gap is longer than the snapshot said; close anyway
+    // and the layoff goes unrecorded, after which it is undetectable on every
+    // later day. The cut is not wrong, it is gone.
+    const {recent, tonight} = await twoPriorSessions()
+    await untick(recent)
+
+    expect(await finishSession(repo, tonight, undefined, {basis: [recent]})).toBe('changed')
+
+    expect(repo.block(tonight).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('still closes while the basis session is intact', async () => {
+    // The other half of the mutation: a fence that refuses everything passes
+    // the test above for the wrong reason.
+    const {recent, tonight} = await twoPriorSessions()
+
+    expect(await finishSession(repo, tonight, undefined, {basis: [recent]})).toBe('done')
+  })
+
+  it('carries the basis from closeSession into the finish, not just accepts one', async () => {
+    // Same lesson as the session-kind fence: testing `finishSession` directly
+    // pins the CHECK but not the CALLER, and dropping the argument at the call
+    // site broke no test. Landed from inside the finishing transaction's own
+    // opening, which is the window that actually exists.
+    const {recent, tonight} = await twoPriorSessions()
+    const realTx = repo.tx.bind(repo)
+    let armed = true
+    repo.tx = (async (fn: never, opts: {description?: string}) => {
+      if (armed && opts?.description === 'Finish session') {
+        armed = false
+        const [entry] = await liveChildren(recent, EXERCISE_ENTRY_TYPE)
+        const [set] = await liveChildren(entry.id, SET_TYPE)
+        await realTx(tx => tx.setProperty(set.id, todoStatusProp, 'open'),
+          {scope: ChangeScope.BlockDefault, description: 'another panel takes a session back'})
+      }
+      return realTx(fn, opts as never)
+    }) as typeof repo.tx
+
+    try {
+      expect(await closeSession(repo, WORKSPACE_ID, tonight)).toBe('changed')
+    } finally {
+      repo.tx = realTx
+    }
+    expect(repo.block(tonight).peekProperty(statusProp)).toBe('in-progress')
+    // …and pressing Finish again decides afresh, which is what `changed` is
+    // for: the basis has moved back to the older session, so the ten-day gap
+    // this time gets the record it needs.
+    expect(await closeSession(repo, WORKSPACE_ID, tonight)).toBe('done')
+    expect(buildLayoffs(
+      await repo.queryBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}),
+    )[0]).toMatchObject({from: '2026-07-14', to: '2026-07-24', days: 10})
+  })
+
   it('refuses to close when the session kind flipped under the layoff decision', async () => {
     // `isMini` is read before the transaction, and it decides whether a layoff
     // is recorded AT ALL. Flip `strength:session` from `mini` to `A` in another

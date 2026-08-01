@@ -51,6 +51,29 @@ describe('a date typed into the property editor', () => {
     expect(storedDate(once).getTime()).toBe(once.getTime())
   })
 
+  it('leaves our own write alone at UTC-12, where it IS a UTC midnight', () => {
+    // Local noon coincides with UTC midnight at TWO offsets, not one. At UTC+12
+    // both readings name the same day. At UTC-12 they differ, and the loser was
+    // our own encoding: `dayToDate('2026-08-01')` serialises to
+    // `2026-08-02T00:00:00.000Z`, which the date-only reading called the 2nd.
+    // Every session stamped there was filed a day forward — including past
+    // `standingSession`, so Start could not find the session it had just made.
+    //
+    // The suite pins `America/Los_Angeles` (see the vitest configs), so this
+    // one moves the clock itself and puts it back.
+    const was = process.env.TZ
+    process.env.TZ = 'Etc/GMT+12'
+    try {
+      const ours = dayToDate('2026-08-01')
+      // The premise, asserted rather than assumed: without this the test still
+      // passes at any offset where the branch is never reached at all.
+      expect(ours.toISOString()).toBe('2026-08-02T00:00:00.000Z')
+      expect(dateToDay(storedDate(ours))).toBe('2026-08-01')
+    } finally {
+      process.env.TZ = was
+    }
+  })
+
   it('carries into the history record, which every later clock re-decodes', () => {
     const workout = block('w1', 'page', 'a0', encode([
       [FIELD.session, 'A'], [FIELD.date, asEditorWould('2026-08-01')], [FIELD.status, 'done'],

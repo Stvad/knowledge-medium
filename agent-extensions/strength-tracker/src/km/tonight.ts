@@ -12,7 +12,7 @@ import type {Repo} from '@/data/repo.js'
 
 import {prescribe} from '../engine/prescribe'
 import {
-  detectPendingLayoff, layoffAlreadyRecorded, layoffFromPending,
+  detectPendingLayoff, lastFullSessionBasis, layoffAlreadyRecorded, layoffFromPending,
 } from '../engine/reentry'
 import {trainingDay} from '../engine/schedule'
 import type {
@@ -221,7 +221,14 @@ export const closeSession = async (
   // session as a full one with no record — after which the gap is undetectable
   // on every later day and the re-entry cut is gone for good, rather than
   // merely misfiled. See `FinishExpectation`.
-  const expected = {date: workout.properties[FIELD.date], mini: isMini}
+  // `basis` alongside them: the gap was measured from the last full session
+  // day, and that day is a history read, not a property of this workout —
+  // `finishSession` re-checks the target and would not have noticed.
+  const expected = {
+    date: workout.properties[FIELD.date],
+    mini: isMini,
+    basis: lastFullSessionBasis(snapshot.history, snapshot.config),
+  }
   if (!record) return finishSession(repo, workoutId, undefined, expected)
 
   // A gap record needs a home, but creating one is a WRITE and every refusal

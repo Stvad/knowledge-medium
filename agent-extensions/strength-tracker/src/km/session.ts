@@ -746,6 +746,36 @@ export interface FinishExpectation {
    *  instead would also refuse an A→B edit, which changes nothing here, and
    *  could not tell an absent property from an unfenced one. */
   mini?: boolean
+  /** The workouts that made the last full session day when the layoff was
+   *  measured — `lastFullSessionBasis`. The gap is measured FROM that day, so
+   *  retracting it (unticking every set) makes the real gap longer than the
+   *  snapshot said, and the finish commits with no record or a light one; once
+   *  the closing session joins history, the gap is gone for good.
+   *
+   *  Checked as "is at least one of these still a training day", which is what
+   *  the day's survival means, rather than by re-deriving history — no
+   *  transaction here can, having no workspace-wide query. Empty means there
+   *  was no prior full session to depend on, so there is nothing to fence. */
+  basis?: readonly string[]
+}
+
+/** Is any of these still a session history would count — live, closed, full,
+ *  and holding at least one performed set where `buildHistory` looks? */
+const anyStillATrainingDay = async (tx: Tx, ids: readonly string[]): Promise<boolean> => {
+  for (const id of ids) {
+    const block = await tx.get(id)
+    if (!block || block.deleted) continue
+    if (!hasBlockType(block, WORKOUT_TYPE)) continue
+    if (block.properties[FIELD.status] === 'in-progress') continue
+    // `fullSessionDays` excludes mini days, so a day held up only by one was
+    // never the basis to begin with.
+    if (block.properties[FIELD.session] === 'mini') continue
+    const tree = await setsOf(tx, id)
+    if (tree.some(({sets}) => sets.some(set => set.properties[FIELD.todoStatus] === 'done'))) {
+      return true
+    }
+  }
+  return false
 }
 
 /** Anything typed as a set or a lift that is NOT in the one position history
@@ -864,6 +894,14 @@ const checkFinishable = async (
   // loses the record permanently rather than merely misfiling it.
   if (expected?.mini !== undefined
     && (workout.properties[FIELD.session] === 'mini') !== expected.mini) {
+    return {blocked: 'changed'}
+  }
+  // And the history the gap was measured across — the last full session day.
+  // Same failure as the two above and the least recoverable: a decision made
+  // on a stale basis closes with no layoff record, and the gap it should have
+  // recorded stops being detectable the moment this session joins history.
+  if (expected?.basis !== undefined && expected.basis.length > 0
+    && !(await anyStillATrainingDay(tx, expected.basis))) {
     return {blocked: 'changed'}
   }
 

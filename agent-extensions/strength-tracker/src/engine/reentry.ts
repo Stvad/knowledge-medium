@@ -25,7 +25,7 @@ import type {
   ReentryTier,
   WorkoutRecord,
 } from './types'
-import {isOnScheduleTier} from './types'
+import {isFullSession, isOnScheduleTier} from './types'
 
 /** First tier whose bound the gap fits under. Tiers are sorted defensively
  *  so a hand-edited config block in the wrong order still classifies
@@ -171,3 +171,40 @@ export const layoffAlreadyRecorded = (
  *  records don't have to reach into `schedule` for one helper. */
 export const workoutDay = (workout: WorkoutRecord, config: ProgramConfig): string =>
   trainingDay(workout.date, config.dayRolloverHour)
+
+/** The workouts that establish the last full session day — the one fact the
+ *  whole layoff decision turns on.
+ *
+ *  `detectPendingLayoff` measures the gap FROM that day, so it alone fixes the
+ *  tier, and it is read from a history snapshot taken before the finishing
+ *  transaction opens. Untick every set of that session inside the window (the
+ *  only correction available once a session is closed) and it stops being a
+ *  training day, so the real gap is longer than the snapshot says — and the
+ *  finish commits with no layoff record, or a light one. Once the closing
+ *  session joins history the gap is undetectable on every later day, so the
+ *  re-entry cut is lost for good rather than merely wrong.
+ *
+ *  Returned as BLOCK IDS, so the finishing transaction can re-check them by id
+ *  — which is the only shape it can check, having no workspace-wide query. They
+ *  are also the only rows whose retraction changes the answer: a workout on an
+ *  EARLIER day is not what `from` reads, and one arriving LATER only shortens
+ *  the gap, which is the conservative direction.
+ *
+ *  Every workout on that day, not just one: the day survives as long as any
+ *  full session on it does. */
+export const lastFullSessionBasis = (
+  history: readonly WorkoutRecord[],
+  config: ProgramConfig,
+): string[] => {
+  const full = history.filter(workout => isFullSession(workout.session))
+  const latest = full.reduce<string | undefined>(
+    (best, workout) => {
+      const day = workoutDay(workout, config)
+      return best === undefined || day > best ? day : best
+    },
+    undefined,
+  )
+  return latest === undefined
+    ? []
+    : full.filter(workout => workoutDay(workout, config) === latest).map(workout => workout.id)
+}
