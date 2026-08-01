@@ -187,9 +187,10 @@ export const prescribedRepsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Which time in this session the lift is — the same 0-based number the entry
- *  block id was derived from, stored because position among siblings stops
- *  being identity as soon as the user reorders them. See `FIELD.occurrence`. */
+/** Which time in this session the lift is — 0-based. Stored because position
+ *  among siblings stops being identity as soon as the user reorders them, and
+ *  `lastEntryFor` has to tell one occurrence's history from the other's. See
+ *  `FIELD.occurrence`. */
 export const occurrenceProp = seedProperty({
   seedKey: extensionPropertySeedKey('occurrence'),
   revision: 1,
@@ -527,8 +528,8 @@ export const exerciseEntryType = seedType({
   seedKey: extensionTypeSeedKey('exercise'),
   // 2: `occurrenceProp` joined the declared shape. A session can prescribe
   // one lift twice, and sibling order is not identity — so the entry states
-  // which occurrence it is, and both the derived id and the mint re-find
-  // read it back.
+  // which occurrence it is, and `lastEntryFor` reads it back to keep the two
+  // progressions apart.
   // 3: `prescribedRepsProp` joined. The rep target belongs beside the weight
   // and set count it was prescribed with — read off a set block it tracked
   // whatever you last logged, so it could never disagree with you.

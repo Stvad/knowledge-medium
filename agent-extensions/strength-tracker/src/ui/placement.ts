@@ -55,11 +55,12 @@ export const isExpendableLine = <
 
 export interface Placement {
   parentId: string
-  /** Only `first`/`last`: `getOrCreateTypedChild` refuses an anchored
-   *  position so that "is this position supported" answers the same whether
-   *  or not a record already sits at the derived id — a determinism the
-   *  untyped callers (dynamic extensions, bridge `eval`) depend on. Exact
-   *  placement is reached by MOVING afterwards instead; see `replaces`. */
+  /** Only `first`/`last`, deliberately. An anchored insert re-keys the
+   *  siblings around it and throws outright when the anchor has moved away or
+   *  been deleted — inside the stamping transaction that would abort the whole
+   *  session over where it was going to sit. Exact placement is reached by
+   *  MOVING afterwards, in a transaction of its own, so a placement that fails
+   *  costs you a slot rather than the session; see `replaces`. */
   position: {kind: 'first'} | {kind: 'last'}
   /** An empty block the session is taking the place of.
    *

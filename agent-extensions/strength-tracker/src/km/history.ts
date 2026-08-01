@@ -136,14 +136,6 @@ export const buildHistory = (
   return workouts.sort(compareRecords)
 }
 
-/** `|` separates the parts of every identity string here, so a lift whose
- *  NAME contains one could spell another row's identity: "Bench|1" at
- *  occurrence 0 and "Bench" at occurrence 1 both read as `Bench|1`, and two
- *  different lifts would share one entry block. Escaping makes the parts
- *  recoverable. Exported for `session.ts`, which spells the same identity
- *  into a derived block id and must escape it identically. */
-export const escapeKeyPart = (part: string): string => part.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
-
 /** `{groupId: optionId}` from the `or`-group choice blocks (children of the
  *  settings block). One block per answered group; a group with no block is
  *  absent, and falls back to the plan's own default. Pure, so the mapping is

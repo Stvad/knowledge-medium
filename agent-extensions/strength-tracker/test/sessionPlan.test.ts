@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import type {PrescribedExercise, Prescription} from '../src/engine/types'
-import {choicesToRecord, matchEntries, planFromPrescription, type PlannedLift} from '../src/km/sessionPlan'
+import {choicesToRecord, planFromPrescription} from '../src/km/sessionPlan'
 
 const exercise = (over: Partial<PrescribedExercise> = {}): PrescribedExercise => ({
   exercise: 'Bench press',
@@ -113,7 +113,7 @@ describe('planFromPrescription', () => {
   })
 
   it('numbers a repeated lift by plan block, so two rows of it stay separate records', () => {
-    // Occurrence is counted ONCE, here, and the entry's block id derives from
+    // Occurrence is counted ONCE, here, and the entry records it —
     // it. Counted from a second list somewhere else is how a row used to end
     // up writing into its neighbour's blocks.
     const {lifts} = planFromPrescription(prescription([
@@ -148,56 +148,6 @@ describe('planFromPrescription', () => {
   })
 })
 
-describe('matchEntries — which existing entry each row continues', () => {
-  const entry = (id: string, over: {exercise?: string; def?: string; occurrence?: number} = {}) => ({
-    id,
-    properties: {
-      'strength:exercise': over.exercise ?? 'Press',
-      ...(over.def !== undefined ? {'strength:definition': over.def} : {}),
-      ...(over.occurrence !== undefined ? {'strength:occurrence': over.occurrence} : {}),
-    } as Record<string, unknown>,
-  })
-  const row = (over: Partial<PlannedLift> = {}): PlannedLift => ({
-    exercise: 'Press', occurrence: 0, unit: 'lb', prescribedSets: 1, sets: [], ...over,
-  })
-
-  it('never hands one entry to two rows', () => {
-    // The bare row cannot match exactly (the entry names a plan block), so it
-    // reaches the fallback — where, unclaimed, it would take the entry the
-    // exact pass already gave away, and both rows would write into one tree.
-    const a = entry('a', {def: 'def-ohp'})
-    const {matched} = matchEntries([row({definitionId: 'def-ohp'}), row()], [a])
-
-    expect(matched[0]).toBe(a)
-    expect(matched[1]).toBeUndefined()
-  })
-
-  it('will not continue an entry logged as a different occurrence of the lift', () => {
-    // Session A prescribes the lift twice. Ignore the occurrence and the first
-    // row claims the SECOND slot's entry, filing its sets under the other one.
-    const second = entry('second', {occurrence: 1})
-    const {matched} = matchEntries([row({occurrence: 0}), row({occurrence: 1})], [second])
-
-    expect(matched[0]).toBeUndefined()
-    expect(matched[1]).toBe(second)
-  })
-
-  it('reads a missing occurrence as the first slot, which is what legacy entries are', () => {
-    const legacy = entry('legacy')
-    expect(matchEntries([row({occurrence: 0})], [legacy]).matched[0]).toBe(legacy)
-    expect(matchEntries([row({occurrence: 1})], [legacy]).matched[0]).toBeUndefined()
-  })
-
-  it('refuses an entry that names a different plan block outright', () => {
-    expect(matchEntries([row({definitionId: 'def-ohp'})], [entry('a', {def: 'def-landmine'})]).matched[0])
-      .toBeUndefined()
-  })
-
-  it('refuses an entry for a different lift, however the plan blocks line up', () => {
-    expect(matchEntries([row({exercise: 'Row'})], [entry('a')]).matched[0]).toBeUndefined()
-  })
-})
-
 describe('a lift with no rep range', () => {
   it('carries forward the reps you last did, rather than stamping zero', () => {
     // A carry has neither `repMin` nor `repMax` — the range is no help, but
@@ -219,22 +169,6 @@ describe('a lift with no rep range', () => {
 
     expect(lifts[0].sets.every(s => s.reps === 0)).toBe(true)
     expect(lifts[0].sets).toHaveLength(3)
-  })
-})
-
-describe('matchEntries reports what it claimed', () => {
-  it('names the entries it handed out, so a derived fallback cannot reuse one', () => {
-    // A row that matched nothing here still derives an id, and that id can be
-    // an entry the by-name pass just gave to another row — a definition
-    // renamed away from the name a bare row still uses is enough. Without the
-    // claim set travelling out, both lifts adopt one entry and one set tree.
-    const a = {id: 'a', properties: {'strength:exercise': 'Press'} as Record<string, unknown>}
-    const {matched, claimed} = matchEntries([{
-      exercise: 'Press', occurrence: 0, unit: 'lb', prescribedSets: 1, sets: [],
-    }], [a])
-
-    expect(matched[0]).toBe(a)
-    expect([...claimed]).toEqual(['a'])
   })
 })
 

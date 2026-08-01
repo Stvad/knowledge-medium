@@ -96,12 +96,13 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
 
   const prescription = prescribeFor(confirmed, now, picks.session, picks.choices)
   const plan = planFromPrescription(prescription, snapshot.config.unit)
-  // `arrived` is null here — the branch above returned if it was not. Passed
-  // in so the stamping transaction can re-check the premise this whole flow
-  // rests on: a session that turns up between that check and the write gets
-  // continued rather than having tonight's picks stamped into it.
+  // The two checks above are courtesy, not the guard: they save computing a
+  // prescription nobody will use, and they keep the blank line you ran this on
+  // untouched. `startSession` asks the same question inside the transaction
+  // that writes, and that is the answer that counts — a session turning up in
+  // the window between them is handed back rather than stamped into.
   const {id: workoutId, stamped} = await startSession(
-    repo, workspaceId, placement.parentId, plan, placement.position, arrived,
+    repo, workspaceId, placement.parentId, plan, placement.position,
   )
 
   // Reported, not thrown: the session is real, and a leftover blank line is a

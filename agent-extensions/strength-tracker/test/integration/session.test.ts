@@ -12,7 +12,6 @@ import {ChangeScope, propertyValue} from '@/data/api'
 import type {BlockData} from '@/data/api'
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo, isBlockDeleted} from '@/data/test/createTestRepo'
-import {derivedBlockId} from '@/data/typedRecords'
 import {deleteBlock} from '@/data/mutators'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets'
 import {hasBlockType} from '@/data/properties'
@@ -23,7 +22,7 @@ import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from '../../src/km/f
 import {nextWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
-import {adjustSet, exerciseIdentity, finishSession, loggedSetCount, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
+import {adjustSet, finishSession, loggedSetCount, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
 import {discardSession} from '../../src/km/store'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -162,7 +161,7 @@ describe('startSession — one tap stamps the whole session', () => {
     expect(sets.map(s => repo.block(s.id).peekProperty(sideProp))).toEqual(['L', 'R', 'L', 'R'])
   })
 
-  it('adopts on a second tap rather than stamping a second session, and leaves ticked sets alone', async () => {
+  it('hands back the standing session on a second tap rather than stamping a second one', async () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     const [first] = await childrenOf(entry.id, SET_TYPE)
@@ -174,7 +173,8 @@ describe('startSession — one tap stamps the whole session', () => {
     expect(await childrenOf(PAGE_ID, WORKOUT_TYPE)).toHaveLength(1)
     expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
     expect(await childrenOf(entry.id, SET_TYPE)).toHaveLength(2)
-    // The adopt must not hand back its own prescription over what was logged.
+    // Trivially, because the second tap writes nothing at all — but this is
+    // the assertion that would catch it if it ever wrote again.
     expect(repo.block(first.id).peekProperty(todoStatusProp)).toBe('done')
   })
 
@@ -190,42 +190,6 @@ describe('startSession — one tap stamps the whole session', () => {
     expect(second).not.toBe(first)
     expect(repo.block(first).peekProperty(statusProp)).toBe('done')
     expect(repo.block(second).peekProperty(statusProp)).toBe('in-progress')
-  })
-
-  it('mints beside an entry seat whose block now answers for a different lift', async () => {
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
-      lift('Bench press', 1, {definitionId: 'def-bench'}),
-    ]))
-    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    // A hand-edit repoints the entry at another lift's plan block. Its derived
-    // id still resolves, so adopting on the id alone would file tonight's
-    // bench sets under the other lift.
-    await repo.tx(async tx => {
-      await tx.setProperties(entry.id, {set: [propertyValue(definitionProp, 'def-overhead')]})
-    }, {scope: ChangeScope.BlockDefault, description: 'repoint by hand'})
-
-    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
-      lift('Bench press', 1, {definitionId: 'def-bench'}),
-    ]))
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(2)
-    expect(entries.filter(e => repo.block(e.id).peekProperty(definitionProp) === 'def-bench')).toHaveLength(1)
-  })
-
-  it('mints beside a set seat whose block was dragged out of the lift', async () => {
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
-    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    const [set] = await childrenOf(entry.id, SET_TYPE)
-    await repo.tx(async tx => { await tx.move(set.id, {parentId: PAGE_ID, orderKey: 'z0'}) },
-      {scope: ChangeScope.BlockDefault, description: 'drag the set out'})
-
-    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
-
-    // The dragged block is left where the user put it; the lift gets its set
-    // back rather than silently having none.
-    expect(await childrenOf(entry.id, SET_TYPE)).toHaveLength(1)
-    expect(await isBlockDeleted(repo, set.id)).toBe(false)
   })
 })
 
@@ -312,83 +276,46 @@ describe('finishSession — closing without deleting anything', () => {
   })
 })
 
-describe('a rejected seat is permanent, so the mint must be re-findable', () => {
-  it('will not hand one entry to two lifts when a seat is permanently taken', async () => {
-    // Two same-named lifts with DIFFERENT definition refs. The matcher gives
-    // the bare legacy entry to the first; the second derives a seat that is
-    // permanently taken, so it falls back — and the fallback matched purely on
-    // the name, so it found the very entry just handed out. Both prescriptions
-    // then shared one entry and one set tree.
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
-      lift('Row', 1, {definitionId: 'def-a'}),
-    ]))
-    const [first] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    // Bare: no definition ref, so it matches EITHER lift by name.
-    await repo.tx(async tx => { await tx.setProperties(first.id, {unset: [definitionProp]}) },
-      {scope: ChangeScope.BlockDefault, description: 'a legacy entry with no ref'})
-    // …and tombstone the second lift's derived seat, so it can never be had.
-    const takenSeat = derivedBlockId(
-      exerciseIdentity(workoutId, 'def-b', 0))
-    await repo.tx(async tx => {
-      await tx.create({
-        id: takenSeat, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'zq', content: 'squatter',
-      })
-    }, {scope: ChangeScope.BlockDefault, description: 'the seat is occupied'})
-
-    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
-      lift('Row', 1, {definitionId: 'def-a'}),
-      lift('Row', 1, {definitionId: 'def-b', occurrence: 0}),
-    ]))
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(2)
-    expect(new Set(entries.map(entry => entry.id)).size).toBe(2)
-  })
-
-  it('does not add another entry on every later tap', async () => {
-    // `taken` never becomes untaken — a tombstone stays one, and a repointed
-    // block keeps failing `adoptable`. A blind mint therefore adds an entry
-    // (and its whole set tree) on EVERY Start tap, forever. Three taps is the
-    // smallest number that tells "mint once" apart from "mint each time":
-    // two taps look identical either way.
+describe('a second tap writes nothing into the session it hands back', () => {
+  it('leaves a lift you deleted deleted, rather than stamping it in again', async () => {
+    // The strongest form of "Start is idempotent": not "it converges on what
+    // it would have written" but "it does not write". Deleting a lift is a
+    // decision — I am not doing that one tonight — and a tap that topped the
+    // session back up to the prescribed shape would undo it silently.
     const start = () => startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
-      lift('Bench press', 1, {definitionId: 'def-bench'}),
+      lift('Bench press', 2), lift('Row', 2),
     ]))
     const workoutId = await start()
+    const [, row] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [firstSet] = await childrenOf(row.id, SET_TYPE)
+    await repo.tx(tx => tx.run(deleteBlock, {id: row.id}),
+      {scope: ChangeScope.BlockDefault, description: 'not doing rows tonight'})
+
+    await start()
+
+    expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+    expect(await isBlockDeleted(repo, firstSet.id)).toBe(true)
+  })
+
+  it('does not grow the session on every tap, however the tree was edited', async () => {
+    // Three taps, because two look identical whether the rule is "write once"
+    // or "write every time": the second could be the one that duplicates.
+    const start = () => startSession(repo, WORKSPACE_ID, PAGE_ID,
+      plan([lift('Bench press', 1, {definitionId: 'def-bench'})]))
+    const workoutId = await start()
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    // Repointed at another lift's plan block — the shape that used to leave
+    // the entry's seat permanently unusable and mint beside it.
     await repo.tx(async tx => {
       await tx.setProperties(entry.id, {set: [propertyValue(definitionProp, 'def-overhead')]})
     }, {scope: ChangeScope.BlockDefault, description: 'repoint by hand'})
 
     await start()
-    const afterSecond = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     await start()
-    const afterThird = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
 
-    expect(afterSecond).toHaveLength(2)
-    expect(afterThird.map(e => e.id).sort()).toEqual(afterSecond.map(e => e.id).sort())
-  })
-
-  it('does not resurrect a set you deleted, and does not keep minting for it either', async () => {
-    const start = () => startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 3)]))
-    const workoutId = await start()
-    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    const sets = await childrenOf(entry.id, SET_TYPE)
-    // Delete the MIDDLE one: its derived seat becomes a tombstone while the
-    // seats either side stay live, which is the case a positional re-find has
-    // to get right.
-    await repo.tx(tx => tx.run(deleteBlock, {id: sets[1].id}),
-      {scope: ChangeScope.BlockDefault, description: 'drop a set'})
-
-    await start()
-    const afterSecond = await childrenOf(entry.id, SET_TYPE)
-    await start()
-    const afterThird = await childrenOf(entry.id, SET_TYPE)
-
-    // A set you deleted was a decision; Start does not undo it…
-    expect(afterSecond).toHaveLength(2)
-    // …and it does not grow a new one on every tap either.
-    expect(afterThird.map(s => s.id)).toEqual(afterSecond.map(s => s.id))
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries.map(e => e.id)).toEqual([entry.id])
+    expect(await childrenOf(entry.id, SET_TYPE)).toHaveLength(1)
   })
 })
 
@@ -417,32 +344,29 @@ describe('which standing session a tap continues', () => {
     // A device that has the SECOND session's create row but not yet the
     // first's status update sees both as in-progress. The one you are IN is
     // the one you started last — and, decisively, it is the one
-    // `standingSession` sends you to a moment before this runs. Preferring the
-    // derived seat here made the two disagree, so a session arriving in that
-    // window got tonight's lifts stamped into it while you looked at another.
-    const derived = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    // `standingSession` sends you to a moment before this runs. Any other rule
+    // here (lowest id, first row back) makes the two disagree, so the tap
+    // continues a session you are not looking at.
+    const ours = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     const peer = '11111111-1111-4111-8111-111111111111'
     await standingWorkout(peer)
-    await startedAt(derived, 1_000)
+    await startedAt(ours, 1_000)
     await startedAt(peer, 2_000)
 
     expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(peer)
   })
 
-  it('continues without stamping when the caller checked and found none', async () => {
+  it('continues a session that arrived, without stamping tonight\'s picks into it', async () => {
     // Two devices confirm different alternatives of one `or`-group. Both pass
-    // the post-dialog check, then the first commits and the second adopts it —
-    // and stamped its own alternative in beside the other, so Finish recorded
-    // both. The pick does not change `workoutIdentity`, so no id comparison
-    // can tell that session apart from an ordinary re-tap; the caller's
-    // premise is the only thing that can, so it travels in.
+    // the post-dialog check, then the first commits and the second finds it
+    // here. Stamping into it would add this device's alternative beside the
+    // other, and Finish would record both — so the standing session is handed
+    // back untouched instead.
     const theirs = await startSession(
       repo, WORKSPACE_ID, PAGE_ID, plan([lift('Face pulls', 1)]))
 
     const mine = await startSession(
-      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]),
-      {kind: 'first'}, null,
-    )
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]))
 
     expect(mine).toBe(theirs)
     const entries = await childrenOf(theirs, EXERCISE_ENTRY_TYPE)
@@ -460,24 +384,21 @@ describe('which standing session a tap continues', () => {
     expect(theirs.stamped).toBe(true)
 
     const mine = await startSessionReporting(
-      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]),
-      {kind: 'first'}, null,
-    )
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]))
 
     expect(mine).toEqual({id: theirs.id, stamped: false})
   })
 
   it('continues a session of ANOTHER type that arrived, instead of starting beside it', async () => {
-    // The caller's check (`standingSession`) counts any in-progress workout
-    // for the training day; this transaction counted only ones of the SAME
-    // session type. So a peer starting Session B while you configured Session
-    // A was invisible here, and the tap made a second live workout for one
-    // day — which every later Start walks straight past, since it continues
-    // only the newest.
+    // `standingSession` counts any in-progress workout for the training day,
+    // and so does this. A rule scoped to the SAME session type would leave a
+    // peer's Session B invisible while you configured Session A, and the tap
+    // would make a second live workout for one day — which every later Start
+    // walks straight past, since it continues only the newest.
     await standingWorkout('44444444-4444-4444-8444-444444444444', {session: 'B'})
 
     const mine = await startSession(
-      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'first'}, null)
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
 
     expect(mine).toBe('44444444-4444-4444-8444-444444444444')
     // And nothing was written to it: not this session's lifts, not a type tag.
@@ -490,36 +411,58 @@ describe('which standing session a tap continues', () => {
     await standingWorkout('55555555-5555-4555-8555-555555555555', {day: '2026-07-20'})
 
     const mine = await startSession(
-      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'first'}, null)
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
 
     expect(mine).not.toBe('55555555-5555-4555-8555-555555555555')
     expect(await childrenOf(mine, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
   })
 
-  it('still stamps when the caller states no premise, which is what a re-tap is', async () => {
-    // The mirror. Omitting the premise leaves the plain adopt-and-stamp path,
-    // so this cannot be read as "adoption never stamps" — that would make the
-    // whole entry-matching layer unreachable.
-    const first = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Face pulls', 1)]))
-
-    const again = await startSession(
-      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]))
-
-    expect(again).toBe(first)
-    expect(await childrenOf(first, EXERCISE_ENTRY_TYPE)).toHaveLength(2)
-  })
-
-  it('continues the derived one when IT is the one started last', async () => {
-    // The mirror, so the test above cannot be passing merely because the
-    // derived seat stopped being preferred: the rule is chronological, and it
-    // has to pick the derived row when that is the newest.
-    const derived = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+  it('continues the one this device started when IT is the newest', async () => {
+    // The mirror, so the test above cannot be passing merely because a peer's
+    // row is preferred: the rule is chronological in both directions.
+    const ours = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     const peer = '11111111-1111-4111-8111-111111111111'
     await standingWorkout(peer)
     await startedAt(peer, 1_000)
-    await startedAt(derived, 2_000)
+    await startedAt(ours, 2_000)
 
-    expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(derived)
+    expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(ours)
+  })
+
+  it('finds a session the workspace-wide query has not caught up with yet', async () => {
+    // The two populations the scan merges answer different questions, and this
+    // is the one the workspace query cannot: a session created microseconds
+    // ago — two Start dialogs confirmed back to back into the same place — is
+    // not in a loader-backed result that resolved before it landed, but it IS
+    // among the parent's children by the time this transaction holds the write
+    // lock. Without the children scan the second tap starts a duplicate.
+    //
+    // Staleness is forged with a RAW write, which maintains the trigger-backed
+    // side indexes but fires no post-commit processor, so no handle is
+    // invalidated — the same shape a sync-applied row has.
+    const warm = repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [WORKOUT_TYPE]})
+    await warm.load()
+    await sharedDb.db.writeTransaction(async tx => {
+      await tx.execute(
+        `insert into blocks (id, workspace_id, parent_id, order_key, content, properties_json,
+          references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+         values (?,?,?,?,?,?,'[]',?,?,?,'lifter','lifter',0)`,
+        ['unseen-workout', WORKSPACE_ID, PAGE_ID, 'zz', 'Session A', JSON.stringify({
+          types: [WORKOUT_TYPE],
+          [FIELD.session]: 'A',
+          [FIELD.date]: dayToDate(DAY).toISOString(),
+          [FIELD.status]: 'in-progress',
+        }), 9_000, 9_000, 9_000],
+      )
+    })
+    // The precondition, asserted rather than assumed: the query really is
+    // blind to it, so a pass cannot be coming from the other population.
+    expect(await warm.load()).toHaveLength(0)
+
+    const mine = await startSessionReporting(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+
+    expect(mine).toEqual({id: 'unseen-workout', stamped: false})
   })
 
   it('does not continue a block that no longer claims to be a workout', async () => {
@@ -545,14 +488,6 @@ describe('which standing session a tap continues', () => {
 
     // Adopting it would file tonight's lifts into another day's record.
     expect(workoutId).not.toBe('22222222-2222-4222-8222-222222222222')
-  })
-
-  it('does not continue the other session type on the same day', async () => {
-    await standingWorkout('33333333-3333-4333-8333-333333333333', {session: 'B'})
-
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
-
-    expect(workoutId).not.toBe('33333333-3333-4333-8333-333333333333')
   })
 })
 
@@ -725,10 +660,6 @@ describe('the invariants the deleted suite used to hold', () => {
     // workout beside the standing one and logs into a session the screen
     // isn't showing.
     const AWAY = 'some-other-page'
-    // A RANDOM id, which is what every session logged before derived ids has.
-    // Given a derived one, the id lookup finds it wherever it sits and the
-    // scan is never consulted — so this has to be the legacy shape or it
-    // pins nothing.
     const filedAway = '44444444-4444-4444-8444-444444444444'
     await repo.tx(async tx => {
       await tx.create({
@@ -870,93 +801,6 @@ describe('a set the outline has rearranged, and text you typed', () => {
   })
 })
 
-describe('two lifts that share a name', () => {
-  it('does not collapse them into one entry when only one came from the plan', async () => {
-    // `planFromPrescription` keys occurrence on `defId ?? name`, so these are
-    // both occurrence 0. Matching on the name whenever either side lacked a
-    // plan block merged them: one lift left the session entirely and its set
-    // seats adopted the other's blocks.
-    // The BARE lift comes first, and the two carry different set counts. Both
-    // matter: scanned in this order a too-permissive match lets the bare row
-    // claim the plan-keyed entry before its rightful owner gets there, and the
-    // swap is only visible in which entry ends up holding which sets —
-    // adopting never rewrites the definition, so comparing those sees nothing.
-    const twoPresses = () => plan([
-      lift('Press', 1),
-      lift('Press', 3, {definitionId: 'def-ohp'}),
-    ])
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, twoPresses())
-    expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(2)
-
-    await startSession(repo, WORKSPACE_ID, PAGE_ID, twoPresses())
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(2)
-    const byDef = new Map(await Promise.all(entries.map(async e => [
-      repo.block(e.id).peekProperty(definitionProp) ?? 'bare',
-      (await childrenOf(e.id, SET_TYPE)).length,
-    ] as const)))
-    expect(byDef.get('def-ohp')).toBe(3)
-    expect(byDef.get('bare')).toBe(1)
-  })
-
-  it('does not fork an entry when the plan becomes readable between two taps', async () => {
-    // A device that starts before the plan has synced keys the entry on the
-    // NAME; the next tap, with the plan readable, derives elsewhere — and
-    // stamped a second entry and a second whole set tree in the same workout.
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID,
-      plan([lift('Bench press', 2)]))
-
-    await startSession(repo, WORKSPACE_ID, PAGE_ID,
-      plan([lift('Bench press', 2, {definitionId: 'def-bench'})]))
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(1)
-    expect(await childrenOf(entries[0].id, SET_TYPE)).toHaveLength(2)
-  })
-})
-
-describe('an entry whose plan block appears or disappears between taps', () => {
-  it('continues it when the plan becomes unreadable, rather than deriving a second', async () => {
-    // The mirror of the readable direction. This tap knows the plan block; the
-    // next one does not (the outline has not synced, or stopped resolving), so
-    // it keys on the NAME and derives elsewhere. Without the by-name pass
-    // that is a second entry and a second set tree in the same workout.
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID,
-      plan([lift('Bench press', 2, {definitionId: 'def-bench'})]))
-
-    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(1)
-    expect(await childrenOf(entries[0].id, SET_TYPE)).toHaveLength(2)
-  })
-
-  it('settles every exact match before any row falls back to a name', async () => {
-    // Two same-named lifts, one plan-keyed and one not, with the BARE row
-    // listed first. Matched greedily row by row, the bare row reaches the
-    // plan-keyed entry first and both rows land on the wrong tree — visible
-    // only in which entry ends up holding which sets, since adopting never
-    // rewrites the definition.
-    const first = plan([lift('Press', 3, {definitionId: 'def-ohp'}), lift('Press', 1)])
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, first)
-    expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(2)
-
-    // Same two lifts, bare one first.
-    await startSession(repo, WORKSPACE_ID, PAGE_ID,
-      plan([lift('Press', 1), lift('Press', 3, {definitionId: 'def-ohp'})]))
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(2)
-    const byDef = new Map(await Promise.all(entries.map(async e => [
-      repo.block(e.id).peekProperty(definitionProp) ?? 'bare',
-      (await childrenOf(e.id, SET_TYPE)).length,
-    ] as const)))
-    expect(byDef.get('def-ohp')).toBe(3)
-    expect(byDef.get('bare')).toBe(1)
-  })
-})
-
 describe('closing a session takes nothing away from you', () => {
   it('leaves every set a todo, performed and skipped alike', async () => {
     // Finish used to strip TODO_TYPE from every set, to stop a stray tap
@@ -1054,33 +898,6 @@ describe('typing a starting weight', () => {
     // "set to" apart from "add": from 0 the two agree.
     expect(await adjustSet(repo, set.id, {set: {weight: 100}})).toBe('written')
     expect(repo.block(set.id).peekProperty(weightProp)).toBe(100)
-  })
-})
-
-describe('a plan block renamed away from the name an entry still carries', () => {
-  it('keeps the two lifts on separate trees', async () => {
-    // Logged as "Press" from `def-ohp`. The plan block is later renamed to
-    // "Overhead Press", and the plan also has a bare "Press" row.
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID,
-      plan([lift('Press', 1, {definitionId: 'def-ohp'})]))
-
-    // The bare row wins the existing entry by NAME. The renamed row matches
-    // nothing — but its derived id is that same entry's, and `stillNamesLift`
-    // sees a matching definition and would wave it through. Both lifts would
-    // then write into one entry and one set tree.
-    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
-      lift('Overhead Press', 3, {definitionId: 'def-ohp'}),
-      lift('Press', 1),
-    ]))
-
-    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    expect(entries).toHaveLength(2)
-    const byName = new Map(await Promise.all(entries.map(async e => [
-      repo.block(e.id).peekProperty(exerciseProp),
-      (await childrenOf(e.id, SET_TYPE)).length,
-    ] as const)))
-    expect(byName.get('Overhead Press')).toBe(3)
-    expect(byName.get('Press')).toBe(1)
   })
 })
 

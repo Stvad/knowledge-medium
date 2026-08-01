@@ -8,20 +8,35 @@
  *  at the end. Editing a set is editing its block, through the ordinary block
  *  path; there is no draft to reconcile and no writer of last resort.
  *
- *  What survived from the old write path, and why: the derived ids. Two taps,
- *  two tabs or two devices starting the same session converge on one row
- *  instead of racing. They cost almost nothing now — the machinery that used
- *  to surround them (index repair, stray placement, re-finding a refilled
- *  block) existed for the refill, and there is no refill.
+ *  A tap therefore either STARTS tonight's session or hands back the one
+ *  already under way. It never writes into an existing session, and that is
+ *  the whole of the idempotency: the second tap is a no-op, so there is
+ *  nothing to reconcile, no entry to match against a plan row, and no set
+ *  position to re-find.
+ *
+ *  Which is what the derived block ids were for, and why they are gone.
+ *  Nothing here looks a workout, a lift or a set up BY id — every reader scans
+ *  by type — so they bought exactly one thing: two devices starting the same
+ *  day+session offline converged on one row instead of two. The price was a
+ *  matching layer that had to answer, at three levels, what to do when the
+ *  seat it derived was occupied by something that was not the record (a
+ *  tombstone, a repointed entry, a set dragged out) — and a rejected seat is
+ *  permanent, so each level needed its own lookup-then-mint fallback beside
+ *  the derived path, plus a second entry matcher to keep the two from handing
+ *  one entry to two lifts. The duplicate those seats prevented is one visible
+ *  extra session in a day, which `mostRecentlyStarted` already resolves and
+ *  Discard already removes. Traded, deliberately.
+ *
+ *  The two records that DO keep a derived seat are the ones where a duplicate
+ *  is silent and permanent rather than visible: the layoff (`store.ts`) and
+ *  the settings block (`page.ts`).
  */
 
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/index.js'
 import {deleteBlock} from '@/data/mutators.js'
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
-import {
-  adoptTypedBlock, createTypedChild, derivedBlockId, getOrCreateTypedChild, type DerivedIdentity,
-} from '@/data/typedRecords.js'
+import {createTypedChild} from '@/data/typedRecords.js'
 // A logged set composes with the built-in todo: the todo type + its `status`
 // prop make done-ness the native checkbox and reuse todo tooling.
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
@@ -33,10 +48,9 @@ import type {LayoffRecord, SessionType} from '../engine/types'
 import {isExpendableLine} from '../ui/placement'
 import {dateToDay, dayToDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
-import {escapeKeyPart} from './history'
 import {writeLayoffInTx} from './store'
 import {countLoggedSets} from './subtree'
-import {matchEntries, namesThisLift, type PlannedLift, type PlannedSet, type SessionPlan} from './sessionPlan'
+import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
 import {
   catchUpRpeProp,
   completedAtProp,
@@ -74,44 +88,17 @@ const liveDay = (raw: unknown): string | undefined => {
   return Number.isNaN(date.getTime()) ? undefined : dateToDay(date)
 }
 
-// ──── derived identities ────
-//
-// Unchanged namespaces and key layouts: sessions already logged on these ids
-// must keep resolving to the same blocks.
-const WORKOUT_NS = '80ae2b6d-7bde-4de7-9790-04e2d24eeb02'
-const EXERCISE_NS = '6d216957-1c1f-45c8-8ee6-b44bb0e7f4aa'
-const SET_NS = 'feda0816-3421-4fe5-8249-ac2655cc962b'
-
-/** One workout per workspace/day/session — the FIRST one. A second session of
- *  the same type on the same day has nothing left to key on, so it is minted
- *  rather than derived (see `startSession`). */
-const workoutIdentity = (workspaceId: string, day: string, session: SessionType): DerivedIdentity =>
-  ({namespace: WORKOUT_NS, key: `${workspaceId}|${day}|${session}`})
-
-/** One entry per lift, keyed on the plan block where there is one so a lift
- *  renamed mid-session stays the same entry. `escapeKeyPart` so a lift NAMED
- *  "Bench|1" cannot derive the same id as "Bench" at occurrence 1. */
-export const exerciseIdentity = (workoutId: string, key: string, occurrence: number): DerivedIdentity => {
-  const part = escapeKeyPart(key)
-  return {
-    namespace: EXERCISE_NS,
-    key: occurrence === 0 ? `${workoutId}|${part}` : `${workoutId}|${part}|${occurrence}`,
-  }
-}
-
-/** Sets are positional within their entry — including the L/R rows of a
- *  per-side lift, which alternate. */
-const setIdentity = (exerciseId: string, index: number): DerivedIdentity =>
-  ({namespace: SET_NS, key: `${exerciseId}|${index}`})
-
 /** Is a session already under way on this training day — whatever its SESSION
  *  type (A / B / mini).
  *
- *  The rule `standingSession` uses, stated once so the pre-dialog check and
- *  the stamping transaction cannot mean different things by "a session is
- *  under way". They did: this side also required the session type to match, so
- *  a peer starting Session B while you configured Session A was invisible
- *  here, and the tap made a second live workout for one day — which every
+ *  The one question a tap asks before writing anything, and the same one
+ *  `standingSession` asks before the dialog opens. Stated once, because two
+ *  implementations of "am I already in a session" is how a tap navigates to
+ *  one session and starts another.
+ *
+ *  ANY session type, not tonight's. A peer starting Session B while you
+ *  configured Session A is a session under way whatever it is called, and
+ *  starting an A beside it leaves two live workouts for one day — which every
  *  later Start then walks past, since it continues only the newest.
  *
  *  The BLOCK type is required. This used to be tolerant, on the argument that
@@ -128,38 +115,10 @@ const setIdentity = (exerciseId: string, index: number): DerivedIdentity =>
  *  alike. Removing the Workout type is an explicit gesture that takes a block
  *  out of the strength world; treating it as still-live here would have made
  *  this the one reader that disagreed. */
-const isStandingToday = (block: BlockData, plan: SessionPlan): boolean =>
+const isStandingToday = (block: BlockData, day: string): boolean =>
   hasBlockType(block, WORKOUT_TYPE)
   && block.properties[FIELD.status] === 'in-progress'
-  && liveDay(block.properties[FIELD.date]) === plan.day
-
-/** …and is it the one tonight's tap would be LOGGING into, which additionally
- *  needs the session type to match — stamping Session A's lifts into a Session
- *  B record files them under a session you did not do. */
-const isTonightsLog = (block: BlockData, plan: SessionPlan): boolean =>
-  isStandingToday(block, plan) && block.properties[FIELD.session] === plan.session
-
-/** A positional record's seat is where it sits: a block dragged out of this
- *  parent is no longer this slot's occupant, and adopting it would write the
- *  rest of the session into another tree. */
-const stillUnder = (parentId: string) => (block: BlockData): boolean =>
-  block.parentId === parentId
-
-/** …and for an entry, also: does it still claim to be THIS lift. Silent about
- *  the name on purpose — an entry with no definition (or one logged while the
- *  plan outline was unreadable) still matches, so a later client that can read
- *  the plan adopts it instead of deriving a second entry beside it. */
-const stillNamesLift = (lift: PlannedLift) => (block: BlockData): boolean => {
-  const definition = block.properties[FIELD.definition]
-  return typeof definition !== 'string'
-    || lift.definitionId === undefined
-    || definition === lift.definitionId
-}
-
-const both = (
-  a: (block: BlockData) => boolean,
-  b: (block: BlockData) => boolean,
-) => (block: BlockData): boolean => a(block) && b(block)
+  && liveDay(block.properties[FIELD.date]) === day
 
 /** Which of several live sessions a tap continues.
  *
@@ -168,8 +127,7 @@ const both = (
  *  so taking the lowest could send you to the session you already finished,
  *  whose set checkboxes are (deliberately) still live, and log tonight's work
  *  into last night's record. `created_at` is the creating device's clock at
- *  insert, and the systemMint path zeroes `updated_at` only, so it survives a
- *  derived-id mint intact.
+ *  insert.
  *
  *  Id breaks the tie so every device names the same one. Pulled out as a pure
  *  function because that tie-break is otherwise untestable: the query happens
@@ -300,26 +258,6 @@ export const takePlaceOf = async (
 export const loggedSetCount = async (repo: Repo, workoutId: string): Promise<number> =>
   countLoggedSets(async id => (await repo.block(id).children.load()) ?? [], workoutId)
 
-/** The `taken` fallback, in the shape `getOrCreateTypedChild`'s contract
- *  prescribes: look for the record you mean inside this same transaction,
- *  adopt it if it is there, mint only if it is not. Without the lookup the
- *  mint is unfindable next time, and a permanently-rejected seat mints again
- *  on every call. */
-const adoptOrMint = async (
-  repo: Repo,
-  tx: Tx,
-  parentId: string,
-  spec: Parameters<typeof createTypedChild>[2],
-  isTheOne: (block: BlockData) => boolean,
-  typeSnapshot: TypeSnapshot,
-): Promise<string> => {
-  const existing = (await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true}))
-    .find(block => !block.deleted && isTheOne(block))
-  return existing !== undefined
-    ? (await adoptTypedBlock(repo, tx, existing, spec.types, typeSnapshot)).id
-    : createTypedChild(repo, tx, spec)
-}
-
 // ──── stamping ────
 
 const setSpec = (
@@ -375,27 +313,28 @@ const entrySpec = (
   typeSnapshot,
 })
 
-/** Stamp tonight's session into `parentId` and return the workout's block id.
+/** Stamp tonight's session into `parentId`, or hand back the one already
+ *  under way for this training day.
  *
- *  Idempotent: everything is addressed by a derived id, so tapping Start
- *  again adopts what the first tap made and leaves every logged value exactly
- *  as it is. The one thing it will not adopt is a workout already `done` —
- *  "I did session A twice today" has to stay representable, and there is no
- *  second id to derive for it (which of two is "the second" is only knowable
- *  from rows a device happens to hold). So the repeat falls back to a lookup
- *  inside the transaction and mints if that comes back empty.
+ *  Idempotent by refusing to write rather than by converging on what it would
+ *  have written: a second call finds the standing session and returns it
+ *  untouched. Every logged value therefore survives trivially — there is no
+ *  path on which a tap edits a session that already exists.
+ *
+ *  A workout already `done` is not standing, so "I did session A twice today"
+ *  stays representable: Finish the first and the next tap starts a second.
  */
 export interface StartedSession {
   id: string
-  /** Whether THIS call wrote the confirmed plan into it.
+  /** Whether THIS call created it.
    *
-   *  `false` means a session that arrived since the caller's check was handed
-   *  back untouched — the lifts you picked are not in it. The caller needs to
-   *  know, because the things it does AFTER a start are all conditional on the
-   *  start having happened: recording an `or`-group choice says "this is the
-   *  variant I am now tracking", and recording it off a session that never got
-   *  the pick changes what future sessions prescribe on the strength of a race
-   *  you lost and were never told about. */
+   *  `false` means a session already under way was handed back untouched — the
+   *  lifts you picked are not in it. The caller needs to know, because the
+   *  things it does AFTER a start are all conditional on the start having
+   *  happened: recording an `or`-group choice says "this is the variant I am
+   *  now tracking", and recording it off a session that never got the pick
+   *  changes what future sessions prescribe on the strength of a race you lost
+   *  and were never told about. */
   stamped: boolean
 }
 
@@ -407,18 +346,8 @@ export const startSession = async (
   /** Where among `parentId`'s children the workout lands. `first` reads as a
    *  log (newest on top), which is what the Strength Log page wants; `last`
    *  is what taking the place of an empty block you just opened at the end of
-   *  a page looks like. Anchored positions are not on offer —
-   *  `getOrCreateTypedChild` refuses them, since re-keying siblings can throw
-   *  before the derived id is known to be free. */
+   *  a page looks like. */
   position: {kind: 'first'} | {kind: 'last'} = {kind: 'first'},
-  /** The standing session the caller saw when it last looked — `null` for "I
-   *  checked, there was none". Re-checked inside the transaction, and a
-   *  session that turns up anyway is CONTINUED rather than stamped into; see
-   *  the comment at that check for what stamping into it costs.
-   *
-   *  Omitted entirely means "no premise to keep", which leaves the plain
-   *  adopt-and-stamp behaviour a second tap with the same plan relies on. */
-  expectedStanding?: string | null,
 ): Promise<StartedSession> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   // Candidates for the standing-session scan, from the same workspace-wide
@@ -429,16 +358,50 @@ export const startSession = async (
   // plausibly be tonight rather than by every workout ever recorded — those
   // `tx.get`s hold the write lock while every other write queues behind them.
   // Re-checked inside the transaction regardless, so a stale list can only
-  // cause a mint, never a bad adoption.
-  // Widened to any session under way today, not only this type: the premise
-  // check below asks the same question `standingSession` does, and it cannot
-  // ask it about rows this list never carried into the transaction.
+  // cause a redundant session, never a write into the wrong one.
   const known = (await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load())
-    .filter((row: BlockData) => isStandingToday(row, plan))
+    .filter((row: BlockData) => isStandingToday(row, plan.day))
     .map((row: BlockData) => row.id)
 
   return repo.tx(async tx => {
-    const workoutSpec = {
+    // Two populations, because neither alone is the answer: the workspace-wide
+    // list is what finds a session filed somewhere this tap would never look,
+    // and `parentId`'s children are what a session created microseconds ago —
+    // too recently for the query above to have seen it — is guaranteed to be
+    // among when the two taps stamp into the same place.
+    const seen = new Map<string, BlockData>()
+    for (const block of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
+      seen.set(block.id, block)
+    }
+    for (const id of known) {
+      if (seen.has(id)) continue
+      const block = await tx.get(id)
+      if (block) seen.set(id, block)
+    }
+
+    // Asked FIRST, before a single write: a session already under way is
+    // handed back untouched. That is the whole of the duplicate guard, and it
+    // is also the whole of the idempotency — nothing below can run against a
+    // session that already exists, so there is nothing to reconcile.
+    //
+    // `runStartSession` asks the same question before the dialog and again
+    // after it, and navigates rather than starting; but those checks and this
+    // transaction are separate operations, and a peer's create can land in
+    // between. It does not even need a race — an offline device's row applies
+    // whenever it syncs. Stamping the confirmed plan into a session somebody
+    // else configured would add THIS device's pick of an `or`-group beside the
+    // one already there, and Finish would record both.
+    //
+    // More than one can look standing: a device that has received the second
+    // session's create row but not yet the FIRST one's status update sees both
+    // as in-progress. Most recently STARTED, which is "the session you are in"
+    // and, decisively, the one `standingSession` sent you to a moment ago.
+    const standing = mostRecentlyStarted(
+      [...seen.values()].filter(block => !block.deleted && isStandingToday(block, plan.day)),
+    )
+    if (standing !== null) return {id: standing, stamped: false}
+
+    const workoutId = await createTypedChild(repo, tx, {
       parentId,
       content: `${sessionLabel(plan.session)} · ${plan.day}`,
       position,
@@ -449,171 +412,15 @@ export const startSession = async (
         propertyValue(statusProp, 'in-progress' as const),
       ],
       typeSnapshot,
-    }
+    })
 
-    // Scanned BEFORE deriving, always: a workout written before derived ids
-    // carries a random one, leaving the derived seat empty however live it is,
-    // and deriving first there would stamp a second session beside it.
-    const seen = new Map<string, BlockData>()
-    for (const block of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
-      seen.set(block.id, block)
-    }
-    for (const id of known) {
-      if (seen.has(id)) continue
-      const block = await tx.get(id)
-      if (block) seen.set(id, block)
-    }
-    const live = [...seen.values()].filter(block => !block.deleted)
-
-    // FIRST, before anything is created: a session that arrived since the
-    // caller last looked is CONTINUED, not started beside and not stamped
-    // into.
-    //
-    // `runStartSession` checks for one before the dialog and again after it,
-    // and navigates rather than starting — but those checks and this
-    // transaction are separate operations, and a peer's create can land in
-    // between. It does not even need a race: an offline device's row applies
-    // whenever it syncs. Stamping the confirmed plan into a session somebody
-    // else configured adds THIS device's pick of an `or`-group beside the one
-    // already there, and Finish records both — the both-alternatives session
-    // those checks exist to prevent, arriving inside the transaction they
-    // cannot cover. The `or`-group pick does not change `workoutIdentity`, so
-    // no id comparison can tell that session apart from your own re-tap; only
-    // the caller's premise can.
-    //
-    // Which is why the premise travels in, the same way `finishSession`
-    // re-checks `expectedDate` and `discardSession` re-checks its count. A
-    // caller that says nothing keeps the plain adopt-and-stamp behaviour — a
-    // second tap with the same plan is idempotent, which is what the derived
-    // seats are for.
-    //
-    // Asked with `isStandingToday`, the rule the CALLER's check used: a peer
-    // starting Session B while you configured Session A is a session under way
-    // whatever it is called, and creating an A beside it leaves two live
-    // workouts for one day — which every later Start then walks past, since it
-    // continues only the newest. Nothing is written on this path, not even a
-    // type repair: the mandate is "hand it back", and a transaction that
-    // writes nothing costs nothing.
-    if (expectedStanding !== undefined) {
-      const arrived = mostRecentlyStarted(live.filter(block => isStandingToday(block, plan)))
-      if (arrived !== null && arrived !== expectedStanding) return {id: arrived, stamped: false}
-    }
-
-    // More than one can look standing: a device that has received the second
-    // session's create row but not yet the FIRST one's status update sees both
-    // as in-progress. Most recently STARTED — "the session you are in", not
-    // "the lowest id", and not "the derived one" either. Preferring the
-    // derived seat here made this disagree with `standingSession`, which is
-    // the check that decided a moment ago which workout to send you to: a
-    // session arriving between the two reaches this selection instead, and the
-    // tap then stamps tonight's lifts into a session you are not looking at.
-    // One rule, one function, both ends.
-    //
-    // `isTonightsLog`, not `isStandingToday`: what gets ADOPTED and stamped
-    // has to be this session type, since Session A's lifts filed under a
-    // Session B record are filed under a session you did not do.
-    const candidates = live.filter(block => isTonightsLog(block, plan))
-    const continuesId = mostRecentlyStarted(candidates)
-    const standing = candidates.find(block => block.id === continuesId)
-
-    const workout = standing !== undefined
-      ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
-      : await (async () => {
-        const derived = await getOrCreateTypedChild(repo, tx, {
-          identity: workoutIdentity(workspaceId, plan.day, plan.session),
-          adoptable: block => isTonightsLog(block, plan),
-          ...workoutSpec,
-        })
-        return derived.status !== 'taken'
-          ? derived
-          : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
-      })()
-
-    // Scanned before deriving, for the same reason the workout is: a lift's
-    // derived id is keyed on its PLAN BLOCK when the plan could be read and
-    // on its NAME when it could not, so a device that starts before the plan
-    // has synced writes name-keyed entries, and the next tap — with the plan
-    // readable — derives elsewhere and stamps a second entry, and a second
-    // whole set tree, inside the same workout. The block already there says
-    // which lift it is; ask it first, and the derived id becomes the way to
-    // create rather than the only way to find.
-    const liveEntries = (await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true}))
-      .filter(block => !block.deleted && hasBlockType(block, EXERCISE_ENTRY_TYPE))
-    // Settled for every row at once, before any of them writes.
-    const {matched: continues, claimed} = matchEntries(plan.lifts, liveEntries)
-    // Everything already spoken for: what the matcher handed out, plus what
-    // each row below is given as it goes. The exclusion has to reach the mint
-    // fallback too — see there.
-    //
-    // The `claimed` seed is the load-bearing half. Growing it inside the loop
-    // is defence in depth, and provably so today: the fallback finds an entry
-    // only if `namesThisLift` accepts it, which is the exact predicate
-    // `matchEntries`' second pass uses — so anything the fallback could reach
-    // was already claimed, and a row that reaches the fallback at all is one
-    // no entry fits. Mutation-tested: dropping the in-loop growth breaks
-    // nothing. It is kept because the day those two predicates stop being the
-    // same function is the day one entry quietly serves two lifts again.
-    const assigned = new Set<string>(claimed)
-
-    for (const [row, lift] of plan.lifts.entries()) {
-      const already = continues[row]
-      const entry = already !== undefined
-        ? await adoptTypedBlock(repo, tx, already, [EXERCISE_ENTRY_TYPE], typeSnapshot)
-        : await getOrCreateTypedChild(repo, tx, {
-          identity: exerciseIdentity(workout.id, lift.definitionId ?? lift.exercise, lift.occurrence),
-          // …and never one another row was already given. A row that matched
-          // nothing above still derives an id, and that id can be an entry the
-          // by-name pass just handed out — a definition renamed away from the
-          // name a bare row still carries is enough. `stillNamesLift` would
-          // wave it through, and both lifts would share one set tree.
-          adoptable: both(
-            block => !assigned.has(block.id),
-            both(stillUnder(workout.id), stillNamesLift(lift)),
-          ),
-          ...entrySpec(workout.id, lift, typeSnapshot),
-        })
-      const entryId = entry.status !== 'taken'
-        ? entry.id
-        // A rejected seat is PERMANENT — a tombstone stays one, and a block
-        // the user dragged out or repointed keeps failing `adoptable` — so a
-        // blind mint here adds another entry (and another whole set tree) on
-        // every Start tap, forever. Look for the mint the last tap made
-        // before making a new one: the same lookup-then-mint the layoff path
-        // does, and the reason `startSession` can claim to be idempotent.
-        // Excluding what is already spoken for, exactly as the seat above
-        // does. Dropped here, the fallback matched purely on the NAME — so
-        // two same-named lifts with different definition refs, one of whose
-        // seats is permanently taken, both landed on the one bare legacy
-        // entry and shared a single set tree. `assigned` rather than
-        // `claimed`: a row given an entry earlier in THIS loop is spoken for
-        // too, and the matcher never saw that handout.
-        : await adoptOrMint(repo, tx, workout.id, entrySpec(workout.id, lift, typeSnapshot),
-          block => !assigned.has(block.id)
-            && hasBlockType(block, EXERCISE_ENTRY_TYPE) && namesThisLift(block, lift),
-          typeSnapshot)
-      assigned.add(entryId)
-
-      // Read once, and kept up to date as we mint: a set's re-find key is its
-      // POSITION among its lift's live sets, which is the same thing its
-      // derived id encodes. Re-reading per index would miss the sets minted
-      // earlier in this very loop.
-      const liveSets = (await tx.childrenOf(entryId, undefined, {hidePropertyChildren: true}))
-        .filter(block => !block.deleted && hasBlockType(block, SET_TYPE))
-
-      for (const [index, set] of lift.sets.entries()) {
-        const seat = await getOrCreateTypedChild(repo, tx, {
-          identity: setIdentity(entryId, index),
-          adoptable: stillUnder(entryId),
-          ...setSpec(entryId, set, lift.unit, typeSnapshot),
-        })
-        if (seat.status === 'taken' && liveSets[index] === undefined) {
-          const minted = await createTypedChild(repo, tx, setSpec(entryId, set, lift.unit, typeSnapshot))
-          const block = await tx.get(minted)
-          if (block) liveSets[index] = block
-        }
+    for (const lift of plan.lifts) {
+      const entryId = await createTypedChild(repo, tx, entrySpec(workoutId, lift, typeSnapshot))
+      for (const set of lift.sets) {
+        await createTypedChild(repo, tx, setSpec(entryId, set, lift.unit, typeSnapshot))
       }
     }
-    return {id: workout.id, stamped: true}
+    return {id: workoutId, stamped: true}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(plan.session)}`})
 }
 

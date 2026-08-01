@@ -46,8 +46,7 @@ export const FIELD = {
   prescribedWeight: 'strength:prescribedWeight',
   prescribedSets: 'strength:prescribedSets',
   prescribedReps: 'strength:prescribedReps',
-  /** Which time in THIS session this lift is — 0-based, and the same number
-   *  its block id is derived from.
+  /** Which time in THIS session this lift is — 0-based.
    *
    *  Stored because position among siblings is not identity. A session can prescribe one lift twice, and counting the
    *  entries in block order gives the second one occurrence 1 only while
