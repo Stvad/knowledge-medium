@@ -186,11 +186,16 @@ describe('grouping', () => {
 })
 
 describe('sticky rows', () => {
-  const Probe = ({live, onRender}: {
+  /** Default predicate: every row that left the query left because it was
+   *  reviewed. Tests that care about the other exits pass their own. */
+  const RETAIN_ALL = () => true
+
+  const Probe = ({live, onRender, retain = RETAIN_ALL}: {
     live: readonly BlockData[]
     onRender: (ids: string[], reset: () => void) => void
+    retain?: (row: BlockData) => boolean
   }) => {
-    const [rows, reset] = useStickyRows(live)
+    const [rows, reset] = useStickyRows(live, retain)
     onRender(rows.map(r => r.id), reset)
     return <span>{rows.map(r => r.id).join(',')}</span>
   }
@@ -202,7 +207,7 @@ describe('sticky rows', () => {
     live: readonly BlockData[]
     onRender: (rows: readonly BlockData[]) => void
   }) => {
-    const [rows] = useStickyRows(live)
+    const [rows] = useStickyRows(live, RETAIN_ALL)
     onRender(rows)
     return <span>{rows.map(r => `${r.id}@${r.parentId}`).join(',')}</span>
   }
@@ -264,6 +269,27 @@ describe('sticky rows', () => {
 
     expect(latest.map(r => r.id)).toEqual(['a', 'b'])
     expect(latest[0]!.parentId).toBe('sec')
+  })
+
+  it('drops a row that left the query for a reason other than being reviewed', async () => {
+    // Being reviewed is only one way out. A highlight can also be deleted,
+    // untagged, or rescheduled into the future — holding on to those leaves a
+    // row on screen that is no longer a reviewed highlight, and a deleted one
+    // renders as a ghost.
+    let latest: string[] = []
+    const capture = (ids: string[]) => { latest = ids }
+    const reviewed = new Set(['a'])
+    const retain = (row: BlockData) => reviewed.has(row.id)
+    const {rerender} = render(
+      <Probe live={[row('a'), row('b'), row('c')]} onRender={capture} retain={retain}/>,
+    )
+
+    // 'a' was reviewed; 'c' was deleted.
+    await act(async () => {
+      rerender(<Probe live={[row('b')]} onRender={capture} retain={retain}/>)
+    })
+
+    expect(latest).toEqual(['a', 'b'])
   })
 
   it('drops the done rows on reset', async () => {

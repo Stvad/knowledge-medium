@@ -889,7 +889,9 @@ const ReviewedHighlightDecorator = ({ block, Inner }: BlockRendererProps & { Inn
         className="mt-1 shrink-0 text-muted-foreground hover:text-foreground disabled:pointer-events-none"
         onClick={event => {
           event.stopPropagation()
-          void block.set(reviewedProp, false)
+          // Un-reviewing puts the highlight back in the backlog, so it moves
+          // the cached count just as marking it did.
+          void block.set(reviewedProp, false).then(invalidateBacklogCount)
         }}
       >
         {/* Inlined rather than imported: an installed extension resolves imports
@@ -1616,10 +1618,6 @@ const runSync = async (repo: any, { silent = false } = {}) => {
 
     const finishedAt = new Date().toISOString()
     await prefs.set(lastSyncedAtProp, finishedAt)
-    // A sync is the other thing that changes the backlog count (new highlights
-    // arrive already scheduled). The count is cached rather than subscribed, so
-    // the writers have to say when it moved — see `invalidateBacklogCount`.
-    invalidateBacklogCount()
     progress?.done(bookCount === 0
       ? undefined
       : `Readwise: synced ${bookCount} book(s), ${highlightCount} highlight(s)`)
@@ -1629,6 +1627,13 @@ const runSync = async (repo: any, { silent = false } = {}) => {
     } else if (!silent) {
       showError(`Readwise sync failed: ${err?.message ?? err}`)
     }
+  } finally {
+    // A sync is the other thing that moves the backlog count — new highlights
+    // arrive already scheduled. In `finally` rather than after the loop because
+    // each book commits as it goes: a run that writes three books and then
+    // throws on the fourth page has still changed the count. The cached count
+    // is not subscribed, so the writers are what tell it.
+    invalidateBacklogCount()
   }
 }
 
@@ -1903,16 +1908,33 @@ export const buildUnreviewedHighlightsQuery = (
   order: 'created-asc',
 })
 
-const useUnreviewedHighlights = (workspaceId: string): BlockData[] => {
+/** Shared query builder, so the rows hook and the readiness hook observe the
+ *  exact same typed-blocks handle rather than opening two. */
+const useUnreviewedHighlightsQuery = (workspaceId: string): TypedBlockQuery => {
   // Drives the cutoff off today's local midnight, which advances overnight, so
   // a backlog left open past midnight picks up the new day instead of staying
   // pinned to yesterday's boundary.
   const startOfToday = useStartOfToday()
-  const query = useMemo(
+  return useMemo(
     () => buildUnreviewedHighlightsQuery(workspaceId, new Date(startOfToday)),
     [workspaceId, startOfToday],
   )
-  return useBlockQuery(query)
+}
+
+const useUnreviewedHighlights = (workspaceId: string): BlockData[] =>
+  useBlockQuery(useUnreviewedHighlightsQuery(workspaceId))
+
+/** Whether the query has produced a result yet, as opposed to still loading.
+ *  `useBlockQuery` reports `[]` for both, so "nothing to review" and "haven't
+ *  looked yet" are indistinguishable without this. The handle's data is
+ *  `undefined` until the first resolve, then an array. Shares the handle with
+ *  `useUnreviewedHighlights`, so it costs no extra query. */
+const useUnreviewedHighlightsReady = (workspaceId: string): boolean => {
+  const repo = useRepo()
+  const query = useUnreviewedHighlightsQuery(workspaceId)
+  return useHandle(repo.query.typedBlocks(query), {
+    selector: data => data !== undefined,
+  }) as boolean
 }
 
 /** Rows in the order they first appeared, never dropped.
@@ -1928,26 +1950,37 @@ const useUnreviewedHighlights = (workspaceId: string): BlockData[] => {
  *  A retained row is only ever a FALLBACK. Rows still in the live query are
  *  replaced with the live copy, because `parentId` — which decides the group a
  *  highlight renders under — does change under us when the highlight is moved
- *  while the page is open. Only rows that have dropped out of the query (the
- *  just-reviewed ones) keep their last-seen snapshot, and for those the stale
- *  parent is the correct answer: it's where the row was when you saw it. */
+ *  while the page is open. Only rows that have dropped out of the query keep
+ *  their last-seen snapshot, and for those the stale parent is the correct
+ *  answer: it's where the row was when you saw it.
+ *
+ *  `shouldRetain` decides WHY a row left. Being reviewed is only one way out of
+ *  the query — a highlight can also be deleted, untagged, or rescheduled into
+ *  the future, and holding on to those would leave a row on screen that is no
+ *  longer a reviewed highlight (a deleted one renders as a ghost). The caller
+ *  answers from the block's current state; anything else is dropped. */
 export const useStickyRows = (
   live: readonly BlockData[],
+  shouldRetain: (row: BlockData) => boolean,
 ): readonly [readonly BlockData[], () => void] => {
   const [sticky, setSticky] = useState<readonly BlockData[]>(live)
   const merged = useMemo(() => {
     const liveById = new Map(live.map(row => [row.id, row]))
-    const refreshed = sticky.map(row => liveById.get(row.id) ?? row)
+    const next: BlockData[] = []
+    for (const row of sticky) {
+      const liveRow = liveById.get(row.id)
+      if (liveRow) next.push(liveRow)
+      else if (shouldRetain(row)) next.push(row)
+    }
     const known = new Set(sticky.map(row => row.id))
-    const additions = live.filter(row => !known.has(row.id))
-    const next = additions.length === 0 ? refreshed : [...refreshed, ...additions]
-    // `map` always allocates, so identity has to be re-established explicitly:
-    // the converge-during-render below compares by reference, and a fresh array
-    // every render would set state every render — an infinite loop.
+    for (const row of live) if (!known.has(row.id)) next.push(row)
+    // The loop always allocates, so identity has to be re-established
+    // explicitly: the converge-during-render below compares by reference, and a
+    // fresh array every render would set state every render — an infinite loop.
     const unchanged = next.length === sticky.length
       && next.every((row, i) => row === sticky[i])
     return unchanged ? sticky : next
-  }, [sticky, live])
+  }, [sticky, live, shouldRetain])
   // Converge during render (React's "adjust state while rendering" path) so the
   // first paint after a query result already includes the new rows.
   if (merged !== sticky) setSticky(merged)
@@ -2055,7 +2088,19 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   const repo = useRepo()
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const live = useUnreviewedHighlights(workspaceId)
-  const [rows, resetSticky] = useStickyRows(live)
+  const ready = useUnreviewedHighlightsReady(workspaceId)
+  // Keep a row that left the query only if it left because it was REVIEWED.
+  // Read from the block's current state rather than the retained snapshot,
+  // which by definition still says `reviewed: false`.
+  const stillAReviewedHighlight = useCallback((row: BlockData) => {
+    const data = repo.block(row.id).peek()
+    if (!data || data.deleted) return false
+    try {
+      if (!getBlockTypes(data).includes(READWISE_HIGHLIGHT_TYPE)) return false
+    } catch { return false }
+    return readReviewed(data)
+  }, [repo])
+  const [rows, resetSticky] = useStickyRows(live, stillAReviewedHighlight)
 
   const groups = useMemo(() => groupHighlightsBySection(rows), [rows])
   const sectionBlocks = useMemo(
@@ -2072,7 +2117,10 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   if (rows.length === 0) {
     return (
       <div className="mx-auto w-full max-w-3xl py-6 text-sm text-muted-foreground">
-        Nothing scheduled for review today or earlier.
+        {/* `useBlockQuery` reports [] while the handle is still unresolved, so
+            without the readiness signal a cold open asserts "nothing to review"
+            for a beat before the real list appears. */}
+        {ready ? 'Nothing scheduled for review today or earlier.' : 'Loading…'}
       </div>
     )
   }
@@ -2166,7 +2214,31 @@ let backlogCountAttempt: { workspaceId: string; at: number } | null = null
 let backlogCountInFlight = false
 const backlogCountListeners = new CallbackSet('readwise.backlog-count')
 
-const backlogCountSnapshot = (): BacklogCount | null => backlogCount
+/** The `useSyncExternalStore` snapshot, carrying a generation stamp.
+ *
+ *  The stamp is what makes an invalidation observable. React bails out when
+ *  `getSnapshot` returns the same value, so if the first fetch FAILED — leaving
+ *  the count null — a later invalidation setting it to null again would be
+ *  `null === null`, no re-render, no effect, no refetch, and the surface would
+ *  sit empty until something else happened to re-render it. Every state change
+ *  publishes a fresh object instead.
+ *
+ *  It must be a stored object rather than one built per call: `getSnapshot` is
+ *  required to return a cached value, and allocating on each call is an
+ *  infinite render loop. */
+let backlogCountSnapshotValue: { count: BacklogCount | null; generation: number } =
+  { count: null, generation: 0 }
+
+const publishBacklogCount = (next: BacklogCount | null) => {
+  backlogCountSnapshotValue = {
+    count: next,
+    generation: backlogCountSnapshotValue.generation + 1,
+  }
+  backlogCount = next
+  backlogCountListeners.notify()
+}
+
+const backlogCountSnapshot = () => backlogCountSnapshotValue
 const subscribeBacklogCount = (notify: () => void) => backlogCountListeners.add(notify)
 
 /** Drop the cache so the next render refetches. Called when the latch marks a
@@ -2174,9 +2246,8 @@ const subscribeBacklogCount = (notify: () => void) => backlogCountListeners.add(
  *  inside this app — so the number stays honest where the user is looking
  *  without anything subscribing. */
 export const invalidateBacklogCount = () => {
-  backlogCount = null
   backlogCountAttempt = null
-  backlogCountListeners.notify()
+  publishBacklogCount(null)
 }
 
 /** Rate-limits ATTEMPTS, not successes — which is the whole reason
@@ -2199,13 +2270,16 @@ const refreshBacklogCount = (repo: Repo, workspaceId: string): void => {
   backlogCountAttempt = { workspaceId, at: now }
   backlogCountInFlight = true
   repo.queryBlocks(buildUnreviewedHighlightsQuery(workspaceId))
-    .then(rows => { backlogCount = { workspaceId, value: rows.length, at: Date.now() } })
+    .then(rows => ({ workspaceId, value: rows.length, at: Date.now() }))
     // A failed count is not worth a toast; leave the cache empty and let the
     // next window try again.
-    .catch(() => {})
-    .finally(() => {
+    .catch(() => null)
+    .then(next => {
+      // Clear the flag BEFORE publishing: publishing notifies subscribers, which
+      // re-render and re-enter this function, and a still-set flag would make
+      // that re-entry a silent no-op.
       backlogCountInFlight = false
-      backlogCountListeners.notify()
+      publishBacklogCount(next)
     })
 }
 
@@ -2222,7 +2296,8 @@ const useBacklogCount = (workspaceId: string): number | null => {
     backlogCountSnapshot,
   )
   useEffect(() => { refreshBacklogCount(repo, workspaceId) })
-  return snapshot && snapshot.workspaceId === workspaceId ? snapshot.value : null
+  const count = snapshot.count
+  return count && count.workspaceId === workspaceId ? count.value : null
 }
 
 const ReviewBacklogSidebarSection = ({ closeSidebar }: { closeSidebar: () => void }) => {

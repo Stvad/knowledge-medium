@@ -275,6 +275,28 @@ describe('daily-note backlog hint', () => {
     })
   })
 
+  it('refetches after an invalidation even when the FIRST count failed', async () => {
+    // The subtle one. `useSyncExternalStore` bails out when the snapshot is
+    // unchanged — so with the cache already empty from a failed fetch, an
+    // invalidation setting it to null again is `null === null`: no re-render,
+    // no effect, no refetch, and the surface stays blank until something else
+    // happens to re-render it. The snapshot carries a generation stamp so every
+    // state change is observable.
+    const {repo, runtime} = setup()
+    await seedOverdueHighlight(repo, 'hl-1')
+    const today = await getOrCreateDailyNote(repo, WS, todayIso())
+    const queryBlocks = vi.spyOn(repo, 'queryBlocks')
+      .mockRejectedValueOnce(new Error('db is having a moment'))
+
+    await renderDailyNote(repo, runtime, today.id)
+    await vi.waitFor(() => { expect(queryBlocks).toHaveBeenCalledTimes(1) })
+    expect(hint()).toBeNull()
+
+    await act(async () => { invalidateBacklogCount() })
+
+    await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+  })
+
   it('serves several consumers from ONE query', async () => {
     const {repo, runtime} = setup()
     await seedOverdueHighlight(repo, 'hl-1')
