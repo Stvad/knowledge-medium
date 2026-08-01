@@ -70,11 +70,17 @@ export const readProgram = async (
   // ONE query for the whole tree, `types` being any-of: three separate ones
   // resolve independently, and a history assembled from a half-arrived tree
   // would prescribe off a session that looks emptier than it is.
-  const tree = splitTree(await repo.query.typedBlocks({
+  // Layoffs ride in the SAME any-of query as the tree. Read separately, a peer
+  // finishing the first comeback session between the two loads gives you
+  // pre-finish history beside the layoff that finish created atomically —
+  // `resolveReentry` then counts zero sessions since the break and hands a
+  // concurrently started second session the first-session cut all over again.
+  const rows = await repo.query.typedBlocks({
     workspaceId,
-    types: [WORKOUT_TYPE, EXERCISE_ENTRY_TYPE, SET_TYPE],
-  }).load())
-  const layoffRows = await repo.query.typedBlocks({workspaceId, types: [LAYOFF_TYPE]}).load()
+    types: [WORKOUT_TYPE, EXERCISE_ENTRY_TYPE, SET_TYPE, LAYOFF_TYPE],
+  }).load()
+  const tree = splitTree(rows)
+  const layoffRows = (rows as BlockData[]).filter(row => hasBlockType(row, LAYOFF_TYPE))
 
   return {
     config,
@@ -201,5 +207,5 @@ export const closeSession = async (
       knownIds: snapshot.layoffs.map(entry => entry.id),
     }
     : undefined
-  return finishSession(repo, workoutId, layoff, performedOn)
+  return finishSession(repo, workoutId, layoff, workout?.properties[FIELD.date])
 }

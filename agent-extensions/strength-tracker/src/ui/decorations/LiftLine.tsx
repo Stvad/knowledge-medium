@@ -15,6 +15,7 @@ import {useContent, useData, usePropertyValue, useWorkspaceId} from '@/hooks/blo
 import type {BlockRenderer} from '@/types.js'
 
 import {lastEntryFor, progressionSets, workingWeight} from '../../engine/progression'
+import {compareRecords} from '../../engine/types'
 import {dateToDay} from '../../km/day'
 import {FIELD} from '../../km/fields'
 import {
@@ -62,7 +63,13 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
     // everything, which is right.
     return mine === undefined
       ? history
-      : history.filter(workout => workout.id !== workoutId && workout.date < mine.date)
+      // `compareRecords`, not `<` on the date: two sessions of one training
+      // day share the same noon-backed `date`, so a strict comparison hid the
+      // morning one from the evening one entirely. That comparator is what
+      // progression orders by — day first, completion time only inside it — so
+      // the line and the next prescription agree about which came first.
+      : history.filter(workout =>
+        workout.id !== workoutId && compareRecords(workout, mine) < 0)
   }, [history, workoutId])
   const previous = lastEntryFor(earlier, exercise ?? content, definitionId, occurrence ?? 0)
   const previousWeight = previous ? workingWeight(previous.entry) : undefined

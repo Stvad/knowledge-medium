@@ -51,8 +51,11 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
     return total + weight * reps
   }, 0)
 
-  if (lifts.length === 0) return null
-
+  // No early return on an empty workout. One with no direct lifts — nothing
+  // stamped, every lift deleted, or every lift indented under a note — still
+  // needs Discard, and still needs Finish to be reachable so it can say WHY
+  // it refuses. Without them the standing-session check sends every later
+  // Start back to a session with no way out of it.
   const tally = `${lifts.length} ${lifts.length === 1 ? 'lift' : 'lifts'} · `
     + `${done.length}/${sets.length} sets`
     + (volume > 0 ? ` · ${volume.toLocaleString()}${typeof unit === 'string' ? unit : ''}` : '')

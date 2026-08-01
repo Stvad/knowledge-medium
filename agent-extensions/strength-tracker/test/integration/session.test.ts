@@ -808,6 +808,32 @@ describe('a plan block renamed away from the name an entry still carries', () =>
   })
 })
 
+describe('a set nested deeper than the guard used to look', () => {
+  it('is still refused, however far down it is', async () => {
+    // A fixed depth cutoff accepted anything below it — the exact corruption
+    // the guard exists to stop, just further from the surface.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+    let parent = entry.id
+    for (const [depth, id] of ['n1', 'n2', 'n3', 'n4', 'n5', 'n6'].entries()) {
+      await repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: WORKSPACE_ID, parentId: parent, orderKey: 'z0',
+          content: `note ${depth}`,
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'a nested note'})
+      parent = id
+    }
+    await repo.tx(tx => tx.move(sets[1].id, {parentId: 'n6', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault, description: 'bury the set'})
+
+    expect(await finishSession(repo, workoutId)).toBe('misfiled')
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+})
+
 describe('a session that cannot be filed on a day', () => {
   it('refuses to close a workout whose date was cleared, rather than substituting today', async () => {
     // `strength:date` is hand-editable. Substituting the clock closes a

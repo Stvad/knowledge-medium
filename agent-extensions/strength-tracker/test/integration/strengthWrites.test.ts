@@ -280,14 +280,18 @@ describe('the finish transaction re-checks what the caller validated', () => {
     // to the old one.
     const workoutId = await startAndLog()
 
-    expect(await finishSession(repo, workoutId, undefined, '2099-01-01')).toBe('undated')
+    expect(await finishSession(repo, workoutId, undefined, 'a different stored value')).toBe('undated')
 
     expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 
-  it('closes when the day still matches', async () => {
+  it('closes when the stored value still matches', async () => {
     const workoutId = await startAndLog()
-    expect(await finishSession(repo, workoutId, undefined, '2026-07-24')).toBe('done')
+    // Raw, not a decoded day: decoding on both sides let two decoders
+    // disagree, and any rollover past 12 then made every workout permanently
+    // unfinishable.
+    const stored = repo.block(workoutId).peek()?.properties['strength:date']
+    expect(await finishSession(repo, workoutId, undefined, stored)).toBe('done')
   })
 })
 

@@ -473,12 +473,18 @@ export type FinishOutcome =
  *  than silently left out of your training history. */
 const misfiled = async (tx: Tx, workoutId: string): Promise<BlockData[]> => {
   const found: BlockData[] = []
+  // Every reachable block, not the first few levels: a depth cutoff let a set
+  // nested deeper than it through, which is precisely the corruption this
+  // guard exists to stop. A visited set is what keeps hand-edited parentage
+  // from looping, and it does that without deciding how deep is too deep.
+  const seen = new Set<string>([workoutId])
   // Depth is counted from the WORKOUT: its children are lifts, their children
   // are sets. Those two positions are the whole canonical shape; a typed block
   // anywhere else is one neither reader can reach.
   const walk = async (parentId: string, depth: number): Promise<void> => {
-    if (depth > 4) return
     for (const child of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
+      if (seen.has(child.id)) continue
+      seen.add(child.id)
       if (child.deleted) continue
       const entryHere = depth === 0 && hasBlockType(child, EXERCISE_ENTRY_TYPE)
       const setHere = depth === 1 && hasBlockType(child, SET_TYPE)
@@ -538,12 +544,20 @@ export const finishSession = async (
    *  record for good — every session after the first back silently returns to
    *  full loads. */
   layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>; knownIds?: readonly string[]},
-  /** The training day the caller validated and computed the layoff against.
-   *  Re-checked INSIDE the transaction, because it is a hand-editable property
-   *  and the caller's read is several awaits old: cleared in that window the
-   *  workout closes and `buildHistory` drops it whole, and changed to another
-   *  valid day it closes with a layoff measured to the old one. */
-  expectedDay?: string,
+  /** The RAW `strength:date` the caller validated and computed the layoff
+   *  against. Re-checked inside the transaction, because it is a hand-editable
+   *  property and the caller's read is several awaits old: cleared in that
+   *  window the workout closes and `buildHistory` drops it whole, and changed
+   *  to another valid day it closes with a layoff measured to the old one.
+   *
+   *  The raw value, deliberately, not a decoded day. Decoding on both sides
+   *  invites the two decoders to disagree — and they did: the caller used
+   *  `trainingDay` (which shifts back by `rolloverHour`) while this compared
+   *  `dateToDay` (which does not), so any rollover past 12 moved the caller's
+   *  answer to the previous day and made EVERY workout permanently
+   *  unfinishable. Comparing the stored string needs no decoder at all, and
+   *  catches any change including ones a decoder would round away. */
+  expectedDate?: unknown,
 ): Promise<FinishOutcome> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
@@ -556,7 +570,7 @@ export const finishSession = async (
     // Checked before anything is written: closing around a set history cannot
     // read would report the session recorded while progression never sees the
     // work, and would strip the todo that is your only sign it is there.
-    if (expectedDay !== undefined && liveDay(workout.properties[FIELD.date]) !== expectedDay) {
+    if (expectedDate !== undefined && workout.properties[FIELD.date] !== expectedDate) {
       return 'undated' as const
     }
 
