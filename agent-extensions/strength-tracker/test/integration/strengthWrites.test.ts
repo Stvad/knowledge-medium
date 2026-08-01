@@ -21,11 +21,12 @@ import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
+import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
-import {findSettingsBlock, findStrengthLogPage} from '../../src/km/page'
-import {adjustSet, finishSession, mostRecentlyStarted, startSession} from '../../src/km/session'
+import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
+import {adjustSet, finishSession, mostRecentlyStarted, startSession as startSessionReporting} from '../../src/km/session'
 import {closeSession, ensureStrengthHome, readProgram, standingSession} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -40,6 +41,13 @@ import {
   sessionProp,
   statusProp,
 } from '../../src/km/schema'
+
+/** These tests read the session ID; `stamped` is asserted where it is the
+ *  point, in the premise-check block. Shimmed rather than threaded through
+ *  ~80 call sites, which would bury the change it is here to support. */
+const startSession = async (
+  ...args: Parameters<typeof startSessionReporting>
+): Promise<string> => (await startSessionReporting(...args)).id
 
 const WORKSPACE_ID = 'ws-1'
 const PAGE_ID = 'strength-log-page'
@@ -134,6 +142,40 @@ describe('ensureStrengthHome', () => {
 
     expect(await findStrengthLogPage(repo, fresh)).toBe(pageId)
     expect(await findSettingsBlock(repo, fresh, pageId)).toBe(settingsBlockId)
+  })
+
+  it('mints the settings block AT its derived seat, so two devices converge', async () => {
+    // The sibling scan inside the transaction only makes two bootstraps on ONE
+    // device converge. Two OFFLINE devices each see no sibling, each mint a
+    // random id, and after sync the page has two — with `findSettingsBlock`
+    // taking whichever the query returns first, so the two read and write
+    // different plan roots, rollover hours and `or`-group choices. Asserted on
+    // the id directly, because a random-id mint behaves identically on one
+    // device and only forks once a peer is involved.
+    const fresh = 'ws-with-nothing-in-it'
+
+    const {pageId, settingsBlockId} = await ensureStrengthHome(repo, fresh)
+
+    expect(settingsBlockId).toBe(derivedBlockId(settingsIdentity(pageId)))
+  })
+
+  it('adds no second settings block once the derived seat holds a tombstone', async () => {
+    // The seat never becomes untaken, so every open after a delete has to fall
+    // back to the mint — and must find the previous one rather than making
+    // another. What actually re-finds it here is the pre-transaction query at
+    // the top of `getOrCreateSettingsBlock`; the in-transaction re-find behind
+    // it is defence in depth (see its comment), and is NOT what this pins.
+    const fresh = 'ws-with-nothing-in-it'
+    const {pageId, settingsBlockId: derived} = await ensureStrengthHome(repo, fresh)
+    await repo.tx(async tx => { await tx.run(deleteBlock, {id: derived}) },
+      {scope: ChangeScope.BlockDefault, description: 'the settings block is deleted'})
+
+    const minted = await getOrCreateSettingsBlock(repo, fresh, pageId)
+    const again = await getOrCreateSettingsBlock(repo, fresh, pageId)
+
+    expect(minted).not.toBe(derived)
+    expect(again).toBe(minted)
+    expect(await liveChildren(pageId, SETTINGS_TYPE)).toHaveLength(1)
   })
 })
 
@@ -382,14 +424,36 @@ describe('an edit still in flight when Finish is tapped', () => {
     expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 
-  it('closes normally once the edits that were in flight have landed', async () => {
+  it('refuses once for a write that failed BEFORE the tap, then lets you close', async () => {
+    // Waiting on the in-flight set alone only catches a write still RUNNING.
+    // Lose by a hair the other way — the blur's write rejects between mousedown
+    // and mouseup — and the set is empty again by the time Finish looks, so it
+    // closed around the old number while the row was saying "could not save
+    // that", and the closed-session guard refused every retry after.
     const workoutId = await startAndLog()
-    const write = adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
-    await write.catch(() => {})
+    await adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+      .catch(() => {})
 
-    // A write that already failed is not this gesture's business: you were
-    // told at the time, and the session is still yours to close.
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('edit-failed')
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+
+    // …and it clears on the way out, so the refusal happens once. It has to:
+    // the alternative is a session nothing can close until some write
+    // succeeds, and "I know, 135 is right, finish it" is a fair answer to
+    // being told. Tapping Finish again means you were told.
     expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
+  })
+
+  it('does not carry a reported failure into an unrelated later Finish', async () => {
+    // The same clearing from the other side: a failure already reported must
+    // not still be sitting there when you close the NEXT session.
+    const first = await startAndLog()
+    await adjustSet(writesFail as unknown as Repo, 'some-set', {weight: 5}).catch(() => {})
+    expect(await closeSession(repo, WORKSPACE_ID, first)).toBe('edit-failed')
+    expect(await closeSession(repo, WORKSPACE_ID, first)).toBe('done')
+
+    const second = await startAndLog({day: '2026-07-25', session: 'B', lifts: [lift('Row')]})
+    expect(await closeSession(repo, WORKSPACE_ID, second)).toBe('done')
   })
 })
 

@@ -354,6 +354,20 @@ const entrySpec = (
  *  from rows a device happens to hold). So the repeat falls back to a lookup
  *  inside the transaction and mints if that comes back empty.
  */
+export interface StartedSession {
+  id: string
+  /** Whether THIS call wrote the confirmed plan into it.
+   *
+   *  `false` means a session that arrived since the caller's check was handed
+   *  back untouched — the lifts you picked are not in it. The caller needs to
+   *  know, because the things it does AFTER a start are all conditional on the
+   *  start having happened: recording an `or`-group choice says "this is the
+   *  variant I am now tracking", and recording it off a session that never got
+   *  the pick changes what future sessions prescribe on the strength of a race
+   *  you lost and were never told about. */
+  stamped: boolean
+}
+
 export const startSession = async (
   repo: Repo,
   workspaceId: string,
@@ -374,7 +388,7 @@ export const startSession = async (
    *  Omitted entirely means "no premise to keep", which leaves the plain
    *  adopt-and-stamp behaviour a second tap with the same plan relies on. */
   expectedStanding?: string | null,
-): Promise<string> => {
+): Promise<StartedSession> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   // Candidates for the standing-session scan, from the same workspace-wide
   // population the readers use — a page-children-only scan would miss a
@@ -451,7 +465,7 @@ export const startSession = async (
     // writes nothing costs nothing.
     if (expectedStanding !== undefined) {
       const arrived = mostRecentlyStarted(live.filter(block => isStandingToday(block, plan)))
-      if (arrived !== null && arrived !== expectedStanding) return arrived
+      if (arrived !== null && arrived !== expectedStanding) return {id: arrived, stamped: false}
     }
 
     // More than one can look standing: a device that has received the second
@@ -546,7 +560,7 @@ export const startSession = async (
         }
       }
     }
-    return workout.id
+    return {id: workout.id, stamped: true}
   }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(plan.session)}`})
 }
 
@@ -690,18 +704,34 @@ const writeSet = async (
  */
 const inFlight = new Set<Promise<unknown>>()
 
-/** Let the set edits that were ALREADY running finish, and say whether any of
- *  them failed.
+/** A set edit that rejected and has not been superseded.
+ *
+ *  Waiting on `inFlight` alone only catches a write still running when Finish
+ *  is tapped. Lose by a hair the other way — the blur's write rejects between
+ *  mousedown and mouseup — and the set is empty again by the time Finish
+ *  looks, so it closes around the old number while `SetLine` is displaying
+ *  "could not save that". The closed-session guard then refuses every retry.
+ *  So a failure outlives its promise.
+ */
+let failedEdit = false
+
+/** Let the set edits that were ALREADY running finish, and say whether any
+ *  edit has failed since the last time this asked.
  *
  *  One drain of what is in flight now, not a loop until quiet: writes started
  *  after this was called are not part of the gesture that called it, and
- *  waiting for those would let a stuck field block Finish indefinitely.
+ *  waiting for those would let a stuck field block Finish for ever.
+ *
+ *  The sticky flag CLEARS on the way out, so the refusal happens once. It has
+ *  to: the alternative is a session nothing can close until a write succeeds,
+ *  and "I know, 135 is right, finish it" is a perfectly good answer to being
+ *  told the edit did not save. Tapping Finish again means you were told.
  */
 export const setEditsSettled = async (): Promise<'settled' | 'failed'> => {
-  const running = [...inFlight]
-  if (running.length === 0) return 'settled'
-  const results = await Promise.allSettled(running)
-  return results.some(result => result.status === 'rejected') ? 'failed' : 'settled'
+  const results = await Promise.allSettled([...inFlight])
+  const failed = failedEdit || results.some(result => result.status === 'rejected')
+  failedEdit = false
+  return failed ? 'failed' : 'settled'
 }
 
 /** @see writeSet — this is that, with the write registered so Finish can wait
@@ -714,9 +744,12 @@ export const adjustSet = (
   const write = writeSet(repo, setId, delta)
   inFlight.add(write)
   // Both arms, so a rejected write is counted as handled here and its failure
-  // still reaches `setEditsSettled` through `allSettled` — and its own caller.
-  const forget = () => inFlight.delete(write)
-  write.then(forget, forget)
+  // still reaches `setEditsSettled` — through `allSettled` while it is running,
+  // and through the sticky flag once it is not.
+  write.then(
+    () => inFlight.delete(write),
+    () => { inFlight.delete(write); failedEdit = true },
+  )
   return write
 }
 

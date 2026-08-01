@@ -100,7 +100,7 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // in so the stamping transaction can re-check the premise this whole flow
   // rests on: a session that turns up between that check and the write gets
   // continued rather than having tonight's picks stamped into it.
-  const workoutId = await startSession(
+  const {id: workoutId, stamped} = await startSession(
     repo, workspaceId, placement.parentId, plan, placement.position, arrived,
   )
 
@@ -120,6 +120,14 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // prescription actually contains — flipping a variant while previewing one
   // session and then switching to another leaves the first session's group in
   // `picks`, and recording it would retrack a session you never started.
+  // …and only when the session that exists is the one those picks configured.
+  // A start that lost the race to a peer hands back THEIR session untouched,
+  // so the alternative you chose was never added to anything; recording it
+  // anyway would change what future sessions prescribe on the strength of a
+  // race you lost and were not told about. Same rule as the cancelled dialog
+  // below, for the same reason: a preference is recorded because a session was
+  // started with it.
+  if (!stamped) return
   const recording = choicesToRecord(picks.choices, prescription.exercises)
   // Nothing to record means nothing to bootstrap either: the home is created
   // here rather than at read time, and a discarded pick must not be the thing

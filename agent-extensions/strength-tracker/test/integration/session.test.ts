@@ -22,7 +22,7 @@ import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from '../../src/km/f
 import {nextWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
-import {adjustSet, finishSession, loggedSetCount, startSession, takePlaceOf} from '../../src/km/session'
+import {adjustSet, finishSession, loggedSetCount, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
 import {discardSession} from '../../src/km/store'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -49,6 +49,13 @@ import {
   weightProp,
   workingWeightProp,
 } from '../../src/km/schema'
+
+/** These tests read the session ID; `stamped` is asserted where it is the
+ *  point, in the premise-check block. Shimmed rather than threaded through
+ *  ~80 call sites, which would bury the change it is here to support. */
+const startSession = async (
+  ...args: Parameters<typeof startSessionReporting>
+): Promise<string> => (await startSessionReporting(...args)).id
 
 const WORKSPACE_ID = 'ws-1'
 const PAGE_ID = 'strength-log-page'
@@ -407,6 +414,24 @@ describe('which standing session a tap continues', () => {
     expect(mine).toBe(theirs)
     const entries = await childrenOf(theirs, EXERCISE_ENTRY_TYPE)
     expect(entries.map(entry => entry.properties[FIELD.exercise])).toEqual(['Face pulls'])
+  })
+
+  it('reports that it did not stamp, so the caller can skip what follows a start', async () => {
+    // The caller cannot see this from the id alone, and everything it does
+    // after a start is conditional on the start having happened — recording an
+    // `or`-group choice says "this is the variant I now track", and recording
+    // it off a session that never got the pick changes what future sessions
+    // prescribe on the strength of a race you lost and were not told about.
+    const theirs = await startSessionReporting(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Face pulls', 1)]))
+    expect(theirs.stamped).toBe(true)
+
+    const mine = await startSessionReporting(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]),
+      {kind: 'first'}, null,
+    )
+
+    expect(mine).toEqual({id: theirs.id, stamped: false})
   })
 
   it('continues a session of ANOTHER type that arrived, instead of starting beside it', async () => {
