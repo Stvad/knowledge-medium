@@ -1,8 +1,12 @@
 import {
-  actionTransformsFacet, actionsFacet, appEffectsFacet, appMountsFacet,
+  actionsFacet, appEffectsFacet, appMountsFacet,
 } from '@/extensions/core.js'
 import {
+  actionDispatchWrap, type ActionDispatchDecorator,
+} from '@/shortcuts/actionDispatch.js'
+import {
   blockContentDecoratorsFacet,
+  cachedContentDecorator,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
@@ -13,6 +17,7 @@ import {
   type PropertySeedDeclaration,
 } from '@/data/api/index.js'
 import { definitionSeedsFacet, propertyEditorOverridesFacet, typeSeedsFacet } from '@/data/facets.js'
+import { safeDecodeRowProperty } from '@/data/rowProperty.js'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import { keyBetween, keysBetween } from '@/data/orderKey.js'
 import { pluginBlockId } from '@/extensions/pluginIds.js'
@@ -34,7 +39,6 @@ import {
   ActionContextTypes,
   type ActionConfig,
   type ActionContextType,
-  type ActionTransform,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import {
@@ -49,7 +53,10 @@ import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
 import { useHandle } from '@/hooks/block.js'
 import type { BlockData, BlockRenderer, BlockRendererProps } from '@/types.js'
-import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import {
+  useEffect, useMemo, useState, useSyncExternalStore,
+  type ComponentType, type CSSProperties,
+} from 'react'
 
 // ---------------------------------------------------------------------------
 // constants
@@ -825,6 +832,87 @@ const readwiseDocumentContentDecorator: BlockContentDecoratorContribution = ctx 
 }
 
 // ---------------------------------------------------------------------------
+// reviewed-highlight decoration
+//
+// Marking a highlight reviewed is otherwise INVISIBLE — nothing else in the app
+// reads `readwise:reviewed`. That made the review pass read as broken (press,
+// nothing happens) and made the first visible feedback the *second* press, which
+// falls through and turns the highlight into a todo. So: dim a reviewed
+// highlight, and give it a check the user can click to un-review — the same
+// affordance the properties-panel checkbox provides, without going and finding it.
+
+const ReviewedHighlightDecorator = ({ block, Inner }: BlockRendererProps & { Inner: BlockRenderer }) => {
+  // Reactive: a highlight can gain the type (first sync) or flip `reviewed` (the
+  // latch, another device, the properties panel) while mounted.
+  //
+  // Decoded LENIENTLY, and that matters more here than on the keypress path:
+  // `usePropertyValue` decodes through the strict codec, which THROWS on a
+  // malformed cell — and this decorator is attached to every highlight, so a
+  // `readwise:reviewed` of `"true"` from a raw import/sync/bridge write would
+  // take out the whole block's render rather than just failing to decorate.
+  const decorated = useHandle(block, {
+    selector: (data: BlockData | null | undefined) => {
+      if (!data) return false
+      let types: readonly string[]
+      try {
+        types = getBlockTypes(data)
+      } catch {
+        return false
+      }
+      return types.includes(READWISE_HIGHLIGHT_TYPE) && readReviewed(data)
+    },
+  })
+
+  if (!decorated) return <Inner block={block}/>
+
+  return (
+    <div className="flex items-start gap-2">
+      <button
+        type="button"
+        aria-label="Mark highlight unreviewed"
+        title="Reviewed — click to undo"
+        data-block-interaction="ignore"
+        disabled={block.repo.isReadOnly}
+        className="mt-1 shrink-0 text-muted-foreground hover:text-foreground disabled:pointer-events-none"
+        onClick={event => {
+          event.stopPropagation()
+          void block.set(reviewedProp, false)
+        }}
+      >
+        {/* Inlined rather than imported: an installed extension resolves imports
+            through the page importmap, which maps only `react`, `react-dom` and
+            `@/` — a bare `lucide-react` specifier would pass the test here and
+            404 on the user's device. */}
+        <svg
+          aria-hidden="true" viewBox="0 0 16 16" width="14" height="14"
+          fill="none" stroke="currentColor" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round"
+        >
+          <path d="M3 8.5 6.5 12 13 4"/>
+        </svg>
+      </button>
+      <div className="min-w-0 flex-1 text-muted-foreground">
+        <Inner block={block}/>
+      </div>
+    </div>
+  )
+}
+
+const decorateReviewedHighlight = cachedContentDecorator(
+  ReviewedHighlightDecorator as ComponentType<{ block: Block, Inner: BlockRenderer }>,
+  'WithReadwiseReviewedHighlight',
+)
+
+/** Keyed on the TYPE, not on `reviewed`: the decorator is attached to every
+ *  highlight and the component decides per render, so flipping `reviewed` shows
+ *  up immediately instead of waiting for the decorator set to be re-resolved. */
+const readwiseReviewedContentDecorator: BlockContentDecoratorContribution = ctx => {
+  if (!ctx.types.includes(READWISE_HIGHLIGHT_TYPE)) return null
+  if (ctx.blockContext?.isBreadcrumb) return null
+  return decorateReviewedHighlight
+}
+
+// ---------------------------------------------------------------------------
 // template rendering
 
 type BookRecord = {
@@ -1143,51 +1231,71 @@ const ensureHighlightReviewState = async (
   if (changed) await tx.update(blockId, { properties: next })
 }
 
-const readReviewed = (properties: Record<string, unknown>): boolean => {
-  const stored = properties[reviewedProp.name]
-  if (stored === undefined) return reviewedProp.defaultValue
-  try {
-    return reviewedProp.codec.decode(stored)
-  } catch {
-    return reviewedProp.defaultValue
-  }
-}
+/** Lenient on purpose: a malformed `reviewed` cell reads as unreviewed, and the
+ *  mark then overwrites it with a real boolean, so the cell self-heals. The
+ *  propagating twin would make the keypress throw instead. */
+const readReviewed = (data: Pick<BlockData, 'properties'>): boolean =>
+  safeDecodeRowProperty(data, reviewedProp)
 
-const toggleHighlightReviewed = async (block: any): Promise<boolean> => {
+/** Marking a highlight reviewed is a one-way LATCH, not a cycle: the review pass
+ *  asks "have I seen this yet", which only gets answered once. Once latched this
+ *  returns false, so the press falls through to whatever the action normally
+ *  does and the highlight stops being special.
+ *
+ *  Un-marking is deliberately not on this key (that would be the cycle again) —
+ *  it's the `readwise:reviewed` checkbox in the block's properties.
+ *
+ *  Returns whether the press was consumed. */
+const markHighlightReviewed = async (block: Block): Promise<boolean> => {
   const data = block.peek() ?? await block.load()
   if (!data || !getBlockTypes(data).includes(READWISE_HIGHLIGHT_TYPE)) return false
+  if (readReviewed(data)) return false
 
   if (!block.repo.isReadOnly) {
-    await block.set(reviewedProp, !readReviewed(data.properties))
+    await block.set(reviewedProp, true)
   }
   return true
 }
 
-const decorateActionToToggleReadwiseReview = (
+/** Wraps at DISPATCH time rather than rewriting the action definition, because
+ *  the seam decides the ORDER. SRS decorates these same three actions from the
+ *  dispatch seam, and a dispatch wrap always sits outside the effective action's
+ *  handler — so as an `actionTransformsFacet` transform this could never run
+ *  before SRS, whatever precedence either declared. On a block that is both a
+ *  highlight and an SRS card the review mark should come first (it is the
+ *  lighter action), which is what `READWISE_REVIEW_PRECEDENCE` buys below.
+ *
+ *  `await next(...)` rather than `return next(...)`: an async wrap cannot carry
+ *  the inner sync `false` decline sentinel (`ActionHandlerResult` forbids
+ *  `Promise<false>`), so awaiting it and resolving to `Promise<void>` is the
+ *  documented discipline — same as the SRS twin. */
+const decorateActionToMarkReadwiseReviewed = (
   actionId: string,
   context?: ActionContextType,
-): ActionTransform => ({
+): ActionDispatchDecorator => ({
   actionId,
   ...(context ? { context } : {}),
-  apply: (action: ActionConfig): ActionConfig => ({
-    ...action,
-    handler: async (deps, trigger, dispatch) => {
-      const block = (deps as BlockShortcutDependencies).block
-      if (block && (await toggleHighlightReviewed(block))) return
-      await action.handler(deps as never, trigger, dispatch)
-    },
-  }),
+  wrap: async (deps, trigger, next, dispatch) => {
+    const block = (deps as BlockShortcutDependencies).block
+    if (block && (await markHighlightReviewed(block))) return
+    await next(deps, trigger, dispatch)
+  },
 })
 
-const readwiseSwipeRightDecorator: ActionTransform =
-  decorateActionToToggleReadwiseReview(SWIPE_RIGHT_BLOCK_ACTION_ID)
+/** Decorators fold ascending by precedence with the LOWEST innermost, so a value
+ *  above SRS's (which registers at the default 0) puts the review mark outermost
+ *  — it gets the press first, then declines once latched and hands it down. */
+const READWISE_REVIEW_PRECEDENCE = 10
 
-const readwiseTodoCycleDecorators: readonly ActionTransform[] = [
-  decorateActionToToggleReadwiseReview(
+const readwiseSwipeRightDecorator: ActionDispatchDecorator =
+  decorateActionToMarkReadwiseReviewed(SWIPE_RIGHT_BLOCK_ACTION_ID)
+
+const readwiseTodoCycleDecorators: readonly ActionDispatchDecorator[] = [
+  decorateActionToMarkReadwiseReviewed(
     TODO_CYCLE_ACTION_ID,
     ActionContextTypes.NORMAL_MODE,
   ),
-  decorateActionToToggleReadwiseReview(
+  decorateActionToMarkReadwiseReviewed(
     EDIT_MODE_TODO_CYCLE_ACTION_ID,
     ActionContextTypes.EDIT_MODE_CM,
   ),
@@ -1791,11 +1899,13 @@ export default [
   appMountsFacet.of({ id: 'readwise.setup-dialog', component: ReadwiseSetupDialog }, { source }),
   appEffectsFacet.of(autoSyncEffect, { source }),
   blockContentDecoratorsFacet.of(readwiseDocumentContentDecorator, { source }),
+  blockContentDecoratorsFacet.of(readwiseReviewedContentDecorator, { source }),
 
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
   actionsFacet.of(connectAction, { source }),
-  actionTransformsFacet.of(readwiseSwipeRightDecorator, { source }),
+  actionDispatchWrap(readwiseSwipeRightDecorator,
+    { source, precedence: READWISE_REVIEW_PRECEDENCE }),
   ...readwiseTodoCycleDecorators.map(decorator =>
-    actionTransformsFacet.of(decorator, { source })),
+    actionDispatchWrap(decorator, { source, precedence: READWISE_REVIEW_PRECEDENCE })),
 ]
