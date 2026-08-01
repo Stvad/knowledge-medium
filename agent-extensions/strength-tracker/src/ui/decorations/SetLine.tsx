@@ -11,6 +11,8 @@
  *  on every tap. One place to read the value, one place to change it.
  */
 
+import {useState} from 'react'
+
 import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
 import {usePropertyValue} from '@/hooks/block.js'
 import type {BlockRenderer, BlockRendererProps} from '@/types.js'
@@ -44,18 +46,34 @@ interface Props extends BlockRendererProps {
   Inner: BlockRenderer
 }
 
+const REFUSED: Record<'closed' | 'gone', string> = {
+  closed: 'That session is finished — reopen it to change what it records.',
+  gone: 'That set is no longer there.',
+}
+
 const SetLine = ({block, Inner}: Props) => {
   const [unit] = usePropertyValue(block, unitProp)
+  const [problem, setProblem] = useState<string | null>(null)
   const step = weightStep(unit ?? '')
+
   // Deltas, so a burst of taps composes instead of each one re-sending an
   // absolute value computed from whichever render it happened to see.
   const nudge = (delta: {weight?: number; reps?: number}) => () => {
-    void adjustSet(block.repo, block.id, delta)
+    setProblem(null)
+    adjustSet(block.repo, block.id, delta)
+      // Refusals are the whole point of having them: dropped on the floor,
+      // the buttons look live on a finished session and silently do nothing.
+      .then(outcome => setProblem(outcome === 'written' ? null : REFUSED[outcome]))
+      .catch((error: unknown) => {
+        console.error('[strength] could not adjust the set', error)
+        setProblem('Could not save that — try again.')
+      })
   }
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <div className="min-w-0 flex-1"><Inner block={block}/></div>
+      {problem ? <span className="text-xs text-destructive">{problem}</span> : null}
       {block.repo.isReadOnly ? null : (
         <div className="flex shrink-0 items-center gap-1">
           <Nudge label={`Reduce weight by ${step}${unit ?? ''}`} onPress={nudge({weight: -step})}>−</Nudge>

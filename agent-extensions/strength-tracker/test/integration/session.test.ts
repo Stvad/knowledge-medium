@@ -432,13 +432,15 @@ describe('adjustSet', () => {
       })
       await tx.setProperty(legacyId, weightProp, 185)
       await tx.setProperty(legacyId, repsProp, 5)
-      await tx.setProperty(entryId, unitProp, 'kg')
+      await tx.setProperty(entryId, unitProp, 'lb')
       await repo.addTypeInTx(tx, legacyId, SET_TYPE, {}, repo.snapshotTypeRegistries())
     }, {scope: ChangeScope.BlockDefault, description: 'a set from before the redesign'})
 
     await adjustSet(repo, legacyId, {weight: 5})
 
-    expect(repo.block(legacyId).peek()?.content).toBe('190kg × 5')
+    // Without the fallback the unit reads as empty, `185 × 5` no longer
+    // matches the text on the block, and the content is left behind entirely.
+    expect(repo.block(legacyId).peek()?.content).toBe('190lb × 5')
   })
 
   it('refuses a set whose session is already closed', async () => {
@@ -563,5 +565,143 @@ describe('the invariants the deleted suite used to hold', () => {
     )
     expect(history.map(w => w.id)).toEqual([morning, evening])
     expect(history.every(w => w.recordedAt !== undefined)).toBe(true)
+  })
+})
+
+describe('a set the outline has rearranged, and text you typed', () => {
+  const closedSetTabbedUnderItsNeighbour = async (): Promise<string> => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+    // Tabbing a set under its neighbour is an ordinary outline gesture, and
+    // it puts the workout THREE hops up instead of two.
+    await repo.tx(tx => tx.move(sets[1].id, {parentId: sets[0].id, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault, description: 'tab the set in'})
+    expect(await finishSession(repo, workoutId)).toBe('done')
+    return sets[1].id
+  }
+
+  it('refuses a nested set whose session is closed, not just a direct grandchild', async () => {
+    const setId = await closedSetTabbedUnderItsNeighbour()
+    const before = repo.block(setId).peekProperty(weightProp)
+
+    expect(await adjustSet(repo, setId, {weight: 5})).toBe('closed')
+
+    expect(repo.block(setId).peekProperty(weightProp)).toBe(before)
+  })
+
+  it('leaves text you typed alone, rather than overwriting it from the properties', async () => {
+    // Restoring `Inner` made the set line editable again, so this is a
+    // legitimate thing to have typed — and rewriting it from the properties
+    // threw away both the note and the number, neither of which is read back.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+    await repo.tx(tx => tx.update(set.id, {content: '225lb × 5 — felt easy'}),
+      {scope: ChangeScope.BlockDefault, description: 'type over the set line'})
+
+    expect(await adjustSet(repo, set.id, {reps: 1})).toBe('written')
+
+    expect(repo.block(set.id).peek()?.content).toBe('225lb × 5 — felt easy')
+    // The properties still move, so the buttons keep working.
+    expect(repo.block(set.id).peekProperty(repsProp)).toBe(9)
+  })
+
+  it('still keeps the text in step while it is the text we wrote', async () => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+
+    await adjustSet(repo, set.id, {weight: 5})
+
+    expect(repo.block(set.id).peek()?.content).toBe('140lb × 8')
+  })
+})
+
+describe('two lifts that share a name', () => {
+  it('does not collapse them into one entry when only one came from the plan', async () => {
+    // `planFromPrescription` keys occurrence on `defId ?? name`, so these are
+    // both occurrence 0. Matching on the name whenever either side lacked a
+    // plan block merged them: one lift left the session entirely and its set
+    // seats adopted the other's blocks.
+    // The BARE lift comes first, and the two carry different set counts. Both
+    // matter: scanned in this order a too-permissive match lets the bare row
+    // claim the plan-keyed entry before its rightful owner gets there, and the
+    // swap is only visible in which entry ends up holding which sets —
+    // adopting never rewrites the definition, so comparing those sees nothing.
+    const twoPresses = () => plan([
+      lift('Press', 1),
+      lift('Press', 3, {definitionId: 'def-ohp'}),
+    ])
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, twoPresses())
+    expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(2)
+
+    await startSession(repo, WORKSPACE_ID, PAGE_ID, twoPresses())
+
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries).toHaveLength(2)
+    const byDef = new Map(await Promise.all(entries.map(async e => [
+      repo.block(e.id).peekProperty(definitionProp) ?? 'bare',
+      (await childrenOf(e.id, SET_TYPE)).length,
+    ] as const)))
+    expect(byDef.get('def-ohp')).toBe(3)
+    expect(byDef.get('bare')).toBe(1)
+  })
+
+  it('does not fork an entry when the plan becomes readable between two taps', async () => {
+    // A device that starts before the plan has synced keys the entry on the
+    // NAME; the next tap, with the plan readable, derives elsewhere — and
+    // stamped a second entry and a second whole set tree in the same workout.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID,
+      plan([lift('Bench press', 2)]))
+
+    await startSession(repo, WORKSPACE_ID, PAGE_ID,
+      plan([lift('Bench press', 2, {definitionId: 'def-bench'})]))
+
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries).toHaveLength(1)
+    expect(await childrenOf(entries[0].id, SET_TYPE)).toHaveLength(2)
+  })
+})
+
+describe('an entry whose plan block appears or disappears between taps', () => {
+  it('continues it when the plan becomes unreadable, rather than deriving a second', async () => {
+    // The mirror of the readable direction. This tap knows the plan block; the
+    // next one does not (the outline has not synced, or stopped resolving), so
+    // it keys on the NAME and derives elsewhere. Without the by-name pass
+    // that is a second entry and a second set tree in the same workout.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID,
+      plan([lift('Bench press', 2, {definitionId: 'def-bench'})]))
+
+    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries).toHaveLength(1)
+    expect(await childrenOf(entries[0].id, SET_TYPE)).toHaveLength(2)
+  })
+
+  it('settles every exact match before any row falls back to a name', async () => {
+    // Two same-named lifts, one plan-keyed and one not, with the BARE row
+    // listed first. Matched greedily row by row, the bare row reaches the
+    // plan-keyed entry first and both rows land on the wrong tree — visible
+    // only in which entry ends up holding which sets, since adopting never
+    // rewrites the definition.
+    const first = plan([lift('Press', 3, {definitionId: 'def-ohp'}), lift('Press', 1)])
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, first)
+    expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(2)
+
+    // Same two lifts, bare one first.
+    await startSession(repo, WORKSPACE_ID, PAGE_ID,
+      plan([lift('Press', 1), lift('Press', 3, {definitionId: 'def-ohp'})]))
+
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries).toHaveLength(2)
+    const byDef = new Map(await Promise.all(entries.map(async e => [
+      repo.block(e.id).peekProperty(definitionProp) ?? 'bare',
+      (await childrenOf(e.id, SET_TYPE)).length,
+    ] as const)))
+    expect(byDef.get('def-ohp')).toBe(3)
+    expect(byDef.get('bare')).toBe(1)
   })
 })

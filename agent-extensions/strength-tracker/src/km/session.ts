@@ -31,7 +31,7 @@ import {dateToDay, dayToDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {escapeKeyPart} from './history'
 import {writeLayoffInTx} from './store'
-import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
+import {matchEntries, namesThisLift, type PlannedLift, type PlannedSet, type SessionPlan} from './sessionPlan'
 import {
   completedAtProp,
   dateProp,
@@ -131,18 +131,17 @@ const both = (
 const newestFirst = (a: BlockData, b: BlockData): number =>
   (b.createdAt ?? 0) - (a.createdAt ?? 0) || (a.id < b.id ? -1 : 1)
 
-/** Does this block say it is the entry for this lift — the re-find key for a
- *  mint, so a second Start tap adopts what the first one made. Stricter than
- *  `stillNamesLift`, which only has to avoid stealing someone else's entry:
- *  here we are choosing one, so the plan block must match when both sides
- *  have one, and the name when they do not. */
-const namesThisLift = (block: BlockData, lift: PlannedLift): boolean => {
-  if ((block.properties[FIELD.occurrence] ?? 0) !== lift.occurrence) return false
-  const definition = block.properties[FIELD.definition]
-  if (lift.definitionId !== undefined && typeof definition === 'string') {
-    return definition === lift.definitionId
+/** The chain above a block, nearest first, bounded so a cycle in hand-edited
+ *  parentage cannot spin. */
+const ancestorsOf = async (tx: Tx, block: BlockData): Promise<BlockData[]> => {
+  const chain: BlockData[] = []
+  let current: BlockData | null = block
+  for (let hop = 0; hop < 6 && current?.parentId; hop += 1) {
+    current = await tx.get(current.parentId)
+    if (!current || current.deleted) break
+    chain.push(current)
   }
-  return block.properties[FIELD.exercise] === lift.exercise
+  return chain
 }
 
 /** The `taken` fallback, in the shape `getOrCreateTypedChild`'s contract
@@ -294,12 +293,28 @@ export const startSession = async (
           : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
       })()
 
-    for (const lift of plan.lifts) {
-      const entry = await getOrCreateTypedChild(repo, tx, {
-        identity: exerciseIdentity(workout.id, lift.definitionId ?? lift.exercise, lift.occurrence),
-        adoptable: both(stillUnder(workout.id), stillNamesLift(lift)),
-        ...entrySpec(workout.id, lift, typeSnapshot),
-      })
+    // Scanned before deriving, for the same reason the workout is: a lift's
+    // derived id is keyed on its PLAN BLOCK when the plan could be read and
+    // on its NAME when it could not, so a device that starts before the plan
+    // has synced writes name-keyed entries, and the next tap — with the plan
+    // readable — derives elsewhere and stamps a second entry, and a second
+    // whole set tree, inside the same workout. The block already there says
+    // which lift it is; ask it first, and the derived id becomes the way to
+    // create rather than the only way to find.
+    const liveEntries = (await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true}))
+      .filter(block => !block.deleted && hasBlockType(block, EXERCISE_ENTRY_TYPE))
+    // Settled for every row at once, before any of them writes.
+    const continues = matchEntries(plan.lifts, liveEntries)
+
+    for (const [row, lift] of plan.lifts.entries()) {
+      const already = continues[row]
+      const entry = already !== undefined
+        ? await adoptTypedBlock(repo, tx, already, [EXERCISE_ENTRY_TYPE], typeSnapshot)
+        : await getOrCreateTypedChild(repo, tx, {
+          identity: exerciseIdentity(workout.id, lift.definitionId ?? lift.exercise, lift.occurrence),
+          adoptable: both(stillUnder(workout.id), stillNamesLift(lift)),
+          ...entrySpec(workout.id, lift, typeSnapshot),
+        })
       const entryId = entry.status !== 'taken'
         ? entry.id
         // A rejected seat is PERMANENT — a tombstone stays one, and a block
@@ -365,36 +380,54 @@ export const adjustSet = async (
     const block = await tx.get(setId)
     if (!block || block.deleted) return 'gone' as const
 
-    // The entry above it, for the two things the set alone cannot answer.
-    const entry = block.parentId ? await tx.get(block.parentId) : null
-    const workout = entry?.parentId ? await tx.get(entry.parentId) : null
+    // Walked, not hopped: a set tabbed under its neighbour or outdented up to
+    // the workout is an ordinary outline gesture, and a fixed set→entry→
+    // workout walk misses both — leaving the closed-session refusal and the
+    // unit fallback silently inactive for exactly the blocks a thumb is most
+    // likely to have rearranged.
+    const ancestors = await ancestorsOf(tx, block)
+    const workout = ancestors.find(row => hasBlockType(row, WORKOUT_TYPE))
+      ?? ancestors.find(row => row.properties[FIELD.status] !== undefined)
+
     // A closed session is a record, not a form. The old per-set writer
     // refused once the workout was finished, and dropping that guard while
     // WIDENING the surface from one view to every set block in the outline is
-    // how one stray tap silently rewrites the baseline the next prescription
-    // is derived from — and leaves the entry's stamped working weight
-    // disagreeing with its own sets.
+    // how one stray tap rewrites the baseline the next prescription derives
+    // from — and leaves the stamped working weight disagreeing with its sets.
     if (workout && workout.properties[FIELD.status] === 'done') return 'closed' as const
 
-    const weight = Math.max(0, numberAt(block, FIELD.weight, 0) + (delta.weight ?? 0))
-    const reps = Math.max(0, numberAt(block, FIELD.reps, 0) + (delta.reps ?? 0))
+    const previousWeight = numberAt(block, FIELD.weight, 0)
+    const previousReps = numberAt(block, FIELD.reps, 0)
+    const weight = Math.max(0, previousWeight + (delta.weight ?? 0))
+    const reps = Math.max(0, previousReps + (delta.reps ?? 0))
     // Sets logged before this redesign carry no `strength:unit` — it lived on
     // the entry — so reading the set alone would rewrite "185lb × 5" as
-    // "185 × 5" on the first tap, quietly stripping the unit from a record
-    // that is supposed to stay meaningful without the extension.
+    // "185 × 5", stripping the unit from a record meant to stay readable
+    // without the extension. Nearest ancestor that has one, for the same
+    // reason the workout is walked to rather than hopped to.
     const unit = typeof block.properties[FIELD.unit] === 'string'
       ? block.properties[FIELD.unit] as string
-      : typeof entry?.properties[FIELD.unit] === 'string'
-        ? entry.properties[FIELD.unit] as string
-        : ''
+      : (ancestors.find(row => typeof row.properties[FIELD.unit] === 'string')
+        ?.properties[FIELD.unit] as string | undefined) ?? ''
     const side = block.properties[FIELD.side] === 'L' || block.properties[FIELD.side] === 'R'
       ? block.properties[FIELD.side] as 'L' | 'R'
       : undefined
+    const shape = (w: number, r: number): string =>
+      setContent({weight: w, reps: r, ...(side ? {side} : {})}, unit)
+
     await tx.setProperties(setId, {set: [
       propertyValue(weightProp, weight),
       propertyValue(repsProp, reps),
     ]})
-    await tx.update(setId, {content: setContent({weight, reps, ...(side ? {side} : {})}, unit)})
+    // We only own the text we wrote. Restoring `Inner` made the set line
+    // editable again, so "185lb × 5 — felt easy" is something you can
+    // legitimately have typed — and rewriting it from the properties threw
+    // away both the note AND the number you typed, which nothing reads back.
+    // Untouched when it is no longer machine-shaped: the properties still
+    // move, so the ± buttons work, and your words survive.
+    if (block.content === shape(previousWeight, previousReps)) {
+      await tx.update(setId, {content: shape(weight, reps)})
+    }
     return 'written' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Adjust set'})
 

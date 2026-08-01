@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import type {PrescribedExercise, Prescription} from '../src/engine/types'
-import {planFromPrescription} from '../src/km/sessionPlan'
+import {matchEntries, planFromPrescription, type PlannedLift} from '../src/km/sessionPlan'
 
 const exercise = (over: Partial<PrescribedExercise> = {}): PrescribedExercise => ({
   exercise: 'Bench press',
@@ -89,5 +89,55 @@ describe('planFromPrescription', () => {
     ]), 'lb')
 
     expect(lifts.map(l => l.occurrence)).toEqual([0, 0])
+  })
+})
+
+describe('matchEntries — which existing entry each row continues', () => {
+  const entry = (id: string, over: {exercise?: string; def?: string; occurrence?: number} = {}) => ({
+    id,
+    properties: {
+      'strength:exercise': over.exercise ?? 'Press',
+      ...(over.def !== undefined ? {'strength:definition': over.def} : {}),
+      ...(over.occurrence !== undefined ? {'strength:occurrence': over.occurrence} : {}),
+    } as Record<string, unknown>,
+  })
+  const row = (over: Partial<PlannedLift> = {}): PlannedLift => ({
+    exercise: 'Press', occurrence: 0, unit: 'lb', prescribedSets: 1, sets: [], ...over,
+  })
+
+  it('never hands one entry to two rows', () => {
+    // The bare row cannot match exactly (the entry names a plan block), so it
+    // reaches the fallback — where, unclaimed, it would take the entry the
+    // exact pass already gave away, and both rows would write into one tree.
+    const a = entry('a', {def: 'def-ohp'})
+    const matched = matchEntries([row({definitionId: 'def-ohp'}), row()], [a])
+
+    expect(matched[0]).toBe(a)
+    expect(matched[1]).toBeUndefined()
+  })
+
+  it('will not continue an entry logged as a different occurrence of the lift', () => {
+    // Session A prescribes the lift twice. Ignore the occurrence and the first
+    // row claims the SECOND slot's entry, filing its sets under the other one.
+    const second = entry('second', {occurrence: 1})
+    const matched = matchEntries([row({occurrence: 0}), row({occurrence: 1})], [second])
+
+    expect(matched[0]).toBeUndefined()
+    expect(matched[1]).toBe(second)
+  })
+
+  it('reads a missing occurrence as the first slot, which is what legacy entries are', () => {
+    const legacy = entry('legacy')
+    expect(matchEntries([row({occurrence: 0})], [legacy])[0]).toBe(legacy)
+    expect(matchEntries([row({occurrence: 1})], [legacy])[0]).toBeUndefined()
+  })
+
+  it('refuses an entry that names a different plan block outright', () => {
+    expect(matchEntries([row({definitionId: 'def-ohp'})], [entry('a', {def: 'def-landmine'})])[0])
+      .toBeUndefined()
+  })
+
+  it('refuses an entry for a different lift, however the plan blocks line up', () => {
+    expect(matchEntries([row({exercise: 'Row'})], [entry('a')])[0]).toBeUndefined()
   })
 })
