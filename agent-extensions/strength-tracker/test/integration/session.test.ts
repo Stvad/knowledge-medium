@@ -389,6 +389,39 @@ describe('which standing session a tap continues', () => {
     expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(peer)
   })
 
+  it('continues without stamping when the caller checked and found none', async () => {
+    // Two devices confirm different alternatives of one `or`-group. Both pass
+    // the post-dialog check, then the first commits and the second adopts it —
+    // and stamped its own alternative in beside the other, so Finish recorded
+    // both. The pick does not change `workoutIdentity`, so no id comparison
+    // can tell that session apart from an ordinary re-tap; the caller's
+    // premise is the only thing that can, so it travels in.
+    const theirs = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Face pulls', 1)]))
+
+    const mine = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]),
+      {kind: 'first'}, null,
+    )
+
+    expect(mine).toBe(theirs)
+    const entries = await childrenOf(theirs, EXERCISE_ENTRY_TYPE)
+    expect(entries.map(entry => entry.properties[FIELD.exercise])).toEqual(['Face pulls'])
+  })
+
+  it('still stamps when the caller states no premise, which is what a re-tap is', async () => {
+    // The mirror. Omitting the premise leaves the plain adopt-and-stamp path,
+    // so this cannot be read as "adoption never stamps" — that would make the
+    // whole entry-matching layer unreachable.
+    const first = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Face pulls', 1)]))
+
+    const again = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Band pull-aparts', 1)]))
+
+    expect(again).toBe(first)
+    expect(await childrenOf(first, EXERCISE_ENTRY_TYPE)).toHaveLength(2)
+  })
+
   it('continues the derived one when IT is the one started last', async () => {
     // The mirror, so the test above cannot be passing merely because the
     // derived seat stopped being preferred: the rule is chronological, and it
@@ -1208,6 +1241,32 @@ describe('a set filed under a note that sits directly under the workout', () => 
 
     expect(await finishSession(repo, workoutId)).toBe('misfiled')
     expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('treats a workout nested under it as its own record, not as misfiling', async () => {
+    // Run the shortcut while pointing at last week's unfinished session and
+    // the new one is stamped as its CHILD — that is the placement contract,
+    // not an accident, and `standingSession` does not catch it because that
+    // older session is on a different training day. `buildHistory` files the
+    // inner entries under the inner workout, where they are canonical; the
+    // scan descending into it called them misfiled against the OUTER record
+    // and left it permanently unfinishable, under a message about outdenting
+    // sets that describes nothing that is wrong.
+    const outer = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(outer, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+    await tick(set.id)
+
+    // Stamped under the outer workout, exactly as `placeAtFocus` would.
+    const inner = await startSession(
+      repo, WORKSPACE_ID, outer, plan([lift('Barbell row', 1)], {day: '2026-07-25', session: 'B'}))
+    expect(repo.block(inner).peek()?.parentId).toBe(outer)
+    expect((await childrenOf(inner, EXERCISE_ENTRY_TYPE)).length).toBe(1)
+
+    expect(await finishSession(repo, outer)).toBe('done')
+
+    // And the inner session is untouched by the outer one closing.
+    expect(repo.block(inner).peekProperty(statusProp)).toBe('in-progress')
   })
 
   it('still accepts the ordinary shape, so the rule did not just get stricter', async () => {

@@ -354,6 +354,14 @@ export const startSession = async (
    *  `getOrCreateTypedChild` refuses them, since re-keying siblings can throw
    *  before the derived id is known to be free. */
   position: {kind: 'first'} | {kind: 'last'} = {kind: 'first'},
+  /** The standing session the caller saw when it last looked — `null` for "I
+   *  checked, there was none". Re-checked inside the transaction, and a
+   *  session that turns up anyway is CONTINUED rather than stamped into; see
+   *  the comment at that check for what stamping into it costs.
+   *
+   *  Omitted entirely means "no premise to keep", which leaves the plain
+   *  adopt-and-stamp behaviour a second tap with the same plan relies on. */
+  expectedStanding?: string | null,
 ): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   // Candidates for the standing-session scan, from the same workspace-wide
@@ -421,6 +429,31 @@ export const startSession = async (
           ? derived
           : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
       })()
+
+    // A session that arrived since the caller last looked is CONTINUED, not
+    // re-stamped.
+    //
+    // `runStartSession` checks for one before the dialog and again after it,
+    // and navigates rather than starting — but those checks and this
+    // transaction are separate operations, and a peer's create can land in
+    // between. It does not even need a race: an offline device's row applies
+    // whenever it syncs. Stamping the confirmed plan into a session somebody
+    // else configured adds THIS device's pick of an `or`-group beside the one
+    // already there, and Finish records both — the both-alternatives session
+    // those checks exist to prevent, arriving inside the transaction they
+    // cannot cover. The `or`-group pick does not change `workoutIdentity`, so
+    // no id comparison can tell that session apart from your own re-tap; only
+    // the caller's premise can.
+    //
+    // Which is why the premise travels in, the same way `finishSession`
+    // re-checks `expectedDate` and `discardSession` re-checks its count. A
+    // caller that says nothing keeps the plain adopt-and-stamp behaviour — a
+    // second tap with the same plan is idempotent, which is what the derived
+    // seats are for.
+    if (standing !== undefined
+      && expectedStanding !== undefined && standing.id !== expectedStanding) {
+      return workout.id
+    }
 
     // Scanned before deriving, for the same reason the workout is: a lift's
     // derived id is keyed on its PLAN BLOCK when the plan could be read and
@@ -707,6 +740,15 @@ const misfiled = async (tx: Tx, workoutId: string): Promise<BlockData[]> => {
       if (seen.has(child.id)) continue
       seen.add(child.id)
       if (child.deleted) continue
+      // Another workout ENDS this scan's territory. Run the shortcut while
+      // pointing at last week's unfinished session and the new one is stamped
+      // as its child — that is the placement contract, and it is a session in
+      // its own right, not a stray. `buildHistory` files its entries under IT,
+      // so they are canonical where it counts; descending here called them
+      // misfiled against the outer record and left the outer session
+      // permanently unfinishable, under a message about outdenting sets that
+      // describes nothing that is wrong.
+      if (hasBlockType(child, WORKOUT_TYPE)) continue
       const entryHere = parentId === workoutId && hasBlockType(child, EXERCISE_ENTRY_TYPE)
       const setHere = parentIsEntry && hasBlockType(child, SET_TYPE)
       if (!entryHere && !setHere
