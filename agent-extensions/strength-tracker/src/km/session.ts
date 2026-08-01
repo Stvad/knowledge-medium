@@ -104,20 +104,33 @@ export const exerciseIdentity = (workoutId: string, key: string, occurrence: num
 const setIdentity = (exerciseId: string, index: number): DerivedIdentity =>
   ({namespace: SET_NS, key: `${exerciseId}|${index}`})
 
-/** Is a session already under way on this training day — WHATEVER its type.
+/** Is a session already under way on this training day — whatever its SESSION
+ *  type (A / B / mini).
  *
  *  The rule `standingSession` uses, stated once so the pre-dialog check and
  *  the stamping transaction cannot mean different things by "a session is
- *  under way". They did: this side also required the session TYPE to match, so
+ *  under way". They did: this side also required the session type to match, so
  *  a peer starting Session B while you configured Session A was invisible
  *  here, and the tap made a second live workout for one day — which every
  *  later Start then walks past, since it continues only the newest.
  *
- *  Deliberately no type check on the BLOCK: the properties are both key and
- *  evidence, which lets a workout that lost its type tag be repaired rather
- *  than duplicated. */
+ *  The BLOCK type is required. This used to be tolerant, on the argument that
+ *  the properties are evidence enough and a workout that lost its tag should
+ *  be repaired rather than duplicated — but that repair was only ever reachable
+ *  for a block sitting under the parent being stamped into, because every
+ *  workspace-wide scan that feeds this (here and `standingSession`) queries BY
+ *  type and there is no property-indexed query to widen them to. So the same
+ *  block was continued or ignored depending on where it happened to sit.
+ *
+ *  Requiring the tag is the reading every other component already takes:
+ *  `buildHistory`, `useSessionRows` and the footer renderer all gate on it, so
+ *  an untagged block is invisible to the history, the tally and the controls
+ *  alike. Removing the Workout type is an explicit gesture that takes a block
+ *  out of the strength world; treating it as still-live here would have made
+ *  this the one reader that disagreed. */
 const isStandingToday = (block: BlockData, plan: SessionPlan): boolean =>
-  block.properties[FIELD.status] === 'in-progress'
+  hasBlockType(block, WORKOUT_TYPE)
+  && block.properties[FIELD.status] === 'in-progress'
   && liveDay(block.properties[FIELD.date]) === plan.day
 
 /** …and is it the one tonight's tap would be LOGGING into, which additionally

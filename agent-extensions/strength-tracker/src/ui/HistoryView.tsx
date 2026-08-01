@@ -108,7 +108,7 @@ export function HistoryView({config, history}: Props) {
         <Section title="Left / right">
           <ul className="flex flex-col gap-1.5">
             {asym.map(a => (
-              <li key={`${a.exercise}#${a.occurrence}`} className="flex items-center justify-between gap-2 text-sm">
+              <li key={`${a.defId ?? a.exercise}#${a.occurrence}`} className="flex items-center justify-between gap-2 text-sm">
                 <span>{a.occurrence === 0 ? a.exercise : `${a.exercise} (${a.occurrence + 1})`}</span>
                 <span className="flex items-center gap-2 tabular-nums">
                   <span>L {a.left ?? '—'}</span>

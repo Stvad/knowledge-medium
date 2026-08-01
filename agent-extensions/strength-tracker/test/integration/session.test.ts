@@ -522,6 +522,22 @@ describe('which standing session a tap continues', () => {
     expect(await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))).toBe(derived)
   })
 
+  it('does not continue a block that no longer claims to be a workout', async () => {
+    // Removing the Workout type keeps `strength:status`/date/session, so the
+    // properties alone still look live. But every other reader gates on the
+    // tag — history, the tally, the footer controls — so an untagged block is
+    // already invisible everywhere else; continuing it HERE would make this
+    // the one reader that disagreed. It is an explicit gesture, and it takes
+    // the block out of the strength world.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    await repo.removeType(workoutId, WORKOUT_TYPE)
+    expect(hasBlockType(repo.block(workoutId).peek()!, WORKOUT_TYPE)).toBe(false)
+
+    const next = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+
+    expect(next).not.toBe(workoutId)
+  })
+
   it('does not continue a session logged for another day', async () => {
     await standingWorkout('22222222-2222-4222-8222-222222222222', {day: '2026-07-20'})
 

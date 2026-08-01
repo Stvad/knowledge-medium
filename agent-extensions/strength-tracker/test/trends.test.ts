@@ -100,6 +100,39 @@ describe('asymmetries', () => {
   })
 })
 
+describe('asymmetries — two definitions sharing a display name', () => {
+  it('keeps them apart by definition, not by occurrence alone', () => {
+    // Each is counted under its OWN id, so both are occurrence 0 — a
+    // name+occurrence key collides, and React reuses or discards the wrong
+    // row, putting one definition's left/right numbers under the other's
+    // heading. The definition has to travel with the result.
+    const config = {
+      unit: 'lb', dayRolloverHour: 0, roundTo: 5, milestones: [], reentryTiers: [],
+      exercises: [
+        {name: 'Split squat', defId: 'def-front', session: 'A' as const, sets: 2, increment: 5, perSide: true, freeform: false},
+        {name: 'Split squat', defId: 'def-rear', session: 'A' as const, sets: 2, increment: 5, perSide: true, freeform: false},
+      ],
+    } as unknown as ProgramConfig
+    const history = [{
+      id: 'w1', date: '2026-07-20T12:00:00.000Z', session: 'A' as const,
+      exercises: [
+        {exercise: 'Split squat', definitionId: 'def-front', occurrence: 0, sets: [
+          {weight: 60, reps: 8, side: 'L' as const}, {weight: 60, reps: 8, side: 'R' as const}]},
+        {exercise: 'Split squat', definitionId: 'def-rear', occurrence: 0, sets: [
+          {weight: 30, reps: 8, side: 'L' as const}, {weight: 40, reps: 8, side: 'R' as const}]},
+      ],
+    }]
+
+    const out = asymmetries(history, config)
+
+    expect(out.map(a => [a.defId, a.occurrence, a.left, a.right]))
+      .toEqual([['def-front', 0, 60, 60], ['def-rear', 0, 30, 40]])
+    // What the row key is built from — distinct is the whole point.
+    const keys = out.map(a => `${a.defId ?? a.exercise}#${a.occurrence}`)
+    expect(new Set(keys).size).toBe(2)
+  })
+})
+
 describe('asymmetries — one per-side lift prescribed twice', () => {
   const config = {
     unit: 'lb', dayRolloverHour: 0, roundTo: 5, milestones: [], reentryTiers: [],

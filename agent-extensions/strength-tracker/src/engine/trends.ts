@@ -84,8 +84,14 @@ export const milestoneProgress = (
 
 export interface Asymmetry {
   exercise: string
-  /** Which of several same-named rows this is — see `SeriesKey`. Carried so
-   *  the UI can key and label two rows of one lift apart. */
+  /** The plan block this row is, when it has one. Carried alongside
+   *  `occurrence` because occurrence alone does NOT identify a row: two
+   *  DISTINCT definitions can share a display name, and each is counted under
+   *  its own id — so both land on occurrence 0 and a name+occurrence key
+   *  collides. React then reuses or discards the wrong row and one
+   *  definition's left/right numbers end up under the other's heading. */
+  defId?: string
+  /** Which of several rows sharing one identity this is — see `SeriesKey`. */
   occurrence: number
   left?: number
   right?: number
@@ -131,6 +137,7 @@ export const asymmetries = (
     if (left === undefined && right === undefined) continue
     out.push({
       exercise: exercise.name,
+      ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
       occurrence,
       left,
       right,
