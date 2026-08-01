@@ -32,6 +32,7 @@ import {createTypedChild} from '@/data/typedRecords.js'
 import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import {workingWeight} from '../engine/progression'
+import type {BasisWorkout} from '../engine/reentry'
 import type {LayoffRecord, SessionType} from '../engine/types'
 // The placement DECISION and the delete that carries it out share one
 // predicate on purpose — see `takePlaceOf`. A pure rule, no repo behind it.
@@ -748,28 +749,44 @@ export interface FinishExpectation {
   mini?: boolean
   /** The workouts that made the last full session day when the layoff was
    *  measured — `lastFullSessionBasis`. The gap is measured FROM that day, so
-   *  retracting it (unticking every set) makes the real gap longer than the
-   *  snapshot said, and the finish commits with no record or a light one; once
-   *  the closing session joins history, the gap is gone for good.
+   *  anything that moves the day makes the real gap longer than the snapshot
+   *  said, and the finish commits with no record or a light one; once the
+   *  closing session joins history, the gap is gone for good.
    *
-   *  Checked as "is at least one of these still a training day", which is what
-   *  the day's survival means, rather than by re-deriving history — no
-   *  transaction here can, having no workspace-wide query. Empty means there
-   *  was no prior full session to depend on, so there is nothing to fence. */
-  basis?: readonly string[]
+   *  Checked as "is at least one of these still a training day ON THAT DAY",
+   *  which is what the day's survival means, rather than by re-deriving history
+   *  — no transaction here can, having no workspace-wide query. Empty means
+   *  there was no prior full session to depend on, so nothing to fence. */
+  basis?: readonly BasisWorkout[]
 }
 
-/** Is any of these still a session history would count — live, closed, full,
- *  and holding at least one performed set where `buildHistory` looks? */
-const anyStillATrainingDay = async (tx: Tx, ids: readonly string[]): Promise<boolean> => {
-  for (const id of ids) {
+/** Is any of these still a session history would count, still on the day it
+ *  was counted on — live, closed, full, dated as captured, and holding at
+ *  least one performed set where `buildHistory` looks?
+ *
+ *  The DATE as well as the sets. `strength:date` is hand-editable, so re-dating
+ *  a basis workout to an older day leaves every done set in place: an
+ *  existence-only check passes while the gap it anchors has silently grown, and
+ *  the finish commits the shorter one. Compared as the normalised instant
+ *  `buildHistory` derives, so this needs no rollover hour and cannot disagree
+ *  with the decoder that captured it. */
+const anyStillATrainingDay = async (
+  tx: Tx,
+  basis: readonly BasisWorkout[],
+): Promise<boolean> => {
+  for (const {id, date} of basis) {
     const block = await tx.get(id)
     if (!block || block.deleted) continue
     if (!hasBlockType(block, WORKOUT_TYPE)) continue
     if (block.properties[FIELD.status] === 'in-progress') continue
     // `fullSessionDays` excludes mini days, so a day held up only by one was
-    // never the basis to begin with.
+    // never the basis to begin with — and flipping a basis workout TO mini
+    // takes it out of the reckoning just as re-dating it does.
     if (block.properties[FIELD.session] === 'mini') continue
+    const raw = block.properties[FIELD.date]
+    if (typeof raw !== 'string') continue
+    const on = new Date(raw)
+    if (Number.isNaN(on.getTime()) || storedDate(on).toISOString() !== date) continue
     const tree = await setsOf(tx, id)
     if (tree.some(({sets}) => sets.some(set => set.properties[FIELD.todoStatus] === 'done'))) {
       return true

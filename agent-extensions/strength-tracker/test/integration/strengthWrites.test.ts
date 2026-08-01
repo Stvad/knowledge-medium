@@ -23,7 +23,7 @@ import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
-import {dayToDate} from '../../src/km/day'
+import {dayToDate, storedDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
 import {adjustSet, finishSession, mostRecentlyStarted, startSession as startSessionReporting} from '../../src/km/session'
@@ -313,6 +313,13 @@ describe('the layoff record and the finish that justifies it', () => {
     return {recent, tonight: await startAndLog()}
   }
 
+  /** The basis entry `closeSession` would build for a workout — id plus the
+   *  normalised instant `buildHistory` derives from its raw date. */
+  const basisOf = async (workoutId: string): Promise<{id: string; date: string}> => {
+    const raw = repo.block(workoutId).peek()?.properties[FIELD.date]
+    return {id: workoutId, date: storedDate(new Date(raw as string)).toISOString()}
+  }
+
   const untick = async (workoutId: string): Promise<void> => {
     const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
     const [set] = await liveChildren(entry.id, SET_TYPE)
@@ -328,19 +335,38 @@ describe('the layoff record and the finish that justifies it', () => {
     // and the layoff goes unrecorded, after which it is undetectable on every
     // later day. The cut is not wrong, it is gone.
     const {recent, tonight} = await twoPriorSessions()
+    const basis = await basisOf(recent)
     await untick(recent)
 
-    expect(await finishSession(repo, tonight, undefined, {basis: [recent]})).toBe('changed')
+    expect(await finishSession(repo, tonight, undefined, {basis: [basis]})).toBe('changed')
+
+    expect(repo.block(tonight).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('refuses when the basis workout was re-dated rather than emptied', async () => {
+    // The half an existence check misses. `strength:date` is hand-editable, so
+    // moving the basis session back to an older day leaves every done set in
+    // place — it is still a training day, just not THAT one — while the gap it
+    // anchors silently grows. Compared as the normalised instant
+    // `buildHistory` derives, so there is no rollover arithmetic here and no
+    // second decoder to disagree with the one that captured it.
+    const {recent, tonight} = await twoPriorSessions()
+    const basis = await basisOf(recent)
+    await repo.tx(tx => tx.setProperty(recent, dateProp, dayToDate('2026-07-10')),
+      {scope: ChangeScope.BlockDefault, description: 'correct a date by hand'})
+
+    expect(await finishSession(repo, tonight, undefined, {basis: [basis]})).toBe('changed')
 
     expect(repo.block(tonight).peekProperty(statusProp)).toBe('in-progress')
   })
 
   it('still closes while the basis session is intact', async () => {
     // The other half of the mutation: a fence that refuses everything passes
-    // the test above for the wrong reason.
+    // both tests above for the wrong reason.
     const {recent, tonight} = await twoPriorSessions()
+    const basis = await basisOf(recent)
 
-    expect(await finishSession(repo, tonight, undefined, {basis: [recent]})).toBe('done')
+    expect(await finishSession(repo, tonight, undefined, {basis: [basis]})).toBe('done')
   })
 
   it('carries the basis from closeSession into the finish, not just accepts one', async () => {

@@ -191,11 +191,25 @@ export const workoutDay = (workout: WorkoutRecord, config: ProgramConfig): strin
  *  the gap, which is the conservative direction.
  *
  *  Every workout on that day, not just one: the day survives as long as any
- *  full session on it does. */
+ *  full session on it does.
+ *
+ *  Carries the DATE as well as the id, because existing is not the same as
+ *  still being on that day. `strength:date` is hand-editable, so a basis
+ *  workout re-dated to an older day keeps all its done sets — an id-only check
+ *  passes while the gap it anchors has silently grown. The value is the
+ *  normalised instant `buildHistory` derives (`storedDate(raw).toISOString()`),
+ *  so the transaction can rebuild it from the raw property with no config and
+ *  no rollover arithmetic. */
+export interface BasisWorkout {
+  id: string
+  /** `WorkoutRecord.date` — the normalised ISO instant, not the raw property. */
+  date: string
+}
+
 export const lastFullSessionBasis = (
   history: readonly WorkoutRecord[],
   config: ProgramConfig,
-): string[] => {
+): BasisWorkout[] => {
   const full = history.filter(workout => isFullSession(workout.session))
   const latest = full.reduce<string | undefined>(
     (best, workout) => {
@@ -206,5 +220,7 @@ export const lastFullSessionBasis = (
   )
   return latest === undefined
     ? []
-    : full.filter(workout => workoutDay(workout, config) === latest).map(workout => workout.id)
+    : full
+      .filter(workout => workoutDay(workout, config) === latest)
+      .map(workout => ({id: workout.id, date: workout.date}))
 }
