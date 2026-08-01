@@ -20,11 +20,13 @@ import {statusProp as todoStatusProp, TODO_TYPE, todoType} from '@/plugins/todo/
 
 import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {dayToDate} from '../../src/km/day'
+import {buildHistory} from '../../src/km/history'
 import {adjustSet, finishSession, startSession} from '../../src/km/session'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
+  completedAtProp,
   dateProp,
   definitionProp,
   occurrenceProp,
@@ -214,16 +216,16 @@ describe('finishSession — closing without deleting anything', () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 3)]))
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     const sets = await childrenOf(entry.id, SET_TYPE)
-    // Two performed at a heavier weight than prescribed, one never done — so
-    // the stamped weight has to come from what was logged, not from the
-    // prescription still sitting on the third block.
-    for (const set of sets.slice(0, 2)) {
-      await repo.tx(async tx => {
-        await tx.setProperties(set.id, {set: [
-          propertyValue(weightProp, 145), propertyValue(todoStatusProp, 'done'),
-        ]})
-      }, {scope: ChangeScope.BlockDefault, description: 'log a set'})
-    }
+    // ONE performed at a heavier weight than prescribed, TWO left open at the
+    // prescribed 135. The counts matter: with two done at 145 the modal
+    // weight is 145 whether or not the un-performed sets are filtered out, so
+    // the filter this asserts would have been unfalsifiable. Here the honest
+    // answer is 145 and the unfiltered one is 135.
+    await repo.tx(async tx => {
+      await tx.setProperties(sets[0].id, {set: [
+        propertyValue(weightProp, 145), propertyValue(todoStatusProp, 'done'),
+      ]})
+    }, {scope: ChangeScope.BlockDefault, description: 'log a set'})
 
     expect(await finishSession(repo, workoutId)).toBe('done')
 
@@ -237,9 +239,13 @@ describe('finishSession — closing without deleting anything', () => {
     // …it just stops claiming to be an outstanding task, so it leaves every
     // open-todo query instead of sitting in them forever.
     expect(hasBlockType(repo.block(sets[2].id).peek()!, TODO_TYPE)).toBe(false)
-    // The performed ones keep both tags and their tick.
+    // The performed one keeps both tags and its tick.
     expect(hasBlockType(repo.block(sets[0].id).peek()!, TODO_TYPE)).toBe(true)
     expect(repo.block(sets[0].id).peekProperty(todoStatusProp)).toBe('done')
+    // …and Finish stamps when it happened. Nothing else writes this — the
+    // native checkbox sets only `status` — and it is the only thing that
+    // orders two sessions of one training day.
+    expect(typeof repo.block(sets[0].id).peekProperty(completedAtProp)).toBe('number')
   })
 
   it('refuses a session with nothing ticked, writing nothing', async () => {
@@ -267,22 +273,26 @@ describe('finishSession — closing without deleting anything', () => {
     expect(await finishSession(repo, workoutId)).toBe('gone')
   })
 
-  it('leaves a note typed under a lift alone', async () => {
+  it('does not count a ticked note under a lift as a performed set', async () => {
+    // A note you typed under a lift is an ordinary block, and you may well
+    // tick it. Without the `strength-set` filter it reads as a performed set
+    // with no numbers: the session commits as a training day holding nothing,
+    // and stamps a working weight of 0 that every later prescription follows.
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    const [set] = await childrenOf(entry.id, SET_TYPE)
-    await tick(set.id)
     await repo.tx(async tx => {
       await tx.create({
-        id: 'shoulder-note', workspaceId: WORKSPACE_ID, parentId: entry.id, orderKey: 'z0',
+        id: 'shoulder-note', workspaceId: WORKSPACE_ID, parentId: entry.id, orderKey: 'a1',
         content: 'left shoulder felt tight',
       })
-    }, {scope: ChangeScope.BlockDefault, description: 'user note under the lift'})
+      await tx.setProperties('shoulder-note', {set: [propertyValue(todoStatusProp, 'done')]})
+      await repo.addTypeInTx(tx, 'shoulder-note', TODO_TYPE, {}, repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault, description: 'a ticked note under the lift'})
 
-    expect(await finishSession(repo, workoutId)).toBe('done')
-
+    // The real set is untouched, so nothing was actually performed.
+    expect(await finishSession(repo, workoutId)).toBe('nothing-logged')
     expect(await isBlockDeleted(repo, 'shoulder-note')).toBe(false)
-    expect(repo.block(entry.id).peekProperty(occurrenceProp)).toBe(0)
+    expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBeUndefined()
   })
 })
 
@@ -452,5 +462,106 @@ describe('adjustSet', () => {
 
     expect(await adjustSet(repo, setId, {weight: 5})).toBe('gone')
     expect(await isBlockDeleted(repo, setId)).toBe(true)
+  })
+})
+
+describe('the invariants the deleted suite used to hold', () => {
+  it('continues a session filed away from where this tap would stamp it', async () => {
+    // Sessions logged before this redesign live under the Strength Log page,
+    // while a tap now stamps into the daily note — so the workspace-wide scan
+    // is the ONLY thing that finds them. Without it, Start builds a second
+    // workout beside the standing one and logs into a session the screen
+    // isn't showing.
+    const AWAY = 'some-other-page'
+    // A RANDOM id, which is what every session logged before derived ids has.
+    // Given a derived one, the id lookup finds it wherever it sits and the
+    // scan is never consulted — so this has to be the legacy shape or it
+    // pins nothing.
+    const filedAway = '44444444-4444-4444-8444-444444444444'
+    await repo.tx(async tx => {
+      await tx.create({
+        id: AWAY, workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'a1', content: '2026',
+      })
+      await tx.create({
+        id: filedAway, workspaceId: WORKSPACE_ID, parentId: AWAY, orderKey: 'a0',
+        content: 'Session A · 2026-07-24',
+      })
+      await tx.setProperties(filedAway, {set: [
+        propertyValue(statusProp, 'in-progress'),
+        propertyValue(sessionProp, 'A'),
+        propertyValue(dateProp, dayToDate(DAY)),
+      ]})
+      await repo.addTypeInTx(tx, filedAway, WORKOUT_TYPE, {}, repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault, description: 'a legacy session under a year heading'})
+
+    // A different parent — the daily note, in the real flow.
+    const again = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+
+    expect(again).toBe(filedAway)
+    expect(await childrenOf(PAGE_ID, WORKOUT_TYPE)).toHaveLength(0)
+  })
+
+  it('takes the working weight from the left side of a single-arm lift', async () => {
+    // The plan's rule is "left sets the reps, right matches", so the left is
+    // the honest progression signal. Drop the side from what Finish reads and
+    // the modal tiebreak goes heavy — stamping the STRONG arm's load and
+    // progressing off it forever.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Single-arm row', 2, {
+        sets: [
+          {weight: 35, reps: 10, side: 'L'}, {weight: 45, reps: 10, side: 'R'},
+          {weight: 35, reps: 10, side: 'L'}, {weight: 45, reps: 10, side: 'R'},
+        ],
+      }),
+    ]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    for (const set of await childrenOf(entry.id, SET_TYPE)) await tick(set.id)
+
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(35)
+  })
+
+  it('leaves a lift you skipped with no working weight, rather than zero', async () => {
+    // `undefined` reads as "no data" to every consumer; 0 reads as "you
+    // lifted nothing", which is a real number the next prescription follows.
+    // Needs a session that DOES finish, so a second lift carries it.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Bench press', 1), lift('Barbell row', 1),
+    ]))
+    const [bench, row] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [benchSet] = await childrenOf(bench.id, SET_TYPE)
+    await tick(benchSet.id)
+
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    expect(repo.block(bench.id).peekProperty(workingWeightProp)).toBe(135)
+    expect(repo.block(row.id).peekProperty(workingWeightProp)).toBeUndefined()
+  })
+
+  it('orders two sessions of one training day by when they were finished', async () => {
+    // `date` is that day's local noon on both, so the day alone cannot say
+    // which came second. `recordedAt` — derived from the sets' completedAt —
+    // is the only thing that can, and it decides which session tomorrow's
+    // prescription progresses from.
+    const morning = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [mEntry] = await childrenOf(morning, EXERCISE_ENTRY_TYPE)
+    const [mSet] = await childrenOf(mEntry.id, SET_TYPE)
+    await tick(mSet.id)
+    expect(await finishSession(repo, morning)).toBe('done')
+
+    const evening = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [eEntry] = await childrenOf(evening, EXERCISE_ENTRY_TYPE)
+    const [eSet] = await childrenOf(eEntry.id, SET_TYPE)
+    await tick(eSet.id)
+    expect(await finishSession(repo, evening)).toBe('done')
+
+    const history = buildHistory(
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [WORKOUT_TYPE]}).load(),
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [EXERCISE_ENTRY_TYPE]}).load(),
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [SET_TYPE]}).load(),
+    )
+    expect(history.map(w => w.id)).toEqual([morning, evening])
+    expect(history.every(w => w.recordedAt !== undefined)).toBe(true)
   })
 })

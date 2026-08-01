@@ -33,6 +33,7 @@ import {escapeKeyPart, preferredLive} from './history'
 import {writeLayoffInTx} from './store'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
 import {
+  completedAtProp,
   dateProp,
   definitionProp,
   exerciseProp,
@@ -467,10 +468,25 @@ export const finishSession = async (
     const logged = tree.reduce((n, {sets}) => n + sets.filter(isDone).length, 0)
     if (logged === 0) return 'nothing-logged' as const
 
+    // Finish is the moment we know the work happened by. The native todo
+    // checkbox writes only `status`, so without this nothing stamps
+    // `strength:completedAt` at all — and `buildHistory` derives `recordedAt`
+    // from it, which is the ONLY thing that orders two sessions of the same
+    // training day. Absent, `compareRecords` calls them incomparable and
+    // whichever row the query returns first decides which one tomorrow's
+    // prescription progresses from. Only when absent, so a real tick-time
+    // stamp always wins over this approximation.
+    const finishedAt = Date.now()
+
     for (const {entry, sets} of tree) {
       for (const set of sets) {
-        if (isDone(set)) continue
-        if (hasBlockType(set, TODO_TYPE)) await repo.removeTypeInTx(tx, set.id, TODO_TYPE)
+        if (!isDone(set)) {
+          if (hasBlockType(set, TODO_TYPE)) await repo.removeTypeInTx(tx, set.id, TODO_TYPE)
+          continue
+        }
+        if (set.properties[FIELD.completedAt] === undefined) {
+          await tx.setProperty(set.id, completedAtProp, finishedAt)
+        }
       }
       // Denormalised so "last working weight for lift X" stays a flat scan.
       // Written from what was actually performed, by the same function

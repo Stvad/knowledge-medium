@@ -21,7 +21,7 @@ import type {Repo} from '@/data/repo'
 import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 import {dailyNotesDataExtension} from '@/plugins/daily-notes/dataExtension'
 
-import {LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE} from '../../src/km/fields'
+import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE} from '../../src/km/fields'
 import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {finishSession, startSession} from '../../src/km/session'
@@ -212,6 +212,10 @@ describe('or-group choices', () => {
       'group-1': 'opt-b',
       'group-2': 'opt-c',
     })
+    // Counted, because `readAltChoices` collapses duplicates last-wins — so
+    // the map above reads correctly even if every call appended a new block,
+    // which is exactly the "grows a log" this claims not to do.
+    expect(await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)).toHaveLength(2)
   })
 })
 

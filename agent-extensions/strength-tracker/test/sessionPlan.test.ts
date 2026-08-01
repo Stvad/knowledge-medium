@@ -51,6 +51,7 @@ describe('planFromPrescription', () => {
     // it keeps "prescribed" meaning "there is a block".
     const {lifts} = planFromPrescription(prescription([exercise({weight: undefined})]), 'lb')
 
+    expect(lifts[0].sets).toHaveLength(3)
     expect(lifts[0].sets.every(s => s.weight === 0)).toBe(true)
     expect(lifts[0].prescribedWeight).toBeUndefined()
   })
