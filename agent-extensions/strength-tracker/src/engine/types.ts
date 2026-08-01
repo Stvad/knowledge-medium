@@ -204,19 +204,15 @@ export interface WorkoutRecord {
 
 /** Which of two records is the later training session.
  *
- *  The DAY is the primary key and the timestamp only breaks ties inside it —
- *  never the other way around. Comparing timestamps outright would let a
- *  session performed at 23:00 outrank one dated the next day but carrying no
- *  times at all, which is every hand-entered and imported record.
+ *  The DAY is the primary key; the timestamp only breaks ties INSIDE it.
+ *  Comparing timestamps outright would let a 23:00 session outrank one dated
+ *  the next day carrying no times at all — every hand-entered record.
  *
- *  And only when BOTH records say when they happened. A missing `recordedAt`
- *  is "unknown", not "the beginning of time": reading it as 0 ranked the
- *  untimed record FIRST, which is this function's own bug in the other
- *  direction — a repeat session whose sets were ticked from the outline
- *  carries no `strength:completedAt` (the native todo checkbox writes only
- *  the todo status), so it would lose to the morning's timestamped one and
- *  hand tomorrow the lighter weights. Incomparable returns 0, which leaves
- *  such a pair in the order it arrived rather than inventing one. */
+ *  And only when BOTH say when they happened. A missing `recordedAt` is
+ *  "unknown", not zero: reading it as 0 ranked the untimed record first, and
+ *  a session ticked from the outline carries no `strength:completedAt` (the
+ *  native checkbox writes only `status`). Incomparable returns 0, leaving such
+ *  a pair in arrival order rather than inventing one. */
 export const compareRecords = (a: WorkoutRecord, b: WorkoutRecord): number => {
   const byDay = a.date.localeCompare(b.date)
   if (byDay !== 0) return byDay

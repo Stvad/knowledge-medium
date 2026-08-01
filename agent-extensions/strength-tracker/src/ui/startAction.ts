@@ -25,24 +25,14 @@ import {StartSessionDialog, type StartSessionResult} from './StartSessionDialog'
 
 export const START_SESSION_ACTION_ID = 'strength.startSession'
 
-/** Ask what tonight is, then stamp it at `placement`.
- *
- *  Exported because the Strength Log page's button runs the SAME flow with a
- *  different placement — two entry points, one dialog, one set of races
- *  already thought about. */
 /** Take the user to a session, and say so when that is refused.
  *
  *  `navigateFromGlobalCommand` resolves to `null` — it never rejects — when a
- *  navigation-policy plugin vetoes the gesture or the navigation errors. Every
- *  path out of this action ends in a navigation, and a discarded `null` is the
- *  same failure each time: the tap reports success while leaving you on the
- *  page you started from, with a live session you were never shown. Worse, it
- *  is self-perpetuating — that session is now standing, so every later Start
- *  finds it and navigates into the same veto, and the action can never appear
- *  to do anything again.
- *
- *  One helper because there is one rule; it existed inline on the create path
- *  only, which is exactly how the two short-circuits kept theirs unchecked. */
+ *  navigation-policy plugin vetoes the gesture or the navigation errors. A
+ *  discarded `null` reports success while leaving you on the page you started
+ *  from with a live session you were never shown, and it is self-perpetuating:
+ *  that session is now standing, so every later Start navigates into the same
+ *  veto and the action can never appear to do anything again. */
 const showSession = async (
   repo: Repo,
   workspaceId: string,
@@ -53,6 +43,11 @@ const showSession = async (
   if (shown === null) console.warn(`[strength] ${what}, but could not be opened`, workoutId)
 }
 
+/** Ask what tonight is, then stamp it at `placement`.
+ *
+ *  Exported because the Strength Log page's button runs the SAME flow with a
+ *  different placement — two entry points, one dialog, one set of races
+ *  already thought about. */
 export const runStartSession = async (repo: Repo, placement: Placement): Promise<void> => {
   const workspaceId = repo.activeWorkspaceId
   // Nothing here is readable-only: it bootstraps the log page and settings
@@ -100,36 +95,28 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // than the list you confirmed.
   //
   // The knobs travel with the plan for the same reason, and `dayRolloverHour`
-  // is the load-bearing one: it decides which training day this is, so it
-  // decides `plan.day` — which is the day `startSession`'s standing-session
-  // scan asks about. Taking it from the approved config keeps the day the scan
-  // asks about and the day the session lands on the same value by
-  // construction, rather than by two callers remembering to agree.
+  // is the load-bearing one: it decides `plan.day`, which is the day
+  // `startSession`'s scan asks about. Taking it from the approved config keeps
+  // "the day asked about" and "the day it lands on" one value by construction.
   const confirmed = {...fresh, planSource: snapshot.planSource, config: snapshot.config}
 
   const prescription = prescribeFor(confirmed, now, picks.session, picks.choices)
   const plan = planFromPrescription(prescription, snapshot.config.unit)
-  // There is deliberately NO second standing-session check here. One used to
-  // sit above this line, for the case where another client starts this
-  // training day while the dialog is open — but `startSession` now asks that
-  // question inside the transaction that writes, which is the only place the
-  // answer cannot go stale, and hands back whatever it finds with
-  // `stamped: false`. The pre-check was strictly weaker AND behaved worse when
-  // it did fire: it returned early, so the blank line you ran this on was left
-  // behind and the navigation it did was the one path still discarding its
-  // result. Falling through clears the line, reports a refused navigation, and
-  // skips the alt-choice recording on `!stamped` — all three by the same code
-  // that handles an ordinary start.
+  // Deliberately NO second standing-session check. `startSession` asks that
+  // question inside the transaction that writes — the only place the answer
+  // cannot go stale — and hands back what it finds with `stamped: false`. The
+  // pre-check that used to sit here was strictly weaker and behaved worse when
+  // it fired, returning early and leaving the blank line behind. Falling
+  // through clears the line, reports a refused navigation, and skips the
+  // alt-choice recording, all by the code that handles an ordinary start.
   const {id: workoutId, stamped} = await startSession(
     repo, workspaceId, placement.parentId, plan, placement.position,
   )
 
-  // Reported, not thrown: the session is real, and a leftover blank line is a
-  // smaller thing than the action appearing to have failed.
-  // `stamped` goes in: losing the start race hands back a peer's session, and
-  // that one is not ours to move into the cursor's slot even when it happens
-  // to sit under the same parent. The blank line is still cleared — it was
-  // opened to hold a session and now there is one.
+  // Reported, not thrown: a leftover blank line is smaller than the action
+  // appearing to have failed. `stamped` goes in because a peer's session is not
+  // ours to move into the cursor's slot even when it shares a parent; the line
+  // is cleared either way, having been opened to hold a session.
   await takePlaceOf(repo, workoutId, placement, stamped)
     .catch((error: unknown) => console.error('[strength] could not clear the empty line', error))
 
@@ -142,17 +129,13 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
     stamped ? 'the session was created' : 'a session was already under way')
 
   // Recorded only now the session exists, so a cancelled dialog leaves the
-  // tracked variant exactly as it was. Narrowed to the groups the confirmed
-  // prescription actually contains — flipping a variant while previewing one
-  // session and then switching to another leaves the first session's group in
-  // `picks`, and recording it would retrack a session you never started.
-  // …and only when the session that exists is the one those picks configured.
-  // A start that lost the race to a peer hands back THEIR session untouched,
-  // so the alternative you chose was never added to anything; recording it
-  // anyway would change what future sessions prescribe on the strength of a
-  // race you lost and were not told about. Same rule as the cancelled dialog
-  // below, for the same reason: a preference is recorded because a session was
-  // started with it.
+  // tracked variant as it was — and only when the session is the one these
+  // picks configured. A start that lost the race hands back THEIR session, so
+  // the alternative was never added to anything, and recording it would change
+  // future prescriptions on the strength of a race you were not told about.
+  // `choicesToRecord` narrows to the groups the confirmed prescription holds,
+  // since flipping a variant and then switching session leaves the first
+  // session's group in `picks`.
   if (!stamped) return
   const recording = choicesToRecord(picks.choices, prescription.exercises)
   // Nothing to record means nothing to bootstrap either: the home is created

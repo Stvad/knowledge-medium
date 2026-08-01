@@ -211,19 +211,15 @@ export const closeSession = async (
     : undefined
   if (!record) return finishSession(repo, workoutId, undefined, workout.properties[FIELD.date])
 
-  // A gap record needs a home, and the page is created HERE rather than at
-  // read time — but creating it is a WRITE, and every refusal below is
-  // documented as writing nothing. Bootstrapped before the checks, a Finish
-  // that then returns `gone` / `misfiled` / `nothing-logged` left a Strength
-  // Log page and a settings block behind it. So ask first, with the same
-  // questions Finish asks, and only build the home once they all pass.
+  // A gap record needs a home, but creating one is a WRITE and every refusal
+  // below is documented as writing nothing — bootstrapped eagerly, a Finish
+  // that then returns `gone`/`misfiled`/`nothing-logged` left a Strength Log
+  // page behind. So ask the same questions first, and build only if they pass.
   //
-  // Advisory, not a guarantee: `finishSession` re-asks inside the transaction
-  // that writes, so a peer changing the tree in this window can still refuse
-  // after the home exists. That window is a few awaits wide instead of the
-  // whole of Finish, and it cannot be closed without putting page creation
-  // inside the finishing transaction — which `ensureStrengthHome` cannot be,
-  // running transactions of its own.
+  // Advisory: `finishSession` re-asks inside the transaction that writes, so a
+  // peer can still refuse after the home exists. That window cannot be closed
+  // without putting page creation inside the finishing transaction, which
+  // `ensureStrengthHome` cannot be — it runs transactions of its own.
   const blocker = await finishBlocker(repo, workoutId, workout.properties[FIELD.date])
   if (blocker) return blocker
 

@@ -14,22 +14,12 @@
  *  nothing to reconcile, no entry to match against a plan row, and no set
  *  position to re-find.
  *
- *  Which is what the derived block ids were for, and why they are gone.
- *  Nothing here looks a workout, a lift or a set up BY id — every reader scans
- *  by type — so they bought exactly one thing: two devices starting the same
- *  day+session offline converged on one row instead of two. The price was a
- *  matching layer that had to answer, at three levels, what to do when the
- *  seat it derived was occupied by something that was not the record (a
- *  tombstone, a repointed entry, a set dragged out) — and a rejected seat is
- *  permanent, so each level needed its own lookup-then-mint fallback beside
- *  the derived path, plus a second entry matcher to keep the two from handing
- *  one entry to two lifts. The duplicate those seats prevented is one visible
- *  extra session in a day, which `mostRecentlyStarted` already resolves and
- *  Discard already removes. Traded, deliberately.
- *
- *  The two records that DO keep a derived seat are the ones where a duplicate
- *  is silent and permanent rather than visible: the layoff (`store.ts`) and
- *  the settings block (`page.ts`).
+ *  Records here carry ordinary minted ids. Nothing looks a workout, lift or
+ *  set up BY id — every reader scans by type — so a derived id would buy only
+ *  offline convergence, at the price of handling an occupied seat at three
+ *  levels. `store.ts` (layoff) and `page.ts` (settings) keep theirs, on the
+ *  bar that decides it: a duplicate there is silent and permanent, where a
+ *  duplicate session is visible and Discard removes it.
  */
 
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/index.js'
@@ -96,49 +86,34 @@ const liveDay = (raw: unknown): string | undefined => {
  *  implementations of "am I already in a session" is how a tap navigates to
  *  one session and starts another.
  *
- *  ANY session type, not tonight's. A peer starting Session B while you
- *  configured Session A is a session under way whatever it is called, and
- *  starting an A beside it leaves two live workouts for one day — which every
- *  later Start then walks past, since it continues only the newest.
+ *  ANY session type: a peer's Session B is a session under way while you
+ *  configure Session A, and starting an A beside it leaves two live workouts
+ *  for one day — which every later Start walks past, continuing only the newest.
  *
- *  The BLOCK type is required. This used to be tolerant, on the argument that
- *  the properties are evidence enough and a workout that lost its tag should
- *  be repaired rather than duplicated — but that repair was only ever reachable
- *  for a block sitting under the parent being stamped into, because every
- *  workspace-wide scan that feeds this (here and `standingSession`) queries BY
- *  type and there is no property-indexed query to widen them to. So the same
- *  block was continued or ignored depending on where it happened to sit.
- *
- *  Requiring the tag is the reading every other component already takes:
- *  `buildHistory`, `useSessionRows` and the footer renderer all gate on it, so
- *  an untagged block is invisible to the history, the tally and the controls
- *  alike. Removing the Workout type is an explicit gesture that takes a block
- *  out of the strength world; treating it as still-live here would have made
- *  this the one reader that disagreed. */
+ *  The block TYPE is required, unlike the settings block, which tolerates a
+ *  missing tag (`page.ts` says why). The difference is that a workout has no
+ *  id-based lookup: every scan feeding this queries BY type, so tolerating an
+ *  untagged block would only ever reach one filed under the parent being
+ *  stamped into. Every other reader gates on the tag too, so removing it takes
+ *  a block out of the strength world entirely. */
 const isStandingToday = (block: BlockData, day: string): boolean =>
   hasBlockType(block, WORKOUT_TYPE)
   && block.properties[FIELD.status] === 'in-progress'
   && liveDay(block.properties[FIELD.date]) === day
 
-/** Which of several live sessions a tap continues.
+/** Which of several live sessions a tap continues: the most recently STARTED.
  *
- *  Most recently STARTED. Two can look live at once while a peer's `done`
- *  update is still in flight, and an id has nothing to do with chronology —
- *  so taking the lowest could send you to the session you already finished,
- *  whose set checkboxes are (deliberately) still live, and log tonight's work
- *  into last night's record. `created_at` is the creating device's clock at
- *  insert.
+ *  Two can look live at once while a peer's `done` update is in flight, and an
+ *  id has nothing to do with chronology — taking the lowest could send you to
+ *  the session you already finished (whose checkboxes are deliberately still
+ *  live) and log tonight's work into last night's record.
  *
- *  Id breaks the tie so every device names the same one. Pulled out as a pure
- *  function because that tie-break is otherwise untestable: the query happens
- *  to return rows in an order that produces the same answer, so a test
- *  through `standingSession` passes whether the clause is there or not.
+ *  Id breaks the tie so every device names the same one. Pure, because that
+ *  tie-break is otherwise untestable: the query returns rows in an order that
+ *  gives the same answer whether the clause is there or not.
  *
- *  Lives HERE, beside the stamp, rather than in `tonight.ts` where it was
- *  written: the pre-dialog check and the transaction that actually adopts have
- *  to agree about which session you are in, and two implementations of "which
- *  one" is exactly how a tap navigates to one session and stamps into another.
- */
+ *  Lives beside the stamp rather than in `tonight.ts`, so the pre-dialog check
+ *  and the transaction cannot disagree about which session you are in. */
 export const mostRecentlyStarted = (
   rows: readonly {id: string; createdAt?: number}[],
 ): string | null => {
@@ -175,10 +150,9 @@ const ancestorsOf = async (tx: Tx, block: BlockData): Promise<BlockData[]> => {
  *
  *  Runs AFTER the stamp, never before, so a session that fails to be created
  *  costs you nothing. The move is exact — the empty block is about to stop
- *  using its `orderKey`, so that slot is free — which is how the session
- *  lands where the cursor was rather than merely on the same parent, without
- *  asking `getOrCreateTypedChild` for the anchored position it refuses.
- */
+ *  using its `orderKey`, so that slot is free — which lands the session where
+ *  the cursor was rather than merely on the same parent. See `placement.ts`
+ *  for why this is a move afterwards and not an anchored insert. */
 export const takePlaceOf = async (
   repo: Repo,
   workoutId: string,
@@ -215,22 +189,15 @@ export const takePlaceOf = async (
     // far smaller thing than a deleted block.
     if (!stillExpendable) return 'kept-the-line' as const
 
-    // Only when the session actually landed where we asked. `startSession`
-    // ADOPTS one already started for this training day, and that one can live
-    // anywhere — dragging it out of wherever it is kept because you happened
-    // to run this on an empty line is not a placement, it is a move nobody
-    // asked for.
+    // Only when the session actually landed where we asked. A session handed
+    // back rather than created can live anywhere, and dragging it out of there
+    // because you ran this on an empty line is a move nobody asked for.
     //
-    // Read in the transaction for the same reason the line above it is: a
-    // pre-transaction load is old by the time the write lock is held, and
-    // acting on it drags a workout back out of wherever a concurrent filing
-    // gesture just put it.
-    //
-    // `placedByUs` first: the parentage test was standing in for "did this
-    // call put it here", and it answers wrong for a peer's session that
-    // happens to live under the same page. It stays as the secondary check —
-    // a session we created but that has since been moved is no longer ours to
-    // slot either.
+    // `placedByUs` first: parentage alone answers wrong for a peer's session
+    // filed under the same page. It stays as the secondary check, since one we
+    // created but that has since MOVED is no longer ours to slot either. Read
+    // in-transaction, like the line above, so a concurrent filing gesture is
+    // not undone from a stale load.
     const workout = await tx.get(workoutId)
     const mine = placedByUs && workout !== null && !workout.deleted
       && workout.parentId === placement.parentId
@@ -350,15 +317,10 @@ export const startSession = async (
   position: {kind: 'first'} | {kind: 'last'} = {kind: 'first'},
 ): Promise<StartedSession> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  // Candidates for the standing-session scan, from the same workspace-wide
-  // population the readers use — a page-children-only scan would miss a
-  // session filed under a year heading, which is exactly where the sessions
-  // logged before this redesign live. Filtered HERE, on rows already loaded,
-  // so the in-transaction re-read below is bounded by the handful that could
-  // plausibly be tonight rather than by every workout ever recorded — those
-  // `tx.get`s hold the write lock while every other write queues behind them.
-  // Re-checked inside the transaction regardless, so a stale list can only
-  // cause a redundant session, never a write into the wrong one.
+  // Workspace-wide, like the readers: a page-children scan would miss a session
+  // filed under a year heading. Narrowed to today HERE, on rows already loaded,
+  // so the in-transaction re-reads below are bounded by the handful that could
+  // be tonight — those `tx.get`s hold the write lock.
   const known = (await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load())
     .filter((row: BlockData) => isStandingToday(row, plan.day))
     .map((row: BlockData) => row.id)
@@ -379,23 +341,12 @@ export const startSession = async (
       if (block) seen.set(id, block)
     }
 
-    // Asked FIRST, before a single write: a session already under way is
-    // handed back untouched. That is the whole of the duplicate guard, and it
-    // is also the whole of the idempotency — nothing below can run against a
-    // session that already exists, so there is nothing to reconcile.
-    //
-    // `runStartSession` asks the same question before the dialog and again
-    // after it, and navigates rather than starting; but those checks and this
-    // transaction are separate operations, and a peer's create can land in
-    // between. It does not even need a race — an offline device's row applies
-    // whenever it syncs. Stamping the confirmed plan into a session somebody
-    // else configured would add THIS device's pick of an `or`-group beside the
-    // one already there, and Finish would record both.
-    //
-    // More than one can look standing: a device that has received the second
-    // session's create row but not yet the FIRST one's status update sees both
-    // as in-progress. Most recently STARTED, which is "the session you are in"
-    // and, decisively, the one `standingSession` sent you to a moment ago.
+    // Asked FIRST, before a single write, and the answer that counts: the
+    // caller's pre-dialog check is a separate operation, and a peer's create
+    // can land in between — it need not even be a race, since an offline
+    // device's row applies whenever it syncs. Stamping the confirmed plan into
+    // a session somebody else configured would add this device's `or`-group
+    // pick beside theirs, and Finish would record both.
     const standing = mostRecentlyStarted(
       [...seen.values()].filter(block => !block.deleted && isStandingToday(block, plan.day)),
     )
@@ -429,21 +380,6 @@ export const startSession = async (
 const numberAt = (block: BlockData, field: string, fallback: number): number =>
   typeof block.properties[field] === 'number' ? block.properties[field] as number : fallback
 
-/** Nudge what a set says you lifted, by a DELTA rather than to a value.
- *
- *  Deltas because the caller is a thumb on a ± button, and the value it would
- *  otherwise send is read off a render. Two taps before the first write lands
- *  both compute `135 + 5`, so tapping quickly to dial 135 up to 185 silently
- *  loses increments — and the number lost is the one the whole progression
- *  engine reads. A delta resolved against the row inside the transaction
- *  cannot lose a tap, whatever the render was showing.
- *
- *  ONE transaction for the properties and the content, because they are two
- *  views of the same fact: the engine reads
- *  `strength:weight`/`strength:reps`, the outline shows the text, and a
- *  reader trusting the text while progression trusts the properties would
- *  train off the wrong numbers.
- */
 /** Load steps in the unit the set records. Deliberately not the plan's
  *  `roundTo`: this is a thumb correcting a number under a bar, and a plate you
  *  can actually add is the useful increment. */
@@ -452,33 +388,40 @@ export const weightStep = (unit: string): number => (unit === 'kg' ? 2.5 : 5)
 export interface SetAdjustment {
   weight?: number
   reps?: number
-  /** ± one plate, sized HERE rather than by the caller.
-   *
-   *  The unit is resolved inside the transaction by walking to the nearest
-   *  ancestor that has one, and the caller cannot do that: `strength:unit` has
-   *  a schema default of `lb`, so a set logged before the unit lived on the
-   *  set reads back as `lb` in the UI however the workout is actually kept.
-   *  The two answers then disagreed in the worst possible way — a 5 lb step
-   *  applied to a row this same function goes on to write as kg. Ask for a
-   *  step and only one of them has to be right. */
+  /** ± one plate, sized HERE rather than by the caller, because only this side
+   *  can resolve the unit: `strength:unit` has a schema default of `lb`, so a
+   *  set that predates the unit living on the set reads back as `lb` in the UI
+   *  however the workout is actually kept — a 5 lb step applied to a row this
+   *  same call goes on to write as kg. */
   weightSteps?: number
   set?: {weight?: number; reps?: number; rpe?: number | null}
 }
 
+/** Nudge what a set says you lifted, by a DELTA rather than to a value.
+ *
+ *  Deltas because the caller is a thumb on a ± button reading a render. Two
+ *  taps before the first write lands both compute `135 + 5`, so dialling 135
+ *  up to 185 quickly loses increments — and that number is what the whole
+ *  progression engine reads. Resolved against the row inside the transaction,
+ *  a tap cannot be lost whatever the render was showing.
+ *
+ *  Properties and content move in ONE transaction: the engine reads
+ *  `strength:weight`/`strength:reps` and the outline shows the text, so a
+ *  reader trusting one while progression trusts the other trains off the
+ *  wrong numbers.
+ */
 const writeSet = async (
   repo: Repo,
   setId: string,
   /** A relative nudge, or — for `set` — an outright value. `set` exists for
-   *  typing a starting weight: a lift with no history stamps at 0, and
-   *  dialling that to 135 with a ± button is 27 taps. It is deliberately a
-   *  different field, so the delta path cannot be accidentally handed an
-   *  absolute and lose a tap.
+   *  typing a starting weight (a lift with no history stamps at 0, and
+   *  dialling to 135 with a ± button is 27 taps), and is a separate field so
+   *  the delta path cannot be handed an absolute and lose a tap.
    *
-   *  `set.rpe` has no delta form on purpose: an RPE is a judgement about the
-   *  set you just did, not a number you dial up from the last one. `null`
-   *  clears it, because a mis-tap has to be undoable — and an ABSENT rpe is
-   *  load-bearing, being exactly what stops the catch-up jump firing on
-   *  evidence that was never given. */
+   *  `set.rpe` has no delta form: an RPE is a judgement about the set you just
+   *  did, not a number dialled up from the last one. `null` clears it, because
+   *  an ABSENT rpe is load-bearing — it is what stops the catch-up jump firing
+   *  on evidence never given. */
   delta: SetAdjustment,
 ): Promise<'written' | 'gone' | 'closed'> =>
   repo.tx(async tx => {
@@ -494,21 +437,15 @@ const writeSet = async (
     const workout = ancestors.find(row => hasBlockType(row, WORKOUT_TYPE))
       ?? ancestors.find(row => row.properties[FIELD.status] !== undefined)
 
-    // A closed session is a record, not a form. The old per-set writer
-    // refused once the workout was finished, and dropping that guard while
-    // WIDENING the surface from one view to every set block in the outline is
-    // how one stray tap rewrites the baseline the next prescription derives
-    // from — and leaves the stamped working weight disagreeing with its sets.
+    // A closed session is a record, not a form: one stray tap would rewrite
+    // the baseline the next prescription derives from, and leave the stamped
+    // working weight disagreeing with its own sets.
     if (workout && workout.properties[FIELD.status] === 'done') return 'closed' as const
 
-    // Sets logged before this redesign carry no `strength:unit` — it lived on
-    // the entry — so reading the set alone would rewrite "185lb × 5" as
-    // "185 × 5", stripping the unit from a record meant to stay readable
-    // without the extension. Nearest ancestor that has one, for the same
-    // reason the workout is walked to rather than hopped to.
-    //
-    // Resolved BEFORE the weight, because it is what sizes a `weightSteps`
-    // nudge — see `SetAdjustment`.
+    // Older sets carry no `strength:unit` (it lived on the entry), so reading
+    // the set alone would rewrite "185lb × 5" as "185 × 5" — stripping the unit
+    // from a record meant to stay readable without the extension. Resolved
+    // BEFORE the weight, since it sizes a `weightSteps` nudge.
     const unit = typeof block.properties[FIELD.unit] === 'string'
       ? block.properties[FIELD.unit] as string
       : (ancestors.find(row => typeof row.properties[FIELD.unit] === 'string')
@@ -537,42 +474,35 @@ const writeSet = async (
       // whether the value is there at all.
       ...(rpe === null ? {unset: [rpeProp]} : {}),
     })
-    // We only own the text we wrote. Restoring `Inner` made the set line
-    // editable again, so "185lb × 5 — felt easy" is something you can
-    // legitimately have typed — and rewriting it from the properties threw
-    // away both the note AND the number you typed, which nothing reads back.
-    // Untouched when it is no longer machine-shaped: the properties still
-    // move, so the ± buttons work, and your words survive.
+    // We only own the text we wrote. The set line is editable, so "185lb × 5 —
+    // felt easy" is something you can legitimately have typed; rewriting that
+    // from the properties would throw away the note. Left alone once it stops
+    // being machine-shaped — the properties still move, so ± still works.
     if (block.content === shape(previousWeight, previousReps)) {
       await tx.update(setId, {content: shape(weight, reps)})
     }
     return 'written' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Adjust set'})
 
-/** Set edits that have been started and have not landed yet.
+/** Set edits started and not yet landed.
  *
  *  Finish is one tap away from a blur, and nothing awaits the blur's write:
- *  the weight field commits on blur (mousedown), the button commits on click
- *  (mouseup), and the two run as independent transactions. Lose that race and
- *  the session closes around the OLD number while the edit then refuses as
- *  `closed` — telling you to reopen a session the extension offers no way to
- *  reopen, with the number you typed nowhere in the record.
+ *  the field commits on mousedown, the button on mouseup, as independent
+ *  transactions. Lose that race and the session closes around the OLD number
+ *  while the edit refuses as `closed` — telling you to reopen a session
+ *  nothing here can reopen.
  *
- *  A module-level set rather than plumbing through React because the two ends
- *  are different components with no relationship: `SetLine` writes, and
- *  `WorkoutFooter` — anywhere in the tree — is what must not overtake it.
- */
+ *  Module-level rather than threaded through React: `SetLine` writes and
+ *  `WorkoutFooter` (anywhere in the tree) must not overtake it. */
 const inFlight = new Set<Promise<unknown>>()
 
 /** A set edit that rejected and has not been superseded.
  *
- *  Waiting on `inFlight` alone only catches a write still running when Finish
- *  is tapped. Lose by a hair the other way — the blur's write rejects between
- *  mousedown and mouseup — and the set is empty again by the time Finish
- *  looks, so it closes around the old number while `SetLine` is displaying
- *  "could not save that". The closed-session guard then refuses every retry.
- *  So a failure outlives its promise.
- */
+ *  `inFlight` alone only catches a write still RUNNING at Finish. Lose the
+ *  other way — the write rejects between mousedown and mouseup — and the set
+ *  is empty again by the time Finish looks, so it closes around the old number
+ *  while `SetLine` shows "could not save that". So a failure outlives its
+ *  promise. */
 const failedEdits = new Set<string>()
 
 /** The workout a set belongs to, walked the way `writeSet` walks it and
@@ -858,18 +788,14 @@ export const finishSession = async (
    *  full loads. */
   layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>; knownIds?: readonly string[]},
   /** The RAW `strength:date` the caller validated and computed the layoff
-   *  against. Re-checked inside the transaction, because it is a hand-editable
-   *  property and the caller's read is several awaits old: cleared in that
-   *  window the workout closes and `buildHistory` drops it whole, and changed
-   *  to another valid day it closes with a layoff measured to the old one.
+   *  against, re-checked in-transaction: it is hand-editable and the caller's
+   *  read is several awaits old, so a clear makes `buildHistory` drop the
+   *  session whole and a change files the layoff against the wrong day.
    *
-   *  The raw value, deliberately, not a decoded day. Decoding on both sides
-   *  invites the two decoders to disagree — and they did: the caller used
-   *  `trainingDay` (which shifts back by `rolloverHour`) while this compared
-   *  `dateToDay` (which does not), so any rollover past 12 moved the caller's
-   *  answer to the previous day and made EVERY workout permanently
-   *  unfinishable. Comparing the stored string needs no decoder at all, and
-   *  catches any change including ones a decoder would round away. */
+   *  The raw value, not a decoded day: decoding on both sides let the two
+   *  decoders disagree (`trainingDay` shifts by `rolloverHour`, `dateToDay`
+   *  does not), which made every workout permanently unfinishable at any
+   *  rollover past 12. Comparing the stored string needs no decoder. */
   expectedDate?: unknown,
 ): Promise<FinishOutcome> => {
   const typeSnapshot = repo.snapshotTypeRegistries()

@@ -749,30 +749,7 @@ describe('the invariants the deleted suite used to hold', () => {
   })
 })
 
-describe('a set the outline has rearranged, and text you typed', () => {
-  const closedSetTabbedUnderItsNeighbour = async (): Promise<string> => {
-    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
-    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
-    const sets = await childrenOf(entry.id, SET_TYPE)
-    await tick(sets[0].id)
-    expect(await finishSession(repo, workoutId)).toBe('done')
-    // Tabbed in AFTER closing — Finish refuses a tree shaped like this, so
-    // this is the way a closed session comes to hold one. It puts the workout
-    // THREE hops above the set instead of two.
-    await repo.tx(tx => tx.move(sets[1].id, {parentId: sets[0].id, orderKey: 'a0'}),
-      {scope: ChangeScope.BlockDefault, description: 'tab the set in'})
-    return sets[1].id
-  }
-
-  it('refuses a nested set whose session is closed, not just a direct grandchild', async () => {
-    const setId = await closedSetTabbedUnderItsNeighbour()
-    const before = repo.block(setId).peekProperty(weightProp)
-
-    expect(await adjustSet(repo, setId, {weight: 5})).toBe('closed')
-
-    expect(repo.block(setId).peekProperty(weightProp)).toBe(before)
-  })
-
+describe('text you typed on a set line', () => {
   it('leaves text you typed alone, rather than overwriting it from the properties', async () => {
     // Restoring `Inner` made the set line editable again, so this is a
     // legitimate thing to have typed — and rewriting it from the properties

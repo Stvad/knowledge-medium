@@ -27,20 +27,14 @@ export interface FocusRow {
 }
 
 /** Whether this line is the blank one you just opened with Enter — the only
- *  thing a session is allowed to take the place of, because taking a line's
- *  place DELETES it, cascading over anything under it.
+ *  thing a session may take the place of, since doing so DELETES it and
+ *  cascades over anything under it.
  *
- *  Blank text is not enough. A block's types live in its property bag, so a
- *  blank line can be an empty todo, a property-schema definition, or any other
- *  typed record whose content is empty by design — in this workspace 1003
- *  blank blocks carry properties and 402 of those carry a type. Treating one
- *  of those as scratch space would delete a record because you happened to run
- *  a command while pointing at it.
- *
- *  So: carries nothing at all. A blank line with only view state on it
- *  (`system:collapsed`) fails this too and merely gets the session as a child,
- *  which is the harmless side of the trade.
- */
+ *  Blank text is not enough: types live in the property bag, so a blank line
+ *  can be an empty todo or a property-schema definition (1003 blank blocks in
+ *  this workspace carry properties, 402 of them a type). So: carries nothing
+ *  at all. A line with only view state fails this too and merely gets the
+ *  session as a child, which is the harmless side of the trade. */
 export const isExpendableLine = <
   T extends Pick<FocusRow, 'content' | 'parentId' | 'hasChildren' | 'properties'>,
 >(
@@ -55,12 +49,11 @@ export const isExpendableLine = <
 
 export interface Placement {
   parentId: string
-  /** Only `first`/`last`, deliberately. An anchored insert re-keys the
-   *  siblings around it and throws outright when the anchor has moved away or
-   *  been deleted — inside the stamping transaction that would abort the whole
-   *  session over where it was going to sit. Exact placement is reached by
-   *  MOVING afterwards, in a transaction of its own, so a placement that fails
-   *  costs you a slot rather than the session; see `replaces`. */
+  /** Only `first`/`last`, deliberately. An anchored insert re-keys its
+   *  siblings and throws outright when the anchor has moved or been deleted —
+   *  inside the stamping transaction that aborts the whole session over where
+   *  it was going to sit. Exact placement is a MOVE afterwards, in its own
+   *  transaction, so a failed placement costs a slot and not the session. */
   position: {kind: 'first'} | {kind: 'last'}
   /** An empty block the session is taking the place of.
    *
@@ -80,15 +73,10 @@ export const placeOnPage = (pageId: string): Placement =>
 /** The shortcut: where the cursor is.
  *
  *  An EXPENDABLE focused block is the slot you just opened with Enter, so the
- *  session takes its place — appended to its parent, which is where that
- *  empty block was sitting, and the block itself goes away rather than
- *  staying on as a blank wrapper. Anything else is a block you are pointing
- *  AT, so the session becomes its child.
- *
- *  A page (no parent) is never replaced even when its title is empty —
- *  there is nowhere to put the session but inside it, and deleting a page
- *  because you ran a command on it is not a trade anyone wants.
- */
+ *  session takes its place rather than staying on as a blank wrapper. Anything
+ *  else is a block you are pointing AT, so the session becomes its child. A
+ *  page (no parent) is never replaced even when untitled — there is nowhere to
+ *  put the session but inside it. */
 export const placeAtFocus = (focus: FocusRow): Placement =>
   isExpendableLine(focus)
     ? {

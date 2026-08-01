@@ -94,26 +94,19 @@ export const getOrCreateSettingsBlock = async (
   return repo.tx(async tx => {
     const seat = await getOrCreateTypedChild(repo, tx, {
       identity: settingsIdentity(pageId),
-      // Parentage only — deliberately NOT the type as well.
+      // Parentage only — deliberately NOT the type as well. The derived id
+      // resolves to this page's settings block whatever tags it carries, and
+      // `getOrCreateTypedChild` re-tags a missing one on adopt. Demanding the
+      // tag rejected it instead, and a rejected seat is permanent, so the
+      // fallback minted a BLANK settings block and every later read used the
+      // empty one — plan root, rollover hour and choice children abandoned.
+      // Losing a tag is a slip; losing the config is not.
+      // (`isStandingToday` DOES require its type: a workout has no id-based
+      // lookup, so tolerating a missing tag there is unimplementable.)
       //
-      // `getOrCreateTypedChild` re-tags a missing type on adopt, which is
-      // exactly the repair this record wants: the derived id resolves to this
-      // page's settings block whatever tags it carries, so a block that lost
-      // `strength-settings` is still findable and still holds the real plan
-      // root, rollover hour, cadence and `or`-group choice children. Demanding
-      // the tag here rejected it, and a rejected seat is permanent — the
-      // fallback below then minted a BLANK settings block beside it and every
-      // later read silently used the empty one. Losing the tag is a slip; the
-      // config is not, and the two must not be the same event.
-      //
-      // (`isStandingToday` requires its type, and the difference is that a
-      // workout has no id-based lookup at all — it is found by a workspace-wide
-      // scan BY type, so tolerating a missing tag there is unimplementable
-      // rather than merely stricter.)
-      //
-      // Parentage stays, because `findSettingsBlock` is parent-scoped: adopting
+      // Parentage stays because `findSettingsBlock` is parent-scoped — adopting
       // a block dragged off the page would hand back knobs the reader cannot
-      // find, so the two would disagree about which block the settings are in.
+      // find, and the two would disagree about where the settings are.
       adoptable: block => block.parentId === pageId,
       ...settingsSpec(pageId, typeSnapshot),
     })

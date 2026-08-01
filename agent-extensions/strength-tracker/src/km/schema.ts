@@ -258,20 +258,15 @@ export const completedAtProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** When Finish closed the session.
+/** When Finish closed the session — the workout-level twin of
+ *  `strength:completedAt`, and the ORDERING fallback for two sessions of one
+ *  training day (`date` is that day's local noon on both).
  *
- *  The workout-level twin of `strength:completedAt`, and the ORDERING
- *  fallback for two sessions of one training day — `date` is that day's local
- *  noon on both. Derived from the done sets first, because a set ticked live
- *  carries the truer time; but that derivation empties out under an ordinary
- *  correction, since unticking the sets Finish stamped and ticking a
- *  previously-skipped one leaves every done set without a `completedAt` (the
- *  native checkbox writes only `status`). Two same-day sessions then compare
- *  as incomparable and whichever row the query returns first becomes the
- *  progression baseline. This one cannot empty out.
- *
- *  Sessions closed before this existed simply do not have it, which is exactly
- *  the behaviour they have today. */
+ *  The set-derived value is preferred, but it empties out under an ordinary
+ *  correction: unticking what Finish stamped and ticking a skipped set leaves
+ *  every done set without a `completedAt`, since the native checkbox writes
+ *  only `status`. This one cannot empty out. Sessions closed before it existed
+ *  simply lack it, as they do today. */
 export const finishedAtProp = seedProperty({
   seedKey: extensionPropertySeedKey('finished-at'),
   revision: 1,
