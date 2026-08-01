@@ -1958,7 +1958,16 @@ const useUnreviewedHighlightsReady = (workspaceId: string): boolean => {
  *  the query — a highlight can also be deleted, untagged, or rescheduled into
  *  the future, and holding on to those would leave a row on screen that is no
  *  longer a reviewed highlight (a deleted one renders as a ghost). The caller
- *  answers from the block's current state; anything else is dropped. */
+ *  answers from the block's current state; anything else is dropped.
+ *
+ *  It is evaluated when the LIVE SET changes, not per row continuously — this
+ *  is not a subscription. So a row that is retained first and deleted second
+ *  survives until the next render that moves `live` or `sticky` (reviewing
+ *  anything else does it), or until "Clear done". That residue is deliberate:
+ *  subscribing every retained row to its block would buy a bounded cosmetic
+ *  artifact — an empty slot in a list you are already finished with — at the
+ *  cost of a handle per row. The done-count is not wrong in that case either:
+ *  you did review it this session. */
 export const useStickyRows = (
   live: readonly BlockData[],
   shouldRetain: (row: BlockData) => boolean,
