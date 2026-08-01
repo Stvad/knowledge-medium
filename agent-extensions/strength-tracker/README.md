@@ -12,30 +12,36 @@ plain km blocks.
   template) and, per exercise, target weight × sets × rep-range — with double
   progression applied, and, when a gap is detected, the re-entry table applied
   automatically and visibly ("20-day gap → 90% of pre-break weights").
-- **Fast logging.** Every set is pre-filled from the prescription; accepting
-  one as-prescribed is a single tap. A finished workout lands as blocks.
+- **Fast logging.** Starting a session stamps the whole thing as blocks at
+  once — the workout, one block per prescribed lift, one per prescribed set —
+  each set pre-filled and carrying the app's own todo checkbox. Logging a set
+  is ticking it; correcting a load is the ± controls beside it. There is no
+  draft to accept and nothing to save.
 - **Layoff awareness.** Gaps between full sessions are classified against the
   plan's re-entry table and recorded as `strength-layoff` blocks; the comeback
   ramp shows until you're back to pre-break weights.
 - **Trends & milestones.** Per-lift progression sparklines, dance-lift
   milestone bars, and a left/right asymmetry view for single-arm work.
-- **Shoulder self-check.** After logging, occasionally surfaces the plan's
-  re-open triggers; any checked trigger creates a todo referencing the
-  shoulder-policy block.
 
 ## Design
 
+- **The outline IS the state.** A set block's *existence* means prescribed;
+  its todo `status` means performed. Nothing is materialised on a guess and
+  nothing is pruned at the end, so there is no draft to reconcile — editing a
+  session is editing its blocks, through the ordinary block path.
 - **Pure engine.** `src/engine/` is `(history, config, today) → prescription`
   with no km, DOM, or clock dependency — the progression rules, re-entry
-  table, scheduling, trends, and shoulder logic are all unit-tested there.
+  table, scheduling and trends are all unit-tested there.
 - **Config from notes.** `src/program/planParser.ts` reads exercises, rep
   ranges, increments, re-entry percentages, and milestones live from the plan
   outline; `src/program/defaults.ts` is a plan-faithful fallback for anything
   a line can't be read from. Edit the program by editing your notes.
-- **Data as blocks.** `src/km/` stores workouts, exercise entries (sets in a
-  `strength:sets` property plus a denormalised working weight for flat SQL),
-  and layoffs as typed blocks — queryable, hand-editable, meaningful even with
-  the extension removed.
+- **Data as blocks, one record per block.** `src/km/` stores the workout, each
+  exercise entry, each SET, and each layoff as its own typed block — so every
+  one of them is queryable, referenceable, undoable and hand-editable on its
+  own, and the session still reads as a session with the extension removed.
+  The entry keeps a denormalised working weight so "last weight for lift X"
+  stays a flat scan.
 
 The one non-obvious modelling call: the re-entry table's *load-cutting* tiers
 are global (a real break detrains everything), but "repeat, no jump" is
@@ -65,8 +71,21 @@ pnpm agent --profile <profile> install-extension --verify "agent-extensions/stre
 pnpm agent --profile <profile> enable-extension "Strength Tracker"
 ```
 
-Then run the **Strength: open tonight's session** command (⌃⇧L) — it creates
-the *Strength Log* page on first use and navigates to it.
+Two commands, because starting a session and reading the log are different
+gestures:
+
+- **Strength: start a session here** (⌃⇧L) — asks what tonight is, then
+  stamps it *where your cursor is*: taking the place of the empty line you
+  just opened, or as a child of the block you are pointing at. Run it while a
+  session is already under way for today and it navigates to that one instead
+  of starting a second.
+- **Strength: open the log** — creates the *Strength Log* page and its
+  settings block on first use, and navigates there. The page carries a **Log a
+  workout** button, which runs the same flow but files the session on the log
+  page rather than at your cursor.
+
+Configure the program by editing the settings block on that page (plan root,
+day-rollover hour, cadence, rounding).
 
 ## SQL sanity checks
 

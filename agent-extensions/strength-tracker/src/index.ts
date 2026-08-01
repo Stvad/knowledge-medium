@@ -24,6 +24,7 @@ import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
 import {STRENGTH_PROPS, STRENGTH_TYPES} from './km/schema'
+import {findStrengthLogPage} from './km/page'
 import {ensureStrengthHome} from './km/tonight'
 import {strengthDecorations} from './ui/decorations'
 import {StrengthLogRenderer} from './ui/StrengthPageRenderer'
@@ -41,6 +42,17 @@ const openStrengthLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     const repo = uiStateBlock.repo
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
+    // A read-only workspace gets what is already there, and never a write.
+    // `ensureStrengthHome` bootstraps through `ChangeScope.BlockDefault`,
+    // which a read-only repo rejects — so routing everything through it made
+    // this command throw before it navigated, and the history view exists
+    // precisely to be read without editing rights. Nothing to navigate TO is
+    // the honest outcome when the page has never been made.
+    if (repo.isReadOnly) {
+      const existing = await findStrengthLogPage(repo, workspaceId)
+      if (existing) await navigateFromGlobalCommand(repo, {blockId: existing, workspaceId})
+      return
+    }
     // The page AND its settings block. Creating only the page left a fresh
     // workspace with nowhere to configure the plan root, the rollover hour,
     // the cadence or the rounding: the settings type is hidden from

@@ -409,6 +409,35 @@ describe('which standing session a tap continues', () => {
     expect(entries.map(entry => entry.properties[FIELD.exercise])).toEqual(['Face pulls'])
   })
 
+  it('continues a session of ANOTHER type that arrived, instead of starting beside it', async () => {
+    // The caller's check (`standingSession`) counts any in-progress workout
+    // for the training day; this transaction counted only ones of the SAME
+    // session type. So a peer starting Session B while you configured Session
+    // A was invisible here, and the tap made a second live workout for one
+    // day — which every later Start walks straight past, since it continues
+    // only the newest.
+    await standingWorkout('44444444-4444-4444-8444-444444444444', {session: 'B'})
+
+    const mine = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'first'}, null)
+
+    expect(mine).toBe('44444444-4444-4444-8444-444444444444')
+    // And nothing was written to it: not this session's lifts, not a type tag.
+    expect(await childrenOf(mine, EXERCISE_ENTRY_TYPE)).toHaveLength(0)
+  })
+
+  it('still starts one when the only live session is another day\'s', async () => {
+    // The other half: `isStandingToday` is scoped to the training day, so an
+    // unfinished session from last week must not swallow tonight's tap.
+    await standingWorkout('55555555-5555-4555-8555-555555555555', {day: '2026-07-20'})
+
+    const mine = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'first'}, null)
+
+    expect(mine).not.toBe('55555555-5555-4555-8555-555555555555')
+    expect(await childrenOf(mine, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+  })
+
   it('still stamps when the caller states no premise, which is what a re-tap is', async () => {
     // The mirror. Omitting the premise leaves the plain adopt-and-stamp path,
     // so this cannot be read as "adoption never stamps" — that would make the

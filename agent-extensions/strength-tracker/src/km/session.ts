@@ -103,15 +103,27 @@ const exerciseIdentity = (workoutId: string, key: string, occurrence: number): D
 const setIdentity = (exerciseId: string, index: number): DerivedIdentity =>
   ({namespace: SET_NS, key: `${exerciseId}|${index}`})
 
-/** Is this block the session tonight's tap would be logging into — the same
- *  three fields the readers file a workout by, so a start can never target a
- *  workout the outline shows as something else. Deliberately no type check:
- *  the properties are both key and evidence, which lets a workout that lost
- *  its type tag be repaired rather than duplicated. */
-const isTonightsLog = (block: BlockData, plan: SessionPlan): boolean =>
+/** Is a session already under way on this training day — WHATEVER its type.
+ *
+ *  The rule `standingSession` uses, stated once so the pre-dialog check and
+ *  the stamping transaction cannot mean different things by "a session is
+ *  under way". They did: this side also required the session TYPE to match, so
+ *  a peer starting Session B while you configured Session A was invisible
+ *  here, and the tap made a second live workout for one day — which every
+ *  later Start then walks past, since it continues only the newest.
+ *
+ *  Deliberately no type check on the BLOCK: the properties are both key and
+ *  evidence, which lets a workout that lost its type tag be repaired rather
+ *  than duplicated. */
+const isStandingToday = (block: BlockData, plan: SessionPlan): boolean =>
   block.properties[FIELD.status] === 'in-progress'
-  && block.properties[FIELD.session] === plan.session
   && liveDay(block.properties[FIELD.date]) === plan.day
+
+/** …and is it the one tonight's tap would be LOGGING into, which additionally
+ *  needs the session type to match — stamping Session A's lifts into a Session
+ *  B record files them under a session you did not do. */
+const isTonightsLog = (block: BlockData, plan: SessionPlan): boolean =>
+  isStandingToday(block, plan) && block.properties[FIELD.session] === plan.session
 
 /** A positional record's seat is where it sits: a block dragged out of this
  *  parent is no longer this slot's occupant, and adopting it would write the
@@ -373,8 +385,11 @@ export const startSession = async (
   // `tx.get`s hold the write lock while every other write queues behind them.
   // Re-checked inside the transaction regardless, so a stale list can only
   // cause a mint, never a bad adoption.
+  // Widened to any session under way today, not only this type: the premise
+  // check below asks the same question `standingSession` does, and it cannot
+  // ask it about rows this list never carried into the transaction.
   const known = (await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load())
-    .filter((row: BlockData) => isTonightsLog(row, plan))
+    .filter((row: BlockData) => isStandingToday(row, plan))
     .map((row: BlockData) => row.id)
 
   return repo.tx(async tx => {
@@ -403,35 +418,11 @@ export const startSession = async (
       const block = await tx.get(id)
       if (block) seen.set(id, block)
     }
-    // More than one can look standing: a device that has received the second
-    // session's create row but not yet the FIRST one's status update sees both
-    // as in-progress. Most recently STARTED — "the session you are in", not
-    // "the lowest id", and not "the derived one" either. Preferring the
-    // derived seat here made this disagree with `standingSession`, which is
-    // the check that decided a moment ago which workout to send you to: a
-    // session arriving between the two reaches this selection instead, and the
-    // tap then stamps tonight's lifts into a session you are not looking at.
-    // One rule, one function, both ends.
-    const candidates = [...seen.values()]
-      .filter(block => !block.deleted && isTonightsLog(block, plan))
-    const continuesId = mostRecentlyStarted(candidates)
-    const standing = candidates.find(block => block.id === continuesId)
+    const live = [...seen.values()].filter(block => !block.deleted)
 
-    const workout = standing !== undefined
-      ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
-      : await (async () => {
-        const derived = await getOrCreateTypedChild(repo, tx, {
-          identity: workoutIdentity(workspaceId, plan.day, plan.session),
-          adoptable: block => isTonightsLog(block, plan),
-          ...workoutSpec,
-        })
-        return derived.status !== 'taken'
-          ? derived
-          : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
-      })()
-
-    // A session that arrived since the caller last looked is CONTINUED, not
-    // re-stamped.
+    // FIRST, before anything is created: a session that arrived since the
+    // caller last looked is CONTINUED, not started beside and not stamped
+    // into.
     //
     // `runStartSession` checks for one before the dialog and again after it,
     // and navigates rather than starting — but those checks and this
@@ -450,10 +441,48 @@ export const startSession = async (
     // caller that says nothing keeps the plain adopt-and-stamp behaviour — a
     // second tap with the same plan is idempotent, which is what the derived
     // seats are for.
-    if (standing !== undefined
-      && expectedStanding !== undefined && standing.id !== expectedStanding) {
-      return workout.id
+    //
+    // Asked with `isStandingToday`, the rule the CALLER's check used: a peer
+    // starting Session B while you configured Session A is a session under way
+    // whatever it is called, and creating an A beside it leaves two live
+    // workouts for one day — which every later Start then walks past, since it
+    // continues only the newest. Nothing is written on this path, not even a
+    // type repair: the mandate is "hand it back", and a transaction that
+    // writes nothing costs nothing.
+    if (expectedStanding !== undefined) {
+      const arrived = mostRecentlyStarted(live.filter(block => isStandingToday(block, plan)))
+      if (arrived !== null && arrived !== expectedStanding) return arrived
     }
+
+    // More than one can look standing: a device that has received the second
+    // session's create row but not yet the FIRST one's status update sees both
+    // as in-progress. Most recently STARTED — "the session you are in", not
+    // "the lowest id", and not "the derived one" either. Preferring the
+    // derived seat here made this disagree with `standingSession`, which is
+    // the check that decided a moment ago which workout to send you to: a
+    // session arriving between the two reaches this selection instead, and the
+    // tap then stamps tonight's lifts into a session you are not looking at.
+    // One rule, one function, both ends.
+    //
+    // `isTonightsLog`, not `isStandingToday`: what gets ADOPTED and stamped
+    // has to be this session type, since Session A's lifts filed under a
+    // Session B record are filed under a session you did not do.
+    const candidates = live.filter(block => isTonightsLog(block, plan))
+    const continuesId = mostRecentlyStarted(candidates)
+    const standing = candidates.find(block => block.id === continuesId)
+
+    const workout = standing !== undefined
+      ? await adoptTypedBlock(repo, tx, standing, workoutSpec.types, typeSnapshot)
+      : await (async () => {
+        const derived = await getOrCreateTypedChild(repo, tx, {
+          identity: workoutIdentity(workspaceId, plan.day, plan.session),
+          adoptable: block => isTonightsLog(block, plan),
+          ...workoutSpec,
+        })
+        return derived.status !== 'taken'
+          ? derived
+          : {status: 'created' as const, id: await createTypedChild(repo, tx, workoutSpec)}
+      })()
 
     // Scanned before deriving, for the same reason the workout is: a lift's
     // derived id is keyed on its PLAN BLOCK when the plan could be read and
