@@ -318,40 +318,27 @@ const moveVertical = async (
       excludedSurfaces,
     )
 
-    // Taking the neighbour cannot skip the model's row when the neighbour is
-    // at, or on the near side of, that slot: keep pressing and the walk arrives
-    // there. On the far side it would jump over it — the rows between are
-    // missing from the DOM, so we decline and let the model handler resolve the
-    // row and `FocusedRowLazyMount` mount it.
+    // Within this scope, document order IS model order, so the only same-scope
+    // row that can come next is the model's own. Anything else is DOM the model
+    // has already moved past and React hasn't caught up with — a collapsed
+    // row's descendants, a deleted or reordered row's node — and every one of
+    // those reads as "on the near side" of whatever follows.
+    const takesTheModelRow = next !== null && next === modelRowSlot
+
+    // The relaxation is for nested surfaces and reaches no further. Their rows
+    // belong to their OWN scope, so no walk of this one can name them, and
+    // position is the only thing left to judge them by: fine as long as taking
+    // one can't skip the model's row — at, or on the near side of, its slot. On
+    // the far side the rows between are missing from the DOM, so we decline and
+    // let the model handler resolve the row and `FocusedRowLazyMount` mount it.
     //
     // No slot at all means the DOM can't answer — the row's parent hasn't
     // rendered its children yet — which is also a decline.
-    const towardsTheModelRow = next && modelRowSlot && (
-      next === modelRowSlot || aheadOf(next, modelRowSlot, direction)
+    const stepsIntoANestedSurface = Boolean(
+      next && modelRowSlot &&
+      nextLocation?.renderScopeId !== currentLocation.renderScopeId &&
+      aheadOf(next, modelRowSlot, direction),
     )
-
-    // One thing position alone can't see: the DOM holds same-scope rows the
-    // model walk deliberately SKIPS — a collapsed row's descendants, still
-    // mounted for the commit or two before they unmount. They sit inside this
-    // row, so they precede whatever comes after it and read as "on the near
-    // side". The model descends into this row only when it is expanded, and
-    // then its row is in there too — so a descendant is a legitimate step only
-    // when the model went the same way.
-    const descendantOfThisRow =
-      nextLocation?.renderScopeId === currentLocation.renderScopeId &&
-      current.contains(next) &&
-      !current.contains(modelRowSlot)
-
-    // The same rows, reached from the other side. Walking UP, the model stops
-    // AT a collapsed row rather than descending into it
-    // (`getLastVisibleDescendant`), so ITS still-mounted descendants are the
-    // skipped ones — and they sit inside it, which reads as "on the near side"
-    // just the same. `next === modelRowSlot` is the legitimate arrival at that
-    // row; anything strictly inside it, in this scope, is hidden.
-    const descendantOfTheModelRow =
-      nextLocation?.renderScopeId === currentLocation.renderScopeId &&
-      next !== modelRowSlot &&
-      Boolean(modelRowSlot?.contains(next))
 
     const canTakeTheNeighbour = Boolean(
       nextLocation &&
@@ -360,9 +347,7 @@ const moveVertical = async (
       // wholly before or after it — so the position test above already declines
       // every cross-panel step the model still has rows ahead of.
       nextPanelId === uiStateBlock.id &&
-      towardsTheModelRow &&
-      !descendantOfThisRow &&
-      !descendantOfTheModelRow,
+      (takesTheModelRow || stepsIntoANestedSurface),
     )
     if (!canTakeTheNeighbour) return false
   }

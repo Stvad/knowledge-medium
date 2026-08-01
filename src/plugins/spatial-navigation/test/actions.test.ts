@@ -965,6 +965,48 @@ describe('spatial navigation vertical actions', () => {
     })
   })
 
+  // The model moves first and React catches up. In that window the DOM still
+  // holds a row the model no longer has anywhere — deleted here, but a reorder
+  // leaves the same shape — and it sits exactly where the next row should be.
+  it('declines a same-scope neighbour the model no longer has', async () => {
+    buildPanelDom([{
+      blockId: 'top',
+      renderScopeId: 'panel:outline',
+      surface: 'outline',
+      nested: [
+        {blockId: 'A', renderScopeId: 'panel:outline', surface: 'outline'},
+        {blockId: 'B', renderScopeId: 'panel:outline', surface: 'outline'},
+        {blockId: 'C', renderScopeId: 'panel:outline', surface: 'outline'},
+      ],
+    }])
+    // 'B' is gone from the model; its row hasn't been removed yet.
+    await env.repo.tx(async tx => { await tx.delete('B') }, {scope: ChangeScope.UiState})
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:outline',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    // Not 'B': the model's next row is 'C', and focusing a row that is about to
+    // unmount strands the cursor where nothing can walk from.
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:outline',
+    })
+  })
+
   // A scope's own rows nest inside each other in the DOM, and a COLLAPSED row's
   // descendants can still be mounted for the commit or two before they go. They
   // are same-scope rows the model walk skips on purpose, and they sit inside the
