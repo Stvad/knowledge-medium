@@ -18,11 +18,33 @@ export function HistoryView({config, history}: Props) {
   const asym = useMemo(() => asymmetries(history, config), [history, config])
   // The load-progressed main lifts, in program order, that have any history.
   const trendLifts = useMemo(
-    () =>
-      config.exercises
+    () => {
+      // Occurrence counted the way `planFromPrescription` counts it — by plan
+      // block where there is one, else by name — so a plan that prescribes one
+      // lift twice draws two DIFFERENT lines instead of the same one twice
+      // (with the second row's history nowhere on screen, under a duplicate
+      // React key).
+      const seen = new Map<string, number>()
+      return config.exercises
         .filter(e => !e.freeform)
-        .map(e => ({name: e.name, unit: config.unit, series: exerciseSeries(history, e.name, config.dayRolloverHour)}))
-        .filter(t => t.series.length > 0),
+        .map(e => {
+          const identityKey = e.defId ?? e.name
+          const occurrence = seen.get(identityKey) ?? 0
+          seen.set(identityKey, occurrence + 1)
+          return {
+            name: e.name,
+            key: `${identityKey}#${occurrence}`,
+            label: occurrence === 0 ? e.name : `${e.name} (${occurrence + 1})`,
+            unit: config.unit,
+            series: exerciseSeries(
+              history,
+              {exercise: e.name, ...(e.defId !== undefined ? {defId: e.defId} : {}), occurrence},
+              config.dayRolloverHour,
+            ),
+          }
+        })
+        .filter(t => t.series.length > 0)
+    },
     [history, config],
   )
 
@@ -64,9 +86,9 @@ export function HistoryView({config, history}: Props) {
         <Section title="Progression">
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {trendLifts.map(t => (
-              <li key={t.name} className="rounded-md border border-border p-3">
+              <li key={t.key} className="rounded-md border border-border p-3">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-medium">{t.name}</span>
+                  <span className="text-sm font-medium">{t.label}</span>
                   <span className="tabular-nums text-sm text-muted-foreground">
                     {t.series.at(-1)!.weight}
                     {t.unit}

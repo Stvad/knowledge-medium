@@ -166,7 +166,7 @@ export const closeSession = async (
   // after a blur, and the blur's `adjustSet` is a transaction of its own that
   // nothing awaits — overtake it and the session closes around the number you
   // had already replaced, while the edit refuses as `closed`.
-  if (await setEditsSettled() === 'failed') return 'edit-failed'
+  if (await setEditsSettled(repo, workoutId) === 'failed') return 'edit-failed'
   const snapshot = await readProgram(repo, workspaceId)
   // The gap ends on the day the session was PERFORMED, not the day you got
   // round to tapping Finish. Train Friday night, finish Saturday morning, and
@@ -195,7 +195,17 @@ export const closeSession = async (
   // session gone from progression, its todos already stripped, and no way
   // back through Finish. Refuse instead, and say why.
   if (performedOn === null) return 'undated'
-  const pending = detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
+  // A MINI day does not end a break, so it must not record the return.
+  // `fullSessionDays` — which is what `detectPendingLayoff` measures gaps
+  // between — excludes mini sessions on purpose: they are habit continuity,
+  // not stimulus. Recording one anyway dated the comeback to the mini day, and
+  // because the record is keyed on `from`, the real full session back could
+  // not replace it: every later prescription then resolved against a SHORTER
+  // gap and whatever tier that fell in, so a deep re-entry could jump to a
+  // much heavier tier after one easy session. The first full session records
+  // the actual return.
+  const isMini = workout.properties[FIELD.session] === 'mini'
+  const pending = isMini ? null : detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
   const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
     ? layoffFromPending(pending)
     : undefined

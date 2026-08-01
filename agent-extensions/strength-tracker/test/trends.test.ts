@@ -14,10 +14,40 @@ const at = (weight: number, ...reps: number[]): SetRecord[] => reps.map(r => ({w
 describe('exerciseSeries', () => {
   it('is one point per session, oldest first', () => {
     const history = [A('2026-07-16', ...at(135, 10, 10, 10)), A('2026-07-09', ...at(130, 10, 10, 10))]
-    expect(exerciseSeries(history, 'Bench press', 4)).toEqual([
+    expect(exerciseSeries(history, {exercise: 'Bench press'}, 4)).toEqual([
       {day: '2026-07-09', weight: 130},
       {day: '2026-07-16', weight: 135},
     ])
+  })
+})
+
+describe('exerciseSeries — one lift prescribed twice', () => {
+  const workout = (day: string, ...entries: {exercise: string; defId?: string; occurrence?: number; weight: number}[]) => ({
+    id: `w-${day}`,
+    date: `${day}T12:00:00.000Z`,
+    session: 'A' as const,
+    exercises: entries.map(e => ({
+      exercise: e.exercise,
+      ...(e.defId !== undefined ? {definitionId: e.defId} : {}),
+      ...(e.occurrence !== undefined ? {occurrence: e.occurrence} : {}),
+      sets: [{weight: e.weight, reps: 5}, {weight: e.weight, reps: 5}],
+    })),
+  })
+
+  it('draws a separate line for each occurrence, not the first one twice', () => {
+    // A plan can prescribe one lift twice at different loads — which is what
+    // `occurrence` exists for everywhere else. Keyed by NAME alone, both cards
+    // found the first same-named entry and drew the identical series, so the
+    // second row's history was nowhere on screen.
+    const history = [
+      workout('2026-07-20', {exercise: 'Squat', occurrence: 0, weight: 225},
+        {exercise: 'Squat', occurrence: 1, weight: 135}),
+    ]
+
+    expect(exerciseSeries(history, {exercise: 'Squat', occurrence: 0}, 0))
+      .toEqual([{day: '2026-07-20', weight: 225}])
+    expect(exerciseSeries(history, {exercise: 'Squat', occurrence: 1}, 0))
+      .toEqual([{day: '2026-07-20', weight: 135}])
   })
 })
 

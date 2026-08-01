@@ -113,7 +113,17 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // record a preference must not leave you looking at the page you started
   // from with a live workout you were never shown — least of all a persistent
   // one, which would make Start unable to reach the workout it just made.
-  await navigateFromGlobalCommand(repo, {blockId: workoutId, workspaceId})
+  //
+  // The RESULT matters: `navigateFromGlobalCommand` resolves to `null` when a
+  // navigation-policy plugin vetoes the gesture or the navigation errors, and
+  // it never rejects — so ignoring it reported success while leaving the new
+  // workout off screen, and every later Start then found that standing session
+  // and refused into the same veto. Say so instead; the session is real and
+  // the outline is where it is.
+  const shown = await navigateFromGlobalCommand(repo, {blockId: workoutId, workspaceId})
+  if (shown === null) {
+    console.warn('[strength] the session was created but could not be opened', workoutId)
+  }
 
   // Recorded only now the session exists, so a cancelled dialog leaves the
   // tracked variant exactly as it was. Narrowed to the groups the confirmed

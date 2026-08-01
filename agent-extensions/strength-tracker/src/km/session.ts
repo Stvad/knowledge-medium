@@ -740,7 +740,23 @@ const inFlight = new Set<Promise<unknown>>()
  *  "could not save that". The closed-session guard then refuses every retry.
  *  So a failure outlives its promise.
  */
-let failedEdit = false
+const failedEdits = new Set<string>()
+
+/** The workout a set belongs to, walked the way `writeSet` walks it and
+ *  without a transaction — a set can be tabbed under its neighbour or
+ *  outdented, so the parent is not where a fixed hop would look. `null` when
+ *  the chain runs out, which is what a deleted set gives. */
+const workoutOf = async (repo: Repo, setId: string): Promise<string | null> => {
+  const seen = new Set<string>([setId])
+  let current = await repo.load(setId)
+  while (current?.parentId && !seen.has(current.parentId)) {
+    seen.add(current.parentId)
+    current = await repo.load(current.parentId)
+    if (!current || current.deleted) return null
+    if (hasBlockType(current, WORKOUT_TYPE)) return current.id
+  }
+  return null
+}
 
 /** Let the set edits that were ALREADY running finish, and say whether any
  *  edit has failed since the last time this asked.
@@ -754,27 +770,58 @@ let failedEdit = false
  *  and "I know, 135 is right, finish it" is a perfectly good answer to being
  *  told the edit did not save. Tapping Finish again means you were told.
  */
-let draining: Promise<'settled' | 'failed'> | null = null
+const draining = new Map<string, Promise<'settled' | 'failed'>>()
 
-export const setEditsSettled = (): Promise<'settled' | 'failed'> => {
-  // One drain, shared by everyone who asks while it runs. Clearing the flag on
-  // read is what makes the refusal happen once — but two Finish taps that
-  // OVERLAP (the same workout in two panels, say) both awaited, both resumed,
-  // and only the first saw the failure: the second read the flag the first had
-  // just cleared and closed the session around the unsaved number. Sharing the
-  // promise means one failure produces one answer, and every caller holding
-  // that answer gets it.
-  draining ??= (async () => {
-    const results = await Promise.allSettled([...inFlight])
-    const failed = failedEdit || results.some(result => result.status === 'rejected')
-    failedEdit = false
-    return failed ? 'failed' as const : 'settled' as const
+export const setEditsSettled = (
+  repo: Repo,
+  /** The session being closed. A failure belongs to the workout whose set it
+   *  was, and nothing else: two in-progress workouts is a supported state
+   *  (nesting makes one, a peer makes the other), and a module-wide flag let
+   *  finishing B consume A's failure — B got a refusal about a set it does not
+   *  own, and A then closed around the stale value with nothing left to warn
+   *  it. */
+  workoutId: string,
+): Promise<'settled' | 'failed'> => {
+  // One drain PER WORKOUT, shared by everyone asking about that one while it
+  // runs. Consuming the failure is what makes the refusal happen once — but
+  // two Finish taps that OVERLAP (the same workout in two panels, say) both
+  // awaited, both resumed, and only the first saw it: the second read state
+  // the first had just cleared and closed around the unsaved number. Keyed,
+  // because the answer is no longer the same for every session.
+  const existing = draining.get(workoutId)
+  if (existing !== undefined) return existing
+
+  const drain = (async () => {
+    // Waited on for its own sake — an edit still running has to land before
+    // anything reads the tree. The VERDICT comes from `failedEdits`, which is
+    // scoped to a workout; a rejected write is added there by the handler
+    // `adjustSet` attached before `allSettled` attached its own, so every
+    // rejection among these is recorded by the time this resumes.
+    await Promise.allSettled([...inFlight])
+
+    const mine: string[] = []
+    for (const setId of [...failedEdits]) {
+      // Resolved now rather than recorded at write time: a rejected write may
+      // never have reached the point where it knew its own workout, and the
+      // set is still in the tree to be walked from here.
+      const owner = await workoutOf(repo, setId)
+      // A set that resolves to no workout is forgotten. HOUSEKEEPING only,
+      // and mutation-tested as such: the verdict already requires
+      // `owner === workoutId`, so an unresolvable entry could never refuse
+      // anything whether it is dropped or not. Dropping it just stops the set
+      // growing without bound and stops every later Finish re-walking it.
+      if (owner === null) failedEdits.delete(setId)
+      else if (owner === workoutId) mine.push(setId)
+    }
+    for (const setId of mine) failedEdits.delete(setId)
+    return mine.length > 0 ? 'failed' as const : 'settled' as const
   })()
-  const drain = draining
+
+  draining.set(workoutId, drain)
   // Released once it settles, so the NEXT tap gets a fresh look rather than
   // this one's cached verdict — which is the whole of "refuse once".
-  void drain.then(() => { if (draining === drain) draining = null },
-    () => { if (draining === drain) draining = null })
+  const release = () => { if (draining.get(workoutId) === drain) draining.delete(workoutId) }
+  void drain.then(release, release)
   return drain
 }
 
@@ -792,7 +839,7 @@ export const adjustSet = (
   // and through the sticky flag once it is not.
   write.then(
     () => inFlight.delete(write),
-    () => { inFlight.delete(write); failedEdit = true },
+    () => { inFlight.delete(write); failedEdits.add(setId) },
   )
   return write
 }
@@ -1027,6 +1074,15 @@ export const finishSession = async (
         // corruption.
       }
       // Denormalised so "last working weight for lift X" stays a flat scan.
+      //
+      // A SNAPSHOT taken at Finish, not a maintained cache — and it cannot be
+      // one: unticking a set of a closed session is a supported correction
+      // (that is the whole of the undo), the tick is the todo plugin's own
+      // write with no hook of ours on it, and `buildHistory` recomputes from
+      // the sets the moment it changes. So an untick leaves this value behind.
+      // Nothing in the extension reads it — progression and every view compute
+      // `workingWeight(entry)` from the sets — so it can mislead a hand-written
+      // SQL query and nothing else. The README's example reads the sets.
       // Written from what was actually performed, by the same function
       // progression judges with — not from what was prescribed.
       const weight = workingWeight({exercise: '', sets: sets.filter(isDone).map(setRecord)})

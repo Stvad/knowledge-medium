@@ -382,6 +382,36 @@ describe('the day a layoff is measured to', () => {
     expect(layoffs[0].days).toBe(35)
   })
 
+  it('does not let a MINI session record the comeback', async () => {
+    // `fullSessionDays` — what `detectPendingLayoff` measures gaps between —
+    // excludes mini days on purpose: they are habit continuity, not stimulus.
+    // Recording one anyway dated the comeback to the mini day, and because the
+    // record is keyed on `from`, the real full session back could not replace
+    // it: every later prescription then resolved against a SHORTER gap and
+    // whatever tier that fell in, so a deep re-entry could jump to a much
+    // heavier tier after one easy session.
+    const long = dayBefore(60)
+    const miniDay = dayBefore(25)
+    const fullDay = dayBefore(24)
+    const oldId = await startAndLog({day: long})
+    expect(await finishSession(repo, oldId)).toBe('done')
+
+    const mini = await startAndLog({day: miniDay, session: 'mini', lifts: [lift('Row')]})
+    expect(await closeSession(repo, WORKSPACE_ID, mini)).toBe('done')
+
+    expect(await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load())
+      .toHaveLength(0)
+
+    // …and the first FULL session back records the real return.
+    const full = await startAndLog({day: fullDay, session: 'B', lifts: [lift('Row')]})
+    expect(await closeSession(repo, WORKSPACE_ID, full)).toBe('done')
+
+    const layoffs = buildLayoffs(
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load())
+    expect(layoffs).toHaveLength(1)
+    expect(layoffs[0].to).toBe(fullDay)
+  })
+
   it('bootstraps no page at all when the finish it was for refuses', async () => {
     // A gap record needs a home, and creating that home is a WRITE — while
     // every Finish refusal is documented as writing nothing. Built eagerly, a
@@ -408,6 +438,15 @@ describe('an edit still in flight when Finish is tapped', () => {
    *  the repo through `repo.tx` alone, so this is the whole surface. */
   const writesFail = {tx: async () => { await Promise.resolve(); throw new Error('the write failed') }}
 
+  /** A real set under the workout — the failure is scoped to the session that
+   *  OWNS the set now, so a made-up id would be dropped as belonging to no
+   *  session at all (which is itself asserted below). */
+  const aSetOf = async (workoutId: string): Promise<string> => {
+    const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await liveChildren(entry.id, SET_TYPE)
+    return set.id
+  }
+
   it('refuses rather than closing around the number that never landed', async () => {
     // The blur commits the weight field, the click commits the session, and
     // the two are independent transactions with nothing sequencing them. Lose
@@ -415,7 +454,7 @@ describe('an edit still in flight when Finish is tapped', () => {
     // `closed` — pointing you at a reopen the extension does not offer.
     const workoutId = await startAndLog()
 
-    const write = adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+    const write = adjustSet(writesFail as unknown as Repo, await aSetOf(workoutId), {set: {weight: 145}})
     write.catch(() => {})
     // Called with the write still in flight — no await between them, which is
     // exactly the gap between mousedown and mouseup on the Finish button.
@@ -431,7 +470,7 @@ describe('an edit still in flight when Finish is tapped', () => {
     // closed around the old number while the row was saying "could not save
     // that", and the closed-session guard refused every retry after.
     const workoutId = await startAndLog()
-    await adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+    await adjustSet(writesFail as unknown as Repo, await aSetOf(workoutId), {set: {weight: 145}})
       .catch(() => {})
 
     expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('edit-failed')
@@ -452,7 +491,7 @@ describe('an edit still in flight when Finish is tapped', () => {
     // unsaved number. Started without awaiting between them, which is the
     // whole scenario.
     const workoutId = await startAndLog()
-    await adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+    await adjustSet(writesFail as unknown as Repo, await aSetOf(workoutId), {set: {weight: 145}})
       .catch(() => {})
 
     const [first, second] = await Promise.all([
@@ -464,11 +503,39 @@ describe('an edit still in flight when Finish is tapped', () => {
     expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
   })
 
+  it('does not let one workout consume another workout\'s failure', async () => {
+    // Two live sessions is a supported state — nesting makes one, a peer makes
+    // the other. A module-wide flag let finishing B consume A's failure: B got
+    // a refusal about a set it does not own, and A then closed around the
+    // stale value with nothing left to warn it. Both halves asserted.
+    const mine = await startAndLog()
+    const theirs = await startAndLog({day: '2026-07-25', session: 'B', lifts: [lift('Row')]})
+    await adjustSet(writesFail as unknown as Repo, await aSetOf(mine), {set: {weight: 145}})
+      .catch(() => {})
+
+    // Not theirs to answer for…
+    expect(await closeSession(repo, WORKSPACE_ID, theirs)).toBe('done')
+    // …and still mine to be told about.
+    expect(await closeSession(repo, WORKSPACE_ID, mine)).toBe('edit-failed')
+    expect(await closeSession(repo, WORKSPACE_ID, mine)).toBe('done')
+  })
+
+  it('lets an unrelated session close when a failed set belongs to no workout', async () => {
+    // A deleted set — or, here, one that never existed. The verdict requires
+    // the failure to be THIS workout's, so an unresolvable one cannot refuse
+    // anything. (The matching delete inside the drain is housekeeping and is
+    // deliberately not what this pins; see its comment.)
+    const workoutId = await startAndLog()
+    await adjustSet(writesFail as unknown as Repo, 'never-existed', {weight: 5}).catch(() => {})
+
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
+  })
+
   it('does not carry a reported failure into an unrelated later Finish', async () => {
     // The same clearing from the other side: a failure already reported must
     // not still be sitting there when you close the NEXT session.
     const first = await startAndLog()
-    await adjustSet(writesFail as unknown as Repo, 'some-set', {weight: 5}).catch(() => {})
+    await adjustSet(writesFail as unknown as Repo, await aSetOf(first), {weight: 5}).catch(() => {})
     expect(await closeSession(repo, WORKSPACE_ID, first)).toBe('edit-failed')
     expect(await closeSession(repo, WORKSPACE_ID, first)).toBe('done')
 

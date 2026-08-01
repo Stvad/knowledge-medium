@@ -41,7 +41,8 @@ plain km blocks.
   one of them is queryable, referenceable, undoable and hand-editable on its
   own, and the session still reads as a session with the extension removed.
   The entry keeps a denormalised working weight so "last weight for lift X"
-  stays a flat scan.
+  stays a flat scan — a snapshot taken at Finish, not a maintained cache: see
+  the SQL section for why to read the sets instead.
 
 The one non-obvious modelling call: the re-entry table's *load-cutting* tiers
 are global (a real break detrains everything), but "repeat, no jump" is
@@ -90,11 +91,17 @@ day-rollover hour, cadence, rounding).
 ## SQL sanity checks
 
 ```sql
--- last working weight for an exercise
-SELECT json_extract(properties_json, '$.strength:workingWeight') AS weight
-FROM blocks
-WHERE json_extract(properties_json, '$.strength:exercise') = 'Bench press'
-ORDER BY created_at DESC LIMIT 1;
+-- last working weight for an exercise, from the SETS you actually ticked.
+-- `strength:workingWeight` on the entry is a snapshot taken at Finish and is
+-- not maintained: unticking a set of a closed session is a supported
+-- correction, and it leaves that number behind. The sets are the record.
+SELECT s.id, json_extract(s.properties_json, '$.strength:weight') AS weight
+FROM blocks e
+JOIN blocks s ON s.parent_id = e.id AND coalesce(s.deleted, 0) = 0
+WHERE json_extract(e.properties_json, '$.strength:exercise') = 'Bench press'
+  AND json_extract(s.properties_json, '$.status') = 'done'
+ORDER BY e.created_at DESC, s.order_key
+LIMIT 5;
 
 -- all bench workouts since June
 SELECT b.content
