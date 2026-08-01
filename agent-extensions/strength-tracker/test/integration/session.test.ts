@@ -212,7 +212,7 @@ describe('startSession — one tap stamps the whole session', () => {
 })
 
 describe('finishSession — closing without deleting anything', () => {
-  it('flips the workout done, untags un-performed sets from todo while keeping them, and stamps the performed working weight', async () => {
+  it('flips the workout done, keeps every set block, and stamps the performed working weight', async () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 3)]))
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     const sets = await childrenOf(entry.id, SET_TYPE)
@@ -237,10 +237,10 @@ describe('finishSession — closing without deleting anything', () => {
     expect(await isBlockDeleted(repo, sets[2].id)).toBe(false)
     expect(hasBlockType(repo.block(sets[2].id).peek()!, SET_TYPE)).toBe(true)
     // …it just stops claiming to be an outstanding task, so it leaves every
-    // open-todo query instead of sitting in them forever.
+    // open-todo query instead of sitting in them forever. So does the
+    // performed one — see 'a closed session is a record, not a form'.
     expect(hasBlockType(repo.block(sets[2].id).peek()!, TODO_TYPE)).toBe(false)
-    // The performed one keeps both tags and its tick.
-    expect(hasBlockType(repo.block(sets[0].id).peek()!, TODO_TYPE)).toBe(true)
+    // The performed one keeps its tick, which is what history reads.
     expect(repo.block(sets[0].id).peekProperty(todoStatusProp)).toBe('done')
     // …and Finish stamps when it happened. Nothing else writes this — the
     // native checkbox sets only `status` — and it is the only thing that
@@ -703,5 +703,73 @@ describe('an entry whose plan block appears or disappears between taps', () => {
     ] as const)))
     expect(byDef.get('def-ohp')).toBe(3)
     expect(byDef.get('bare')).toBe(1)
+  })
+})
+
+describe('a closed session is a record, not a form', () => {
+  it('takes the checkbox off every set, performed ones included', async () => {
+    // Untagging only the skipped sets left the performed ones tickable. One
+    // tap unticks a set of a session that can never be finished again:
+    // `buildHistory` drops it from progression while the entry keeps the
+    // working weight stamped from it, and the two disagree for good.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    await tick(sets[0].id)
+
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    for (const set of sets) {
+      expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(false)
+      expect(hasBlockType(repo.block(set.id).peek()!, SET_TYPE)).toBe(true)
+    }
+    // Done-ness lives in `status`, which is what history reads — untouched,
+    // so the record still says what was performed.
+    expect(repo.block(sets[0].id).peekProperty(todoStatusProp)).toBe('done')
+    expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(135)
+  })
+
+  it('counts a set indented under a note, rather than leaving it out of the record', async () => {
+    // Indenting a set under a note you typed is an ordinary outline gesture.
+    // Scanning only direct children omits it from history AND leaves it behind
+    // as an open todo under a session that can never be finished again.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'a-note', workspaceId: WORKSPACE_ID, parentId: entry.id, orderKey: 'a1',
+        content: 'felt tight, went lighter',
+      })
+      await tx.move(set.id, {parentId: 'a-note', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'indent the set under a note'})
+    await tick(set.id)
+
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(135)
+    expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(false)
+  })
+})
+
+describe('typing a starting weight', () => {
+  it('sets the value outright rather than nudging from it', async () => {
+    // A lift with no history stamps at 0; reaching 135 with the ± button is
+    // 27 taps. The typed path is a separate field so the delta path can never
+    // be handed an absolute and quietly lose a tap.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Bench press', 1, {sets: [{weight: 0, reps: 8}]}),
+    ]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+
+    expect(await adjustSet(repo, set.id, {set: {weight: 135}})).toBe('written')
+    expect(repo.block(set.id).peekProperty(weightProp)).toBe(135)
+    expect(repo.block(set.id).peek()?.content).toBe('135lb × 8')
+
+    // Typed again from a NON-zero value, which is the only thing that tells
+    // "set to" apart from "add": from 0 the two agree.
+    expect(await adjustSet(repo, set.id, {set: {weight: 100}})).toBe('written')
+    expect(repo.block(set.id).peekProperty(weightProp)).toBe(100)
   })
 })

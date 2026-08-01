@@ -89,6 +89,18 @@ export const StartSessionDialog = ({
         </p>
       </div>
 
+      {prescription.reentry ? (
+        <p className="rounded border border-border bg-muted/40 p-2 text-xs">
+          {prescription.reentry.banner}
+        </p>
+      ) : null}
+
+      {prescription.notes.length > 0 ? (
+        <ul className="flex list-disc flex-col gap-0.5 pl-4 text-xs text-muted-foreground">
+          {prescription.notes.map(note => <li key={note}>{note}</li>)}
+        </ul>
+      ) : null}
+
       {warnings.length > 0 ? (
         <ul className="flex flex-col gap-1 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
           {warnings.map(warning => <li key={warning}>{warning}</li>)}
@@ -129,12 +141,29 @@ export const StartSessionDialog = ({
         </span>
         <ul className="mt-1 flex flex-col gap-0.5 text-sm">
           {prescription.exercises.map((exercise, index) => (
-            <li key={`${exercise.exercise}-${index}`} className="flex justify-between gap-3">
-              <span>{exercise.exercise}</span>
-              <span className="shrink-0 tabular-nums text-muted-foreground">
-                {exercise.sets}×{exercise.repMax ?? exercise.repMin ?? '?'}
-                {exercise.weight !== undefined ? ` @ ${exercise.weight}` : ''}
-              </span>
+            <li key={`${exercise.exercise}-${index}`} className="flex flex-col gap-0.5">
+              <div className="flex justify-between gap-3">
+                <span>{exercise.exercise}</span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">
+                  {exercise.sets}×{exercise.repMax ?? exercise.repMin ?? '?'}
+                  {exercise.weight !== undefined ? ` @ ${exercise.weight}` : ''}
+                </span>
+              </div>
+              {/* Where the number came from. The plan's whole point is that it
+                  is never a mystery, and this preview is the only place it is
+                  said now — nothing stamps it onto the blocks. */}
+              <span className="text-xs text-muted-foreground">{exercise.rationale}</span>
+              {exercise.note ? (
+                <span className="text-xs text-muted-foreground">{exercise.note}</span>
+              ) : null}
+              {(exercise.videos ?? []).length > 0 ? (
+                <span className="flex flex-wrap gap-2 text-xs">
+                  {(exercise.videos ?? []).map(video => (
+                    <a key={video.url} href={video.url} target="_blank" rel="noreferrer"
+                      className="underline decoration-dotted">{video.label}</a>
+                  ))}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>

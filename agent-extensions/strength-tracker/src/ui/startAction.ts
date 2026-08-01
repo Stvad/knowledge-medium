@@ -25,7 +25,10 @@ export const START_SESSION_ACTION_ID = 'strength.startSession'
 
 const runStartSession = async (repo: Repo): Promise<void> => {
   const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId) return
+  // Nothing here is readable-only: it bootstraps the log page and settings
+  // block before the dialog even opens. The footer and the set controls
+  // already refuse; this was the one write path that did not.
+  if (!workspaceId || repo.isReadOnly) return
 
   // Captured once: the dialog can sit open across midnight, and re-reading
   // the clock at stamp time would file the session on a different training

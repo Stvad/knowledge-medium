@@ -374,7 +374,12 @@ const numberAt = (block: BlockData, field: string, fallback: number): number =>
 export const adjustSet = async (
   repo: Repo,
   setId: string,
-  delta: {weight?: number; reps?: number},
+  /** A relative nudge, or — for `set` — an outright value. `set` exists for
+   *  typing a starting weight: a lift with no history stamps at 0, and
+   *  dialling that to 135 with a ± button is 27 taps. It is deliberately a
+   *  different field, so the delta path cannot be accidentally handed an
+   *  absolute and lose a tap. */
+  delta: {weight?: number; reps?: number; set?: {weight?: number; reps?: number}},
 ): Promise<'written' | 'gone' | 'closed'> =>
   repo.tx(async tx => {
     const block = await tx.get(setId)
@@ -398,8 +403,8 @@ export const adjustSet = async (
 
     const previousWeight = numberAt(block, FIELD.weight, 0)
     const previousReps = numberAt(block, FIELD.reps, 0)
-    const weight = Math.max(0, previousWeight + (delta.weight ?? 0))
-    const reps = Math.max(0, previousReps + (delta.reps ?? 0))
+    const weight = Math.max(0, delta.set?.weight ?? previousWeight + (delta.weight ?? 0))
+    const reps = Math.max(0, delta.set?.reps ?? previousReps + (delta.reps ?? 0))
     // Sets logged before this redesign carry no `strength:unit` — it lived on
     // the entry — so reading the set alone would rewrite "185lb × 5" as
     // "185 × 5", stripping the unit from a record meant to stay readable
@@ -442,6 +447,24 @@ export type FinishOutcome =
    *  nothing: an empty tree is never consent to commit an empty record. */
   | 'nothing-logged'
 
+/** Every set in a subtree, however deep.
+ *
+ *  Sets DESCEND rather than only sit as direct children: indenting one under
+ *  a note you typed is an ordinary outline gesture, and a direct-children
+ *  scan silently omits it from the record while leaving it behind as an open
+ *  todo under a session that can never be finished again. Bounded so
+ *  hand-edited parentage cannot spin. */
+const setsUnder = async (tx: Tx, rootId: string, depth = 0): Promise<BlockData[]> => {
+  if (depth > 4) return []
+  const found: BlockData[] = []
+  for (const child of await tx.childrenOf(rootId, undefined, {hidePropertyChildren: true})) {
+    if (child.deleted) continue
+    if (hasBlockType(child, SET_TYPE)) found.push(child)
+    else found.push(...await setsUnder(tx, child.id, depth + 1))
+  }
+  return found
+}
+
 /** Every set block under a workout, with the entry it belongs to. */
 const setsOf = async (
   tx: Tx,
@@ -450,9 +473,7 @@ const setsOf = async (
   const out: {entry: BlockData; sets: BlockData[]}[] = []
   for (const entry of await tx.childrenOf(workoutId, undefined, {hidePropertyChildren: true})) {
     if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) continue
-    const sets = (await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true}))
-      .filter(child => hasBlockType(child, SET_TYPE))
-    out.push({entry, sets})
+    out.push({entry, sets: await setsUnder(tx, entry.id)})
   }
   return out
 }
@@ -513,13 +534,18 @@ export const finishSession = async (
 
     for (const {entry, sets} of tree) {
       for (const set of sets) {
-        if (!isDone(set)) {
-          if (hasBlockType(set, TODO_TYPE)) await repo.removeTypeInTx(tx, set.id, TODO_TYPE)
-          continue
-        }
-        if (set.properties[FIELD.completedAt] === undefined) {
+        if (isDone(set) && set.properties[FIELD.completedAt] === undefined) {
           await tx.setProperty(set.id, completedAtProp, finishedAt)
         }
+        // EVERY set stops being a todo, performed or not — a closed session is
+        // a record, and a record holds no outstanding tasks. Untagging only the
+        // skipped ones left the performed sets with a live checkbox, and one
+        // tap unticks a set of a session that can never be finished again:
+        // `buildHistory` drops it from progression while the entry keeps the
+        // working weight stamped from it. Done-ness lives in the `status`
+        // property, which is what history reads and which this leaves alone —
+        // so this changes what you can DO to the record, not what it says.
+        if (hasBlockType(set, TODO_TYPE)) await repo.removeTypeInTx(tx, set.id, TODO_TYPE)
       }
       // Denormalised so "last working weight for lift X" stays a flat scan.
       // Written from what was actually performed, by the same function

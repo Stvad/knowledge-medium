@@ -38,6 +38,12 @@ const StrengthLogContent: BlockRenderer = ({block}: BlockRendererProps) => {
   useEffect(() => {
     if (!workspaceId) return
     let cancelled = false
+    // Dropped back to the defaults FIRST: the panel swaps workspaces without
+    // remounting, and history is already reactive — so keeping the previous
+    // workspace's config would render this workspace's sessions against
+    // someone else's lift names, units and milestones for as long as the read
+    // takes, and for good if it fails.
+    setConfig(DEFAULT_CONFIG)
     void readProgram(repo, workspaceId)
       .then(snapshot => { if (!cancelled) setConfig(snapshot.config) })
       .catch((error: unknown) => console.error('[strength] could not read the plan outline', error))
