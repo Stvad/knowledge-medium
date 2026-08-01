@@ -196,6 +196,17 @@ describe('sticky rows', () => {
   }
   const row = (id: string): BlockData => ({id, parentId: 'sec'} as BlockData)
 
+  /** Same hook, but handing back the whole rows so a test can look at their
+   *  `parentId` rather than just the id order. */
+  const RowProbe = ({live, onRender}: {
+    live: readonly BlockData[]
+    onRender: (rows: readonly BlockData[]) => void
+  }) => {
+    const [rows] = useStickyRows(live)
+    onRender(rows)
+    return <span>{rows.map(r => `${r.id}@${r.parentId}`).join(',')}</span>
+  }
+
   it('keeps a row that dropped out of the live set', async () => {
     // What "mark reviewed" does. Without this the row vanishes and everything
     // below jumps up under the cursor — the problem SRS review answers with a
@@ -221,6 +232,38 @@ describe('sticky rows', () => {
     })
 
     expect(latest).toEqual(['a', 'c'])
+  })
+
+  it('takes the LIVE copy of a row that is still in the query', async () => {
+    // `parentId` decides which group a highlight renders under, and it changes
+    // under us when the highlight is moved while the page is open. Retaining
+    // the first-seen row unconditionally would pin it to its old document.
+    let latest: readonly BlockData[] = []
+    const capture = (rows: readonly BlockData[]) => { latest = rows }
+    const moved = {id: 'a', parentId: 'sec-b'} as BlockData
+    const {rerender} = render(
+      <RowProbe live={[row('a')]} onRender={capture}/>,
+    )
+    expect(latest[0]!.parentId).toBe('sec')
+
+    await act(async () => { rerender(<RowProbe live={[moved]} onRender={capture}/>) })
+
+    expect(latest[0]!.parentId).toBe('sec-b')
+  })
+
+  it('keeps the last-seen copy of a row that dropped out', async () => {
+    // For a just-reviewed row the stale parent is the RIGHT answer: it is where
+    // the row was when you saw it, so it stays put instead of jumping groups.
+    let latest: readonly BlockData[] = []
+    const capture = (rows: readonly BlockData[]) => { latest = rows }
+    const {rerender} = render(
+      <RowProbe live={[row('a'), row('b')]} onRender={capture}/>,
+    )
+
+    await act(async () => { rerender(<RowProbe live={[row('b')]} onRender={capture}/>) })
+
+    expect(latest.map(r => r.id)).toEqual(['a', 'b'])
+    expect(latest[0]!.parentId).toBe('sec')
   })
 
   it('drops the done rows on reset', async () => {

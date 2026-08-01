@@ -248,6 +248,33 @@ describe('daily-note backlog hint', () => {
     expect(hint()).toBeNull()
   })
 
+  describe('across midnight', () => {
+    // `shouldAdvanceTime` keeps real async (DB work, the count fetch) moving
+    // while the timers themselves are controllable.
+    beforeEach(() => { vi.useFakeTimers({shouldAdvanceTime: true}) })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('hides the hint on a note left open past midnight', async () => {
+      // The contribution's today-check runs once, when the decorator set is
+      // resolved — so the component has to re-check the date itself, or an
+      // open note keeps a hint that now belongs on a different page.
+      const {repo, runtime} = setup()
+      await seedOverdueHighlight(repo, 'hl-1')
+      const today = await getOrCreateDailyNote(repo, WS, todayIso())
+      await renderDailyNote(repo, runtime, today.id)
+      await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+
+      const tomorrow = new Date()
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      tomorrow.setHours(0, 1, 0, 0)
+      vi.setSystemTime(tomorrow)
+      // Let the shared rollover ticker notice the new calendar day.
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+
+      expect(hint()).toBeNull()
+    })
+  })
+
   it('serves several consumers from ONE query', async () => {
     const {repo, runtime} = setup()
     await seedOverdueHighlight(repo, 'hl-1')

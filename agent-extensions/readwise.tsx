@@ -1616,6 +1616,10 @@ const runSync = async (repo: any, { silent = false } = {}) => {
 
     const finishedAt = new Date().toISOString()
     await prefs.set(lastSyncedAtProp, finishedAt)
+    // A sync is the other thing that changes the backlog count (new highlights
+    // arrive already scheduled). The count is cached rather than subscribed, so
+    // the writers have to say when it moved — see `invalidateBacklogCount`.
+    invalidateBacklogCount()
     progress?.done(bookCount === 0
       ? undefined
       : `Readwise: synced ${bookCount} book(s), ${highlightCount} highlight(s)`)
@@ -1921,16 +1925,28 @@ const useUnreviewedHighlights = (workspaceId: string): BlockData[] => {
  *  it was and dims (the reviewed content decorator does that), so "where was I"
  *  is answered by the screen. `reset` re-syncs to live and clears the done ones.
  *
- *  Only `id` and `parentId` are read off the retained rows, and neither changes
- *  under us, so keeping the pre-review snapshot of a row costs nothing. */
+ *  A retained row is only ever a FALLBACK. Rows still in the live query are
+ *  replaced with the live copy, because `parentId` — which decides the group a
+ *  highlight renders under — does change under us when the highlight is moved
+ *  while the page is open. Only rows that have dropped out of the query (the
+ *  just-reviewed ones) keep their last-seen snapshot, and for those the stale
+ *  parent is the correct answer: it's where the row was when you saw it. */
 export const useStickyRows = (
   live: readonly BlockData[],
 ): readonly [readonly BlockData[], () => void] => {
   const [sticky, setSticky] = useState<readonly BlockData[]>(live)
   const merged = useMemo(() => {
+    const liveById = new Map(live.map(row => [row.id, row]))
+    const refreshed = sticky.map(row => liveById.get(row.id) ?? row)
     const known = new Set(sticky.map(row => row.id))
     const additions = live.filter(row => !known.has(row.id))
-    return additions.length === 0 ? sticky : [...sticky, ...additions]
+    const next = additions.length === 0 ? refreshed : [...refreshed, ...additions]
+    // `map` always allocates, so identity has to be re-established explicitly:
+    // the converge-during-render below compares by reference, and a fresh array
+    // every render would set state every render — an infinite loop.
+    const unchanged = next.length === sticky.length
+      && next.every((row, i) => row === sticky[i])
+    return unchanged ? sticky : next
   }, [sticky, live])
   // Converge during render (React's "adjust state while rendering" path) so the
   // first paint after a query result already includes the new rows.
@@ -1991,8 +2007,11 @@ const BacklogGroupSection = ({
   const documentBlock = ancestors.at(-1)
   // Each highlight's parents = the section's ancestors plus the section itself.
   // Handing these to the entry saves it firing its own ancestor query per row.
+  // `sectionId` is '' for a highlight sitting at the workspace root (moved out
+  // of its document). There is no section block to name, and `repo.block('')`
+  // would mint a facade for an id that can never resolve.
   const itemParents = useMemo(
-    () => [...ancestors, repo.block(group.sectionId)],
+    () => (group.sectionId ? [...ancestors, repo.block(group.sectionId)] : EMPTY_ANCESTORS),
     [ancestors, repo, group.sectionId],
   )
 
@@ -2040,7 +2059,7 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
 
   const groups = useMemo(() => groupHighlightsBySection(rows), [rows])
   const sectionBlocks = useMemo(
-    () => groups.map(group => repo.block(group.sectionId)),
+    () => groups.filter(group => group.sectionId).map(group => repo.block(group.sectionId)),
     [groups, repo],
   )
   // ONE ancestor round-trip for every group, rather than one per group — this
@@ -2240,11 +2259,17 @@ const DailyNoteBacklogHint = ({ block, Inner }: BlockRendererProps & { Inner: Bl
   const repo = useRepo()
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const count = useBacklogCount(workspaceId)
+  // The contribution's today-check runs once, when the decorator set is
+  // resolved. Leave this note open across local midnight and it would keep a
+  // hint that now belongs on a different page — so re-check here against the
+  // shared rollover ticker, which re-renders us the minute the date turns.
+  const startOfToday = useStartOfToday()
+  const isToday = block.id === dailyNoteBlockId(workspaceId, todayIso(new Date(startOfToday)))
 
   return (
     <>
       <Inner block={block}/>
-      {!!count && (
+      {isToday && !!count && (
         <button
           type="button"
           data-block-interaction="ignore"
@@ -2271,7 +2296,12 @@ const decorateDailyNoteWithBacklogHint = cachedContentDecorator(
 /** Only on TODAY's daily note, and only when it is the focal document. Every
  *  past daily note carrying this would be noise, and `isTopLevel` keeps it off
  *  breadcrumbs, embeds and backlink entries — where it would render once per
- *  occurrence. */
+ *  occurrence.
+ *
+ *  This gate is the cheap PRE-filter: it runs once per decorator resolution, so
+ *  a past note never mounts the component and never triggers a count query. The
+ *  component re-checks the date itself for the case this can't see — the note
+ *  staying open across midnight. */
 const readwiseDailyNoteBacklogDecorator: BlockContentDecoratorContribution = ctx => {
   if (!ctx.types.includes(DAILY_NOTE_TYPE)) return null
   if (!ctx.isTopLevel) return null
