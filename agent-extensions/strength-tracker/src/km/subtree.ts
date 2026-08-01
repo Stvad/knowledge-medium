@@ -8,9 +8,8 @@
  */
 
 import type {BlockData} from '@/data/api/index.js'
-import {hasBlockType} from '@/data/properties.js'
 
-import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
+import {asEntry, asSet, asWorkout} from './records'
 
 export type ChildReader = (parentId: string) => Promise<readonly BlockData[]>
 
@@ -33,7 +32,7 @@ export const nestedWorkouts = async (
       seen.add(child.id)
       // Not descended into: whatever is under another workout belongs to THAT
       // record, and one hit is all a refusal needs.
-      if (hasBlockType(child, WORKOUT_TYPE)) { found.push(child); continue }
+      if (asWorkout(child) !== null) { found.push(child); continue }
       await walk(child.id)
     }
   }
@@ -79,10 +78,11 @@ export const discardTally = async (
       // Another workout's contents are its own, not this one's — counting them
       // would describe a deletion that is refused rather than performed. See
       // `nestedWorkouts`, which is what refuses it.
-      if (hasBlockType(child, WORKOUT_TYPE)) continue
-      if (hasBlockType(child, SET_TYPE)) {
-        if (child.properties[FIELD.todoStatus] === 'done') tally.logged += 1
-      } else if (!hasBlockType(child, EXERCISE_ENTRY_TYPE)) {
+      if (asWorkout(child) !== null) continue
+      const set = asSet(child)
+      if (set !== null) {
+        if (set.done) tally.logged += 1
+      } else if (asEntry(child) === null) {
         tally.yours += 1
       }
       await walk(child.id)

@@ -40,6 +40,7 @@ import {isExpendableLine} from '../ui/placement'
 import {dateToDay, dayToDate, storedDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {writeLayoffInTx} from './store'
+import {asSet, asWorkout} from './records'
 import {discardTally, type DiscardTally} from './subtree'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
 import {
@@ -74,7 +75,9 @@ const setContent = (set: PlannedSet, unit: string): string =>
 /** Which training day a raw `date` property lands on, read the way the
  *  readers read it: `undefined` for anything that doesn't decode as a day.
  *  Through `storedDate`, so a date typed into the property editor names the
- *  day it says rather than the one before. */
+ *  day it says rather than the one before.
+ *
+ *  Still here for the layoff record, which `asWorkout` does not cover. */
 const liveDay = (raw: unknown): string | undefined => {
   if (typeof raw !== 'string') return undefined
   const date = new Date(raw)
@@ -98,11 +101,13 @@ const liveDay = (raw: unknown): string | undefined => {
  *  id-based lookup: every scan feeding this queries BY type, so tolerating an
  *  untagged block would only ever reach one filed under the parent being
  *  stamped into. Every other reader gates on the tag too, so removing it takes
- *  a block out of the strength world entirely. */
-const isStandingToday = (block: BlockData, day: string): boolean =>
-  hasBlockType(block, WORKOUT_TYPE)
-  && block.properties[FIELD.status] === 'in-progress'
-  && liveDay(block.properties[FIELD.date]) === day
+ *  a block out of the strength world entirely — which `asWorkout` is now the
+ *  one statement of. */
+const isStandingToday = (block: BlockData, day: string): boolean => {
+  const workout = asWorkout(block)
+  return workout !== null && workout.live && workout.on !== null
+    && dateToDay(workout.on) === day
+}
 
 /** Which of several live sessions a tap continues: the most recently STARTED.
  *
@@ -473,14 +478,12 @@ const writeSet = async (
 ): Promise<'written' | 'gone' | 'closed'> =>
   repo.tx(async tx => {
     const block = await tx.get(setId)
-    if (!block || block.deleted) return 'gone' as const
-    // The TYPE, not just liveness — the fourth reader to need this and the
-    // same rule as `isStandingToday` / `checkFinishable` / `discardSession`.
-    // `strength:weight` and `strength:reps` survive an untag, so a control
-    // rendered from a block that has since left the strength world would go on
-    // rewriting its numbers AND its content line, restamping a `135lb × 8`
-    // over whatever it says now.
-    if (!hasBlockType(block, SET_TYPE)) return 'gone' as const
+    // The TYPE, not just liveness — `strength:weight` and `strength:reps`
+    // survive an untag, so a control rendered from a block that has since left
+    // the strength world would go on rewriting its numbers AND its content
+    // line, restamping a `135lb × 8` over whatever it says now. One statement
+    // of that, in `asSet`, because this was the fourth reader to need it.
+    if (block === null || asSet(block) === null) return 'gone' as const
 
     // Walked, not hopped: a set tabbed under its neighbour or outdented up to
     // the workout is an ordinary outline gesture, and a fixed set→entry→
@@ -810,22 +813,15 @@ const anyStillATrainingDay = async (
   basis: readonly BasisWorkout[],
 ): Promise<boolean> => {
   for (const {id, date} of basis) {
-    const block = await tx.get(id)
-    if (!block || block.deleted) continue
-    if (!hasBlockType(block, WORKOUT_TYPE)) continue
-    if (block.properties[FIELD.status] === 'in-progress') continue
+    const workout = asWorkout(await tx.get(id))
+    if (workout === null || workout.live) continue
     // `fullSessionDays` excludes mini days, so a day held up only by one was
     // never the basis to begin with — and flipping a basis workout TO mini
     // takes it out of the reckoning just as re-dating it does.
-    if (block.properties[FIELD.session] === 'mini') continue
-    const raw = block.properties[FIELD.date]
-    if (typeof raw !== 'string') continue
-    const on = new Date(raw)
-    if (Number.isNaN(on.getTime()) || storedDate(on).toISOString() !== date) continue
+    if (workout.isMini) continue
+    if (workout.on === null || workout.on.toISOString() !== date) continue
     const tree = await setsOf(tx, id)
-    if (tree.some(({sets}) => sets.some(set => set.properties[FIELD.todoStatus] === 'done'))) {
-      return true
-    }
+    if (tree.some(({sets}) => sets.some(set => asSet(set)?.done === true))) return true
   }
   return false
 }
@@ -928,12 +924,12 @@ const checkFinishable = async (
   // Read here rather than trusted from the caller: another client can close
   // this workout between the tap and this transaction opening.
   const workout = await tx.get(workoutId)
-  if (!workout || workout.deleted) return {blocked: 'gone'}
-  // The type too: `strength:status` survives an untag, so without this the one
-  // reader that still treated an untyped block as a live session would be the
-  // one that writes to it. See `isStandingToday`.
-  if (!hasBlockType(workout, WORKOUT_TYPE)) return {blocked: 'gone'}
-  if (workout.properties[FIELD.status] !== 'in-progress') return {blocked: 'gone'}
+  // Missing, deleted, untyped and not-in-progress are one answer to this
+  // caller. `asWorkout` is where "not ours" is decided — without it, the one
+  // reader still treating an untyped block as a live session would be the one
+  // that WRITES to it, which is how this hole was found twice.
+  const view = asWorkout(workout)
+  if (workout === null || view === null || !view.live) return {blocked: 'gone'}
 
   // Checked before anything is written: closing around a set history cannot
   // read would report the session recorded while progression never sees the
@@ -944,8 +940,7 @@ const checkFinishable = async (
   // The session KIND, for the same reason: it decided whether a layoff is
   // recorded at all, and closing on a decision its premise no longer supports
   // loses the record permanently rather than merely misfiling it.
-  if (expected?.mini !== undefined
-    && (workout.properties[FIELD.session] === 'mini') !== expected.mini) {
+  if (expected?.mini !== undefined && view.isMini !== expected.mini) {
     return {blocked: 'changed'}
   }
   // And the history the gap was measured across — the last full session day.

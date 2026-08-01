@@ -19,9 +19,9 @@ import type {
   LayoffRecord, Prescription, ProgramConfig, SessionType, WorkoutRecord,
 } from '../engine/types'
 import {configFor, loadPlanSource, type PlanSource} from './config'
-import {storedDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {buildHistory, buildLayoffs} from './history'
+import {asWorkout} from './records'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
 // `mostRecentlyStarted` lives beside the stamp, not here: this pre-check and
 // the transaction that adopts have to name the SAME session.
@@ -130,13 +130,11 @@ export const standingSession = async (
 ): Promise<string | null> => {
   const day = trainingDay(now, snapshot.config.dayRolloverHour)
   const rows = await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load()
-  const live: BlockData[] = (rows as BlockData[]).filter(row =>
-    !row.deleted
-    && row.properties[FIELD.status] === 'in-progress'
-    && typeof row.properties[FIELD.date] === 'string'
-    && trainingDay(
-      storedDate(new Date(row.properties[FIELD.date] as string)),
-      snapshot.config.dayRolloverHour) === day)
+  const live: BlockData[] = (rows as BlockData[]).filter(row => {
+    const workout = asWorkout(row)
+    return workout !== null && workout.live && workout.on !== null
+      && trainingDay(workout.on, snapshot.config.dayRolloverHour) === day
+  })
   return mostRecentlyStarted(live)
 }
 
@@ -184,18 +182,17 @@ export const closeSession = async (
   // turns that into `undated` — which tells you to set a date on a workout
   // that is not there. `finishSession` would say `gone`; say it here too.
   if (!workout || workout.deleted) return 'gone'
-  const stored = workout.properties[FIELD.date]
   // `trainingDay`, matching `detectPendingLayoff`, which decodes the history
   // it compares against the same way (`fullSessionDays`). Decoding this one
   // call site differently would put the gap's two ends on different scales.
   // What made the two disagree was an unbounded `rolloverHour`; that is
   // constrained where it is read — see `applySettings`.
-  // `storedDate` first: a date typed into the property editor is UTC midnight,
-  // whose LOCAL day is the one before west of UTC — so repairing a workout's
-  // date would file its layoff against the wrong day. See `storedDate`.
-  const performedOn = typeof stored === 'string' && !Number.isNaN(new Date(stored).getTime())
-    ? trainingDay(storedDate(new Date(stored)), snapshot.config.dayRolloverHour)
-    : null
+  // The instant comes from `asWorkout`, which normalises it: a date typed into
+  // the property editor is UTC midnight, whose LOCAL day is the one before west
+  // of UTC — so repairing a workout's date would file its layoff against the
+  // wrong day. See `storedDate`.
+  const view = asWorkout(workout)
+  const performedOn = view?.on ? trainingDay(view.on, snapshot.config.dayRolloverHour) : null
   // `strength:date` is hand-editable. Cleared or corrupted, substituting the
   // clock would close a workout that `buildHistory` then drops whole — the
   // session gone from progression, its todos already stripped, and no way
@@ -210,7 +207,7 @@ export const closeSession = async (
   // gap and whatever tier that fell in, so a deep re-entry could jump to a
   // much heavier tier after one easy session. The first full session records
   // the actual return.
-  const isMini = workout.properties[FIELD.session] === 'mini'
+  const isMini = view?.isMini === true
   const pending = isMini ? null : detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
   // WHICH record satisfied the check, not merely that one did — writing nothing
   // because a record already covers the gap is a decision resting on that row,

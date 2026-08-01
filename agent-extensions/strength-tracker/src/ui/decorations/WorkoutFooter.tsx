@@ -14,7 +14,7 @@ import {openDialog} from '@/utils/dialogs.js'
 import type {Block} from '@/data/block.js'
 import {useData, useWorkspaceId} from '@/hooks/block.js'
 
-import {FIELD} from '../../km/fields'
+import {asSet, asWorkout} from '../../km/records'
 import {discardCounts, type FinishOutcome} from '../../km/session'
 import type {DiscardTally} from '../../km/subtree'
 import {ConfirmDialog} from '../ConfirmDialog'
@@ -55,27 +55,23 @@ const whatGoes = ({logged, yours}: DiscardTally): string => [
 
 export const WorkoutFooter = ({block}: {block: Block}) => {
   const workspaceId = useWorkspaceId(block)
-  // The RAW value, not `usePropertyValue`: `strength:status` has a schema
+  // Through `asWorkout`, not `usePropertyValue`: `strength:status` has a schema
   // default of `in-progress`, so a block you hand-tagged as a Workout — or
-  // whose status you cleared — reads as live here while `finishSession` and
-  // `discardSession` (which compare the stored string) refuse it as `gone` and
-  // `buildHistory` (same) files it as a completed session. Three readers, three
-  // answers, and the two controls the block offers can never succeed. Absent
-  // means absent, which is what the other two already say.
-  const status = useData(block)?.properties[FIELD.status]
+  // whose status you cleared — read as live HERE while `finishSession` and
+  // `discardSession` refused it as `gone` and `buildHistory` filed it as a
+  // completed session. Three readers, three answers, and the two controls this
+  // footer offers could never succeed. One reader now, and it is the same one
+  // the writers use.
+  const workout = asWorkout(useData(block))
   const {entriesOf, setsOf} = useSessionRows(workspaceId)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
 
   const lifts = entriesOf(block.id)
   const sets = lifts.flatMap(entry => [...setsOf(entry.id)])
-  const done = sets.filter(set => set.properties[FIELD.todoStatus] === 'done')
-  const unit = done[0]?.properties[FIELD.unit]
-  const volume = done.reduce((total, set) => {
-    const weight = typeof set.properties[FIELD.weight] === 'number' ? set.properties[FIELD.weight] as number : 0
-    const reps = typeof set.properties[FIELD.reps] === 'number' ? set.properties[FIELD.reps] as number : 0
-    return total + weight * reps
-  }, 0)
+  const done = sets.map(asSet).filter(set => set?.done === true)
+  const unit = done[0]?.unit
+  const volume = done.reduce((total, set) => total + (set?.weight ?? 0) * (set?.reps ?? 0), 0)
 
   // No early return on an empty workout. One with no direct lifts — nothing
   // stamped, every lift deleted, or every lift indented under a note — still
@@ -89,7 +85,7 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
   return (
     <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
       <span className="tabular-nums">{tally}</span>
-      {status === 'in-progress' && !block.repo.isReadOnly ? (
+      {workout?.live === true && !block.repo.isReadOnly ? (
         <button
           type="button"
           disabled={busy}
@@ -116,7 +112,7 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
       {/* The only way out of a session started by mistake. Without it, the
           standing-session check sends every later Start back to the workout
           you did not want, and deleting blocks by hand is the only escape. */}
-      {status === 'in-progress' && !block.repo.isReadOnly ? (
+      {workout?.live === true && !block.repo.isReadOnly ? (
         <button
           type="button"
           disabled={busy}
@@ -169,7 +165,7 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
           }}
         >Discard</button>
       ) : null}
-      {status === 'done' ? <span className="text-muted-foreground">closed</span> : null}
+      {workout?.closed ? <span className="text-muted-foreground">closed</span> : null}
       {problem ? <span className="text-destructive">{problem}</span> : null}
     </div>
   )
