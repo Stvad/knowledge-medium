@@ -28,6 +28,15 @@ const configDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   plugins: [react()],
   test: {
+    // Pinned, and it is load-bearing rather than tidiness. Several rules here
+    // are timezone-sensitive by nature: `dayToDate` writes local NOON while the
+    // app's date property editor writes UTC MIDNIGHT, and the gap between them
+    // only misreads the day WEST of UTC. Run under UTC — which is what a CI
+    // runner defaults to — a test for that difference passes whether the fix is
+    // there or not. A fixed western zone makes the suite mean the same thing on
+    // every machine. Verified by mutation: neutering `storedDate` fails here
+    // and goes green under TZ=UTC.
+    env: {TZ: 'America/Los_Angeles'},
     environment: 'node',
     include: ['test/integration/**/*.test.ts'],
     // Same setup the app's own tests run with: L2 dev-assertion invariants

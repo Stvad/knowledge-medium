@@ -14,34 +14,16 @@
 import type {Repo} from '@/data/repo.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {openDialog} from '@/utils/dialogs.js'
-import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
 import {startSession, takePlaceOf} from '../km/session'
 import {choicesToRecord, planFromPrescription} from '../km/sessionPlan'
 import {writeAltChoice} from '../km/store'
 import {ensureStrengthHome, prescribeFor, readProgram, standingSession} from '../km/tonight'
 import {placeAtFocus, type Placement} from './placement'
+import {showSession} from './showSession'
 import {StartSessionDialog, type StartSessionResult} from './StartSessionDialog'
 
 export const START_SESSION_ACTION_ID = 'strength.startSession'
-
-/** Take the user to a session, and say so when that is refused.
- *
- *  `navigateFromGlobalCommand` resolves to `null` — it never rejects — when a
- *  navigation-policy plugin vetoes the gesture or the navigation errors. A
- *  discarded `null` reports success while leaving you on the page you started
- *  from with a live session you were never shown, and it is self-perpetuating:
- *  that session is now standing, so every later Start navigates into the same
- *  veto and the action can never appear to do anything again. */
-const showSession = async (
-  repo: Repo,
-  workspaceId: string,
-  workoutId: string,
-  what: string,
-): Promise<void> => {
-  const shown = await navigateFromGlobalCommand(repo, {blockId: workoutId, workspaceId})
-  if (shown === null) console.warn(`[strength] ${what}, but could not be opened`, workoutId)
-}
 
 /** Ask what tonight is, then stamp it at `placement`.
  *
@@ -109,16 +91,28 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // it fired, returning early and leaving the blank line behind. Falling
   // through clears the line, reports a refused navigation, and skips the
   // alt-choice recording, all by the code that handles an ordinary start.
-  const {id: workoutId, stamped} = await startSession(
-    repo, workspaceId, placement.parentId, plan, placement.position,
-  )
-
-  // Reported, not thrown: a leftover blank line is smaller than the action
-  // appearing to have failed. `stamped` goes in because a peer's session is not
-  // ours to move into the cursor's slot even when it shares a parent; the line
-  // is cleared either way, having been opened to hold a session.
-  await takePlaceOf(repo, workoutId, placement, stamped)
-    .catch((error: unknown) => console.error('[strength] could not clear the empty line', error))
+  // ONE undo entry for the outline writes. Creating the session and clearing
+  // the line you ran this on are two transactions but one gesture, and
+  // ungrouped the first Cmd-Z merely put the blank line back while leaving a
+  // live workout behind — which the standing-session check then finds, so the
+  // session you just undid is the one every later Start returns you to.
+  //
+  // Deliberately NOT spanning the navigation or the preference write below.
+  // Grouping merges top-of-stack only, so a foreign transaction landing
+  // mid-group splits it — and navigating writes panel state through the real
+  // repo. Reaching over it would make the entry count depend on a race.
+  const {id: workoutId, stamped} = await repo.undoGroup(async grouped => {
+    const started = await startSession(
+      grouped, workspaceId, placement.parentId, plan, placement.position,
+    )
+    // Reported, not thrown: a leftover blank line is smaller than the action
+    // appearing to have failed. `stamped` goes in because a peer's session is
+    // not ours to move into the cursor's slot even when it shares a parent;
+    // the line is cleared either way, having been opened to hold a session.
+    await takePlaceOf(grouped, started.id, placement, started.stamped)
+      .catch((error: unknown) => console.error('[strength] could not clear the empty line', error))
+    return started
+  })
 
   // Navigate FIRST. The session exists from the line above, and a failure to
   // record a preference must not leave you looking at the page you started

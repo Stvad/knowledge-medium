@@ -8,6 +8,15 @@ const configDir = dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   plugins: [react()],
   test: {
+    // Pinned, and it is load-bearing rather than tidiness. Several rules here
+    // are timezone-sensitive by nature: `dayToDate` writes local NOON while the
+    // app's date property editor writes UTC MIDNIGHT, and the gap between them
+    // only misreads the day WEST of UTC. Run under UTC — which is what a CI
+    // runner defaults to — a test for that difference passes whether the fix is
+    // there or not. A fixed western zone makes the suite mean the same thing on
+    // every machine. Verified by mutation: neutering `storedDate` fails here
+    // and goes green under TZ=UTC.
+    env: {TZ: 'America/Los_Angeles'},
     // `node` by default — most of this extension is pure logic (engine,
     // parser, readers) and a per-file DOM instance is the bulk of a suite's
     // wall-clock. Files that need a DOM opt in with a

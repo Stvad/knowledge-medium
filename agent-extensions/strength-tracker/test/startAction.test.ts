@@ -54,11 +54,24 @@ vi.mock('../src/km/store', () => ({
 
 const {runStartSession} = await import('../src/ui/startAction')
 
-const repo = {activeWorkspaceId: 'ws-1', isReadOnly: false} as never
+/** Records what ran inside `repo.undoGroup`, since the point of the group is
+ *  that the outline writes are ONE undo entry — invisible from their return
+ *  values, and only observable as "did this write get the grouped repo". */
+let grouped: string[] = []
+const groupedRepo = {activeWorkspaceId: 'ws-1', isReadOnly: false, grouped: true} as never
+const repo = {
+  activeWorkspaceId: 'ws-1',
+  isReadOnly: false,
+  undoGroup: async (fn: (r: unknown) => Promise<unknown>) => {
+    grouped.push('open')
+    return fn(groupedRepo)
+  },
+} as never
 const placement = {parentId: 'page', position: {kind: 'last'} as const}
 
 beforeEach(() => {
   vi.clearAllMocks()
+  grouped = []
   resetNavigation()
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   standing.mockResolvedValue(null)
@@ -144,8 +157,21 @@ describe('a start that lost the race', () => {
     // The 4th argument is `placedByUs`. False means the line is cleared but
     // the session is NOT moved into its slot — sharing a parent is not owning
     // it, and a peer's session is not ours to reorder.
-    expect(placed).toHaveBeenCalledWith(repo, 'peer-workout', placement, false)
+    expect(placed).toHaveBeenCalledWith(groupedRepo, 'peer-workout', placement, false)
   })
+})
+
+it('creates the session and clears the line as ONE undo entry', async () => {
+  await runStartSession(repo, placement)
+
+  // Two transactions, one gesture. Ungrouped, the first Cmd-Z put the blank
+  // line back and left a live workout behind — which the standing-session
+  // check then finds, so the session you just undid is the one every later
+  // Start returns you to. Asserted as "both writes got the grouped repo",
+  // since one-entry-ness has no return value to look at.
+  expect(grouped).toEqual(['open'])
+  expect(started).toHaveBeenCalledWith(groupedRepo, 'ws-1', 'page', expect.anything(), placement.position)
+  expect(placed).toHaveBeenCalledWith(groupedRepo, 'workout-1', placement, true)
 })
 
 it('writes nothing at all in a read-only workspace', async () => {

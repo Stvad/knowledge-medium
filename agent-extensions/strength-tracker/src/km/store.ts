@@ -21,7 +21,7 @@ import {
 } from '@/data/typedRecords.js'
 
 import type {LayoffRecord} from '../engine/types'
-import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE} from './fields'
+import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, WORKOUT_TYPE} from './fields'
 import {
   choiceGroupProp,
   choiceOptionProp,
@@ -31,7 +31,7 @@ import {
   layoffTierProp,
   layoffToProp,
 } from './schema'
-import {dateToDay, dayToDate} from './day'
+import {dateToDay, dayToDate, storedDate} from './day'
 import {countLoggedSets, nestedWorkouts} from './subtree'
 
 import {buildAltChoices} from './history'
@@ -39,11 +39,12 @@ import {buildAltChoices} from './history'
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
 /** Which training day a raw `date` property lands on, read the way the
- *  readers read it. */
+ *  readers read it — via `storedDate`, so a hand-edited date names the day it
+ *  says. */
 const liveDay = (raw: unknown): string | undefined => {
   if (typeof raw !== 'string') return undefined
   const date = new Date(raw)
-  return Number.isNaN(date.getTime()) ? undefined : dateToDay(date)
+  return Number.isNaN(date.getTime()) ? undefined : dateToDay(storedDate(date))
 }
 
 // ──── layoff ────
@@ -162,6 +163,12 @@ export const discardSession = async (
   repo.tx(async tx => {
     const workout = await tx.get(workoutId)
     if (!workout || workout.deleted) return 'gone' as const
+    // The TYPE as well as the status, and this is the destructive path: the
+    // raw `strength:status` survives an untag, so a block that left the
+    // strength world between the confirmation and here would still be
+    // cascade-deleted with its whole subtree. Same rule as `isStandingToday`
+    // and `checkFinishable` — one answer to "is this still a workout".
+    if (!hasBlockType(workout, WORKOUT_TYPE)) return 'gone' as const
     if (workout.properties[FIELD.status] !== 'in-progress') return 'gone' as const
 
     // Another session filed under this one is not this one's to throw away.

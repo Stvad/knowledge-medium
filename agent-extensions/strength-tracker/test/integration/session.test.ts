@@ -920,6 +920,39 @@ describe('a closed session corrected back to empty', () => {
   })
 })
 
+describe('a block that stopped claiming to be a workout', () => {
+  // The type is membership in the strength world — `isStandingToday`,
+  // `buildHistory`, the tally and the footer controls all gate on it. The raw
+  // `strength:status` survives an untag, so without these checks the two
+  // WRITING paths would be the only readers that still treated it as a live
+  // session, and one of them cascades a delete.
+  const untypedWorkout = async (): Promise<string> => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+    await tick(set.id)
+    await repo.removeType(workoutId, WORKOUT_TYPE)
+    return workoutId
+  }
+
+  it('cannot be discarded, so its subtree is not cascade-deleted', async () => {
+    const workoutId = await untypedWorkout()
+
+    expect(await discardSession(repo, workoutId)).toBe('gone')
+
+    expect(await isBlockDeleted(repo, workoutId)).toBe(false)
+    expect(await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)).toHaveLength(1)
+  })
+
+  it('cannot be finished either, so the two write paths agree', async () => {
+    const workoutId = await untypedWorkout()
+
+    expect(await finishSession(repo, workoutId)).toBe('gone')
+
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+})
+
 describe('typing a starting weight', () => {
   it('sets the value outright rather than nudging from it', async () => {
     // A lift with no history stamps at 0; reaching 135 with the ± button is

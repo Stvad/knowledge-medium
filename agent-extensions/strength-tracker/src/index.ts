@@ -21,13 +21,13 @@ import {actionsFacet, blockRenderersFacet} from '@/extensions/core.js'
 import {definitionSeedsFacet, typeSeedsFacet} from '@/data/facets.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
-import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
 import {STRENGTH_PROPS, STRENGTH_TYPES} from './km/schema'
 import {findStrengthLogPage} from './km/page'
 import {ensureStrengthHome} from './km/tonight'
 import {strengthDecorations} from './ui/decorations'
 import {StrengthLogRenderer} from './ui/StrengthPageRenderer'
+import {showSession} from './ui/showSession'
 import {startSessionAction} from './ui/startAction'
 
 const source = 'strength-tracker'
@@ -50,7 +50,7 @@ const openStrengthLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     // the honest outcome when the page has never been made.
     if (repo.isReadOnly) {
       const existing = await findStrengthLogPage(repo, workspaceId)
-      if (existing) await navigateFromGlobalCommand(repo, {blockId: existing, workspaceId})
+      if (existing) await showSession(repo, workspaceId, existing, 'the log page is there')
       return
     }
     // The page AND its settings block. Creating only the page left a fresh
@@ -66,7 +66,7 @@ const openStrengthLogAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
     // write from every panel that renders the page, in every tab, including
     // one you merely navigated past. Reading still bootstraps nothing.
     const {pageId} = await ensureStrengthHome(repo, workspaceId)
-    await navigateFromGlobalCommand(repo, {blockId: pageId, workspaceId})
+    await showSession(repo, workspaceId, pageId, 'the log page is ready')
   },
 }
 

@@ -9,7 +9,7 @@
 
 import {compareRecords} from '../engine/types'
 import type {LayoffRecord, SessionType, SetRecord, WorkoutRecord} from '../engine/types'
-import {dateToDay} from './day'
+import {dateToDay, storedDate} from './day'
 import {FIELD} from './fields'
 
 /** Minimal shape the readers need — a structural subset of the app's
@@ -93,8 +93,13 @@ export const buildHistory = (
 
   const workouts: WorkoutRecord[] = []
   for (const row of workoutRows) {
+    // Normalized HERE, once: `d.toISOString()` becomes `WorkoutRecord.date`,
+    // which `fullSessionDays`, `prescribe` and `compareRecords` all decode
+    // again. A date typed into the property editor is UTC midnight, so without
+    // this every one of those clocks reads it a day early. See `storedDate`.
     const d = date(row, FIELD.date)
     if (d === undefined) continue
+    const on = storedDate(d)
     if (str(row, FIELD.status) === 'in-progress') continue
     const entries = (exercisesByWorkout.get(row.id) ?? []).slice().sort(compareByOrderKey)
     const session = str(row, FIELD.session, 'A') as SessionType
@@ -138,7 +143,7 @@ export const buildHistory = (
     if (exercises.every(entry => entry.sets.length === 0)) continue
     workouts.push({
       id: row.id,
-      date: d.toISOString(),
+      date: on.toISOString(),
       session,
       ...(orderedAt !== undefined ? {recordedAt: orderedAt} : {}),
       exercises,
@@ -171,8 +176,8 @@ export const buildLayoffs = (layoffRows: readonly RowLike[]): LayoffRecord[] => 
     if (from === undefined || to === undefined) continue
     layoffs.push({
       id: row.id,
-      from: dateToDay(from),
-      to: dateToDay(to),
+      from: dateToDay(storedDate(from)),
+      to: dateToDay(storedDate(to)),
       days: num(row, FIELD.layoffDays, 0),
       tierId: str(row, FIELD.layoffTier),
       pct: num(row, FIELD.layoffPct, 1),

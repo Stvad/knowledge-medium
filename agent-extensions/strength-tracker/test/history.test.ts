@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 
 import {buildAltChoices, buildHistory, buildLayoffs} from '../src/km/history'
-import {dateToDay, dayToDate} from '../src/km/day'
+import {dateToDay, dayToDate, storedDate} from '../src/km/day'
 import {FIELD} from '../src/km/fields'
 import type {WorkoutRecord} from '../src/engine/types'
 
@@ -27,6 +27,44 @@ describe('day round-trip', () => {
 
 const setBlock = (id: string, parentId: string, orderKey: string, weight: number, reps: number, extra: Array<[string, unknown]> = []) =>
   block(id, parentId, orderKey, encode([[FIELD.weight, weight], [FIELD.reps, reps], [FIELD.todoStatus, 'done'], ...extra]))
+
+describe('a date typed into the property editor', () => {
+  // The app's `DatePropertyEditor` commits `new Date('YYYY-MM-DD')`, which JS
+  // parses as UTC MIDNIGHT — while `dayToDate` writes local NOON. Anywhere west
+  // of UTC, the local calendar day of a UTC-midnight instant is the day BEFORE
+  // the one typed, so repairing a session's date used to move it to another
+  // training day for history, layoff gaps and the standing-session check alike.
+  const asEditorWould = (day: string) => new Date(day)
+
+  it('names the day it says, not the one before', () => {
+    expect(dateToDay(storedDate(asEditorWould('2026-08-01')))).toBe('2026-08-01')
+  })
+
+  it('leaves a date this extension wrote exactly alone', () => {
+    const ours = dayToDate('2026-08-01')
+    expect(storedDate(ours).getTime()).toBe(ours.getTime())
+    expect(dateToDay(storedDate(ours))).toBe('2026-08-01')
+  })
+
+  it('is idempotent, so normalizing twice cannot drift', () => {
+    const once = storedDate(asEditorWould('2026-08-01'))
+    expect(storedDate(once).getTime()).toBe(once.getTime())
+  })
+
+  it('carries into the history record, which every later clock re-decodes', () => {
+    const workout = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, asEditorWould('2026-08-01')], [FIELD.status, 'done'],
+    ]))
+    const bench = block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press']]))
+    const history = buildHistory([workout], [bench], [setBlock('s1', 'e1', 'a0', 135, 5)])
+
+    expect(history).toHaveLength(1)
+    // `WorkoutRecord.date` is what `fullSessionDays`, `prescribe` and
+    // `compareRecords` all decode again — so getting it right here is what
+    // keeps every one of them on the same day.
+    expect(dateToDay(new Date(history[0].date))).toBe('2026-08-01')
+  })
+})
 
 describe('buildHistory', () => {
   it('assembles workouts, exercise entries, and their done set blocks', () => {

@@ -36,7 +36,7 @@ import type {LayoffRecord, SessionType} from '../engine/types'
 // The placement DECISION and the delete that carries it out share one
 // predicate on purpose — see `takePlaceOf`. A pure rule, no repo behind it.
 import {isExpendableLine} from '../ui/placement'
-import {dateToDay, dayToDate} from './day'
+import {dateToDay, dayToDate, storedDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {writeLayoffInTx} from './store'
 import {countLoggedSets} from './subtree'
@@ -71,11 +71,13 @@ const setContent = (set: PlannedSet, unit: string): string =>
   `${set.side ? `${set.side} ` : ''}${set.weight}${unit} × ${set.reps}`
 
 /** Which training day a raw `date` property lands on, read the way the
- *  readers read it: `undefined` for anything that doesn't decode as a day. */
+ *  readers read it: `undefined` for anything that doesn't decode as a day.
+ *  Through `storedDate`, so a date typed into the property editor names the
+ *  day it says rather than the one before. */
 const liveDay = (raw: unknown): string | undefined => {
   if (typeof raw !== 'string') return undefined
   const date = new Date(raw)
-  return Number.isNaN(date.getTime()) ? undefined : dateToDay(date)
+  return Number.isNaN(date.getTime()) ? undefined : dateToDay(storedDate(date))
 }
 
 /** Is a session already under way on this training day — whatever its SESSION
@@ -726,6 +728,10 @@ const checkFinishable = async (
   // this workout between the tap and this transaction opening.
   const workout = await tx.get(workoutId)
   if (!workout || workout.deleted) return {blocked: 'gone'}
+  // The type too: `strength:status` survives an untag, so without this the one
+  // reader that still treated an untyped block as a live session would be the
+  // one that writes to it. See `isStandingToday`.
+  if (!hasBlockType(workout, WORKOUT_TYPE)) return {blocked: 'gone'}
   if (workout.properties[FIELD.status] !== 'in-progress') return {blocked: 'gone'}
 
   // Checked before anything is written: closing around a set history cannot

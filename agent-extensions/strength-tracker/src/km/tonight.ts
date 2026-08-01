@@ -19,6 +19,7 @@ import type {
   LayoffRecord, Prescription, ProgramConfig, SessionType, WorkoutRecord,
 } from '../engine/types'
 import {configFor, loadPlanSource, type PlanSource} from './config'
+import {storedDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {buildHistory, buildLayoffs} from './history'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
@@ -133,7 +134,9 @@ export const standingSession = async (
     !row.deleted
     && row.properties[FIELD.status] === 'in-progress'
     && typeof row.properties[FIELD.date] === 'string'
-    && trainingDay(row.properties[FIELD.date] as string, snapshot.config.dayRolloverHour) === day)
+    && trainingDay(
+      storedDate(new Date(row.properties[FIELD.date] as string)),
+      snapshot.config.dayRolloverHour) === day)
   return mostRecentlyStarted(live)
 }
 
@@ -187,8 +190,11 @@ export const closeSession = async (
   // call site differently would put the gap's two ends on different scales.
   // What made the two disagree was an unbounded `rolloverHour`; that is
   // constrained where it is read — see `applySettings`.
+  // `storedDate` first: a date typed into the property editor is UTC midnight,
+  // whose LOCAL day is the one before west of UTC — so repairing a workout's
+  // date would file its layoff against the wrong day. See `storedDate`.
   const performedOn = typeof stored === 'string' && !Number.isNaN(new Date(stored).getTime())
-    ? trainingDay(stored, snapshot.config.dayRolloverHour)
+    ? trainingDay(storedDate(new Date(stored)), snapshot.config.dayRolloverHour)
     : null
   // `strength:date` is hand-editable. Cleared or corrupted, substituting the
   // clock would close a workout that `buildHistory` then drops whole — the
