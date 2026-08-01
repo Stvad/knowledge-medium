@@ -9,9 +9,9 @@ import {
   type FocusedBlockLocation,
 } from '@/data/properties.js'
 import type { Block } from '@/data/block.js'
-import { panelById } from '@/plugins/spatial-navigation/walker.js'
+import { instanceIn, panelById } from '@/plugins/spatial-navigation/walker.js'
 import { resolveSpatialNavExclusions } from '@/plugins/spatial-navigation/exclusionsFacet.js'
-import { findInstance, isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
+import { isRowInViewport, resolveSettledAnchor } from './viewportAnchor.ts'
 import { createSettleScheduler } from './settleScheduler.ts'
 
 /** Re-anchor once scrolling has stopped, not while it's happening. Two reasons:
@@ -106,7 +106,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
 
     const sample = () => {
       if (seenOnScreen) return
-      const row = findInstance(panelEl, location, excluded())
+      const row = instanceIn(panelEl, location, excluded())
       if (row && isRowInViewport(row)) seenOnScreen = true
     }
 
@@ -130,7 +130,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
       // cursor is off screen, so a move was wanted and no candidate was found.
       if (retriesLeft <= 0) return
       if (block.peekProperty(isEditingProp)) return
-      const row = findInstance(panelEl, location, excluded())
+      const row = instanceIn(panelEl, location, excluded())
       if (!row || isRowInViewport(row)) return
       retriesLeft -= 1
       scheduler.schedule(SETTLE_RETRY_MS)
@@ -159,7 +159,7 @@ export function PanelCursorFollowsScroll({block}: {block: Block}) {
     const remeasure = () => {
       sample()
       if (!seenOnScreen) return
-      const row = findInstance(panelEl, location, excluded())
+      const row = instanceIn(panelEl, location, excluded())
       if (!row || isRowInViewport(row)) return
       if (block.peekProperty(isEditingProp)) suppressedWhileEditing = true
       retriesLeft = SETTLE_RETRIES

@@ -39,13 +39,18 @@ const OVERSCAN_PX = 600
 
 interface LazyBlockComponentProps {
   blockId: string
+  /** The scope this row will render in — its parent's, since children inherit
+   *  it. Passed down rather than read from context here so a deferred row isn't
+   *  a context subscriber; see `BlockChildren`. */
+  renderScopeId?: string
 }
 
-export function LazyBlockComponent({ blockId }: LazyBlockComponentProps) {
+export function LazyBlockComponent({ blockId, renderScopeId }: LazyBlockComponentProps) {
   return (
     <LazyViewportMount
       cacheKey={lazyBlockCacheKey(blockId)}
       blockId={blockId}
+      renderScopeId={renderScopeId}
       estimatedHeightPx={ESTIMATED_HEIGHT_PX}
       overscanPx={OVERSCAN_PX}
       renderPlaceholder={({reservedHeight}) => (

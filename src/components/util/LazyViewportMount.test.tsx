@@ -32,11 +32,15 @@ class TestIntersectionObserver {
   }
 }
 
-const renderLazy = (cacheKey: string, options?: {container?: HTMLElement; overscanPx?: number}) =>
+const renderLazy = (
+  cacheKey: string,
+  options?: {container?: HTMLElement; overscanPx?: number; renderScopeId?: string},
+) =>
   render(
     <LazyViewportMount
       cacheKey={cacheKey}
       blockId={cacheKey}
+      renderScopeId={options?.renderScopeId}
       estimatedHeightPx={32}
       overscanPx={options?.overscanPx ?? 0}
       renderPlaceholder={({reservedHeight}) => (
@@ -48,12 +52,65 @@ const renderLazy = (cacheKey: string, options?: {container?: HTMLElement; oversc
     options?.container ? {container: options.container} : undefined,
   )
 
+/** The slot a deferred row reserves, as the spatial-navigation walker queries
+ *  it (`rowSlotIn` / `reservedRowBetween` both AND the two attributes). */
+const reservedSlot = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>('[data-lazy-block-id][data-lazy-render-scope-id]')
+
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   TestIntersectionObserver.instances = []
   __resetLazyMountRegistryForTesting()
   __resetLazyMountCachesForTesting()
+})
+
+// The half of the deferred-row contract that lives here. The spatial-navigation
+// walker decides whether a keyboard move would jump OVER a not-yet-mounted row
+// by looking for these attributes; its own tests build the DOM by hand, so
+// without these the producer and the consumer could drift apart silently and
+// every suite would stay green.
+//
+// The other end of it — that `BlockChildren` SUPPLIES the scope — is pinned in
+// `components/test/blockChildrenSlots.component.test.tsx`, against a real block
+// tree, since neither half means anything alone.
+describe('LazyViewportMount — the slot a deferred row reserves', () => {
+  it('marks the placeholder with the block and the scope the row will have', () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    renderLazy('block:deferred', {renderScopeId: 'panel:p1:top'})
+
+    const slot = reservedSlot()
+    expect(slot?.dataset.lazyBlockId).toBe('block:deferred')
+    expect(slot?.dataset.lazyRenderScopeId).toBe('panel:p1:top')
+  })
+
+  it('drops the slot once the row mounts, so nothing reserves a place that is taken', async () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    renderLazy('block:mounts', {renderScopeId: 'panel:p1:top'})
+    expect(reservedSlot()).not.toBeNull()
+
+    await act(async () => {
+      TestIntersectionObserver.instances[0].trigger(true)
+    })
+
+    expect(screen.getByTestId('child')).toBeInTheDocument()
+    expect(reservedSlot()).toBeNull()
+  })
+
+  // `LazyBacklinkItem` and the recents rows mint their scope INSIDE the wrapper,
+  // so they can't name it out here and deliberately pass none. The walker must
+  // then ignore the slot rather than attribute it to the surrounding row — which
+  // it does by requiring both attributes, so this is the producer's half of it.
+  it('leaves the slot anonymous when the caller cannot name the scope', () => {
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+
+    renderLazy('block:anonymous')
+
+    expect(reservedSlot()).toBeNull()
+    expect(document.querySelector('[data-lazy-render-scope-id]')).toBeNull()
+  })
 })
 
 describe('LazyViewportMount', () => {
