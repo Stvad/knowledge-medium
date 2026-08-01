@@ -239,13 +239,11 @@ describe('finishSession — closing without deleting anything', () => {
     expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(145)
 
     // Nothing was pruned — the un-performed set is still a block recording
-    // what was asked for and not done…
+    // what was asked for and not done, and still an ordinary todo. Finish
+    // takes no type away; see 'closing a session takes nothing away from you'.
     expect(await isBlockDeleted(repo, sets[2].id)).toBe(false)
     expect(hasBlockType(repo.block(sets[2].id).peek()!, SET_TYPE)).toBe(true)
-    // …it just stops claiming to be an outstanding task, so it leaves every
-    // open-todo query instead of sitting in them forever. So does the
-    // performed one — see 'a closed session is a record, not a form'.
-    expect(hasBlockType(repo.block(sets[2].id).peek()!, TODO_TYPE)).toBe(false)
+    expect(hasBlockType(repo.block(sets[2].id).peek()!, TODO_TYPE)).toBe(true)
     // The performed one keeps its tick, which is what history reads.
     expect(repo.block(sets[0].id).peekProperty(todoStatusProp)).toBe('done')
     // …and Finish stamps when it happened. Nothing else writes this — the
@@ -758,12 +756,13 @@ describe('an entry whose plan block appears or disappears between taps', () => {
   })
 })
 
-describe('a closed session is a record, not a form', () => {
-  it('takes the checkbox off every set, performed ones included', async () => {
-    // Untagging only the skipped sets left the performed ones tickable. One
-    // tap unticks a set of a session that can never be finished again:
-    // `buildHistory` drops it from progression while the entry keeps the
-    // working weight stamped from it, and the two disagree for good.
+describe('closing a session takes nothing away from you', () => {
+  it('leaves every set a todo, performed and skipped alike', async () => {
+    // Finish used to strip TODO_TYPE from every set, to stop a stray tap
+    // unticking a closed record. A type is not ours to remove on the user's
+    // behalf: it is what makes the block answer to every other todo query and
+    // view in the app, so untagging retroactively deleted these sets from the
+    // user's todo world to protect an invariant of ours.
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     const sets = await childrenOf(entry.id, SET_TYPE)
@@ -772,13 +771,37 @@ describe('a closed session is a record, not a form', () => {
     expect(await finishSession(repo, workoutId)).toBe('done')
 
     for (const set of sets) {
-      expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(false)
+      expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(true)
       expect(hasBlockType(repo.block(set.id).peek()!, SET_TYPE)).toBe(true)
     }
-    // Done-ness lives in `status`, which is what history reads — untouched,
-    // so the record still says what was performed.
+    // Done-ness never lived in the type: it is `status`, which is what history
+    // reads, and Finish leaves both alone.
     expect(repo.block(sets[0].id).peekProperty(todoStatusProp)).toBe('done')
+    expect(repo.block(sets[1].id).peekProperty(todoStatusProp)).toBe('open')
     expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(135)
+  })
+
+  it('reads a set unticked afterwards as not performed, which is what it now says', async () => {
+    // The consequence of keeping the checkbox, stated as the intent it is:
+    // unticking a closed session's set is an ordinary outline edit meaning "I
+    // did not do that one", and history agreeing with the outline is the
+    // right answer rather than corruption to be defended against.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const sets = await childrenOf(entry.id, SET_TYPE)
+    for (const set of sets) await tick(set.id)
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    await repo.tx(async tx => {
+      await tx.setProperties(sets[1].id, {set: [propertyValue(todoStatusProp, 'open')]})
+    }, {scope: ChangeScope.BlockDefault, description: 'untick after the fact'})
+
+    const history = buildHistory(
+      [repo.block(workoutId).peek()!],
+      await childrenOf(workoutId, EXERCISE_ENTRY_TYPE),
+      await childrenOf(entry.id, SET_TYPE),
+    )
+    expect(history[0].exercises[0].sets).toHaveLength(1)
   })
 
   it('refuses a set indented where history cannot read it, rather than closing around it', async () => {

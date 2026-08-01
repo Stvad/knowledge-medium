@@ -643,15 +643,15 @@ export const finishSession = async (
         if (isDone(set) && set.properties[FIELD.completedAt] === undefined) {
           await tx.setProperty(set.id, completedAtProp, finishedAt)
         }
-        // EVERY set stops being a todo, performed or not — a closed session is
-        // a record, and a record holds no outstanding tasks. Untagging only the
-        // skipped ones left the performed sets with a live checkbox, and one
-        // tap unticks a set of a session that can never be finished again:
-        // `buildHistory` drops it from progression while the entry keeps the
-        // working weight stamped from it. Done-ness lives in the `status`
-        // property, which is what history reads and which this leaves alone —
-        // so this changes what you can DO to the record, not what it says.
-        if (hasBlockType(set, TODO_TYPE)) await repo.removeTypeInTx(tx, set.id, TODO_TYPE)
+        // A finished set stays a todo. Finish used to strip TODO_TYPE from
+        // every set to stop a stray tap unticking a closed record — but a type
+        // is not ours to take away on the user's behalf: it is what makes the
+        // block answer to every other todo query and view in the app, so
+        // removing it retroactively deletes these sets from the user's todo
+        // world to protect an invariant of ours. Unticking a set of a closed
+        // session is an ordinary outline edit that says "I did not do that
+        // one", and `buildHistory` reading it back is the correct answer, not
+        // corruption.
       }
       // Denormalised so "last working weight for lift X" stays a flat scan.
       // Written from what was actually performed, by the same function
