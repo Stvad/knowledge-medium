@@ -20,7 +20,9 @@ import {
   adoptTypedBlock, createTypedChild, getOrCreateTypedChild, type DerivedIdentity,
 } from '@/data/typedRecords.js'
 
-import type {LayoffRecord} from '../engine/types'
+import {effectiveTier} from '../engine/reentry'
+import {isOnScheduleTier} from '../engine/types'
+import type {LayoffRecord, ReentryTier} from '../engine/types'
 import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, WORKOUT_TYPE} from './fields'
 import {
   choiceGroupProp,
@@ -32,7 +34,7 @@ import {
   layoffToProp,
 } from './schema'
 import {dateToDay, dayToDate, storedDate} from './day'
-import {asWorkout} from './records'
+import {asAltChoice, asWorkout} from './records'
 import {discardTally, nestedWorkouts, type DiscardTally} from './subtree'
 
 import {buildAltChoices} from './history'
@@ -100,18 +102,43 @@ const refreshLayoff = async (
   id: string,
   record: Omit<LayoffRecord, 'id'>,
   spec: {content: string; properties: ReturnType<typeof propertyValue>[]},
+  /** The plan's re-entry table, so severity is judged here the way every other
+   *  reader judges it. Without it this compared the stored `strength:reentryPct`
+   *  — which decides nothing, since `resolveReentry` resolves the tier from
+   *  `strength:tier`/`strength:gapDays` — so a record whose tier had been
+   *  hand-edited to `on-schedule` kept its old percentage, satisfied the early
+   *  return, and survived the very write meant to replace it. The finish then
+   *  closed leaving a record that applies no cut at all. */
+  reentry: readonly ReentryTier[],
 ): Promise<string> => {
   const block = await tx.get(id)
-  const recorded = block?.properties[FIELD.layoffPct]
-  // Already at least this severe — including the equal case, which is two
-  // clients recording one comeback and is what keying on `from` is for.
-  if (!block || (typeof recorded === 'number' && recorded <= record.pct)) return id
+  if (!block) return id
+  const storedTier = block.properties[FIELD.layoffTier]
+  const storedDays = block.properties[FIELD.layoffDays]
+  const recorded = typeof storedTier === 'string' && typeof storedDays === 'number'
+    ? effectiveTier({tierId: storedTier, days: storedDays}, reentry)
+    : undefined
+  // Already at least this severe AND actually applying a cut — the equal case
+  // included, which is two clients recording one comeback and is what keying on
+  // `from` is for. A record resolving to `on-schedule` covers nothing and gets
+  // replaced however deep its stored percentage claims to be.
+  //
+  // With NO table the tier cannot be resolved, and the fallback is the stored
+  // percentage — the behaviour before this argument existed. Not "replace it":
+  // that would let a caller with no plan in hand loosen a deeper record, which
+  // is the one direction this must never go. Callers that can judge properly
+  // pass the table; `closeSession` does.
+  const storedPct = block.properties[FIELD.layoffPct]
+  const covers = recorded !== undefined
+    ? !isOnScheduleTier(recorded) && recorded.pct <= record.pct
+    : typeof storedPct === 'number' && storedPct <= record.pct
+  if (covers) return id
   // The generated label only. Renamed by hand, the text is the user's, and a
   // stale number in it is a smaller loss than overwriting what they wrote.
   if (block.content === layoffContent(
-    block.properties[FIELD.layoffDays],
-    recorded,
-    block.properties[FIELD.layoffTier],
+    storedDays,
+    block.properties[FIELD.layoffPct],
+    storedTier,
   )) await tx.update(id, {content: spec.content})
   await tx.setProperties(id, {set: spec.properties})
   return id
@@ -136,6 +163,11 @@ export const writeLayoffInTx = async (
    *  restart a ramp already climbed out of. Re-checked in-tx, so a stale list
    *  can only cause a mint, never a bad adoption. */
   knownLayoffIds: readonly string[] = [],
+  /** The plan's re-entry table — `refreshLayoff` needs it to judge severity
+   *  the way `resolveReentry` does. Defaulted so a caller with no plan in hand
+   *  still writes the record; with an empty table every stored tier resolves to
+   *  nothing, which reads as "covers nothing" and always refreshes. */
+  reentry: readonly ReentryTier[] = [],
 ): Promise<string> => {
   const spec = {
     parentId: pageId,
@@ -162,7 +194,7 @@ export const writeLayoffInTx = async (
     ...spec,
   })
   if (outcome.status === 'created') return outcome.id
-  if (outcome.status === 'adopted') return refreshLayoff(tx, outcome.id, record, spec)
+  if (outcome.status === 'adopted') return refreshLayoff(tx, outcome.id, record, spec, reentry)
 
   // The derived seat is held by a tombstone, another workspace's row, or a
   // block whose `from` now names a different gap. There's no second identity
@@ -182,7 +214,8 @@ export const writeLayoffInTx = async (
       && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, record.from))
   return minted !== undefined
     ? refreshLayoff(
-      tx, (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id, record, spec,
+      tx, (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id,
+      record, spec, reentry,
     )
     : createTypedChild(repo, tx, spec)
 }
@@ -192,10 +225,11 @@ export const writeLayoff = async (
   workspaceId: string,
   pageId: string,
   record: Omit<LayoffRecord, 'id'>,
+  reentry: readonly ReentryTier[] = [],
 ): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(
-    tx => writeLayoffInTx(repo, tx, workspaceId, pageId, record, typeSnapshot),
+    tx => writeLayoffInTx(repo, tx, workspaceId, pageId, record, typeSnapshot, [], reentry),
     {scope: ChangeScope.BlockDefault, description: 'Record layoff'},
   )
 }
@@ -344,5 +378,9 @@ export const readAltChoices = async (
   settingsBlockId: string,
 ): Promise<Record<string, string>> => {
   const children = await repo.block(settingsBlockId).children.load()
-  return buildAltChoices((children ?? []).filter(child => !child.deleted))
+  // Through `asAltChoice`, so removing `strength-alt-choice` from a block
+  // actually removes its preference. The group and option properties survive
+  // an untag, and folding them regardless meant a choice you had visibly taken
+  // out of the strength world went on steering every later prescription.
+  return buildAltChoices((children ?? []).filter(child => asAltChoice(child) !== null))
 }

@@ -18,6 +18,7 @@ import {
 } from '@/data/typedRecords.js'
 
 import {FIELD} from './fields'
+import {asAltChoice} from './records'
 import {SETTINGS_TYPE, STRENGTH_LOG_TYPE} from './schema'
 
 type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
@@ -57,9 +58,21 @@ export const findSettingsBlock = async (
 
 /** Any of the settings values, which is what makes a block the settings block
  *  when its type tag is not there to say so. */
-const carriesSettings = (block: BlockData): boolean =>
+const carriesKnobs = (block: BlockData): boolean =>
   [FIELD.planRoot, FIELD.rolloverHour, FIELD.cadenceDays, FIELD.roundTo]
     .some(name => block.properties[name] !== undefined)
+
+/** …or any recorded `or`-group choice among its children.
+ *
+ *  The knobs alone are not enough. Picking a variant and leaving every knob at
+ *  its default is the ORDINARY state — the switcher writes a choice block, and
+ *  nothing else is written at all — so a settings block whose whole
+ *  configuration is its children reads as empty from the outside. Rescuing on
+ *  the knobs only would abandon exactly the workspace that had answered a
+ *  question and changed nothing else. */
+const carriesChoices = async (repo: Repo, block: BlockData): Promise<boolean> =>
+  ((await repo.block(block.id).children.load()) ?? [])
+    .some(child => asAltChoice(child) !== null)
 
 /** The one ordered rule for "where are this page's settings", used by the
  *  reader AND the writer so they cannot name different blocks — which they did
@@ -94,9 +107,16 @@ const locateSettings = async (
   // The same conditions the writer's `adoptable` applies, and no type check.
   if (seat && !seat.deleted && seat.parentId === pageId) return seat
 
-  const legacy = ((await repo.block(pageId).children.load()) ?? [])
-    .find(block => !block.deleted && carriesSettings(block))
-  return legacy ?? null
+  // Untagged children only — workouts and layoffs carry their own types, so
+  // this is the handful of loose blocks under the page, and the child load per
+  // candidate below is bounded by that. It only runs at all when there is no
+  // tagged settings block AND no seat, which is the rescue case.
+  const loose = ((await repo.block(pageId).children.load()) ?? [])
+    .filter(block => !block.deleted && !hasBlockType(block, SETTINGS_TYPE))
+  const byKnobs = loose.find(carriesKnobs)
+  if (byKnobs) return byKnobs
+  for (const block of loose) if (await carriesChoices(repo, block)) return block
+  return null
 }
 
 export const getOrCreateStrengthLogPage = (repo: Repo, workspaceId: string): Promise<Block> =>

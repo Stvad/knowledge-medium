@@ -33,7 +33,7 @@ import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
 
 import {workingWeight} from '../engine/progression'
 import type {BasisWorkout} from '../engine/reentry'
-import type {LayoffRecord, SessionType} from '../engine/types'
+import type {LayoffRecord, ReentryTier, SessionType} from '../engine/types'
 // The placement DECISION and the delete that carries it out share one
 // predicate on purpose — see `takePlaceOf`. A pure rule, no repo behind it.
 import {isExpendableLine} from '../ui/placement'
@@ -1010,7 +1010,13 @@ export const finishSession = async (
    *  gap on any later day), so writing it separately and failing loses the
    *  record for good — every session after the first back silently returns to
    *  full loads. */
-  layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>; knownIds?: readonly string[]},
+  layoff?: {
+    pageId: string
+    record: Omit<LayoffRecord, 'id'>
+    knownIds?: readonly string[]
+    /** The plan's re-entry table — `refreshLayoff` judges severity with it. */
+    reentry?: readonly ReentryTier[]
+  },
   /** What the caller's layoff decision rested on — see `FinishExpectation`. */
   expected?: FinishExpectation,
 ): Promise<FinishOutcome> => {
@@ -1073,7 +1079,7 @@ export const finishSession = async (
 
     if (layoff) {
       await writeLayoffInTx(repo, tx, workout.workspaceId, layoff.pageId, layoff.record,
-        typeSnapshot, layoff.knownIds ?? [])
+        typeSnapshot, layoff.knownIds ?? [], layoff.reentry ?? [])
     }
     await tx.setProperty(workoutId, statusProp, 'done')
     return 'done' as const

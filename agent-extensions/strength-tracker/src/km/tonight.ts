@@ -256,5 +256,6 @@ export const closeSession = async (
     pageId: (await ensureStrengthHome(repo, workspaceId)).pageId,
     record,
     knownIds: snapshot.layoffs.map(entry => entry.id),
+    reentry: snapshot.config.reentry,
   }, expected)
 }

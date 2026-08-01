@@ -151,7 +151,7 @@ describe('layoff records', () => {
       id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '2-4w', pct: 0.9,
     }
 
-    expect(pending.tier.pct).toBeLessThan(effectiveTier(retracted, DEFAULT_CONFIG)!.pct)
+    expect(pending.tier.pct).toBeLessThan(effectiveTier(retracted, DEFAULT_CONFIG.reentry)!.pct)
     expect(layoffAlreadyRecorded(pending, [retracted], DEFAULT_CONFIG)).toBe(false)
   })
 
@@ -167,7 +167,7 @@ describe('layoff records', () => {
       id: 'l', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '1-2mo', pct: 0.5,
     }
 
-    expect(effectiveTier(deeper, DEFAULT_CONFIG)!.pct).toBeLessThan(pending.tier.pct)
+    expect(effectiveTier(deeper, DEFAULT_CONFIG.reentry)!.pct).toBeLessThan(pending.tier.pct)
     expect(layoffAlreadyRecorded(pending, [deeper], DEFAULT_CONFIG)).toBe(true)
   })
 
@@ -195,7 +195,7 @@ describe('layoff records', () => {
     }
 
     // Classified by its 20 days → `2-4w`, which is shallower than a 62-day gap.
-    expect(effectiveTier(byDays, DEFAULT_CONFIG)?.id).toBe('2-4w')
+    expect(effectiveTier(byDays, DEFAULT_CONFIG.reentry)?.id).toBe('2-4w')
     expect(layoffAlreadyRecorded(pending, [byDays], DEFAULT_CONFIG)).toBe(false)
   })
 })

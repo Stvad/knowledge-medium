@@ -25,6 +25,7 @@ import {SETTINGS_TYPE} from '../../src/km/schema'
 import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate, storedDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
+import {DEFAULT_CONFIG} from '../../src/program/defaults'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
 import {adjustSet, finishSession, mostRecentlyStarted, startSession as startSessionReporting} from '../../src/km/session'
 import {closeSession, ensureStrengthHome, readProgram, standingSession} from '../../src/km/tonight'
@@ -220,6 +221,31 @@ describe('ensureStrengthHome', () => {
     // …and the writer agrees rather than minting beside it, then repairs the tag.
     expect(await getOrCreateSettingsBlock(repo, fresh, pageId)).toBe('legacy-settings')
     expect(hasBlockType(repo.block('legacy-settings').peek()!, SETTINGS_TYPE)).toBe(true)
+  })
+
+  it('rescues a legacy settings block whose only config is its choices', async () => {
+    // Picking a variant and leaving every knob at its default is the ORDINARY
+    // state — the switcher writes a choice block and nothing else is written at
+    // all — so a pre-seat settings block can carry no settings VALUES while
+    // owning the only configuration there is. Rescuing on the knobs alone
+    // abandoned exactly that workspace.
+    const fresh = 'ws-with-nothing-in-it'
+    const {pageId} = await ensureStrengthHome(repo, fresh)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'legacy-choices-only', workspaceId: fresh, parentId: pageId,
+        orderKey: 'a1', content: 'Strength settings',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a settings block from before the seat'})
+    await writeAltChoice(repo, 'legacy-choices-only', 'press', 'ohp', 'Overhead press')
+    // No knobs at all — the case the value check alone misses.
+    expect(repo.block('legacy-choices-only').peek()?.properties[FIELD.rolloverHour])
+      .toBeUndefined()
+    await repo.tx(tx => tx.run(deleteBlock, {id: derivedBlockId(settingsIdentity(pageId))}),
+      {scope: ChangeScope.BlockDefault, description: 'no seat block'})
+
+    expect(await findSettingsBlock(repo, fresh, pageId)).toBe('legacy-choices-only')
+    expect(await readAltChoices(repo, 'legacy-choices-only')).toEqual({press: 'ohp'})
   })
 
   it('READS a settings block whose type was removed, without repairing it first', async () => {
@@ -611,6 +637,24 @@ describe('the layoff record and the finish that justifies it', () => {
     expect(repo.block(seat).peek()?.content).toContain('62-day gap')
   })
 
+  it('replaces a record whose tier was edited to apply no cut at all', async () => {
+    // `coveringLayoff` correctly asks for a replacement — the tier says
+    // on-schedule, so the record cuts nothing — but `refreshLayoff` compared
+    // the STORED percentage, which still read deep, and returned early. The
+    // write meant to replace the record left it exactly as it was, so Finish
+    // closed the comeback with a layoff that applies no cut.
+    const deep = {from: '2026-07-01', to: '2026-07-15', days: 62, tierId: '2mo+', pct: 0.5}
+    const seat = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, deep, DEFAULT_CONFIG.reentry)
+    await repo.tx(tx => tx.setProperty(seat, layoffTierProp, 'on-schedule'),
+      {scope: ChangeScope.BlockDefault, description: 'hand-edit the tier to nothing'})
+
+    const real = {from: '2026-07-01', to: '2026-09-01', days: 62, tierId: '2mo+', pct: 0.7}
+    expect(await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, real, DEFAULT_CONFIG.reentry)).toBe(seat)
+
+    const layoffs = buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))
+    expect(layoffs[0]).toMatchObject({tierId: '2mo+', pct: 0.7})
+  })
+
   it('will not loosen a record that already names a deeper break', async () => {
     // Severity is the merge rule, so it is order-independent: whichever client
     // writes second, the harsher measurement survives. This is the half that
@@ -768,6 +812,26 @@ describe('or-group choices', () => {
     await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-c', 'Face pulls')
     expect(await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)).toHaveLength(1)
     expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({'group-1': 'opt-c'})
+  })
+})
+
+describe('a choice block that left the strength world', () => {
+  it('stops steering prescriptions once its type is removed', async () => {
+    // The group and option properties survive an untag, and folding any child
+    // carrying them meant a choice you had visibly taken out of the extension
+    // went on changing every later session. The type IS required here, unlike
+    // the settings block that parents these — a choice is re-pickable in one
+    // tap, where the settings block holds the plan root and can only be found
+    // by tag or seat.
+    await writeAltChoice(repo, SETTINGS_ID, 'press', 'ohp', 'Overhead press')
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({press: 'ohp'})
+
+    const [choice] = await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)
+    await repo.removeType(choice.id, ALT_CHOICE_TYPE)
+
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({})
+    // The block and its properties are untouched — this is a READ rule.
+    expect(repo.block(choice.id).peek()?.properties[FIELD.choiceGroup]).toBe('press')
   })
 })
 

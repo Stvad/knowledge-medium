@@ -78,9 +78,9 @@ export const detectPendingLayoff = (
  *  `detectPendingLayoff` used to pick the tier in the first place. */
 export const effectiveTier = (
   record: {tierId: string; days: number},
-  config: ProgramConfig,
+  tiers: readonly ReentryTier[],
 ): ReentryTier | undefined =>
-  config.reentry.find(tier => tier.id === record.tierId) ?? tierFor(record.days, config.reentry)
+  tiers.find(tier => tier.id === record.tierId) ?? tierFor(record.days, tiers)
 
 const factorFor = (tier: ReentryTier, sessionsBack: number): number =>
   Math.min(1, tier.pct + tier.rampPerSession * sessionsBack)
@@ -123,7 +123,7 @@ export const resolveReentry = (
   const latest = [...layoffs].sort((a, b) => a.to.localeCompare(b.to)).at(-1)
   if (!latest) return undefined
 
-  const tier = effectiveTier(latest, config)
+  const tier = effectiveTier(latest, config.reentry)
   if (!tier || isOnScheduleTier(tier)) return undefined
 
   const sessionsBack = fullSessionDays(history, config.dayRolloverHour)
@@ -194,7 +194,7 @@ export const coveringLayoff = (
   config: ProgramConfig,
 ): LayoffRecord | undefined => layoffs.find(record => {
   if (record.from !== pending.from) return false
-  const tier = effectiveTier(record, config)
+  const tier = effectiveTier(record, config.reentry)
   return tier !== undefined && !isOnScheduleTier(tier) && tier.pct <= pending.tier.pct
 })
 

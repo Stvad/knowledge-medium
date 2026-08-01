@@ -36,7 +36,7 @@ import {hasBlockType} from '@/data/properties.js'
 
 import type {SessionType} from '../engine/types'
 import {storedDate} from './day'
-import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
+import {ALT_CHOICE_TYPE, EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 
 export interface Row {
   id: string
@@ -137,4 +137,28 @@ export const asEntry = (row: Row | null | undefined): EntryView | null => {
     definitionId: text(row, FIELD.definition),
     occurrence: num(row, FIELD.occurrence),
   }
+}
+
+export interface AltChoiceView {
+  id: string
+  /** The `or`-group this answers, and the option chosen for it. Both must be
+   *  present and non-empty — a half-written record answers nothing. */
+  group: string
+  option: string
+}
+
+/** The recorded answer to one `or`-group.
+ *
+ *  The type IS required, unlike the settings block that parents these. The
+ *  reason they differ: a choice is re-pickable in one tap from the switcher,
+ *  so untagging one costs a tap, while the settings block holds the plan root
+ *  and can only be found by tag or by seat — losing it there loses config with
+ *  no way back. Without this gate the group and option properties survived an
+ *  untag and every later prescription kept applying a preference the user had
+ *  visibly removed. */
+export const asAltChoice = (row: Row | null | undefined): AltChoiceView | null => {
+  if (!usable(row, ALT_CHOICE_TYPE)) return null
+  const group = text(row, FIELD.choiceGroup)
+  const option = text(row, FIELD.choiceOption)
+  return group !== undefined && option !== undefined ? {id: row.id, group, option} : null
 }
