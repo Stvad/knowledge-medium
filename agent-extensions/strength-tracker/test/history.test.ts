@@ -3,7 +3,6 @@ import {describe, expect, it} from 'vitest'
 import {buildAltChoices, buildHistory, buildLayoffs} from '../src/km/history'
 import {dateToDay, dayToDate} from '../src/km/day'
 import {FIELD} from '../src/km/fields'
-import {detectLeftRightAsymmetry, shoulderChecklist} from '../src/engine/shoulder'
 import type {WorkoutRecord} from '../src/engine/types'
 
 /** Build the encoded `properties` map a real row carries: dates as ISO
@@ -108,26 +107,5 @@ describe('buildLayoffs', () => {
     expect(buildLayoffs([layoff])).toEqual([
       {id: 'l1', from: '2026-07-03', to: '2026-07-23', days: 20, tierId: '2-4w', pct: 0.9},
     ])
-  })
-})
-
-describe('shoulder checklist', () => {
-  const waiter = (l: number, r: number): WorkoutRecord => ({
-    id: 'b', date: '2026-07-19T23:00:00', session: 'B',
-    exercises: [{exercise: 'Waiter carry', sets: [
-      {weight: l, reps: 4, side: 'L'},
-      {weight: r, reps: 4, side: 'R'},
-    ]}],
-  })
-
-  it('flags left/right asymmetry when the right outpaces the left', () => {
-    expect(detectLeftRightAsymmetry([waiter(35, 45)])).toBe(true)
-    expect(detectLeftRightAsymmetry([waiter(40, 40)])).toBe(false)
-  })
-
-  it('pre-checks the asymmetry trigger in the checklist', () => {
-    const checklist = shoulderChecklist([waiter(35, 45)])
-    expect(checklist.find(t => t.id === 'left-plateau')?.autoFlag).toBe(true)
-    expect(checklist.every(t => t.id === 'left-plateau' || !t.autoFlag)).toBe(true)
   })
 })

@@ -1,8 +1,7 @@
 /** The strength writes that are not a session.
  *
  *  Logging lives in `session.ts` — this holds what sits beside it: the user's
- *  `or`-group choices, the layoff record, the shoulder-consult todo, and
- *  discarding a session outright.
+ *  `or`-group choices, the layoff record, and discarding a session outright.
  *
  *  It used to hold the whole logging path as well: materialize-on-first-edit,
  *  per-set patch writes, prune-at-Finish, and the derived-id machinery that

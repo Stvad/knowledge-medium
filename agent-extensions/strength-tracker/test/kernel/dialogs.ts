@@ -3,7 +3,7 @@
  *  The real facade queues a component and resolves when the user answers it.
  *  Under test nobody answers, so the queue would hang the caller forever —
  *  and the caller here is `finish()`, whose remaining work (the status
- *  message, the shoulder todo) is exactly what we want to observe. So this
+ *  message) is exactly what we want to observe. So this
  *  answers immediately with whatever the test has armed.
  *
  *  Aliased in `vitest.config.ts`; `src/` still imports the real path. */

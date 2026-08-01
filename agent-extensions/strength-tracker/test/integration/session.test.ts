@@ -774,8 +774,11 @@ describe('closing a session takes nothing away from you', () => {
       expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(true)
       expect(hasBlockType(repo.block(set.id).peek()!, SET_TYPE)).toBe(true)
     }
-    // Done-ness never lived in the type: it is `status`, which is what history
-    // reads, and Finish leaves both alone.
+    // `status` is the TODO type's own property. Untagging did not clear it —
+    // the value stayed in the bag, which is the only reason history kept
+    // reading it — but it left the block carrying a property whose declaring
+    // type it no longer had, which is the orphaned shape `audit-extension`
+    // reports. Keeping the type keeps the property owned.
     expect(repo.block(sets[0].id).peekProperty(todoStatusProp)).toBe('done')
     expect(repo.block(sets[1].id).peekProperty(todoStatusProp)).toBe('open')
     expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(135)
