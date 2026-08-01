@@ -52,7 +52,12 @@ export interface SessionPlan {
  *  right, which is the order the plan's "left leads and right matches" rule
  *  wants them performed in. */
 const setsFor = (exercise: PrescribedExercise): PlannedSet[] => {
-  const reps = exercise.repMax ?? exercise.repMin ?? 0
+  // Carries and rounds-based work have no rep range at all, so the range is
+  // no help — but what you did last time is. Stamping 0 there records a set
+  // performed for zero reps, which is a real number the engine and every
+  // volume total then believe.
+  const reps = exercise.repMax ?? exercise.repMin
+    ?? exercise.lastTime?.reps.find(count => count > 0) ?? 0
   const weight = exercise.weight ?? 0
   const rows: PlannedSet[] = []
   for (let i = 0; i < Math.max(0, exercise.sets); i += 1) {
@@ -127,7 +132,7 @@ export const isExactlyThisLift = (block: EntryRow, lift: PlannedLift): boolean =
 export const matchEntries = <T extends EntryRow>(
   lifts: readonly PlannedLift[],
   entries: readonly T[],
-): (T | undefined)[] => {
+): {matched: (T | undefined)[]; claimed: ReadonlySet<string>} => {
   const matched: (T | undefined)[] = lifts.map(() => undefined)
   const claimed = new Set<string>()
   const pass = (fits: (block: EntryRow, lift: PlannedLift) => boolean): void => {
@@ -141,5 +146,10 @@ export const matchEntries = <T extends EntryRow>(
   }
   pass(isExactlyThisLift)
   pass(namesThisLift)
-  return matched
+  // `claimed` goes OUT, because the caller has a second way to reach an
+  // entry: a row that matched nothing here still derives an id, and that id
+  // can be one another row was just given by the by-name pass — a definition
+  // renamed away from the name a bare row still uses is enough. Adopting it
+  // there puts two lifts in one entry and one set tree.
+  return {matched, claimed}
 }

@@ -7,9 +7,11 @@
  *  override by tapping, not a cache of a computation.
  */
 
+import {useMemo} from 'react'
+
 import type {Block} from '@/data/block.js'
 import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
-import {useContent, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
+import {useContent, useData, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import type {BlockRenderer} from '@/types.js'
 
 import {lastEntryFor, workingWeight} from '../../engine/progression'
@@ -38,12 +40,23 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const sets = setsOf(block.id)
   const done = sets.filter(set => set.properties[FIELD.todoStatus] === 'done').length
 
-  // "Last time" comes from the same matcher progression uses, so what the
-  // line says and what the next prescription is built from cannot disagree.
-  // The name falls back to the block's own text: an entry hand-typed into the
-  // outline has no `strength:exercise` yet, and "no history" would be a
-  // wronger answer than matching on what it plainly says it is.
-  const previous = lastEntryFor(history, exercise ?? content, definitionId, occurrence ?? 0)
+  // Everything except the session this entry is IN. `history` holds every
+  // finished workout, so the moment you tap Finish this lookup returns the
+  // very entry it is describing and the line reports tonight as "last time";
+  // opened on an older session it reports a later one. Both are worse than
+  // saying nothing, because that number is what you lift against.
+  //
+  // "Last time" otherwise comes from the same matcher progression uses, so
+  // what the line says and what the next prescription is built from cannot
+  // disagree. The name falls back to the block's own text: an entry
+  // hand-typed into the outline has no `strength:exercise` yet, and "no
+  // history" would be a wronger answer than matching what it plainly says.
+  const workoutId = useData(block)?.parentId ?? null
+  const earlier = useMemo(
+    () => history.filter(workout => workout.id !== workoutId),
+    [history, workoutId],
+  )
+  const previous = lastEntryFor(earlier, exercise ?? content, definitionId, occurrence ?? 0)
   const previousWeight = previous ? workingWeight(previous.entry) : undefined
 
   const parts: string[] = []

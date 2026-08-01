@@ -29,6 +29,7 @@ import {
   completedAtProp,
   dateProp,
   definitionProp,
+  exerciseProp,
   occurrenceProp,
   sessionProp,
   prescribedSetsProp,
@@ -771,5 +772,32 @@ describe('typing a starting weight', () => {
     // "set to" apart from "add": from 0 the two agree.
     expect(await adjustSet(repo, set.id, {set: {weight: 100}})).toBe('written')
     expect(repo.block(set.id).peekProperty(weightProp)).toBe(100)
+  })
+})
+
+describe('a plan block renamed away from the name an entry still carries', () => {
+  it('keeps the two lifts on separate trees', async () => {
+    // Logged as "Press" from `def-ohp`. The plan block is later renamed to
+    // "Overhead Press", and the plan also has a bare "Press" row.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID,
+      plan([lift('Press', 1, {definitionId: 'def-ohp'})]))
+
+    // The bare row wins the existing entry by NAME. The renamed row matches
+    // nothing — but its derived id is that same entry's, and `stillNamesLift`
+    // sees a matching definition and would wave it through. Both lifts would
+    // then write into one entry and one set tree.
+    await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Overhead Press', 3, {definitionId: 'def-ohp'}),
+      lift('Press', 1),
+    ]))
+
+    const entries = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    expect(entries).toHaveLength(2)
+    const byName = new Map(await Promise.all(entries.map(async e => [
+      repo.block(e.id).peekProperty(exerciseProp),
+      (await childrenOf(e.id, SET_TYPE)).length,
+    ] as const)))
+    expect(byName.get('Overhead Press')).toBe(3)
+    expect(byName.get('Press')).toBe(1)
   })
 })

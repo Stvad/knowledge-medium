@@ -110,7 +110,7 @@ describe('matchEntries — which existing entry each row continues', () => {
     // reaches the fallback — where, unclaimed, it would take the entry the
     // exact pass already gave away, and both rows would write into one tree.
     const a = entry('a', {def: 'def-ohp'})
-    const matched = matchEntries([row({definitionId: 'def-ohp'}), row()], [a])
+    const {matched} = matchEntries([row({definitionId: 'def-ohp'}), row()], [a])
 
     expect(matched[0]).toBe(a)
     expect(matched[1]).toBeUndefined()
@@ -120,7 +120,7 @@ describe('matchEntries — which existing entry each row continues', () => {
     // Session A prescribes the lift twice. Ignore the occurrence and the first
     // row claims the SECOND slot's entry, filing its sets under the other one.
     const second = entry('second', {occurrence: 1})
-    const matched = matchEntries([row({occurrence: 0}), row({occurrence: 1})], [second])
+    const {matched} = matchEntries([row({occurrence: 0}), row({occurrence: 1})], [second])
 
     expect(matched[0]).toBeUndefined()
     expect(matched[1]).toBe(second)
@@ -128,16 +128,56 @@ describe('matchEntries — which existing entry each row continues', () => {
 
   it('reads a missing occurrence as the first slot, which is what legacy entries are', () => {
     const legacy = entry('legacy')
-    expect(matchEntries([row({occurrence: 0})], [legacy])[0]).toBe(legacy)
-    expect(matchEntries([row({occurrence: 1})], [legacy])[0]).toBeUndefined()
+    expect(matchEntries([row({occurrence: 0})], [legacy]).matched[0]).toBe(legacy)
+    expect(matchEntries([row({occurrence: 1})], [legacy]).matched[0]).toBeUndefined()
   })
 
   it('refuses an entry that names a different plan block outright', () => {
-    expect(matchEntries([row({definitionId: 'def-ohp'})], [entry('a', {def: 'def-landmine'})])[0])
+    expect(matchEntries([row({definitionId: 'def-ohp'})], [entry('a', {def: 'def-landmine'})]).matched[0])
       .toBeUndefined()
   })
 
   it('refuses an entry for a different lift, however the plan blocks line up', () => {
-    expect(matchEntries([row({exercise: 'Row'})], [entry('a')])[0]).toBeUndefined()
+    expect(matchEntries([row({exercise: 'Row'})], [entry('a')]).matched[0]).toBeUndefined()
+  })
+})
+
+describe('a lift with no rep range', () => {
+  it('carries forward the reps you last did, rather than stamping zero', () => {
+    // A carry has neither `repMin` nor `repMax` — the range is no help, but
+    // what you did last time is. Stamping 0 records a set performed for zero
+    // reps, which every volume total and the engine then believe.
+    const {lifts} = planFromPrescription(prescription([exercise({
+      exercise: 'Waiter carry', repMin: undefined, repMax: undefined, freeform: true,
+      weight: 53, sets: 2,
+      lastTime: {date: '2026-07-17', weight: 53, reps: [40, 40]},
+    })]), 'lb')
+
+    expect(lifts[0].sets.map(s => s.reps)).toEqual([40, 40])
+  })
+
+  it('still stamps zero when there is nothing to carry forward', () => {
+    const {lifts} = planFromPrescription(prescription([exercise({
+      exercise: 'Waiter carry', repMin: undefined, repMax: undefined, freeform: true,
+    })]), 'lb')
+
+    expect(lifts[0].sets.every(s => s.reps === 0)).toBe(true)
+    expect(lifts[0].sets).toHaveLength(3)
+  })
+})
+
+describe('matchEntries reports what it claimed', () => {
+  it('names the entries it handed out, so a derived fallback cannot reuse one', () => {
+    // A row that matched nothing here still derives an id, and that id can be
+    // an entry the by-name pass just gave to another row — a definition
+    // renamed away from the name a bare row still uses is enough. Without the
+    // claim set travelling out, both lifts adopt one entry and one set tree.
+    const a = {id: 'a', properties: {'strength:exercise': 'Press'} as Record<string, unknown>}
+    const {matched, claimed} = matchEntries([{
+      exercise: 'Press', occurrence: 0, unit: 'lb', prescribedSets: 1, sets: [],
+    }], [a])
+
+    expect(matched[0]).toBe(a)
+    expect([...claimed]).toEqual(['a'])
   })
 })

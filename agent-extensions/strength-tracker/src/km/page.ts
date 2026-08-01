@@ -9,7 +9,7 @@
 
 import {ChangeScope} from '@/data/api/index.js'
 import type {Block} from '@/data/block.js'
-import {getOrCreateKernelPage} from '@/data/kernelPage.js'
+import {getOrCreateKernelPage, kernelPageBlockId} from '@/data/kernelPage.js'
 import {createChild} from '@/data/mutators.js'
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
@@ -20,6 +20,29 @@ import {SETTINGS_TYPE, STRENGTH_LOG_TYPE} from './schema'
 // deterministic id can never collide with another kernel page.
 const STRENGTH_LOG_NS = 'b7e1d4c2-9a63-4f80-8c15-3e6d5a2f9b04'
 const STRENGTH_LOG_ALIAS = 'Strength Log'
+
+/** The page if it already exists, WITHOUT creating it.
+ *
+ *  Reading the program must not bootstrap: the start flow reads before it
+ *  asks, and a preview you cancel would otherwise leave a real synced page
+ *  and settings block behind — for no session. */
+export const findStrengthLogPage = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<string | null> => {
+  const id = kernelPageBlockId(workspaceId, STRENGTH_LOG_NS)
+  const block = await repo.load(id)
+  return block && !block.deleted ? id : null
+}
+
+/** The settings block if it already exists, WITHOUT creating it. */
+export const findSettingsBlock = async (
+  repo: Repo,
+  workspaceId: string,
+  pageId: string,
+): Promise<string | null> =>
+  (await repo.queryBlocks({workspaceId, types: [SETTINGS_TYPE]}))
+    .find(block => block.parentId === pageId)?.id ?? null
 
 export const getOrCreateStrengthLogPage = (repo: Repo, workspaceId: string): Promise<Block> =>
   getOrCreateKernelPage(repo, workspaceId, {

@@ -22,7 +22,7 @@ import type {
 import {configFor, loadPlanSource, type PlanSource} from './config'
 import {EXERCISE_ENTRY_TYPE, FIELD, LAYOFF_TYPE, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {buildHistory, buildLayoffs} from './history'
-import {getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
+import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, getOrCreateStrengthLogPage} from './page'
 import {finishSession, type FinishOutcome} from './session'
 
 export interface ProgramSnapshot {
@@ -30,8 +30,9 @@ export interface ProgramSnapshot {
   warnings: readonly string[]
   history: readonly WorkoutRecord[]
   layoffs: readonly LayoffRecord[]
-  /** Where layoff records and settings live. */
-  pageId: string
+  /** Where layoff records and settings live — `null` until something is
+   *  written there. */
+  pageId: string | null
   settingsBlockId: string | null
   day: string
   /** The plan as read, so a caller can re-resolve it against different
@@ -57,8 +58,12 @@ export const readProgram = async (
   workspaceId: string,
   altChoiceOverrides?: Readonly<Record<string, string>>,
 ): Promise<ProgramSnapshot> => {
-  const page = await getOrCreateStrengthLogPage(repo, workspaceId)
-  const settingsBlockId = await getOrCreateSettingsBlock(repo, workspaceId, page.id).catch(() => null)
+  // Found, never created: this runs before the start dialog is even shown,
+  // and a preview you cancel must leave the workspace exactly as it was.
+  // `ensureStrengthHome` does the creating, at the two moments something is
+  // actually written here.
+  const pageId = await findStrengthLogPage(repo, workspaceId)
+  const settingsBlockId = pageId ? await findSettingsBlock(repo, workspaceId, pageId) : null
   const planSource = await loadPlanSource(repo, workspaceId, settingsBlockId)
   const {config, warnings} = configFor(planSource, altChoiceOverrides)
 
@@ -76,7 +81,7 @@ export const readProgram = async (
     warnings,
     history: buildHistory(tree.workouts, tree.exercises, tree.sets),
     layoffs: buildLayoffs(layoffRows),
-    pageId: page.id,
+    pageId,
     settingsBlockId,
     day: trainingDay(new Date(), config.dayRolloverHour),
     planSource,
@@ -101,6 +106,43 @@ export const prescribeFor = (
   now,
   ...(session !== undefined ? {session} : {}),
 })
+
+/** The in-progress workout for the training day this snapshot describes, if
+ *  there is one — the same three fields the readers file a workout by.
+ *
+ *  Read straight from the blocks rather than from `history`, which holds only
+ *  FINISHED sessions by design and so can never answer this. */
+export const standingSession = async (
+  repo: Repo,
+  workspaceId: string,
+  snapshot: ProgramSnapshot,
+  now: Date,
+): Promise<string | null> => {
+  const day = trainingDay(now, snapshot.config.dayRolloverHour)
+  const rows = await repo.query.typedBlocks({workspaceId, types: [WORKOUT_TYPE]}).load()
+  const live: BlockData[] = (rows as BlockData[]).filter(row =>
+    !row.deleted
+    && row.properties[FIELD.status] === 'in-progress'
+    && typeof row.properties[FIELD.date] === 'string'
+    && trainingDay(row.properties[FIELD.date] as string, snapshot.config.dayRolloverHour) === day)
+  // Lowest id when there are somehow several, so every device names the same
+  // one — this only chooses where to NAVIGATE, never where to write.
+  let best: string | null = null
+  for (const row of live) if (best === null || row.id < best) best = row.id
+  return best
+}
+
+/** The log page and its settings block, created if they are not there yet.
+ *  Called only from the two paths that write into them — recording a layoff,
+ *  and recording an `or`-group choice — so nothing is bootstrapped by merely
+ *  looking. */
+export const ensureStrengthHome = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<{pageId: string; settingsBlockId: string}> => {
+  const page = await getOrCreateStrengthLogPage(repo, workspaceId)
+  return {pageId: page.id, settingsBlockId: await getOrCreateSettingsBlock(repo, workspaceId, page.id)}
+}
 
 /** Where tonight's session gets filed: the training day's daily note.
  *
@@ -141,8 +183,13 @@ export const closeSession = async (
     ? trainingDay(workout.properties[FIELD.date] as string, snapshot.config.dayRolloverHour)
     : snapshot.day
   const pending = detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
-  const layoff = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
-    ? {pageId: snapshot.pageId, record: layoffFromPending(pending)}
+  const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
+    ? layoffFromPending(pending)
+    : undefined
+  // The page is created HERE, not at read time — a gap record needs a home,
+  // and this is the first moment one is actually being written.
+  const layoff = record
+    ? {pageId: (await ensureStrengthHome(repo, workspaceId)).pageId, record}
     : undefined
   return finishSession(repo, workoutId, layoff)
 }

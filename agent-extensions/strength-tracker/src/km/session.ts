@@ -304,7 +304,7 @@ export const startSession = async (
     const liveEntries = (await tx.childrenOf(workout.id, undefined, {hidePropertyChildren: true}))
       .filter(block => !block.deleted && hasBlockType(block, EXERCISE_ENTRY_TYPE))
     // Settled for every row at once, before any of them writes.
-    const continues = matchEntries(plan.lifts, liveEntries)
+    const {matched: continues, claimed} = matchEntries(plan.lifts, liveEntries)
 
     for (const [row, lift] of plan.lifts.entries()) {
       const already = continues[row]
@@ -312,7 +312,15 @@ export const startSession = async (
         ? await adoptTypedBlock(repo, tx, already, [EXERCISE_ENTRY_TYPE], typeSnapshot)
         : await getOrCreateTypedChild(repo, tx, {
           identity: exerciseIdentity(workout.id, lift.definitionId ?? lift.exercise, lift.occurrence),
-          adoptable: both(stillUnder(workout.id), stillNamesLift(lift)),
+          // …and never one another row was already given. A row that matched
+          // nothing above still derives an id, and that id can be an entry the
+          // by-name pass just handed out — a definition renamed away from the
+          // name a bare row still carries is enough. `stillNamesLift` would
+          // wave it through, and both lifts would share one set tree.
+          adoptable: both(
+            block => !claimed.has(block.id),
+            both(stillUnder(workout.id), stillNamesLift(lift)),
+          ),
           ...entrySpec(workout.id, lift, typeSnapshot),
         })
       const entryId = entry.status !== 'taken'
