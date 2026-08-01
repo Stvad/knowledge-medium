@@ -14,6 +14,7 @@ import type { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
 import { createTestRepo } from '@/data/test/createTestRepo.js'
 import { blockRenderersFacet } from '@/extensions/core.js'
+import { typesProp } from '@/data/properties.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes/dailyNotes.js'
@@ -21,8 +22,8 @@ import type { BlockRendererProps } from '@/types.js'
 
 import readwiseContributions, {
   buildUnreviewedHighlightsQuery,
-  groupHighlightsBySection,
-  useStickyRows,
+  groupHighlightIds,
+  useStickyIds,
 } from './readwise.tsx'
 
 const HIGHLIGHT_TYPE = 'readwise-highlight'
@@ -165,165 +166,117 @@ describe('unreviewed backlog query', () => {
 })
 
 describe('grouping', () => {
-  const row = (id: string, parentId: string | null): BlockData =>
-    ({id, parentId} as BlockData)
+  /** Stand-in for `repo.block(id).peek()`. */
+  const reader = (rows: Record<string, BlockData | null>) =>
+    (id: string) => rows[id] ?? null
 
-  it('groups by section in first-appearance order, keeping item order', () => {
-    // The query is `created-asc`, so first appearance is oldest-first — and
+  // The grouper reads each id's CURRENT block, so the rows need real type tags —
+  // spelled through `typesProp` rather than a literal key, since guessing it
+  // wrong makes every one of these pass as "not a highlight".
+  const typed = (id: string, parentId: string | null, types: string[] = [HIGHLIGHT_TYPE]) =>
+    ({
+      id, parentId, deleted: false,
+      properties: {[typesProp.name]: typesProp.codec.encode(types)},
+    } as unknown as BlockData)
+
+  it('groups by the block\'s current parent, in first-seen order', () => {
+    // Ids arrive `created-asc`, so first appearance is oldest-first — and
     // because `review_date` is stamped at import, that tracks scheduled order.
-    const groups = groupHighlightsBySection([
-      row('a1', 'sec-a'), row('b1', 'sec-b'), row('a2', 'sec-a'), row('b2', 'sec-b'),
-    ])
+    const rows = {
+      a1: typed('a1', 'sec-a'), b1: typed('b1', 'sec-b'),
+      a2: typed('a2', 'sec-a'), b2: typed('b2', 'sec-b'),
+    }
+    const groups = groupHighlightIds(['a1', 'b1', 'a2', 'b2'], reader(rows))
 
     expect(groups.map(g => g.sectionId)).toEqual(['sec-a', 'sec-b'])
-    expect(groups.map(g => g.items.map(i => i.id))).toEqual([['a1', 'a2'], ['b1', 'b2']])
+    expect(groups.map(g => g.items)).toEqual([['a1', 'a2'], ['b1', 'b2']])
+  })
+
+  it('follows a MOVED highlight to its new parent', () => {
+    // The point of reading live rather than keeping a snapshot: the id set
+    // cannot go stale, because it holds no copy of the block to go stale.
+    const groups = groupHighlightIds(['x'], reader({x: typed('x', 'sec-moved')}))
+    expect(groups).toEqual([{sectionId: 'sec-moved', items: ['x']}])
+  })
+
+  it('drops ids whose block is gone, deleted, or no longer a highlight', () => {
+    // Each of these used to need its own "why did this row leave the query"
+    // branch in the sticky reconciliation. Reading live, they are one rule.
+    const rows: Record<string, BlockData | null> = {
+      missing: null,
+      gone: {...typed('gone', 'sec'), deleted: true} as BlockData,
+      untagged: typed('untagged', 'sec', ['page']),
+      kept: typed('kept', 'sec'),
+    }
+    const groups = groupHighlightIds(
+      ['missing', 'gone', 'untagged', 'kept'], reader(rows),
+    )
+    expect(groups).toEqual([{sectionId: 'sec', items: ['kept']}])
   })
 
   it('does not merge parentless rows into a real section', () => {
-    const groups = groupHighlightsBySection([row('orphan', null), row('x', 'sec-a')])
+    const groups = groupHighlightIds(
+      ['orphan', 'x'], reader({orphan: typed('orphan', null), x: typed('x', 'sec-a')}),
+    )
     expect(groups.map(g => g.sectionId)).toEqual(['', 'sec-a'])
   })
 })
 
-describe('sticky rows', () => {
-  /** Default predicate: every row that left the query left because it was
-   *  reviewed. Tests that care about the other exits pass their own. */
-  const RETAIN_ALL = () => true
-
-  const Probe = ({live, onRender, retain = RETAIN_ALL, ready = true}: {
-    live: readonly BlockData[]
-    onRender: (ids: string[], reset: () => void) => void
-    retain?: (row: BlockData) => boolean
-    ready?: boolean
+describe('sticky ids', () => {
+  const Probe = ({live, onRender}: {
+    live: readonly string[]
+    onRender: (ids: readonly string[], reset: () => void) => void
   }) => {
-    const [rows, reset] = useStickyRows(live, {shouldRetain: retain, ready})
-    onRender(rows.map(r => r.id), reset)
-    return <span>{rows.map(r => r.id).join(',')}</span>
-  }
-  const row = (id: string): BlockData => ({id, parentId: 'sec'} as BlockData)
-
-  /** Same hook, but handing back the whole rows so a test can look at their
-   *  `parentId` rather than just the id order. */
-  const RowProbe = ({live, onRender}: {
-    live: readonly BlockData[]
-    onRender: (rows: readonly BlockData[]) => void
-  }) => {
-    const [rows] = useStickyRows(live, {shouldRetain: RETAIN_ALL, ready: true})
-    onRender(rows)
-    return <span>{rows.map(r => `${r.id}@${r.parentId}`).join(',')}</span>
+    const [ids, reset] = useStickyIds(live)
+    onRender(ids, reset)
+    return <span>{ids.join(',')}</span>
   }
 
-  it('keeps a row that dropped out of the live set', async () => {
+  it('keeps an id that dropped out of the live set', async () => {
     // What "mark reviewed" does. Without this the row vanishes and everything
     // below jumps up under the cursor — the problem SRS review answers with a
     // frozen queue, a persisted index and a reconcile pass.
-    let latest: string[] = []
-    const {rerender} = render(
-      <Probe live={[row('a'), row('b')]} onRender={ids => { latest = ids }}/>,
-    )
+    let latest: readonly string[] = []
+    const capture = (ids: readonly string[]) => { latest = ids }
+    const {rerender} = render(<Probe live={['a', 'b']} onRender={capture}/>)
     expect(latest).toEqual(['a', 'b'])
 
-    await act(async () => { rerender(<Probe live={[row('b')]} onRender={ids => { latest = ids }}/>) })
+    await act(async () => { rerender(<Probe live={['b']} onRender={capture}/>) })
 
     expect(latest).toEqual(['a', 'b'])
     expect(screen.getByText('a,b')).toBeTruthy()
   })
 
-  it('appends newly-arriving rows at the end rather than reordering', async () => {
-    let latest: string[] = []
-    const {rerender} = render(<Probe live={[row('a')]} onRender={ids => { latest = ids }}/>)
+  it('appends newly-arriving ids at the end rather than reordering', async () => {
+    let latest: readonly string[] = []
+    const capture = (ids: readonly string[]) => { latest = ids }
+    const {rerender} = render(<Probe live={['a']} onRender={capture}/>)
 
-    await act(async () => {
-      rerender(<Probe live={[row('c'), row('a')]} onRender={ids => { latest = ids }}/>)
-    })
+    await act(async () => { rerender(<Probe live={['c', 'a']} onRender={capture}/>) })
 
     expect(latest).toEqual(['a', 'c'])
   })
 
-  it('takes the LIVE copy of a row that is still in the query', async () => {
-    // `parentId` decides which group a highlight renders under, and it changes
-    // under us when the highlight is moved while the page is open. Retaining
-    // the first-seen row unconditionally would pin it to its old document.
-    let latest: readonly BlockData[] = []
-    const capture = (rows: readonly BlockData[]) => { latest = rows }
-    const moved = {id: 'a', parentId: 'sec-b'} as BlockData
-    const {rerender} = render(
-      <RowProbe live={[row('a')]} onRender={capture}/>,
-    )
-    expect(latest[0]!.parentId).toBe('sec')
+  it('never removes on merge, so an unresolved query cannot empty the list', async () => {
+    // `useBlockQuery` reports [] both while loading and when genuinely empty,
+    // and the midnight rollover swaps the query key — so a version that
+    // reconciled removals would blank the whole backlog at midnight. Being
+    // append-only is what makes that unrepresentable rather than guarded.
+    let latest: readonly string[] = []
+    const capture = (ids: readonly string[]) => { latest = ids }
+    const {rerender} = render(<Probe live={['a', 'b']} onRender={capture}/>)
 
-    await act(async () => { rerender(<RowProbe live={[moved]} onRender={capture}/>) })
-
-    expect(latest[0]!.parentId).toBe('sec-b')
-  })
-
-  it('keeps the last-seen copy of a row that dropped out', async () => {
-    // For a just-reviewed row the stale parent is the RIGHT answer: it is where
-    // the row was when you saw it, so it stays put instead of jumping groups.
-    let latest: readonly BlockData[] = []
-    const capture = (rows: readonly BlockData[]) => { latest = rows }
-    const {rerender} = render(
-      <RowProbe live={[row('a'), row('b')]} onRender={capture}/>,
-    )
-
-    await act(async () => { rerender(<RowProbe live={[row('b')]} onRender={capture}/>) })
-
-    expect(latest.map(r => r.id)).toEqual(['a', 'b'])
-    expect(latest[0]!.parentId).toBe('sec')
-  })
-
-  it('drops a row that left the query for a reason other than being reviewed', async () => {
-    // Being reviewed is only one way out. A highlight can also be deleted,
-    // untagged, or rescheduled into the future — holding on to those leaves a
-    // row on screen that is no longer a reviewed highlight, and a deleted one
-    // renders as a ghost.
-    let latest: string[] = []
-    const capture = (ids: string[]) => { latest = ids }
-    const reviewed = new Set(['a'])
-    const retain = (row: BlockData) => reviewed.has(row.id)
-    const {rerender} = render(
-      <Probe live={[row('a'), row('b'), row('c')]} onRender={capture} retain={retain}/>,
-    )
-
-    // 'a' was reviewed; 'c' was deleted.
-    await act(async () => {
-      rerender(<Probe live={[row('b')]} onRender={capture} retain={retain}/>)
-    })
+    await act(async () => { rerender(<Probe live={[]} onRender={capture}/>) })
 
     expect(latest).toEqual(['a', 'b'])
   })
 
-  it('holds every row while the query is unresolved', async () => {
-    // The midnight case, and the one that made the retention predicate
-    // dangerous: a rollover changes the query key, so `useBlockQuery` hands
-    // back [] for the new unresolved handle. Reconciling that would read as
-    // "everything left the query" and drop the whole list — including the
-    // session's reviewed rows — and would keep them hidden for good if the
-    // replacement query then failed.
-    let latest: string[] = []
-    const capture = (ids: string[]) => { latest = ids }
-    const retainNone = () => false
-    const {rerender} = render(
-      <Probe live={[row('a'), row('b')]} onRender={capture} retain={retainNone}/>,
-    )
-    expect(latest).toEqual(['a', 'b'])
-
-    await act(async () => {
-      rerender(<Probe live={[]} onRender={capture} retain={retainNone} ready={false}/>)
-    })
-
-    expect(latest).toEqual(['a', 'b'])
-  })
-
-  it('drops the done rows on reset', async () => {
-    let latest: string[] = []
+  it('drops the done ids on reset', async () => {
+    let latest: readonly string[] = []
     let reset = () => {}
-    const {rerender} = render(
-      <Probe live={[row('a'), row('b')]} onRender={(ids, r) => { latest = ids; reset = r }}/>,
-    )
-    await act(async () => {
-      rerender(<Probe live={[row('b')]} onRender={(ids, r) => { latest = ids; reset = r }}/>)
-    })
+    const capture = (ids: readonly string[], r: () => void) => { latest = ids; reset = r }
+    const {rerender} = render(<Probe live={['a', 'b']} onRender={capture}/>)
+    await act(async () => { rerender(<Probe live={['b']} onRender={capture}/>) })
     expect(latest).toEqual(['a', 'b'])
 
     await act(async () => { reset() })

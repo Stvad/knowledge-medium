@@ -31,7 +31,7 @@ import { getOrCreateKernelPage } from '@/data/kernelPage.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { LazyBlockEntry } from '@/plugins/backlinks/BlockEntry.js'
 import { dueByDailyNoteRef } from '@/plugins/daily-notes/dueQuery.js'
-import { localDayKey, useStartOfToday, useTodayKey } from '@/plugins/daily-notes/today.js'
+import { useStartOfToday } from '@/plugins/daily-notes/today.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
 import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
@@ -40,7 +40,7 @@ import {
 } from '@/plugins/daily-notes/dailyNotes.js'
 import { leftSidebarSectionsFacet } from '@/plugins/left-sidebar/facet.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
-import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
 import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
@@ -889,9 +889,7 @@ const ReviewedHighlightDecorator = ({ block, Inner }: BlockRendererProps & { Inn
         className="mt-1 shrink-0 text-muted-foreground hover:text-foreground disabled:pointer-events-none"
         onClick={event => {
           event.stopPropagation()
-          // Un-reviewing puts the highlight back in the backlog, so it moves
-          // the cached count just as marking it did.
-          void block.set(reviewedProp, false).then(invalidateBacklogCount)
+          void block.set(reviewedProp, false)
         }}
       >
         {/* Inlined rather than imported: an installed extension resolves imports
@@ -1268,9 +1266,6 @@ const markHighlightReviewed = async (block: Block): Promise<boolean> => {
 
   if (!block.repo.isReadOnly) {
     await block.set(reviewedProp, true)
-    // The backlog count is cached rather than subscribed; this is the one write
-    // in the app that changes it, so it's also the one place that has to say so.
-    invalidateBacklogCount()
   }
   return true
 }
@@ -1627,13 +1622,6 @@ const runSync = async (repo: any, { silent = false } = {}) => {
     } else if (!silent) {
       showError(`Readwise sync failed: ${err?.message ?? err}`)
     }
-  } finally {
-    // A sync is the other thing that moves the backlog count — new highlights
-    // arrive already scheduled. In `finally` rather than after the loop because
-    // each book commits as it goes: a run that writes three books and then
-    // throws on the fourth page has still changed the count. The cached count
-    // is not subscribed, so the writers are what tell it.
-    invalidateBacklogCount()
   }
 }
 
@@ -1937,73 +1925,45 @@ const useUnreviewedHighlightsReady = (workspaceId: string): boolean => {
   }) as boolean
 }
 
-/** Rows in the order they first appeared, never dropped.
+/** Ids in the order they were first seen this session, never dropped.
  *
  *  Marking a highlight reviewed takes it out of the live query. Rendering the
- *  live list directly would make the row vanish and everything below it jump
- *  up under the cursor — which is exactly the problem SRS review answers with a
- *  frozen queue, a persisted index, a day-rollover invalidation and a reconcile
- *  pass. We don't need any of that: the reviewed highlight stays exactly where
- *  it was and dims (the reviewed content decorator does that), so "where was I"
- *  is answered by the screen. `reset` re-syncs to live and clears the done ones.
+ *  live list directly would make the row vanish and everything below it jump up
+ *  under the cursor — which is the problem SRS review answers with a frozen
+ *  queue, a persisted index, a day-rollover invalidation and a reconcile pass.
+ *  None of that is needed here: the reviewed highlight stays where it is and
+ *  dims (the reviewed content decorator does that), so "where was I" is
+ *  answered by the screen.
  *
- *  A retained row is only ever a FALLBACK. Rows still in the live query are
- *  replaced with the live copy, because `parentId` — which decides the group a
- *  highlight renders under — does change under us when the highlight is moved
- *  while the page is open. Only rows that have dropped out of the query keep
- *  their last-seen snapshot, and for those the stale parent is the correct
- *  answer: it's where the row was when you saw it.
+ *  This keeps IDS, not row snapshots. That is the whole design: an id has no
+ *  staleness semantics, so there is nothing to reconcile. Everything else —
+ *  which document a highlight groups under, whether it still exists, whether it
+ *  is still a highlight — is read live from the block at render time, and can
+ *  therefore never disagree with the database. The earlier snapshot-keeping
+ *  version had to answer "did this row leave because it was reviewed, or
+ *  deleted, or untagged, or rescheduled?", and got it wrong four separate ways.
  *
- *  `shouldRetain` decides WHY a row left. Being reviewed is only one way out of
- *  the query — a highlight can also be deleted, untagged, or rescheduled into
- *  the future, and holding on to those would leave a row on screen that is no
- *  longer a reviewed highlight (a deleted one renders as a ghost). The caller
- *  answers from the block's current state; anything else is dropped.
- *
- *  It is evaluated when the LIVE SET changes, not per row continuously — this
- *  is not a subscription. So a row that is retained first and deleted second
- *  survives until the next render that moves `live` or `sticky` (reviewing
- *  anything else does it), or until "Clear done". That residue is deliberate:
- *  subscribing every retained row to its block would buy a bounded cosmetic
- *  artifact — an empty slot in a list you are already finished with — at the
- *  cost of a handle per row. The done-count is not wrong in that case either:
- *  you did review it this session. */
-export const useStickyRows = (
-  live: readonly BlockData[],
-  {shouldRetain, ready}: {
-    shouldRetain: (row: BlockData) => boolean
-    /** False while the query handle is unresolved. `live` is `[]` then, which
-     *  is indistinguishable from "everything left the query" — and the day
-     *  rollover changes the query key, so this is not just a cold-start case:
-     *  at midnight an open backlog would drop every row it was showing,
-     *  including the session's reviewed ones, and would keep them hidden for
-     *  good if the replacement query failed. Reconciliation waits. */
-    ready: boolean
-  },
-): readonly [readonly BlockData[], () => void] => {
-  const [sticky, setSticky] = useState<readonly BlockData[]>(live)
+ *  The merge is APPEND-ONLY, which is what makes an unresolved handle harmless.
+ *  `useBlockQuery` reports `[]` both while loading and when genuinely empty,
+ *  and the day rollover changes the query key — so a snapshot-keeping version
+ *  needed an explicit readiness gate to avoid reading "loading" as "everything
+ *  left the query" and emptying the list at midnight. Here nothing is ever
+ *  removed by reconciliation, so there is no such reading to get wrong.
+ *  Departures are handled where they belong: `groupHighlightIds` simply doesn't
+ *  render an id whose block is gone. */
+export const useStickyIds = (
+  liveIds: readonly string[],
+): readonly [readonly string[], () => void] => {
+  const [sticky, setSticky] = useState<readonly string[]>(liveIds)
   const merged = useMemo(() => {
-    if (!ready) return sticky
-    const liveById = new Map(live.map(row => [row.id, row]))
-    const next: BlockData[] = []
-    for (const row of sticky) {
-      const liveRow = liveById.get(row.id)
-      if (liveRow) next.push(liveRow)
-      else if (shouldRetain(row)) next.push(row)
-    }
-    const known = new Set(sticky.map(row => row.id))
-    for (const row of live) if (!known.has(row.id)) next.push(row)
-    // The loop always allocates, so identity has to be re-established
-    // explicitly: the converge-during-render below compares by reference, and a
-    // fresh array every render would set state every render — an infinite loop.
-    const unchanged = next.length === sticky.length
-      && next.every((row, i) => row === sticky[i])
-    return unchanged ? sticky : next
-  }, [sticky, live, shouldRetain, ready])
+    const known = new Set(sticky)
+    const additions = liveIds.filter(id => !known.has(id))
+    return additions.length === 0 ? sticky : [...sticky, ...additions]
+  }, [sticky, liveIds])
   // Converge during render (React's "adjust state while rendering" path) so the
-  // first paint after a query result already includes the new rows.
+  // first paint after a query result already includes the new ids.
   if (merged !== sticky) setSticky(merged)
-  const reset = useCallback(() => setSticky(live), [live])
+  const reset = useCallback(() => setSticky(liveIds), [liveIds])
   return [merged, reset]
 }
 
@@ -2012,23 +1972,36 @@ const EMPTY_ANCESTORS: readonly Block[] = []
 interface BacklogGroup {
   /** The highlights' shared parent — the document's "Highlights" section. */
   sectionId: string
-  items: readonly BlockData[]
+  items: readonly string[]
 }
 
-/** Group by the highlights' immediate parent. Readwise files every highlight
- *  under its document's "Highlights" section, so the parent id IS the document
- *  grouping — no ancestor query needed to work it out, and no guessing when a
- *  highlight has been moved somewhere unexpected (it just groups under wherever
- *  it actually lives). Map insertion order preserves the query's `created-asc`
- *  order, so groups come out oldest-first; since `review_date` is stamped at
- *  import, creation order tracks scheduling order. */
-export const groupHighlightsBySection = (rows: readonly BlockData[]): BacklogGroup[] => {
-  const byParent = new Map<string, BlockData[]>()
-  for (const row of rows) {
-    const key = row.parentId ?? ''
+/** Group ids by the highlights' CURRENT immediate parent, read live from each
+ *  block rather than from a snapshot. Readwise files every highlight under its
+ *  document's "Highlights" section, so the parent id is the document grouping —
+ *  no ancestor query needed to work it out, and a highlight moved somewhere
+ *  unexpected simply groups under wherever it actually lives now.
+ *
+ *  Reading live is also what makes an id set sufficient: a deleted or untagged
+ *  block resolves to nothing and drops out here, with no "why did this leave
+ *  the query" bookkeeping anywhere. Ids arrive in the query's `created-asc`
+ *  order and Map insertion order preserves it, so groups come out oldest-first;
+ *  since `review_date` is stamped at import, creation order tracks scheduling
+ *  order. */
+export const groupHighlightIds = (
+  ids: readonly string[],
+  read: (id: string) => BlockData | null | undefined,
+): BacklogGroup[] => {
+  const byParent = new Map<string, string[]>()
+  for (const id of ids) {
+    const data = read(id)
+    if (!data || data.deleted) continue
+    let types: readonly string[]
+    try { types = getBlockTypes(data) } catch { continue }
+    if (!types.includes(READWISE_HIGHLIGHT_TYPE)) continue
+    const key = data.parentId ?? ''
     const bucket = byParent.get(key)
-    if (bucket) bucket.push(row)
-    else byParent.set(key, [row])
+    if (bucket) bucket.push(id)
+    else byParent.set(key, [id])
   }
   return [...byParent.entries()].map(([sectionId, items]) => ({ sectionId, items }))
 }
@@ -2052,19 +2025,27 @@ const BacklogGroupSection = ({
 }) => {
   const repo = useRepo()
   const openBlock = useBlockOpener()
-  // The section's immediate parent is the document page. Taking the last
-  // ancestor rather than scanning for the document TYPE keeps this honest for a
-  // highlight filed somewhere unusual: the header names wherever it really
-  // lives, and each entry's own breadcrumb still shows the full chain.
-  const documentBlock = ancestors.at(-1)
+  const sectionBlock = group.sectionId ? repo.block(group.sectionId) : undefined
+
+  // Usually the section is the document's "Highlights" child, so the document
+  // is the section's parent. But a highlight filed DIRECTLY under its document
+  // makes the document itself the section — and then the parent is the library
+  // root, which would label the group "Readwise Library". Check the section
+  // first, fall back to its parent.
+  const sectionData = sectionBlock?.peek()
+  const sectionIsDocument = (() => {
+    if (!sectionData) return false
+    try { return getBlockTypes(sectionData).includes(READWISE_DOCUMENT_TYPE) } catch { return false }
+  })()
+  const documentBlock = sectionIsDocument ? sectionBlock : ancestors.at(-1)
+
   // Each highlight's parents = the section's ancestors plus the section itself.
   // Handing these to the entry saves it firing its own ancestor query per row.
   // `sectionId` is '' for a highlight sitting at the workspace root (moved out
-  // of its document). There is no section block to name, and `repo.block('')`
-  // would mint a facade for an id that can never resolve.
+  // of its document); there is no section block to name.
   const itemParents = useMemo(
-    () => (group.sectionId ? [...ancestors, repo.block(group.sectionId)] : EMPTY_ANCESTORS),
-    [ancestors, repo, group.sectionId],
+    () => (sectionBlock ? [...ancestors, sectionBlock] : EMPTY_ANCESTORS),
+    [ancestors, sectionBlock],
   )
 
   return (
@@ -2091,12 +2072,12 @@ const BacklogGroupSection = ({
           {group.items.length}
         </span>
       </header>
-      {group.items.map(item => (
+      {group.items.map(id => (
         <LazyBlockEntry
-          key={item.id}
-          block={repo.block(item.id)}
+          key={id}
+          block={repo.block(id)}
           initialParents={itemParents}
-          scopeId={`readwise-backlog:${item.id}`}
+          scopeId={`readwise-backlog:${id}`}
         />
       ))}
     </section>
@@ -2108,20 +2089,16 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const live = useUnreviewedHighlights(workspaceId)
   const ready = useUnreviewedHighlightsReady(workspaceId)
-  // Keep a row that left the query only if it left because it was REVIEWED.
-  // Read from the block's current state rather than the retained snapshot,
-  // which by definition still says `reviewed: false`.
-  const stillAReviewedHighlight = useCallback((row: BlockData) => {
-    const data = repo.block(row.id).peek()
-    if (!data || data.deleted) return false
-    try {
-      if (!getBlockTypes(data).includes(READWISE_HIGHLIGHT_TYPE)) return false
-    } catch { return false }
-    return readReviewed(data)
-  }, [repo])
-  const [rows, resetSticky] = useStickyRows(live, {shouldRetain: stillAReviewedHighlight, ready})
+  const liveIds = useMemo(() => live.map(row => row.id), [live])
+  const [seen, resetSeen] = useStickyIds(liveIds)
 
-  const groups = useMemo(() => groupHighlightsBySection(rows), [rows])
+  // Everything below the id set is derived from CURRENT block state, so a
+  // highlight that was moved, deleted or untagged since you saw it can never
+  // render from a stale copy of itself.
+  const groups = useMemo(
+    () => groupHighlightIds(seen, id => repo.block(id).peek()),
+    [seen, repo],
+  )
   const sectionBlocks = useMemo(
     () => groups.filter(group => group.sectionId).map(group => repo.block(group.sectionId)),
     [groups, repo],
@@ -2130,10 +2107,13 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   // is exactly the case `useManyParents` documents itself for.
   const ancestorsBySection = useManyParents(sectionBlocks)
 
-  const liveIds = useMemo(() => new Set(live.map(row => row.id)), [live])
-  const doneCount = rows.filter(row => !liveIds.has(row.id)).length
+  const liveIdSet = useMemo(() => new Set(liveIds), [liveIds])
+  const shown = groups.reduce((n, group) => n + group.items.length, 0)
+  // Gated on `ready`: while the handle is unresolved `live` is [], which would
+  // otherwise read as "every row is done".
+  const doneCount = ready ? seen.filter(id => !liveIdSet.has(id)).length : 0
 
-  if (rows.length === 0) {
+  if (shown === 0) {
     return (
       <div className="mx-auto w-full max-w-3xl py-6 text-sm text-muted-foreground">
         {/* `useBlockQuery` reports [] while the handle is still unresolved, so
@@ -2150,12 +2130,12 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
         <div>
           <h2 className="text-lg font-semibold">Readwise review</h2>
           <p className="text-sm text-muted-foreground">
-            {live.length} unreviewed, scheduled today or earlier
+            {shown - doneCount} unreviewed, scheduled today or earlier
             {doneCount > 0 ? ` · ${doneCount} done this session` : ''}
           </p>
         </div>
         {doneCount > 0 && (
-          <Button variant="ghost" size="sm" onClick={resetSticky}>
+          <Button variant="ghost" size="sm" onClick={resetSeen}>
             Clear done
           </Button>
         )}
@@ -2215,125 +2195,27 @@ const openReviewBacklogAction = {
 // ---------------------------------------------------------------------------
 // backlog surfacing
 //
-// Two places tell you the backlog exists. Neither may hold a live subscription:
-// the sidebar one is cheap because the sidebar UNMOUNTS when closed, but the
-// daily-note one rides along on a page you open constantly, and a subscribed
-// typed-block query there would re-resolve on every write touching a highlight.
-// So the count is a one-shot `queryBlocks` behind a module-level cache with a
-// TTL. It is a nudge, not a number anyone acts on to the unit — being a few
-// minutes stale is the intended trade.
+// Two places tell you the backlog exists: a left-sidebar entry, and a line on
+// today's daily note — the page actually opened every day.
+//
+// Both read the count straight off the SAME subscribed query the backlog page
+// uses. There is no cache here on purpose. An earlier version hand-rolled one
+// (TTL, attempt stamps, generation-stamped snapshots, an in-flight flag, and an
+// invalidation call at every site that writes `readwise:reviewed`) to avoid
+// re-querying on a page opened constantly. That was the wrong trade twice over:
+// the query costs ~4ms against a real library, and the kernel's loader already
+// does structural-diff dedup, so a subscriber is NOT re-rendered by writes that
+// leave the result unchanged. What the cache did buy was an open-ended
+// obligation for every future writer of the property to remember to invalidate
+// — which is how the same bug kept being found in a new call site.
 
-const BACKLOG_COUNT_TTL_MS = 5 * 60_000
-
-/** A count is only meaningful for the DAY it was computed for: the query's
- *  cutoff is "today or earlier", so a value fetched at 23:58 answers a
- *  different question at 00:01. Stamping the day is what stops the TTL from
- *  holding yesterday's answer across the rollover. */
-interface BacklogCount { workspaceId: string; value: number; at: number; day: string }
-
-let backlogCount: BacklogCount | null = null
-/** When we last TRIED, successfully or not — see `refreshBacklogCount`. */
-let backlogCountAttempt: { workspaceId: string; at: number; day: string } | null = null
-let backlogCountInFlight = false
-const backlogCountListeners = new CallbackSet('readwise.backlog-count')
-
-/** The `useSyncExternalStore` snapshot, carrying a generation stamp.
- *
- *  The stamp is what makes an invalidation observable. React bails out when
- *  `getSnapshot` returns the same value, so if the first fetch FAILED — leaving
- *  the count null — a later invalidation setting it to null again would be
- *  `null === null`, no re-render, no effect, no refetch, and the surface would
- *  sit empty until something else happened to re-render it. Every state change
- *  publishes a fresh object instead.
- *
- *  It must be a stored object rather than one built per call: `getSnapshot` is
- *  required to return a cached value, and allocating on each call is an
- *  infinite render loop. */
-let backlogCountSnapshotValue: { count: BacklogCount | null; generation: number } =
-  { count: null, generation: 0 }
-
-const publishBacklogCount = (next: BacklogCount | null) => {
-  backlogCountSnapshotValue = {
-    count: next,
-    generation: backlogCountSnapshotValue.generation + 1,
-  }
-  backlogCount = next
-  backlogCountListeners.notify()
-}
-
-const backlogCountSnapshot = () => backlogCountSnapshotValue
-const subscribeBacklogCount = (notify: () => void) => backlogCountListeners.add(notify)
-
-/** Drop the cache so the next render refetches. Called when the latch marks a
- *  highlight reviewed, which is the only thing that changes the count from
- *  inside this app — so the number stays honest where the user is looking
- *  without anything subscribing. */
-export const invalidateBacklogCount = () => {
-  backlogCountAttempt = null
-  publishBacklogCount(null)
-}
-
-/** Rate-limits ATTEMPTS, not successes — which is the whole reason
- *  `backlogCountAttempt` exists separately from the cached value.
- *
- *  The hook below runs this from an effect with no dependency array, and every
- *  settled fetch notifies subscribers (so an invalidation turns into a
- *  refetch). Gate on the cached VALUE's age and a query that keeps failing
- *  leaves the cache empty forever: settle → notify → render → effect → fetch,
- *  with nothing to break the cycle. Gating on when we last tried bounds it to
- *  one attempt per window whatever the outcome. */
-const refreshBacklogCount = (repo: Repo, workspaceId: string): void => {
-  if (backlogCountInFlight || !workspaceId) return
-  const now = Date.now()
-  const day = localDayKey()
-  const recentlyTried = backlogCountAttempt
-    && backlogCountAttempt.workspaceId === workspaceId
-    // A rollover makes the previous attempt answer the wrong question, so the
-    // TTL must not carry it over.
-    && backlogCountAttempt.day === day
-    && now - backlogCountAttempt.at < BACKLOG_COUNT_TTL_MS
-  if (recentlyTried) return
-
-  backlogCountAttempt = { workspaceId, at: now, day }
-  backlogCountInFlight = true
-  repo.queryBlocks(buildUnreviewedHighlightsQuery(workspaceId))
-    .then(rows => ({ workspaceId, value: rows.length, at: Date.now(), day }))
-    // A failed count is not worth a toast; leave the cache empty and let the
-    // next window try again.
-    .catch(() => null)
-    .then(next => {
-      // Cleared before publishing so the flag is never observably set while a
-      // notification is going out. Defensive rather than load-bearing: the
-      // re-render a notify triggers is scheduled, not synchronous, so the
-      // effect that re-enters here always runs after this whole block.
-      backlogCountInFlight = false
-      publishBacklogCount(next)
-    })
-}
-
-/** The cached count, or null while nothing has been fetched yet. The effect has
- *  no dependency array on purpose: it runs after every render, and
- *  `refreshBacklogCount` returns immediately unless the cache is missing or
- *  past its TTL. That is what lets an invalidation turn into a refetch — the
- *  notify re-renders, the effect runs, the cache is gone, so it fetches. */
 const useBacklogCount = (workspaceId: string): number | null => {
-  const repo = useRepo()
-  // Subscribing to the rollover is what makes the day stamp effective: it
-  // re-renders every consumer the minute the date turns, the effect runs, and
-  // the refresh now sees a stale-day attempt and refetches. Without it nothing
-  // would schedule that render — the sidebar in particular had no rollover
-  // awareness at all.
-  const today = useTodayKey()
-  const snapshot = useSyncExternalStore(
-    subscribeBacklogCount,
-    backlogCountSnapshot,
-    backlogCountSnapshot,
-  )
-  useEffect(() => { refreshBacklogCount(repo, workspaceId) })
-  const count = snapshot.count
-  return count && count.workspaceId === workspaceId && count.day === today
-    ? count.value
-    : null
+  const live = useUnreviewedHighlights(workspaceId)
+  const ready = useUnreviewedHighlightsReady(workspaceId)
+  // Null, not 0, while unresolved: "nothing to review" and "haven't looked yet"
+  // must not render the same. Rollover is handled inside the query hook, whose
+  // cutoff is keyed on `useStartOfToday`.
+  return ready ? live.length : null
 }
 
 const ReviewBacklogSidebarSection = ({ closeSidebar }: { closeSidebar: () => void }) => {
@@ -2370,10 +2252,11 @@ const DailyNoteBacklogHint = ({ block, Inner }: BlockRendererProps & { Inner: Bl
   const repo = useRepo()
   const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const count = useBacklogCount(workspaceId)
-  // The contribution's today-check runs once, when the decorator set is
-  // resolved. Leave this note open across local midnight and it would keep a
-  // hint that now belongs on a different page — so re-check here against the
-  // shared rollover ticker, which re-renders us the minute the date turns.
+  // The ONLY place the date is decided, and it is reactive: `useStartOfToday`
+  // advances at the rollover, so a note left open across midnight stops (or
+  // starts) showing the hint on its own. Deciding this in the contribution
+  // instead — as this used to — bakes in the date at resolve time, and
+  // contributions are not re-resolved when time passes.
   const startOfToday = useStartOfToday()
   const isToday = block.id === dailyNoteBlockId(workspaceId, todayIso(new Date(startOfToday)))
 
@@ -2404,31 +2287,18 @@ const decorateDailyNoteWithBacklogHint = cachedContentDecorator(
   'WithReadwiseBacklogHint',
 )
 
-/** UTC midnight of today's local calendar date — the value a daily note stores
- *  for "today" (see `dueBoundary`, which is the same encoding one day on). */
-const startOfTodayUtc = (now: Date = new Date()): number =>
-  Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
-
-/** The cheap PRE-filter, run once per decorator resolution. `isTopLevel` keeps
- *  the hint off breadcrumbs, embeds and backlink entries, where it would render
- *  once per occurrence.
+/** STRUCTURAL only — type and focality, no date. A contribution is resolved
+ *  once and never re-resolved as time passes, so any date decision made here is
+ *  frozen at resolve time; both bugs this gate has had were exactly that. The
+ *  component owns the date, reactively.
  *
- *  It admits today AND any FUTURE note, not just today's, even though only
- *  today's ever shows the hint. Contributions are not re-resolved on a date
- *  change, so a note opened before midnight and left open becomes today's note
- *  with no second chance to mount — rejecting it here means the hint never
- *  appears on it. The component makes the precise call, reactively.
- *
- *  What this still buys is the case that actually matters for cost: every PAST
- *  daily note — nearly everything you browse — never mounts the component and
- *  so never triggers a count query. */
+ *  Mounting on every daily note is free now that the count is a subscription:
+ *  every consumer shares one query handle, so a past note adds no query.
+ *  `isTopLevel` still matters — it keeps the hint off breadcrumbs, embeds and
+ *  backlink entries, where it would render once per occurrence. */
 const readwiseDailyNoteBacklogDecorator: BlockContentDecoratorContribution = ctx => {
   if (!ctx.types.includes(DAILY_NOTE_TYPE)) return null
   if (!ctx.isTopLevel) return null
-  const data = ctx.block.peek()
-  if (!data) return null
-  const noteDate = safeDecodeRowProperty(data, dailyNoteDateProp)
-  if (!noteDate || noteDate.getTime() < startOfTodayUtc()) return null
   return decorateDailyNoteWithBacklogHint
 }
 
