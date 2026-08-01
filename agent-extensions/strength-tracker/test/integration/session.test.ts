@@ -36,8 +36,12 @@ import {
   exerciseProp,
   occurrenceProp,
   sessionProp,
+  exerciseEntryType,
+  prescribedRepsProp,
   prescribedSetsProp,
   repsProp,
+  setType,
+  workoutType,
   rpeProp,
   sideProp,
   statusProp,
@@ -1282,5 +1286,52 @@ describe('taking the place of the empty line you ran it on', () => {
   it('does nothing when there is no line to replace', async () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     expect(await takePlaceOf(repo, workoutId, {parentId: PAGE_ID})).toBe('nothing-to-do')
+  })
+})
+
+describe('what a stamped record declares', () => {
+  it('stamps the rep target on the lift, where editing a set cannot move it', async () => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Bench press', 2, {prescribedReps: 10, sets: [
+        {weight: 135, reps: 10}, {weight: 135, reps: 10},
+      ]}),
+    ]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [first] = await childrenOf(entry.id, SET_TYPE)
+
+    await adjustSet(repo, first.id, {reps: -2})
+
+    expect(repo.block(entry.id).peekProperty(prescribedRepsProp)).toBe(10)
+    expect(repo.block(first.id).peekProperty(repsProp)).toBe(8)
+  })
+
+  it('declares every strength property it writes on the record that carries it', async () => {
+    // The guard that would have caught `strength:unit`: `setSpec` wrote it and
+    // `SetLine` read it while `setType` never declared it, so the stored
+    // record's shape and the fields the extension uses disagreed and no
+    // schema-driven editor or audit could see the field at all.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([
+      lift('Deadlift', 1, {
+        definitionId: 'def-deadlift', prescribedReps: 5,
+        sets: [{weight: 275, reps: 5, side: 'L', catchUpRpe: 7}],
+      }),
+    ]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+
+    const declaredBy = (type: {properties?: readonly {name: string}[]}): Set<string> =>
+      new Set((type.properties ?? []).map(prop => prop.name))
+    const undeclared = (block: BlockData, type: {properties?: readonly {name: string}[]}): string[] =>
+      Object.keys(block.properties)
+        .filter(key => key.startsWith('strength:'))
+        .filter(key => !declaredBy(type).has(key))
+
+    expect(undeclared(repo.block(workoutId).peek()!, workoutType)).toEqual([])
+    expect(undeclared(repo.block(entry.id).peek()!, exerciseEntryType)).toEqual([])
+    expect(undeclared(repo.block(set.id).peek()!, setType)).toEqual([])
+    // The set really did carry the fields whose declaration we just checked —
+    // an empty bag would satisfy the assertions above for the wrong reason.
+    expect(Object.keys(repo.block(set.id).peek()!.properties))
+      .toEqual(expect.arrayContaining(['strength:unit', 'strength:catchUpRpe', 'strength:side']))
   })
 })

@@ -23,6 +23,7 @@ import {
   definitionProp,
   exerciseProp,
   occurrenceProp,
+  prescribedRepsProp,
   prescribedSetsProp,
   prescribedWeightProp,
   unitProp,
@@ -35,6 +36,7 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   const [definitionId] = usePropertyValue(block, definitionProp)
   const [occurrence] = usePropertyValue(block, occurrenceProp)
   const [prescribedSets] = usePropertyValue(block, prescribedSetsProp)
+  const [prescribedReps] = usePropertyValue(block, prescribedRepsProp)
   const [prescribedWeight] = usePropertyValue(block, prescribedWeightProp)
   const [unit] = usePropertyValue(block, unitProp)
   const content = useContent(block)
@@ -72,13 +74,24 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
       : history.filter(workout =>
         workout.id !== workoutId && compareRecords(workout, mine) < 0)
   }, [history, workoutId])
-  const previous = lastEntryFor(earlier, exercise ?? content, definitionId, occurrence ?? 0)
+  // `||`, not `??`: `strength:exercise` is a plain string property whose
+  // schema default is '', so an entry that never had one reads as empty
+  // rather than undefined and `??` kept the empty string — sending the
+  // lookup after a lift named '' and hiding every bit of real history. The
+  // fallback to the block's own text exists precisely for those entries.
+  const previous = lastEntryFor(earlier, exercise || content, definitionId, occurrence ?? 0)
   const previousWeight = previous ? workingWeight(previous.entry) : undefined
 
   const parts: string[] = []
   if (sets.length > 0) parts.push(`${done}/${sets.length} done`)
   if (prescribedSets !== undefined) {
-    parts.push(`target ${prescribedSets}×${sets[0]?.properties[FIELD.reps] ?? '?'}`
+    // The STAMPED target, not the first set's current reps. Read off the set
+    // block, "target" tracked whatever you last logged — record 8 on set one
+    // and a prescribed 3×10 relabelled itself 3×8, so the line could never
+    // tell you that you had missed it. Entries stamped before this property
+    // existed still fall back to the row, which is what they have.
+    const target = prescribedReps ?? sets[0]?.properties[FIELD.reps] ?? '?'
+    parts.push(`target ${prescribedSets}×${target}`
       + (prescribedWeight !== undefined ? ` @ ${prescribedWeight}${unit ?? ''}` : ''))
   }
   if (previous && previousWeight !== undefined) {

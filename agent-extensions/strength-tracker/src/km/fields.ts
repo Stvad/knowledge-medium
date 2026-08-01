@@ -45,6 +45,7 @@ export const FIELD = {
   unit: 'strength:unit',
   prescribedWeight: 'strength:prescribedWeight',
   prescribedSets: 'strength:prescribedSets',
+  prescribedReps: 'strength:prescribedReps',
   /** Which time in THIS session this lift is — 0-based, and the same number
    *  its block id is derived from.
    *

@@ -44,6 +44,10 @@ export interface PlannedLift {
   unit: string
   prescribedWeight?: number
   prescribedSets: number
+  /** The rep target as prescribed. Stamped on the entry rather than read
+   *  back off a set block, which is a number the user edits — logging 8 reps
+   *  on set one turned "target 3×10" into "target 3×8". */
+  prescribedReps?: number
   sets: readonly PlannedSet[]
 }
 
@@ -86,6 +90,10 @@ export const planFromPrescription = (
     const key = exercise.defId ?? exercise.exercise
     const occurrence = seen.get(key) ?? 0
     seen.set(key, occurrence + 1)
+    // Taken from the expanded rows rather than recomputed from the rep range:
+    // `setsFor` already resolved the fallbacks a carry needs, and two places
+    // deriving "what reps did we ask for" is two places to disagree.
+    const sets = setsFor(exercise)
     return {
       exercise: exercise.exercise,
       ...(exercise.defId !== undefined ? {definitionId: exercise.defId} : {}),
@@ -93,7 +101,8 @@ export const planFromPrescription = (
       unit,
       ...(exercise.weight !== undefined ? {prescribedWeight: exercise.weight} : {}),
       prescribedSets: exercise.sets,
-      sets: setsFor(exercise),
+      ...(sets[0] !== undefined ? {prescribedReps: sets[0].reps} : {}),
+      sets,
     }
   })
   return {day: prescription.day, session: prescription.session, lifts}

@@ -41,6 +41,7 @@ import {
   definitionProp,
   exerciseProp,
   occurrenceProp,
+  prescribedRepsProp,
   prescribedSetsProp,
   prescribedWeightProp,
   repsProp,
@@ -265,6 +266,9 @@ const entrySpec = (
       ? [propertyValue(prescribedWeightProp, lift.prescribedWeight)]
       : []),
     propertyValue(prescribedSetsProp, lift.prescribedSets),
+    ...(lift.prescribedReps !== undefined
+      ? [propertyValue(prescribedRepsProp, lift.prescribedReps)]
+      : []),
   ],
   typeSnapshot,
 })

@@ -76,6 +76,25 @@ describe('planFromPrescription', () => {
     expect(lifts[0].sets.map(s => s.catchUpRpe)).toEqual([undefined, undefined, undefined])
   })
 
+  it('carries the rep target as prescribed, not as later performed', () => {
+    // Stamped on the entry so the lift line stops reading it back off a set
+    // block, which is a number you edit: logging 8 on set one turned a
+    // prescribed 3x10 into "target 3x8".
+    const {lifts} = planFromPrescription(prescription([exercise({repMax: 10})]), 'lb')
+    expect(lifts[0].prescribedReps).toBe(10)
+  })
+
+  it('takes the target from the expanded rows, so a carry gets its fallback too', () => {
+    // A carry has no rep range at all; `setsFor` resolves that from what you
+    // last did. Recomputing the target from the range instead would report
+    // '?' for exactly the lifts the fallback exists for.
+    const {lifts} = planFromPrescription(prescription([exercise({
+      exercise: 'Waiter carry', repMin: undefined, repMax: undefined,
+      lastTime: {date: '2026-07-19', weight: 35, reps: [4, 4]},
+    })]), 'lb')
+    expect(lifts[0].prescribedReps).toBe(4)
+  })
+
   it('stamps zero rather than nothing when there is no history to load from', () => {
     // The block is created either way — a set you have to type a number into
     // is the same gesture as correcting a suggestion you disagree with, and

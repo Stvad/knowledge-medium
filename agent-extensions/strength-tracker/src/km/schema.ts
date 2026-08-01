@@ -172,6 +172,21 @@ export const prescribedSetsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** What the rep target WAS, stamped beside the weight and set count.
+ *
+ *  The lift line used to read this off its first set block, which is a number
+ *  you edit: logging 8 reps on set one turned "target 3×10" into "target
+ *  3×8", so the target agreed with the performance by construction and could
+ *  never tell you that you had missed it. */
+export const prescribedRepsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('prescribed-reps'),
+  revision: 1,
+  name: FIELD.prescribedReps,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Which time in this session the lift is — the same 0-based number the entry
  *  block id was derived from, stored because position among siblings stops
  *  being identity as soon as the user reorders them. See `FIELD.occurrence`. */
@@ -487,7 +502,10 @@ export const exerciseEntryType = seedType({
   // one lift twice, and sibling order is not identity — so the entry states
   // which occurrence it is, and both the derived id and the mint re-find
   // read it back.
-  revision: 2,
+  // 3: `prescribedRepsProp` joined. The rep target belongs beside the weight
+  // and set count it was prescribed with — read off a set block it tracked
+  // whatever you last logged, so it could never disagree with you.
+  revision: 3,
   id: EXERCISE_ENTRY_TYPE,
   label: 'Exercise entry',
   description: 'One lift within a workout; its sets are child set blocks.',
@@ -499,6 +517,7 @@ export const exerciseEntryType = seedType({
     unitProp,
     prescribedWeightProp,
     prescribedSetsProp,
+    prescribedRepsProp,
     occurrenceProp,
   ],
 })
@@ -547,12 +566,16 @@ export const setType = seedType({
   // 3: `catchUpRpeProp` joined — copied down from the prescription so a set
   // row knows whether an RPE it collects feeds anything, without loading the
   // lift. Same denormalisation as `unitProp` on the set, same reason.
-  revision: 3,
+  // 4: `unitProp` — which `setSpec` had been WRITING and `SetLine` reading
+  // all along without the type declaring it, so the record's shape and the
+  // fields the extension uses disagreed and no schema-driven editor or audit
+  // could see it.
+  revision: 4,
   id: SET_TYPE,
   label: 'Set',
   description: 'One set within an exercise entry.',
   hideFromCompletion: true,
-  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp, catchUpRpeProp],
+  properties: [weightProp, repsProp, rpeProp, sideProp, unitProp, completedAtProp, catchUpRpeProp],
 })
 
 export const layoffType = seedType({
@@ -606,6 +629,7 @@ export const STRENGTH_PROPS = [
   unitProp,
   prescribedWeightProp,
   prescribedSetsProp,
+  prescribedRepsProp,
   occurrenceProp,
   weightProp,
   repsProp,
