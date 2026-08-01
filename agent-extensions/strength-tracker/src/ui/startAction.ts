@@ -30,6 +30,29 @@ export const START_SESSION_ACTION_ID = 'strength.startSession'
  *  Exported because the Strength Log page's button runs the SAME flow with a
  *  different placement — two entry points, one dialog, one set of races
  *  already thought about. */
+/** Take the user to a session, and say so when that is refused.
+ *
+ *  `navigateFromGlobalCommand` resolves to `null` — it never rejects — when a
+ *  navigation-policy plugin vetoes the gesture or the navigation errors. Every
+ *  path out of this action ends in a navigation, and a discarded `null` is the
+ *  same failure each time: the tap reports success while leaving you on the
+ *  page you started from, with a live session you were never shown. Worse, it
+ *  is self-perpetuating — that session is now standing, so every later Start
+ *  finds it and navigates into the same veto, and the action can never appear
+ *  to do anything again.
+ *
+ *  One helper because there is one rule; it existed inline on the create path
+ *  only, which is exactly how the two short-circuits kept theirs unchecked. */
+const showSession = async (
+  repo: Repo,
+  workspaceId: string,
+  workoutId: string,
+  what: string,
+): Promise<void> => {
+  const shown = await navigateFromGlobalCommand(repo, {blockId: workoutId, workspaceId})
+  if (shown === null) console.warn(`[strength] ${what}, but could not be opened`, workoutId)
+}
+
 export const runStartSession = async (repo: Repo, placement: Placement): Promise<void> => {
   const workspaceId = repo.activeWorkspaceId
   // Nothing here is readable-only: it bootstraps the log page and settings
@@ -43,15 +66,15 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   const now = new Date()
   const snapshot = await readProgram(repo, workspaceId)
 
-  // A session already under way is not a new one to configure. Offering the
-  // picker again lets you choose the OTHER option of an `or`-group, and since
-  // Start adopts the standing workout and adds the newly-chosen lift, the
-  // session would end up holding both alternatives — with Finish recording
-  // each. Changing your mind mid-session is an outline edit: delete the lift
+  // A session already under way is not a new one to configure. This is the one
+  // short-circuit that earns its place: everything below it is answerable
+  // inside the stamping transaction, but a DIALOG is not — offering the picker
+  // and then throwing your answer away is a question that should not have been
+  // asked. Changing your mind mid-session is an outline edit: delete the lift
   // you are not doing.
   const standing = await standingSession(repo, workspaceId, snapshot, now)
   if (standing) {
-    await navigateFromGlobalCommand(repo, {blockId: standing, workspaceId})
+    await showSession(repo, workspaceId, standing, 'a session is already under way')
     return
   }
 
@@ -76,31 +99,27 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // the built-in fallback, if the outline stopped resolving mid-dialog —
   // than the list you confirmed.
   //
-  // The knobs travel with the plan for the same reason, and one of them is
-  // load-bearing twice over: `dayRolloverHour` decides which training day
-  // this is. Checking for an arrival with the fresh hour while stamping with
-  // the approved one asks about a day the session will not land on, so a
-  // peer's standing workout goes unseen and gets its alternative stamped
-  // beside the one chosen here — exactly what the check exists to stop.
+  // The knobs travel with the plan for the same reason, and `dayRolloverHour`
+  // is the load-bearing one: it decides which training day this is, so it
+  // decides `plan.day` — which is the day `startSession`'s standing-session
+  // scan asks about. Taking it from the approved config keeps the day the scan
+  // asks about and the day the session lands on the same value by
+  // construction, rather than by two callers remembering to agree.
   const confirmed = {...fresh, planSource: snapshot.planSource, config: snapshot.config}
-
-  // Asked AGAIN. Another client can start the same training day while this
-  // dialog sits open, and stamping into it adds whichever alternative was
-  // chosen here beside the one chosen there — the both-alternatives session
-  // the pre-dialog check exists to prevent, arriving through the back door.
-  const arrived = await standingSession(repo, workspaceId, confirmed, now)
-  if (arrived) {
-    await navigateFromGlobalCommand(repo, {blockId: arrived, workspaceId})
-    return
-  }
 
   const prescription = prescribeFor(confirmed, now, picks.session, picks.choices)
   const plan = planFromPrescription(prescription, snapshot.config.unit)
-  // The two checks above are courtesy, not the guard: they save computing a
-  // prescription nobody will use, and they keep the blank line you ran this on
-  // untouched. `startSession` asks the same question inside the transaction
-  // that writes, and that is the answer that counts — a session turning up in
-  // the window between them is handed back rather than stamped into.
+  // There is deliberately NO second standing-session check here. One used to
+  // sit above this line, for the case where another client starts this
+  // training day while the dialog is open — but `startSession` now asks that
+  // question inside the transaction that writes, which is the only place the
+  // answer cannot go stale, and hands back whatever it finds with
+  // `stamped: false`. The pre-check was strictly weaker AND behaved worse when
+  // it did fire: it returned early, so the blank line you ran this on was left
+  // behind and the navigation it did was the one path still discarding its
+  // result. Falling through clears the line, reports a refused navigation, and
+  // skips the alt-choice recording on `!stamped` — all three by the same code
+  // that handles an ordinary start.
   const {id: workoutId, stamped} = await startSession(
     repo, workspaceId, placement.parentId, plan, placement.position,
   )
@@ -118,17 +137,9 @@ export const runStartSession = async (repo: Repo, placement: Placement): Promise
   // record a preference must not leave you looking at the page you started
   // from with a live workout you were never shown — least of all a persistent
   // one, which would make Start unable to reach the workout it just made.
-  //
-  // The RESULT matters: `navigateFromGlobalCommand` resolves to `null` when a
-  // navigation-policy plugin vetoes the gesture or the navigation errors, and
-  // it never rejects — so ignoring it reported success while leaving the new
-  // workout off screen, and every later Start then found that standing session
-  // and refused into the same veto. Say so instead; the session is real and
-  // the outline is where it is.
-  const shown = await navigateFromGlobalCommand(repo, {blockId: workoutId, workspaceId})
-  if (shown === null) {
-    console.warn('[strength] the session was created but could not be opened', workoutId)
-  }
+  // See `showSession` for why the result is checked rather than discarded.
+  await showSession(repo, workspaceId, workoutId,
+    stamped ? 'the session was created' : 'a session was already under way')
 
   // Recorded only now the session exists, so a cancelled dialog leaves the
   // tracked variant exactly as it was. Narrowed to the groups the confirmed

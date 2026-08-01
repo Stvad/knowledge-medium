@@ -33,6 +33,7 @@ export default defineConfig({
       {find: /^@\/utils\/navigation\.js$/, replacement: resolve(configDir, 'test/kernel/navigation.ts')},
       {find: /^@\/hooks\/block\.js$/, replacement: resolve(configDir, 'test/kernel/blockHooks.ts')},
       {find: /^@\/data\/properties\.js$/, replacement: resolve(configDir, 'test/kernel/properties.ts')},
+      {find: /^@\/shortcuts\/types\.js$/, replacement: resolve(configDir, 'test/kernel/shortcutTypes.ts')},
       {find: /^@\/(.*)$/, replacement: resolve(configDir, '../kernel-types/src/$1')},
     ],
   },
