@@ -163,4 +163,34 @@ describe('asymmetries — one per-side lift prescribed twice', () => {
     expect(out[0].rightAhead).toBe(true)
     expect(out[1].rightAhead).toBe(false)
   })
+
+  const waiterAt = (sets: {weight: number; reps: number; side: 'L' | 'R'}[]): WorkoutRecord[] => [{
+    id: 'b', date: '2026-07-19T23:00:00', session: 'B',
+    exercises: [{exercise: 'Waiter carry', sets}],
+  }]
+
+  it('flags the right side ahead on REPS when both sides use the same weight', () => {
+    // The commonest disparity there is: single-arm work is loaded with the one
+    // dumbbell you have, so both sides sit at the same number and the right
+    // pulls ahead in reps. Comparing modal weight alone reported no asymmetry
+    // for exactly that session — the plan's rule is left leads and right
+    // matches ("start left, right matches"), so 45×8 against 45×10 is the case
+    // the flag exists for.
+    const waiter = asymmetries(waiterAt([
+      {weight: 45, reps: 8, side: 'L'},
+      {weight: 45, reps: 10, side: 'R'},
+    ]), DEFAULT_CONFIG).find(a => a.exercise === 'Waiter carry')!
+
+    expect(waiter).toMatchObject({left: 45, right: 45, leftReps: 8, rightReps: 10})
+    expect(waiter.rightAhead).toBe(true)
+  })
+
+  it('does not flag matched sides, so the rule did not just get louder', () => {
+    const waiter = asymmetries(waiterAt([
+      {weight: 45, reps: 10, side: 'L'},
+      {weight: 45, reps: 10, side: 'R'},
+    ]), DEFAULT_CONFIG).find(a => a.exercise === 'Waiter carry')!
+
+    expect(waiter.rightAhead).toBe(false)
+  })
 })

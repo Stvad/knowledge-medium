@@ -95,19 +95,42 @@ export interface Asymmetry {
   occurrence: number
   left?: number
   right?: number
+  /** Reps at that modal weight, per side. Carried because weight alone cannot
+   *  express the most ordinary disparity there is — see `rightAhead`. */
+  leftReps?: number
+  rightReps?: number
   /** True when the logged left side trails the right — the plan's rule is
-   *  left leads and right matches, so right-ahead is the flag. */
+   *  left leads and right matches, so right-ahead is the flag.
+   *
+   *  Weight FIRST, then reps at that weight. Comparing modal weight alone made
+   *  the commonest case invisible: single-arm work is usually loaded with the
+   *  one dumbbell you have, so both sides sit at the same number and the right
+   *  pulls ahead in REPS — `45×8` against `45×10` reported no asymmetry at
+   *  all, which is precisely the session the flag exists to catch. */
   rightAhead: boolean
 }
 
-const sideModal = (
+interface SidePerformance {
+  weight: number
+  /** The most reps done at that weight, which is what "the right matched and
+   *  then some" looks like in the log. */
+  reps: number
+}
+
+const sidePerformance = (
   history: readonly WorkoutRecord[],
   key: SeriesKey,
   side: 'L' | 'R',
-): number | undefined => {
+): SidePerformance | undefined => {
   const last = lastEntryFor(history, key.exercise, key.defId, key.occurrence)
   if (!last) return undefined
-  return modalWeight(last.entry.sets.filter(s => s.side === side))
+  const sets = last.entry.sets.filter(s => s.side === side)
+  const weight = modalWeight(sets)
+  if (weight === undefined) return undefined
+  // Reps AT the modal weight, not across the whole side: a warm-up or a
+  // drop-off at another load says nothing about how the two sides compare.
+  const reps = sets.filter(s => s.weight === weight).map(s => s.reps)
+  return {weight, reps: reps.length > 0 ? Math.max(...reps) : 0}
 }
 
 /** Latest left/right comparison for every single-arm lift that has sided
@@ -132,16 +155,20 @@ export const asymmetries = (
       ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
       occurrence,
     }
-    const left = sideModal(history, key, 'L')
-    const right = sideModal(history, key, 'R')
+    const left = sidePerformance(history, key, 'L')
+    const right = sidePerformance(history, key, 'R')
     if (left === undefined && right === undefined) continue
     out.push({
       exercise: exercise.name,
       ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
       occurrence,
-      left,
-      right,
-      rightAhead: left !== undefined && right !== undefined && right > left,
+      left: left?.weight,
+      right: right?.weight,
+      leftReps: left?.reps,
+      rightReps: right?.reps,
+      rightAhead: left !== undefined && right !== undefined
+        && (right.weight > left.weight
+          || (right.weight === left.weight && right.reps > left.reps)),
     })
   }
   return out

@@ -112,9 +112,12 @@ export function HistoryView({config, history}: Props) {
               <li key={`${a.defId ?? a.exercise}#${a.occurrence}`} className="flex items-center justify-between gap-2 text-sm">
                 <span>{a.occurrence === 0 ? a.exercise : `${a.exercise} (${a.occurrence + 1})`}</span>
                 <span className="flex items-center gap-2 tabular-nums">
-                  <span>L {a.left ?? '—'}</span>
+                  {/* Reps beside the load: at equal weight the flag turns on
+                      REPS, and showing weight alone would put "right ahead"
+                      next to two identical numbers. */}
+                  <span>L {a.left ?? '—'}{a.leftReps !== undefined ? `×${a.leftReps}` : ''}</span>
                   <span className="text-muted-foreground">/</span>
-                  <span>R {a.right ?? '—'}</span>
+                  <span>R {a.right ?? '—'}{a.rightReps !== undefined ? `×${a.rightReps}` : ''}</span>
                   {a.rightAhead && (
                     <span className="rounded bg-amber-500/15 px-1 text-xs text-amber-600 dark:text-amber-400">
                       right ahead

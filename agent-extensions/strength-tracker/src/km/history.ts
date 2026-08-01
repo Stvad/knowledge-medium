@@ -100,7 +100,14 @@ export const buildHistory = (
     const d = date(row, FIELD.date)
     if (d === undefined) continue
     const on = storedDate(d)
-    if (str(row, FIELD.status) === 'in-progress') continue
+    // Only `done` — not "anything that is not in-progress". A workout whose
+    // status was cleared, or holds some third value, is neither live nor
+    // closed (`asWorkout` says so, and the footer offers it no controls), so
+    // admitting it here made a session nobody can finish or discard count as a
+    // training day: it moved the layoff gap, incremented `sessionsBack` and
+    // read to `resolveSession` as work recently done. The two readers now
+    // agree on what "closed" means.
+    if (str(row, FIELD.status) !== 'done') continue
     const entries = (exercisesByWorkout.get(row.id) ?? []).slice().sort(compareByOrderKey)
     const session = str(row, FIELD.session, 'A') as SessionType
     // When the work was actually done, for telling two sessions of one day

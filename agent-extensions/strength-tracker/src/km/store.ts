@@ -144,6 +144,39 @@ const refreshLayoff = async (
   return id
 }
 
+/** A layoff row for this gap that the derived lookup cannot see.
+ *
+ *  Two populations, and neither alone is enough: the page's children are where
+ *  a mint lands, and `knownLayoffIds` covers one the user has since filed
+ *  elsewhere — a layoff is about a gap in TIME, not where it sits, so a
+ *  page-scoped scan alone let the next finish mint a second record for the
+ *  same break. Re-checked in-tx, so a stale caller list can only cause a mint,
+ *  never a bad adoption.
+ *
+ *  It must still SAY it is this gap: `strength:from` is an ordinary editable
+ *  date and `coveringLayoff` reads that rather than the id, so adopting on a
+ *  matching id alone would leave the pending gap with no record at all. */
+const findLegacyGapRecord = async (
+  tx: Tx,
+  pageId: string,
+  from: string,
+  knownLayoffIds: readonly string[],
+  exclude: string,
+): Promise<BlockData | null> => {
+  const candidates = new Map<string, BlockData>()
+  for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+    candidates.set(block.id, block)
+  }
+  for (const id of knownLayoffIds) {
+    if (candidates.has(id)) continue
+    const block = await tx.get(id)
+    if (block) candidates.set(id, block)
+  }
+  return [...candidates.values()].find(block =>
+    !block.deleted && block.id !== exclude
+    && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, from)) ?? null
+}
+
 /** Exported for `finishSession`, which must write the layoff inside its OWN
  *  transaction — the gap stops being detectable the moment the finish lands,
  *  so a separate write that fails loses the record permanently. */
@@ -193,26 +226,35 @@ export const writeLayoffInTx = async (
     adoptable: block => isGapRecord(block, record.from),
     ...spec,
   })
-  if (outcome.status === 'created') return outcome.id
   if (outcome.status === 'adopted') return refreshLayoff(tx, outcome.id, record, spec, reentry)
+  if (outcome.status === 'created') {
+    // The seat was FREE, which does not mean this gap has no record: rows
+    // written before layoffs had a derived id carry random ones, and they are
+    // invisible to the lookup above. Minting regardless left the workspace
+    // holding two records for one `from` — and `resolveReentry` takes the
+    // latest `to`, so deleting or correcting the new one can expose the
+    // obsolete one and restart a ramp already climbed out of.
+    //
+    // Checked AFTER the create rather than before, because the create is what
+    // proves the seat was empty; the mint is then deleted again in favour of
+    // the row that already exists. `typedRecords.ts` asks for exactly this
+    // when a derived id is retrofitted onto a kind with rows already out
+    // there — the same rescue `page.ts` does for legacy settings.
+    const legacy = await findLegacyGapRecord(tx, pageId, record.from, knownLayoffIds, outcome.id)
+    if (legacy === null) return outcome.id
+    await tx.run(deleteBlock, {id: outcome.id})
+    return refreshLayoff(
+      tx, (await adoptTypedBlock(repo, tx, legacy, spec.types, typeSnapshot)).id,
+      record, spec, reentry,
+    )
+  }
 
   // The derived seat is held by a tombstone, another workspace's row, or a
   // block whose `from` now names a different gap. There's no second identity
   // to derive, so mint — and look the mint up on the NEXT call rather than
   // add to it. The page's children, because that's where a mint lands.
-  const candidates = new Map<string, BlockData>()
-  for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
-    candidates.set(block.id, block)
-  }
-  for (const id of knownLayoffIds) {
-    if (candidates.has(id)) continue
-    const block = await tx.get(id)
-    if (block) candidates.set(id, block)
-  }
-  const minted = [...candidates.values()]
-    .find(block => !block.deleted && block.id !== outcome.id
-      && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, record.from))
-  return minted !== undefined
+  const minted = await findLegacyGapRecord(tx, pageId, record.from, knownLayoffIds, outcome.id)
+  return minted !== null
     ? refreshLayoff(
       tx, (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id,
       record, spec, reentry,
@@ -321,7 +363,14 @@ export const writeAltChoice = async (
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     const children = await tx.childrenOf(settingsBlockId)
-    const existing = children.filter(child => !child.deleted && isChoiceFor(child, groupKey))
+    // Through `asAltChoice`, matching the reader. An untyped block keeps its
+    // group property, so finding it here meant a one-tap re-pick UPDATED a
+    // block `readAltChoices` now filters out — the switcher moved, the write
+    // succeeded, and the new variant still did not apply, with nothing on
+    // screen to say why. Skipping it sends the write to the derived seat,
+    // which re-tags that same block on adopt and makes the pick take effect.
+    const existing = children.filter(child =>
+      asAltChoice(child) !== null && isChoiceFor(child, groupKey))
 
     if (existing.length > 0) {
       // EVERY match, not the first. Blocks minted before this group had a
@@ -362,6 +411,16 @@ export const writeAltChoice = async (
     // tombstone, or another workspace's row. There is no second identity to
     // derive, so mint; the scan above adopts it on the next call.
     if (outcome.status === 'taken') await createTypedChild(repo, tx, spec)
+    // An ADOPT re-tags but does not apply properties, so the block came back
+    // into the reader's view still holding the option it had before. Reaching
+    // this branch at all means the scan above found no typed choice — for an
+    // adopt that means the seat block had lost its type — so the pick just
+    // made has to be written, or the switcher moves and nothing changes. The
+    // same upsert the layoff record needs, for the same reason.
+    if (outcome.status === 'adopted') {
+      await tx.update(outcome.id, {content: choiceContent(label)})
+      await tx.setProperties(outcome.id, {set: spec.properties})
+    }
     // `BlockDefault`, not `UserPrefs`, even though this IS a preference: the
     // choice is stored as a real block, and `core.createChild` refuses to run
     // in a user-prefs transaction. Under `UserPrefs` the update path worked

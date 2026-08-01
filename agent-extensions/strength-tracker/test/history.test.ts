@@ -219,3 +219,31 @@ describe('buildLayoffs', () => {
     ])
   })
 })
+
+describe('a workout whose status is neither live nor closed', () => {
+  it('is left out of history rather than counted as a training day', () => {
+    // Excluding only `in-progress` admitted a workout whose status was cleared
+    // — or holds some third value — as a completed session. `asWorkout` calls
+    // it neither live nor closed and the footer offers it no Finish or
+    // Discard, so it was a session nobody could close that still moved the
+    // layoff gap, incremented `sessionsBack` and read as work recently done.
+    const workout = block('w1', 'page', 'a0', encode([
+      [FIELD.session, 'A'], [FIELD.date, '2026-07-20T19:00:00.000Z'],
+    ]))
+    const entry = block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press']]))
+    const set = setBlock('s1', 'e1', 'a0', 135, 8)
+
+    expect(buildHistory([workout], [entry], [set])).toEqual([])
+  })
+
+  it('still admits one that says done, so the rule did not just get stricter', () => {
+    const workout = block('w1', 'page', 'a0', encode([
+      [FIELD.status, 'done'], [FIELD.session, 'A'],
+      [FIELD.date, '2026-07-20T19:00:00.000Z'],
+    ]))
+    const entry = block('e1', 'w1', 'a0', encode([[FIELD.exercise, 'Bench press']]))
+    const set = setBlock('s1', 'e1', 'a0', 135, 8)
+
+    expect(buildHistory([workout], [entry], [set])).toHaveLength(1)
+  })
+})

@@ -835,6 +835,52 @@ describe('a choice block that left the strength world', () => {
   })
 })
 
+describe('picking a variant again after its record lost the type', () => {
+  it('produces a choice that actually applies, instead of updating a dead one', () => (async () => {
+    // The write side of the untag rule. The group property survives, so the
+    // existing-record scan still FOUND the untyped block and updated it — the
+    // switcher moved, the write succeeded, and `readAltChoices` filtered the
+    // result out, so the newly picked variant did not apply and nothing on
+    // screen said why. Skipping it sends the write to the derived seat, which
+    // re-tags that same block on adopt.
+    await writeAltChoice(repo, SETTINGS_ID, 'press', 'ohp', 'Overhead press')
+    const [choice] = await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)
+    await repo.removeType(choice.id, ALT_CHOICE_TYPE)
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({})
+
+    await writeAltChoice(repo, SETTINGS_ID, 'press', 'incline', 'Incline press')
+
+    expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({press: 'incline'})
+  })())
+})
+
+describe('a layoff row written before layoffs had a derived id', () => {
+  it('is adopted rather than left beside a freshly minted one', async () => {
+    // The seat being FREE does not mean the gap has no record: rows written
+    // before the derived id carry random ones and the lookup cannot see them.
+    // Minting regardless left two records for one `from`, and `resolveReentry`
+    // takes the latest `to` — so deleting or correcting the new one exposes the
+    // obsolete one and restarts a ramp already climbed out of.
+    const record = {from: '2026-07-01', to: '2026-07-24', days: 23, tierId: '2mo+', pct: 0.7}
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'legacy-layoff', workspaceId: WORKSPACE_ID, parentId: PAGE_ID,
+        orderKey: 'a1', content: 'Layoff · 23-day gap',
+      })
+      await tx.setProperties('legacy-layoff', {set: [
+        propertyValue(layoffFromProp, dayToDate('2026-07-01')),
+      ]})
+    }, {scope: ChangeScope.BlockDefault, description: 'a layoff from before the seat'})
+    await repo.addType('legacy-layoff', LAYOFF_TYPE)
+
+    const written = await writeLayoff(
+      repo, WORKSPACE_ID, PAGE_ID, record, DEFAULT_CONFIG.reentry)
+
+    expect(written).toBe('legacy-layoff')
+    expect(buildLayoffs(await liveChildren(PAGE_ID, LAYOFF_TYPE))).toHaveLength(1)
+  })
+})
+
 describe('the day a layoff is measured to', () => {
   const dayBefore = (n: number): string => {
     const d = new Date()
