@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
@@ -209,6 +209,95 @@ const decorateAction = <T extends typeof ActionContextTypes.NORMAL_MODE | typeof
   }
 }
 
+/** The navigation actions spatial nav decorates. The decorator registry matches
+ *  on id + context only, so a description is presentational here and the id
+ *  serves as one. */
+type NavigationActionId =
+  | 'move_down'
+  | 'move_up'
+  | 'jump_to_first_visible_block'
+  | 'jump_to_last_visible_block'
+
+/**
+ * Press a navigation key through the real dispatch path — the spatial decorator
+ * wrapping a base handler standing in for the model-walking vim one. The
+ * returned spy answers the question every test below asks: did spatial nav
+ * handle the keystroke itself, or decline and leave it to the model walk?
+ *
+ * `deps` is forwarded VERBATIM and nothing here may add to it. `scopeRootId` in
+ * particular is optional, and several tests OMIT it deliberately — a surface
+ * whose activation injected none — so the omission IS the scenario, and a
+ * default here would quietly turn those tests into different ones that pass.
+ */
+const pressNavigationKey = async (
+  id: NavigationActionId,
+  deps: BlockShortcutDependencies,
+): Promise<{modelWalk: Mock}> => {
+  const modelWalk = vi.fn()
+  const action = decorateAction({
+    id,
+    description: id,
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async () => { modelWalk() },
+  })
+  await action.handler(deps, {} as ActionTrigger)
+  return {modelWalk}
+}
+
+/** Shift+Down, with the REAL structural `extendSelectionDown` as the base the
+ *  decorator declines to — so a decline is observable as the data-tree range it
+ *  produces, not merely as "the spy ran". Same verbatim-`deps` rule as above. */
+const pressExtendSelectionDown = async (
+  deps: BlockShortcutDependencies,
+): Promise<{structuralExtend: Mock}> => {
+  const structuralExtend = vi.fn()
+  const action = decorateAction({
+    id: 'extend_selection_down',
+    description: 'Extend selection down',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async baseDeps => {
+      structuralExtend()
+      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, baseDeps.scopeRootId)
+    },
+  })
+  await action.handler(deps, {} as ActionTrigger)
+  return {structuralExtend}
+}
+
+/** The same key once multi-select mode owns it: a different action id and
+ *  context, and deps that carry the selection rather than a focused block. */
+const pressMultiSelectExtendDown = async (
+  deps: MultiSelectModeDependencies,
+): Promise<{structuralExtend: Mock}> => {
+  const structuralExtend = vi.fn()
+  const action = decorateAction({
+    id: 'multi_select.extend_selection_down',
+    description: 'Extend selection down',
+    context: ActionContextTypes.MULTI_SELECT_MODE,
+    handler: async baseDeps => {
+      structuralExtend()
+      await extendSelectionDown(baseDeps.uiStateBlock, env.repo, baseDeps.scopeRootId)
+    },
+  })
+  await action.handler(deps, {} as ActionTrigger)
+  return {structuralExtend}
+}
+
+/** Shift-click, through the pointer decorator and the structural selection base
+ *  it declines to. */
+const shiftClick = async (
+  deps: BlockPointerDependencies,
+): Promise<{structuralSelect: Mock}> => {
+  const decorator = getSpatialNavigationDispatchDecorators().find(candidate =>
+    candidate.actionId === EXTEND_BLOCK_SELECTION_ACTION_ID &&
+    candidate.context === ActionContextTypes.BLOCK_POINTER,
+  )
+  if (!decorator) throw new Error('Missing spatial shift-click decorator')
+  const structuralSelect = vi.fn()
+  await decorator.wrap(deps, {} as ActionTrigger, async () => { structuralSelect() })
+  return {structuralSelect}
+}
+
 let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
@@ -234,24 +323,14 @@ describe('spatial navigation selection actions', () => {
     // Seed an existing selection so this exercises the *extension* path (the
     // Roam-style first press selects only the current block — covered below).
     await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'extend_selection_down',
-      description: 'Extend selection down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async deps => {
-        fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
-      },
-    })
 
-    await action.handler({
+    const {structuralExtend} = await pressExtendSelectionDown({
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(structuralExtend).not.toHaveBeenCalled()
     expect(panel.peekProperty(selectionStateProp)).toEqual({
       selectedBlockIds: ['A', 'X'],
       anchorBlockId: 'A',
@@ -269,21 +348,13 @@ describe('spatial navigation selection actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    // No prior selection — the first Shift+Down should select just A.
-    const action = decorateAction({
-      id: 'extend_selection_down',
-      description: 'Extend selection down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async deps => {
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
-      },
-    })
 
-    await action.handler({
+    // No prior selection — the first Shift+Down should select just A.
+    await pressExtendSelectionDown({
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
     expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A'])
   })
@@ -299,24 +370,14 @@ describe('spatial navigation selection actions', () => {
       selectedBlockIds: ['A'],
       anchorBlockId: 'A',
     })
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'multi_select.extend_selection_down',
-      description: 'Extend selection down',
-      context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async deps => {
-        fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
-      },
-    })
 
-    await action.handler({
+    const {structuralExtend} = await pressMultiSelectExtendDown({
       uiStateBlock: panel,
       selectedBlocks: [env.repo.block('A')],
       anchorBlock: env.repo.block('A'),
-    } satisfies MultiSelectModeDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(structuralExtend).not.toHaveBeenCalled()
     expect(panel.peekProperty(selectionStateProp)).toEqual({
       selectedBlockIds: ['A', 'X'],
       anchorBlockId: 'A',
@@ -340,24 +401,14 @@ describe('spatial navigation selection actions', () => {
       selectedBlockIds: ['A'],
       anchorBlockId: 'A',
     })
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'multi_select.extend_selection_down',
-      description: 'Extend selection down',
-      context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async deps => {
-        fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
-      },
-    })
 
-    await action.handler({
+    const {structuralExtend} = await pressMultiSelectExtendDown({
       uiStateBlock: panel,
       selectedBlocks: [env.repo.block('A')],
       anchorBlock: env.repo.block('A'),
-    } satisfies MultiSelectModeDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(structuralExtend).not.toHaveBeenCalled()
     expect(panel.peekProperty(selectionStateProp)).toEqual({
       selectedBlockIds: ['A'],
       anchorBlockId: 'A',
@@ -366,19 +417,6 @@ describe('spatial navigation selection actions', () => {
 })
 
 describe('spatial navigation shift-click selection', () => {
-  const decoratePointerSelection = (action: ActionConfig): ActionConfig => {
-    const decorator = getSpatialNavigationDispatchDecorators().find(candidate =>
-      candidate.actionId === EXTEND_BLOCK_SELECTION_ACTION_ID &&
-      candidate.context === ActionContextTypes.BLOCK_POINTER,
-    )
-    if (!decorator) throw new Error('Missing spatial shift-click decorator')
-    return {
-      ...action,
-      handler: (deps, trigger, dispatch) =>
-        decorator.wrap(deps, trigger, action.handler, dispatch),
-    }
-  }
-
   const blockNavItem = (blockId: string): HTMLElement => {
     const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`)
     if (!el) throw new Error(`missing nav item ${blockId}`)
@@ -394,21 +432,14 @@ describe('spatial navigation shift-click selection', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const structural = vi.fn()
-    const action = decoratePointerSelection({
-      id: EXTEND_BLOCK_SELECTION_ACTION_ID,
-      description: 'Extend block selection to the clicked block',
-      context: ActionContextTypes.BLOCK_POINTER,
-      handler: async () => { structural() },
-    })
 
-    await action.handler({
+    const {structuralSelect} = await shiftClick({
       block: env.repo.block('X'),
       uiStateBlock: panel,
       targetElement: blockNavItem('X'),
-    } as BlockPointerDependencies, {} as ActionTrigger)
+    })
 
-    expect(structural).not.toHaveBeenCalled()
+    expect(structuralSelect).not.toHaveBeenCalled()
     expect(panel.peekProperty(selectionStateProp)).toEqual({
       selectedBlockIds: ['A', 'X'],
       anchorBlockId: 'A',
@@ -432,21 +463,14 @@ describe('spatial navigation shift-click selection', () => {
 
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const structural = vi.fn()
-    const action = decoratePointerSelection({
-      id: EXTEND_BLOCK_SELECTION_ACTION_ID,
-      description: 'Extend block selection to the clicked block',
-      context: ActionContextTypes.BLOCK_POINTER,
-      handler: async () => { structural() },
-    })
 
-    await action.handler({
+    const {structuralSelect} = await shiftClick({
       block: env.repo.block('A'),
       uiStateBlock: panel,
       targetElement: otherItem,
-    } as BlockPointerDependencies, {} as ActionTrigger)
+    })
 
-    expect(structural).toHaveBeenCalledTimes(1)
+    expect(structuralSelect).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -459,22 +483,15 @@ describe('spatial navigation jump-to-edge actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'jump_to_first_visible_block',
-      description: 'Jump to first visible block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('jump_to_first_visible_block', {
       block: env.repo.block('C'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -489,22 +506,15 @@ describe('spatial navigation jump-to-edge actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'jump_to_last_visible_block',
-      description: 'Jump to last visible block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('jump_to_last_visible_block', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'X',
       renderScopeId: 'panel:backlink',
@@ -516,22 +526,15 @@ describe('spatial navigation jump-to-edge actions', () => {
     // handler must run instead of swallowing the keystroke.
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'jump_to_last_visible_block',
-      description: 'Jump to last visible block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('jump_to_last_visible_block', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -540,23 +543,14 @@ describe('spatial navigation vertical actions', () => {
     buildPanelDom([{blockId: 'A', renderScopeId: 'panel:outline'}])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'X', {renderScopeId: 'panel:missing:X'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => {
-        fallback()
-      },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('X'),
       uiStateBlock: panel,
       renderScopeId: 'panel:missing:X',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'X',
       renderScopeId: 'panel:missing:X',
@@ -574,22 +568,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('B'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
   })
 
   // The other half of the same branch: on a non-outline surface the model
@@ -603,21 +590,14 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'X', {renderScopeId: 'panel:backlink'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('X'),
       uiStateBlock: panel,
       renderScopeId: 'panel:backlink',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
   })
 
   // In a stacked column the DOM neighbour below the last MOUNTED row is the
@@ -634,22 +614,15 @@ describe('spatial navigation vertical actions', () => {
     await seedPanelBelow(env.repo)
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toBeUndefined()
   })
 
@@ -666,23 +639,16 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:backlink'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:backlink',
       // A backlink entry's scope root is the block it shows, not the page.
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
   })
 
   // ...and the edge of a backlink entry is still an edge: nothing in that
@@ -693,22 +659,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'C', {renderScopeId: 'panel:backlink'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('C'),
       uiStateBlock: panel,
       renderScopeId: 'panel:backlink',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
   })
 
   // Mounting is sticky and an IntersectionObserver only reports per-frame
@@ -729,22 +688,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     // Crucially NOT 'C' — that jump is the bug.
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
@@ -764,22 +716,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -803,22 +748,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -849,22 +787,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -896,22 +827,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'top', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('top'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'top',
       renderScopeId: 'panel:outline',
@@ -941,22 +865,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('B'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -983,24 +900,17 @@ describe('spatial navigation vertical actions', () => {
     await env.repo.tx(async tx => { await tx.delete('B') }, {scope: ChangeScope.UiState})
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
     // Not 'B': the model's next row is 'C', and focusing a row that is about to
     // unmount strands the cursor where nothing can walk from.
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -1030,22 +940,15 @@ describe('spatial navigation vertical actions', () => {
     }, {scope: ChangeScope.UiState})
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -1070,20 +973,13 @@ describe('spatial navigation vertical actions', () => {
     }, {scope: ChangeScope.UiState})
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
     // The same-panel focus write is fire-and-forget, so a bare assertion here
     // would pass before a wrong one could land. Transactions commit in order:
@@ -1091,7 +987,7 @@ describe('spatial navigation vertical actions', () => {
     await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
 
     // Not 'C': focusing it would also force-mount a row that is on its way out.
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -1123,24 +1019,17 @@ describe('spatial navigation vertical actions', () => {
     await env.repo.block('B').set(isCollapsedProp, true)
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('B'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
     // NOT 'B1': landing inside a collapsed subtree puts the cursor on a row the
     // user can't see, which unmounts a commit later.
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'B',
       renderScopeId: 'panel:outline',
@@ -1171,23 +1060,16 @@ describe('spatial navigation vertical actions', () => {
     await env.repo.block('B').set(isCollapsedProp, true)
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'C', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_up',
-      description: 'Move up',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_up', {
       block: env.repo.block('C'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
     // The model's row is 'B' itself; the handler lands there, not on 'B1'.
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'C',
       renderScopeId: 'panel:outline',
@@ -1222,23 +1104,16 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('X'),
       uiStateBlock: panel,
       renderScopeId: 'embed:B:X',
       // An embed's scope root is the block it shows, so the walk ends here.
       scopeRootId: 'X',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B1',
@@ -1269,22 +1144,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('X'),
       uiStateBlock: panel,
       renderScopeId: 'embed:B:X',
       scopeRootId: 'X',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B1',
@@ -1321,22 +1189,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('X'),
       uiStateBlock: panel,
       renderScopeId: 'embed:B:X',
       scopeRootId: 'X',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     // The mounted row after the embed, not the collapsed child inside it.
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
@@ -1371,22 +1232,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'X', {renderScopeId: 'embed:B:X'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('X'),
       uiStateBlock: panel,
       renderScopeId: 'embed:B:X',
       scopeRootId: 'X',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'C',
@@ -1416,22 +1270,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -1466,22 +1313,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -1515,22 +1355,15 @@ describe('spatial navigation vertical actions', () => {
     }])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'C', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_up',
-      description: 'Move up',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_up', {
       block: env.repo.block('C'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -1553,22 +1386,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'B', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_up',
-      description: 'Move up',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_up', {
       block: env.repo.block('B'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -1611,22 +1437,14 @@ describe('spatial navigation vertical actions', () => {
       },
     })
 
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
-
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: mountModelRowDuringWalk,
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     // NOT the backlink: it was the neighbour before 'B' mounted, and taking it
     // would jump the row that had just appeared in between.
     await vi.waitFor(() => {
@@ -1651,23 +1469,16 @@ describe('spatial navigation vertical actions', () => {
     const panel = env.repo.block('panel')
     // Focus has already moved on — as it would have during the await.
     await focusBlock(panel, 'C', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
     // ...but this invocation still carries the row the keystroke started on.
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     // The same-panel step writes fire-and-forget (`void focusBlock`), so a
     // bare assertion here would pass before a stale write could even land.
     // Fence on a write we CAN await: transactions commit in order, so once
@@ -1690,22 +1501,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'B',
@@ -1726,23 +1530,16 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
     // 'B' follows 'A' in the model, so the keystroke belongs to the outline.
-    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(modelWalk).toHaveBeenCalledTimes(1)
     expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'A',
       renderScopeId: 'panel:outline',
@@ -1758,22 +1555,15 @@ describe('spatial navigation vertical actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'C', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('C'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -1791,24 +1581,17 @@ describe('spatial navigation vertical actions', () => {
     await seedPanelBelow(env.repo)
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'C', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('C'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
       scopeRootId: 'top',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
     // (`panel-below` is seeded in both tests, so the negative assertion in the
     // sibling test can actually be false.)
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(env.repo.block('panel-below').peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'X',
@@ -1844,21 +1627,14 @@ describe('spatial navigation exclusion facet — real consumer path', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:outline'})
-    const fallback = vi.fn()
-    const action = decorateAction({
-      id: 'move_down',
-      description: 'Move down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async () => { fallback() },
-    })
 
-    await action.handler({
+    const {modelWalk} = await pressNavigationKey('move_down', {
       block: env.repo.block('A'),
       uiStateBlock: panel,
       renderScopeId: 'panel:outline',
-    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+    })
 
-    expect(fallback).not.toHaveBeenCalled()
+    expect(modelWalk).not.toHaveBeenCalled()
     // Lands on B, skipping the kanban-cell-surfaced instance in between —
     // the plugin-contributed exclusion working through the real dispatch
     // path (moveVertical -> excludedSurfacesFor -> resolveSpatialNavExclusions),
