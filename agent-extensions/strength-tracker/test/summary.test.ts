@@ -34,12 +34,43 @@ describe('lastTimeShape', () => {
     ], undefined)).toBe('10/7')
   })
 
-  it('prefers the prescribed count for legacy rows that recorded no side', () => {
+  it('counts what was performed, not what was prescribed', () => {
+    // `buildHistory` hands over only the ticked rows, so a lift cut short at
+    // two of three arrives here with two. Printing the prescribed 3 said you
+    // had finished it — the same lie the `10/8/7` rule above exists to
+    // prevent, by another route, and one progression does not tell: it treats
+    // the short session as incomplete and holds the load, so the line and the
+    // next prescription disagreed about the session you lift against.
+    expect(lastTimeShape([set(135, 10), set(135, 10)], 3)).toBe('2×10')
+  })
+
+  it('still reads legacy side-less rows as the prescribed count', () => {
     // Entries logged before `strength:side` existed have both sides as bare
-    // rows, so the left-side filter cannot save them and six would be shown.
+    // rows, so nothing can halve them and six would be shown. Recognised by
+    // the doubling itself — no side anywhere, exactly twice the prescription.
     expect(lastTimeShape([
       set(60, 10), set(60, 10), set(60, 10), set(60, 10), set(60, 10), set(60, 10),
     ], 3)).toBe('3×10')
+  })
+
+  it('does not call rows legacy when any one of them does claim a side', () => {
+    // Reachable only by hand-editing: `progressionSets` already returns every
+    // row when NO row has a side, so in practice the doubled-count test alone
+    // decides. This pins the side clause directly — a half-sided entry is
+    // damaged, and reporting the six rows it has beats asserting the three it
+    // was prescribed.
+    expect(lastTimeShape([
+      set(60, 10, 'L'), set(60, 10), set(60, 10),
+      set(60, 10), set(60, 10), set(60, 10),
+    ], 3)).toBe('6×10')
+  })
+
+  it('does not mistake an over-delivered lift for legacy doubling', () => {
+    // Four sets against a prescribed three is not the doubled shape, so the
+    // count stands rather than being rewritten to the prescription.
+    expect(lastTimeShape([
+      set(135, 10), set(135, 10), set(135, 10), set(135, 10),
+    ], 3)).toBe('4×10')
   })
 
   it('says nothing rather than guessing when there are no sets', () => {
