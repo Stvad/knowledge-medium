@@ -40,7 +40,7 @@ import {
 } from '@/plugins/daily-notes/dailyNotes.js'
 import { leftSidebarSectionsFacet } from '@/plugins/left-sidebar/facet.js'
 import { CallbackSet } from '@/utils/callbackSet.js'
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
 import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
@@ -2275,9 +2275,10 @@ const refreshBacklogCount = (repo: Repo, workspaceId: string): void => {
     // next window try again.
     .catch(() => null)
     .then(next => {
-      // Clear the flag BEFORE publishing: publishing notifies subscribers, which
-      // re-render and re-enter this function, and a still-set flag would make
-      // that re-entry a silent no-op.
+      // Cleared before publishing so the flag is never observably set while a
+      // notification is going out. Defensive rather than load-bearing: the
+      // re-render a notify triggers is scheduled, not synchronous, so the
+      // effect that re-enters here always runs after this whole block.
       backlogCountInFlight = false
       publishBacklogCount(next)
     })
@@ -2368,21 +2369,31 @@ const decorateDailyNoteWithBacklogHint = cachedContentDecorator(
   'WithReadwiseBacklogHint',
 )
 
-/** Only on TODAY's daily note, and only when it is the focal document. Every
- *  past daily note carrying this would be noise, and `isTopLevel` keeps it off
- *  breadcrumbs, embeds and backlink entries — where it would render once per
- *  occurrence.
+/** UTC midnight of today's local calendar date — the value a daily note stores
+ *  for "today" (see `dueBoundary`, which is the same encoding one day on). */
+const startOfTodayUtc = (now: Date = new Date()): number =>
+  Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+
+/** The cheap PRE-filter, run once per decorator resolution. `isTopLevel` keeps
+ *  the hint off breadcrumbs, embeds and backlink entries, where it would render
+ *  once per occurrence.
  *
- *  This gate is the cheap PRE-filter: it runs once per decorator resolution, so
- *  a past note never mounts the component and never triggers a count query. The
- *  component re-checks the date itself for the case this can't see — the note
- *  staying open across midnight. */
+ *  It admits today AND any FUTURE note, not just today's, even though only
+ *  today's ever shows the hint. Contributions are not re-resolved on a date
+ *  change, so a note opened before midnight and left open becomes today's note
+ *  with no second chance to mount — rejecting it here means the hint never
+ *  appears on it. The component makes the precise call, reactively.
+ *
+ *  What this still buys is the case that actually matters for cost: every PAST
+ *  daily note — nearly everything you browse — never mounts the component and
+ *  so never triggers a count query. */
 const readwiseDailyNoteBacklogDecorator: BlockContentDecoratorContribution = ctx => {
   if (!ctx.types.includes(DAILY_NOTE_TYPE)) return null
   if (!ctx.isTopLevel) return null
-  const workspaceId = ctx.block.peek()?.workspaceId
-  if (!workspaceId) return null
-  if (ctx.block.id !== dailyNoteBlockId(workspaceId, todayIso())) return null
+  const data = ctx.block.peek()
+  if (!data) return null
+  const noteDate = safeDecodeRowProperty(data, dailyNoteDateProp)
+  if (!noteDate || noteDate.getTime() < startOfTodayUtc()) return null
   return decorateDailyNoteWithBacklogHint
 }
 

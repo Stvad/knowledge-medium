@@ -10,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { act, cleanup, render, screen } from '@testing-library/react'
 
 import { ChangeScope } from '@/data/api/index.js'
+import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { RepoContext } from '@/context/repo.js'
@@ -273,6 +274,30 @@ describe('daily-note backlog hint', () => {
 
       expect(hint()).toBeNull()
     })
+
+    it('shows the hint on TOMORROW\'s note once midnight makes it today', async () => {
+      // The mirror case. Contributions aren't re-resolved on a date change, so
+      // a note opened before midnight and left open gets no second chance to
+      // mount — if the pre-filter admitted only today's note, the hint could
+      // never appear here.
+      const {repo, runtime} = setup()
+      await seedOverdueHighlight(repo, 'hl-1')
+      const tomorrowIso = todayIso(new Date(Date.now() + 24 * 60 * 60 * 1000))
+      const tomorrow = await getOrCreateDailyNote(repo, WS, tomorrowIso)
+
+      await renderDailyNote(repo, runtime, tomorrow.id)
+      // Mounted, but silent: it isn't today yet.
+      await vi.waitFor(() => { expect(screen.getByText(tomorrow.peek()!.content)).toBeTruthy() })
+      expect(hint()).toBeNull()
+
+      const afterMidnight = new Date()
+      afterMidnight.setDate(afterMidnight.getDate() + 1)
+      afterMidnight.setHours(0, 1, 0, 0)
+      vi.setSystemTime(afterMidnight)
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+
+      await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+    })
   })
 
   it('refetches after an invalidation even when the FIRST count failed', async () => {
@@ -295,6 +320,42 @@ describe('daily-note backlog hint', () => {
     await act(async () => { invalidateBacklogCount() })
 
     await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+  })
+
+  it('does not settle on a count computed before an invalidation', async () => {
+    // A review can land while the count query is still in flight. The refresh
+    // is guarded against re-entry, so the invalidation's own refresh attempt is
+    // a no-op — the question is whether the stale in-flight result is what the
+    // user is LEFT looking at, or whether the settle re-triggers.
+    const {repo, runtime} = setup()
+    await seedOverdueHighlight(repo, 'hl-1')
+    await seedOverdueHighlight(repo, 'hl-2')
+    const today = await getOrCreateDailyNote(repo, WS, todayIso())
+
+    let release!: (rows: BlockData[]) => void
+    const gate = new Promise<BlockData[]>(resolve => { release = resolve })
+    const queryBlocks = vi.spyOn(repo, 'queryBlocks')
+      .mockReturnValueOnce(gate as unknown as Promise<BlockData[]>)
+
+    await renderDailyNote(repo, runtime, today.id)
+    await vi.waitFor(() => { expect(queryBlocks).toHaveBeenCalledTimes(1) })
+
+    // One highlight gets reviewed while that query is still pending.
+    await act(async () => {
+      await repo.tx(async tx => {
+        const row = await tx.get('hl-1')
+        await tx.update('hl-1', {properties: {...row!.properties, [REVIEWED_PROP]: true}})
+      }, {scope: ChangeScope.BlockDefault, description: 'review hl-1'})
+      invalidateBacklogCount()
+    })
+
+    // ...and only now does the pre-review query come back, reporting 2.
+    await act(async () => { release([{id: 'hl-1'}, {id: 'hl-2'}] as BlockData[]) })
+
+    // The truth is 1. If the stale settle were final, this would sit at 2.
+    await vi.waitFor(() => {
+      expect(hint()!.textContent).toContain('1 Readwise highlight')
+    })
   })
 
   it('serves several consumers from ONE query', async () => {
