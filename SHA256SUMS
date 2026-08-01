@@ -1721,7 +1721,7 @@ a4b29da45b71646760ea11229b8b6e46a7866453446de4638cdad117d9e9ebcb  ./src/App.js
 39808076fb3f1d8e9d016a11e4bcf0d52b4b7cac48154d753e23b687058e605c  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-a8894030d0f86c0f7905cef7e7ce41d09727c93cdf04bcb68053fbeb6506c7e7  ./src/appVersion.js
+a88be583d8d7cd8180ec67ab8c1199a5798ce3696023e3fffb2344d637e01697  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2284,8 +2284,8 @@ d39eb1fb7e3a9b1702ab5106cdfc78f33e715131f14d597a0882754d3d945515  ./src/plugins/
 b1872b9a40a7e949417eedbb217930c0c1a45430a3d4bfc55be5c5aaa8697550  ./src/plugins/agent-runtime/AgentTokensDialog.js.map
 b82c0f25c1af8e3ad620ca1ed34976b9314ee458da3a778cc6e5373860a9107b  ./src/plugins/agent-runtime/BridgePairingDialog.js
 4308a81a3a1b68334e5984c7fc8feaae24dc44a72599b1c83b9a416c38ad4316  ./src/plugins/agent-runtime/BridgePairingDialog.js.map
-857a32d31b36db5b6fe92b9f0ecbd3ad3b4573c1870f442a4b7f44734a905215  ./src/plugins/agent-runtime/authoringCatalog.js
-1540b5f1e404b6edd42addd2a71fd702ea6d5f90fb9dd076e71621f8183eaa3f  ./src/plugins/agent-runtime/authoringCatalog.js.map
+3ae29999e6bad545f1f065a0daeb295a82b807691e4979d7576fd15893d29003  ./src/plugins/agent-runtime/authoringCatalog.js
+782c55b16f6b99beb22b5c7441c7a75fb838ac4dde03667447112faf307971f5  ./src/plugins/agent-runtime/authoringCatalog.js.map
 e9f3373e71b32c6ce8eb79fba07752bcf55226349d110e272d1bb4a67528bce8  ./src/plugins/agent-runtime/bridge.js
 fba6d6896e7a47ed25c8e42f073ccf421ca75c9cea05eaa1857fbbd050144141  ./src/plugins/agent-runtime/bridge.js.map
 ecdd28dfa73cb77d1651483ffaa36d8d6c17e5090cd799686f259271aa9ef827  ./src/plugins/agent-runtime/commands.js
@@ -2939,8 +2939,8 @@ b527b93e716994a7e148c9fde02f99e6f26ceef74388f857f3bc9ac381131f03  ./src/plugins/
 b782ffcf0309684ba13f52739c744ccaf70339eb842c6b6a4dd19ef888045423  ./src/plugins/srs-rescheduling/srsBlockDateAdapter.js.map
 50ba9df116dff019a987a998ce9348560953d91517b8b5f6183832dbbc17d364  ./src/plugins/srs-rescheduling/srsClipboard.js
 1ce788ae52403c47b8cb3b0dbcabbdc49858588e2fd0a0625b5aab8f8966e658  ./src/plugins/srs-rescheduling/srsClipboard.js.map
-723474de8f41c376d03efd9f8bf1c9c6476e08b30f104b26429b69b03c84fe24  ./src/plugins/srs-rescheduling/swipeRightDecorator.js
-477c1bb3882ef06a48a9f5e0823424b21b6033f20f26c6a0bb031a355b7a813c  ./src/plugins/srs-rescheduling/swipeRightDecorator.js.map
+d29e5ace5189f370a447f0c32ae8b9bc5bd38b110a64344efbdce1eeb5002a39  ./src/plugins/srs-rescheduling/swipeRightDecorator.js
+773e535a468738d755ee2515249662bf67c7c8b2a67094ad3fdc750f04cfe1c3  ./src/plugins/srs-rescheduling/swipeRightDecorator.js.map
 5546bf3919b5ba5040fa2bde31eda53bfb43bd3cf333957152905117246ba837  ./src/plugins/srs-review/DeckPicker.js
 207218e4f0ee4feef974b5f0bf7f98ce5a087d5286de451640cd1a9a562af472  ./src/plugins/srs-review/DeckPicker.js.map
 5781c832173eb5620c90542a0a84492479173159d035985821f6bfab69a15f20  ./src/plugins/srs-review/ReviewDeckRenderer.js
@@ -3281,8 +3281,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-0743c327f779ff425a304b42ee56bb067dede387fe259980ae1c1046d124111c  ./sw.js
-528f7c43218c20fbb89d71a764c3f083fc2f637ef881a64fb9d17000397ba2a1  ./version.json
+80c23471235d5e47e03f7379582f3b4c289c3236cfa5b7e624ba422b77051917  ./sw.js
+1eadc78c0c533e515ef734bcd2c4f8fbd08157b99ba295db13f0ff93ce15f3da  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
