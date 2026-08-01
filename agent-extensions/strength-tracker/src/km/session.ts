@@ -39,7 +39,7 @@ import {isExpendableLine} from '../ui/placement'
 import {dateToDay, dayToDate, storedDate} from './day'
 import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 import {writeLayoffInTx} from './store'
-import {countLoggedSets} from './subtree'
+import {discardTally, type DiscardTally} from './subtree'
 import type {PlannedLift, PlannedSet, SessionPlan} from './sessionPlan'
 import {
   catchUpRpeProp,
@@ -221,11 +221,11 @@ export const takePlaceOf = async (
 /** What Discard is about to destroy, read before the confirmation.
  *
  *  The same walk `discardSession` re-runs inside its transaction — see
- *  `countLoggedSets`. Two implementations of "is there logged work here?" is
- *  how the warning ends up describing a tree the delete no longer applies to.
+ *  `discardTally`. Two implementations of "what would this destroy?" is how
+ *  the warning ends up describing a tree the delete no longer applies to.
  */
-export const loggedSetCount = async (repo: Repo, workoutId: string): Promise<number> =>
-  countLoggedSets(async id => (await repo.block(id).children.load()) ?? [], workoutId)
+export const discardCounts = async (repo: Repo, workoutId: string): Promise<DiscardTally> =>
+  discardTally(async id => (await repo.block(id).children.load()) ?? [], workoutId)
 
 // ──── stamping ────
 
@@ -282,17 +282,6 @@ const entrySpec = (
   typeSnapshot,
 })
 
-/** Stamp tonight's session into `parentId`, or hand back the one already
- *  under way for this training day.
- *
- *  Idempotent by refusing to write rather than by converging on what it would
- *  have written: a second call finds the standing session and returns it
- *  untouched. Every logged value therefore survives trivially — there is no
- *  path on which a tap edits a session that already exists.
- *
- *  A workout already `done` is not standing, so "I did session A twice today"
- *  stays representable: Finish the first and the next tap starts a second.
- */
 export interface StartedSession {
   id: string
   /** Whether THIS call created it.
@@ -307,7 +296,20 @@ export interface StartedSession {
   stamped: boolean
 }
 
-export const startSession = async (
+/** Stamp tonight's session into `parentId`, or hand back the one already
+ *  under way for this training day.
+ *
+ *  Idempotent by refusing to write rather than by converging on what it would
+ *  have written: a second call finds the standing session and returns it
+ *  untouched. Every logged value therefore survives trivially — there is no
+ *  path on which a tap edits a session that already exists.
+ *
+ *  A workout already `done` is not standing, so "I did session A twice today"
+ *  stays representable: Finish the first and the next tap starts a second.
+ *
+ *  Serialized per client — see `starting`. Call this, never `stampSession`.
+ */
+export const startSession = (
   repo: Repo,
   workspaceId: string,
   parentId: string,
@@ -317,6 +319,46 @@ export const startSession = async (
    *  is what taking the place of an empty block you just opened at the end of
    *  a page looks like. */
   position: {kind: 'first'} | {kind: 'last'} = {kind: 'first'},
+): Promise<StartedSession> => {
+  const run = starting.then(
+    () => stampSession(repo, workspaceId, parentId, plan, position),
+    () => stampSession(repo, workspaceId, parentId, plan, position),
+  )
+  // Swallowed, so one start that throws does not reject every later one — the
+  // queue is for ordering, not for propagating outcomes.
+  starting = run.then(() => undefined, () => undefined)
+  return run
+}
+
+/** One start at a time on this client.
+ *
+ *  The standing-session question is answered from a workspace-wide query that
+ *  necessarily runs BEFORE the transaction: `Tx` has no workspace-wide query,
+ *  so "is a session under way anywhere" cannot be asked any later. Two starts
+ *  overlapping that window both read "nothing under way" and both stamp. The
+ *  in-transaction catch-up scan below only covers the two landing in the SAME
+ *  parent, and the two entry points differ by construction — the shortcut
+ *  stamps at your cursor, the log page's button stamps on that page. Reachable
+ *  in one tab: the dialog host renders every queued dialog at once, so two
+ *  pickers sit open together and one Enter can answer both.
+ *
+ *  Serializing makes the second call's query run after the first's COMMIT —
+ *  the handle is invalidated inside `repo.tx`, so `load()` re-resolves — and it
+ *  then finds the session and hands it back untouched.
+ *
+ *  Per tab only. Two DEVICES starting at once still make two sessions; that is
+ *  unfixable here (a workspace-wide claim is not expressible in a transaction)
+ *  and is the accepted position for a record with no derived id — see the
+ *  module docblock: a duplicate session is visible on the page and Discard
+ *  removes it, where a duplicate settings block is silent and permanent. */
+let starting: Promise<unknown> = Promise.resolve()
+
+const stampSession = async (
+  repo: Repo,
+  workspaceId: string,
+  parentId: string,
+  plan: SessionPlan,
+  position: {kind: 'first'} | {kind: 'last'},
 ): Promise<StartedSession> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   // Workspace-wide, like the readers: a page-children scan would miss a session
@@ -330,9 +372,11 @@ export const startSession = async (
   return repo.tx(async tx => {
     // Two populations, because neither alone is the answer: the workspace-wide
     // list is what finds a session filed somewhere this tap would never look,
-    // and `parentId`'s children are what a session created microseconds ago —
-    // too recently for the query above to have seen it — is guaranteed to be
-    // among when the two taps stamp into the same place.
+    // and `parentId`'s children are what a session that landed since that query
+    // ran is guaranteed to be among IF it landed here. Since starts are
+    // serialized on this client, the only writer that can slip into that window
+    // is a peer's row arriving over sync — so this half is a partial catch-up,
+    // not a general one, and the two-device case stays as `starting` describes.
     const seen = new Map<string, BlockData>()
     for (const block of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
       seen.set(block.id, block)

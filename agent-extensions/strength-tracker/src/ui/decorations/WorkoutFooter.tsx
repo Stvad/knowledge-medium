@@ -15,7 +15,8 @@ import type {Block} from '@/data/block.js'
 import {useData, useWorkspaceId} from '@/hooks/block.js'
 
 import {FIELD} from '../../km/fields'
-import {loggedSetCount, type FinishOutcome} from '../../km/session'
+import {discardCounts, type FinishOutcome} from '../../km/session'
+import type {DiscardTally} from '../../km/subtree'
 import {ConfirmDialog} from '../ConfirmDialog'
 import {closeSession} from '../../km/tonight'
 import {discardSession} from '../../km/store'
@@ -38,6 +39,17 @@ const message = (outcome: FinishOutcome): string | null => {
         + 'record the old number. Check the set, then finish.'
   }
 }
+
+/** Name what Discard would take, in the user's terms.
+ *
+ *  Both kinds, because `deleteBlock` cascades over the whole subtree and a
+ *  warning that mentions only sets under-describes the deletion. "You added"
+ *  is the distinction that matters: everything else down there was stamped by
+ *  the Start you are undoing, and losing that is the point of the button. */
+const whatGoes = ({logged, yours}: DiscardTally): string => [
+  ...(logged > 0 ? [`${logged} logged ${logged === 1 ? 'set' : 'sets'}`] : []),
+  ...(yours > 0 ? [`${yours} ${yours === 1 ? 'block' : 'blocks'} you added`] : []),
+].join(' and ')
 
 export const WorkoutFooter = ({block}: {block: Block}) => {
   const workspaceId = useWorkspaceId(block)
@@ -116,12 +128,11 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
               // a performed set indented under a note is still work Discard
               // destroys, and `done` above cannot see it — so the warning was
               // skipped for exactly the tree Finish refuses.
-              const logged = await loggedSetCount(block.repo, block.id)
-              if (logged > 0) {
+              const doomed = await discardCounts(block.repo, block.id)
+              if (doomed.logged > 0 || doomed.yours > 0) {
                 const go = await openDialog(ConfirmDialog, {
                   title: 'Discard this session?',
-                  body: `${logged} logged ${logged === 1 ? 'set' : 'sets'} will be deleted. `
-                    + 'This cannot be undone from here.',
+                  body: `${whatGoes(doomed)} will be deleted. This cannot be undone from here.`,
                   confirmLabel: 'Discard',
                   destructive: true,
                 })
@@ -129,17 +140,18 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
               }
               setBusy(true)
               try {
-                // The count goes IN, so the delete applies to the tree that
-                // was confirmed. Between the count and here sits a dialog you
-                // can leave open indefinitely — and, when nothing was logged,
-                // no dialog but still several awaits. Either way a peer can
-                // tick a set in the gap, and the reading that skips the
-                // warning entirely is exactly "nothing is logged".
-                const outcome = await discardSession(block.repo, block.id, logged)
+                // The counts go IN, so the delete applies to the tree that was
+                // confirmed. Between the count and here sits a dialog you can
+                // leave open indefinitely — and, when there was nothing to
+                // warn about, no dialog but still several awaits. Either way a
+                // peer can tick a set or add a block in the gap, and the
+                // reading that skips the warning entirely is exactly the one
+                // where anything appearing is unannounced.
+                const outcome = await discardSession(block.repo, block.id, doomed)
                 setProblem(
                   outcome === 'discarded' ? null
                     : outcome === 'changed'
-                      ? 'A set was logged while that was open — press Discard again to see what it would delete.'
+                      ? 'This session changed while that was open — press Discard again to see what it would delete.'
                       : outcome === 'holds-a-session'
                         ? 'Another workout is filed inside this one, and discarding would delete it too. '
                           + 'Outdent it first, then discard.'

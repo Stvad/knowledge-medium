@@ -32,7 +32,7 @@ import {
   layoffToProp,
 } from './schema'
 import {dateToDay, dayToDate, storedDate} from './day'
-import {countLoggedSets, nestedWorkouts} from './subtree'
+import {discardTally, nestedWorkouts, type DiscardTally} from './subtree'
 
 import {buildAltChoices} from './history'
 
@@ -150,15 +150,17 @@ export const writeLayoff = async (
 export const discardSession = async (
   repo: Repo,
   workoutId: string,
-  /** How much logged work the caller counted before deciding whether to warn.
+  /** What the caller counted before deciding whether to warn — BOTH kinds, so
+   *  the recheck covers everything the warning described.
+   *
    *  Re-counted here and refused when it no longer matches: the count and the
    *  delete are separated by a dialog the user can sit in indefinitely — and
    *  by several awaits even when there is nothing to confirm. A peer ticking a
-   *  set in that gap turned a warned-about deletion into an unwarned one, on
-   *  exactly the reading ("nothing is logged") that skips the dialog. Omit it
-   *  to delete whatever is there, which is what a caller with no count to
-   *  honour means. */
-  expectedLogged?: number,
+   *  set or typing a note in that gap turned a warned-about deletion into an
+   *  unwarned one, on exactly the reading ("nothing here but the prescribed
+   *  skeleton") that skips the dialog. Omit it to delete whatever is there,
+   *  which is what a caller with no count to honour means. */
+  expected?: DiscardTally,
 ): Promise<'discarded' | 'gone' | 'changed' | 'holds-a-session'> =>
   repo.tx(async tx => {
     const workout = await tx.get(workoutId)
@@ -185,12 +187,12 @@ export const discardSession = async (
     )
     if (nested.length > 0) return 'holds-a-session' as const
 
-    if (expectedLogged !== undefined) {
-      const logged = await countLoggedSets(
+    if (expected !== undefined) {
+      const now = await discardTally(
         id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
         workoutId,
       )
-      if (logged !== expectedLogged) return 'changed' as const
+      if (now.logged !== expected.logged || now.yours !== expected.yours) return 'changed' as const
     }
     await tx.run(deleteBlock, {id: workoutId})
     return 'discarded' as const

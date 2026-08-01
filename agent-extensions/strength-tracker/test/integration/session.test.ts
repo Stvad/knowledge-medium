@@ -22,7 +22,7 @@ import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from '../../src/km/f
 import {nextWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
-import {adjustSet, finishSession, loggedSetCount, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
+import {adjustSet, discardCounts, finishSession, startSession as startSessionReporting, takePlaceOf} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
 import {discardSession} from '../../src/km/store'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -176,6 +176,36 @@ describe('startSession — one tap stamps the whole session', () => {
     // Trivially, because the second tap writes nothing at all — but this is
     // the assertion that would catch it if it ever wrote again.
     expect(repo.block(first.id).peekProperty(todoStatusProp)).toBe('done')
+  })
+
+  it('makes ONE session when two taps land in different parents at once', async () => {
+    // The standing-session question is answered from a workspace-wide query
+    // that has to run BEFORE the transaction — `Tx` cannot ask it — so two
+    // taps overlapping that window both read "nothing under way". The
+    // in-transaction catch-up scan only covers `parentId`'s own children, and
+    // the two entry points differ by construction: the shortcut stamps at your
+    // cursor, the log page's button stamps on the page. The dialog host
+    // renders every queued dialog at once, so both pickers can be open and one
+    // Enter answers both. Serialized starts make the second query run after
+    // the first commit, so it sees the session and hands it back.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'elsewhere', workspaceId: WORKSPACE_ID, parentId: PAGE_ID,
+        orderKey: 'a5', content: 'some other block',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a second landing spot'})
+
+    const [here, there] = await Promise.all([
+      startSessionReporting(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)])),
+      startSessionReporting(repo, WORKSPACE_ID, 'elsewhere', plan([lift('Barbell row', 1)])),
+    ])
+
+    expect(there.id).toBe(here.id)
+    // The one that lost is told so: its `or`-group picks configured a session
+    // that was never created, and recording them would change what future
+    // sessions prescribe on the strength of a race nobody was shown.
+    expect([here.stamped, there.stamped]).toEqual([true, false])
+    expect(await childrenOf('elsewhere', WORKOUT_TYPE)).toHaveLength(0)
   })
 
   it('stamps a second session beside a finished one rather than reopening it', async () => {
@@ -1038,12 +1068,41 @@ describe('what Discard is about to destroy', () => {
       await tx.move(sets[1].id, {parentId: 'a-note', orderKey: 'a0'})
     }, {scope: ChangeScope.BlockDefault, description: 'indent one under a note'})
 
-    expect(await loggedSetCount(repo, workoutId)).toBe(2)
+    expect((await discardCounts(repo, workoutId)).logged).toBe(2)
   })
 
   it('is zero for a session where nothing was ticked', async () => {
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2)]))
-    expect(await loggedSetCount(repo, workoutId)).toBe(0)
+    expect((await discardCounts(repo, workoutId)).logged).toBe(0)
+  })
+
+  it('counts the blocks you added, so a session with only notes still warns', async () => {
+    // `deleteBlock` CASCADES over the whole subtree, and the warning named
+    // logged sets only. A session with nothing ticked and a paragraph about
+    // why counted zero — which is the reading that shows NO dialog — so the
+    // paragraph was deleted with nothing having asked.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'why-i-stopped', workspaceId: WORKSPACE_ID, parentId: entry.id,
+        orderKey: 'z0', content: 'shoulder felt wrong, called it here',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a note under the lift'})
+
+    expect(await discardCounts(repo, workoutId)).toEqual({logged: 0, yours: 1})
+  })
+
+  it('is zero on BOTH counts for a freshly stamped session', async () => {
+    // The other half, and the one that would bite every user rather than a
+    // few: escaping a start you did not mean has to stay one tap and no
+    // dialog. Everything the stamp makes — workout, entries, sets, and any
+    // property children the kernel materialises under them — must read as
+    // generated, or Discard would claim to destroy work on every session.
+    const workoutId = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 2), lift('Barbell row', 3)]))
+
+    expect(await discardCounts(repo, workoutId)).toEqual({logged: 0, yours: 0})
   })
 })
 
@@ -1291,8 +1350,8 @@ describe('a set filed under a note that sits directly under the workout', () => 
     const [innerSet] = await childrenOf(innerEntry.id, SET_TYPE)
     await tick(innerSet.id)
 
-    expect(await loggedSetCount(repo, outer)).toBe(0)
-    expect(await loggedSetCount(repo, inner)).toBe(1)
+    expect(await discardCounts(repo, outer)).toEqual({logged: 0, yours: 0})
+    expect((await discardCounts(repo, inner)).logged).toBe(1)
   })
 
   it('still accepts the ordinary shape, so the rule did not just get stricter', async () => {
@@ -1321,17 +1380,35 @@ describe('discarding what was actually confirmed', () => {
     const {workoutId, setId} = await started()
     await tick(setId)
 
-    expect(await discardSession(repo, workoutId, 0)).toBe('changed')
+    expect(await discardSession(repo, workoutId, {logged: 0, yours: 0})).toBe('changed')
 
     expect(await isBlockDeleted(repo, workoutId)).toBe(false)
     expect(repo.block(setId).peekProperty(todoStatusProp)).toBe('done')
+  })
+
+  it('refuses when a block was added after the counts the caller confirmed', async () => {
+    // The same gap on the other count, and on the reading that skips the
+    // dialog entirely: a peer typing a note while the button is being pressed
+    // turns an unwarned deletion into one that destroys their writing.
+    const {workoutId} = await started()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'landed-late', workspaceId: WORKSPACE_ID, parentId: workoutId,
+        orderKey: 'z0', content: 'a peer wrote this',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a note arriving late'})
+
+    expect(await discardSession(repo, workoutId, {logged: 0, yours: 0})).toBe('changed')
+
+    expect(await isBlockDeleted(repo, workoutId)).toBe(false)
+    expect(await isBlockDeleted(repo, 'landed-late')).toBe(false)
   })
 
   it('goes ahead when the tree still matches what was confirmed', async () => {
     const {workoutId, setId} = await started()
     await tick(setId)
 
-    expect(await discardSession(repo, workoutId, 1)).toBe('discarded')
+    expect(await discardSession(repo, workoutId, {logged: 1, yours: 0})).toBe('discarded')
 
     expect(await isBlockDeleted(repo, workoutId)).toBe(true)
   })
@@ -1347,8 +1424,8 @@ describe('discarding what was actually confirmed', () => {
     expect(repo.block(setId).peek()?.parentId).toBe(workoutId)
     await tick(setId)
 
-    expect(await discardSession(repo, workoutId, 0)).toBe('changed')
-    expect(await discardSession(repo, workoutId, 1)).toBe('discarded')
+    expect(await discardSession(repo, workoutId, {logged: 0, yours: 0})).toBe('changed')
+    expect(await discardSession(repo, workoutId, {logged: 1, yours: 0})).toBe('discarded')
   })
 
   it('deletes whatever is there when no count is offered', async () => {
