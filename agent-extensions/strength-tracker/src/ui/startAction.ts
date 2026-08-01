@@ -62,8 +62,26 @@ const runStartSession = async (repo: Repo): Promise<void> => {
   // that is no longer the latest. The clock and your picks are kept; only
   // the history underneath them is refreshed.
   const fresh = await readProgram(repo, workspaceId)
-  const prescription = prescribeFor(fresh, now, picks.session, picks.choices)
-  const plan = planFromPrescription(prescription, fresh.config.unit)
+
+  // Asked AGAIN. Another client can start the same training day while this
+  // dialog sits open, and stamping into it adds whichever alternative was
+  // chosen here beside the one chosen there — the both-alternatives session
+  // the pre-dialog check exists to prevent, arriving through the back door.
+  const arrived = await standingSession(repo, workspaceId, fresh, now)
+  if (arrived) {
+    await navigateFromGlobalCommand(repo, {blockId: arrived, workspaceId})
+    return
+  }
+
+  // Only history and layoffs are taken from the refreshed read: the PLAN stays
+  // the one that was previewed and approved. Refreshing that too would stamp
+  // different lifts — or the built-in fallback, if the outline stopped
+  // resolving mid-dialog — than the list you confirmed.
+  const prescription = prescribeFor(
+    {...fresh, planSource: snapshot.planSource, config: snapshot.config},
+    now, picks.session, picks.choices,
+  )
+  const plan = planFromPrescription(prescription, snapshot.config.unit)
   const parentId = await sessionParent(repo, workspaceId, prescription.day)
   const workoutId = await startSession(repo, workspaceId, parentId, plan)
 

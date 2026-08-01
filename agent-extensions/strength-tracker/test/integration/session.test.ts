@@ -22,6 +22,7 @@ import {EXERCISE_ENTRY_TYPE, SET_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
 import {adjustSet, finishSession, startSession} from '../../src/km/session'
+import {closeSession} from '../../src/km/tonight'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {
   STRENGTH_PROPS,
@@ -575,11 +576,12 @@ describe('a set the outline has rearranged, and text you typed', () => {
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     const sets = await childrenOf(entry.id, SET_TYPE)
     await tick(sets[0].id)
-    // Tabbing a set under its neighbour is an ordinary outline gesture, and
-    // it puts the workout THREE hops up instead of two.
+    expect(await finishSession(repo, workoutId)).toBe('done')
+    // Tabbed in AFTER closing — Finish refuses a tree shaped like this, so
+    // this is the way a closed session comes to hold one. It puts the workout
+    // THREE hops above the set instead of two.
     await repo.tx(tx => tx.move(sets[1].id, {parentId: sets[0].id, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault, description: 'tab the set in'})
-    expect(await finishSession(repo, workoutId)).toBe('done')
     return sets[1].id
   }
 
@@ -730,10 +732,12 @@ describe('a closed session is a record, not a form', () => {
     expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(135)
   })
 
-  it('counts a set indented under a note, rather than leaving it out of the record', async () => {
-    // Indenting a set under a note you typed is an ordinary outline gesture.
-    // Scanning only direct children omits it from history AND leaves it behind
-    // as an open todo under a session that can never be finished again.
+  it('refuses a set indented where history cannot read it, rather than closing around it', async () => {
+    // `buildHistory` groups sets by their DIRECT parent entry — it gets flat
+    // rows and cannot walk through a note block it never queried. Closing
+    // around a nested set would report the session recorded while progression
+    // never sees the work, and would strip the todo that is your only sign it
+    // is there. Both readers use one rule; anything outside it is reported.
     const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
     const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
     const [set] = await childrenOf(entry.id, SET_TYPE)
@@ -746,10 +750,12 @@ describe('a closed session is a record, not a form', () => {
     }, {scope: ChangeScope.BlockDefault, description: 'indent the set under a note'})
     await tick(set.id)
 
-    expect(await finishSession(repo, workoutId)).toBe('done')
+    expect(await finishSession(repo, workoutId)).toBe('misfiled')
 
-    expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBe(135)
-    expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(false)
+    // Nothing written: still open, still a todo, still yours to outdent.
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+    expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(true)
+    expect(repo.block(entry.id).peekProperty(workingWeightProp)).toBeUndefined()
   })
 })
 
@@ -799,5 +805,24 @@ describe('a plan block renamed away from the name an entry still carries', () =>
     ] as const)))
     expect(byName.get('Overhead Press')).toBe(3)
     expect(byName.get('Press')).toBe(1)
+  })
+})
+
+describe('a session that cannot be filed on a day', () => {
+  it('refuses to close a workout whose date was cleared, rather than substituting today', async () => {
+    // `strength:date` is hand-editable. Substituting the clock closes a
+    // workout that `buildHistory` then drops whole — gone from progression,
+    // todos already stripped, and no way back in through Finish.
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const [entry] = await childrenOf(workoutId, EXERCISE_ENTRY_TYPE)
+    const [set] = await childrenOf(entry.id, SET_TYPE)
+    await tick(set.id)
+    await repo.tx(tx => tx.setProperties(workoutId, {set: [propertyValue(dateProp, undefined)]}),
+      {scope: ChangeScope.BlockDefault, description: 'clear the date by hand'})
+
+    expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('undated')
+
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+    expect(hasBlockType(repo.block(set.id).peek()!, TODO_TYPE)).toBe(true)
   })
 })

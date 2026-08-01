@@ -454,26 +454,47 @@ export type FinishOutcome =
   /** Nothing was ticked, so there is no training day to record. Writes
    *  nothing: an empty tree is never consent to commit an empty record. */
   | 'nothing-logged'
+  /** A set or a lift is sitting somewhere `buildHistory` cannot read it —
+   *  indented under a note, or under another set. Writes nothing. */
+  | 'misfiled'
+  /** The workout's `strength:date` is missing or unreadable, so nothing can
+   *  file it on a training day. Writes nothing. */
+  | 'undated'
 
-/** Every set in a subtree, however deep.
+/** Anything typed as a set or a lift that is NOT in the one position history
+ *  can read it from.
  *
- *  Sets DESCEND rather than only sit as direct children: indenting one under
- *  a note you typed is an ordinary outline gesture, and a direct-children
- *  scan silently omits it from the record while leaving it behind as an open
- *  todo under a session that can never be finished again. Bounded so
- *  hand-edited parentage cannot spin. */
-const setsUnder = async (tx: Tx, rootId: string, depth = 0): Promise<BlockData[]> => {
-  if (depth > 4) return []
+ *  `buildHistory` groups sets by their DIRECT parent entry and entries by
+ *  their direct parent workout — it is handed flat rows and cannot walk
+ *  through a note block it never queried. So descending here, as an earlier
+ *  round did, bought nothing but a disagreement: Finish counted a nested set
+ *  and reported the session recorded, while progression never saw it. Both
+ *  readers use the same rule now, and anything outside it is reported rather
+ *  than silently left out of your training history. */
+const misfiled = async (tx: Tx, workoutId: string): Promise<BlockData[]> => {
   const found: BlockData[] = []
-  for (const child of await tx.childrenOf(rootId, undefined, {hidePropertyChildren: true})) {
-    if (child.deleted) continue
-    if (hasBlockType(child, SET_TYPE)) found.push(child)
-    else found.push(...await setsUnder(tx, child.id, depth + 1))
+  // Depth is counted from the WORKOUT: its children are lifts, their children
+  // are sets. Those two positions are the whole canonical shape; a typed block
+  // anywhere else is one neither reader can reach.
+  const walk = async (parentId: string, depth: number): Promise<void> => {
+    if (depth > 4) return
+    for (const child of await tx.childrenOf(parentId, undefined, {hidePropertyChildren: true})) {
+      if (child.deleted) continue
+      const entryHere = depth === 0 && hasBlockType(child, EXERCISE_ENTRY_TYPE)
+      const setHere = depth === 1 && hasBlockType(child, SET_TYPE)
+      if (!entryHere && !setHere
+        && (hasBlockType(child, SET_TYPE) || hasBlockType(child, EXERCISE_ENTRY_TYPE))) {
+        found.push(child)
+      }
+      await walk(child.id, depth + 1)
+    }
   }
+  await walk(workoutId, 0)
   return found
 }
 
-/** Every set block under a workout, with the entry it belongs to. */
+/** Every set block under a workout, with the entry it belongs to — direct
+ *  children at both levels, the same rule `buildHistory` reads by. */
 const setsOf = async (
   tx: Tx,
   workoutId: string,
@@ -481,7 +502,9 @@ const setsOf = async (
   const out: {entry: BlockData; sets: BlockData[]}[] = []
   for (const entry of await tx.childrenOf(workoutId, undefined, {hidePropertyChildren: true})) {
     if (!hasBlockType(entry, EXERCISE_ENTRY_TYPE)) continue
-    out.push({entry, sets: await setsUnder(tx, entry.id)})
+    const sets = (await tx.childrenOf(entry.id, undefined, {hidePropertyChildren: true}))
+      .filter(child => !child.deleted && hasBlockType(child, SET_TYPE))
+    out.push({entry, sets})
   }
   return out
 }
@@ -523,6 +546,11 @@ export const finishSession = async (
     const workout = await tx.get(workoutId)
     if (!workout || workout.deleted) return 'gone' as const
     if (workout.properties[FIELD.status] !== 'in-progress') return 'gone' as const
+
+    // Checked before anything is written: closing around a set history cannot
+    // read would report the session recorded while progression never sees the
+    // work, and would strip the todo that is your only sign it is there.
+    if ((await misfiled(tx, workoutId)).length > 0) return 'misfiled' as const
 
     const tree = await setsOf(tx, workoutId)
     // Counted before anything is written, so the refusal below leaves the

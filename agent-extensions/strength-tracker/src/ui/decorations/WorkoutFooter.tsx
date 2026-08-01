@@ -16,6 +16,7 @@ import {FIELD} from '../../km/fields'
 import type {FinishOutcome} from '../../km/session'
 import {statusProp} from '../../km/schema'
 import {closeSession} from '../../km/tonight'
+import {discardSession} from '../../km/store'
 import {useSessionRows} from './sessionRows'
 
 const message = (outcome: FinishOutcome): string | null => {
@@ -24,6 +25,12 @@ const message = (outcome: FinishOutcome): string | null => {
     case 'gone': return 'Already closed — another device finished or discarded this session.'
     case 'nothing-logged':
       return 'Nothing is ticked yet, so there is no training day to record. Tick the sets you did.'
+    case 'undated':
+      return 'This session has no readable date, so it cannot be filed on a training day. '
+        + 'Set its date property, then finish.'
+    case 'misfiled':
+      return 'A set or a lift is indented somewhere your history cannot read it — '
+        + 'outdent it so every set sits directly under its lift, then finish.'
   }
 }
 
@@ -76,6 +83,34 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
               .finally(() => setBusy(false))
           }}
         >{busy ? 'Finishing…' : 'Finish'}</button>
+      ) : null}
+      {/* The only way out of a session started by mistake. Without it, the
+          standing-session check sends every later Start back to the workout
+          you did not want, and deleting blocks by hand is the only escape. */}
+      {status === 'in-progress' && !block.repo.isReadOnly ? (
+        <button
+          type="button"
+          disabled={busy}
+          data-block-interaction="ignore"
+          className="rounded px-2 py-1 text-muted-foreground underline decoration-dotted hover:text-foreground disabled:opacity-50"
+          onClick={event => {
+            event.stopPropagation()
+            if (done.length > 0 && !confirm(
+              `Discard this session? ${done.length} logged ${done.length === 1 ? 'set' : 'sets'} will be deleted.`,
+            )) return
+            setBusy(true)
+            setProblem(null)
+            void discardSession(block.repo, block.id)
+              .then(outcome => setProblem(outcome === 'discarded'
+                ? null
+                : 'Already closed elsewhere — nothing to discard.'))
+              .catch((error: unknown) => {
+                console.error('[strength] could not discard the session', error)
+                setProblem('Could not discard — the change was not saved.')
+              })
+              .finally(() => setBusy(false))
+          }}
+        >Discard</button>
       ) : null}
       {status === 'done' ? <span className="text-muted-foreground">closed</span> : null}
       {problem ? <span className="text-destructive">{problem}</span> : null}

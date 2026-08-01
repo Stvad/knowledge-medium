@@ -52,10 +52,17 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
   // hand-typed into the outline has no `strength:exercise` yet, and "no
   // history" would be a wronger answer than matching what it plainly says.
   const workoutId = useData(block)?.parentId ?? null
-  const earlier = useMemo(
-    () => history.filter(workout => workout.id !== workoutId),
-    [history, workoutId],
-  )
+  const earlier = useMemo(() => {
+    const mine = history.find(workout => workout.id === workoutId)
+    // Excluding this workout by id alone still leaves every LATER one in, and
+    // `lastEntryFor` takes the newest — so opening an old session labelled a
+    // future performance as "last time". Chronology, not inequality. An
+    // in-progress session is not in `history` at all, so it compares against
+    // everything, which is right.
+    return mine === undefined
+      ? history
+      : history.filter(workout => workout.id !== workoutId && workout.date < mine.date)
+  }, [history, workoutId])
   const previous = lastEntryFor(earlier, exercise ?? content, definitionId, occurrence ?? 0)
   const previousWeight = previous ? workingWeight(previous.entry) : undefined
 

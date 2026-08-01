@@ -179,9 +179,15 @@ export const closeSession = async (
   // run one session long. Both are permanent: the record is keyed on `from`,
   // so a later finish adopts the wrong one rather than correcting it.
   const workout = await repo.load(workoutId)
-  const performedOn = typeof workout?.properties[FIELD.date] === 'string'
-    ? trainingDay(workout.properties[FIELD.date] as string, snapshot.config.dayRolloverHour)
-    : snapshot.day
+  const stored = workout?.properties[FIELD.date]
+  const performedOn = typeof stored === 'string' && !Number.isNaN(new Date(stored).getTime())
+    ? trainingDay(stored, snapshot.config.dayRolloverHour)
+    : null
+  // `strength:date` is hand-editable. Cleared or corrupted, substituting the
+  // clock would close a workout that `buildHistory` then drops whole — the
+  // session gone from progression, its todos already stripped, and no way
+  // back through Finish. Refuse instead, and say why.
+  if (performedOn === null) return 'undated'
   const pending = detectPendingLayoff(snapshot.history, performedOn, snapshot.config)
   const record = pending && !layoffAlreadyRecorded(pending, snapshot.layoffs)
     ? layoffFromPending(pending)
