@@ -107,11 +107,18 @@ export const buildHistory = (
         if (at !== undefined && (recordedAt === undefined || at > recordedAt)) recordedAt = at
       }
     }
+    // Falling back to the workout's own finish stamp: the set-derived value
+    // above is the truer time when it is there (a set ticked live carries
+    // when it was actually done), but it empties out the moment a correction
+    // leaves every done set without a `completedAt`. Sessions closed before
+    // that property existed have neither, which is the behaviour they already
+    // had. See `finishedAtProp`.
+    const orderedAt = recordedAt ?? optNum(row, FIELD.finishedAt)
     workouts.push({
       id: row.id,
       date: d.toISOString(),
       session,
-      ...(recordedAt !== undefined ? {recordedAt} : {}),
+      ...(orderedAt !== undefined ? {recordedAt: orderedAt} : {}),
       exercises: entries.map(entry => ({
         exercise: str(entry, FIELD.exercise),
         definitionId: optStr(entry, FIELD.definition),

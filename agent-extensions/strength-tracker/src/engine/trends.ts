@@ -84,6 +84,9 @@ export const milestoneProgress = (
 
 export interface Asymmetry {
   exercise: string
+  /** Which of several same-named rows this is — see `SeriesKey`. Carried so
+   *  the UI can key and label two rows of one lift apart. */
+  occurrence: number
   left?: number
   right?: number
   /** True when the logged left side trails the right — the plan's rule is
@@ -93,10 +96,10 @@ export interface Asymmetry {
 
 const sideModal = (
   history: readonly WorkoutRecord[],
-  exercise: string,
+  key: SeriesKey,
   side: 'L' | 'R',
 ): number | undefined => {
-  const last = lastEntryFor(history, exercise)
+  const last = lastEntryFor(history, key.exercise, key.defId, key.occurrence)
   if (!last) return undefined
   return modalWeight(last.entry.sets.filter(s => s.side === side))
 }
@@ -107,17 +110,28 @@ export const asymmetries = (
   history: readonly WorkoutRecord[],
   config: ProgramConfig,
 ): Asymmetry[] => {
-  const singleArm = config.exercises.filter(e => e.perSide).map(e => e.name)
-  const seen = new Set<string>()
+  // Counted, not deduplicated. Skipping the second same-named row showed
+  // occurrence 0 twice over and hid occurrence 1 entirely — the same fault
+  // `exerciseSeries` had, in its sibling reader. Occurrence is counted here
+  // exactly as `planFromPrescription` and `prescribe` count it, over the same
+  // list, so all three agree about which row is which.
+  const seen = new Map<string, number>()
   const out: Asymmetry[] = []
-  for (const exercise of singleArm) {
-    if (seen.has(exercise)) continue
-    seen.add(exercise)
-    const left = sideModal(history, exercise, 'L')
-    const right = sideModal(history, exercise, 'R')
+  for (const exercise of config.exercises.filter(e => e.perSide)) {
+    const identityKey = exercise.defId ?? exercise.name
+    const occurrence = seen.get(identityKey) ?? 0
+    seen.set(identityKey, occurrence + 1)
+    const key: SeriesKey = {
+      exercise: exercise.name,
+      ...(exercise.defId !== undefined ? {defId: exercise.defId} : {}),
+      occurrence,
+    }
+    const left = sideModal(history, key, 'L')
+    const right = sideModal(history, key, 'R')
     if (left === undefined && right === undefined) continue
     out.push({
-      exercise,
+      exercise: exercise.name,
+      occurrence,
       left,
       right,
       rightAhead: left !== undefined && right !== undefined && right > left,

@@ -67,6 +67,7 @@ export const FIELD = {
   /** Explicit completion time — kept separate rather than inferred from the
    *  row's update time (which is noisy). */
   completedAt: 'strength:completedAt',
+  finishedAt: 'strength:finishedAt',
   // layoff
   layoffFrom: 'strength:from',
   layoffTo: 'strength:to',

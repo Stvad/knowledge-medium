@@ -22,7 +22,7 @@ import {statusProp as todoStatusProp, todoType} from '@/plugins/todo/schema'
 
 import {ALT_CHOICE_TYPE, LAYOFF_TYPE, SET_TYPE, EXERCISE_ENTRY_TYPE, WORKOUT_TYPE} from '../../src/km/fields'
 import {SETTINGS_TYPE} from '../../src/km/schema'
-import {buildLayoffs} from '../../src/km/history'
+import {buildHistory, buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
 import {findSettingsBlock, findStrengthLogPage, getOrCreateSettingsBlock, settingsIdentity} from '../../src/km/page'
@@ -541,6 +541,40 @@ describe('an edit still in flight when Finish is tapped', () => {
 
     const second = await startAndLog({day: '2026-07-25', session: 'B', lifts: [lift('Row')]})
     expect(await closeSession(repo, WORKSPACE_ID, second)).toBe('done')
+  })
+})
+
+describe('ordering two sessions of one training day', () => {
+  it('survives unticking everything Finish stamped and ticking a skipped set', async () => {
+    // `recordedAt` is derived from the done sets' `completedAt`, and the
+    // native checkbox writes only `status` — so correcting a closed session by
+    // unticking what Finish stamped and ticking a set you had skipped leaves
+    // every done set without one. The workout then had no ordering stamp at
+    // all, `compareRecords` called it incomparable with the day's other
+    // session, and query order picked the progression baseline.
+    const workoutId = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan({lifts: [lift('Bench press', {prescribedSets: 2,
+        sets: [{weight: 135, reps: 8}, {weight: 145, reps: 8}]})]}))
+    const [entry] = await liveChildren(workoutId, EXERCISE_ENTRY_TYPE)
+    const [first, second] = await liveChildren(entry.id, SET_TYPE)
+    await repo.tx(tx => tx.setProperty(first.id, todoStatusProp, 'done'),
+      {scope: ChangeScope.BlockDefault, description: 'tick the first'})
+    expect(await finishSession(repo, workoutId)).toBe('done')
+
+    // The correction: what Finish stamped goes off, what it skipped goes on.
+    await repo.tx(async tx => {
+      await tx.setProperty(first.id, todoStatusProp, 'open')
+      await tx.setProperty(second.id, todoStatusProp, 'done')
+    }, {scope: ChangeScope.BlockDefault, description: 'correct the record'})
+
+    const [record] = buildHistory(
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [WORKOUT_TYPE]}).load(),
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [EXERCISE_ENTRY_TYPE]}).load(),
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [SET_TYPE]}).load(),
+    )
+    // Still orderable — and still reading the corrected set, not the old one.
+    expect(record.recordedAt).toBeGreaterThan(0)
+    expect(record.exercises[0].sets.map(s => s.weight)).toEqual([145])
   })
 })
 

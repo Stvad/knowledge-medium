@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest'
 
 import {asymmetries, bestWorkingWeight, exerciseSeries, milestoneProgress} from '../src/engine/trends'
 import {DEFAULT_CONFIG} from '../src/program/defaults'
+import type {ProgramConfig} from '../src/engine/types'
 import type {SetRecord, WorkoutRecord} from '../src/engine/types'
 
 const A = (day: string, ...sets: SetRecord[]): WorkoutRecord => ({
@@ -96,5 +97,37 @@ describe('asymmetries', () => {
 
   it('omits lifts with no sided history', () => {
     expect(asymmetries([], DEFAULT_CONFIG)).toEqual([])
+  })
+})
+
+describe('asymmetries — one per-side lift prescribed twice', () => {
+  const config = {
+    unit: 'lb', dayRolloverHour: 0, roundTo: 5, milestones: [], reentryTiers: [],
+    exercises: [
+      {name: 'Split squat', session: 'A' as const, sets: 2, increment: 5, perSide: true, freeform: false},
+      {name: 'Split squat', session: 'A' as const, sets: 2, increment: 5, perSide: true, freeform: false},
+    ],
+  } as unknown as ProgramConfig
+
+  it('reports both rows instead of the first one twice', () => {
+    // The sibling of the `exerciseSeries` fault: deduplicating by NAME showed
+    // occurrence 0 and hid occurrence 1 entirely, so half a lift's left/right
+    // comparison was simply absent from the view.
+    const history = [{
+      id: 'w1', date: '2026-07-20T12:00:00.000Z', session: 'A' as const,
+      exercises: [
+        {exercise: 'Split squat', occurrence: 0, sets: [
+          {weight: 60, reps: 8, side: 'L' as const}, {weight: 70, reps: 8, side: 'R' as const}]},
+        {exercise: 'Split squat', occurrence: 1, sets: [
+          {weight: 30, reps: 8, side: 'L' as const}, {weight: 30, reps: 8, side: 'R' as const}]},
+      ],
+    }]
+
+    const out = asymmetries(history, config)
+
+    expect(out.map(a => [a.occurrence, a.left, a.right]))
+      .toEqual([[0, 60, 70], [1, 30, 30]])
+    expect(out[0].rightAhead).toBe(true)
+    expect(out[1].rightAhead).toBe(false)
   })
 })

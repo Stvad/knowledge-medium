@@ -232,3 +232,37 @@ describe('prescribe — the RPE ceiling', () => {
     expect(forExercise(result, 'Deadlift').catchUpRpe).toBeUndefined()
   })
 })
+
+describe('a repeat session on the same training day', () => {
+  it('progresses off the session already finished today, not off yesterday', () => {
+    // Finish Session A, start Session A again the same day — the repeat the
+    // write path explicitly keeps working. `history` holds only FINISHED
+    // sessions, so excluding today's date could only ever exclude that
+    // repeat's real baseline: it prescribed from YESTERDAY, ignoring the
+    // weights just logged and dropping the progression the morning earned.
+    const config = {...DEFAULT_CONFIG, dayRolloverHour: 0}
+    const bench = config.exercises.find(e => e.name === 'Bench press')!
+    const history: WorkoutRecord[] = [
+      {
+        id: 'yesterday', date: '2026-07-23T12:00:00.000Z', session: 'A', recordedAt: 1,
+        exercises: [{exercise: bench.name, sets: [
+          {weight: 135, reps: bench.repMax!}, {weight: 135, reps: bench.repMax!},
+          {weight: 135, reps: bench.repMax!}]}],
+      },
+      {
+        id: 'this-morning', date: '2026-07-24T12:00:00.000Z', session: 'A', recordedAt: 2,
+        exercises: [{exercise: bench.name, sets: [
+          {weight: 185, reps: bench.repMax!}, {weight: 185, reps: bench.repMax!},
+          {weight: 185, reps: bench.repMax!}]}],
+      },
+    ]
+
+    const out = prescribe({
+      history, layoffs: [], config, now: new Date('2026-07-24T20:00:00.000Z'), session: 'A',
+    })
+
+    const row = out.exercises.find(e => e.exercise === bench.name)!
+    // Off this morning's 185, not yesterday's 135.
+    expect(row.weight).toBeGreaterThanOrEqual(185)
+  })
+})

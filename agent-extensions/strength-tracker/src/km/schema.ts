@@ -257,6 +257,29 @@ export const completedAtProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** When Finish closed the session.
+ *
+ *  The workout-level twin of `strength:completedAt`, and the ORDERING
+ *  fallback for two sessions of one training day — `date` is that day's local
+ *  noon on both. Derived from the done sets first, because a set ticked live
+ *  carries the truer time; but that derivation empties out under an ordinary
+ *  correction, since unticking the sets Finish stamped and ticking a
+ *  previously-skipped one leaves every done set without a `completedAt` (the
+ *  native checkbox writes only `status`). Two same-day sessions then compare
+ *  as incomparable and whichever row the query returns first becomes the
+ *  progression baseline. This one cannot empty out.
+ *
+ *  Sessions closed before this existed simply do not have it, which is exactly
+ *  the behaviour they have today. */
+export const finishedAtProp = seedProperty({
+  seedKey: extensionPropertySeedKey('finished-at'),
+  revision: 1,
+  name: FIELD.finishedAt,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── Layoff ────
 
 export const layoffFromProp = seedProperty({
@@ -489,11 +512,15 @@ export const strengthLogType = seedType({
 
 export const workoutType = seedType({
   seedKey: extensionTypeSeedKey('workout'),
-  revision: 1,
+  // 2: `finishedAtProp` joined the declared shape. Two sessions of one
+  // training day are ordered by when the work was recorded, and deriving that
+  // from the done sets alone empties out under an ordinary untick — see the
+  // property.
+  revision: 2,
   id: WORKOUT_TYPE,
   label: 'Workout',
   description: 'A logged strength session (A / B / mini).',
-  properties: [sessionProp, dateProp, statusProp],
+  properties: [sessionProp, dateProp, statusProp, finishedAtProp],
 })
 
 export const exerciseEntryType = seedType({
@@ -636,6 +663,7 @@ export const STRENGTH_PROPS = [
   rpeProp,
   sideProp,
   completedAtProp,
+  finishedAtProp,
   layoffFromProp,
   layoffToProp,
   layoffDaysProp,

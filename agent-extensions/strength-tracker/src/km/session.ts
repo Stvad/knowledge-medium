@@ -42,6 +42,7 @@ import {
   completedAtProp,
   dateProp,
   definitionProp,
+  finishedAtProp,
   exerciseProp,
   occurrenceProp,
   prescribedRepsProp,
@@ -1069,6 +1070,13 @@ export const finishSession = async (
     // prescription progresses from. Only when absent, so a real tick-time
     // stamp always wins over this approximation.
     const finishedAt = Date.now()
+    // On the WORKOUT too, not only on the sets. The set-derived ordering
+    // stamp empties out under an ordinary correction — untick what Finish
+    // stamped, tick a set you had skipped, and every done set is left without
+    // a `completedAt`, because the native checkbox writes only `status`. Two
+    // same-day sessions then compare as incomparable and query order picks the
+    // progression baseline. See `finishedAtProp`.
+    await tx.setProperty(workoutId, finishedAtProp, finishedAt)
 
     for (const {entry, sets} of tree) {
       for (const set of sets) {
