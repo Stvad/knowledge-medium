@@ -444,6 +444,26 @@ describe('an edit still in flight when Finish is tapped', () => {
     expect(await closeSession(repo, WORKSPACE_ID, workoutId)).toBe('done')
   })
 
+  it('gives every OVERLAPPING finish attempt the same verdict', async () => {
+    // Clearing the flag on read is what makes the refusal happen once — but
+    // two taps that overlap (the same workout in two panels) both awaited,
+    // both resumed, and only the first saw the failure: the second read the
+    // flag the first had just cleared and closed the session around the
+    // unsaved number. Started without awaiting between them, which is the
+    // whole scenario.
+    const workoutId = await startAndLog()
+    await adjustSet(writesFail as unknown as Repo, 'some-set', {set: {weight: 145}})
+      .catch(() => {})
+
+    const [first, second] = await Promise.all([
+      closeSession(repo, WORKSPACE_ID, workoutId),
+      closeSession(repo, WORKSPACE_ID, workoutId),
+    ])
+
+    expect([first, second]).toEqual(['edit-failed', 'edit-failed'])
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
   it('does not carry a reported failure into an unrelated later Finish', async () => {
     // The same clearing from the other side: a failure already reported must
     // not still be sitting there when you close the NEXT session.

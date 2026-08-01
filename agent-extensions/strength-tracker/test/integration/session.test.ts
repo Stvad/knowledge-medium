@@ -1323,6 +1323,38 @@ describe('a set filed under a note that sits directly under the workout', () => 
     expect(repo.block(inner).peekProperty(statusProp)).toBe('in-progress')
   })
 
+  it('refuses to discard a workout that has another one filed inside it', async () => {
+    // The other side of the boundary rule above. `deleteBlock` cascades, so
+    // discarding the outer session tombstoned an independent one whole — and
+    // worst where it hurts most: a nested session with nothing ticked counts
+    // zero logged sets, so the confirmation never appeared and it went
+    // silently. Refused rather than reparented: where those blocks belong
+    // instead is the user's call.
+    const outer = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const inner = await startSession(
+      repo, WORKSPACE_ID, outer, plan([lift('Barbell row', 1)], {day: '2026-07-25', session: 'B'}))
+
+    expect(await discardSession(repo, outer)).toBe('holds-a-session')
+
+    expect(await isBlockDeleted(repo, outer)).toBe(false)
+    expect(await isBlockDeleted(repo, inner)).toBe(false)
+  })
+
+  it('counts logged sets for THIS session, not for one nested inside it', async () => {
+    // The warning has to describe the deletion that is actually on offer. A
+    // nested session's ticked sets are its own, and the discard refuses rather
+    // than taking them, so counting them would overstate what is at risk.
+    const outer = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    const inner = await startSession(
+      repo, WORKSPACE_ID, outer, plan([lift('Barbell row', 1)], {day: '2026-07-25', session: 'B'}))
+    const [innerEntry] = await childrenOf(inner, EXERCISE_ENTRY_TYPE)
+    const [innerSet] = await childrenOf(innerEntry.id, SET_TYPE)
+    await tick(innerSet.id)
+
+    expect(await loggedSetCount(repo, outer)).toBe(0)
+    expect(await loggedSetCount(repo, inner)).toBe(1)
+  })
+
   it('still accepts the ordinary shape, so the rule did not just get stricter', async () => {
     // The other half of the mutation: a guard that refuses everything passes
     // the test above for the wrong reason.

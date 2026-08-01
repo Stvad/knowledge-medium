@@ -32,7 +32,7 @@ import {
   layoffToProp,
 } from './schema'
 import {dateToDay, dayToDate} from './day'
-import {countLoggedSets} from './subtree'
+import {countLoggedSets, nestedWorkouts} from './subtree'
 
 import {buildAltChoices} from './history'
 
@@ -158,11 +158,26 @@ export const discardSession = async (
    *  to delete whatever is there, which is what a caller with no count to
    *  honour means. */
   expectedLogged?: number,
-): Promise<'discarded' | 'gone' | 'changed'> =>
+): Promise<'discarded' | 'gone' | 'changed' | 'holds-a-session'> =>
   repo.tx(async tx => {
     const workout = await tx.get(workoutId)
     if (!workout || workout.deleted) return 'gone' as const
     if (workout.properties[FIELD.status] !== 'in-progress') return 'gone' as const
+
+    // Another session filed under this one is not this one's to throw away.
+    // The placement contract puts tonight's workout under whatever block the
+    // cursor was on, including last week's unfinished session — and
+    // `deleteBlock` cascades, so discarding the outer one tombstoned an
+    // independent session whole. Worse where it hurts most: a nested session
+    // with nothing ticked counts zero, so the confirmation never appeared and
+    // the whole thing went silently. Refused rather than reparented, because
+    // where those blocks should go instead is the user's call, not ours.
+    const nested = await nestedWorkouts(
+      id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+      workoutId,
+    )
+    if (nested.length > 0) return 'holds-a-session' as const
+
     if (expectedLogged !== undefined) {
       const logged = await countLoggedSets(
         id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),

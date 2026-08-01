@@ -134,7 +134,10 @@ export const WorkoutFooter = ({block}: {block: Block}) => {
                   outcome === 'discarded' ? null
                     : outcome === 'changed'
                       ? 'A set was logged while that was open — press Discard again to see what it would delete.'
-                      : 'Already closed elsewhere — nothing to discard.',
+                      : outcome === 'holds-a-session'
+                        ? 'Another workout is filed inside this one, and discarding would delete it too. '
+                          + 'Outdent it first, then discard.'
+                        : 'Already closed elsewhere — nothing to discard.',
                 )
               } catch (error: unknown) {
                 console.error('[strength] could not discard the session', error)

@@ -10,9 +10,36 @@
 import type {BlockData} from '@/data/api/index.js'
 import {hasBlockType} from '@/data/properties.js'
 
-import {FIELD, SET_TYPE} from './fields'
+import {FIELD, SET_TYPE, WORKOUT_TYPE} from './fields'
 
 export type ChildReader = (parentId: string) => Promise<readonly BlockData[]>
+
+/** Every workout filed underneath another one.
+ *
+ *  Reachable by design, not by accident: run the shortcut while pointing at
+ *  last week's unfinished session and the placement contract makes tonight's a
+ *  CHILD of it. The finish scan already treats one as a record boundary; this
+ *  is the other side of that — what a cascading delete would take with it.
+ */
+export const nestedWorkouts = async (
+  children: ChildReader,
+  workoutId: string,
+): Promise<BlockData[]> => {
+  const found: BlockData[] = []
+  const seen = new Set<string>([workoutId])
+  const walk = async (parentId: string): Promise<void> => {
+    for (const child of await children(parentId)) {
+      if (child.deleted || seen.has(child.id)) continue
+      seen.add(child.id)
+      // Not descended into: whatever is under another workout belongs to THAT
+      // record, and one hit is all a refusal needs.
+      if (hasBlockType(child, WORKOUT_TYPE)) { found.push(child); continue }
+      await walk(child.id)
+    }
+  }
+  await walk(workoutId)
+  return found
+}
 
 /** Done sets anywhere under a workout, however they have been rearranged.
  *
@@ -32,6 +59,10 @@ export const countLoggedSets = async (
     for (const child of await children(parentId)) {
       if (child.deleted || seen.has(child.id)) continue
       seen.add(child.id)
+      // Another workout's sets are its own, not this one's — counting them
+      // would describe a deletion that is refused rather than performed. See
+      // `nestedWorkouts`, which is what refuses it.
+      if (hasBlockType(child, WORKOUT_TYPE)) continue
       if (hasBlockType(child, SET_TYPE) && child.properties[FIELD.todoStatus] === 'done') {
         count += 1
       }

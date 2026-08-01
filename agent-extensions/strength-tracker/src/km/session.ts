@@ -727,11 +727,28 @@ let failedEdit = false
  *  and "I know, 135 is right, finish it" is a perfectly good answer to being
  *  told the edit did not save. Tapping Finish again means you were told.
  */
-export const setEditsSettled = async (): Promise<'settled' | 'failed'> => {
-  const results = await Promise.allSettled([...inFlight])
-  const failed = failedEdit || results.some(result => result.status === 'rejected')
-  failedEdit = false
-  return failed ? 'failed' : 'settled'
+let draining: Promise<'settled' | 'failed'> | null = null
+
+export const setEditsSettled = (): Promise<'settled' | 'failed'> => {
+  // One drain, shared by everyone who asks while it runs. Clearing the flag on
+  // read is what makes the refusal happen once — but two Finish taps that
+  // OVERLAP (the same workout in two panels, say) both awaited, both resumed,
+  // and only the first saw the failure: the second read the flag the first had
+  // just cleared and closed the session around the unsaved number. Sharing the
+  // promise means one failure produces one answer, and every caller holding
+  // that answer gets it.
+  draining ??= (async () => {
+    const results = await Promise.allSettled([...inFlight])
+    const failed = failedEdit || results.some(result => result.status === 'rejected')
+    failedEdit = false
+    return failed ? 'failed' as const : 'settled' as const
+  })()
+  const drain = draining
+  // Released once it settles, so the NEXT tap gets a fresh look rather than
+  // this one's cached verdict — which is the whole of "refuse once".
+  void drain.then(() => { if (draining === drain) draining = null },
+    () => { if (draining === drain) draining = null })
+  return drain
 }
 
 /** @see writeSet — this is that, with the write registered so Finish can wait
