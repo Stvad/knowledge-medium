@@ -195,7 +195,11 @@ export const closeSession = async (
   // The page is created HERE, not at read time — a gap record needs a home,
   // and this is the first moment one is actually being written.
   const layoff = record
-    ? {pageId: (await ensureStrengthHome(repo, workspaceId)).pageId, record}
+    ? {
+      pageId: (await ensureStrengthHome(repo, workspaceId)).pageId,
+      record,
+      knownIds: snapshot.layoffs.map(entry => entry.id),
+    }
     : undefined
-  return finishSession(repo, workoutId, layoff)
+  return finishSession(repo, workoutId, layoff, performedOn)
 }

@@ -72,6 +72,15 @@ export const writeLayoffInTx = async (
   pageId: string,
   record: Omit<LayoffRecord, 'id'>,
   typeSnapshot: TypeSnapshot,
+  /** Every layoff block the caller could see before opening the transaction.
+   *  The adopt below is deliberately parent-agnostic — a layoff is about a gap
+   *  in time, not where it sits — so the re-find must be too: a mint the user
+   *  has since filed elsewhere was invisible to a page-children scan, and the
+   *  next finish minted a SECOND record for the same gap. History reads
+   *  layoffs workspace-wide, so both then feed re-entry and the later one can
+   *  restart a ramp already climbed out of. Re-checked in-tx, so a stale list
+   *  can only cause a mint, never a bad adoption. */
+  knownLayoffIds: readonly string[] = [],
 ): Promise<string> => {
   const spec = {
     parentId: pageId,
@@ -103,7 +112,16 @@ export const writeLayoffInTx = async (
   // block whose `from` now names a different gap. There's no second identity
   // to derive, so mint — and look the mint up on the NEXT call rather than
   // add to it. The page's children, because that's where a mint lands.
-  const minted = (await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true}))
+  const candidates = new Map<string, BlockData>()
+  for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+    candidates.set(block.id, block)
+  }
+  for (const id of knownLayoffIds) {
+    if (candidates.has(id)) continue
+    const block = await tx.get(id)
+    if (block) candidates.set(id, block)
+  }
+  const minted = [...candidates.values()]
     .find(block => !block.deleted && block.id !== outcome.id
       && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, record.from))
   return minted !== undefined

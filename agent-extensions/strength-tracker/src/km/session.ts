@@ -537,7 +537,13 @@ export const finishSession = async (
    *  gap on any later day), so writing it separately and failing loses the
    *  record for good — every session after the first back silently returns to
    *  full loads. */
-  layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>},
+  layoff?: {pageId: string; record: Omit<LayoffRecord, 'id'>; knownIds?: readonly string[]},
+  /** The training day the caller validated and computed the layoff against.
+   *  Re-checked INSIDE the transaction, because it is a hand-editable property
+   *  and the caller's read is several awaits old: cleared in that window the
+   *  workout closes and `buildHistory` drops it whole, and changed to another
+   *  valid day it closes with a layoff measured to the old one. */
+  expectedDay?: string,
 ): Promise<FinishOutcome> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   return repo.tx(async tx => {
@@ -550,6 +556,10 @@ export const finishSession = async (
     // Checked before anything is written: closing around a set history cannot
     // read would report the session recorded while progression never sees the
     // work, and would strip the todo that is your only sign it is there.
+    if (expectedDay !== undefined && liveDay(workout.properties[FIELD.date]) !== expectedDay) {
+      return 'undated' as const
+    }
+
     if ((await misfiled(tx, workoutId)).length > 0) return 'misfiled' as const
 
     const tree = await setsOf(tx, workoutId)
@@ -591,7 +601,8 @@ export const finishSession = async (
     }
 
     if (layoff) {
-      await writeLayoffInTx(repo, tx, workout.workspaceId, layoff.pageId, layoff.record, typeSnapshot)
+      await writeLayoffInTx(repo, tx, workout.workspaceId, layoff.pageId, layoff.record,
+        typeSnapshot, layoff.knownIds ?? [])
     }
     await tx.setProperty(workoutId, statusProp, 'done')
     return 'done' as const

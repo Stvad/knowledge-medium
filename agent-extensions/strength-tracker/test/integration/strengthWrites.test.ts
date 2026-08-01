@@ -28,7 +28,7 @@ import {finishSession, startSession} from '../../src/km/session'
 import {closeSession, sessionParent} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
-import {discardSession, readAltChoices, writeAltChoice, writeLayoff} from '../../src/km/store'
+import {discardSession, readAltChoices, writeAltChoice, writeLayoff, writeLayoffInTx} from '../../src/km/store'
 import {
   STRENGTH_PROPS,
   STRENGTH_TYPES,
@@ -269,5 +269,60 @@ describe('the day a layoff is measured to', () => {
     expect(layoffs).toHaveLength(1)
     expect(layoffs[0].to).toBe(performedOn)
     expect(layoffs[0].days).toBe(35)
+  })
+})
+
+describe('the finish transaction re-checks what the caller validated', () => {
+  it('refuses when the date changed between the read and the transaction', async () => {
+    // `strength:date` is hand-editable and the caller's read is several awaits
+    // old. Cleared in that window the workout closes and `buildHistory` drops
+    // it whole; changed to another valid day it closes with a layoff measured
+    // to the old one.
+    const workoutId = await startAndLog()
+
+    expect(await finishSession(repo, workoutId, undefined, '2099-01-01')).toBe('undated')
+
+    expect(repo.block(workoutId).peekProperty(statusProp)).toBe('in-progress')
+  })
+
+  it('closes when the day still matches', async () => {
+    const workoutId = await startAndLog()
+    expect(await finishSession(repo, workoutId, undefined, '2026-07-24')).toBe('done')
+  })
+})
+
+describe('a layoff mint filed away from the log page', () => {
+  it('is re-found rather than duplicated', async () => {
+    // The adopt is deliberately parent-agnostic — a layoff is about a gap in
+    // time, not where it sits — so the re-find must be too. A page-children
+    // scan lost a mint the user had filed elsewhere, and the next finish
+    // minted a SECOND record for the same gap; history reads layoffs
+    // workspace-wide, so both then feed re-entry.
+    const record = {from: '2026-07-01', to: '2026-07-24', days: 23, tierId: 'long', pct: 0.7}
+    const derived = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+    await repo.tx(tx => tx.run(deleteBlock, {id: derived}),
+      {scope: ChangeScope.BlockDefault, description: 'the gap record is deleted'})
+    const minted = await writeLayoff(repo, WORKSPACE_ID, PAGE_ID, record)
+
+    // Filed under a year heading, out of the page's children.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'a-year', workspaceId: WORKSPACE_ID, parentId: null, orderKey: 'a1', content: '2026',
+      })
+      await tx.move(minted, {parentId: 'a-year', orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault, description: 'file it away'})
+
+    const known = buildLayoffs(
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load(),
+    ).map(l => l.id)
+    const again = await repo.tx(
+      tx => writeLayoffInTx(repo, tx, WORKSPACE_ID, PAGE_ID, record, repo.snapshotTypeRegistries(), known),
+      {scope: ChangeScope.BlockDefault, description: 'finish again'},
+    )
+
+    expect(again).toBe(minted)
+    expect(buildLayoffs(
+      await repo.query.typedBlocks({workspaceId: WORKSPACE_ID, types: [LAYOFF_TYPE]}).load(),
+    )).toHaveLength(1)
   })
 })

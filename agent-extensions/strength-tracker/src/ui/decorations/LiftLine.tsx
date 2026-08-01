@@ -14,7 +14,8 @@ import {cachedContentDecorator} from '@/extensions/blockInteraction.js'
 import {useContent, useData, usePropertyValue, useWorkspaceId} from '@/hooks/block.js'
 import type {BlockRenderer} from '@/types.js'
 
-import {lastEntryFor, workingWeight} from '../../engine/progression'
+import {lastEntryFor, progressionSets, workingWeight} from '../../engine/progression'
+import {dateToDay} from '../../km/day'
 import {FIELD} from '../../km/fields'
 import {
   definitionProp,
@@ -73,8 +74,17 @@ const LiftSummary = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
       + (prescribedWeight !== undefined ? ` @ ${prescribedWeight}${unit ?? ''}` : ''))
   }
   if (previous && previousWeight !== undefined) {
-    parts.push(`last ${previous.workout.date.slice(5, 10)}: `
-      + `${previous.entry.sets.length}×${previous.entry.sets[0]?.reps ?? '?'} @ ${previousWeight}${unit ?? ''}`)
+    // Sets, not ROWS: a single-arm lift stores each prescribed set as an L and
+    // an R row, so counting rows reported a three-set lift as "6×". What was
+    // prescribed at the time if the entry says; else the rows progression
+    // itself counts, which is the left side alone for per-side work.
+    const count = previous.entry.prescribedSets ?? progressionSets(previous.entry.sets).length
+    // Through the local-day helper: the date is stored at local noon and
+    // serialized as UTC, so slicing the string shows the wrong calendar day
+    // either side of the date line.
+    const day = dateToDay(new Date(previous.workout.date)).slice(5)
+    parts.push(`last ${day}: `
+      + `${count}×${previous.entry.sets[0]?.reps ?? '?'} @ ${previousWeight}${unit ?? ''}`)
   }
 
   return (
