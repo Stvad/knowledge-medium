@@ -22,7 +22,7 @@ import {EXERCISE_ENTRY_TYPE, FIELD, SET_TYPE, WORKOUT_TYPE} from '../../src/km/f
 import {nextWeight} from '../../src/engine/progression'
 import {dayToDate} from '../../src/km/day'
 import {buildHistory} from '../../src/km/history'
-import {adjustSet, finishSession, loggedSetCount, startSession} from '../../src/km/session'
+import {adjustSet, finishSession, loggedSetCount, startSession, takePlaceOf} from '../../src/km/session'
 import {closeSession} from '../../src/km/tonight'
 import {discardSession} from '../../src/km/store'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
@@ -1206,5 +1206,81 @@ describe('discarding what was actually confirmed', () => {
     await tick(setId)
 
     expect(await discardSession(repo, workoutId)).toBe('discarded')
+  })
+})
+
+describe('where a session lands', () => {
+  it('honours the position it is given among its siblings', async () => {
+    // `first` is what the Strength Log page wants (newest on top); `last` is
+    // what taking an empty line's place at the end of a page looks like.
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'existing-note', workspaceId: WORKSPACE_ID, parentId: PAGE_ID,
+        orderKey: 'a5', content: 'already here',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'a sibling'})
+
+    const first = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    expect(repo.block(first).peek()!.orderKey < 'a5').toBe(true)
+
+    await tick((await childrenOf((await childrenOf(first, EXERCISE_ENTRY_TYPE))[0].id, SET_TYPE))[0].id)
+    await finishSession(repo, first)
+    const second = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'last'},
+    )
+    expect(second).not.toBe(first)
+    expect(repo.block(second).peek()!.orderKey > 'a5').toBe(true)
+  })
+})
+
+describe('taking the place of the empty line you ran it on', () => {
+  const emptyLine = async (id: string, orderKey: string): Promise<void> => {
+    await repo.tx(async tx => {
+      await tx.create({id, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey, content: ''})
+    }, {scope: ChangeScope.BlockDefault, description: 'an empty line'})
+  }
+
+  it('moves the session into the line\'s slot and clears the line', async () => {
+    await emptyLine('blank', 'a5')
+    const workoutId = await startSession(
+      repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]), {kind: 'last'},
+    )
+
+    expect(await takePlaceOf(repo, workoutId, {
+      parentId: PAGE_ID, replaces: {id: 'blank', orderKey: 'a5'},
+    })).toBe('took-its-place')
+
+    expect(repo.block(workoutId).peek()!.orderKey).toBe('a5')
+    expect(await isBlockDeleted(repo, 'blank')).toBe(true)
+  })
+
+  it('will not drag a session it adopted from somewhere else', async () => {
+    // Start ADOPTS a session already under way for this training day, and that
+    // one can live anywhere. Moving it because you happened to run this on an
+    // empty line is not a placement, it is a move nobody asked for.
+    const elsewhere = 'other-parent'
+    await repo.tx(async tx => {
+      await tx.create({
+        id: elsewhere, workspaceId: WORKSPACE_ID, parentId: PAGE_ID, orderKey: 'a1',
+        content: 'Tuesday',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'somewhere else'})
+    const workoutId = await startSession(repo, WORKSPACE_ID, elsewhere, plan([lift('Bench press', 1)]))
+    const before = repo.block(workoutId).peek()!.orderKey
+    await emptyLine('blank', 'a5')
+
+    expect(await takePlaceOf(repo, workoutId, {
+      parentId: PAGE_ID, replaces: {id: 'blank', orderKey: 'a5'},
+    })).toBe('cleared-only')
+
+    expect(repo.block(workoutId).peek()!.parentId).toBe(elsewhere)
+    expect(repo.block(workoutId).peek()!.orderKey).toBe(before)
+    // Still cleared: the line was opened to hold a session and now has one.
+    expect(await isBlockDeleted(repo, 'blank')).toBe(true)
+  })
+
+  it('does nothing when there is no line to replace', async () => {
+    const workoutId = await startSession(repo, WORKSPACE_ID, PAGE_ID, plan([lift('Bench press', 1)]))
+    expect(await takePlaceOf(repo, workoutId, {parentId: PAGE_ID})).toBe('nothing-to-do')
   })
 })

@@ -8,7 +8,6 @@
 
 import type {BlockData} from '@/data/api/index.js'
 import {hasBlockType} from '@/data/properties.js'
-import {getOrCreateDailyNote} from '@/plugins/daily-notes/dailyNotes.js'
 import type {Repo} from '@/data/repo.js'
 
 import {prescribe} from '../engine/prescribe'
@@ -149,19 +148,6 @@ export const ensureStrengthHome = async (
   const page = await getOrCreateStrengthLogPage(repo, workspaceId)
   return {pageId: page.id, settingsBlockId: await getOrCreateSettingsBlock(repo, workspaceId, page.id)}
 }
-
-/** Where tonight's session gets filed: the training day's daily note.
- *
- *  `day` is a training day (`YYYY-MM-DD`), which is exactly the calendar-ISO
- *  string `getOrCreateDailyNote` takes — it parses `^\d{4}-\d{2}-\d{2}$` and
- *  throws on anything else, a full timestamp included. Kept as a named
- *  function so the contract between the engine's day and the daily-note API
- *  has somewhere to be tested. */
-export const sessionParent = async (
-  repo: Repo,
-  workspaceId: string,
-  day: string,
-): Promise<string> => (await getOrCreateDailyNote(repo, workspaceId, day)).id
 
 /** Finish, recording the break this session ends if there is one.
  *

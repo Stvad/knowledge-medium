@@ -6,8 +6,9 @@
  *  afterwards would mean deleting them, which is the prune-and-regenerate
  *  this design exists without. Cancelling writes nothing.
  *
- *  The session lands in the day's daily note, not on a dedicated page: it is
- *  a thing you did today, and it belongs where the rest of today is.
+ *  WHERE it lands is the caller's to say — see `placement.ts`. The shortcut
+ *  puts it where your cursor is; the Strength Log page's button puts it on
+ *  that page. Nothing here files it by a rule of its own.
  */
 
 import type {Repo} from '@/data/repo.js'
@@ -15,15 +16,21 @@ import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {openDialog} from '@/utils/dialogs.js'
 import {navigateFromGlobalCommand} from '@/utils/navigation.js'
 
-import {startSession} from '../km/session'
+import {startSession, takePlaceOf} from '../km/session'
 import {choicesToRecord, planFromPrescription} from '../km/sessionPlan'
 import {writeAltChoice} from '../km/store'
-import {ensureStrengthHome, prescribeFor, readProgram, sessionParent, standingSession} from '../km/tonight'
+import {ensureStrengthHome, prescribeFor, readProgram, standingSession} from '../km/tonight'
+import {placeAtFocus, type Placement} from './placement'
 import {StartSessionDialog, type StartSessionResult} from './StartSessionDialog'
 
 export const START_SESSION_ACTION_ID = 'strength.startSession'
 
-const runStartSession = async (repo: Repo): Promise<void> => {
+/** Ask what tonight is, then stamp it at `placement`.
+ *
+ *  Exported because the Strength Log page's button runs the SAME flow with a
+ *  different placement — two entry points, one dialog, one set of races
+ *  already thought about. */
+export const runStartSession = async (repo: Repo, placement: Placement): Promise<void> => {
   const workspaceId = repo.activeWorkspaceId
   // Nothing here is readable-only: it bootstraps the log page and settings
   // block before the dialog even opens. The footer and the set controls
@@ -89,8 +96,14 @@ const runStartSession = async (repo: Repo): Promise<void> => {
 
   const prescription = prescribeFor(confirmed, now, picks.session, picks.choices)
   const plan = planFromPrescription(prescription, snapshot.config.unit)
-  const parentId = await sessionParent(repo, workspaceId, prescription.day)
-  const workoutId = await startSession(repo, workspaceId, parentId, plan)
+  const workoutId = await startSession(
+    repo, workspaceId, placement.parentId, plan, placement.position,
+  )
+
+  // Reported, not thrown: the session is real, and a leftover blank line is a
+  // smaller thing than the action appearing to have failed.
+  await takePlaceOf(repo, workoutId, placement)
+    .catch((error: unknown) => console.error('[strength] could not clear the empty line', error))
 
   // Navigate FIRST. The session exists from the line above, and a failure to
   // record a preference must not leave you looking at the page you started
@@ -120,10 +133,29 @@ const runStartSession = async (repo: Repo): Promise<void> => {
   }
 }
 
-export const startSessionAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
+/** NORMAL_MODE, not GLOBAL, because the block you are on IS the argument: it
+ *  is what "start one here" means, and a global action would have to go
+ *  digging through the layout session for the active panel's focus to learn
+ *  the same thing. The Strength Log page keeps a button for the case where
+ *  you are not pointing anywhere in particular. */
+export const startSessionAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: START_SESSION_ACTION_ID,
-  description: 'Strength: start a session',
-  context: ActionContextTypes.GLOBAL,
-  handler: async ({uiStateBlock}) => { await runStartSession(uiStateBlock.repo) },
+  description: 'Strength: start a session here',
+  context: ActionContextTypes.NORMAL_MODE,
+  handler: async ({block}) => {
+    const data = block.peek()
+    if (!data) return
+    // Loaded rather than peeked: "does this block already hold something" is
+    // the difference between taking an empty line's place and burying the
+    // session under a heading, and children are not on the row.
+    const children = (await block.repo.block(block.id).children.load()) ?? []
+    await runStartSession(block.repo, placeAtFocus({
+      id: data.id,
+      parentId: data.parentId,
+      content: data.content,
+      orderKey: data.orderKey,
+      hasChildren: children.some(child => !child.deleted),
+    }))
+  },
   defaultBinding: {keys: 'Control+Shift+l'},
 }

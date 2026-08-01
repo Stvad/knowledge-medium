@@ -16,6 +16,7 @@
  */
 
 import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/index.js'
+import {deleteBlock} from '@/data/mutators.js'
 import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
 import {
@@ -154,6 +155,39 @@ const ancestorsOf = async (tx: Tx, block: BlockData): Promise<BlockData[]> => {
   return chain
 }
 
+/** Put a freshly-stamped session where an empty line was, and clear the line.
+ *
+ *  Runs AFTER the stamp, never before, so a session that fails to be created
+ *  costs you nothing. The move is exact — the empty block is about to stop
+ *  using its `orderKey`, so that slot is free — which is how the session
+ *  lands where the cursor was rather than merely on the same parent, without
+ *  asking `getOrCreateTypedChild` for the anchored position it refuses.
+ */
+export const takePlaceOf = async (
+  repo: Repo,
+  workoutId: string,
+  placement: {parentId: string; replaces?: {id: string; orderKey: string}},
+): Promise<'took-its-place' | 'cleared-only' | 'nothing-to-do'> => {
+  const replaces = placement.replaces
+  if (replaces === undefined || replaces.id === workoutId) return 'nothing-to-do'
+  const landed = await repo.block(workoutId).load()
+  return repo.tx(async tx => {
+    // Only when the session actually landed where we asked. `startSession`
+    // ADOPTS one already started for this training day, and that one can live
+    // anywhere — dragging it out of wherever it is kept because you happened
+    // to run this on an empty line is not a placement, it is a move nobody
+    // asked for.
+    const mine = landed?.parentId === placement.parentId && !landed.deleted
+    if (mine) {
+      await tx.move(workoutId, {parentId: placement.parentId, orderKey: replaces.orderKey})
+    }
+    // Cleared either way: the line was opened to hold a session and now has
+    // one — here, or wherever the adopted one lives.
+    await tx.run(deleteBlock, {id: replaces.id})
+    return mine ? 'took-its-place' as const : 'cleared-only' as const
+  }, {scope: ChangeScope.BlockDefault, description: 'Put the session where the cursor was'})
+}
+
 /** What Discard is about to destroy, read before the confirmation.
  *
  *  The same walk `discardSession` re-runs inside its transaction — see
@@ -250,6 +284,13 @@ export const startSession = async (
   workspaceId: string,
   parentId: string,
   plan: SessionPlan,
+  /** Where among `parentId`'s children the workout lands. `first` reads as a
+   *  log (newest on top), which is what the Strength Log page wants; `last`
+   *  is what taking the place of an empty block you just opened at the end of
+   *  a page looks like. Anchored positions are not on offer —
+   *  `getOrCreateTypedChild` refuses them, since re-keying siblings can throw
+   *  before the derived id is known to be free. */
+  position: {kind: 'first'} | {kind: 'last'} = {kind: 'first'},
 ): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
   // Candidates for the standing-session scan, from the same workspace-wide
@@ -269,7 +310,7 @@ export const startSession = async (
     const workoutSpec = {
       parentId,
       content: `${sessionLabel(plan.session)} · ${plan.day}`,
-      position: {kind: 'first'} as const,
+      position,
       types: [WORKOUT_TYPE],
       properties: [
         propertyValue(sessionProp, plan.session),

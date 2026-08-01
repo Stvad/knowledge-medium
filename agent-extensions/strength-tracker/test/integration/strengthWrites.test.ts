@@ -26,7 +26,7 @@ import {buildLayoffs} from '../../src/km/history'
 import {dayToDate} from '../../src/km/day'
 import {loadConfig} from '../../src/km/config'
 import {finishSession, startSession} from '../../src/km/session'
-import {closeSession, ensureStrengthHome, sessionParent} from '../../src/km/tonight'
+import {closeSession, ensureStrengthHome} from '../../src/km/tonight'
 import {trainingDay} from '../../src/engine/schedule'
 import type {PlannedLift, SessionPlan} from '../../src/km/sessionPlan'
 import {derivedBlockId} from '@/data/typedRecords'
@@ -285,25 +285,6 @@ describe('or-group choices', () => {
     await writeAltChoice(repo, SETTINGS_ID, 'group-1', 'opt-c', 'Face pulls')
     expect(await liveChildren(SETTINGS_ID, ALT_CHOICE_TYPE)).toHaveLength(1)
     expect(await readAltChoices(repo, SETTINGS_ID)).toEqual({'group-1': 'opt-c'})
-  })
-})
-
-describe('where a session gets filed', () => {
-  it('files it in the training day\'s daily note, whose ISO contract the engine\'s day already satisfies', async () => {
-    // `getOrCreateDailyNote` parses `^\d{4}-\d{2}-\d{2}$` and THROWS on
-    // anything else. Passing a full timestamp threw before a single block was
-    // stamped, and no test saw it because nothing exercised the start action
-    // and a fake daily-note module would have accepted any string. This calls
-    // the real one, with a day straight out of `trainingDay`.
-    const day = trainingDay(new Date('2026-07-24T19:30:00'), 4)
-    expect(day).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-
-    const parentId = await sessionParent(repo, WORKSPACE_ID, day)
-    const workoutId = await startSession(repo, WORKSPACE_ID, parentId, plan({day}))
-
-    expect(repo.block(workoutId).peek()?.parentId).toBe(parentId)
-    // Same day, same note — not a second one beside it.
-    expect(await sessionParent(repo, WORKSPACE_ID, day)).toBe(parentId)
   })
 })
 
