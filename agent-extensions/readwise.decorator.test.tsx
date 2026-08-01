@@ -4,7 +4,7 @@
 // `readwise:reviewed` — so these render the REAL decorator off the extension's
 // contribution list against a REAL block and assert on node values: is the
 // content dimmed, is the undo control there, and does clicking it write.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { ChangeScope } from '@/data/api/index.js'
@@ -74,6 +74,7 @@ const undoControl = () => screen.queryByRole('button', { name: 'Mark highlight u
 const contentEl = () => screen.getByText('the highlighted sentence')
 
 beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { await resetTestDb(sharedDb.db) })
 afterEach(() => { cleanup() })
 
@@ -147,6 +148,25 @@ describe('reviewed highlight decoration', () => {
     })
 
     await vi.waitFor(() => { expect(undoControl()).toBeNull() })
+  })
+
+  it('renders through a malformed reviewed value instead of throwing', async () => {
+    // The strict codec throws on a non-boolean, and this decorator is attached to
+    // every highlight — so decoding strictly would take out the whole block's
+    // render for a `"true"` left by a raw import / sync / bridge write.
+    const { repo, runtime } = setup()
+    await seedHighlight(repo, true)
+    await repo.tx(async tx => {
+      const row = await tx.get('hl')
+      await tx.update('hl', { properties: { ...row!.properties, [REVIEWED_PROP]: 'true' } })
+    }, { scope: ChangeScope.BlockDefault, description: 'corrupt reviewed' })
+    await repo.block('hl').load()
+
+    await renderDecorated(repo, runtime)
+
+    // Degrades to undecorated; the block itself still renders.
+    expect(contentEl()).not.toBeNull()
+    expect(undoControl()).toBeNull()
   })
 
   it('does not decorate a non-highlight block', async () => {

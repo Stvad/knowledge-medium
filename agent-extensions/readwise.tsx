@@ -1,6 +1,9 @@
 import {
-  actionTransformsFacet, actionsFacet, appEffectsFacet, appMountsFacet,
+  actionsFacet, appEffectsFacet, appMountsFacet,
 } from '@/extensions/core.js'
+import {
+  actionDispatchWrap, type ActionDispatchDecorator,
+} from '@/shortcuts/actionDispatch.js'
 import {
   blockContentDecoratorsFacet,
   cachedContentDecorator,
@@ -23,7 +26,7 @@ import { showError, showInfo, showProgress, showSuccess } from '@/utils/toast.js
 import { useRepo } from '@/context/repo.js'
 import type { Block } from '@/data/block.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
-import { aliasesProp, getBlockTypes, showPropertiesProp, typesProp } from '@/data/properties.js'
+import { aliasesProp, getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { createOrRestoreTargetBlock, ensureAliasTarget } from '@/data/targets.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes/dailyNotes.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
@@ -36,7 +39,6 @@ import {
   ActionContextTypes,
   type ActionConfig,
   type ActionContextType,
-  type ActionTransform,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import {
@@ -49,7 +51,7 @@ import { Label } from '@/components/ui/label.js'
 import { Textarea } from '@/components/ui/textarea.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { buildAppHash } from '@/utils/routing.js'
-import { useHandle, usePropertyValue } from '@/hooks/block.js'
+import { useHandle } from '@/hooks/block.js'
 import type { BlockData, BlockRenderer, BlockRendererProps } from '@/types.js'
 import {
   useEffect, useMemo, useState, useSyncExternalStore,
@@ -840,12 +842,28 @@ const readwiseDocumentContentDecorator: BlockContentDecoratorContribution = ctx 
 // affordance the properties-panel checkbox provides, without going and finding it.
 
 const ReviewedHighlightDecorator = ({ block, Inner }: BlockRendererProps & { Inner: BlockRenderer }) => {
-  // Both reads are reactive: a highlight can gain the type (first sync) or flip
-  // `reviewed` (the latch, another device, the properties panel) while mounted.
-  const [types] = usePropertyValue(block, typesProp)
-  const [reviewed, setReviewed] = usePropertyValue(block, reviewedProp)
+  // Reactive: a highlight can gain the type (first sync) or flip `reviewed` (the
+  // latch, another device, the properties panel) while mounted.
+  //
+  // Decoded LENIENTLY, and that matters more here than on the keypress path:
+  // `usePropertyValue` decodes through the strict codec, which THROWS on a
+  // malformed cell — and this decorator is attached to every highlight, so a
+  // `readwise:reviewed` of `"true"` from a raw import/sync/bridge write would
+  // take out the whole block's render rather than just failing to decorate.
+  const decorated = useHandle(block, {
+    selector: (data: BlockData | null | undefined) => {
+      if (!data) return false
+      let types: readonly string[]
+      try {
+        types = getBlockTypes(data)
+      } catch {
+        return false
+      }
+      return types.includes(READWISE_HIGHLIGHT_TYPE) && readReviewed(data)
+    },
+  })
 
-  if (!types.includes(READWISE_HIGHLIGHT_TYPE) || !reviewed) return <Inner block={block}/>
+  if (!decorated) return <Inner block={block}/>
 
   return (
     <div className="flex items-start gap-2">
@@ -858,7 +876,7 @@ const ReviewedHighlightDecorator = ({ block, Inner }: BlockRendererProps & { Inn
         className="mt-1 shrink-0 text-muted-foreground hover:text-foreground disabled:pointer-events-none"
         onClick={event => {
           event.stopPropagation()
-          void setReviewed(false)
+          void block.set(reviewedProp, false)
         }}
       >
         {/* Inlined rather than imported: an installed extension resolves imports
@@ -1239,26 +1257,40 @@ const markHighlightReviewed = async (block: Block): Promise<boolean> => {
   return true
 }
 
+/** Wraps at DISPATCH time rather than rewriting the action definition, because
+ *  the seam decides the ORDER. SRS decorates these same three actions from the
+ *  dispatch seam, and a dispatch wrap always sits outside the effective action's
+ *  handler — so as an `actionTransformsFacet` transform this could never run
+ *  before SRS, whatever precedence either declared. On a block that is both a
+ *  highlight and an SRS card the review mark should come first (it is the
+ *  lighter action), which is what `READWISE_REVIEW_PRECEDENCE` buys below.
+ *
+ *  `await next(...)` rather than `return next(...)`: an async wrap cannot carry
+ *  the inner sync `false` decline sentinel (`ActionHandlerResult` forbids
+ *  `Promise<false>`), so awaiting it and resolving to `Promise<void>` is the
+ *  documented discipline — same as the SRS twin. */
 const decorateActionToMarkReadwiseReviewed = (
   actionId: string,
   context?: ActionContextType,
-): ActionTransform => ({
+): ActionDispatchDecorator => ({
   actionId,
   ...(context ? { context } : {}),
-  apply: (action: ActionConfig): ActionConfig => ({
-    ...action,
-    handler: async (deps, trigger, dispatch) => {
-      const block = (deps as BlockShortcutDependencies).block
-      if (block && (await markHighlightReviewed(block))) return
-      await action.handler(deps as never, trigger, dispatch)
-    },
-  }),
+  wrap: async (deps, trigger, next, dispatch) => {
+    const block = (deps as BlockShortcutDependencies).block
+    if (block && (await markHighlightReviewed(block))) return
+    await next(deps, trigger, dispatch)
+  },
 })
 
-const readwiseSwipeRightDecorator: ActionTransform =
+/** Decorators fold ascending by precedence with the LOWEST innermost, so a value
+ *  above SRS's (which registers at the default 0) puts the review mark outermost
+ *  — it gets the press first, then declines once latched and hands it down. */
+const READWISE_REVIEW_PRECEDENCE = 10
+
+const readwiseSwipeRightDecorator: ActionDispatchDecorator =
   decorateActionToMarkReadwiseReviewed(SWIPE_RIGHT_BLOCK_ACTION_ID)
 
-const readwiseTodoCycleDecorators: readonly ActionTransform[] = [
+const readwiseTodoCycleDecorators: readonly ActionDispatchDecorator[] = [
   decorateActionToMarkReadwiseReviewed(
     TODO_CYCLE_ACTION_ID,
     ActionContextTypes.NORMAL_MODE,
@@ -1872,7 +1904,8 @@ export default [
   actionsFacet.of(openSettingsAction, { source }),
   actionsFacet.of(syncNowAction, { source }),
   actionsFacet.of(connectAction, { source }),
-  actionTransformsFacet.of(readwiseSwipeRightDecorator, { source }),
+  actionDispatchWrap(readwiseSwipeRightDecorator,
+    { source, precedence: READWISE_REVIEW_PRECEDENCE }),
   ...readwiseTodoCycleDecorators.map(decorator =>
-    actionTransformsFacet.of(decorator, { source })),
+    actionDispatchWrap(decorator, { source, precedence: READWISE_REVIEW_PRECEDENCE })),
 ]

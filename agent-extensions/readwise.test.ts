@@ -24,6 +24,8 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo.js'
 import type { AppExtension, FacetRuntime } from '@/facets/facet.js'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.js'
+import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling/index.js'
+import { SRS_SM25_TYPE, srsArchivedProp } from '@/plugins/srs-rescheduling/schema.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.js'
 import {
   EDIT_MODE_TODO_CYCLE_ACTION_ID,
@@ -131,6 +133,79 @@ const SURFACES = [
   { name: 'edit-mode todo cycle', actionId: EDIT_MODE_TODO_CYCLE_ACTION_ID },
   { name: 'swipe right', actionId: SWIPE_RIGHT_BLOCK_ACTION_ID },
 ] as const
+
+// A highlight can also be an SRS card, and SRS decorates these same three
+// actions. Both claims are latches, so each press moves one step down the chain
+// instead of one layer swallowing the key forever.
+describe.each(SURFACES)('ordering against the SRS claim via $name', ({ actionId }) => {
+  const srsSetup = () => {
+    const { repo } = createTestRepo({
+      db: sharedDb.db,
+      extensions: [
+        dailyNotesDataExtension,
+        todoDataExtension,
+        todoActionsExtension,
+        // Readwise registers BEFORE srs deliberately: at equal precedence the
+        // later registration folds outermost, so this ordering means only the
+        // explicit precedence can put the review mark first.
+        ...readwiseDataAndActions,
+        srsReschedulingPlugin,
+      ],
+    })
+    return { repo, runtime: repo.facetRuntime! }
+  }
+
+  const seedBoth = async (repo: Repo) => {
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await tx.create({ id: 'both', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x' })
+      await repo.addTypeInTx(tx, 'both', HIGHLIGHT_TYPE, { [REVIEWED_PROP]: false }, snapshot)
+      await repo.addTypeInTx(tx, 'both', SRS_SM25_TYPE, {}, snapshot)
+    }, { scope: ChangeScope.BlockDefault, description: 'seed both' })
+    const block = repo.block('both')
+    await block.load()
+    return block
+  }
+
+  const chainState = (block: Block) => {
+    const data = block.peek()!
+    return {
+      reviewed: data.properties[REVIEWED_PROP],
+      archived: data.properties[srsArchivedProp.name],
+      todoStatus: data.properties[statusProp.name],
+    }
+  }
+
+  it('gives the review mark the first press, then SRS, then the todo cycle', async () => {
+    const { repo, runtime } = srsSetup()
+    const block = await seedBoth(repo)
+
+    await press(runtime, actionId, block)
+    expect(chainState(block)).toEqual({ reviewed: true, archived: undefined, todoStatus: undefined })
+
+    await press(runtime, actionId, block)
+    expect(chainState(block)).toEqual({ reviewed: true, archived: true, todoStatus: undefined })
+
+    await press(runtime, actionId, block)
+    expect(chainState(block)).toEqual({ reviewed: true, archived: true, todoStatus: 'open' })
+  })
+
+  it('still lets SRS claim a card that is not a highlight', async () => {
+    const { repo, runtime } = srsSetup()
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await tx.create({ id: 'card', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'x' })
+      await repo.addTypeInTx(tx, 'card', SRS_SM25_TYPE, {}, snapshot)
+    }, { scope: ChangeScope.BlockDefault, description: 'seed card' })
+    const block = repo.block('card')
+    await block.load()
+
+    await press(runtime, actionId, block)
+
+    expect(block.peek()!.properties[srsArchivedProp.name]).toBe(true)
+    expect(block.peek()!.properties[statusProp.name]).toBeUndefined()
+  })
+})
 
 describe.each(SURFACES)('readwise review latch via $name', ({ actionId }) => {
   it('marks an unreviewed highlight and consumes the press', async () => {
