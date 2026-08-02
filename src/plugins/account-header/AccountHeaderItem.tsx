@@ -28,6 +28,15 @@ export function AccountHeaderItem() {
     <div className="flex min-w-0 shrink items-center gap-1 text-xs text-muted-foreground sm:gap-2 sm:text-sm">
       <a
         href={buildAppHashInContext(workspaceId, userBlockId)}
+        // Chrome-level anchor: the header does NOT re-render on a
+        // perspective-lane switch (pushState fires no hashchange; App only
+        // re-renders on a workspace change), so the render-time href can
+        // carry a stale lane. Refresh it just-in-time — mousedown precedes
+        // click/auxclick/contextmenu for every button, covering native
+        // navigation, middle/modified clicks, and copy-link-address.
+        onMouseDown={event => {
+          event.currentTarget.href = buildAppHashInContext(workspaceId, userBlockId)
+        }}
         onClick={handleUserLinkClick}
         className="inline-flex h-7 min-w-0 max-w-[7rem] items-center rounded-sm px-0.5 leading-none text-muted-foreground no-underline transition-colors hover:text-foreground hover:no-underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:max-w-none"
       >

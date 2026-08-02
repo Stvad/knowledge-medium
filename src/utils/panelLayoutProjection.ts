@@ -690,10 +690,23 @@ export const deletePanelRow = async (
   panelHistory.clear(panelId)
 }
 
+/** Thrown inside reconcilePanelRows' tx to ABORT it when the caller was
+ *  cancelled mid-transaction — the throw rolls every row write back (same
+ *  rollback contract as any in-tx throw; see the panelHistory note below).
+ *  applyCurrentLayoutUrl catches it and folds it into {kind: 'cancelled'}. */
+class ReconcileCancelled extends Error {
+  constructor() {
+    super('reconcilePanelRows: cancelled')
+  }
+}
+
 export const reconcilePanelRows = async (
   repo: Repo,
   layoutSessionBlock: Block,
   targetSlotsOrBlockIds: readonly (LayoutSlot | string)[],
+  /** Checked at the tx's entry and exits; a mid-tx cancellation ABORTS the
+   *  whole reconcile (rows roll back) via ReconcileCancelled. */
+  isCancelled?: () => boolean,
 ): Promise<{changed: boolean}> => {
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
@@ -702,6 +715,7 @@ export const reconcilePanelRows = async (
   const deletedPanelRowIds: string[] = []
 
   const changed = await repo.tx(async tx => {
+    if (isCancelled?.()) throw new ReconcileCancelled()
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`reconcilePanelRows: layout session block ${layoutSessionBlock.id} not found`)
 
@@ -745,6 +759,7 @@ export const reconcilePanelRows = async (
         // dangling active id is cleared. Not counted as a layout change.
         await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, undefined)
       }
+      if (isCancelled?.()) throw new ReconcileCancelled()
       return wrote
     }
 
@@ -863,6 +878,7 @@ export const reconcilePanelRows = async (
     } else {
       await repairActivePanelId(await loadSubtreeRowsInTx(tx, parent))
     }
+    if (isCancelled?.()) throw new ReconcileCancelled()
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
@@ -915,10 +931,14 @@ export interface ApplyCurrentLayoutUrlArgs {
   layoutSessionBlock: Block
   hash?: string
   replaceHash?: (hash: string) => void
-  /** Re-checked after every await and before every side effect (row writes,
-   *  replaceHash). A caller whose lifetime can end mid-apply — the projection
-   *  is disposed on a session switch — passes its own liveness here so a late
-   *  apply can't mutate rows or rewrite the hash on behalf of a dead owner. */
+  /** Caller liveness for an apply whose owner can die mid-flight (the
+   *  projection is disposed on a session switch). Guarantees after a
+   *  cancellation is observed: the URL is never written, and row writes
+   *  either roll back (cancellation observed inside the reconcile tx, which
+   *  aborts it) or stand as committed (cancellation landing after the tx
+   *  committed, during the final canonicalization load) — committed writes
+   *  targeted this apply's own session with the hash it started from, so
+   *  they are consistent saved state either way. */
   isCancelled?: () => boolean
 }
 
@@ -956,7 +976,15 @@ export const applyCurrentLayoutUrl = async ({
     return {kind: 'empty'}
   }
 
-  const {changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots)
+  let changed: boolean
+  try {
+    ({changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots, isCancelled))
+  } catch (error) {
+    // Cancellation observed INSIDE the tx aborted it — rows rolled back,
+    // nothing to canonicalize, and the URL belongs to whoever cancelled us.
+    if (error instanceof ReconcileCancelled) return {kind: 'cancelled'}
+    throw error
+  }
 
   // Canonicalize the URL against what the rows actually hold (adds `;active`,
   // canonical entry order, un-parenthesizes degraded sublayouts) in ONE
@@ -966,10 +994,9 @@ export const applyCurrentLayoutUrl = async ({
   const finalRows = changed
     ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
     : currentRows
-  // Cancelled during the reconcile/load: the row writes committed (a tx is
-  // not abortable mid-flight) but they targeted OUR OWN session block with
-  // the hash this apply was born with — consistent saved state. The URL,
-  // though, now belongs to whoever cancelled us; leave it alone.
+  // Cancelled after the tx committed (during the final load): the committed
+  // rows stand — they targeted our own session with the hash this apply
+  // started from (see the isCancelled arg doc) — but the URL is off-limits.
   if (isCancelled?.()) return {kind: 'cancelled'}
   const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows)
   const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots), route.wsContext)
@@ -1060,6 +1087,13 @@ export class PanelLayoutProjection {
     })
   }
 
+  /** ORDERING CONTRACT for session-switching hosts: dispose() must
+   *  happen-before the successor session's hash is installed. The
+   *  cancellation guards all key off `disposed` — a host that installs the
+   *  new hash FIRST leaves this projection live to receive it (via
+   *  hashchange or a queued apply), reconcile its OWN rows toward the other
+   *  session's layout, and canonicalize over the fresh hash. Nothing in
+   *  here can defend against that ordering; only the host can. */
   dispose(): void {
     this.disposed = true
     this.unsubscribeRows?.()
@@ -1175,6 +1209,12 @@ export class PanelLayoutProjection {
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {
+    // Dead projections don't write the hash — the rows subscription is
+    // unsubscribed by dispose(), but the handle store snapshots its listener
+    // list before dispatching, so a co-subscriber earlier in the SAME
+    // dispatch can dispose this projection and our already-snapshotted
+    // callback still runs.
+    if (this.disposed) return
     // While an inbound apply is in flight, a rows event necessarily compares
     // OLD rows against the NEW hash — writing that back would clobber the
     // just-navigated hash (Back silently undone) and the queued reconcile

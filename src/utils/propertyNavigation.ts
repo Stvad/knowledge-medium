@@ -81,15 +81,26 @@ const isVisibleElement = (element: HTMLElement): boolean => {
   }
   // Fallback for environments without checkVisibility (older WebViews):
   // multi-session isolation must hold here too, so walk the ancestor chain
-  // for display:none by hand. Only display needs the walk — an ancestor's
-  // display:none leaves the row's own computed display untouched, while
-  // visibility INHERITS, so the own-element visibility read already reflects
-  // a hidden ancestor (and honors a descendant's visible override, matching
-  // checkVisibility's semantics).
+  // for display:none — and content-visibility:hidden, which Chromium/WebView
+  // 85–104 support while lacking checkVisibility, so a host hiding warm
+  // sessions that way must still be caught — by hand. Only those two need
+  // the walk: an ancestor's value leaves the row's own computed style
+  // untouched, while visibility INHERITS, so the own-element visibility
+  // read already reflects a hidden (or collapsed) ancestor and honors a
+  // descendant's visible override, matching checkVisibility's semantics.
+  // Exclusion-based (not `!== 'visible'`): non-browser DOMs (happy-dom)
+  // compute '' for unstyled elements, and only these two values mean
+  // invisible per the spec checkVisibility implements.
+  const own = window.getComputedStyle(element)
+  if (own.visibility === 'hidden' || own.visibility === 'collapse') return false
   for (let node: HTMLElement | null = element; node; node = node.parentElement) {
-    if (window.getComputedStyle(node).display === 'none') return false
+    const style = node === element ? own : window.getComputedStyle(node)
+    if (style.display === 'none') return false
+    // content-visibility hides CONTENT, not the element itself — only
+    // ancestors' values matter for this row's visibility.
+    if (node !== element && style.contentVisibility === 'hidden') return false
   }
-  return window.getComputedStyle(element).visibility !== 'hidden'
+  return true
 }
 
 const isFocusableElement = (element: HTMLElement): boolean => {

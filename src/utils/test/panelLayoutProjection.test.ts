@@ -248,6 +248,52 @@ describe('applyCurrentLayoutUrl', () => {
     expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a'])
   })
 
+  // The next two pin the LATER checkpoints with a call-counting isCancelled.
+  // Check order for a destructive (topology-changing) reconcile is fixed:
+  // (1) after the initial subtree load, (2) at the reconcile tx's entry,
+  // (3) at the tx's exit, (4) after the reconcile, before canonicalization.
+  it('cancellation observed at the tx EXIT aborts the whole reconcile — rows roll back', async () => {
+    await createPanelRows(['a'])
+    let calls = 0
+    const replaces: string[] = []
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      replaceHash: hash => replaces.push(hash),
+      isCancelled: () => ++calls >= 3,
+    })
+
+    expect(result.kind).toBe('cancelled')
+    expect(replaces).toEqual([])
+    // The tx deleted the 'a' row and created 'b' — then the exit check threw
+    // and rolled ALL of it back.
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a'])
+  })
+
+  it('cancellation after the tx committed keeps the rows but suppresses the canonicalization replace', async () => {
+    await createPanelRows(['a'])
+    let calls = 0
+    const replaces: string[] = []
+    // A degraded-sublayout hash: its canonical rebuild differs from the
+    // input, so WITHOUT the post-reconcile check the late replaceHash fires.
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/(b/c)',
+      replaceHash: hash => replaces.push(hash),
+      isCancelled: () => ++calls >= 4,
+    })
+
+    expect(result.kind).toBe('cancelled')
+    // Committed rows stand (they belong to this session, from this hash)…
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['b', 'c'])
+    // …but the URL — now someone else's — is never touched.
+    expect(replaces).toEqual([])
+  })
+
   it('preserves the ws-context when normalizing an empty-target hash against live rows', async () => {
     await createPanelRows(['a'])
     const replaces: string[] = []
@@ -1727,12 +1773,14 @@ describe('PanelLayoutProjection', () => {
     })
 
     it('a dispose landing AFTER the entry guard, while the apply is in flight, still cannot write the hash', async () => {
-      // The other half of the race: the queued callback already passed its
-      // disposed check and applyCurrentLayoutUrl is awaiting its subtree
-      // load when the switch-away disposes the projection. Its late
-      // normalization must not overwrite the hash the next session installed.
-      // getHash is the last synchronous step before the apply's first await,
-      // so disposing inside it lands the disposal exactly in that window.
+      // The other half of the race: the queued callback passes its disposed
+      // check, then the projection is disposed before the apply's awaits
+      // resolve. What this pins is the WIRING — applyCurrentUrl passing
+      // `isCancelled: () => this.disposed` into the apply (getHash runs
+      // after the entry guard, immediately before the apply is invoked, so
+      // disposing inside it exercises exactly that seam; the checkpoint
+      // placements themselves are pinned by the direct applyCurrentLayoutUrl
+      // cancellation tests).
       await createPanelRows(['a'])
       let currentHash = '#ws-1;persp=lane'
       const pushes: string[] = []
@@ -1756,6 +1804,23 @@ describe('PanelLayoutProjection', () => {
       expect(pushes).toEqual([])
       expect(replaces).toEqual([]) // without isCancelled this normalized to '#ws-1;persp=lane/a'
       expect(currentHash).toBe('#ws-1;persp=lane')
+    })
+
+    it('a rows event delivered to an already-disposed projection is inert', async () => {
+      // The handle store snapshots its listener list before dispatching, so
+      // a co-subscriber earlier in the same dispatch can dispose the
+      // projection and the already-snapshotted rows listener still runs —
+      // it must not write the hash on behalf of a dead projection.
+      await createPanelRows(['a'])
+      const {projection, pushes, replaces} = startProjection('#ws-1/a')
+      await projection.start()
+
+      projection.dispose()
+      await createPanelRows(['b'])
+      deliverRowsEvent(projection, await layoutRows()) // rows now differ from lastSlots
+
+      expect(pushes).toEqual([]) // without the guard: pushHash('#ws-1/a/b')
+      expect(replaces).toEqual([])
     })
   })
 })

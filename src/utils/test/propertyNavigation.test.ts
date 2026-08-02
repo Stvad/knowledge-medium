@@ -106,5 +106,25 @@ describe('getPropertyRows visibility', () => {
 
       expect(getPropertyRows('b1')).toEqual([row])
     })
+
+    it('excludes a row with visibility:collapse (checkVisibility parity)', () => {
+      const row = makeRow('b1')
+      row.style.visibility = 'collapse'
+      document.body.appendChild(row)
+
+      expect(getPropertyRows('b1')).toEqual([])
+    })
+
+    it('excludes a row hidden by an ANCESTOR content-visibility:hidden', () => {
+      // Chromium/WebView 85–104 support content-visibility while lacking
+      // checkVisibility — exactly the environments this fallback serves.
+      const hiddenWrapper = document.createElement('div')
+      hiddenWrapper.style.contentVisibility = 'hidden'
+      const row = makeRow('b1')
+      hiddenWrapper.appendChild(row)
+      document.body.appendChild(hiddenWrapper)
+
+      expect(getPropertyRows('b1')).toEqual([])
+    })
   })
 })

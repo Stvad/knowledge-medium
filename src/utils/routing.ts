@@ -390,16 +390,25 @@ export const buildAppHash = (workspaceId: string, blockId?: string): string =>
  * Cross-workspace links still drop the context: it belongs to the source
  * workspace's token.
  *
- * Deliberately NOT the default. Plain `buildAppHash` remains correct for
- * copy/share links (a perspective lane is device-local UiState and must not
- * leak into a durable shared URL — see the copy-link action) and for
- * intentional lane exits (`setHash(buildAppHash(ws))` workspace-root jumps,
- * which under a preserved lane would normalize back to the lane's rows
- * instead of navigating).
+ * Deliberately NOT the default: a perspective lane is device-local UiState
+ * that must not leak into a durable shared URL, so copy/share builders keep
+ * plain `buildAppHash` (see the copy-link action). The workspace-switching
+ * `setHash` sites also keep it — they all fire cross-workspace-only, where
+ * this variant would drop the context anyway.
  *
- * `currentHash` is read at call (render) time; anchors re-render on any
- * lane change (a session switch remounts the tree), so a stale read is not
- * a practical concern.
+ * `currentHash` is read at call (render) time. Anchors INSIDE a layout
+ * session re-render under their session's own hash (and a warm-hidden
+ * session's anchors correctly keep ITS lane), but a chrome-level anchor
+ * outside the sessions (e.g. the account header) does not re-render on a
+ * lane switch — pushState fires no hashchange — so such anchors must
+ * refresh their href at interaction time (see AccountHeaderItem).
+ *
+ * Known trade-off for the out-of-core session host: a lane-carrying href
+ * opened in a NEW tab deep-links into that lane's session — and since a
+ * perspective session's id is derived from its key and its rows sync, the
+ * new tab's reconcile rewrites layout the source tab shares. The host owns
+ * the inbound-deep-link policy (reconcile vs fork vs read-only); core just
+ * guarantees the lane attribution is carried.
  */
 export const buildAppHashInContext = (
   workspaceId: string,
