@@ -172,6 +172,10 @@ export interface ExerciseRecord {
   exercise: string
   /** The plan block this was performed from, when known. */
   definitionId?: string
+  /** Which time in ITS session this lift was — the number the entry block
+   *  stores. Absent on entries written before that property existed, where
+   *  there is nothing better than "the first one that matches". */
+  occurrence?: number
   /** What the engine asked for at the time. Kept so progression judges
    *  "all prescribed sets" against the prescription that was actually
    *  live, not against today's config. */
@@ -186,6 +190,34 @@ export interface WorkoutRecord {
   date: string
   session: SessionType
   exercises: readonly ExerciseRecord[]
+  /** When the session was actually performed — the latest `completedAt` of
+   *  the sets in it. ONLY for telling two sessions of the same day apart:
+   *  `date` is pinned to that day's local noon, so two of them are
+   *  byte-identical and the day alone cannot say which came second.
+   *
+   *  Derived rather than stamped at Finish, because "when you did the work"
+   *  is what a baseline should follow — a morning session finished late in
+   *  the evening is still the morning's. Absent when nothing in the session
+   *  carries a time (hand-entered or imported records). */
+  recordedAt?: number
+}
+
+/** Which of two records is the later training session.
+ *
+ *  The DAY is the primary key; the timestamp only breaks ties INSIDE it.
+ *  Comparing timestamps outright would let a 23:00 session outrank one dated
+ *  the next day carrying no times at all — every hand-entered record.
+ *
+ *  And only when BOTH say when they happened. A missing `recordedAt` is
+ *  "unknown", not zero: reading it as 0 ranked the untimed record first, and
+ *  a session ticked from the outline carries no `strength:completedAt` (the
+ *  native checkbox writes only `status`). Incomparable returns 0, leaving such
+ *  a pair in arrival order rather than inventing one. */
+export const compareRecords = (a: WorkoutRecord, b: WorkoutRecord): number => {
+  const byDay = a.date.localeCompare(b.date)
+  if (byDay !== 0) return byDay
+  if (a.recordedAt === undefined || b.recordedAt === undefined) return 0
+  return a.recordedAt - b.recordedAt
 }
 
 /** A recorded break. `from` is the last pre-break full session, `to` the
@@ -220,6 +252,16 @@ export interface PrescribedExercise {
   videos?: readonly ExerciseVideo[]
   altGroupKey?: string
   altOptions?: readonly AltOption[]
+  /** The RPE ceiling this lift's catch-up jump needs — and the only reason to
+   *  log an RPE at all.
+   *
+   *  Set only when the lift ALSO has a `catchUpIncrement`, because
+   *  `incrementFor` reads the two together: a ceiling with no bigger jump
+   *  behind it changes no prescription, and surfacing an RPE control for it
+   *  would collect a number nothing reads. Carried through onto the stamped
+   *  set blocks, so the row that asks for RPE knows whether it matters
+   *  without loading the plan. */
+  catchUpRpe?: number
   /** One line explaining where `weight` came from. Always shown: the
    *  plan's whole point is that the number is never a mystery. */
   rationale: string

@@ -16,6 +16,7 @@
  *    2-set night count as a completed 3-set night once config changes.
  */
 
+import {compareRecords} from './types'
 import type {ExerciseConfig, ExerciseRecord, SetRecord, WorkoutRecord} from './types'
 
 /** Sets that count toward progression: the side-agnostic ones, plus — for
@@ -71,12 +72,29 @@ export const lastEntryFor = (
   history: readonly WorkoutRecord[],
   exercise: string,
   defId?: string,
+  /** Which time in the session this row is, when the caller knows. A session
+   *  can prescribe one lift twice at two different loads, and taking the first
+   *  match gave BOTH of tomorrow's rows the same baseline — so the second
+   *  progressed off the first's weight, and reordering the finished entries
+   *  could swap which. Records written before entries stored the number fall
+   *  back to the first match, which is all there is to go on. */
+  occurrence?: number,
 ): {workout: WorkoutRecord; entry: ExerciseRecord} | undefined => {
   let best: {workout: WorkoutRecord; entry: ExerciseRecord} | undefined
   for (const workout of history) {
-    const entry = workout.exercises.find(e => entryMatches(e, exercise, defId))
+    const candidates = workout.exercises.filter(e => entryMatches(e, exercise, defId))
+    // Falling back to "the first match" per WORKOUT let a newer session that
+    // logged only the FIRST Squat outrank an older one that logged both — so
+    // a lookup for the second row took the first row's load again, by a
+    // different route. The only fallback that is not a wrong answer is a
+    // record that states no occurrence at all, which is every record written
+    // before entries stored the number; otherwise keep looking further back.
+    const entry = occurrence === undefined
+      ? candidates[0]
+      : candidates.find(e => e.occurrence === occurrence)
+        ?? candidates.find(e => e.occurrence === undefined)
     if (!entry || entry.sets.length === 0) continue
-    if (!best || workout.date > best.workout.date) best = {workout, entry}
+    if (!best || compareRecords(workout, best.workout) > 0) best = {workout, entry}
   }
   return best
 }

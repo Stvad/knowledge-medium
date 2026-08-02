@@ -61,10 +61,11 @@ const prescribeExercise = (
   reentry: ReentryStatus | undefined,
   day: string,
   config: ProgramConfig,
+  occurrence: number,
 ): PrescribedExercise => {
   const sets = setsFor(exercise, reentry)
   const {repMin, repMax} = repsFor(exercise, reentry)
-  const last = lastEntryFor(basis, exercise.name, exercise.defId)
+  const last = lastEntryFor(basis, exercise.name, exercise.defId, occurrence)
   const lastWeight = last ? workingWeight(last.entry) : undefined
   const lastTime = last && lastWeight !== undefined
     ? {
@@ -86,6 +87,12 @@ const prescribeExercise = (
     videos: exercise.videos,
     altGroupKey: exercise.altGroupKey,
     altOptions: exercise.altOptions,
+    // Both, or neither: `incrementFor` only consults the ceiling when there
+    // is a bigger jump to award, so a plan that sets one without the other
+    // would otherwise have the UI collecting an RPE nothing ever reads.
+    ...(exercise.catchUpIncrement !== undefined && exercise.catchUpRpe !== undefined
+      ? {catchUpRpe: exercise.catchUpRpe}
+      : {}),
     lastTime,
   }
 
@@ -165,18 +172,33 @@ export const prescribe = (input: PrescribeInput): Prescription => {
 
   const reentry = resolveReentry(history, layoffs, day, config)
 
-  // Basis for "what did I lift last time": everything before tonight, and —
-  // while a layoff ramp is live — everything up to the pre-break session, so
-  // percentages compound off real weights instead of off the reduced ones.
+  // Basis for "what did I lift last time": everything up to and including
+  // tonight, and — while a layoff ramp is live — everything up to the
+  // pre-break session, so percentages compound off real weights instead of
+  // off the reduced ones.
+  //
+  // `<=` on the normal branch, not `<`. `history` holds only FINISHED
+  // sessions, so the only thing today's date can contribute is a session
+  // already closed — which is the supported repeat: finish Session A, start
+  // Session A again the same day. Excluding it prescribed the repeat from
+  // YESTERDAY, ignoring the weights and reps just logged, and dropping the
+  // progression the morning session had earned. Nothing in progress is in
+  // here to be read prematurely.
   const cutoff = reentry ? reentry.from : day
-  const basis = history.filter(w => {
-    const d = trainingDay(w.date, config.dayRolloverHour)
-    return reentry ? d <= cutoff : d < cutoff
-  })
+  const basis = history.filter(w =>
+    trainingDay(w.date, config.dayRolloverHour) <= cutoff)
 
+  // Counted the same way `buildDraft` counts it, over the same list: a lift
+  // prescribed twice is two rows, and each progresses off ITS OWN history.
+  const seen = new Map<string, number>()
   const exercises = config.exercises
     .filter(e => e.session === session)
-    .map(e => prescribeExercise(e, basis, reentry, day, config))
+    .map(e => {
+      const key = e.defId ?? e.name
+      const occurrence = seen.get(key) ?? 0
+      seen.set(key, occurrence + 1)
+      return prescribeExercise(e, basis, reentry, day, config, occurrence)
+    })
 
   const notes = [
     ...(config.sessionNotes[session] ?? []),

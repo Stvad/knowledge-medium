@@ -1,266 +1,358 @@
-/** Writing the strength blocks.
+/** The strength writes that are not a session.
  *
- *  The workout IS the live logging state, not a snapshot taken at the end: it
- *  is *materialized* from the prescription on the first edit (status
- *  `in-progress`), and each set is a child block edited in place as you log —
- *  so a reload, a tab switch, or a second device just re-reads the same synced
- *  blocks. "Finish" flips the workout to `done` (and prunes the un-accepted
- *  sets); until then nothing is lost because the block already holds it.
+ *  Logging lives in `session.ts` — this holds what sits beside it: the user's
+ *  `or`-group choices, the layoff record, and discarding a session outright.
+ *
+ *  It used to hold the whole logging path as well: materialize-on-first-edit,
+ *  per-set patch writes, prune-at-Finish, and the derived-id machinery that
+ *  kept a draft in agreement with the blocks it shadowed. All of that is gone
+ *  with the draft — the outline is the state now, and a set is edited by
+ *  editing its block.
  *
  *  The read side lives in the pure `history.ts` module (re-exported below).
  */
 
-import {ChangeScope, propertyValue, type Tx} from '@/data/api/index.js'
-import {createChild, deleteBlock} from '@/data/mutators.js'
+import {ChangeScope, propertyValue, type BlockData, type Tx} from '@/data/api/index.js'
+import {deleteBlock} from '@/data/mutators.js'
+import {hasBlockType} from '@/data/properties.js'
 import type {Repo} from '@/data/repo.js'
-import {createTypedChild} from '@/data/typedRecords.js'
-// A logged set composes with the built-in todo: it carries the todo type + its
-// `status` prop, so done-ness is the native checkbox and reuses todo tooling.
-import {statusProp as todoStatusProp, TODO_TYPE} from '@/plugins/todo/schema.js'
-
-import type {LayoffRecord, SessionType} from '../engine/types'
-import {FIELD} from './fields'
 import {
-  ALT_CHOICE_TYPE,
-  EXERCISE_ENTRY_TYPE,
-  SET_TYPE,
-  WORKOUT_TYPE,
+  adoptTypedBlock, createTypedChild, getOrCreateTypedChild, type DerivedIdentity,
+} from '@/data/typedRecords.js'
+
+import {effectiveTier} from '../engine/reentry'
+import {isOnScheduleTier} from '../engine/types'
+import type {LayoffRecord, ReentryTier} from '../engine/types'
+import {ALT_CHOICE_TYPE, FIELD, LAYOFF_TYPE, WORKOUT_TYPE} from './fields'
+import {
   choiceGroupProp,
   choiceOptionProp,
-  completedAtProp,
-  dateProp,
-  definitionProp,
-  exerciseProp,
   layoffDaysProp,
   layoffFromProp,
   layoffPctProp,
   layoffTierProp,
   layoffToProp,
-  prescribedSetsProp,
-  prescribedWeightProp,
-  repsProp,
-  rpeProp,
-  sessionProp,
-  sideProp,
-  statusProp,
-  unitProp,
-  weightProp,
-  workingWeightProp,
 } from './schema'
-import {dayToDate} from './day'
+import {dateToDay, dayToDate, storedDate} from './day'
+import {asAltChoice, asWorkout} from './records'
+import {discardTally, nestedWorkouts, type DiscardTally} from './subtree'
 
-export {buildHistory, buildLayoffs, type RowLike} from './history'
 import {buildAltChoices} from './history'
 
-// ──── draft shapes the writer consumes ────
+type TypeSnapshot = ReturnType<Repo['snapshotTypeRegistries']>
 
-export interface SetDraft {
-  weight: number
-  reps: number
-  rpe?: number
-  side?: 'L' | 'R'
-  done: boolean
-  completedAt?: number
+/** Which training day a raw `date` property lands on, read the way the
+ *  readers read it — via `storedDate`, so a hand-edited date names the day it
+ *  says. */
+const liveDay = (raw: unknown): string | undefined => {
+  if (typeof raw !== 'string') return undefined
+  const date = new Date(raw)
+  return Number.isNaN(date.getTime()) ? undefined : dateToDay(storedDate(date))
 }
 
-export interface ExerciseDraft {
-  exercise: string
-  /** Plan block this exercise was prescribed from, when the config came
-   *  from the outline — written as a ref so the definition's backlinks are
-   *  the lift's logged history. */
-  definitionId?: string
-  unit: string
-  prescribedWeight?: number
-  prescribedSets?: number
-  sets: readonly SetDraft[]
+// ──── layoff ────
+
+const LAYOFF_NS = 'cfa6899f-981a-4dac-8eae-978150c019a9'
+
+/** A layoff is keyed on where the gap STARTS, not the whole range: `to`
+ *  ("when you came back") is the field two clients can disagree about, and
+ *  keying on the range would give the two finishes separate records —
+ *  `resolveReentry` would then read the later `to` as most recent and restart
+ *  `sessionsBack`, undoing loads already climbed back to. Keyed on `from`,
+ *  the second finish ADOPTS the first record instead.
+ *
+ *  Adopting is not quite leaving it alone, though — see `refreshLayoff`. The
+ *  same seat is reached whenever the same break is re-measured, so the adopt
+ *  DEEPENS the record when the new measurement is more severe, and otherwise
+ *  returns it untouched. The two clients above still both write the same tier,
+ *  so the second stops before writing at all; what changes is that a comeback
+ *  since taken back no longer holds the ramp at the lighter tier it named. */
+const layoffIdentity = (workspaceId: string, from: string): DerivedIdentity =>
+  ({namespace: LAYOFF_NS, key: `${workspaceId}|${from}`})
+
+const isGapRecord = (block: BlockData, from: string): boolean =>
+  liveDay(block.properties[FIELD.layoffFrom]) === from
+
+const layoffContent = (days: unknown, pct: unknown, tierId: unknown): string =>
+  `Layoff · ${String(days)}-day gap → ${Math.round(Number(pct) * 100)}% (${String(tierId)})`
+
+/** Deepen a record already at this gap's seat, when the break has been
+ *  re-measured as worse than it says.
+ *
+ *  `getOrCreateTypedChild` deliberately does not apply `content`/`properties`
+ *  on adopt — the block on disk holds real state and a caller's defaults must
+ *  not flatten it — and tells callers wanting upsert semantics to write the
+ *  fields they changed themselves. This is that write, and a layoff record is
+ *  the shape it is meant for: every field on it is DERIVED from history, so
+ *  there is no user state to protect. Only `content` can have been touched by
+ *  hand, and that is checked before it is replaced.
+ *
+ *  Needed because the record is keyed on `from` alone, so the same seat is
+ *  reached whenever the same break is re-measured. See `layoffAlreadyRecorded`
+ *  for how a break gets re-measured (untick a comeback session and it stops
+ *  being a training day) and for why the comparison is severity rather than
+ *  the return date: a record only ever gets HARSHER, so clients converge on
+ *  the deepest measurement in any order, and this can never loosen a cut.
+ *
+ *  Re-checked here rather than trusted from the caller: this runs inside the
+ *  finish transaction, where the block on disk is the only current answer —
+ *  `layoffAlreadyRecorded` read a snapshot taken before it opened. */
+const refreshLayoff = async (
+  tx: Tx,
+  id: string,
+  record: Omit<LayoffRecord, 'id'>,
+  spec: {content: string; properties: ReturnType<typeof propertyValue>[]},
+  /** The plan's re-entry table, so severity is judged here the way every other
+   *  reader judges it. Without it this compared the stored `strength:reentryPct`
+   *  — which decides nothing, since `resolveReentry` resolves the tier from
+   *  `strength:tier`/`strength:gapDays` — so a record whose tier had been
+   *  hand-edited to `on-schedule` kept its old percentage, satisfied the early
+   *  return, and survived the very write meant to replace it. The finish then
+   *  closed leaving a record that applies no cut at all. */
+  reentry: readonly ReentryTier[],
+): Promise<string> => {
+  const block = await tx.get(id)
+  if (!block) return id
+  const storedTier = block.properties[FIELD.layoffTier]
+  const storedDays = block.properties[FIELD.layoffDays]
+  const recorded = typeof storedTier === 'string' && typeof storedDays === 'number'
+    ? effectiveTier({tierId: storedTier, days: storedDays}, reentry)
+    : undefined
+  // Already at least this severe AND actually applying a cut — the equal case
+  // included, which is two clients recording one comeback and is what keying on
+  // `from` is for. A record resolving to `on-schedule` covers nothing and gets
+  // replaced however deep its stored percentage claims to be.
+  //
+  // With NO table the tier cannot be resolved, and the fallback is the stored
+  // percentage — the behaviour before this argument existed. Not "replace it":
+  // that would let a caller with no plan in hand loosen a deeper record, which
+  // is the one direction this must never go. Callers that can judge properly
+  // pass the table; `closeSession` does.
+  const storedPct = block.properties[FIELD.layoffPct]
+  const covers = recorded !== undefined
+    ? !isOnScheduleTier(recorded) && recorded.pct <= record.pct
+    : typeof storedPct === 'number' && storedPct <= record.pct
+  if (covers) return id
+  // The generated label only. Renamed by hand, the text is the user's, and a
+  // stale number in it is a smaller loss than overwriting what they wrote.
+  if (block.content === layoffContent(
+    storedDays,
+    block.properties[FIELD.layoffPct],
+    storedTier,
+  )) await tx.update(id, {content: spec.content})
+  await tx.setProperties(id, {set: spec.properties})
+  return id
 }
 
-export interface WorkoutDraft {
-  day: string
-  session: SessionType
-  exercises: readonly ExerciseDraft[]
+/** A layoff row for this gap that the derived lookup cannot see.
+ *
+ *  Two populations, and neither alone is enough: the page's children are where
+ *  a mint lands, and `knownLayoffIds` covers one the user has since filed
+ *  elsewhere — a layoff is about a gap in TIME, not where it sits, so a
+ *  page-scoped scan alone let the next finish mint a second record for the
+ *  same break. Re-checked in-tx, so a stale caller list can only cause a mint,
+ *  never a bad adoption.
+ *
+ *  It must still SAY it is this gap: `strength:from` is an ordinary editable
+ *  date and `coveringLayoff` reads that rather than the id, so adopting on a
+ *  matching id alone would leave the pending gap with no record at all. */
+const findLegacyGapRecord = async (
+  tx: Tx,
+  pageId: string,
+  from: string,
+  knownLayoffIds: readonly string[],
+  exclude: string,
+): Promise<BlockData | null> => {
+  const candidates = new Map<string, BlockData>()
+  for (const block of await tx.childrenOf(pageId, undefined, {hidePropertyChildren: true})) {
+    candidates.set(block.id, block)
+  }
+  for (const id of knownLayoffIds) {
+    if (candidates.has(id)) continue
+    const block = await tx.get(id)
+    if (block) candidates.set(id, block)
+  }
+  return [...candidates.values()].find(block =>
+    !block.deleted && block.id !== exclude
+    && hasBlockType(block, LAYOFF_TYPE) && isGapRecord(block, from)) ?? null
 }
 
-/** The block ids of a materialized workout, so the UI can address individual
- *  set blocks for in-place edits without re-deriving them from a query. */
-export interface ExerciseEntryIds {
-  id: string
-  setIds: string[]
-}
-
-export interface MaterializedWorkout {
-  workoutId: string
-  exercises: ExerciseEntryIds[]
-}
-
-const sessionLabel = (session: SessionType): string =>
-  session === 'mini' ? 'Mini day' : `Session ${session}`
-
-// No ✓ prefix — the composed todo checkbox conveys done-ness.
-const setContent = (set: SetDraft, unit: string): string => {
-  const side = set.side ? `${set.side} ` : ''
-  return `${side}${set.weight}${unit} × ${set.reps}`
-}
-
-const todoStatus = (done: boolean): 'open' | 'done' => (done ? 'done' : 'open')
-
-/** One exercise entry + its set blocks, inside the caller's transaction.
- *  Shared by "start the session" and "add this lift mid-session", so an
- *  entry written either way is identical. */
-const writeExercise = async (
+/** Exported for `finishSession`, which must write the layoff inside its OWN
+ *  transaction — the gap stops being detectable the moment the finish lands,
+ *  so a separate write that fails loses the record permanently. */
+export const writeLayoffInTx = async (
   repo: Repo,
   tx: Tx,
-  workoutId: string,
-  ex: ExerciseDraft,
-  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
-): Promise<ExerciseEntryIds> => {
-  const exId = await tx.run(createChild, {parentId: workoutId, content: ex.exercise})
-  await tx.setProperty(exId, exerciseProp, ex.exercise)
-  await tx.setProperty(exId, definitionProp, ex.definitionId)
-  await tx.setProperty(exId, unitProp, ex.unit)
-  if (ex.prescribedWeight !== undefined) await tx.setProperty(exId, prescribedWeightProp, ex.prescribedWeight)
-  if (ex.prescribedSets !== undefined) await tx.setProperty(exId, prescribedSetsProp, ex.prescribedSets)
-  await repo.addTypeInTx(tx, exId, EXERCISE_ENTRY_TYPE, {}, typeSnapshot)
-
-  const setIds: string[] = []
-  for (const s of ex.sets) {
-    const setId = await tx.run(createChild, {parentId: exId, content: setContent(s, ex.unit)})
-    await tx.setProperty(setId, weightProp, s.weight)
-    await tx.setProperty(setId, repsProp, s.reps)
-    await tx.setProperty(setId, rpeProp, s.rpe)
-    await tx.setProperty(setId, sideProp, s.side)
-    await tx.setProperty(setId, completedAtProp, s.completedAt)
-    await repo.addTypeInTx(tx, setId, SET_TYPE, {}, typeSnapshot)
-    await repo.addTypeInTx(tx, setId, TODO_TYPE, {}, typeSnapshot)
-    await tx.setProperty(setId, todoStatusProp, todoStatus(s.done))
-    setIds.push(setId)
+  workspaceId: string,
+  pageId: string,
+  record: Omit<LayoffRecord, 'id'>,
+  typeSnapshot: TypeSnapshot,
+  /** Every layoff block the caller could see before opening the transaction.
+   *  The adopt below is deliberately parent-agnostic — a layoff is about a gap
+   *  in time, not where it sits — so the re-find must be too: a mint the user
+   *  has since filed elsewhere was invisible to a page-children scan, and the
+   *  next finish minted a SECOND record for the same gap. History reads
+   *  layoffs workspace-wide, so both then feed re-entry and the later one can
+   *  restart a ramp already climbed out of. Re-checked in-tx, so a stale list
+   *  can only cause a mint, never a bad adoption. */
+  knownLayoffIds: readonly string[] = [],
+  /** The plan's re-entry table — `refreshLayoff` needs it to judge severity
+   *  the way `resolveReentry` does. Defaulted so a caller with no plan in hand
+   *  still writes the record; with an empty table every stored tier resolves to
+   *  nothing, which reads as "covers nothing" and always refreshes. */
+  reentry: readonly ReentryTier[] = [],
+): Promise<string> => {
+  const spec = {
+    parentId: pageId,
+    content: layoffContent(record.days, record.pct, record.tierId),
+    position: {kind: 'first'} as const,
+    types: [LAYOFF_TYPE],
+    properties: [
+      propertyValue(layoffFromProp, dayToDate(record.from)),
+      propertyValue(layoffToProp, dayToDate(record.to)),
+      propertyValue(layoffDaysProp, record.days),
+      propertyValue(layoffTierProp, record.tierId),
+      propertyValue(layoffPctProp, record.pct),
+    ],
+    typeSnapshot,
   }
-  return {id: exId, setIds}
+  const outcome = await getOrCreateTypedChild(repo, tx, {
+    identity: layoffIdentity(workspaceId, record.from),
+    // No parentage check, unlike workout/entry/set records: a layoff is about
+    // a gap in time, not where it sits, so a block filed elsewhere is still
+    // THIS gap's record. It does have to still SAY it is this gap, though:
+    // `layoffAlreadyRecorded` reads `strength:from` rather than the id, and
+    // the loss is permanent once the comeback session joins history.
+    adoptable: block => isGapRecord(block, record.from),
+    ...spec,
+  })
+  if (outcome.status === 'adopted') return refreshLayoff(tx, outcome.id, record, spec, reentry)
+  if (outcome.status === 'created') {
+    // The seat was FREE, which does not mean this gap has no record: rows
+    // written before layoffs had a derived id carry random ones, and they are
+    // invisible to the lookup above. Minting regardless left the workspace
+    // holding two records for one `from` — and `resolveReentry` takes the
+    // latest `to`, so deleting or correcting the new one can expose the
+    // obsolete one and restart a ramp already climbed out of.
+    //
+    // Checked AFTER the create rather than before, because the create is what
+    // proves the seat was empty; the mint is then deleted again in favour of
+    // the row that already exists. `typedRecords.ts` asks for exactly this
+    // when a derived id is retrofitted onto a kind with rows already out
+    // there — the same rescue `page.ts` does for legacy settings.
+    const legacy = await findLegacyGapRecord(tx, pageId, record.from, knownLayoffIds, outcome.id)
+    if (legacy === null) return outcome.id
+    await tx.run(deleteBlock, {id: outcome.id})
+    return refreshLayoff(
+      tx, (await adoptTypedBlock(repo, tx, legacy, spec.types, typeSnapshot)).id,
+      record, spec, reentry,
+    )
+  }
+
+  // The derived seat is held by a tombstone, another workspace's row, or a
+  // block whose `from` now names a different gap. There's no second identity
+  // to derive, so mint — and look the mint up on the NEXT call rather than
+  // add to it. The page's children, because that's where a mint lands.
+  const minted = await findLegacyGapRecord(tx, pageId, record.from, knownLayoffIds, outcome.id)
+  return minted !== null
+    ? refreshLayoff(
+      tx, (await adoptTypedBlock(repo, tx, minted, spec.types, typeSnapshot)).id,
+      record, spec, reentry,
+    )
+    : createTypedChild(repo, tx, spec)
 }
 
-// ──── live logging writes ────
-
-/** Create the workout + one child per exercise + one grandchild per set, all
- *  in a single transaction (so it lands and undoes atomically). The workout is
- *  born `in-progress`; the set blocks carry whatever the draft already holds
- *  (usually the pre-filled prescription, `done: false`). Returns the ids so
- *  the caller can write set edits straight to their blocks. */
-export const materializeWorkout = async (
+export const writeLayoff = async (
   repo: Repo,
   workspaceId: string,
   pageId: string,
-  draft: WorkoutDraft,
-): Promise<MaterializedWorkout> => {
+  record: Omit<LayoffRecord, 'id'>,
+  reentry: readonly ReentryTier[] = [],
+): Promise<string> => {
   const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => {
-    const workoutId = await tx.run(createChild, {
-      parentId: pageId,
-      content: `${sessionLabel(draft.session)} · ${draft.day}`,
-      position: {kind: 'first'},
-    })
-    await tx.setProperty(workoutId, sessionProp, draft.session)
-    await tx.setProperty(workoutId, dateProp, dayToDate(draft.day))
-    await tx.setProperty(workoutId, statusProp, 'in-progress')
-    await repo.addTypeInTx(tx, workoutId, WORKOUT_TYPE, {}, typeSnapshot)
-
-    const exercises: {id: string; setIds: string[]}[] = []
-    for (const ex of draft.exercises) {
-      exercises.push(await writeExercise(repo, tx, workoutId, ex, typeSnapshot))
-    }
-    return {workoutId, exercises}
-  }, {scope: ChangeScope.BlockDefault, description: `Start ${sessionLabel(draft.session)}`})
+  return repo.tx(
+    tx => writeLayoffInTx(repo, tx, workspaceId, pageId, record, typeSnapshot, [], reentry),
+    {scope: ChangeScope.BlockDefault, description: 'Record layoff'},
+  )
 }
 
-/** Add ONE exercise (and its pre-filled sets) to a workout that already
- *  exists. This is the mid-session case: you switch an `or`-group to the
- *  other option because your shoulder complained, and the option you switched
- *  to has no blocks yet. Same shape as `materializeWorkout` writes, so the
- *  entry is indistinguishable from one created at the start. */
-export const materializeExercise = async (
+// ──── discarding ────
+
+/** Throw tonight's session away. Verified in-transaction rather than trusted
+ *  from the caller: a stale button must not tombstone a completed record. */
+export const discardSession = async (
   repo: Repo,
   workoutId: string,
-  ex: ExerciseDraft,
-): Promise<ExerciseEntryIds> => {
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => writeExercise(repo, tx, workoutId, ex, typeSnapshot),
-    {scope: ChangeScope.BlockDefault, description: `Add ${ex.exercise}`})
-}
+  /** What the caller counted before deciding whether to warn — BOTH kinds, so
+   *  the recheck covers everything the warning described.
+   *
+   *  Re-counted here and refused when it no longer matches: the count and the
+   *  delete are separated by a dialog the user can sit in indefinitely — and
+   *  by several awaits even when there is nothing to confirm. A peer ticking a
+   *  set or typing a note in that gap turned a warned-about deletion into an
+   *  unwarned one, on exactly the reading ("nothing here but the prescribed
+   *  skeleton") that skips the dialog. Omit it to delete whatever is there,
+   *  which is what a caller with no count to honour means. */
+  expected?: DiscardTally,
+): Promise<'discarded' | 'gone' | 'changed' | 'holds-a-session'> =>
+  repo.tx(async tx => {
+    // The TYPE as well as the status, and this is the destructive path: the
+    // raw `strength:status` survives an untag, so a block that left the
+    // strength world between the confirmation and here would still be
+    // cascade-deleted with its whole subtree. `asWorkout` is the one answer to
+    // "is this still a live workout" — missing, deleted, untyped and closed
+    // all arrive here as the same refusal.
+    const workout = asWorkout(await tx.get(workoutId))
+    if (workout === null || !workout.live) return 'gone' as const
 
-/** Persist one set's current state to its block (in place). Writes the full
- *  set so the block always mirrors the UI, and refreshes the readable content
- *  line. */
-export const writeSet = async (
-  repo: Repo,
-  setId: string,
-  set: SetDraft,
-  unit: string,
-): Promise<void> => {
-  await repo.tx(async tx => {
-    await tx.update(setId, {content: setContent(set, unit)})
-    await tx.setProperty(setId, weightProp, set.weight)
-    await tx.setProperty(setId, repsProp, set.reps)
-    await tx.setProperty(setId, rpeProp, set.rpe)
-    await tx.setProperty(setId, sideProp, set.side)
-    await tx.setProperty(setId, completedAtProp, set.completedAt)
-    await tx.setProperty(setId, todoStatusProp, todoStatus(set.done))
-  }, {scope: ChangeScope.BlockDefault, description: 'Log set'})
-}
+    // Another session filed under this one is not this one's to throw away.
+    // The placement contract puts tonight's workout under whatever block the
+    // cursor was on, including last week's unfinished session — and
+    // `deleteBlock` cascades, so discarding the outer one tombstoned an
+    // independent session whole. Worse where it hurts most: a nested session
+    // with nothing ticked counts zero, so the confirmation never appeared and
+    // the whole thing went silently. Refused rather than reparented, because
+    // where those blocks should go instead is the user's call, not ours.
+    const nested = await nestedWorkouts(
+      id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+      workoutId,
+    )
+    if (nested.length > 0) return 'holds-a-session' as const
 
-/** Instructions for finishing a workout: which sets to keep (with the
- *  exercise's derived working weight) and which un-accepted rows to prune. */
-export interface FinishPlan {
-  workoutId: string
-  /** Exercises that kept at least one done set. */
-  keep: {exerciseId: string; workingWeight: number | undefined; removeSetIds: readonly string[]}[]
-  /** Exercises with no done set — removed wholesale. */
-  removeExerciseIds: readonly string[]
-}
-
-/** Flip the workout to `done`, stamp each kept exercise's working weight, and
- *  prune the un-accepted sets / empty exercises so the saved record shows only
- *  what was actually performed. One transaction. */
-export const finishWorkout = async (repo: Repo, plan: FinishPlan): Promise<void> => {
-  await repo.tx(async tx => {
-    // Subtree delete, not `tx.delete`: a skipped exercise still has its
-    // pre-filled set blocks, and those are todo-typed. Tombstoning only the
-    // parent would leave them live — stray open todos under a deleted block.
-    for (const exId of plan.removeExerciseIds) await tx.run(deleteBlock, {id: exId})
-    for (const ex of plan.keep) {
-      // Subtree, like the exercise prune above: a set block is a normal block,
-      // so a note the user typed under it would otherwise stay live under a
-      // tombstone (and, in a child-backed workspace, so would the set's own
-      // property rows).
-      for (const setId of ex.removeSetIds) await tx.run(deleteBlock, {id: setId})
-      await tx.setProperty(ex.exerciseId, workingWeightProp, ex.workingWeight)
+    if (expected !== undefined) {
+      const now = await discardTally(
+        id => tx.childrenOf(id, undefined, {hidePropertyChildren: true}),
+        workoutId,
+      )
+      if (now.logged !== expected.logged || now.yours !== expected.yours) return 'changed' as const
     }
-    await tx.setProperty(plan.workoutId, statusProp, 'done')
-  }, {scope: ChangeScope.BlockDefault, description: 'Finish workout'})
-}
-
-/** Delete an abandoned in-progress workout and its whole subtree.
- *
- *  Takes the WORKOUT id and cascades, rather than a list the caller
- *  assembled from its draft: the live workout can hold blocks the draft no
- *  longer knows about (the `or`-group option you switched away from), and
- *  those would otherwise stay live — open todo sets under a tombstoned
- *  workout. */
-export const discardWorkout = async (repo: Repo, workoutId: string): Promise<void> => {
-  await repo.tx(async tx => {
     await tx.run(deleteBlock, {id: workoutId})
+    return 'discarded' as const
   }, {scope: ChangeScope.BlockDefault, description: 'Discard workout'})
-}
+
+// ──── or-group choices ────
 
 const choiceContent = (label: string): string => `Tracking: ${label}`
 
-/** Record which option of an `or`-group the user is now tracking.
- *
- *  One block per answered group, under the settings block, upserted — so
- *  switching back and forth edits the same block instead of growing a log.
- *  Both ends are refs, which is the point: the group and the chosen option
- *  each show this in their backlinks, so "what am I tracking in this slot?"
- *  is answerable from the plan outline itself, and an option that gets
- *  deleted leaves a visible dangling link rather than a map entry that
- *  silently stops matching. */
+const ALT_CHOICE_NS = '4e68c312-2b12-4dec-b6c3-b6ca96df272b'
+
+/** One seat per group, so two clients answering the same group for the first
+ *  time converge on one block instead of each minting their own. Keyed on the
+ *  settings block as well as the group: the settings block is the scope the
+ *  choice is read in, and two workspaces answering the same group are two
+ *  different answers. */
+export const choiceIdentity = (settingsBlockId: string, groupKey: string): DerivedIdentity =>
+  ({namespace: ALT_CHOICE_NS, key: `${settingsBlockId}|${groupKey}`})
+
+const isChoiceFor = (block: BlockData, groupKey: string): boolean =>
+  block.properties[FIELD.choiceGroup] === groupKey
+
+/** Record which option of an `or`-group the user is now tracking. One block
+ *  per answered group, under the settings block, upserted so switching back
+ *  and forth edits the same block instead of growing a log. Both ends are
+ *  refs, so "what am I tracking in this slot?" is answerable from the plan
+ *  outline's backlinks, and a deleted option leaves a visible dangling link
+ *  rather than a silently stale map entry. */
 export const writeAltChoice = async (
   repo: Repo,
   settingsBlockId: string,
@@ -271,16 +363,31 @@ export const writeAltChoice = async (
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     const children = await tx.childrenOf(settingsBlockId)
-    const existing = children.find(child =>
-      !child.deleted && child.properties[FIELD.choiceGroup] === groupKey)
+    // Through `asAltChoice`, matching the reader. An untyped block keeps its
+    // group property, so finding it here meant a one-tap re-pick UPDATED a
+    // block `readAltChoices` now filters out — the switcher moved, the write
+    // succeeded, and the new variant still did not apply, with nothing on
+    // screen to say why. Skipping it sends the write to the derived seat,
+    // which re-tags that same block on adopt and makes the pick take effect.
+    const existing = children.filter(child =>
+      asAltChoice(child) !== null && isChoiceFor(child, groupKey))
 
-    if (existing) {
-      await tx.update(existing.id, {content: choiceContent(label)})
-      await tx.setProperty(existing.id, choiceOptionProp, optionKey)
+    if (existing.length > 0) {
+      // EVERY match, not the first. Blocks minted before this group had a
+      // derived seat — and any pair that raced in before one existed — can
+      // leave two blocks answering for one group. `buildAltChoices` folds in
+      // order and keeps the LAST, while updating only the first leaves the
+      // other still winning: the preference then stops sticking, permanently
+      // and with nothing on screen to explain it. Writing all of them makes
+      // them agree, so which one the fold lands on stops mattering.
+      for (const child of existing) {
+        await tx.update(child.id, {content: choiceContent(label)})
+        await tx.setProperty(child.id, choiceOptionProp, optionKey)
+      }
       return
     }
 
-    await createTypedChild(repo, tx, {
+    const spec = {
       parentId: settingsBlockId,
       content: choiceContent(label),
       types: [ALT_CHOICE_TYPE],
@@ -289,66 +396,50 @@ export const writeAltChoice = async (
         propertyValue(choiceOptionProp, optionKey),
       ],
       typeSnapshot,
+    }
+    // Derived, like the layoff above: two offline clients answering the same
+    // group for the first time both see no child and both mint, and a random
+    // id makes those two rows forever. One seat per group means they converge
+    // on sync instead. The scan above still comes first, so a block minted
+    // before this seat existed is adopted rather than duplicated.
+    const outcome = await getOrCreateTypedChild(repo, tx, {
+      identity: choiceIdentity(settingsBlockId, groupKey),
+      adoptable: block => isChoiceFor(block, groupKey),
+      ...spec,
     })
-  }, {scope: ChangeScope.UserPrefs, description: 'Choose exercise variant'})
+    // The seat is held by something that is not this group's choice — a
+    // tombstone, or another workspace's row. There is no second identity to
+    // derive, so mint; the scan above adopts it on the next call.
+    if (outcome.status === 'taken') await createTypedChild(repo, tx, spec)
+    // An ADOPT re-tags but does not apply properties, so the block came back
+    // into the reader's view still holding the option it had before. Reaching
+    // this branch at all means the scan above found no typed choice — for an
+    // adopt that means the seat block had lost its type — so the pick just
+    // made has to be written, or the switcher moves and nothing changes. The
+    // same upsert the layoff record needs, for the same reason.
+    if (outcome.status === 'adopted') {
+      await tx.update(outcome.id, {content: choiceContent(label)})
+      await tx.setProperties(outcome.id, {set: spec.properties})
+    }
+    // `BlockDefault`, not `UserPrefs`, even though this IS a preference: the
+    // choice is stored as a real block, and `core.createChild` refuses to run
+    // in a user-prefs transaction. Under `UserPrefs` the update path worked
+    // and the FIRST pick for any group threw — which is every pick, until one
+    // exists. Nothing had covered the create path.
+  }, {scope: ChangeScope.BlockDefault, description: 'Choose exercise variant'})
 }
 
-/** `{groupId: optionId}` for every answered group — the shape the plan
- *  parser resolves `or`-groups against. An unanswered group is simply
- *  absent and falls back to the plan's own default. */
+/** `{groupId: optionId}` for every answered group — the shape the plan parser
+ *  resolves `or`-groups against. An unanswered group is simply absent and
+ *  falls back to the plan's own default. */
 export const readAltChoices = async (
   repo: Repo,
   settingsBlockId: string,
 ): Promise<Record<string, string>> => {
   const children = await repo.block(settingsBlockId).children.load()
-  return buildAltChoices((children ?? []).filter(child => !child.deleted))
-}
-
-// ──── layoff + shoulder writes (unchanged) ────
-
-export const writeLayoff = async (
-  repo: Repo,
-  workspaceId: string,
-  pageId: string,
-  record: Omit<LayoffRecord, 'id'>,
-): Promise<string> => {
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  return repo.tx(async tx => {
-    const id = await tx.run(createChild, {
-      parentId: pageId,
-      content: `Layoff · ${record.days}-day gap → ${Math.round(record.pct * 100)}% (${record.tierId})`,
-      position: {kind: 'first'},
-    })
-    await tx.setProperty(id, layoffFromProp, dayToDate(record.from))
-    await tx.setProperty(id, layoffToProp, dayToDate(record.to))
-    await tx.setProperty(id, layoffDaysProp, record.days)
-    await tx.setProperty(id, layoffTierProp, record.tierId)
-    await tx.setProperty(id, layoffPctProp, record.pct)
-    await repo.addTypeInTx(tx, id, 'strength-layoff', {}, typeSnapshot)
-    return id
-  }, {scope: ChangeScope.BlockDefault, description: 'Record layoff'})
-}
-
-/** Create a todo referencing the shoulder-policy block. `((id))` in the
- *  content plus an explicit reference makes the todo show up in the policy
- *  block's backlinks regardless of when the reference parser runs. */
-export const writeShoulderTodo = async (
-  repo: Repo,
-  workspaceId: string,
-  pageId: string,
-  triggers: readonly string[],
-  policyBlockId: string,
-): Promise<string> => {
-  const typeSnapshot = repo.snapshotTypeRegistries()
-  const reason = triggers.join('; ')
-  return repo.tx(async tx => {
-    const id = await tx.run(createChild, {
-      parentId: pageId,
-      content: `Book shoulder consult — ${reason} ((${policyBlockId}))`,
-      references: [{id: policyBlockId, alias: policyBlockId}],
-      position: {kind: 'first'},
-    })
-    await repo.addTypeInTx(tx, id, 'todo', {}, typeSnapshot)
-    return id
-  }, {scope: ChangeScope.BlockDefault, description: 'Shoulder trigger → consult todo'})
+  // Through `asAltChoice`, so removing `strength-alt-choice` from a block
+  // actually removes its preference. The group and option properties survive
+  // an untag, and folding them regardless meant a choice you had visibly taken
+  // out of the strength world went on steering every later prescription.
+  return buildAltChoices((children ?? []).filter(child => asAltChoice(child) !== null))
 }

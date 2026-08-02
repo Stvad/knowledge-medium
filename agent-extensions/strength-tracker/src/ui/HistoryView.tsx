@@ -1,36 +1,58 @@
 /** The "look back" surface: milestones, per-lift trend sparklines,
- *  left/right asymmetry, and the recent-session log. Richer than Tonight and
- *  most useful on a wider screen, but degrades fine on mobile.
+ *  left/right asymmetry, and the recent-session log. Most useful on a wider
+ *  screen, but degrades fine on mobile.
  */
 
 import {useMemo} from 'react'
 
 import {asymmetries, exerciseSeries, milestoneProgress, type SeriesPoint} from '../engine/trends'
-import type {ProgramState} from './useProgram'
+import type {ProgramConfig, WorkoutRecord} from '../engine/types'
+import {dateToDay} from '../km/day'
 
 interface Props {
-  program: ProgramState
+  config: ProgramConfig
+  history: readonly WorkoutRecord[]
 }
 
-export function HistoryView({program}: Props) {
-  const {config, history} = program
-
+export function HistoryView({config, history}: Props) {
   const milestones = useMemo(() => milestoneProgress(history, config), [history, config])
   const asym = useMemo(() => asymmetries(history, config), [history, config])
   // The load-progressed main lifts, in program order, that have any history.
   const trendLifts = useMemo(
-    () =>
-      config.exercises
+    () => {
+      // Occurrence counted the way `planFromPrescription` counts it — by plan
+      // block where there is one, else by name — so a plan that prescribes one
+      // lift twice draws two DIFFERENT lines instead of the same one twice
+      // (with the second row's history nowhere on screen, under a duplicate
+      // React key).
+      const seen = new Map<string, number>()
+      return config.exercises
         .filter(e => !e.freeform)
-        .map(e => ({name: e.name, unit: config.unit, series: exerciseSeries(history, e.name, config.dayRolloverHour)}))
-        .filter(t => t.series.length > 0),
+        .map(e => {
+          const identityKey = e.defId ?? e.name
+          const occurrence = seen.get(identityKey) ?? 0
+          seen.set(identityKey, occurrence + 1)
+          return {
+            name: e.name,
+            key: `${identityKey}#${occurrence}`,
+            label: occurrence === 0 ? e.name : `${e.name} (${occurrence + 1})`,
+            unit: config.unit,
+            series: exerciseSeries(
+              history,
+              {exercise: e.name, ...(e.defId !== undefined ? {defId: e.defId} : {}), occurrence},
+              config.dayRolloverHour,
+            ),
+          }
+        })
+        .filter(t => t.series.length > 0)
+    },
     [history, config],
   )
 
   if (history.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No sessions logged yet. Log tonight above and trends will appear here.
+        No sessions logged yet. Start a session (⌃⇧L) and trends will appear here.
       </p>
     )
   }
@@ -65,9 +87,9 @@ export function HistoryView({program}: Props) {
         <Section title="Progression">
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {trendLifts.map(t => (
-              <li key={t.name} className="rounded-md border border-border p-3">
+              <li key={t.key} className="rounded-md border border-border p-3">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-medium">{t.name}</span>
+                  <span className="text-sm font-medium">{t.label}</span>
                   <span className="tabular-nums text-sm text-muted-foreground">
                     {t.series.at(-1)!.weight}
                     {t.unit}
@@ -87,12 +109,15 @@ export function HistoryView({program}: Props) {
         <Section title="Left / right">
           <ul className="flex flex-col gap-1.5">
             {asym.map(a => (
-              <li key={a.exercise} className="flex items-center justify-between gap-2 text-sm">
-                <span>{a.exercise}</span>
+              <li key={`${a.defId ?? a.exercise}#${a.occurrence}`} className="flex items-center justify-between gap-2 text-sm">
+                <span>{a.occurrence === 0 ? a.exercise : `${a.exercise} (${a.occurrence + 1})`}</span>
                 <span className="flex items-center gap-2 tabular-nums">
-                  <span>L {a.left ?? '—'}</span>
+                  {/* Reps beside the load: at equal weight the flag turns on
+                      REPS, and showing weight alone would put "right ahead"
+                      next to two identical numbers. */}
+                  <span>L {a.left ?? '—'}{a.leftReps !== undefined ? `×${a.leftReps}` : ''}</span>
                   <span className="text-muted-foreground">/</span>
-                  <span>R {a.right ?? '—'}</span>
+                  <span>R {a.right ?? '—'}{a.rightReps !== undefined ? `×${a.rightReps}` : ''}</span>
                   {a.rightAhead && (
                     <span className="rounded bg-amber-500/15 px-1 text-xs text-amber-600 dark:text-amber-400">
                       right ahead
@@ -116,7 +141,15 @@ export function HistoryView({program}: Props) {
                   <span className="font-medium">
                     {w.session === 'mini' ? 'Mini' : `Session ${w.session}`}
                   </span>
-                  <span className="text-xs text-muted-foreground">{w.date.slice(0, 10)}</span>
+                  {/* `dateToDay`, not the ISO prefix. `WorkoutRecord.date` is
+                      an INSTANT — local noon for anything this extension wrote
+                      — so its UTC prefix is the day BEFORE anywhere east of
+                      UTC+12, and every session there listed a day early while
+                      progression filed it correctly. Slicing an ISO string is
+                      reading a local calendar day off a UTC rendering. */}
+                  <span className="text-xs text-muted-foreground">
+                    {dateToDay(new Date(w.date))}
+                  </span>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   {w.exercises
