@@ -43,7 +43,7 @@ import {
 } from '@/plugins/srs-rescheduling'
 import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useReviewDeckCards } from './useDueCards.ts'
-import { decideGrade } from './gradeDecision.ts'
+import { decideGrade, showsEnrolledCardActions } from './gradeDecision.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
 import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
@@ -607,8 +607,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
             the SRS date adapter doesn't claim an unenrolled block, so the
             picker either no-ops or edits an unrelated date without enrolling
             it. Grading is how a new card gets a schedule in the first place,
-            so offer these only once it has one. */}
-        {!currentIsNew && (
+            so offer these only once it has one.
+
+            Shares grading's readiness rule via `showsEnrolledCardActions`:
+            `currentIsNew` reads a live `newIds` that is EMPTY until the
+            tagged-candidates query resolves, so a raw `!currentIsNew` renders
+            these for a new card in a restored session — the exact case this
+            branch exists to exclude. Unknown membership means "don't offer". */}
+        {showsEnrolledCardActions({isNew: currentIsNew, ready: dueLoaded}) && (
           <>
             <button
               type="button"

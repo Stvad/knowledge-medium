@@ -6,7 +6,7 @@ import {
   srsArchivedProp,
   srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
-import { decideGrade, isLiveSrsCard } from '../gradeDecision.ts'
+import { decideGrade, isLiveSrsCard, showsEnrolledCardActions } from '../gradeDecision.ts'
 
 const block = (
   types: string[],
@@ -52,6 +52,33 @@ describe('decideGrade', () => {
   it('drops a block that cannot be loaded at all, settled or not', () => {
     expect(decideGrade(null, {isNew: false, ready: false})).toBe('drop')
     expect(decideGrade(undefined, {isNew: true, ready: true})).toBe('drop')
+  })
+})
+
+describe('showsEnrolledCardActions', () => {
+  it('offers Reschedule/Archive only for a settled, enrolled card', () => {
+    expect(showsEnrolledCardActions({isNew: false, ready: true})).toBe(true)
+    expect(showsEnrolledCardActions({isNew: true, ready: true})).toBe(false)
+  })
+
+  it('hides them while membership is still unknown', () => {
+    // The restored-before-ready window again: `isNew` is false only because
+    // the candidates query hasn't resolved, so a raw `!isNew` would offer
+    // controls that fail on a new card — Archive reports "Couldn't archive
+    // this card" and the date picker has no SRS adapter to drive.
+    expect(showsEnrolledCardActions({isNew: false, ready: false})).toBe(false)
+  })
+
+  it('agrees with decideGrade about when membership is knowable', () => {
+    // The drift this pairing exists to prevent: grading gated on readiness
+    // while the controls were not. Wherever grading has to `wait`, the
+    // enrolled-only controls must not be offered either.
+    for (const isNew of [true, false]) {
+      for (const ready of [true, false]) {
+        const waiting = decideGrade(untyped, {isNew, ready}) === 'wait'
+        if (waiting) expect(showsEnrolledCardActions({isNew, ready})).toBe(false)
+      }
+    }
   })
 })
 

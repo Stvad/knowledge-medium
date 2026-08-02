@@ -76,3 +76,19 @@ export const decideGrade = (
   if (isLiveSrsCard(data) || isNew) return 'grade'
   return ready ? 'drop' : 'wait'
 }
+
+/**
+ * Whether to offer the controls that only work on an ENROLLED card —
+ * Reschedule and Archive. `archiveSrsCard` returns false for a block with no
+ * SRS type (surfacing "Couldn't archive this card"), and the SRS date adapter
+ * doesn't claim an unenrolled block, so neither does anything useful for a new
+ * card.
+ *
+ * Shares `decideGrade`'s readiness rule deliberately, rather than restating
+ * `!isNew` at the call site: gating grading on `ready` while leaving these
+ * controls on the raw flag is precisely the drift that shipped once already —
+ * the session gated one and not the other, so a restored session briefly
+ * offered both for a new card. One rule, one place.
+ */
+export const showsEnrolledCardActions = ({isNew, ready}: GradeDecisionInput): boolean =>
+  ready && !isNew

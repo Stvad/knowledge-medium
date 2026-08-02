@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlockResolveContext } from '@/extensions/blockInteraction'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema'
 import { TutorialBanner, tutorialBannerHeader } from '../TutorialBanner.tsx'
-import { isTutorialBannerDismissed } from '../bannerDismissal.ts'
+import { isTutorialBannerDismissed, resetTutorialBannerDismissal } from '../bannerDismissal.ts'
 
 const mocks = vi.hoisted(() => ({
   openTutorial: vi.fn(),
@@ -93,10 +93,12 @@ describe('TutorialBanner', () => {
     mocks.activeWorkspaceId = 'ws-1'
     mocks.navigates = {ok: true}
     window.location.hash = ''
+    resetTutorialBannerDismissal()
     window.localStorage.clear()
   })
   afterEach(() => {
     cleanup()
+    resetTutorialBannerDismissal()
     window.localStorage.clear()
   })
 
