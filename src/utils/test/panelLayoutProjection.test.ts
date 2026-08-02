@@ -224,6 +224,30 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelBlockIds(await rows())).toEqual([])
   })
 
+  it('cancellation observed at the first await point stops row writes AND URL writes', async () => {
+    // isCancelled flips while the apply awaits its initial subtree load (the
+    // caller cancels synchronously after invoking, before the load resolves)
+    // — the apply must bail before reconciling rows or touching the hash.
+    await createPanelRows(['a'])
+    let cancelled = false
+    const replaces: string[] = []
+    const pending = applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      replaceHash: hash => replaces.push(hash),
+      isCancelled: () => cancelled,
+    })
+    cancelled = true
+    const result = await pending
+
+    expect(result.kind).toBe('cancelled')
+    expect(replaces).toEqual([])
+    // rows untouched — the a→b reconcile never ran
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a'])
+  })
+
   it('preserves the ws-context when normalizing an empty-target hash against live rows', async () => {
     await createPanelRows(['a'])
     const replaces: string[] = []
@@ -1700,6 +1724,38 @@ describe('PanelLayoutProjection', () => {
       expect(pushes).toEqual([])
       expect(replaces).toEqual([])
       expect(hash()).toBe('#ws-1;persp=lane')
+    })
+
+    it('a dispose landing AFTER the entry guard, while the apply is in flight, still cannot write the hash', async () => {
+      // The other half of the race: the queued callback already passed its
+      // disposed check and applyCurrentLayoutUrl is awaiting its subtree
+      // load when the switch-away disposes the projection. Its late
+      // normalization must not overwrite the hash the next session installed.
+      // getHash is the last synchronous step before the apply's first await,
+      // so disposing inside it lands the disposal exactly in that window.
+      await createPanelRows(['a'])
+      let currentHash = '#ws-1;persp=lane'
+      const pushes: string[] = []
+      const replaces: string[] = []
+      const projection: PanelLayoutProjection = new PanelLayoutProjection({
+        repo: env.repo,
+        workspaceId: WS,
+        layoutSessionBlock: layoutSessionBlock(),
+        getHash: () => {
+          projection.dispose()
+          return currentHash
+        },
+        pushHash: hash => { pushes.push(hash); currentHash = hash },
+        replaceHash: hash => { replaces.push(hash); currentHash = hash },
+        subscribeToUrl: () => () => {},
+      })
+      await projection.start()
+
+      await projection.applyCurrentUrl()
+
+      expect(pushes).toEqual([])
+      expect(replaces).toEqual([]) // without isCancelled this normalized to '#ws-1;persp=lane/a'
+      expect(currentHash).toBe('#ws-1;persp=lane')
     })
   })
 })

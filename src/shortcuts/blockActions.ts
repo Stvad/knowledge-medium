@@ -432,10 +432,12 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     description: 'Copy link to block',
     icon: Link,
     // `y l` ("yank link") — an absolute, shareable URL that opens this
-    // block. Reuses the same routing facilities the in-app `<a href>`
-    // links use: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
+    // block: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
     // `absoluteAppUrl` to promote it to an absolute URL (and drop any
-    // agent-runtime pairing secret riding in the current hash).
+    // agent-runtime pairing secret riding in the current hash). Plain
+    // buildAppHash ON PURPOSE — not the in-app anchors'
+    // buildAppHashInContext: a perspective lane (`;persp=…`) is
+    // device-local UiState and must not leak into a durable shared URL.
     handler: ({block}: BlockShortcutDependencies) => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) return

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildAppHash,
+  buildAppHashInContext,
   buildLayout,
   buildLayoutFromSlots,
   layoutWorkspaceChanged,
@@ -383,6 +384,33 @@ describe('ws-token context (`#ws;persp=x/...`)', () => {
       {kind: 'leaf', blockId: 'a', viewMode: 'm', active: true},
       {kind: 'leaf', blockId: 'b'},
     ])
+  })
+
+  // In-app anchors preserve the active lane; share/exit paths use plain
+  // buildAppHash. A context-free hash reads as the base session, so a
+  // native click on an anchor built WITHOUT the context would exit the lane.
+  describe('buildAppHashInContext', () => {
+    it('re-attaches the current hash\'s same-workspace ws-context', () => {
+      expect(buildAppHashInContext('ws-1', 'b1', '#ws-1;persp=lane/a/b'))
+        .toBe('#ws-1;persp=lane/b1')
+      expect(buildAppHashInContext('ws-1', undefined, '#ws-1;persp=lane/a'))
+        .toBe('#ws-1;persp=lane')
+    })
+
+    it('drops the context for a CROSS-workspace link (it belongs to the source ws token)', () => {
+      expect(buildAppHashInContext('ws-2', 'b1', '#ws-1;persp=lane/a'))
+        .toBe('#ws-2/b1')
+    })
+
+    it('matches buildAppHash when the current hash carries no context', () => {
+      expect(buildAppHashInContext('ws-1', 'b1', '#ws-1/a')).toBe(buildAppHash('ws-1', 'b1'))
+      expect(buildAppHashInContext('ws-1', 'b1', undefined)).toBe(buildAppHash('ws-1', 'b1'))
+    })
+
+    it('carries every opaque ws entry, not just persp', () => {
+      expect(buildAppHashInContext('ws', 'b1', '#ws;persp=x;zed/a'))
+        .toBe('#ws;persp=x;zed/b1')
+    })
   })
 
   it('parseAppHash returns the clean workspace id for a persp-bearing hash', () => {

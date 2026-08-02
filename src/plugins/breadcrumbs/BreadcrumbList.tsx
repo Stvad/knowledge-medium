@@ -3,7 +3,7 @@ import { Block } from '@/data/block'
 import { BlockContextType } from '@/types.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
-import { buildAppHash } from '@/utils/routing.js'
+import { buildAppHashInContext } from '@/utils/routing.js'
 import { cn } from '@/lib/utils.js'
 import { breadcrumbRenderScopeId } from '@/utils/renderScope.js'
 
@@ -47,7 +47,7 @@ export const BreadcrumbList = ({
       {parents.map((parent, index) => (
         <span key={parent.id} className="flex items-center min-w-0">
           <a
-            href={buildAppHash(workspaceId, parent.id)}
+            href={buildAppHashInContext(workspaceId, parent.id)}
             // text-inherit so the link picks up the container's muted color
             // instead of the user-agent blue.
             className={cn('text-inherit', itemClassName)}

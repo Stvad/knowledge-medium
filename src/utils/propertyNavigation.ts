@@ -75,14 +75,21 @@ const isVisibleElement = (element: HTMLElement): boolean => {
   // the row's own computed style, which is unaffected by an ancestor's
   // display:none and so falsely reported "visible". visibilityProperty
   // extends the ancestor walk to visibility:hidden too, matching the old
-  // check's own-element visibility test. Fall back for environments
-  // without checkVisibility (older browsers) — own-element check only,
-  // exactly the prior behavior.
+  // check's own-element visibility test.
   if (typeof element.checkVisibility === 'function') {
     return element.checkVisibility({visibilityProperty: true})
   }
-  const style = window.getComputedStyle(element)
-  return style.display !== 'none' && style.visibility !== 'hidden'
+  // Fallback for environments without checkVisibility (older WebViews):
+  // multi-session isolation must hold here too, so walk the ancestor chain
+  // for display:none by hand. Only display needs the walk — an ancestor's
+  // display:none leaves the row's own computed display untouched, while
+  // visibility INHERITS, so the own-element visibility read already reflects
+  // a hidden ancestor (and honors a descendant's visible override, matching
+  // checkVisibility's semantics).
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    if (window.getComputedStyle(node).display === 'none') return false
+  }
+  return window.getComputedStyle(element).visibility !== 'hidden'
 }
 
 const isFocusableElement = (element: HTMLElement): boolean => {

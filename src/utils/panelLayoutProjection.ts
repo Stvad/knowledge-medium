@@ -30,7 +30,7 @@ import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeD
 import { visibleChildrenOf } from '@/data/visibleChildren'
 
 export interface ApplyLayoutResult {
-  kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
+  kind: 'applied' | 'cancelled' | 'empty' | 'ignored' | 'noop' | 'normalized'
 }
 
 interface PanelSlot {
@@ -915,6 +915,11 @@ export interface ApplyCurrentLayoutUrlArgs {
   layoutSessionBlock: Block
   hash?: string
   replaceHash?: (hash: string) => void
+  /** Re-checked after every await and before every side effect (row writes,
+   *  replaceHash). A caller whose lifetime can end mid-apply — the projection
+   *  is disposed on a session switch — passes its own liveness here so a late
+   *  apply can't mutate rows or rewrite the hash on behalf of a dead owner. */
+  isCancelled?: () => boolean
 }
 
 export const applyCurrentLayoutUrl = async ({
@@ -923,6 +928,7 @@ export const applyCurrentLayoutUrl = async ({
   layoutSessionBlock,
   hash = typeof window === 'undefined' ? '' : window.location.hash,
   replaceHash,
+  isCancelled,
 }: ApplyCurrentLayoutUrlArgs): Promise<ApplyLayoutResult> => {
   const route = parseLayout(hash)
   if (route.workspaceId && route.workspaceId !== workspaceId) {
@@ -935,6 +941,7 @@ export const applyCurrentLayoutUrl = async ({
     : route.slots
 
   const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  if (isCancelled?.()) return {kind: 'cancelled'}
   const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
   if (targetSlots.length === 0) {
@@ -959,6 +966,11 @@ export const applyCurrentLayoutUrl = async ({
   const finalRows = changed
     ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
     : currentRows
+  // Cancelled during the reconcile/load: the row writes committed (a tx is
+  // not abortable mid-flight) but they targeted OUR OWN session block with
+  // the hash this apply was born with — consistent saved state. The URL,
+  // though, now belongs to whoever cancelled us; leave it alone.
+  if (isCancelled?.()) return {kind: 'cancelled'}
   const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows)
   const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots), route.wsContext)
   if (canonical !== `#${splitHashRouteAndParams(hash).route}`) {
@@ -1012,10 +1024,12 @@ export class PanelLayoutProjection {
   private outboundGeneration = 0
   /** Terminal: set by dispose(), never cleared (projections are one-shot
    *  per effect — nothing restarts a disposed one). Guards the QUEUED work
-   *  `applyCurrentUrl` schedules: dispose() can't cancel an in-flight apply,
-   *  and with the hook now applying post-start (see usePanelLayoutProjection)
-   *  a rapid session switch could otherwise have a dead session's late apply
-   *  rewrite the hash from ITS rows after the next session took over. */
+   *  `applyCurrentUrl` schedules AND (via the apply's isCancelled hook) the
+   *  in-flight apply itself: with the hook applying post-start (see
+   *  usePanelLayoutProjection) a rapid session switch could otherwise have a
+   *  dead session's late apply rewrite the hash from ITS rows after the next
+   *  session took over — whether the dispose landed while the work was still
+   *  queued or mid-await inside applyCurrentLayoutUrl. */
   private disposed = false
 
   constructor(options: PanelLayoutProjectionOptions) {
@@ -1067,12 +1081,17 @@ export class PanelLayoutProjection {
         try {
           // Queued after dispose (or disposed while waiting in the queue):
           // don't touch rows or the hash on behalf of a dead projection.
+          // isCancelled extends the same guard INTO the apply — dispose()
+          // can also land while the apply is awaiting its subtree load or
+          // reconcile tx, and a late replaceHash from a dead projection
+          // would overwrite the hash the next session just installed.
           if (this.disposed) return
           const result = await applyCurrentLayoutUrl({
             repo: this.repo,
             workspaceId: this.workspaceId,
             layoutSessionBlock: this.layoutSessionBlock,
             hash: this.getHash(),
+            isCancelled: () => this.disposed,
             replaceHash: hash => {
               this.replaceHash(hash)
               this.listeners.notify()

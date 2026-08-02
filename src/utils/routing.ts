@@ -380,6 +380,39 @@ export const buildAppHash = (workspaceId: string, blockId?: string): string =>
   buildLayout(workspaceId, blockId ? [blockId] : [])
 
 /**
+ * `buildAppHash` + the CURRENT hash's same-workspace ws-context (e.g.
+ * `;persp=…`) re-attached: `#ws;persp=lane/block`.
+ *
+ * In-app `<a href>` anchors build with THIS so a native navigation (no JS
+ * interceptor, or a modified/middle click falling through to the browser)
+ * stays in the active perspective lane — a context-free hash reads as the
+ * base session, so a plain internal click would otherwise exit the lane.
+ * Cross-workspace links still drop the context: it belongs to the source
+ * workspace's token.
+ *
+ * Deliberately NOT the default. Plain `buildAppHash` remains correct for
+ * copy/share links (a perspective lane is device-local UiState and must not
+ * leak into a durable shared URL — see the copy-link action) and for
+ * intentional lane exits (`setHash(buildAppHash(ws))` workspace-root jumps,
+ * which under a preserved lane would normalize back to the lane's rows
+ * instead of navigating).
+ *
+ * `currentHash` is read at call (render) time; anchors re-render on any
+ * lane change (a session switch remounts the tree), so a stale read is not
+ * a practical concern.
+ */
+export const buildAppHashInContext = (
+  workspaceId: string,
+  blockId?: string,
+  currentHash: string | undefined | null =
+    typeof window === 'undefined' ? undefined : window.location.hash,
+): string => {
+  const current = parseLayout(currentHash)
+  const wsContext = current.workspaceId === workspaceId ? current.wsContext : undefined
+  return buildLayoutFromSlots(workspaceId, blockId ? [{kind: 'leaf', blockId}] : [], wsContext)
+}
+
+/**
  * Promote an app hash (from `buildAppHash` / `buildLayout` /
  * `buildLayoutFromSlots`) to an absolute, shareable URL:
  * `<origin><pathname><hash>`.

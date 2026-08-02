@@ -24,7 +24,7 @@ import {Label} from '@/components/ui/label.js'
 import {useExtensionApprovalStatus} from '@/extensions/extensionApprovalStatus.js'
 import type {ToggleNode} from '@/facets/discoverToggleTree.js'
 import {isEnabled, type Overrides, type Togglable} from '@/facets/togglable.js'
-import {buildAppHash} from '@/utils/routing.js'
+import {buildAppHashInContext} from '@/utils/routing.js'
 
 /** Stable-sort the tree so essentials surface first within each level,
  *  then alphabetical (case-insensitive, locale-aware) within each
@@ -158,7 +158,7 @@ const ToggleRow = ({node, overrides, onToggle, onApprove, workspaceId, level}: T
   const checkboxId = `system-plugin-toggle-${handle.id}`
   const labelId = `${checkboxId}-label`
   const definitionHref = handle.kind === 'user' && workspaceId
-    ? buildAppHash(workspaceId, handle.id)
+    ? buildAppHashInContext(workspaceId, handle.id)
     : undefined
   // Pad inward per level; level 1 stays flush so the outer row aligns
   // with the parent container.

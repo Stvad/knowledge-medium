@@ -13,7 +13,7 @@ import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import { useMinuteClock } from '@/hooks/useMinuteClock.js'
 import { useUserPage } from '@/data/globalState.js'
-import { buildAppHash } from '@/utils/routing.js'
+import { buildAppHashInContext } from '@/utils/routing.js'
 import { useOpenBlock } from '@/utils/navigation.js'
 import { formatAbsoluteDateTime, formatRelativeTime } from '@/utils/relativeTime.js'
 
@@ -54,7 +54,7 @@ const Author = ({userId, workspaceId}: {userId: string; workspaceId: string}): R
       by{' '}
       {blockId ? (
         <a
-          href={buildAppHash(workspaceId, blockId)}
+          href={buildAppHashInContext(workspaceId, blockId)}
           className="hover:underline"
           onClick={openUser}
         >

@@ -25,7 +25,7 @@ import {
   useInEditMode,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
-import { buildAppHash } from '@/utils/routing.js'
+import { buildAppHashInContext } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
@@ -153,7 +153,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <a
-            href={buildAppHash(workspaceId, block.id)}
+            href={buildAppHashInContext(workspaceId, block.id)}
             className="bullet-link flex items-center justify-center h-6 w-5"
             onClick={(event) => {
               hover.close()

@@ -1,5 +1,5 @@
 import { ReactNode } from 'react'
-import { buildAppHash } from '@/utils/routing'
+import { buildAppHashInContext } from '@/utils/routing'
 import { useOpenBlock } from '@/utils/navigation'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
@@ -44,7 +44,7 @@ export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDis
   return (
     <>
       {before}
-      <a href={buildAppHash(workspaceId, blockId)} className="wikilink" data-alias={alias} onClick={onClick}>
+      <a href={buildAppHashInContext(workspaceId, blockId)} className="wikilink" data-alias={alias} onClick={onClick}>
         {display}
       </a>
       {after}

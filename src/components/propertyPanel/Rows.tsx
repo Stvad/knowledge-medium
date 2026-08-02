@@ -1,7 +1,7 @@
 import { Settings2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { useOpenBlock } from '@/utils/navigation.js'
-import { buildAppHash } from '@/utils/routing.js'
+import { buildAppHashInContext } from '@/utils/routing.js'
 import { METADATA_ROW_GRID_STYLE, PROPERTY_ROW_GRID_STYLE } from './layout'
 import type { PropertyPanelMetadataRow, PropertyPanelModelSection } from './model'
 
@@ -43,7 +43,7 @@ export function MetadataRow({row}: {row: PropertyPanelMetadataRow}) {
       <div className="truncate text-muted-foreground" title={row.label}>{row.label}</div>
       {showLink ? (
         <a
-          href={buildAppHash(workspaceId!, blockId!)}
+          href={buildAppHashInContext(workspaceId!, blockId!)}
           onClick={openBlock}
           title={row.value}
           className="inline-flex h-7 min-w-0 items-center rounded-sm px-2 text-sm text-foreground no-underline hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

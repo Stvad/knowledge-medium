@@ -23,7 +23,7 @@ import { typesProp } from '@/data/properties'
 import { useContent, useProperty, useWorkspaceId } from '@/hooks/block.js'
 import { useTypes } from '@/hooks/typeRegistry.js'
 import { useBlockOpener } from '@/utils/navigation'
-import { buildAppHash } from '@/utils/routing'
+import { buildAppHashInContext } from '@/utils/routing'
 import { TypeChip } from '@/components/typeChip/TypeChip'
 import {
   type BlockContentDecorator,
@@ -71,7 +71,7 @@ const TypeChips = ({block, typeIds, registry}: {
             type={type}
             withHash
             link={definitionId ? {
-              href: buildAppHash(workspaceId, definitionId),
+              href: buildAppHashInContext(workspaceId, definitionId),
               onClick: event => openBlock(event, {blockId: definitionId, workspaceId}),
             } : undefined}
             onRemove={removable ? () => { void block.removeType(typeId) } : undefined}

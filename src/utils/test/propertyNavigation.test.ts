@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { getPropertyRows } from '@/utils/propertyNavigation.js'
 
 const makeRow = (blockId: string): HTMLElement => {
@@ -53,5 +53,58 @@ describe('getPropertyRows visibility', () => {
     document.body.appendChild(hiddenWrapper)
 
     expect(getPropertyRows('b1')).toEqual([])
+  })
+
+  // Environments WITHOUT Element.checkVisibility (older WebViews) take the
+  // manual fallback, which must uphold the same ancestor semantics — a
+  // hidden keep-alive session's rows must not be focusable there either.
+  describe('without checkVisibility (fallback path)', () => {
+    const proto = window.Element.prototype as {checkVisibility?: unknown}
+    let saved: unknown
+    beforeEach(() => {
+      saved = proto.checkVisibility
+      proto.checkVisibility = undefined
+    })
+    afterEach(() => {
+      proto.checkVisibility = saved
+    })
+
+    it('includes a visible row', () => {
+      const row = makeRow('b1')
+      document.body.appendChild(row)
+
+      expect(getPropertyRows('b1')).toEqual([row])
+    })
+
+    it('excludes a row hidden by an ANCESTOR display:none', () => {
+      const hiddenWrapper = document.createElement('div')
+      hiddenWrapper.style.display = 'none'
+      const row = makeRow('b1')
+      hiddenWrapper.appendChild(row)
+      document.body.appendChild(hiddenWrapper)
+
+      expect(getPropertyRows('b1')).toEqual([])
+    })
+
+    it('excludes a row hidden by an ANCESTOR visibility:hidden (inherited)', () => {
+      const hiddenWrapper = document.createElement('div')
+      hiddenWrapper.style.visibility = 'hidden'
+      const row = makeRow('b1')
+      hiddenWrapper.appendChild(row)
+      document.body.appendChild(hiddenWrapper)
+
+      expect(getPropertyRows('b1')).toEqual([])
+    })
+
+    it('includes a row that overrides an ancestor visibility:hidden with visible', () => {
+      const hiddenWrapper = document.createElement('div')
+      hiddenWrapper.style.visibility = 'hidden'
+      const row = makeRow('b1')
+      row.style.visibility = 'visible'
+      hiddenWrapper.appendChild(row)
+      document.body.appendChild(hiddenWrapper)
+
+      expect(getPropertyRows('b1')).toEqual([row])
+    })
   })
 })

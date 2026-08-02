@@ -2,7 +2,7 @@ import { ReactNode, type MouseEvent } from 'react'
 import { Block } from '@/data/block'
 import { useRepo } from '@/context/repo'
 import { useWorkspaceId } from '@/hooks/block'
-import { buildAppHash } from '@/utils/routing'
+import { buildAppHashInContext } from '@/utils/routing'
 import { useOpenBlock } from '@/utils/navigation'
 
 // Non-anchor content that drives its OWN click inside a reference via a JS
@@ -67,7 +67,7 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
   const openBlock = useOpenBlock({blockId: block.id, workspaceId})
-  const href = buildAppHash(workspaceId, block.id)
+  const href = buildAppHashInContext(workspaceId, block.id)
 
   return (
     <a
