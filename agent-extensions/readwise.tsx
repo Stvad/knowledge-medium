@@ -2232,11 +2232,14 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   }
 
   return (
-    // `text-base font-normal` is a RESET, not styling. A custom
-    // `ContentRenderer` renders in the block's content slot — which for a page
-    // block is the title, at 24px/600 — and everything without an explicit size
-    // inherits it. The chrome here sets its own sizes, but the highlights are
-    // rendered by `BlockComponent` and have none, so they came out as headings.
+    // `text-base font-normal` is a RESET, not styling, and it is deliberately
+    // redundant with the app: title typography now travels with the title TEXT
+    // (`blockTitleText.ts`), so a surface mounted in the focal content slot no
+    // longer inherits 24px/600. An installed extension runs against whatever
+    // version is DEPLOYED, though, which lags this repo — so the surface states
+    // its own baseline rather than trusting the frame around it. Without either,
+    // the chrome here is fine (it sets its own sizes) but the highlights are
+    // rendered by `BlockComponent` and set none, so they came out as headings.
     <div className="mx-auto w-full max-w-3xl space-y-6 py-4 text-base font-normal">
       <div className="flex items-baseline justify-between gap-3">
         <div>
