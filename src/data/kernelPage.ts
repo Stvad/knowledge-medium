@@ -84,19 +84,24 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
  *  missing the expected types or alias; restores a soft-deleted row;
  *  otherwise creates fresh.
  *
- *  On a READ-ONLY workspace it only GETS: every write below is skipped and the
- *  handle is returned as-is. `repo.tx` does not itself refuse a read-only
- *  session — it writes locally and the rows are RLS-rejected on sync — so
- *  without this, merely opening a kernel-page surface as a viewer leaves
- *  never-syncing junk in a workspace you do not own. The ordinary read-only
- *  case still works: the id is deterministic, so a page the owner has already
- *  created has synced and resolves normally. Where the owner has none, the
- *  caller gets a handle to a block that doesn't exist and the surface renders
- *  empty — the right outcome for a viewer, and strictly better than writing.
+ *  On a READ-ONLY workspace it only GETS: the create/repair transactions are
+ *  skipped and the handle is returned as-is.
  *
- *  This belongs here rather than in each surface because every one of them —
+ *  This is an ERGONOMIC guard, not a safety one — a distinction I originally
+ *  got backwards here. The kernel already refuses the write: `BlockDefault` is
+ *  `readOnly: 'reject'` in `CHANGE_SCOPE_POLICIES`, and the commit pipeline
+ *  throws `ReadOnlyError` before anything is written. So without this, a viewer
+ *  merely opening a kernel-page surface got an unhandled rejection out of an
+ *  action handler; nothing was ever written, and nothing was left to be
+ *  RLS-rejected on sync. What this buys is that the viewer sees an empty page
+ *  instead of an error.
+ *
+ *  The ordinary read-only case is unaffected: the id is deterministic, so a
+ *  page the owner already created has synced and resolves normally.
+ *
+ *  It belongs here rather than in each surface because every one of them —
  *  daily notes, SRS review, locations, media capture, the Readwise backlog —
- *  reaches the same writes through this one function. */
+ *  reaches the same throw through this one function. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
@@ -149,27 +154,21 @@ export const getOrCreateKernelPage = async (
 
   const live = await repo.load(id)
 
-  // Read-only: GET, never create or repair. `repo.tx` does not itself refuse a
-  // read-only session — it writes locally and the rows are RLS-rejected on
-  // sync — so without this, merely opening a kernel-page surface as a viewer
-  // leaves never-syncing junk in a workspace you do not own.
+  // Read-only: GET, never create or repair — see the doc above for why this is
+  // ergonomics rather than safety.
   //
   // Placed AFTER the occupant read and behind `refuseForeign`, not before
-  // either. A read-only session is exactly as exposed to a colliding id as a
-  // writable one: returning the handle unchecked would hand a caller another
-  // workspace's block under this workspace's identity, which is the read
-  // analogue of the write this function refuses. Being unable to write is not
-  // the same as being entitled to read. It also stays after the spec
+  // either. Being unable to write is not the same as being entitled to read:
+  // returning the handle unchecked would hand a caller another workspace's
+  // block under this workspace's identity. It also stays after the spec
   // validation above, so a malformed call still fails loudly for the author
   // instead of silently no-op-ing on whichever session happens to be read-only.
   //
   // KNOWN LIMIT: `repo.load` selects `deleted = 0`, so a TOMBSTONED foreign row
-  // is invisible here and this returns its handle unrefused. The write paths
-  // below still catch it (`tx.get` sees tombstones), and the handle resolves to
-  // a deleted block, so nothing renders and nothing is written — but it is the
-  // one path that can hand back an id without `classifyOccupant` having spoken.
-  // Closing it wants a tombstone-inclusive read on `Repo`, which is a wider
-  // change than this belongs in.
+  // is invisible here and this returns its handle unrefused. The handle
+  // resolves to a deleted block, so nothing renders — but it is the one path
+  // that can hand back an id without `classifyOccupant` having spoken. Closing
+  // it wants a tombstone-inclusive read on `Repo`.
   if (repo.isReadOnly) {
     if (live) refuseForeign(live)
     return repo.block(id)

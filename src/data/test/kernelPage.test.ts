@@ -158,11 +158,12 @@ describe('getOrCreateKernelPage', () => {
     }
 
     it('writes NOTHING when the page is absent', async () => {
-      // `repo.tx` does not itself refuse a read-only session — it writes
-      // locally and the rows are RLS-rejected on sync. So opening any
-      // kernel-page surface as a viewer would leave never-syncing junk in a
-      // workspace you do not own. Asserted on the write, not on the absence of
-      // a rendered thing, which would pass for a dozen unrelated reasons.
+      // The kernel already refuses the write (`BlockDefault` is
+      // `readOnly: 'reject'`, and the commit pipeline throws `ReadOnlyError`).
+      // What this pins is that we don't ATTEMPT it — without the guard, a
+      // viewer opening a kernel-page surface gets an unhandled rejection out
+      // of an action handler. Asserted on the call, not on the absence of a
+      // rendered thing, which would pass for a dozen unrelated reasons.
       const repo = readOnlyRepo()
       const tx = vi.spyOn(repo, 'tx')
 
