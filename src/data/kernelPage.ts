@@ -162,6 +162,14 @@ export const getOrCreateKernelPage = async (
   // the same as being entitled to read. It also stays after the spec
   // validation above, so a malformed call still fails loudly for the author
   // instead of silently no-op-ing on whichever session happens to be read-only.
+  //
+  // KNOWN LIMIT: `repo.load` selects `deleted = 0`, so a TOMBSTONED foreign row
+  // is invisible here and this returns its handle unrefused. The write paths
+  // below still catch it (`tx.get` sees tombstones), and the handle resolves to
+  // a deleted block, so nothing renders and nothing is written — but it is the
+  // one path that can hand back an id without `classifyOccupant` having spoken.
+  // Closing it wants a tombstone-inclusive read on `Repo`, which is a wider
+  // change than this belongs in.
   if (repo.isReadOnly) {
     if (live) refuseForeign(live)
     return repo.block(id)

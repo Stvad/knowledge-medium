@@ -2042,6 +2042,66 @@ const BacklogGroupTitle = ({ documentBlock }: { documentBlock: Block }) => {
   return <>{label ?? 'Untitled document'}</>
 }
 
+/** SQLite binds one host parameter per id and `core.manyAncestors` passes the
+ *  whole list, so an unbounded prefetch is a hard query failure on a large
+ *  enough library rather than a slowdown. Groups past the bound render their
+ *  entries without prefetched parents and `LazyBlockEntry` fetches its own —
+ *  more queries, same result. (SRS review bounds the same call for the same
+ *  reason, at 48.) */
+const ANCESTOR_PREFETCH_LIMIT = 200
+
+const BacklogGroupHeader = ({
+  sectionBlock,
+  ancestors,
+  workspaceId,
+  count,
+}: {
+  sectionBlock: Block
+  ancestors: readonly Block[]
+  workspaceId: string
+  count: number
+}) => {
+  const openBlock = useBlockOpener()
+  // Usually the section is the document's "Highlights" child, so the document
+  // is the section's parent. But a highlight filed DIRECTLY under its document
+  // makes the document itself the section — and then the parent is the library
+  // root, which would label the group "Readwise Library".
+  //
+  // Read reactively rather than by `peek`: on a cold open the section's own row
+  // may not have resolved yet, and peeking would take the wrong branch and then
+  // never re-render to correct it.
+  const sectionIsDocument = useHandle(sectionBlock, {
+    selector: (data: BlockData | null | undefined) => {
+      if (!data) return false
+      try { return getBlockTypes(data).includes(READWISE_DOCUMENT_TYPE) } catch { return false }
+    },
+  }) as boolean
+  const documentBlock = sectionIsDocument ? sectionBlock : ancestors.at(-1)
+
+  return (
+    <header className="flex items-baseline gap-2 border-b border-border/60 pb-1">
+      {documentBlock
+        ? (
+            <button
+              type="button"
+              className="min-w-0 flex-1 truncate text-left text-sm font-semibold hover:underline"
+              onClick={event => openBlock(event, { blockId: documentBlock.id, workspaceId })}
+            >
+              <BacklogGroupTitle documentBlock={documentBlock}/>
+            </button>
+          )
+        : (
+            // Ancestors haven't resolved yet, or weren't prefetched for this
+            // group: render it without a title rather than blocking its items.
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-muted-foreground">
+              Highlights
+            </span>
+          )}
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{count}</span>
+    </header>
+  )
+}
+
 const BacklogGroupSection = ({
   group,
   ancestors,
@@ -2053,20 +2113,7 @@ const BacklogGroupSection = ({
   workspaceId: string
 }) => {
   const repo = useRepo()
-  const openBlock = useBlockOpener()
   const sectionBlock = group.sectionId ? repo.block(group.sectionId) : undefined
-
-  // Usually the section is the document's "Highlights" child, so the document
-  // is the section's parent. But a highlight filed DIRECTLY under its document
-  // makes the document itself the section — and then the parent is the library
-  // root, which would label the group "Readwise Library". Check the section
-  // first, fall back to its parent.
-  const sectionData = sectionBlock?.peek()
-  const sectionIsDocument = (() => {
-    if (!sectionData) return false
-    try { return getBlockTypes(sectionData).includes(READWISE_DOCUMENT_TYPE) } catch { return false }
-  })()
-  const documentBlock = sectionIsDocument ? sectionBlock : ancestors.at(-1)
 
   // Each highlight's parents = the section's ancestors plus the section itself.
   // Handing these to the entry saves it firing its own ancestor query per row.
@@ -2079,28 +2126,25 @@ const BacklogGroupSection = ({
 
   return (
     <section className="space-y-1">
-      <header className="flex items-baseline gap-2 border-b border-border/60 pb-1">
-        {documentBlock
-          ? (
-              <button
-                type="button"
-                className="min-w-0 flex-1 truncate text-left text-sm font-semibold hover:underline"
-                onClick={event => openBlock(event, { blockId: documentBlock.id, workspaceId })}
-              >
-                <BacklogGroupTitle documentBlock={documentBlock}/>
-              </button>
-            )
-          : (
-              // Ancestors haven't resolved yet (or the section is a root):
-              // render the group without a title rather than blocking its items.
+      {sectionBlock
+        ? (
+            <BacklogGroupHeader
+              sectionBlock={sectionBlock}
+              ancestors={ancestors}
+              workspaceId={workspaceId}
+              count={group.items.length}
+            />
+          )
+        : (
+            <header className="flex items-baseline gap-2 border-b border-border/60 pb-1">
               <span className="min-w-0 flex-1 truncate text-sm font-semibold text-muted-foreground">
-                Highlights
+                Unfiled highlights
               </span>
-            )}
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {group.items.length}
-        </span>
-      </header>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                {group.items.length}
+              </span>
+            </header>
+          )}
       {group.items.map(id => (
         <LazyBlockEntry
           key={id}
@@ -2136,7 +2180,11 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   // Keyed on the section ids themselves rather than the `groups` array: groups
   // is rebuilt whenever the query re-resolves, and handing `useManyParents` a
   // fresh array each time would churn its handle for an unchanged id set.
-  const sectionKey = groups.map(group => group.sectionId).join('\u0000')
+  const sectionKey = groups
+    .map(group => group.sectionId)
+    .filter(Boolean)
+    .slice(0, ANCESTOR_PREFETCH_LIMIT)
+    .join('\u0000')
   const sectionBlocks = useMemo(
     () => sectionKey.split('\u0000').filter(Boolean).map(id => repo.block(id)),
     [sectionKey, repo],
