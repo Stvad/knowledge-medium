@@ -2222,7 +2222,7 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
 
   if (shown === 0) {
     return (
-      <div className="mx-auto w-full max-w-3xl py-6 text-sm text-muted-foreground">
+      <div className="mx-auto w-full max-w-3xl py-6 text-sm font-normal text-muted-foreground">
         {/* `useBlockQuery` reports [] while the handle is still unresolved, so
             without the readiness signal a cold open asserts "nothing to review"
             for a beat before the real list appears. */}
@@ -2232,7 +2232,12 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 py-4">
+    // `text-base font-normal` is a RESET, not styling. A custom
+    // `ContentRenderer` renders in the block's content slot — which for a page
+    // block is the title, at 24px/600 — and everything without an explicit size
+    // inherits it. The chrome here sets its own sizes, but the highlights are
+    // rendered by `BlockComponent` and have none, so they came out as headings.
+    <div className="mx-auto w-full max-w-3xl space-y-6 py-4 text-base font-normal">
       <div className="flex items-baseline justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">Readwise review</h2>
