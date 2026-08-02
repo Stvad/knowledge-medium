@@ -1925,6 +1925,22 @@ const useUnreviewedHighlightsReady = (workspaceId: string): boolean => {
   }) as boolean
 }
 
+/** The count alone, aggregated in SQLite rather than by materialising rows.
+ *
+ *  `core.typedBlockCount` shares the membership semantics, candidate set and
+ *  invalidation of the list query — it is the same question with a different
+ *  projection — so the two never disagree. Worth the separate handle for the
+ *  surfacing badges, which want a number and would otherwise hold every row in
+ *  the backlog to render it. `undefined` until the first resolve, which is the
+ *  readiness signal these callers need anyway. */
+const useUnreviewedHighlightCount = (workspaceId: string): number | undefined => {
+  const repo = useRepo()
+  const query = useUnreviewedHighlightsQuery(workspaceId)
+  // Identity selector: the handle's whole value IS the number, so there is
+  // nothing narrower to project.
+  return useHandle(repo.query.typedBlockCount(query), {selector: data => data}) as number | undefined
+}
+
 /** Ids in the order they were first seen this session, never dropped.
  *
  *  Marking a highlight reviewed takes it out of the live query. Rendering the
@@ -2301,12 +2317,10 @@ const openReviewBacklogAction = {
 // — which is how the same bug kept being found in a new call site.
 
 const useBacklogCount = (workspaceId: string): number | null => {
-  const live = useUnreviewedHighlights(workspaceId)
-  const ready = useUnreviewedHighlightsReady(workspaceId)
   // Null, not 0, while unresolved: "nothing to review" and "haven't looked yet"
   // must not render the same. Rollover is handled inside the query hook, whose
   // cutoff is keyed on `useStartOfToday`.
-  return ready ? live.length : null
+  return useUnreviewedHighlightCount(workspaceId) ?? null
 }
 
 const ReviewBacklogSidebarSection = ({ closeSidebar }: { closeSidebar: () => void }) => {

@@ -39,6 +39,21 @@ const useDueCardsQuery = (workspaceId: string, tagName: string): TypedBlockQuery
 export const useDueCards = (workspaceId: string, tagName: string): BlockData[] =>
   useBlockQuery(useDueCardsQuery(workspaceId, tagName))
 
+/** Just the cardinality, aggregated in SQLite rather than by materialising
+ *  rows. The deck picker renders one number per deck and held every due card
+ *  to do it; `core.typedBlockCount` is the same question with a different
+ *  projection, sharing the list query's membership semantics, candidate set and
+ *  invalidation, so the two cannot disagree. `undefined` until the first
+ *  resolve. */
+export const useDueCardCount = (workspaceId: string, tagName: string): number | undefined => {
+  const repo = useRepo()
+  const query = useDueCardsQuery(workspaceId, tagName)
+  // Identity selector: the handle's whole value IS the number, so there is
+  // nothing narrower to project. Spelled out because the lint rule that asks
+  // for one is guarding against subscribing to a whole row for one field.
+  return useHandle(repo.query.typedBlockCount(query), {selector: data => data}) as number | undefined
+}
+
 /** Whether the due-cards query has produced a result yet (vs. still
  *  loading). A loaded-but-empty deck reports `true` here while
  *  `useDueCards` returns `[]`, letting callers tell "nothing due" apart
