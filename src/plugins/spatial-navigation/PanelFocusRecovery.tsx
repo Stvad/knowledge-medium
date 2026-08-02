@@ -9,9 +9,9 @@ import {
 import type { Block } from '@/data/block'
 import {
   findRecoveryAnchor,
+  instanceAt,
   locationOf,
   panelById,
-  panelInstances,
   rememberInstancePosition,
 } from './walker.ts'
 import { resolveSpatialNavExclusions } from './exclusionsFacet.ts'
@@ -151,23 +151,16 @@ const runRecoveryCheck = (
 
   if (!focusedLocation) return
 
-  const panelEl = panelById(block.id)
-  if (!panelEl) return
-
   // Resolved once per check off this block's repo — the same non-React
   // `facetRuntime` access path `actions.ts`'s `excludedSurfacesFor` uses;
   // this component isn't rendered inside the panel's own React tree so it
   // can't rely on hook-based facet access either. See `exclusionsFacet.ts`.
   const excludedSurfaces = resolveSpatialNavExclusions(block.repo.facetRuntime)
 
-  const instances = panelInstances(panelEl, excludedSurfaces)
-  if (instances.length === 0) return
-
-  const focusedInstance = instances.find(el => {
-    const location = locationOf(el)
-    return location?.blockId === focusedLocation.blockId
-      && location.renderScopeId === focusedLocation.renderScopeId
-  })
+  // No panel and no instances both land on the same answer as a missing row:
+  // `findRecoveryAnchor` returns null for either, and a null anchor is the
+  // early exit below.
+  const focusedInstance = instanceAt(block.id, focusedLocation, excludedSurfaces)
 
   if (focusedInstance) {
     // Block is alive in the panel — refresh the sibling/ancestor hint
@@ -197,15 +190,8 @@ const runRecoveryCheck = (
       stillFocused.blockId !== focusedLocation.blockId ||
       stillFocused.renderScopeId !== focusedLocation.renderScopeId
     ) return
-    const panel = panelById(block.id)
-    if (!panel) return
     const excludedSurfaces = resolveSpatialNavExclusions(block.repo.facetRuntime)
-    const refreshed = panelInstances(panel, excludedSurfaces)
-    if (refreshed.find(el => {
-      const location = locationOf(el)
-      return location?.blockId === focusedLocation.blockId
-        && location.renderScopeId === focusedLocation.renderScopeId
-    })) return
+    if (instanceAt(block.id, focusedLocation, excludedSurfaces)) return
     const anchor = findRecoveryAnchor(block.id, focusedLocation, excludedSurfaces)
     const recoveryLocation = anchor ? locationOf(anchor) : null
     if (

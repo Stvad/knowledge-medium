@@ -45,6 +45,14 @@ export const FIELD = {
   unit: 'strength:unit',
   prescribedWeight: 'strength:prescribedWeight',
   prescribedSets: 'strength:prescribedSets',
+  prescribedReps: 'strength:prescribedReps',
+  /** Which time in THIS session this lift is — 0-based.
+   *
+   *  Stored because position among siblings is not identity. A session can prescribe one lift twice, and counting the
+   *  entries in block order gives the second one occurrence 1 only while
+   *  nobody has reordered them — drag them past each other in the outline and
+   *  the two rows swap blocks, then write each other's weights and ticks. */
+  occurrence: 'strength:occurrence',
   // set (one block per set, child of the exercise entry)
   weight: 'strength:weight',
   reps: 'strength:reps',
@@ -58,6 +66,7 @@ export const FIELD = {
   /** Explicit completion time — kept separate rather than inferred from the
    *  row's update time (which is noisy). */
   completedAt: 'strength:completedAt',
+  finishedAt: 'strength:finishedAt',
   // layoff
   layoffFrom: 'strength:from',
   layoffTo: 'strength:to',
@@ -96,15 +105,3 @@ export const FIELD = {
 } as const
 
 export type WorkoutStatus = 'in-progress' | 'done'
-
-/** In-memory shape of one logged set — reconstructed from a set block, and
- *  the unit the engine reasons over. */
-export interface StoredSet {
-  weight: number
-  reps: number
-  rpe?: number
-  side?: 'L' | 'R'
-  done: boolean
-  /** Epoch ms when the set was marked complete during the session. */
-  completedAt?: number
-}

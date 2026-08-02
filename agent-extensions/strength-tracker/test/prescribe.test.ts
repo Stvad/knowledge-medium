@@ -207,3 +207,62 @@ describe('prescribe — notes', () => {
     expect(notes.some(n => /90% of last weights/i.test(n))).toBe(true)
   })
 })
+
+describe('prescribe — the RPE ceiling', () => {
+  it('carries it for a lift the plan gave a catch-up jump', () => {
+    // Deadlift is the one lift in the plan with a catch-up rule, and this is
+    // the only route by which the set rows learn to ask for an RPE at all.
+    const result = run({history: [], now: '2026-07-19T23:00:00'})
+
+    expect(forExercise(result, 'Deadlift').catchUpRpe).toBe(7)
+    expect(forExercise(result, 'Squat').catchUpRpe).toBeUndefined()
+  })
+
+  it('withholds a ceiling that has no catch-up increment behind it', () => {
+    // `incrementFor` reads the two together, so a ceiling on its own changes
+    // no prescription. Carrying it anyway would put an RPE control on the
+    // row and collect a number nothing ever reads back.
+    const config = {
+      ...DEFAULT_CONFIG,
+      exercises: DEFAULT_CONFIG.exercises.map(e =>
+        e.name === 'Deadlift' ? {...e, catchUpIncrement: undefined} : e),
+    }
+    const result = prescribe({history: [], layoffs: [], config, now: '2026-07-19T23:00:00'})
+
+    expect(forExercise(result, 'Deadlift').catchUpRpe).toBeUndefined()
+  })
+})
+
+describe('a repeat session on the same training day', () => {
+  it('progresses off the session already finished today, not off yesterday', () => {
+    // Finish Session A, start Session A again the same day — the repeat the
+    // write path explicitly keeps working. `history` holds only FINISHED
+    // sessions, so excluding today's date could only ever exclude that
+    // repeat's real baseline: it prescribed from YESTERDAY, ignoring the
+    // weights just logged and dropping the progression the morning earned.
+    const config = {...DEFAULT_CONFIG, dayRolloverHour: 0}
+    const bench = config.exercises.find(e => e.name === 'Bench press')!
+    const history: WorkoutRecord[] = [
+      {
+        id: 'yesterday', date: '2026-07-23T12:00:00.000Z', session: 'A', recordedAt: 1,
+        exercises: [{exercise: bench.name, sets: [
+          {weight: 135, reps: bench.repMax!}, {weight: 135, reps: bench.repMax!},
+          {weight: 135, reps: bench.repMax!}]}],
+      },
+      {
+        id: 'this-morning', date: '2026-07-24T12:00:00.000Z', session: 'A', recordedAt: 2,
+        exercises: [{exercise: bench.name, sets: [
+          {weight: 185, reps: bench.repMax!}, {weight: 185, reps: bench.repMax!},
+          {weight: 185, reps: bench.repMax!}]}],
+      },
+    ]
+
+    const out = prescribe({
+      history, layoffs: [], config, now: new Date('2026-07-24T20:00:00.000Z'), session: 'A',
+    })
+
+    const row = out.exercises.find(e => e.exercise === bench.name)!
+    // Off this morning's 185, not yesterday's 135.
+    expect(row.weight).toBeGreaterThanOrEqual(185)
+  })
+})

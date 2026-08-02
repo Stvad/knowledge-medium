@@ -1,32 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { BlockData, TypedBlockQuery } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { useBlockQuery, useHandle } from '@/hooks/block.js'
+import { useStartOfToday } from '@/plugins/daily-notes/today.js'
 import {
   UNRESOLVED_TAG_ID,
   buildDueCardsQuery,
   buildTaggedCandidatesQuery,
   selectNewCards,
 } from './dueQuery.ts'
-
-const startOfLocalDay = (now: Date = new Date()): number =>
-  new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-
-/** Local-midnight timestamp for today, advanced when the date rolls
- *  over. Polls once a minute (cheap, and only re-renders on the minute
- *  the day actually changes) so a deck left open overnight refreshes its
- *  due cutoff instead of staying pinned to yesterday. */
-const useStartOfToday = (): number => {
-  const [ts, setTs] = useState(startOfLocalDay)
-  useEffect(() => {
-    const id = setInterval(() => {
-      const next = startOfLocalDay()
-      setTs(prev => (prev === next ? prev : next))
-    }, 60_000)
-    return () => clearInterval(id)
-  }, [])
-  return ts
-}
 
 /** The deck tag's page block id, or null for the untagged "all due" deck.
  *
@@ -65,6 +47,27 @@ const useDueCardsQuery = (workspaceId: string, tagName: string): TypedBlockQuery
 /** Reactive list of SRS cards due today or earlier for a deck. */
 export const useDueCards = (workspaceId: string, tagName: string): BlockData[] =>
   useBlockQuery(useDueCardsQuery(workspaceId, tagName))
+
+/** Just the cardinality, aggregated in SQLite rather than by materialising
+ *  rows. The deck picker renders one number per deck and held every due card
+ *  to do it; `core.typedBlockCount` is the same question with a different
+ *  projection, sharing the list query's membership semantics, candidate set and
+ *  invalidation, so the two cannot disagree. `undefined` until the first
+ *  resolve.
+ *
+ *  Counts DUE cards only, not the tagged-but-unenrolled ones a session also
+ *  collects — "N due" stays literally true, and counting new cards would mean
+ *  materialising every block that references the tag (see
+ *  `buildTaggedCandidatesQuery`), which is exactly the per-tag-per-render cost
+ *  this hook exists to avoid. */
+export const useDueCardCount = (workspaceId: string, tagName: string): number | undefined => {
+  const repo = useRepo()
+  const query = useDueCardsQuery(workspaceId, tagName)
+  // Identity selector: the handle's whole value IS the number, so there is
+  // nothing narrower to project. Spelled out because the lint rule that asks
+  // for one is guarding against subscribing to a whole row for one field.
+  return useHandle(repo.query.typedBlockCount(query), {selector: data => data}) as number | undefined
+}
 
 /** Whether a typed-blocks query has produced a result yet (vs. still
  *  loading). A loaded-but-empty query reports `true` here while

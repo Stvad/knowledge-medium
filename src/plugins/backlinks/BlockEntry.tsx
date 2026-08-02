@@ -16,13 +16,23 @@ import {
 } from './backlinkBreadcrumbShortcuts.ts'
 import { backlinkRenderScopeId } from '@/utils/renderScope.js'
 
+/** One block rendered OUT of its tree position — lazily viewport-mounted,
+ *  with a promotable breadcrumb chain above it. Nothing here is specific to
+ *  reference queries; it's the generic "list of blocks from somewhere else"
+ *  entry, and linked references were just its first consumer (hence the
+ *  directory). The readwise review backlog renders its highlights with it too.
+ *
+ *  `isBacklink` in the context overrides below is deliberate and NOT a
+ *  leftover: it names the SURFACE KIND, which is what
+ *  `spatial-navigation/surface.ts` and the breadcrumb-promote shortcut in
+ *  `backlinkBreadcrumbShortcuts.ts` key on. Every consumer of this entry
+ *  wants both of those behaviours, so the flag travels with the component
+ *  rather than becoming a prop. */
 const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
-const BACKLINK_ESTIMATED_HEIGHT_PX = 96
-const BACKLINK_OVERSCAN_PX = 600
-const BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
-
-const EMPTY_PARENTS: readonly Block[] = []
+const ENTRY_ESTIMATED_HEIGHT_PX = 96
+const ENTRY_OVERSCAN_PX = 600
+const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
 // Roam-style: breadcrumbs are the chain ABOVE the currently-shown block.
 // Click a segment to "unfurl" — promote it to the shown block. The
@@ -30,17 +40,20 @@ const EMPTY_PARENTS: readonly Block[] = []
 // chosen parent's subtree (which still contains the original backlink
 // as a descendant).
 //
-// Two render paths so we can avoid an `useParents` query per visible
-// entry in the *initial* state: when the parent component has already
-// prefetched ancestors via `useManyParents`, it passes them in as
-// `initialParents` and `BacklinkItemContent` renders without
-// firing its own ancestor handle. After the user clicks a breadcrumb
-// the shown block changes, the conditional flips, and
-// `BacklinkDynamicContent` (which DOES use `useParents`) takes
-// over for the new id. Conditional rendering is what gives us the
-// query skip — React unmounts whichever branch we're not on.
+// Two render paths so we can avoid a `useParents` query per visible entry in
+// the *initial* state: when the parent component has already prefetched
+// ancestors via `useManyParents` it passes them as `initialParents` and
+// `BlockEntryContent` renders without firing its own ancestor handle. After
+// the user clicks a breadcrumb the shown block changes, the conditional flips,
+// and `BlockEntryDynamicContent` (which DOES use `useParents`) takes over for
+// the new id. Conditional rendering is what gives us the query skip — React
+// unmounts whichever branch we're not on.
+//
+// The dynamic path is also the FALLBACK when no prefetch was supplied, which
+// is why the condition tests `initialParents !== undefined` rather than
+// trusting a default: a missing prefetch must cost a query, not a feature.
 
-const BacklinkItemContent = ({
+const BlockEntryContent = ({
   shownBlock,
   parents,
   onSelect,
@@ -99,7 +112,7 @@ const BacklinkItemContent = ({
   )
 }
 
-const BacklinkDynamicContent = ({
+const BlockEntryDynamicContent = ({
   shownBlock,
   onSelect,
   onShowBlock,
@@ -112,7 +125,7 @@ const BacklinkDynamicContent = ({
 }) => {
   const parents = useParents(shownBlock)
   return (
-    <BacklinkItemContent
+    <BlockEntryContent
       shownBlock={shownBlock}
       parents={parents}
       onSelect={onSelect}
@@ -122,12 +135,20 @@ const BacklinkDynamicContent = ({
   )
 }
 
-const BacklinkItem = ({
+const BlockEntry = ({
   block,
-  initialParents = EMPTY_PARENTS,
+  initialParents,
   scopeId,
 }: {
   block: Block
+  /** Prefetched ancestors, when the parent component already has them.
+   *
+   *  A HINT, not a switch. `undefined` means "I don't have them" and this
+   *  fetches its own; `[]` means "this block genuinely has no ancestors". They
+   *  used to collapse to the same thing, which made the optimisation's absence
+   *  silently disable the feature it optimises: both call sites pass
+   *  `map.get(id)`, so every entry the prefetch missed rendered with no
+   *  breadcrumb, permanently, with nothing to indicate it. */
   initialParents?: readonly Block[]
   scopeId: string
 }) => {
@@ -147,9 +168,9 @@ const BacklinkItem = ({
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
-      {isInitial
+      {isInitial && initialParents !== undefined
         ? (
-            <BacklinkItemContent
+            <BlockEntryContent
               shownBlock={shownBlock}
               parents={initialParents}
               onSelect={promote}
@@ -158,7 +179,7 @@ const BacklinkItem = ({
             />
           )
         : (
-            <BacklinkDynamicContent
+            <BlockEntryDynamicContent
               shownBlock={shownBlock}
               onSelect={promote}
               onShowBlock={showBlock}
@@ -169,7 +190,7 @@ const BacklinkItem = ({
   )
 }
 
-const BacklinkItemPlaceholder = ({
+const BlockEntryPlaceholder = ({
   reservedHeight,
 }: LazyViewportPlaceholderProps) => {
   return (
@@ -179,12 +200,12 @@ const BacklinkItemPlaceholder = ({
       aria-hidden
     >
       <div className="mb-1 h-4 w-40 max-w-full rounded-sm bg-muted/60" />
-      <BlockLoadingPlaceholder reservedHeight={BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX} />
+      <BlockLoadingPlaceholder reservedHeight={ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX} />
     </div>
   )
 }
 
-export const LazyBacklinkItem = ({
+export const LazyBlockEntry = ({
   block,
   initialParents,
   scopeId,
@@ -197,11 +218,11 @@ export const LazyBacklinkItem = ({
     <LazyViewportMount
       cacheKey={`backlink:${scopeId}:${block.id}`}
       blockId={block.id}
-      estimatedHeightPx={BACKLINK_ESTIMATED_HEIGHT_PX}
-      overscanPx={BACKLINK_OVERSCAN_PX}
-      renderPlaceholder={(props) => <BacklinkItemPlaceholder {...props} />}
+      estimatedHeightPx={ENTRY_ESTIMATED_HEIGHT_PX}
+      overscanPx={ENTRY_OVERSCAN_PX}
+      renderPlaceholder={(props) => <BlockEntryPlaceholder {...props} />}
     >
-      <BacklinkItem block={block} initialParents={initialParents} scopeId={scopeId} />
+      <BlockEntry block={block} initialParents={initialParents} scopeId={scopeId} />
     </LazyViewportMount>
   )
 }

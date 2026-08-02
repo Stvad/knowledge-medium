@@ -10,7 +10,7 @@ import {
   blockTagsConfigProp,
   normalizeBlockTagsConfig,
 } from '@/plugins/block-tagging/config.js'
-import { useDueCards } from './useDueCards.ts'
+import { useDueCardCount } from './useDueCards.ts'
 import { reviewDeckStartedProp, reviewDeckTagProp } from './schema.ts'
 
 const startDeck = async (deck: Block, tagName: string): Promise<void> => {
@@ -33,8 +33,10 @@ interface DeckOptionProps {
 }
 
 const DeckOption = ({workspaceId, tagName, label, icon: Icon, onPick}: DeckOptionProps) => {
-  const due = useDueCards(workspaceId, tagName)
-  const count = due.length
+  // The picker wants a number, not the cards. Counting in SQLite keeps a
+  // workspace with many decks from materialising every due card in each of
+  // them just to render a badge.
+  const count = useDueCardCount(workspaceId, tagName) ?? 0
   return (
     <button
       type="button"

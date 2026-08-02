@@ -67,3 +67,11 @@ jobs:
 
       - name: Run Social Publisher extension checks
         run: pnpm -C agent-extensions/social-media-publisher run check
+
+      # The root gate deliberately excludes agent-extensions (eslint-ignored,
+      # outside the app tsconfig), so an extension's own gate is the only thing
+      # that covers it — and until this step existed, nothing ran it. Needs no
+      # install of its own: the package declares no dependencies and shells out
+      # to the root node_modules/.bin.
+      - name: Run Strength Tracker extension checks
+        run: pnpm -C agent-extensions/strength-tracker run check

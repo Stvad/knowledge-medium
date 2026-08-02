@@ -56,7 +56,6 @@ export {
   SETTINGS_TYPE,
   STRENGTH_LOG_TYPE,
   WORKOUT_TYPE,
-  type StoredSet,
 } from './fields'
 
 // ──── Workout ────
@@ -132,7 +131,7 @@ export const definitionProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Derived modal working weight — kept in sync with the set blocks on every write.
+/** Derived modal working weight, stamped by `finishSession` from the sets that were actually performed.
  *  Exists purely so the plan's SQL requirement is a flat column read; the
  *  engine always recomputes from `sets`, never trusts this. */
 export const workingWeightProp = seedProperty({
@@ -171,6 +170,37 @@ export const prescribedSetsProp = seedProperty({
   preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+})
+
+/** What the rep target WAS, stamped beside the weight and set count.
+ *
+ *  The lift line used to read this off its first set block, which is a number
+ *  you edit: logging 8 reps on set one turned "target 3×10" into "target
+ *  3×8", so the target agreed with the performance by construction and could
+ *  never tell you that you had missed it. */
+export const prescribedRepsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('prescribed-reps'),
+  revision: 1,
+  name: FIELD.prescribedReps,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Which time in this session the lift is — 0-based. Stored because position
+ *  among siblings stops being identity as soon as the user reorders them, and
+ *  `lastEntryFor` has to tell one occurrence's history from the other's. See
+ *  `FIELD.occurrence`. */
+export const occurrenceProp = seedProperty({
+  seedKey: extensionPropertySeedKey('occurrence'),
+  revision: 1,
+  name: FIELD.occurrence,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  // Bookkeeping: the readable copy of an identity the block id already
+  // fixes, so editing it is always wrong.
+  hidden: true,
 })
 
 // ──── Set ────
@@ -223,6 +253,24 @@ export const completedAtProp = seedProperty({
   seedKey: extensionPropertySeedKey('set-completed-at'),
   revision: 1,
   name: FIELD.completedAt,
+  preset: 'optional-number',
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** When Finish closed the session — the workout-level twin of
+ *  `strength:completedAt`, and the ORDERING fallback for two sessions of one
+ *  training day (`date` is that day's local noon on both).
+ *
+ *  The set-derived value is preferred, but it empties out under an ordinary
+ *  correction: unticking what Finish stamped and ticking a skipped set leaves
+ *  every done set without a `completedAt`, since the native checkbox writes
+ *  only `status`. This one cannot empty out. Sessions closed before it existed
+ *  simply lack it, as they do today. */
+export const finishedAtProp = seedProperty({
+  seedKey: extensionPropertySeedKey('finished-at'),
+  revision: 1,
+  name: FIELD.finishedAt,
   preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
@@ -324,24 +372,30 @@ export const roundToProp = seedProperty({
 // an option leaves a dangling link you can see rather than a map entry that
 // silently stops matching.
 
+// 2: `changeScope` UserPrefs → BlockDefault. The choice is a preference, but
+// it is STORED as a block, and the two cannot disagree: creating the block
+// needs a `block-default` transaction (`core.createChild` refuses any other),
+// while a UserPrefs property can only be written from a `user-prefs` one. So
+// the first pick for any group — the only one that creates — threw, and the
+// choice never got recorded. Nothing had covered the create path.
 export const choiceGroupProp = seedProperty({
   seedKey: extensionPropertySeedKey('choice-group'),
-  revision: 1,
+  revision: 2,
   name: FIELD.choiceGroup,
   preset: 'optional-ref',
   config: {targetTypes: [ALT_GROUP_TYPE]},
   defaultValue: undefined,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 
 export const choiceOptionProp = seedProperty({
   seedKey: extensionPropertySeedKey('choice-option'),
-  revision: 1,
+  revision: 2,
   name: FIELD.choiceOption,
   preset: 'optional-ref',
   config: {targetTypes: [EXERCISE_DEF_TYPE]},
   defaultValue: undefined,
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.BlockDefault,
 })
 
 // ──── Program (blocks in the plan outline) ────
@@ -454,16 +508,27 @@ export const strengthLogType = seedType({
 
 export const workoutType = seedType({
   seedKey: extensionTypeSeedKey('workout'),
-  revision: 1,
+  // 2: `finishedAtProp` joined the declared shape. Two sessions of one
+  // training day are ordered by when the work was recorded, and deriving that
+  // from the done sets alone empties out under an ordinary untick — see the
+  // property.
+  revision: 2,
   id: WORKOUT_TYPE,
   label: 'Workout',
   description: 'A logged strength session (A / B / mini).',
-  properties: [sessionProp, dateProp, statusProp],
+  properties: [sessionProp, dateProp, statusProp, finishedAtProp],
 })
 
 export const exerciseEntryType = seedType({
   seedKey: extensionTypeSeedKey('exercise'),
-  revision: 1,
+  // 2: `occurrenceProp` joined the declared shape. A session can prescribe
+  // one lift twice, and sibling order is not identity — so the entry states
+  // which occurrence it is, and `lastEntryFor` reads it back to keep the two
+  // progressions apart.
+  // 3: `prescribedRepsProp` joined. The rep target belongs beside the weight
+  // and set count it was prescribed with — read off a set block it tracked
+  // whatever you last logged, so it could never disagree with you.
+  revision: 3,
   id: EXERCISE_ENTRY_TYPE,
   label: 'Exercise entry',
   description: 'One lift within a workout; its sets are child set blocks.',
@@ -475,6 +540,8 @@ export const exerciseEntryType = seedType({
     unitProp,
     prescribedWeightProp,
     prescribedSetsProp,
+    prescribedRepsProp,
+    occurrenceProp,
   ],
 })
 
@@ -513,12 +580,25 @@ export const altGroupType = seedType({
 
 export const setType = seedType({
   seedKey: extensionTypeSeedKey('set'),
-  revision: 1,
+  // 2: `setIndexProp` joined the declared shape — and left again when the
+  // outline became the state. Sets are created once in order and never
+  // refilled, so position IS the index and `order_key` carries it. The
+  // revision did NOT move for that removal: materialization never repairs a
+  // stored payload, so a bump would change nothing on disk and warn on every
+  // client.
+  // 3: `catchUpRpeProp` joined — copied down from the prescription so a set
+  // row knows whether an RPE it collects feeds anything, without loading the
+  // lift. Same denormalisation as `unitProp` on the set, same reason.
+  // 4: `unitProp` — which `setSpec` had been WRITING and `SetLine` reading
+  // all along without the type declaring it, so the record's shape and the
+  // fields the extension uses disagreed and no schema-driven editor or audit
+  // could see it.
+  revision: 4,
   id: SET_TYPE,
   label: 'Set',
   description: 'One set within an exercise entry.',
   hideFromCompletion: true,
-  properties: [weightProp, repsProp, rpeProp, sideProp, completedAtProp],
+  properties: [weightProp, repsProp, rpeProp, sideProp, unitProp, completedAtProp, catchUpRpeProp],
 })
 
 export const layoffType = seedType({
@@ -572,11 +652,14 @@ export const STRENGTH_PROPS = [
   unitProp,
   prescribedWeightProp,
   prescribedSetsProp,
+  prescribedRepsProp,
+  occurrenceProp,
   weightProp,
   repsProp,
   rpeProp,
   sideProp,
   completedAtProp,
+  finishedAtProp,
   layoffFromProp,
   layoffToProp,
   layoffDaysProp,

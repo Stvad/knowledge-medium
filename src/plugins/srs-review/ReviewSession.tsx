@@ -50,7 +50,8 @@ import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/s
 import { useReviewDeckCards } from './useDueCards.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
-import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
+import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
+import { useTodayKey } from '@/plugins/daily-notes/today.js'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
 
@@ -63,21 +64,6 @@ const EMPTY_PARENTS: readonly Block[] = []
  *  deck can't exceed SQLite's host-parameter limit. */
 const BREADCRUMB_PREFETCH = 24
 
-/** Today's local day key, advanced when the date rolls over. Polls once a
- *  minute (cheap; only re-renders the minute the day changes), mirroring
- *  `useDueCards`' midnight-aware cutoff so a deck left open overnight saves
- *  and restores under the correct day. */
-const useTodayKey = (): string => {
-  const [key, setKey] = useState(localDayKey)
-  useEffect(() => {
-    const id = setInterval(() => {
-      const next = localDayKey()
-      setKey(prev => (prev === next ? prev : next))
-    }, 60_000)
-    return () => clearInterval(id)
-  }, [])
-  return key
-}
 
 const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   if (!el) return false

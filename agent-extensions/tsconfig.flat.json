@@ -1,0 +1,47 @@
+// Typecheck for the FLAT extension files in this directory (readwise.tsx and
+// its tests). `pnpm run check` does not cover them — they sit outside the app
+// tsconfig and eslint ignores the directory — so this is the only thing that
+// type-checks them:
+//
+//     npx tsc --noEmit -p agent-extensions/tsconfig.flat.json
+//
+// It resolves `@/…` against the REAL `src`, which is what a flat file gets in
+// vitest and the closest available stand-in for what the installed extension
+// gets from the page importmap. (The `kernel-types` stubs are a snapshot taken
+// when the agent-cli package was last built, so they can lag `src` — a symbol
+// added this session wouldn't be in them.) It still does NOT prove the
+// installed module loads: the importmap serves exact emitted filenames only,
+// and only `pnpm agent install-extension` reporting `running: true` proves that.
+//
+// No `baseUrl` on purpose. It is deprecated in TS 6 and makes `tsc` exit 2 on
+// the config itself BEFORE compiling anything — which reads exactly like a
+// clean run if you only check that no type errors were printed.
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["vite/client"],
+    "paths": {
+      "@/*": ["../src/*"],
+      "@knowledge-medium/agent-cli/protocol": ["../packages/agent-cli/src/protocol.ts"]
+    }
+  },
+  "include": [
+    "./*.tsx",
+    "./*.ts",
+    "./url-imports.d.ts",
+    // Ambient declarations the app source relies on; without them `src/` files
+    // pulled in through `@/…` report spurious errors that drown the real ones.
+    "../src/vite-env.d.ts",
+    "../src/plugins/roam-import/runtime.ts"
+  ]
+}

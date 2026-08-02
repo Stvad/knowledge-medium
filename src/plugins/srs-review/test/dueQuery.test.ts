@@ -20,15 +20,9 @@ import {
   selectNewCards,
 } from '../dueQuery.ts'
 
-describe('dueBoundary', () => {
-  it('is UTC midnight of the day after the local date (matching daily-note storage)', () => {
-    // Daily notes store `daily-note:date` at UTC midnight, so the cutoff
-    // must be UTC midnight of tomorrow's local date — not local
-    // midnight, which west of UTC would include tomorrow's cards.
-    const boundary = dueBoundary(new Date(2026, 5, 1, 14, 30))
-    expect(boundary.toISOString()).toBe('2026-06-02T00:00:00.000Z')
-  })
-})
+// `dueBoundary` itself is pinned where it now lives —
+// `src/plugins/daily-notes/test/dueQuery.test.ts`. What matters here is that
+// this plugin's query is still built ON it.
 
 describe('buildDueCardsQuery', () => {
   const ws = 'ws-1'

@@ -29,8 +29,6 @@ import {
  *  "Strength Plan v2" alias when neither points anywhere live. */
 export const DEFAULT_PLAN_ROOT_ID = 'ed2e8053-ea55-4130-9207-01409192a4aa'
 export const PLAN_ALIAS = 'Strength Plan v2'
-/** Shoulder-policy block referenced by auto-created consult todos. */
-export const SHOULDER_POLICY_BLOCK_ID = '3f8866f6-7143-4bbe-b9a0-fa60abf12be5'
 
 const read = <T>(block: BlockData | null, schema: PropertySchema<T>): T => {
   const raw = block?.properties[schema.name]
@@ -73,42 +71,87 @@ export interface LoadedConfig {
   planRootId: string | null
 }
 
+/** A training day rolls over in the small hours — "a Sunday session logged at
+ *  1:10am Monday is Sunday's". Past NOON the idea stops meaning that, and it
+ *  actively breaks: workout dates are stored at local noon, so a rollover
+ *  above 12 shifts a stored date onto the previous day while any reader that
+ *  does not re-apply it stays on the stored one. Two decoders of one value
+ *  then disagree, which is how a hand-set 13 made every workout permanently
+ *  unfinishable. Clamped here, where the setting is read, so no caller has to
+ *  know — and 0 is left reachable, since "midnight" is a legitimate answer. */
+const MAX_ROLLOVER_HOUR = 12
+
 /** Merge engine-knob overrides from the settings block into a base config. */
 const applySettings = (base: ProgramConfig, settings: BlockData | null): ProgramConfig => ({
   ...base,
   roundTo: read(settings, roundToProp),
-  dayRolloverHour: read(settings, rolloverHourProp),
+  dayRolloverHour: Math.min(MAX_ROLLOVER_HOUR, Math.max(0, read(settings, rolloverHourProp))),
   perLiftCadenceDays: read(settings, cadenceDaysProp),
 })
 
-export const loadConfig = async (
+/** Everything read from the database, before any `or`-group is resolved.
+ *
+ *  Split out so resolving is PURE: the start flow lets you try a different
+ *  variant and has to show what that would prescribe, and re-reading the
+ *  outline on every tap of a segmented control would be both slow and racy.
+ *  Read once, resolve as many times as the user pokes at it. */
+export interface PlanSource {
+  tree: PlanNode | null
+  settings: BlockData | null
+  planRootId: string | null
+  /** Choices already recorded under the settings block. */
+  storedChoices: Readonly<Record<string, string>>
+}
+
+export const loadPlanSource = async (
   repo: Repo,
   workspaceId: string,
   settingsBlockId: string | null,
-): Promise<LoadedConfig> => {
+): Promise<PlanSource> => {
   const settings = settingsBlockId ? await repo.block(settingsBlockId).load() : null
-  const base = applySettings(DEFAULT_CONFIG, settings)
-
   const planRootId = await resolvePlanRoot(repo, workspaceId, settings)
-  if (!planRootId) {
+  return {
+    tree: planRootId ? await loadPlanTree(repo, planRootId) : null,
+    settings,
+    planRootId,
+    storedChoices: settingsBlockId ? await readAltChoices(repo, settingsBlockId) : {},
+  }
+}
+
+/** Resolve a read plan into a config. Pure — no repo, no clock.
+ *
+ *  `altChoiceOverrides` merges over the recorded choices, so a group the user
+ *  has not touched in this flow keeps its stored answer. Nothing is written:
+ *  the preference is recorded only if the flow completes. */
+export const configFor = (
+  source: PlanSource,
+  altChoiceOverrides?: Readonly<Record<string, string>>,
+): LoadedConfig => {
+  const base = applySettings(DEFAULT_CONFIG, source.settings)
+  if (!source.planRootId) {
     return {
       config: base,
       warnings: ['Strength Plan v2 outline not found — using the built-in program. Set the plan-root in strength settings to read from your notes.'],
       planRootId: null,
     }
   }
-
-  const tree = await loadPlanTree(repo, planRootId)
-  if (!tree) {
-    return {config: base, warnings: ['Plan outline could not be read — using the built-in program.'], planRootId}
+  if (!source.tree) {
+    return {
+      config: base,
+      warnings: ['Plan outline could not be read — using the built-in program.'],
+      planRootId: source.planRootId,
+    }
   }
-
-  // Which option of each `or`-group the user is currently tracking (choice
-  // blocks under the settings block) resolves the plan's alt-groups to one
-  // exercise per slot.
-  const altChoices = settingsBlockId ? await readAltChoices(repo, settingsBlockId) : {}
-  const {config, warnings} = configFromPlan(tree, altChoices)
+  const {config, warnings} = configFromPlan(source.tree, {...source.storedChoices, ...altChoiceOverrides})
   // The plan supplies program content; the settings block supplies engine
   // knobs. Re-apply the knobs so a settings override wins over the default.
-  return {config: applySettings(config, settings), warnings, planRootId}
+  return {config: applySettings(config, source.settings), warnings, planRootId: source.planRootId}
 }
+
+export const loadConfig = async (
+  repo: Repo,
+  workspaceId: string,
+  settingsBlockId: string | null,
+  altChoiceOverrides?: Readonly<Record<string, string>>,
+): Promise<LoadedConfig> =>
+  configFor(await loadPlanSource(repo, workspaceId, settingsBlockId), altChoiceOverrides)

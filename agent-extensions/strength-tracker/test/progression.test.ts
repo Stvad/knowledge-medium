@@ -21,6 +21,123 @@ const CONFIG = {sets: 3, repMax: 10, freeform: false, increment: 5}
 const at = (weight: number, ...reps: number[]): SetRecord[] =>
   reps.map(r => ({weight, reps: r}))
 
+describe('lastEntryFor with a lift prescribed twice', () => {
+  const twice = (): WorkoutRecord[] => [{
+    id: 'w1', date: '2026-07-20T18:00:00.000Z', session: 'A',
+    exercises: [
+      {exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(225, 5, 5)},
+      {exercise: 'Squat', definitionId: 'def-squat', occurrence: 1, sets: at(185, 8, 8)},
+    ],
+  }]
+
+  it('gives each occurrence its own baseline', () => {
+    // Both rows took the FIRST match, so the back-off row progressed off the
+    // heavy row's weight — and reordering the finished entry blocks swapped
+    // which weight both rows were built on.
+    expect(workingWeight(lastEntryFor(twice(), 'Squat', 'def-squat', 0)!.entry)).toBe(225)
+    expect(workingWeight(lastEntryFor(twice(), 'Squat', 'def-squat', 1)!.entry)).toBe(185)
+  })
+
+  it('is unmoved by the order the entries happen to be in', () => {
+    const reordered = twice()
+    reordered[0].exercises = [...reordered[0].exercises].reverse()
+    expect(workingWeight(lastEntryFor(reordered, 'Squat', 'def-squat', 0)!.entry)).toBe(225)
+    expect(workingWeight(lastEntryFor(reordered, 'Squat', 'def-squat', 1)!.entry)).toBe(185)
+  })
+
+  it('falls back to the first match for records written before the number existed', () => {
+    const legacy: WorkoutRecord[] = [{
+      id: 'w0', date: '2026-07-13T18:00:00.000Z', session: 'A',
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', sets: at(205, 5)}],
+    }]
+    expect(workingWeight(lastEntryFor(legacy, 'Squat', 'def-squat', 1)!.entry)).toBe(205)
+  })
+})
+
+describe('two sessions on one day', () => {
+  // Every workout's `date` is pinned to LOCAL NOON of its training day (see
+  // `dayToDate`), so a second session that day carries a byte-identical
+  // timestamp. A strict `>` therefore never prefers it, and which one won was
+  // decided by the order the query happened to return rows in — so tomorrow's
+  // prescription could be built on the morning's warm-up instead of the
+  // evening's real work, and could flip between reloads.
+  const sameDay = (): WorkoutRecord[] => [
+    {
+      id: 'morning', date: '2026-07-20T12:00:00.000Z', session: 'A',
+      recordedAt: Date.parse('2026-07-20T09:30:00.000Z'),
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(185, 5, 5)}],
+    },
+    {
+      id: 'evening', date: '2026-07-20T12:00:00.000Z', session: 'A',
+      recordedAt: Date.parse('2026-07-20T19:15:00.000Z'),
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(245, 5, 5)}],
+    },
+  ]
+
+  it('takes the one performed later, whichever order they arrive in', () => {
+    expect(lastEntryFor(sameDay(), 'Squat', 'def-squat', 0)!.workout.id).toBe('evening')
+    expect(lastEntryFor([...sameDay()].reverse(), 'Squat', 'def-squat', 0)!.workout.id).toBe('evening')
+  })
+
+  it('still lets a later DAY win, however late in the day the earlier one ran', () => {
+    // The day is the primary key and the timestamp only breaks ties within it.
+    // Comparing timestamps outright would let a session finished at 19:15 on
+    // Monday outrank one dated Tuesday but logged with no times at all.
+    const nextDay: WorkoutRecord[] = [...sameDay(), {
+      id: 'tuesday', date: '2026-07-21T12:00:00.000Z', session: 'A',
+      exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(205, 5, 5)}],
+    }]
+    expect(lastEntryFor(nextDay, 'Squat', 'def-squat', 0)!.workout.id).toBe('tuesday')
+  })
+
+  it('does not let a session with no times lose to one that has them', () => {
+    // A missing `recordedAt` is "unknown", not "the beginning of time". Read
+    // as 0 it ranked FIRST, which is this comparison's own bug mirrored: sets
+    // ticked from the OUTLINE go through the native todo checkbox, which
+    // writes no `strength:completedAt` — so an evening session logged that way
+    // lost to the morning's and handed tomorrow the lighter weights.
+    const morningTimed = sameDay()[0]
+    const eveningUntimed: WorkoutRecord = {...sameDay()[1], recordedAt: undefined}
+
+    for (const history of [[morningTimed, eveningUntimed], [eveningUntimed, morningTimed]]) {
+      // Unordered, so whichever arrives first stands — but the timestamped one
+      // must not WIN on the strength of the other having none.
+      const winner = lastEntryFor(history, 'Squat', 'def-squat', 0)!.workout.id
+      expect(winner).toBe(history[0].id)
+    }
+  })
+
+  it('leaves records with no times in the order they arrive', () => {
+    // Nothing to order them by, so the answer must at least be stable rather
+    // than turning on an undefined comparison.
+    const untimed: WorkoutRecord[] = sameDay().map(w => ({...w, recordedAt: undefined}))
+    expect(lastEntryFor(untimed, 'Squat', 'def-squat', 0)!.workout.id).toBe('morning')
+  })
+})
+
+describe('lastEntryFor keeps looking for the occurrence it was asked about', () => {
+  it('does not take a newer workout\'s other occurrence over an older exact one', () => {
+    // Falling back per WORKOUT meant a newer session that only logged the
+    // first Squat outranked an older one that logged both — so the back-off
+    // row progressed off the heavy row's load again, by a different route.
+    const history: WorkoutRecord[] = [
+      {
+        id: 'w-old', date: '2026-07-13T18:00:00.000Z', session: 'A',
+        exercises: [
+          {exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(225, 5)},
+          {exercise: 'Squat', definitionId: 'def-squat', occurrence: 1, sets: at(185, 8)},
+        ],
+      },
+      {
+        id: 'w-new', date: '2026-07-20T18:00:00.000Z', session: 'A',
+        exercises: [{exercise: 'Squat', definitionId: 'def-squat', occurrence: 0, sets: at(235, 5)}],
+      },
+    ]
+    expect(workingWeight(lastEntryFor(history, 'Squat', 'def-squat', 0)!.entry)).toBe(235)
+    expect(workingWeight(lastEntryFor(history, 'Squat', 'def-squat', 1)!.entry)).toBe(185)
+  })
+})
+
 describe('workingWeight', () => {
   it('takes the modal weight', () => {
     expect(workingWeight(bench([...at(135, 10, 10), ...at(115, 12)]))).toBe(135)
