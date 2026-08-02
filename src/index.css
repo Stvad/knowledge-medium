@@ -400,11 +400,20 @@
     color: hsl(var(--muted-foreground));
   }
 
+  /* The focal block's content slot: spacing under the document body. Holds
+     whatever renderer won the content facet, so nothing INHERITABLE belongs
+     here — see `blockTitleText.ts`. */
   .block-content.top-level-content {
+    margin-bottom: 0.5rem;
+  }
+
+  /* Title typography, applied by the renderers that draw the focal block's own
+     text (markdown read + CodeMirror edit), so it can never leak into a plugin
+     surface mounted in the same slot. */
+  .block-title-text {
     font-size: 1.5rem;
     font-weight: 600;
     line-height: 1.25;
-    margin-bottom: 0.5rem;
   }
 
   .tm-block[data-editing='true'] {

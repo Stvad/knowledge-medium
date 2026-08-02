@@ -19,12 +19,18 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
+import { useBlockTitleTextClass } from './blockTitleText.js'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
+  // The editor draws the block's own text too, so it carries the same title
+  // typography as the read renderer — otherwise a page title would shrink to
+  // body size the moment you clicked into it. CodeMirror's theme sets
+  // `fontSize: 'inherit'`, so the class on the wrapper reaches the editor.
+  const titleClass = useBlockTitleTextClass(block)
   const editorRef = useRef<ReactCodeMirrorRef>(null)
   // The paste ClipboardEvent carries no modifier state, so we latch the
   // most recent paste chord's intent on keydown and read it back in
@@ -149,7 +155,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       ref={editorRef}
       block={block}
       extensions={extensions}
-      className="km-block-text-editor min-h-[1.7em]"
+      className={`km-block-text-editor min-h-[1.7em]${titleClass ? ` ${titleClass}` : ''}`}
       basicSetup={{
         closeBrackets: true,
         lineNumbers: false,

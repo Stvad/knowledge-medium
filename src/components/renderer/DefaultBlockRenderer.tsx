@@ -511,17 +511,12 @@ function BlockShell({
 }
 
 export function DefaultBlockRenderer(
-  props: DefaultBlockRendererProps,
-) {
-  const {
+  {
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
-  } = props
-  // Read BEFORE the default is applied, which is the only point where "the
-  // caller supplied one" is still distinguishable from "we fell back". Used by
-  // `topLevelClass` below.
-  const hasCustomContentRenderer = props.ContentRenderer !== undefined
+  }: DefaultBlockRendererProps,
+) {
   const repo = useRepo()
   const runtime = useAppRuntime()
   const blockContext = useBlockContext()
@@ -641,20 +636,15 @@ export function DefaultBlockRenderer(
         () => resolveContentSurfaceProps(resolveContext),
         [resolveContentSurfaceProps],
       )
-      // Top-of-panel content renders as a title: larger font, less bullet-list
-      // weight. The Controls slot already returns null for top-level so there's
-      // no inline bullet to suppress here.
+      // Marks the focal block's content slot. SPACING only — the gap under the
+      // document body, which is the slot's own business whatever it holds.
       //
-      // NOT when the caller supplied its own content renderer. Then this slot
-      // holds a SURFACE — a review deck, a recents list, a video player, a
-      // media viewer, a CodeMirror editor — and `.top-level-content`'s
-      // 1.5rem/600 is inherited by everything inside it that doesn't set a size
-      // of its own. That is how the Readwise backlog came to render every
-      // highlight as a heading: its chrome set explicit sizes, but the block
-      // bodies it embeds don't. Title styling belongs to title text.
-      const topLevelClass = isTopLevel && !hasCustomContentRenderer
-        ? ' top-level-content'
-        : ''
+      // Title TYPOGRAPHY is deliberately not here: this slot holds whatever
+      // renderer won the content facet — a review deck, a recents list, a video
+      // player, a Readwise backlog — and font-size/weight inherit, so styling
+      // the container styles an arbitrary plugin subtree. It lives on the
+      // renderers that draw the block's own TEXT instead (`blockTitleText.ts`).
+      const topLevelClass = isTopLevel ? ' top-level-content' : ''
       return (
         <div
           {...contentSurfaceProps}
@@ -669,7 +659,7 @@ export function DefaultBlockRenderer(
       )
     }
   }, [
-    block, resolveContext, runtime, isTopLevel, hasCustomContentRenderer,
+    block, resolveContext, runtime, isTopLevel,
     DefaultContentRenderer, contentContainerRef,
   ])
 

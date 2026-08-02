@@ -20,7 +20,8 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
-import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import { blockContentRendererFacet, blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import { defineVariant } from '@/facets/variantFacet'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -28,6 +29,8 @@ import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
+import { MarkdownContentRenderer } from './MarkdownContentRenderer'
+import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -347,45 +350,6 @@ describe('DefaultBlockRenderer slot identity', () => {
     uiStateBlockRef.current = undefined
   })
 
-  it('gives title typography to the block\'s own text at top level', async () => {
-    render(
-      <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
-          <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block('root')} />
-          </ActiveContextsProvider>
-        </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
-
-    await waitFor(() => {
-      expect(document.querySelector('.block-content.top-level-content')).not.toBeNull()
-    })
-  })
-
-  it('withholds it when the caller supplied its own content renderer', async () => {
-    // `.top-level-content` is 1.5rem/600, and everything inside inherits it.
-    // A custom content renderer draws a SURFACE — a review deck, a recents
-    // list, a video player, a CodeMirror editor — whose embedded block bodies
-    // set no size of their own, so they came out as headings. Six renderers
-    // were affected; it surfaced as every Readwise backlog highlight rendering
-    // at heading size.
-    render(
-      <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
-          <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block('root')} ContentRenderer={CountingContentRenderer} />
-          </ActiveContextsProvider>
-        </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
-
-    await waitFor(() => {
-      expect(document.querySelector('.block-content')).not.toBeNull()
-    })
-    expect(document.querySelector('.block-content.top-level-content')).toBeNull()
-  })
-
   it('does not remount the content subtree when a collapse toggle re-renders the layout', async () => {
     render(
       <AppRuntimeContextProvider value={runtime}>
@@ -410,5 +374,132 @@ describe('DefaultBlockRenderer slot identity', () => {
       expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
     )
     expect(contentMountCount).toBe(1)
+  })
+})
+
+// A surface renderer supplied through the FACET rather than the prop — the
+// hello-content shape from `exampleExtensions`. Gated on block id so one
+// fixture serves both the facet and non-facet cases.
+const FacetSurfaceRenderer = ({block}: BlockRendererProps) => (
+  <div className="facet-surface">{block.id}</div>
+)
+
+// The recents-page shape: a custom content renderer that draws the real page
+// title AND a surface below it (`RecentsPageBlockRenderer`).
+const TitlePlusSurfaceRenderer = (props: BlockRendererProps) => (
+  <div>
+    <MarkdownContentRenderer {...props} />
+    <div className="composed-surface">surface</div>
+  </div>
+)
+
+describe('title typography', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
+          {source: 'test'},
+        ),
+        blockContentRendererFacet.of(
+          ctx => ctx.block.id === 'surface-root'
+            ? defineVariant('test.surface', 'Surface', FacetSurfaceRenderer)
+            : null,
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
+      await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Body text'})
+      await tx.create({id: 'surface-root', workspaceId: 'ws-1', parentId: null, orderKey: 'a2', content: 'Surface page'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'title typography fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderBlock = (id: string, ContentRenderer?: typeof FacetSurfaceRenderer) =>
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: id}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const titleElement = () => document.querySelector(`.${BLOCK_TITLE_TEXT_CLASS}`)
+
+  it('is carried by the focal block\'s own text', async () => {
+    renderBlock('root')
+
+    await screen.findByText('Page title')
+    expect(titleElement()?.textContent).toBe('Page title')
+  })
+
+  it('is not carried by a non-focal block\'s text', async () => {
+    renderBlock('block-1')
+
+    // The positive is proven first, so the absence below can't be the text
+    // simply not having rendered yet.
+    await screen.findByText('Body text')
+    expect(titleElement()).toBeNull()
+  })
+
+  it('does not reach a surface supplied as the ContentRenderer prop', async () => {
+    // The Readwise-backlog bug: the slot's 1.5rem/600 was inherited by every
+    // embedded block body, which sets no size of its own. 24px/600 where the
+    // same block reads 16px/400 anywhere else.
+    renderBlock('root', CountingContentRenderer)
+
+    await waitFor(() => expect(document.querySelector('.counting-content')).not.toBeNull())
+    expect(titleElement()).toBeNull()
+  })
+
+  it('does not reach a surface supplied through the content-renderer facet', async () => {
+    // The facet is the other half of the same door, and the one a heuristic on
+    // the prop cannot see: the caller passes nothing, the facet decides.
+    await repo.block('ui-state').set(topLevelBlockIdProp, 'surface-root')
+    renderBlock('surface-root')
+
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(titleElement()).toBeNull()
+  })
+
+  it('still reaches a surface that composes the text renderer', async () => {
+    // The recents page renders the real page title above its list. Nothing is
+    // declared for this to work — the title styling arrives with the title.
+    renderBlock('root', TitlePlusSurfaceRenderer)
+
+    await screen.findByText('Page title')
+    const title = titleElement()
+    expect(title?.textContent).toBe('Page title')
+    // …and stops there: the list beside it is body text.
+    expect(title?.contains(document.querySelector('.composed-surface'))).toBe(false)
   })
 })
