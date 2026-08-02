@@ -21,11 +21,9 @@ import {
   Sparkles,
 } from 'lucide-react'
 import type { Block } from '@/data/block'
-import type { BlockData } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { useManyParents, useProperty } from '@/hooks/block.js'
 import { usePluginUIStateChildBlock } from '@/data/globalState.js'
-import { getBlockTypes } from '@/data/properties.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
@@ -37,17 +35,15 @@ import { PromotableBreadcrumbList, usePromotableBreadcrumb } from '@/plugins/bre
 import { ReschedulePicker } from '@/plugins/daily-notes'
 import { openDialog } from '@/utils/dialogs.js'
 import {
-  SRS_SM25_TYPE,
   formatIntervalDays,
   formatRescheduleToastMessage,
   rescheduleBlock,
-  srsArchivedProp,
   srsFactorProp,
   srsIntervalProp,
-  srsNextReviewDateProp,
 } from '@/plugins/srs-rescheduling'
 import { SrsSignal, estimateSrsIntervalDays } from '@/plugins/srs-rescheduling/scheduler.js'
 import { useReviewDeckCards } from './useDueCards.ts'
+import { decideGrade } from './gradeDecision.ts'
 import { archiveSrsCard } from './archive.ts'
 import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from './schema.ts'
 import { reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
@@ -74,32 +70,6 @@ const isInteractiveTarget = (el: HTMLElement | null): boolean => {
   // them) — the review context must not shadow that, or keyboard users
   // couldn't operate the grade/reschedule/archive controls.
   return ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(el.tagName)
-}
-
-/** Whether a block is still a live, schedulable review card — mirrors
- *  the deck's membership conditions (`buildDueCardsQuery`): it must
- *  carry the SRS type AND a non-empty next-review date AND not be
- *  archived. A card can lose any of these in another panel after the
- *  session snapshotted its id; grading it then would re-add the type
- *  and/or write a fresh date via `rescheduleBlock`, resurrecting a card
- *  the user just removed from review.
- *
- *  A NEW card fails every clause here by construction (it carries no SRS
- *  type at all), which is why grading one is gated on live membership of
- *  the deck's new set instead — see `grade`. The two must stay separate:
- *  "has no SRS type" is the normal state of a newly-tagged block AND the
- *  state of a card whose type was just deleted, and only the tag tells
- *  them apart. */
-const isLiveSrsCard = (data: BlockData): boolean => {
-  if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
-  try {
-    const archivedRaw = data.properties[srsArchivedProp.name]
-    if (archivedRaw !== undefined && srsArchivedProp.codec.decode(archivedRaw)) return false
-    const dateRaw = data.properties[srsNextReviewDateProp.name]
-    return dateRaw !== undefined && srsNextReviewDateProp.codec.decode(dateRaw).length > 0
-  } catch {
-    return false
-  }
 }
 
 interface GradeButton {
@@ -335,8 +305,15 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         // seeds the SM-2.5 defaults plus the type in one tx. Gate it on LIVE
         // membership of the deck's new set, so a block that lost its tag
         // since the queue was snapshotted is dropped rather than enrolled.
+        // `wait` covers the restored-before-ready window: a resumed session
+        // shows its card (revealed state included) on the first render, while
+        // `newIds` is still empty because the candidates query hasn't
+        // resolved. Doing nothing costs the user a second keypress; advancing
+        // would skip a valid new card and never enrol it.
         const data = block.peek() ?? (await block.load())
-        if (!data || !(isLiveSrsCard(data) || newIds.has(currentId))) {
+        const decision = decideGrade(data, {isNew: newIds.has(currentId), ready: dueLoaded})
+        if (decision === 'wait') return
+        if (decision === 'drop') {
           showInfo('Card is no longer in spaced repetition')
           advance()
           return
@@ -357,7 +334,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
         setBusy(false)
       }
     },
-    [currentId, busy, repo, advance, newIds],
+    [currentId, busy, repo, advance, newIds, dueLoaded],
   )
 
   const archive = useCallback(async () => {
@@ -591,7 +568,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
             <span className="ml-2 text-xs opacity-70">space</span>
           </Button>
         ) : currentBlock ? (
-          <GradeButtons card={currentBlock} busy={busy} onGrade={signal => void grade(signal)} />
+          <GradeButtons card={currentBlock} busy={busy || !dueLoaded} onGrade={signal => void grade(signal)} />
         ) : null}
       </div>
 
