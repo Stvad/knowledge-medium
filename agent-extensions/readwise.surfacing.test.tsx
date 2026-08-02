@@ -187,19 +187,37 @@ describe('daily-note backlog hint', () => {
     await vi.waitFor(() => { expect(hint()).toBeNull() })
   })
 
+  /** Render today's note until the hint appears, then unmount.
+   *
+   *  PRECONDITION for every negative case below, and not optional — AGENTS.md
+   *  §"four ways a test passes for the wrong reason". The count arrives from a
+   *  loader-backed query, so a bare "expect no hint" passes whether the gate
+   *  rejected the note or the query simply hadn't resolved; waiting on the
+   *  already-loaded note content fences nothing. Priming leaves a resolved
+   *  count in the shared handle, so the negative renders read it on their first
+   *  render and only the gate can hide the hint.
+   *
+   *  I had this helper, dropped it when the file was rewritten for the
+   *  subscribed count, and reintroduced the exact false negative the doctrine
+   *  was written about. */
+  const primeCount = async (repo: Repo, runtime: FacetRuntime) => {
+    const today = await getOrCreateDailyNote(repo, WS, todayIso())
+    await renderDailyNote(repo, runtime, today.id)
+    await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+    cleanup()
+  }
+
   it('stays off a PAST daily note', async () => {
     // Every past daily note carrying a nag would be noise; the hint is a
     // once-a-day nudge on the page you actually open.
     const {repo, runtime} = setup()
     await seedOverdueHighlight(repo, 'hl-1')
+    await primeCount(repo, runtime)
     const past = await getOrCreateDailyNote(repo, WS, '2026-01-05')
 
     const {block} = await renderDailyNote(repo, runtime, past.id)
 
-    // Give the count every chance to arrive, so this is the date gate hiding
-    // the hint rather than an unresolved query.
-    await vi.waitFor(() => { expect(screen.getByText(block.peek()!.content)).toBeTruthy() })
-    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText(block.peek()!.content)).toBeTruthy()
     expect(hint()).toBeNull()
   })
 
@@ -208,11 +226,12 @@ describe('daily-note backlog hint', () => {
     // hint would appear once per occurrence.
     const {repo, runtime} = setup()
     await seedOverdueHighlight(repo, 'hl-1')
+    await primeCount(repo, runtime)
     const today = await getOrCreateDailyNote(repo, WS, todayIso())
 
     await renderDailyNote(repo, runtime, today.id, {isTopLevel: false})
 
-    await vi.waitFor(() => { expect(screen.getByText(today.peek()!.content)).toBeTruthy() })
+    expect(screen.getByText(today.peek()!.content)).toBeTruthy()
     expect(hint()).toBeNull()
   })
 
@@ -263,8 +282,14 @@ describe('daily-note backlog hint', () => {
       const tomorrowIso = todayIso(new Date(Date.now() + 24 * 60 * 60 * 1000))
       const tomorrow = await getOrCreateDailyNote(repo, WS, tomorrowIso)
 
+      // Prime on today's note first, so the pre-rollover assertion below is the
+      // date check and not an unresolved query.
+      await renderDailyNote(repo, runtime, await getOrCreateDailyNote(repo, WS, todayIso()).then(b => b.id))
+      await vi.waitFor(() => { expect(hint()).not.toBeNull() })
+      cleanup()
+
       await renderDailyNote(repo, runtime, tomorrow.id)
-      await vi.waitFor(() => { expect(screen.getByText(tomorrow.peek()!.content)).toBeTruthy() })
+      expect(screen.getByText(tomorrow.peek()!.content)).toBeTruthy()
       expect(hint()).toBeNull()
 
       await rollOver()

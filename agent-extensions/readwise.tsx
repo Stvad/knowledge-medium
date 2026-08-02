@@ -2042,14 +2042,6 @@ const BacklogGroupTitle = ({ documentBlock }: { documentBlock: Block }) => {
   return <>{label ?? 'Untitled document'}</>
 }
 
-/** SQLite binds one host parameter per id and `core.manyAncestors` passes the
- *  whole list, so an unbounded prefetch is a hard query failure on a large
- *  enough library rather than a slowdown. Groups past the bound render their
- *  entries without prefetched parents and `LazyBlockEntry` fetches its own —
- *  more queries, same result. (SRS review bounds the same call for the same
- *  reason, at 48.) */
-const ANCESTOR_PREFETCH_LIMIT = 200
-
 const BacklogGroupHeader = ({
   sectionBlock,
   ancestors,
@@ -2062,21 +2054,28 @@ const BacklogGroupHeader = ({
   count: number
 }) => {
   const openBlock = useBlockOpener()
-  // Usually the section is the document's "Highlights" child, so the document
-  // is the section's parent. But a highlight filed DIRECTLY under its document
-  // makes the document itself the section — and then the parent is the library
-  // root, which would label the group "Readwise Library".
+  // Which block names this group? The section a highlight sits under IS the
+  // answer, with ONE exception: the generated "Highlights" container, whose
+  // own name says nothing, so the document above it speaks for it.
+  //
+  // Asking it that way round matters. Testing instead for "is the section a
+  // readwise document" recognised only imported pages, so a highlight filed
+  // under an ordinary page labelled and navigated to that page's PARENT.
+  // The special case is the generated container, not the document type.
   //
   // Read reactively rather than by `peek`: on a cold open the section's own row
   // may not have resolved yet, and peeking would take the wrong branch and then
   // never re-render to correct it.
-  const sectionIsDocument = useHandle(sectionBlock, {
+  const sectionIsGeneratedContainer = useHandle(sectionBlock, {
     selector: (data: BlockData | null | undefined) => {
       if (!data) return false
-      try { return getBlockTypes(data).includes(READWISE_DOCUMENT_TYPE) } catch { return false }
+      if (data.content !== HIGHLIGHTS_SECTION_CONTENT) return false
+      // A user-made page that happens to be called "Highlights" is still a
+      // filing target — the generated one carries no types of its own.
+      try { return getBlockTypes(data).length === 0 } catch { return false }
     },
   }) as boolean
-  const documentBlock = sectionIsDocument ? sectionBlock : ancestors.at(-1)
+  const documentBlock = sectionIsGeneratedContainer ? ancestors.at(-1) : sectionBlock
 
   return (
     <header className="flex items-baseline gap-2 border-b border-border/60 pb-1">
@@ -2180,10 +2179,17 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   // Keyed on the section ids themselves rather than the `groups` array: groups
   // is rebuilt whenever the query re-resolves, and handing `useManyParents` a
   // fresh array each time would churn its handle for an unchanged id set.
+  // No cap. I added one, and it was wrong twice over: the fallback it claimed
+  // does not exist — `LazyBlockEntry` uses `initialParents` until the user
+  // promotes a breadcrumb, so an uncapped group got NO breadcrumbs, ever — and
+  // the limit it guarded is `MAX_VARIABLE_NUMBER=32766` (measured on a real
+  // client, where 5000 bound parameters run fine), which needs 32k documents
+  // carrying unreviewed highlights to reach. Trading certain breakage for an
+  // unreachable one is a bad trade; if it ever is reached the query fails
+  // loudly, which beats silently dropping every header past the cap.
   const sectionKey = groups
     .map(group => group.sectionId)
     .filter(Boolean)
-    .slice(0, ANCESTOR_PREFETCH_LIMIT)
     .join('\u0000')
   const sectionBlocks = useMemo(
     () => sectionKey.split('\u0000').filter(Boolean).map(id => repo.block(id)),
