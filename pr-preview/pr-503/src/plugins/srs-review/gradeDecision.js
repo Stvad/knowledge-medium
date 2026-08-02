@@ -1,0 +1,2 @@
+import{getBlockTypes as e}from"../../data/properties.js";import{srsArchivedProp as t,srsNextReviewDateProp as n}from"../srs-rescheduling/schema.js";import"../srs-rescheduling/index.js";var r=r=>{try{if(!e(r).includes(`srs-sm2.5`))return!1;let i=r.properties[t.name];if(i!==void 0&&t.codec.decode(i))return!1;let a=r.properties[n.name];return a!==void 0&&n.codec.decode(a).length>0}catch{return!1}},i=(e,{isNew:t,ready:n})=>e?r(e)||t?`grade`:n?`drop`:`wait`:`drop`;export{i as decideGrade,r as isLiveSrsCard};
+//# sourceMappingURL=gradeDecision.js.map
