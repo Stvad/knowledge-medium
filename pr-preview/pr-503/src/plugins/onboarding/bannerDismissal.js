@@ -1,2 +1,2 @@
-var e=`onboarding:tutorial-banner-dismissed`,t=()=>{try{return window.localStorage?.getItem(e)===`true`}catch{return!1}},n=()=>{try{window.localStorage?.setItem(e,`true`)}catch{}};export{n as dismissTutorialBanner,t as isTutorialBannerDismissed};
+var e=`onboarding:tutorial-banner-dismissed`,t=!1,n=()=>{if(t)return!0;try{return window.localStorage?.getItem(e)===`true`}catch{return!1}},r=()=>{t=!0;try{window.localStorage?.setItem(e,`true`)}catch{}},i=()=>{t=!1};export{r as dismissTutorialBanner,n as isTutorialBannerDismissed,i as resetTutorialBannerDismissal};
 //# sourceMappingURL=bannerDismissal.js.map
