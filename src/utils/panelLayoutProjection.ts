@@ -1115,10 +1115,7 @@ export class PanelLayoutProjection {
         try {
           // Queued after dispose (or disposed while waiting in the queue):
           // don't touch rows or the hash on behalf of a dead projection.
-          // isCancelled extends the same guard INTO the apply — dispose()
-          // can also land while the apply is awaiting its subtree load or
-          // reconcile tx, and a late replaceHash from a dead projection
-          // would overwrite the hash the next session just installed.
+          // (isCancelled extends this guard mid-flight — see `disposed`.)
           if (this.disposed) return
           const result = await applyCurrentLayoutUrl({
             repo: this.repo,

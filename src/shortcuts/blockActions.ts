@@ -435,9 +435,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     // block: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
     // `absoluteAppUrl` to promote it to an absolute URL (and drop any
     // agent-runtime pairing secret riding in the current hash). Plain
-    // buildAppHash ON PURPOSE — not the in-app anchors'
-    // buildAppHashInContext: a perspective lane (`;persp=…`) is
-    // device-local UiState and must not leak into a durable shared URL.
+    // buildAppHash ON PURPOSE — see buildAppHashInContext's docstring for
+    // why shared URLs must stay lane-free.
     handler: ({block}: BlockShortcutDependencies) => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) return
