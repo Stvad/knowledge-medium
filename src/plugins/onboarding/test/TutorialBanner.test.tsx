@@ -4,22 +4,42 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BlockResolveContext } from '@/extensions/blockInteraction'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema'
 import { TutorialBanner, tutorialBannerHeader } from '../TutorialBanner.tsx'
-import { INSERT_TUTORIAL_ACTION_ID } from '../action.ts'
 import { isTutorialBannerDismissed } from '../bannerDismissal.ts'
 
 const mocks = vi.hoisted(() => ({
-  runActionById: vi.fn(),
-  /** Whether the dispatch reports success — drives the persist-only-on-success
-   *  path. */
-  dispatchSucceeds: true,
+  openTutorial: vi.fn(),
+  /** Whether the tutorial actually opened — drives persist-only-on-success. */
+  opens: true,
+  /** When true, run the REAL helper instead of the stub, so the failure test
+   *  exercises the actual "no active workspace" path rather than asserting on
+   *  a boolean it invented. */
+  useReal: false,
+  /** Stands in for the active workspace; null is the real failure input. */
+  activeWorkspaceId: 'ws-1' as string | null,
 }))
 
-vi.mock('@/shortcuts/runAction.js', () => ({
-  runActionByIdSafely: async (...args: unknown[]) => {
-    mocks.runActionById(...args)
-    return mocks.dispatchSucceeds
-  },
+vi.mock('@/context/repo.js', () => ({
+  useRepo: () => ({activeWorkspaceId: mocks.activeWorkspaceId}),
 }))
+
+// Toasts are the helper's failure reporting; stub them so the real path can
+// run headless.
+vi.mock('@/utils/toast.js', () => ({
+  showProgress: () => ({done: vi.fn(), fail: vi.fn()}),
+}))
+
+vi.mock('../action.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../action.ts')>()
+  return {
+    ...actual,
+    openTutorialInActiveWorkspace: (repo: unknown) => {
+      mocks.openTutorial(repo)
+      return mocks.useReal
+        ? actual.openTutorialInActiveWorkspace(repo as never)
+        : Promise.resolve(mocks.opens)
+    },
+  }
+})
 
 // Only the fields the header predicate reads; the facet hands it a full
 // BlockResolveContext.
@@ -53,8 +73,11 @@ describe('tutorial banner placement', () => {
 
 describe('TutorialBanner', () => {
   beforeEach(() => {
-    mocks.runActionById = vi.fn()
-    mocks.dispatchSucceeds = true
+    mocks.openTutorial = vi.fn()
+    mocks.opens = true
+    mocks.useReal = false
+    mocks.activeWorkspaceId = 'ws-1'
+    window.location.hash = ''
     window.localStorage.clear()
   })
   afterEach(() => {
@@ -62,13 +85,12 @@ describe('TutorialBanner', () => {
     window.localStorage.clear()
   })
 
-  it('opens the tutorial through the existing action', () => {
+  it('opens the tutorial through the shared onboarding entry point', () => {
     render(<TutorialBanner/>)
 
     fireEvent.click(screen.getByRole('button', {name: 'Open tutorial'}))
 
-    expect(mocks.runActionById)
-      .toHaveBeenCalledWith(INSERT_TUTORIAL_ACTION_ID, expect.anything())
+    expect(mocks.openTutorial).toHaveBeenCalledTimes(1)
   })
 
   it('retires itself once opened, so it never becomes permanent chrome', async () => {
@@ -86,11 +108,15 @@ describe('TutorialBanner', () => {
     expect(screen.queryByText(/Start with the tutorial/)).not.toBeInTheDocument()
   })
 
-  it('comes back when the dispatch never landed, keeping the only retry route', async () => {
-    // The action is the sole prominent way in. Persisting the dismissal before
-    // knowing the dispatch worked would retire the banner permanently on a
-    // failure the user can see (a toast) but no longer act on from here.
-    mocks.dispatchSucceeds = false
+  it('comes back when no tutorial actually opened, keeping the only retry route', async () => {
+    // Drives the REAL helper against the real failure input — no active
+    // workspace — rather than a hand-fed boolean. This is the case the action
+    // system cannot report: its handler shows a toast and returns normally, so
+    // a dispatch "succeeds" while nothing opened. Persisting on that would
+    // retire the banner permanently on a failure the user can see but no
+    // longer act on from here.
+    mocks.useReal = true
+    mocks.activeWorkspaceId = null
     const view = render(<TutorialBanner/>)
 
     fireEvent.click(screen.getByRole('button', {name: 'Open tutorial'}))
@@ -98,6 +124,7 @@ describe('TutorialBanner', () => {
     // Restored in place…
     expect(await screen.findByText(/Start with the tutorial/)).toBeInTheDocument()
     // …and nothing was persisted, so a later session still offers it.
+    expect(isTutorialBannerDismissed()).toBe(false)
     view.unmount()
     render(<TutorialBanner/>)
     expect(screen.getByText(/Start with the tutorial/)).toBeInTheDocument()
@@ -108,7 +135,7 @@ describe('TutorialBanner', () => {
 
     fireEvent.click(screen.getByRole('button', {name: 'Dismiss tutorial prompt'}))
 
-    expect(mocks.runActionById).not.toHaveBeenCalled()
+    expect(mocks.openTutorial).not.toHaveBeenCalled()
     view.unmount()
     render(<TutorialBanner/>)
     expect(screen.queryByText(/Start with the tutorial/)).not.toBeInTheDocument()

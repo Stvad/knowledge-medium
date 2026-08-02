@@ -16,14 +16,15 @@
 import { GraduationCap, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button.js'
-import { runActionByIdSafely } from '@/shortcuts/runAction.js'
+import { useRepo } from '@/context/repo.js'
 import type { BlockHeaderContribution } from '@/extensions/blockInteraction.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
-import { INSERT_TUTORIAL_ACTION_ID } from './action.ts'
+import { openTutorialInActiveWorkspace } from './action.ts'
 import { dismissTutorialBanner, isTutorialBannerDismissed } from './bannerDismissal.ts'
 
 export const TutorialBanner = () => {
+  const repo = useRepo()
   const [dismissed, setDismissed] = useState(isTutorialBannerDismissed)
   if (dismissed) return null
 
@@ -33,14 +34,20 @@ export const TutorialBanner = () => {
   }
 
   const openTutorial = () => {
-    // Hide immediately but do NOT persist yet: the action navigates away, so
+    // Hide immediately but do NOT persist yet: opening navigates away, so
     // waiting would leave the card on screen through the transition, while
     // persisting up front would burn the only prominent route in even when
-    // the dispatch never landed (its plugin toggled off, no active context).
-    // Persist once the dispatch reports success; restore the banner if not.
+    // nothing opened. Persist once the tutorial is genuinely on screen;
+    // restore the banner if it isn't.
+    //
+    // Calls the shared helper rather than dispatching the action: the action
+    // reports its own failures as toasts and then returns normally, so a
+    // dispatch resolves "successfully" even when no tutorial opened — which
+    // would permanently dismiss the banner on exactly the failures the user
+    // most needs a retry route for.
     setDismissed(true)
-    void runActionByIdSafely(INSERT_TUTORIAL_ACTION_ID, new CustomEvent('open-tutorial'))
-      .then(ok => (ok ? dismissTutorialBanner() : setDismissed(false)))
+    void openTutorialInActiveWorkspace(repo)
+      .then(opened => (opened ? dismissTutorialBanner() : setDismissed(false)))
   }
 
   return (

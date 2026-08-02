@@ -112,6 +112,25 @@ const SRS_SCHEDULING_PROP_NAMES: readonly string[] = [
 const hasStoredSrsState = (data: BlockData): boolean =>
   SRS_SCHEDULING_PROP_NAMES.some(name => data.properties[name] !== undefined)
 
+/** `getBlockTypes` decodes strictly (no try/catch), and unlike every other
+ *  caller this one runs over ARBITRARY user blocks: the candidates query
+ *  returns every block referencing the tag, not a set already known to be
+ *  well-formed. A single malformed `types` value — legacy, imported, synced
+ *  or raw-written — would throw here and take the whole deck down, since
+ *  this runs during `useReviewDeckCards`' render.
+ *
+ *  An unreadable value is treated as "can't classify", which excludes it:
+ *  the same conservative direction as `hasStoredSrsState` — when in doubt,
+ *  don't enrol. Being invisible to the deck is recoverable; enrolling a
+ *  block we couldn't read is not. */
+const lacksSrsType = (data: BlockData): boolean => {
+  try {
+    return !getBlockTypes(data).includes(SRS_SM25_TYPE)
+  } catch {
+    return false
+  }
+}
+
 /** The tagged blocks that aren't cards yet — "tagged for SRS but with no
  *  SRS metadata".
  *
@@ -131,5 +150,4 @@ const hasStoredSrsState = (data: BlockData): boolean =>
  *  and stays invisible to the deck, exactly as before this feature existed;
  *  re-adding its type restores it as the mature card it still is. */
 export const selectNewCards = (candidates: readonly BlockData[]): BlockData[] =>
-  candidates.filter(data =>
-    !getBlockTypes(data).includes(SRS_SM25_TYPE) && !hasStoredSrsState(data))
+  candidates.filter(data => lacksSrsType(data) && !hasStoredSrsState(data))

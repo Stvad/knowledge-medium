@@ -151,4 +151,23 @@ describe('selectNewCards', () => {
     })
     expect(selectNewCards([partial])).toEqual([])
   })
+
+  it('survives a malformed types value instead of taking the whole deck down', () => {
+    // Unlike every other `getBlockTypes` caller, this one runs over ARBITRARY
+    // user blocks — the candidates query returns everything referencing the
+    // tag. `getBlockTypes` decodes strictly, so one legacy/imported/raw-written
+    // row would throw during `useReviewDeckCards`' render and the deck would
+    // never open. A raw (un-encoded) value is exactly what such a row looks
+    // like at rest.
+    const malformed = {
+      id: 'broken',
+      workspaceId: 'ws-1',
+      properties: {[typesProp.name]: '{not-a-types-list'},
+    } as unknown as BlockData
+
+    expect(() => selectNewCards([malformed])).not.toThrow()
+    // Excluded, not enrolled: being invisible to the deck is recoverable,
+    // enrolling a block we couldn't classify is not.
+    expect(selectNewCards([malformed, block('plain', [])]).map(b => b.id)).toEqual(['plain'])
+  })
 })
