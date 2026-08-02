@@ -113,14 +113,20 @@ const dispatchPaste = (target: Element, text: string): Event => {
   return event
 }
 
+// ONE database for the whole file (AGENTS.md: share one DB per test file).
+// The three describes below differ only in the extensions their repo is built
+// with, not in storage, so they reset this handle rather than each standing up
+// their own PowerSync instance — three per worker is exactly the kind of setup
+// cost that turns into timeout flakes under full-gate parallelism.
+let sharedDb: TestDb
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
 describe('DefaultBlockRenderer paste handling', () => {
-  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     vi.mocked(pasteMultilineText).mockClear()
 
@@ -305,12 +311,9 @@ const ContentShellLayout: BlockLayout = ({Content, Shell, block}) => {
 }
 
 describe('DefaultBlockRenderer slot identity', () => {
-  let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     contentMountCount = 0
     await resetTestDb(sharedDb.db)
@@ -375,12 +378,9 @@ describe('DefaultBlockRenderer slot identity', () => {
 })
 
 describe('DefaultBlockRenderer page-title styling', () => {
-  let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     // No blockLayoutFacet contribution — this exercises DefaultBlockLayout,

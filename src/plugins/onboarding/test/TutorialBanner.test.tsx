@@ -16,10 +16,24 @@ const mocks = vi.hoisted(() => ({
   useReal: false,
   /** Stands in for the active workspace; null is the real failure input. */
   activeWorkspaceId: 'ws-1' as string | null,
+  /** What `navigateFromGlobalCommand` resolves. `null` is its documented
+   *  "suppressed / vetoed gesture" result — it never rejects. */
+  navigates: {ok: true} as unknown,
 }))
 
 vi.mock('@/context/repo.js', () => ({
-  useRepo: () => ({activeWorkspaceId: mocks.activeWorkspaceId}),
+  useRepo: () => ({
+    activeWorkspaceId: mocks.activeWorkspaceId,
+    // Lets the real `insertTutorialIntoWorkspace` take its already-present
+    // branch, so these tests reach the navigation step without seeding.
+    query: {aliasLookup: () => ({load: async () => ({id: 'tutorial-1'})})},
+  }),
+}))
+
+vi.mock('@/utils/navigation.js', () => ({
+  activeWorkspaceIdPreferringHash: (repo: {activeWorkspaceId: string | null}) =>
+    repo.activeWorkspaceId,
+  navigateFromGlobalCommand: async () => mocks.navigates,
 }))
 
 // Toasts are the helper's failure reporting; stub them so the real path can
@@ -77,6 +91,7 @@ describe('TutorialBanner', () => {
     mocks.opens = true
     mocks.useReal = false
     mocks.activeWorkspaceId = 'ws-1'
+    mocks.navigates = {ok: true}
     window.location.hash = ''
     window.localStorage.clear()
   })
@@ -128,6 +143,35 @@ describe('TutorialBanner', () => {
     view.unmount()
     render(<TutorialBanner/>)
     expect(screen.getByText(/Start with the tutorial/)).toBeInTheDocument()
+  })
+
+  it('comes back when navigation is vetoed after a successful seed', async () => {
+    // The seed succeeds, so the earlier no-workspace branch is never reached —
+    // this is the *other* way to end up not on the tutorial.
+    // `navigateFromGlobalCommand` resolves `null` for a suppressed/vetoed
+    // gesture and never rejects, so nothing throws and the seed toast even
+    // says "Tutorial inserted"; only the null result distinguishes it.
+    mocks.useReal = true
+    mocks.navigates = null
+    const view = render(<TutorialBanner/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Open tutorial'}))
+
+    expect(await screen.findByText(/Start with the tutorial/)).toBeInTheDocument()
+    expect(isTutorialBannerDismissed()).toBe(false)
+    view.unmount()
+    render(<TutorialBanner/>)
+    expect(screen.getByText(/Start with the tutorial/)).toBeInTheDocument()
+  })
+
+  it('retires itself when navigation actually lands', async () => {
+    mocks.useReal = true
+    mocks.navigates = {ok: true}
+    render(<TutorialBanner/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Open tutorial'}))
+
+    await vi.waitFor(() => expect(isTutorialBannerDismissed()).toBe(true))
   })
 
   it('can be dismissed without opening the tutorial', () => {

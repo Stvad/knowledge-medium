@@ -43,10 +43,12 @@ export const insertTutorialIntoWorkspace = async (
  * Seed-or-find the Tutorial in the active workspace and navigate to it.
  * Returns whether the user actually ended up on the tutorial.
  *
- * The boolean is the point. Dispatching this through the action system
- * cannot tell you: the handler reports failure to the user as a toast and
- * then returns normally, so a dispatch resolves successfully whether the
- * tutorial opened or the workspace was missing and nothing happened at all.
+ * The boolean is the point, and it means NAVIGATED, not merely seeded — all
+ * three ways this can fall short (no active workspace, a throwing seed, a
+ * vetoed navigation) return false. Dispatching through the action system
+ * cannot tell you any of that: the handler reports failure to the user as a
+ * toast and then returns normally, so a dispatch resolves successfully
+ * whether the tutorial opened or nothing happened at all.
  * Callers with something to undo on failure (the banner, which otherwise
  * burns its one-shot localStorage dismissal) need the truth, so the work
  * lives here and both entry points share it — the action stays the single
@@ -63,8 +65,12 @@ export const openTutorialInActiveWorkspace = async (repo: Repo): Promise<boolean
   try {
     const { tutorialId, alreadyExisted } = await insertTutorialIntoWorkspace(repo, workspaceId)
     banner.done(alreadyExisted ? 'Tutorial already present — opening it' : 'Tutorial inserted')
-    await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
-    return true
+    // `navigateFromGlobalCommand` resolves `NavigationResult | null` and never
+    // rejects — a vetoed/suppressed gesture comes back as `null`. Discarding it
+    // would report success for a tutorial that was seeded but never opened,
+    // which is the same lie this function exists to stop telling.
+    const navigated = await navigateFromGlobalCommand(repo, { blockId: tutorialId, workspaceId })
+    return navigated !== null
   } catch (err) {
     console.error('[onboarding] insert tutorial failed:', err)
     banner.fail(`Insert tutorial failed: ${err instanceof Error ? err.message : String(err)}`)
