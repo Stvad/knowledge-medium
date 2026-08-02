@@ -99,7 +99,7 @@ describe('LazyViewportMount — the slot a deferred row reserves', () => {
     expect(reservedSlot()).toBeNull()
   })
 
-  // `LazyBacklinkItem` and the recents rows mint their scope INSIDE the wrapper,
+  // `LazyBlockEntry` and the recents rows mint their scope INSIDE the wrapper,
   // so they can't name it out here and deliberately pass none. The walker must
   // then ignore the slot rather than attribute it to the surrounding row — which
   // it does by requiring both attributes, so this is the producer's half of it.

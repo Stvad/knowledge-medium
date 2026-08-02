@@ -415,6 +415,16 @@ export const blockContentRendererFacet = defineVariantFacet<BlockResolveContext,
 // content). Returning null/undefined/false from a contribution skips it
 // for that block. Decorator authors should memoize the wrapped component
 // per-inner so React doesn't unmount the inner subtree on every render.
+//
+// A CONTRIBUTION IS A STRUCTURAL GATE, NOT A REACTIVE ONE. It runs when the
+// decorator set is resolved for a block, and is NOT re-run because the world
+// moved underneath it — so anything it decides from a clock, a query result,
+// or another block's state freezes at resolve time. Two bugs of exactly that
+// shape shipped from one gate that tested "is this today's daily note": a note
+// left open across midnight kept a hint that had become wrong, and tomorrow's
+// note, opened before midnight, could never gain one. Decide on `ctx.types`,
+// `ctx.isTopLevel`, `ctx.blockContext` and the like; put anything time- or
+// data-dependent inside the decorating component, where a hook can re-run it.
 export const blockContentDecoratorsFacet = defineFacet<
   BlockContentDecoratorContribution,
   BlockContentDecoratorResolver

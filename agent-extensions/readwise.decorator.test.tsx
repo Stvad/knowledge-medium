@@ -63,7 +63,9 @@ const renderDecorated = async (repo: Repo, runtime: ReturnType<typeof setup>['ru
   const block = repo.block('hl')
   const decorate = runtime.read(blockContentDecoratorsFacet)
   const Decorated = decorate(
-    { types: [...getBlockTypes(block.peek()!)] } as BlockResolveContext,
+    // Only `types` is read by the contribution under test; the rest of the
+    // resolve context would need a full render tree to build honestly.
+    { types: [...getBlockTypes(block.peek()!)] } as unknown as BlockResolveContext,
     Inner,
   )
   await act(async () => { render(<Decorated block={block}/>) })

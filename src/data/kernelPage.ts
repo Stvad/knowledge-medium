@@ -82,7 +82,26 @@ export const kernelPageBlockId = (workspaceId: string, namespace: string): strin
 
 /** Get-or-create a per-workspace kernel page. Repairs a live page that's
  *  missing the expected types or alias; restores a soft-deleted row;
- *  otherwise creates fresh. */
+ *  otherwise creates fresh.
+ *
+ *  On a READ-ONLY workspace it only GETS: the create/repair transactions are
+ *  skipped and the handle is returned as-is.
+ *
+ *  This is an ERGONOMIC guard, not a safety one — a distinction I originally
+ *  got backwards here. The kernel already refuses the write: `BlockDefault` is
+ *  `readOnly: 'reject'` in `CHANGE_SCOPE_POLICIES`, and the commit pipeline
+ *  throws `ReadOnlyError` before anything is written. So without this, a viewer
+ *  merely opening a kernel-page surface got an unhandled rejection out of an
+ *  action handler; nothing was ever written, and nothing was left to be
+ *  RLS-rejected on sync. What this buys is that the viewer sees an empty page
+ *  instead of an error.
+ *
+ *  The ordinary read-only case is unaffected: the id is deterministic, so a
+ *  page the owner already created has synced and resolves normally.
+ *
+ *  It belongs here rather than in each surface because every one of them —
+ *  daily notes, SRS review, locations, media capture, the Readwise backlog —
+ *  reaches the same throw through this one function. */
 export const getOrCreateKernelPage = async (
   repo: Repo,
   workspaceId: string,
@@ -134,6 +153,27 @@ export const getOrCreateKernelPage = async (
   }
 
   const live = await repo.load(id)
+
+  // Read-only: GET, never create or repair — see the doc above for why this is
+  // ergonomics rather than safety.
+  //
+  // Placed AFTER the occupant read and behind `refuseForeign`, not before
+  // either. Being unable to write is not the same as being entitled to read:
+  // returning the handle unchecked would hand a caller another workspace's
+  // block under this workspace's identity. It also stays after the spec
+  // validation above, so a malformed call still fails loudly for the author
+  // instead of silently no-op-ing on whichever session happens to be read-only.
+  //
+  // KNOWN LIMIT: `repo.load` selects `deleted = 0`, so a TOMBSTONED foreign row
+  // is invisible here and this returns its handle unrefused. The handle
+  // resolves to a deleted block, so nothing renders — but it is the one path
+  // that can hand back an id without `classifyOccupant` having spoken. Closing
+  // it wants a tombstone-inclusive read on `Repo`.
+  if (repo.isReadOnly) {
+    if (live) refuseForeign(live)
+    return repo.block(id)
+  }
+
   if (live) {
     refuseForeign(live)
     const currentAliases = stringListProperty(live.properties[aliasesProp.name])

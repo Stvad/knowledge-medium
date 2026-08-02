@@ -147,7 +147,7 @@ export interface BlockContextType {
      *  active panel, so pointer activation is enough there. */
     trackPanelFocus?: boolean
     /** Umbrella surface flag — set by every non-document mount
-     *  (`BlockEmbed`, `BacklinkEntry`, breadcrumb list). Consulted by
+     *  (`BlockEmbed`, `BlockEntry`, breadcrumb list). Consulted by
      *  `useIsFocalRender` / `isFocalRender` so a new surface only has
      *  to set the umbrella to be excluded from focal affordances. */
     isNestedSurface?: boolean

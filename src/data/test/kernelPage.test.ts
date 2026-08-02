@@ -143,6 +143,86 @@ describe('getOrCreateKernelPage', () => {
     })
   })
 
+  describe('on a read-only workspace', () => {
+    const readOnlyRepo = () => {
+      const { repo } = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        isReadOnly: true,
+        extensions: [
+          typeSeedsFacet.of(seedType({seedKey: 'test/type/panel-foo', revision: 1, id: FOO_PAGE_TYPE, label: 'Foo'}), {source: 'test'}),
+        ],
+      })
+      repo.setActiveWorkspaceId(WS)
+      return repo
+    }
+
+    it('writes NOTHING when the page is absent', async () => {
+      // The kernel already refuses the write (`BlockDefault` is
+      // `readOnly: 'reject'`, and the commit pipeline throws `ReadOnlyError`).
+      // What this pins is that we don't ATTEMPT it — without the guard, a
+      // viewer opening a kernel-page surface gets an unhandled rejection out
+      // of an action handler. Asserted on the call, not on the absence of a
+      // rendered thing, which would pass for a dozen unrelated reasons.
+      const repo = readOnlyRepo()
+      const tx = vi.spyOn(repo, 'tx')
+
+      const page = await getOrCreateKernelPage(repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      expect(tx).not.toHaveBeenCalled()
+      expect(page.id).toBe(kernelPageBlockId(WS, FOO_PAGE_NS))
+      expect(await repo.load(page.id)).toBeNull()
+    })
+
+    it('still RESOLVES a page the owner already created', async () => {
+      // The ordinary viewer case: the id is deterministic, so a synced page
+      // comes back normally. Skipping the writes must not break reading.
+      await getOrCreateKernelPage(env.repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+
+      const repo = readOnlyRepo()
+      const page = await getOrCreateKernelPage(repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })
+      await page.load()
+
+      expect(page.peek()?.content).toBe('Foo')
+      expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
+    })
+
+    it('still refuses a FOREIGN occupant at this id', async () => {
+      // Being unable to write is not the same as being entitled to read. A
+      // read-only session is exactly as exposed to a colliding derived id, and
+      // returning the handle unchecked would hand the caller another
+      // workspace's block under this workspace's identity — the read analogue
+      // of the write this function already refuses.
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: 'other-workspace', parentId: null, orderKey: 'a0',
+          content: 'someone else\'s page',
+        }, {systemMint: true})
+      }, {scope: ChangeScope.BlockDefault})
+
+      const repo = readOnlyRepo()
+      await expect(getOrCreateKernelPage(repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+    })
+
+    it('still rejects a malformed spec, rather than silently no-op-ing', async () => {
+      // The author-facing validation has to fire whichever session runs it.
+      const repo = readOnlyRepo()
+      await expect(getOrCreateKernelPage(repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo',
+      } as unknown as Parameters<typeof getOrCreateKernelPage>[2]))
+        .rejects.toThrow(/markerType is required/)
+    })
+  })
+
   it('rejects an omitted markerType by name, rather than failing at the tagger', async () => {
     // The cast is the point: TypeScript already requires the field, so this
     // pins the guard for the callers the type does not reach — a dynamic
