@@ -73,6 +73,13 @@ interface PanelHistoryState {
 
 const EMPTY: PanelHistoryState = {back: [], forward: []}
 
+/** Opaque first-touch capture for the transactional-rollback seam below. */
+export interface PanelHistoryRollback {
+  panelId: string
+  state: PanelHistoryState | undefined
+  pending: VisitState | undefined
+}
+
 /** Carry the enter marker from the entry being consumed onto the entry
  *  reconstructed on the opposite stack (the `viewModeEnter` invariant). */
 const withCarriedEnterMark = (entry: HistoryEntry, consumed: HistoryEntry): HistoryEntry =>
@@ -218,6 +225,30 @@ export class PanelHistoryStore {
     this.state.delete(panelId)
     this.pendingRestore.delete(panelId)
     if (had) this.notify(panelId)
+  }
+
+  /** Rollback seam for TRANSACTIONAL callers (reconcilePanelRows,
+   *  retargetPanelBlockIds): they mutate this non-transactional store from
+   *  inside a repo.tx (reconcileUrlNavigation consumes stack entries,
+   *  enqueueRestore replaces the pending restore), so a tx abort would
+   *  otherwise leave history consumed for row writes that rolled back.
+   *  Capture BEFORE the first mutation of each panel; restore every capture
+   *  if the tx throws. Entries/state values are immutable, so keeping refs
+   *  is a faithful snapshot. */
+  captureRollback(panelId: string): PanelHistoryRollback {
+    return {
+      panelId,
+      state: this.state.get(panelId),
+      pending: this.pendingRestore.get(panelId),
+    }
+  }
+
+  restoreRollback(capture: PanelHistoryRollback): void {
+    if (capture.state === undefined) this.state.delete(capture.panelId)
+    else this.state.set(capture.panelId, capture.state)
+    if (capture.pending === undefined) this.pendingRestore.delete(capture.panelId)
+    else this.pendingRestore.set(capture.panelId, capture.pending)
+    this.notify(capture.panelId)
   }
 
   /** Register a snapshotter for a panel — a function that reads the

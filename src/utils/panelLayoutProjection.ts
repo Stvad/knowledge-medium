@@ -23,14 +23,15 @@ import {
   splitHashRouteAndParams,
   type LayoutSlot,
 } from '@/utils/routing'
-import { isBlockConfirmedDeleted, panelHistory, writePanelContent } from '@/utils/panelHistory'
+import { isBlockConfirmedDeleted, panelHistory, writePanelContent, type PanelHistoryRollback } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { layoutSessionBlockIdForKey } from '@/data/stateBlocks'
 
 export interface ApplyLayoutResult {
-  kind: 'applied' | 'cancelled' | 'empty' | 'ignored' | 'noop' | 'normalized'
+  kind: 'applied' | 'cancelled' | 'deferred' | 'empty' | 'ignored' | 'noop' | 'normalized'
 }
 
 interface PanelSlot {
@@ -713,8 +714,18 @@ export const reconcilePanelRows = async (
   )
   const targetBlockIds = flattenSlots(targetSlots)
   const deletedPanelRowIds: string[] = []
+  // panelHistory is NON-transactional but mutated from inside the tx (the
+  // content-swap path consumes stack entries + replaces pending restores).
+  // First-touch capture per panel; restored below if the tx throws (the
+  // cancellation abort made that path routine, not just exceptional).
+  const historyRollbacks = new Map<string, PanelHistoryRollback>()
+  const touchHistory = (panelId: string): void => {
+    if (!historyRollbacks.has(panelId)) {
+      historyRollbacks.set(panelId, panelHistory.captureRollback(panelId))
+    }
+  }
 
-  const changed = await repo.tx(async tx => {
+  const runTx = async (): Promise<boolean> => repo.tx(async tx => {
     if (isCancelled?.()) throw new ReconcileCancelled()
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`reconcilePanelRows: layout session block ${layoutSessionBlock.id} not found`)
@@ -844,6 +855,7 @@ export const reconcilePanelRows = async (
           await tx.move(slot.row.id, {parentId, orderKey})
         }
         if (slot.blockId !== blockId) {
+          touchHistory(slot.row.id)
           const restored = slot.blockId
             ? panelHistory.reconcileUrlNavigation(slot.row.id, {
               blockId: slot.blockId,
@@ -882,9 +894,22 @@ export const reconcilePanelRows = async (
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
+  let changed: boolean
+  try {
+    changed = await runTx()
+  } catch (error) {
+    // The row writes rolled back — un-consume the history mutations that
+    // rode along inside the tx so the surviving rows keep their stacks.
+    for (const capture of historyRollbacks.values()) {
+      panelHistory.restoreRollback(capture)
+    }
+    throw error
+  }
+
   // Clear in-memory history only after the tx committed: ANY in-tx throw
   // (materialization, stack cleanup, active-panel repair) rolls the row
-  // deletes back, and the non-transactional history must survive with them.
+  // deletes back, and the non-transactional history must survive with them
+  // (content-swap mutations are restored above for exactly that reason).
   // (clear is a plain Map delete and cannot throw in production; a throw here
   // would leak the remaining ids' history, which only the probe test does.)
   for (const id of deletedPanelRowIds) {
@@ -901,28 +926,38 @@ export const retargetPanelBlockIds = async (
 ): Promise<void> => {
   if (fromId === toId) return
 
-  await repo.tx(async tx => {
-    const parent = await tx.get(layoutSessionBlock.id)
-    if (!parent) {
-      throw new Error(`retargetPanelBlockIds: layout session block ${layoutSessionBlock.id} not found`)
-    }
+  // Same non-transactional-history rollback discipline as reconcilePanelRows.
+  const historyRollbacks: PanelHistoryRollback[] = []
+  try {
+    await repo.tx(async tx => {
+      const parent = await tx.get(layoutSessionBlock.id)
+      if (!parent) {
+        throw new Error(`retargetPanelBlockIds: layout session block ${layoutSessionBlock.id} not found`)
+      }
 
-    const currentRows = await loadSubtreeRowsInTx(tx, parent)
-    const panelRows = currentRows
-      .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
-      .filter(row => panelBlockId(row) === fromId)
+      const currentRows = await loadSubtreeRowsInTx(tx, parent)
+      const panelRows = currentRows
+        .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
+        .filter(row => panelBlockId(row) === fromId)
 
-    for (const row of panelRows) {
-      const restored = panelHistory.reconcileUrlNavigation(row.id, {
-        blockId: fromId,
-        state: panelHistory.snapshot(row.id),
-      }, toId)
-      panelHistory.enqueueRestore(row.id, restored?.state)
-      // No viewMode option: a merge retarget clears the mode (it belonged
-      // to the (pane, source-block) pair, and the source block is gone).
-      await writePanelContent(tx, row.id, toId, restored?.state)
+      for (const row of panelRows) {
+        historyRollbacks.push(panelHistory.captureRollback(row.id))
+        const restored = panelHistory.reconcileUrlNavigation(row.id, {
+          blockId: fromId,
+          state: panelHistory.snapshot(row.id),
+        }, toId)
+        panelHistory.enqueueRestore(row.id, restored?.state)
+        // No viewMode option: a merge retarget clears the mode (it belonged
+        // to the (pane, source-block) pair, and the source block is gone).
+        await writePanelContent(tx, row.id, toId, restored?.state)
+      }
+    }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
+  } catch (error) {
+    for (const capture of historyRollbacks) {
+      panelHistory.restoreRollback(capture)
     }
-  }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
+    throw error
+  }
 }
 
 export interface ApplyCurrentLayoutUrlArgs {
@@ -953,6 +988,20 @@ export const applyCurrentLayoutUrl = async ({
   const route = parseLayout(hash)
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
+  }
+  // A ws-context-bearing route (`#ws;persp=…/…`) is addressed to a
+  // CONSUMER-SELECTED session, and core keeps the context opaque — so the
+  // one thing core can know is the negative: the per-device BASE session is
+  // never the addressee (context-free is what addresses base). Defer —
+  // touch neither rows nor URL — and let whoever owns the context (the
+  // session host) select the addressee session, whose own projection then
+  // applies the route. Without this, booting on `#ws;persp=lane/a`
+  // reconciled the BASE layout to the lane's slots, and a slot-less lane
+  // URL was first normalized from base rows and then applied to the lane —
+  // clobbering both sessions' persisted state.
+  if (route.wsContext !== undefined
+    && layoutSessionBlock.id === layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)) {
+    return {kind: 'deferred'}
   }
   // Degrade sublayout columns BEFORE they can reach row materialization
   // (which would throw); the canonicalization below rewrites the URL.

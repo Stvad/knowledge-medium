@@ -55,6 +55,9 @@ export interface ClientContextReader {
   readonly user: User
   readonly activeWorkspaceId: string | null
   readonly activeLayoutSessionId: string
+  /** The per-device BASE session id (the no-override fallback). Only for
+   *  base-ness checks — see the class getter's doc. */
+  readonly baseLayoutSessionId: string
   /** Subscribe to EFFECTIVE changes of either field (no-op sets — including
    *  the layout-session id's null⇄base-id folding — do not notify). Returns
    *  an idempotent unsubscribe. */
@@ -121,6 +124,16 @@ export class ClientContext implements ClientContextReader {
    *  this getter is behavior-identical to reading the base id directly. */
   get activeLayoutSessionId(): string {
     return this._activeLayoutSessionId ?? getLayoutSessionId()
+  }
+
+  /** The per-device BASE layout-session id — what `activeLayoutSessionId`
+   *  falls back to with no override. Exposed for the one question only the
+   *  base id answers: "is this session block the base session?" — a
+   *  ws-context-bearing route is never addressed to base, so URL
+   *  application defers there (see applyCurrentLayoutUrl). Reading this is
+   *  NOT a substitute for `activeLayoutSessionId` in imperative code. */
+  get baseLayoutSessionId(): string {
+    return getLayoutSessionId()
   }
 
   /** Override the active layout-session id; `null` restores the

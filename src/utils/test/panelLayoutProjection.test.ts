@@ -272,6 +272,66 @@ describe('applyCurrentLayoutUrl', () => {
     expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a'])
   })
 
+  it('a tx abort un-consumes the panel-history mutations that rode inside it', async () => {
+    // The content-swap path calls reconcileUrlNavigation/enqueueRestore on
+    // the NON-transactional history store from inside the tx. A rollback
+    // (routine now via the cancellation abort) must restore those stacks —
+    // otherwise the surviving row keeps its rows but loses its history.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'x'})
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => ++calls >= 3,
+    })
+
+    expect(result.kind).toBe('cancelled')
+    // Without the rollback: reconcileUrlNavigation('b') found no match and
+    // DELETED the row's stacks, while the row itself rolled back to 'a'.
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x'])
+  })
+
+  it('defers a ws-context route addressed at the per-device BASE session', async () => {
+    // Core keeps ws-context opaque; the one thing it knows is the negative —
+    // the base session is never a context's addressee. Boot used to
+    // reconcile `#ws;persp=lane/…` INTO the base session (clobbering its
+    // layout) and normalize a slot-less lane URL FROM base rows.
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+    const replaces: string[] = []
+    const apply = (hash: string) => applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      hash,
+      replaceHash: h => replaces.push(h),
+    })
+
+    // Slot-bearing lane deep link: must NOT materialize rows in base.
+    expect((await apply('#ws-1;persp=lane/b1')).kind).toBe('deferred')
+    expect(await base.children.load()).toEqual([])
+
+    // Slot-less lane URL over persisted BASE rows: must NOT normalize the
+    // lane URL from them (that would smuggle base's layout into the lane).
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: WS, parentId: base.id, orderKey: 'a0', blockId: 'a',
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed base row'})
+    expect((await apply('#ws-1;persp=lane')).kind).toBe('deferred')
+    expect(replaces).toEqual([])
+
+    // Context-free routes still address base normally.
+    expect((await apply('#ws-1/a')).kind).toBe('noop')
+  })
+
   it('cancellation after the tx committed keeps the rows but suppresses the canonicalization replace', async () => {
     await createPanelRows(['a'])
     let calls = 0
