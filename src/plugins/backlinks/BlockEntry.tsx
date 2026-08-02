@@ -34,23 +34,24 @@ const ENTRY_ESTIMATED_HEIGHT_PX = 96
 const ENTRY_OVERSCAN_PX = 600
 const ENTRY_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
-const EMPTY_PARENTS: readonly Block[] = []
-
 // Roam-style: breadcrumbs are the chain ABOVE the currently-shown block.
 // Click a segment to "unfurl" — promote it to the shown block. The
 // breadcrumb chain truncates accordingly and the body re-renders the
 // chosen parent's subtree (which still contains the original backlink
 // as a descendant).
 //
-// Two render paths so we can avoid an `useParents` query per visible
-// entry in the *initial* state: when the parent component has already
-// prefetched ancestors via `useManyParents`, it passes them in as
-// `initialParents` and `BlockEntryContent` renders without
-// firing its own ancestor handle. After the user clicks a breadcrumb
-// the shown block changes, the conditional flips, and
-// `BlockEntryDynamicContent` (which DOES use `useParents`) takes
-// over for the new id. Conditional rendering is what gives us the
-// query skip — React unmounts whichever branch we're not on.
+// Two render paths so we can avoid a `useParents` query per visible entry in
+// the *initial* state: when the parent component has already prefetched
+// ancestors via `useManyParents` it passes them as `initialParents` and
+// `BlockEntryContent` renders without firing its own ancestor handle. After
+// the user clicks a breadcrumb the shown block changes, the conditional flips,
+// and `BlockEntryDynamicContent` (which DOES use `useParents`) takes over for
+// the new id. Conditional rendering is what gives us the query skip — React
+// unmounts whichever branch we're not on.
+//
+// The dynamic path is also the FALLBACK when no prefetch was supplied, which
+// is why the condition tests `initialParents !== undefined` rather than
+// trusting a default: a missing prefetch must cost a query, not a feature.
 
 const BlockEntryContent = ({
   shownBlock,
@@ -136,10 +137,18 @@ const BlockEntryDynamicContent = ({
 
 const BlockEntry = ({
   block,
-  initialParents = EMPTY_PARENTS,
+  initialParents,
   scopeId,
 }: {
   block: Block
+  /** Prefetched ancestors, when the parent component already has them.
+   *
+   *  A HINT, not a switch. `undefined` means "I don't have them" and this
+   *  fetches its own; `[]` means "this block genuinely has no ancestors". They
+   *  used to collapse to the same thing, which made the optimisation's absence
+   *  silently disable the feature it optimises: both call sites pass
+   *  `map.get(id)`, so every entry the prefetch missed rendered with no
+   *  breadcrumb, permanently, with nothing to indicate it. */
   initialParents?: readonly Block[]
   scopeId: string
 }) => {
@@ -159,7 +168,7 @@ const BlockEntry = ({
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
-      {isInitial
+      {isInitial && initialParents !== undefined
         ? (
             <BlockEntryContent
               shownBlock={shownBlock}

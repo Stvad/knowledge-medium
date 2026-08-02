@@ -8,6 +8,7 @@ import { LazyBlockEntry } from '../BlockEntry.tsx'
 
 const mocks = vi.hoisted(() => ({
   openBlock: vi.fn(),
+  useParents: vi.fn(() => [] as unknown[]),
   repo: {
     activeWorkspaceId: 'workspace',
     block: vi.fn((id: string) => ({id})),
@@ -20,6 +21,13 @@ vi.mock('@/context/repo.tsx', () => ({
 
 vi.mock('@/utils/navigation.ts', () => ({
   useBlockOpener: () => mocks.openBlock,
+}))
+
+// Partial: the breadcrumb list below pulls other hooks from this module, so
+// only the ancestor fetch is stubbed — it's the thing under test.
+vi.mock('@/hooks/block.ts', async importOriginal => ({
+  ...(await importOriginal<typeof import('@/hooks/block')>()),
+  useParents: mocks.useParents,
 }))
 
 // Surfaces the ambient block context so tests can assert what the entry
@@ -46,6 +54,7 @@ afterEach(() => {
   cleanup()
   mocks.openBlock.mockClear()
   mocks.repo.block.mockClear()
+  mocks.useParents.mockClear()
 })
 
 describe('BlockEntry breadcrumbs', () => {
@@ -69,6 +78,38 @@ describe('BlockEntry breadcrumbs', () => {
     const [forwardedEvent, ctx] = mocks.openBlock.mock.calls[0]
     expect(forwardedEvent.shiftKey).toBe(true)
     expect(ctx).toEqual({blockId: 'parent-block', workspaceId: 'workspace'})
+  })
+})
+
+describe('BlockEntry prefetch hint', () => {
+  // `undefined` and `[]` used to collapse to the same thing, so an entry the
+  // caller's prefetch missed rendered with no breadcrumb, permanently. Both
+  // real call sites pass `map.get(id)`, so a miss is `undefined` — the common
+  // case, not a corner.
+  it('fetches its own ancestors when none were prefetched', () => {
+    const source = {id: 'source-block'} as Block
+
+    render(
+      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+        <LazyBlockEntry block={source} scopeId="test:no-prefetch" />
+      </BlockContextProvider>,
+    )
+
+    expect(mocks.useParents).toHaveBeenCalled()
+  })
+
+  it('does NOT fetch when the caller prefetched, even an empty chain', () => {
+    // `[]` is a real answer — a block with no ancestors — and must not be
+    // mistaken for "I didn't look".
+    const source = {id: 'source-block'} as Block
+
+    render(
+      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+        <LazyBlockEntry block={source} initialParents={[]} scopeId="test:empty-prefetch" />
+      </BlockContextProvider>,
+    )
+
+    expect(mocks.useParents).not.toHaveBeenCalled()
   })
 })
 
