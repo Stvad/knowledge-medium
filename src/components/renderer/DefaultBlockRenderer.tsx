@@ -511,12 +511,17 @@ function BlockShell({
 }
 
 export function DefaultBlockRenderer(
-  {
+  props: DefaultBlockRendererProps,
+) {
+  const {
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
-  }: DefaultBlockRendererProps,
-) {
+  } = props
+  // Read BEFORE the default is applied, which is the only point where "the
+  // caller supplied one" is still distinguishable from "we fell back". Used by
+  // `topLevelClass` below.
+  const hasCustomContentRenderer = props.ContentRenderer !== undefined
   const repo = useRepo()
   const runtime = useAppRuntime()
   const blockContext = useBlockContext()
@@ -639,7 +644,17 @@ export function DefaultBlockRenderer(
       // Top-of-panel content renders as a title: larger font, less bullet-list
       // weight. The Controls slot already returns null for top-level so there's
       // no inline bullet to suppress here.
-      const topLevelClass = isTopLevel ? ' top-level-content' : ''
+      //
+      // NOT when the caller supplied its own content renderer. Then this slot
+      // holds a SURFACE — a review deck, a recents list, a video player, a
+      // media viewer, a CodeMirror editor — and `.top-level-content`'s
+      // 1.5rem/600 is inherited by everything inside it that doesn't set a size
+      // of its own. That is how the Readwise backlog came to render every
+      // highlight as a heading: its chrome set explicit sizes, but the block
+      // bodies it embeds don't. Title styling belongs to title text.
+      const topLevelClass = isTopLevel && !hasCustomContentRenderer
+        ? ' top-level-content'
+        : ''
       return (
         <div
           {...contentSurfaceProps}
@@ -653,7 +668,10 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
+  }, [
+    block, resolveContext, runtime, isTopLevel, hasCustomContentRenderer,
+    DefaultContentRenderer, contentContainerRef,
+  ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null

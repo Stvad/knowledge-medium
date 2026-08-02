@@ -347,6 +347,45 @@ describe('DefaultBlockRenderer slot identity', () => {
     uiStateBlockRef.current = undefined
   })
 
+  it('gives title typography to the block\'s own text at top level', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('root')} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('.block-content.top-level-content')).not.toBeNull()
+    })
+  })
+
+  it('withholds it when the caller supplied its own content renderer', async () => {
+    // `.top-level-content` is 1.5rem/600, and everything inside inherits it.
+    // A custom content renderer draws a SURFACE — a review deck, a recents
+    // list, a video player, a CodeMirror editor — whose embedded block bodies
+    // set no size of their own, so they came out as headings. Six renderers
+    // were affected; it surfaced as every Readwise backlog highlight rendering
+    // at heading size.
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('root')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await waitFor(() => {
+      expect(document.querySelector('.block-content')).not.toBeNull()
+    })
+    expect(document.querySelector('.block-content.top-level-content')).toBeNull()
+  })
+
   it('does not remount the content subtree when a collapse toggle re-renders the layout', async () => {
     render(
       <AppRuntimeContextProvider value={runtime}>
