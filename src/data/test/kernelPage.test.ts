@@ -192,6 +192,26 @@ describe('getOrCreateKernelPage', () => {
       expect(page.peekProperty(typesProp)).toEqual([PAGE_TYPE, FOO_PAGE_TYPE])
     })
 
+    it('still refuses a FOREIGN occupant at this id', async () => {
+      // Being unable to write is not the same as being entitled to read. A
+      // read-only session is exactly as exposed to a colliding derived id, and
+      // returning the handle unchecked would hand the caller another
+      // workspace's block under this workspace's identity — the read analogue
+      // of the write this function already refuses.
+      const id = kernelPageBlockId(WS, FOO_PAGE_NS)
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id, workspaceId: 'other-workspace', parentId: null, orderKey: 'a0',
+          content: 'someone else\'s page',
+        }, {systemMint: true})
+      }, {scope: ChangeScope.BlockDefault})
+
+      const repo = readOnlyRepo()
+      await expect(getOrCreateKernelPage(repo, WS, {
+        namespace: FOO_PAGE_NS, alias: 'Foo', markerType: FOO_PAGE_TYPE,
+      })).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+    })
+
     it('still rejects a malformed spec, rather than silently no-op-ing', async () => {
       // The author-facing validation has to fire whichever session runs it.
       const repo = readOnlyRepo()

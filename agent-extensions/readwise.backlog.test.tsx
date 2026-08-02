@@ -251,6 +251,20 @@ describe('done count', () => {
     const rows = {gone: hl('gone', true, true), missing: null}
     expect(countReviewedDepartures(['gone', 'missing'], [], reader(rows))).toBe(0)
   })
+
+  it('does not count a reviewed row that lost its highlight type', () => {
+    // The grouping won't render it, so counting it would leave "N done"
+    // describing rows that are not on screen. Both call sites admit on the
+    // same rule.
+    const untyped = {
+      id: 'x', parentId: 'sec', deleted: false,
+      properties: {
+        [typesProp.name]: typesProp.codec.encode(['page']),
+        [REVIEWED_PROP]: true,
+      },
+    } as unknown as BlockData
+    expect(countReviewedDepartures(['x'], [], reader({x: untyped}))).toBe(0)
+  })
 })
 
 describe('sticky ids', () => {

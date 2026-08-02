@@ -115,11 +115,6 @@ export const getOrCreateKernelPage = async (
       'KernelPageSpec.markerType is required — pass a marker block-type to query the page by, or null for a page reached only by its id and alias.',
     )
   }
-  // AFTER the spec validation above, so a malformed call still fails loudly
-  // for the author rather than silently no-op-ing on whichever session happens
-  // to be read-only.
-  if (repo.isReadOnly) return repo.block(id)
-
   const types: readonly string[] =
     spec.markerType === null ? [PAGE_TYPE] : [PAGE_TYPE, spec.markerType]
 
@@ -153,6 +148,25 @@ export const getOrCreateKernelPage = async (
   }
 
   const live = await repo.load(id)
+
+  // Read-only: GET, never create or repair. `repo.tx` does not itself refuse a
+  // read-only session — it writes locally and the rows are RLS-rejected on
+  // sync — so without this, merely opening a kernel-page surface as a viewer
+  // leaves never-syncing junk in a workspace you do not own.
+  //
+  // Placed AFTER the occupant read and behind `refuseForeign`, not before
+  // either. A read-only session is exactly as exposed to a colliding id as a
+  // writable one: returning the handle unchecked would hand a caller another
+  // workspace's block under this workspace's identity, which is the read
+  // analogue of the write this function refuses. Being unable to write is not
+  // the same as being entitled to read. It also stays after the spec
+  // validation above, so a malformed call still fails loudly for the author
+  // instead of silently no-op-ing on whichever session happens to be read-only.
+  if (repo.isReadOnly) {
+    if (live) refuseForeign(live)
+    return repo.block(id)
+  }
+
   if (live) {
     refuseForeign(live)
     const currentAliases = stringListProperty(live.properties[aliasesProp.name])

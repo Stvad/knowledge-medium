@@ -2023,7 +2023,14 @@ export const countReviewedDepartures = (
   for (const id of seen) {
     if (live.has(id)) continue
     const data = read(id)
-    if (data && !data.deleted && readReviewed(data)) done++
+    if (!data || data.deleted) continue
+    // Same admission rule as the grouping, deliberately: a block that lost its
+    // highlight type isn't rendered, so counting it as a departure would leave
+    // "N done" describing rows that aren't on screen.
+    let types: readonly string[]
+    try { types = getBlockTypes(data) } catch { continue }
+    if (!types.includes(READWISE_HIGHLIGHT_TYPE)) continue
+    if (readReviewed(data)) done++
   }
   return done
 }
