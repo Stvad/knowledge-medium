@@ -119,10 +119,13 @@ describe('agent runtime commands', () => {
     // The extension block is nested under a label-named container,
     // which is itself a child of the agent-extensions root. So the
     // shape is: root → container("Example extension") → extension.
+    // The container is deliberately untyped (no PAGE_TYPE): extension
+    // homes must not qualify for page-scoped surfaces (content search,
+    // semantic indexing) as if they were user notes.
     const container = installed?.parentId ? await env.repo.load(installed.parentId) : null
     expect(container?.content).toBe('Example extension')
     expect(container?.parentId).toBe(root?.id)
-    expect(container?.properties[typesProp.name]).toEqual([PAGE_TYPE])
+    expect(container?.properties[typesProp.name]).toBeUndefined()
     expect(container?.properties[aliasesProp.name]).toBeUndefined()
   })
 
