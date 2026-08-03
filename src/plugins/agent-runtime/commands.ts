@@ -897,7 +897,10 @@ const installRuntimeExtension = async (
     // every install being a flat sibling of every other install. The
     // extension block itself is identified by `extension:name`, not an
     // alias (see extensionBlockProperties), so it carries no PAGE_TYPE /
-    // alias to keep its source out of the alias index.
+    // alias to keep its source out of the alias index. The container is a
+    // plain untyped block on purpose: tagging it PAGE_TYPE made every
+    // extension home qualify for page-scoped surfaces (content search,
+    // semantic indexing) as if it were a user note.
     let parentId = rootId
     if (label && !parentIdFromInput) {
       const rootChildren = await tx.childrenOf(rootId, workspaceId)
@@ -913,7 +916,6 @@ const installRuntimeExtension = async (
           orderKey: keyAtEnd(rootChildren.at(-1)?.orderKey ?? null),
           content: label,
         })
-        await repo.addTypeInTx(tx, parentId, PAGE_TYPE, {}, typeSnapshot)
       }
     }
 
