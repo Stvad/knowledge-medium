@@ -271,6 +271,35 @@ describe('BlockCache applyIfNewer (LWW)', () => {
     expect(cache.applyIfNewer(snap({content: 'server v2', updatedAt: 200}), 'sync')).toBe(false)
     expect(cache.metrics.applyIfNewerServerLineEscapes).toBe(0)
   })
+
+  it('drops the tracked server line on markMissing too, not only deleteSnapshot', () => {
+    const cache = new BlockCache()
+    cache.applyIfNewer(snap({content: 'server v1', updatedAt: 100}), 'sync')
+    // `markMissing` is the PRODUCTION removal path — `applySyncInvalidation`
+    // and `Repo.load` evict through it, `deleteSnapshot` is barely reached — so
+    // leaving the line behind here is the reachable version of the bug the test
+    // above guards. (Found by review on #527.)
+    cache.markMissing('block-1')
+
+    cache.setSnapshot(snap({content: 'local edit', updatedAt: 300}))
+    expect(cache.applyIfNewer(snap({content: 'server v2', updatedAt: 200}), 'sync')).toBe(false)
+    expect(cache.getSnapshot('block-1')?.content).toBe('local edit')
+    expect(cache.metrics.applyIfNewerServerLineEscapes).toBe(0)
+  })
+
+  it('lets a HYDRATE establish the line, so a restarted session can still escape', () => {
+    const cache = new BlockCache()
+    // Cold cache after a restart: the row arrives from DISK, not from sync.
+    cache.applyIfNewer(snap({content: 'disk v1', updatedAt: 100}), 'hydrate')
+    cache.setSnapshot(snap({content: 'local edit', updatedAt: 300}))
+
+    // Without hydrate recording the line there is nothing to compare against,
+    // the escape is blocked, and the row stays stale for the whole session —
+    // #526 reintroduced one restart later (found by review on #527).
+    expect(cache.applyIfNewer(snap({content: 'server v2', updatedAt: 200}), 'sync')).toBe(true)
+    expect(cache.getSnapshot('block-1')?.content).toBe('server v2')
+    expect(cache.metrics.applyIfNewerServerLineEscapes).toBe(1)
+  })
 })
 
 describe('BlockCache trackedIds', () => {

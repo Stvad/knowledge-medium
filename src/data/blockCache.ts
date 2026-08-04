@@ -106,13 +106,24 @@ export class BlockCache {
    *  missing" (peek → null) per spec §5.2. Cleared on setSnapshot
    *  (the row exists now). */
   private readonly missingIds = new Set<string>()
-  /** Highest server-authored `updatedAt` OBSERVED for an id, whether or not
-   *  the cache accepted it — i.e. where the server's version line is, as
-   *  distinct from what the cache chose to display. Read by `applyIfNewer`'s
-   *  advanced-server-line escape (#526); see the comment there for why it
-   *  tracks observations rather than accepted writes. Dropped with the
-   *  snapshot in `deleteSnapshot` so it can't outlive the row. */
-  private readonly serverBase = new Map<string, number>()
+  /** Highest `updatedAt` OBSERVED for an id from a DURABLE source — a sync
+   *  delivery or a disk re-read — whether or not the cache accepted it. The
+   *  one thing it does NOT include is our own optimistic in-memory write
+   *  (`setSnapshot`), which is the whole point: it is the version line the
+   *  outside world is on, as distinct from what the cache chose to display.
+   *  Read by `applyIfNewer`'s advanced-version escape (#526); see the comment
+   *  there for why it tracks observations rather than accepted writes.
+   *
+   *  Hydration MUST record it too, not just sync (found by review on #527): a
+   *  restarted app meets an already-synced row through the hydrate path, and
+   *  if that leaves no observed version the first merged echo has nothing to
+   *  compare against and the row stays stale for the whole new session —
+   *  reintroducing #526 one restart later.
+   *
+   *  Dropped on BOTH removal paths, `deleteSnapshot` and `markMissing`, so a
+   *  recreated id starts with no observed version and keeps its first-echo
+   *  protection (also #527 review). */
+  private readonly observedVersion = new Map<string, number>()
   /** Mutable counters for cache write/notify activity. Increments
    *  inline in the hot path; consumers snapshot via `metrics.snapshot()`
    *  through `repo.metrics()`. */
@@ -202,46 +213,55 @@ export class BlockCache {
    *
    *    - the ack→echo transient (a rescan re-delivering the version our own
    *      unechoed edit was based on) is a version we HAVE seen, so it is
-   *      `<= serverBase` and the reject stands — no new→old→new flash;
+   *      `<= observedVersion` and the reject stands — no new→old→new flash;
    *    - a capped echo carrying a merge we lack is a version we have NEVER
-   *      seen, so it is `> serverBase` and it lands.
+   *      seen, so it is `> observedVersion` and it lands.
    *
-   *  `serverBase` tracks every OBSERVED sync stamp, accepted or rejected —
-   *  what the server's line is at, not what we chose to display. Tracking
-   *  only accepted ones would leave it unset on exactly the devices that
-   *  reject everything, which are the devices this exists for.
+   *  `observedVersion` tracks every OBSERVED durable version, accepted or
+   *  rejected — where the outside world's line is, not what we chose to
+   *  display. Tracking only ACCEPTED ones would leave it unset on exactly the
+   *  devices that reject everything, which are the devices this exists for.
    *
-   *  Undefined `serverBase` (no sync row ever seen for this id) does NOT
-   *  escape: a locally-created row's first echo must not be able to clobber
-   *  an edit made between create and echo.
+   *  Undefined `observedVersion` (nothing durable ever seen for this id) does
+   *  NOT escape: a locally-created row's first echo must not be able to
+   *  clobber an edit made between create and echo.
    *
-   *  Residual, narrower than what it fixes: a foreign row we have never seen,
-   *  stamped BELOW our local stamp, delivered inside our own ack→echo window,
-   *  escapes and shows a transient flash the echo then resolves. That needs
-   *  our clock ahead of the writing device's but under the cap. Traded
-   *  deliberately against the permanent staleness above.
+   *  Two residuals, both narrower than what this fixes:
+   *
+   *    - a foreign row we have never seen, stamped BELOW our local stamp,
+   *      delivered inside our own ack→echo window, escapes and shows a
+   *      transient flash the echo then resolves. Needs our clock ahead of the
+   *      writing device's but under the cap;
+   *    - a row whose UNSYNCED local edit was already on disk at restart
+   *      hydrates a client-authored version into the line, so its own echo
+   *      cannot exceed it and that row stays stale for the session. Telling
+   *      that case apart needs to know the stamp was client-authored, which
+   *      nothing records. Strictly smaller than the pre-fix behaviour, where
+   *      EVERY row on such a device was stale.
    *
    *  The `source` argument routes call/reject counts into separate metric
-   *  buckets, and gates the escape: `hydrate` re-reads SQL and can legitimately
-   *  return a row older than an in-flight local write, so it stays pure LWW. */
+   *  buckets, and gates the ESCAPE (not the recording): a `hydrate` re-read can
+   *  legitimately return a row older than an in-flight local write, so it must
+   *  never take the escape itself — it only establishes the line. */
   applyIfNewer(snapshot: BlockData, source: ApplyIfNewerSource): boolean {
     if (source === 'sync') this.metrics.applyIfNewerSyncCalls++
     else this.metrics.applyIfNewerHydrateCalls++
     const existing = this.snapshots.get(snapshot.id)
-    const priorServerBase = this.serverBase.get(snapshot.id)
-    if (source === 'sync') {
-      this.serverBase.set(
-        snapshot.id,
-        Math.max(priorServerBase ?? Number.NEGATIVE_INFINITY, snapshot.updatedAt),
-      )
-    }
+    const priorObserved = this.observedVersion.get(snapshot.id)
+    // Record from BOTH sources: a sync delivery and a disk re-read are equally
+    // durable, and only the latter exists on the restart path. `Math.max` keeps
+    // a stale re-read from lowering the line.
+    this.observedVersion.set(
+      snapshot.id,
+      Math.max(priorObserved ?? Number.NEGATIVE_INFINITY, snapshot.updatedAt),
+    )
     if (existing && snapshot.updatedAt <= existing.updatedAt) {
       if (source === 'sync') this.metrics.applyIfNewerSyncRejected++
       else this.metrics.applyIfNewerHydrateRejected++
       if (
         source === 'sync'
-        && priorServerBase !== undefined
-        && snapshot.updatedAt > priorServerBase
+        && priorObserved !== undefined
+        && snapshot.updatedAt > priorObserved
       ) {
         this.metrics.applyIfNewerServerLineEscapes++
         return this.setSnapshot(snapshot)
@@ -252,7 +272,7 @@ export class BlockCache {
   }
 
   deleteSnapshot(id: string): boolean {
-    this.serverBase.delete(id)
+    this.observedVersion.delete(id)
     if (!this.snapshots.delete(id)) return false
 
     this.notify(id)
@@ -306,6 +326,12 @@ export class BlockCache {
    *  — subscribers don't care which transition fired, only that they
    *  should re-read. */
   markMissing(id: string): boolean {
+    // Same reason `deleteSnapshot` drops it: a recreated id must start with no
+    // observed version, or a version above the pre-deletion line takes the
+    // #526 escape and rolls the new row back over an edit made before its
+    // first echo. This is the production removal path — `applySyncInvalidation`
+    // and `Repo.load` evict through here, not through `deleteSnapshot`.
+    this.observedVersion.delete(id)
     const hadMarker = this.missingIds.has(id)
     const hadSnapshot = this.snapshots.delete(id)
     if (hadMarker && !hadSnapshot) return false

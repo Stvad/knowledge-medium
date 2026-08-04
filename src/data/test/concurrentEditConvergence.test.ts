@@ -383,6 +383,49 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     expect(a.cache.metrics.snapshot().applyIfNewerServerLineEscapes).toBeGreaterThan(0)
   })
 
+  // Same convergence claim, but reached the way a real install reaches it: the
+  // app RESTARTS between the last sync and the contended edit. Found by review
+  // on PR #527 — the test above seeds the cache through a sync drain during
+  // setup, so it can only exercise the warm path. A cold cache hydrates the row
+  // from disk instead, and if hydration does not establish the observed version
+  // the far-ahead author's first merged echo has nothing to compare against,
+  // cannot escape, and the row is stale for the whole new session — the very
+  // bug this file claims to have fixed, one restart later.
+  it('converges after a RESTART, when the row entered a cold cache by hydration (#527 review)', async () => {
+    const { a, b, server } = await setupFarAheadClock()
+
+    // Restart device A: a fresh repo + cache over the SAME database, with its
+    // clock continuing forward (still past the cap).
+    let time = 1_700_000_000_000 + 5_400_000 + 1_000
+    let idCursor = 100
+    const { repo: restartedRepo, cache: restartedCache } = createTestRepo({
+      db: dbA.db,
+      user: { id: 'user-a' },
+      now: () => ++time,
+      newId: () => `a-gen-${++idCursor}`,
+    })
+    restartedRepo.setActiveWorkspaceId(WS)
+    const restarted: Device = {
+      db: dbA.db, repo: restartedRepo, cache: restartedCache, cursor: a.cursor,
+    }
+
+    // Hydrate TARGET into the cold cache the way a query would — through the
+    // hydrate path, from disk. This is the state the bug needs.
+    const diskRow = await readRow(restarted, TARGET)
+    expect(diskRow, 'precondition: the row is on disk from the pre-restart session').not.toBeNull()
+    await restarted.repo.load(TARGET)
+    expect(restarted.cache.getSnapshot(TARGET)?.content,
+      'precondition: the cold cache hydrated the row from disk').toBe(diskRow!.content)
+
+    await contendOnTarget(restarted, b, server)
+
+    const disk = await readRow(restarted, TARGET)
+    expect(disk, 'precondition: disk converged').toMatchObject({ content: 'B-content' })
+    expect(restarted.cache.getSnapshot(TARGET)?.content,
+      'the restarted session converges too, rather than lagging until the NEXT reload')
+      .toBe('B-content')
+  })
+
   // The exact cap-boundary collision below can't be steered through the real
   // pipeline (the proposal has to land on one specific millisecond), so it is
   // pinned against the server model directly. The end-to-end case above covers

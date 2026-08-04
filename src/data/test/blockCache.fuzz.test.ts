@@ -144,8 +144,9 @@ interface ModelEntry {
 interface Model {
   snapshots: Map<Id, ModelEntry>
   missing: Set<Id>
-  /** Mirrors BlockCache's `serverBase` — highest OBSERVED sync stamp per id. */
-  serverBase: Map<Id, number>
+  /** Mirrors BlockCache's `observedVersion` — highest OBSERVED durable
+   *  version per id, from sync deliveries AND disk re-reads alike. */
+  observedVersion: Map<Id, number>
 }
 
 interface MetricsModel {
@@ -199,15 +200,14 @@ const modelApplyIfNewer = (
   if (source === 'sync') metrics.applyIfNewerSyncCalls++
   else metrics.applyIfNewerHydrateCalls++
   const existing = model.snapshots.get(id)
-  const priorServerBase = model.serverBase.get(id)
-  if (source === 'sync') {
-    model.serverBase.set(id, Math.max(priorServerBase ?? Number.NEGATIVE_INFINITY, updatedAt))
-  }
+  const priorObserved = model.observedVersion.get(id)
+  // Recorded from BOTH sources — hydration establishes the line too.
+  model.observedVersion.set(id, Math.max(priorObserved ?? Number.NEGATIVE_INFINITY, updatedAt))
   if (existing && updatedAt <= existing.updatedAt) {
     if (source === 'sync') metrics.applyIfNewerSyncRejected++
     else metrics.applyIfNewerHydrateRejected++
     // Advanced-server-line escape (#526).
-    if (source === 'sync' && priorServerBase !== undefined && updatedAt > priorServerBase) {
+    if (source === 'sync' && priorObserved !== undefined && updatedAt > priorObserved) {
       metrics.applyIfNewerServerLineEscapes++
       return modelSetSnapshot(model, metrics, id, content, updatedAt)
     }
@@ -218,7 +218,7 @@ const modelApplyIfNewer = (
 
 /** Mirrors `deleteSnapshot` (blockCache.ts:191-196). */
 const modelDelete = (model: Model, metrics: MetricsModel, id: Id): boolean => {
-  model.serverBase.delete(id)
+  model.observedVersion.delete(id)
   if (!model.snapshots.delete(id)) return false
   metrics.notifies++
   return true
@@ -226,6 +226,7 @@ const modelDelete = (model: Model, metrics: MetricsModel, id: Id): boolean => {
 
 /** Mirrors `markMissing` (blockCache.ts:244-251). */
 const modelMarkMissing = (model: Model, metrics: MetricsModel, id: Id): boolean => {
+  model.observedVersion.delete(id)
   const hadMarker = model.missing.has(id)
   const hadSnapshot = model.snapshots.delete(id)
   if (hadMarker && !hadSnapshot) return false
@@ -246,7 +247,7 @@ describe('BlockCache', () => {
     fc.assert(
       fc.property(opsArb, ops => {
         const cache = new BlockCache()
-        const model: Model = {snapshots: new Map(), missing: new Set(), serverBase: new Map()}
+        const model: Model = {snapshots: new Map(), missing: new Set(), observedVersion: new Map()}
         const metrics = zeroMetrics()
 
         for (const op of ops) {
@@ -349,7 +350,7 @@ describe('BlockCache', () => {
         const cache = new BlockCache()
         // Lightweight model reused only to detect whether a mutation
         // notified (same rules as property 1's model functions).
-        const model: Model = {snapshots: new Map(), missing: new Set(), serverBase: new Map()}
+        const model: Model = {snapshots: new Map(), missing: new Set(), observedVersion: new Map()}
         const metrics = zeroMetrics()
         const records: ListenerRecord[] = []
         const activeByid = new Map<Id, Set<number>>(IDS.map(id => [id, new Set<number>()]))
