@@ -105,13 +105,15 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     importPath: '@/extensions/blockInteraction.js',
     description: 'Block-interaction facets — click handlers, content/layout renderers, shortcut activations.',
     exports: [
-      'blockBulletHoverFacet', 'blockChildrenFooterFacet', 'blockClickHandlersFacet',
+      'blockBulletClassFacet', 'blockBulletHoverFacet', 'blockChildrenFooterFacet',
+      'blockClickHandlersFacet',
       'blockContentDecoratorsFacet', 'blockContentRendererFacet', 'blockContentSurfacePropsFacet',
       'blockTextClassFacet',
       'blockHeaderFacet', 'blockLayoutFacet', 'shortcutSurfaceActivationsFacet', 'enterBlockEditMode',
       'getBlockContentRendererSlot', 'isSelectionClick',
     ],
     types: [
+      'BlockBulletClassContext', 'BlockBulletClassContribution',
       'BlockBulletHoverContribution', 'BlockChildrenFooterContribution', 'BlockClickContribution',
       'BlockHeaderContribution', 'BlockContentDecorator', 'BlockContentDecoratorContribution',
       'BlockContentRendererContribution', 'BlockContentRendererSlot', 'BlockContentSurfaceContribution',

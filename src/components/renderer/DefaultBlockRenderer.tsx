@@ -45,6 +45,7 @@ import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
 import {
+  blockBulletClassFacet,
   blockBulletHoverFacet,
   blockChildrenFooterFacet,
   blockClickHandlersFacet,
@@ -107,11 +108,18 @@ const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {
 /** Static bullet visual — pure markup, no link/menu/data dependency.
  *  Exported so LazyBlockComponent can reuse the exact same dot in its
  *  placeholder, keeping placeholder layout aligned with mounted blocks. */
-export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicator?: boolean }) {
+export function BulletDot({withChildrenIndicator = false, className = ''}: {
+  withChildrenIndicator?: boolean
+  /** Plugin-contributed classes for this bullet (`blockBulletClassFacet`).
+   *  Applied to the dot, so it composes with the collapsed halo rather than
+   *  replacing it. */
+  className?: string
+}) {
   return (
     <span
       className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '')}/>
+        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '') +
+        (className ? ` ${className}` : '')}/>
   )
 }
 
@@ -124,6 +132,15 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const hasChildren = useHasChildren(block)
+
+  // Bullet classes contributed by plugins (the alias plugin rings a page's
+  // bullet). `aliases` is read HERE, reactively, for the same reason the text
+  // classes are: a contribution can't call hooks, and reading `block.peek()`
+  // inside one would freeze at resolve time, so naming a block wouldn't
+  // re-mark it. See `blockBulletClassFacet`.
+  const aliases = useBlockAliases(block)
+  const resolveBulletClasses = runtime.read(blockBulletClassFacet)
+  const bulletClass = resolveBulletClasses({block, aliases})
 
   // Bullet hover-card sections contributed by plugins (block-info, …). Empty
   // on a stock build — then the hover-intent and "Block info" menu item below
@@ -163,7 +180,7 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
             onMouseEnter={hover.anchorHoverProps.onMouseEnter}
             onMouseLeave={hover.anchorHoverProps.onMouseLeave}
           >
-            <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
+            <BulletDot withChildrenIndicator={hasChildren && isCollapsed} className={bulletClass}/>
           </a>
         </ContextMenuTrigger>
         <ContextMenuPortal>

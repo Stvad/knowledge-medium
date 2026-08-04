@@ -63,6 +63,8 @@ export type {
 } from '@/extensions/core.js'
 
 export type {
+  BlockBulletClassContext,
+  BlockBulletClassContribution,
   BlockBulletHoverContribution,
   BlockChildrenFooterContribution,
   BlockClickContribution,

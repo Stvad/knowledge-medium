@@ -541,6 +541,46 @@ export const blockTextClassFacet = defineFacet<
   validate: isFunction<BlockTextClassContribution>,
 })
 
+/** What a bullet-class contribution gets to decide from. No `isFocal`: the
+ *  focal block renders no bullet at all (the controls slot returns null for
+ *  it), so there is no focal case to decide. `aliases` is read reactively at
+ *  the bullet, same reason as above. */
+export interface BlockBulletClassContext {
+  block: Block
+  /** The block's page names, or `[]`. */
+  aliases: readonly string[]
+}
+
+export type BlockBulletClassContribution = (ctx: BlockBulletClassContext) => string | null
+export type BlockBulletClassResolver = (ctx: BlockBulletClassContext) => string
+
+/**
+ * Classes for the block's BULLET, contributed by plugins.
+ *
+ * The third of the sibling class seams, and the one to reach for when the
+ * mark should not be part of the text at all. Nothing here inherits into the
+ * content subtree, nothing here can be resized or re-flowed by a decorator
+ * that wraps the content (the type chips make the content container
+ * shrink-to-fit, which is what made a border on the title text render at two
+ * different widths), and the bullet column is where an outline already
+ * carries structural facts — collapsed-with-children draws its halo here.
+ *
+ * Contributions land on the dot itself, so they compose with that halo rather
+ * than replacing it: keep them to paint (color, background, box-shadow) and
+ * to the dot's own size. Anything that changes the bullet's FOOTPRINT would
+ * move every row's text, since the surrounding anchor is fixed-size.
+ */
+export const blockBulletClassFacet = defineFacet<
+  BlockBulletClassContribution,
+  BlockBulletClassResolver
+>({
+  id: 'core.block-bullet-class',
+  combine: contributions => context =>
+    contributions.map(contribute => contribute(context)).filter(Boolean).join(' '),
+  empty: () => () => '',
+  validate: isFunction<BlockBulletClassContribution>,
+})
+
 export const resolveShortcutActivations = (
   contributions: readonly ShortcutActivationContribution[],
   context: ShortcutSurfaceContext,

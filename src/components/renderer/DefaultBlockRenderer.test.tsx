@@ -14,7 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
-import { aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
+import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
 import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -395,7 +395,11 @@ describe('page styling via the alias plugin contribution', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       newId: () => crypto.randomUUID(),
-      extensions: [defaultEditorInteractionExtension, aliasPageStylingContribution],
+      extensions: [
+        defaultEditorInteractionExtension,
+        aliasPageStylingContribution,
+        aliasPageBulletContribution,
+      ],
     }).repo
     runtime = repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
@@ -440,13 +444,19 @@ describe('page styling via the alias plugin contribution', () => {
     const node = await screen.findByText(text)
     // The class lands on the text container the renderer builds, which is the
     // node holding the text or its parent depending on the markdown wrapper.
-    const carrier = node.closest('.page-title-text, .page-name-text, .block-title-text')
+    const carrier = node.closest('.page-name-text, .block-title-text')
     return carrier?.className ?? node.className
   }
 
-  it('marks the open page as a page title', async () => {
+  it('leaves the open page\'s title as a plain focal heading', async () => {
     renderBlock('page')
-    expect(await textClasses('Inbox')).toContain('page-title-text')
+
+    const classes = await textClasses('Inbox')
+    // The positive half is the non-vacuity fence: this asserts the title text
+    // IS being classed (so the carrier lookup and the render both worked) and
+    // that the page treatment is what's absent, not the whole mechanism.
+    expect(classes).toContain(BLOCK_TITLE_TEXT_CLASS)
+    expect(classes).not.toContain('page-name-text')
   })
 
   it('marks a named page seen in the hierarchy, not only when it is open', async () => {
@@ -461,7 +471,6 @@ describe('page styling via the alias plugin contribution', () => {
 
     const classes = await textClasses('Inbox')
     expect(classes).toContain('page-name-text')
-    expect(classes).not.toContain('page-title-text')
     expect(classes).not.toContain(BLOCK_TITLE_TEXT_CLASS)
   })
 
@@ -474,7 +483,58 @@ describe('page styling via the alias plugin contribution', () => {
 
     const classes = await textClasses('just a bullet')
     expect(classes).not.toContain('page-name-text')
-    expect(classes).not.toContain('page-title-text')
+  })
+
+  const bulletClasses = async (text: string): Promise<string> => {
+    // Fence on the row's own text first: the bullet is a sibling of the
+    // content, so querying it before the block has rendered would find
+    // nothing and make an "absent" assertion pass vacuously.
+    await screen.findByText(text)
+    const bullet = document.querySelector('.bullet')
+    expect(bullet).toBeTruthy()
+    return bullet!.className
+  }
+
+  it('rings the bullet of a page in the hierarchy', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+
+    expect(await bulletClasses('Inbox')).toContain('page-bullet')
+  })
+
+  it('leaves an ordinary block\'s bullet a plain dot', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'page')
+    })
+
+    renderBlock('plain')
+
+    const classes = await bulletClasses('just a bullet')
+    // Positive half: the bullet IS being classed, so what's absent is the page
+    // mark rather than the whole mechanism.
+    expect(classes).toContain('bullet')
+    expect(classes).not.toContain('page-bullet')
+  })
+
+  it('re-marks the bullet in place when a block loses its alias', async () => {
+    // Same reactivity contract as the text classes: `aliases` is read at the
+    // bullet via the hook, so un-naming a block un-rings it without a remount.
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+    expect(await bulletClasses('Inbox')).toContain('page-bullet')
+
+    await act(async () => {
+      await repo.block('page').set(aliasesProp, [])
+    })
+
+    await vi.waitFor(async () =>
+      expect(await bulletClasses('Inbox')).not.toContain('page-bullet'))
   })
 
   it('restyles in place when a block gains an alias', async () => {
