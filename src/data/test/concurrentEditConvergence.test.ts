@@ -86,6 +86,20 @@ const deliverAndDrain = async (
   return outcome
 }
 
+/** Download into staging WITHOUT materializing. Splitting the two halves of
+ *  `deliverAndDrain` is what lets a test place a foreign row in staging and
+ *  then drain it at a chosen moment — e.g. after the local edit that raced it
+ *  has already been acked. */
+const deliverOnly = async (device: Device, server: FakeSyncServer): Promise<void> => {
+  device.cursor = await server.deliverTo(device.db, device.cursor)
+}
+
+const drainOnly = async (device: Device): Promise<MaterializeOutcome | null> => {
+  const outcome = await drainStagingWindowOnce(device.db, materializeDeps)
+  if (outcome) applySyncInvalidation(device.cache, device.repo.handleStore, outcome.snapshots, [])
+  return outcome
+}
+
 interface RowShape {
   content: string
   properties_json: string
@@ -295,6 +309,49 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     expect(await readRow(a, TARGET), 'the far-ahead author still learns the merged content')
       .toMatchObject({ content: 'B-content' })
     expect(await readRow(a, TARGET)).toEqual(await readRow(b, TARGET))
+  })
+
+  // The constraint any #526 fix has to satisfy, driven end to end rather than
+  // through hand-built snapshots. `invalidate.test.ts` covers the unit shape,
+  // but at a 6-second stamp gap — small enough that a rule keyed on stamp
+  // DISTANCE sails past it while still being wrong (see #526).
+  //
+  // Shape: a foreign row lands in staging, A edits and gets ACKED before that
+  // row is drained, so by drain time `ps_crud` is empty and the disk gate —
+  // deliberately indiscriminate — writes the older foreign row over A's newer
+  // local one. Disk reverts transiently and the echo converges it. The cache
+  // must NOT follow disk down, or A watches its own edit vanish and come back.
+  it('does not surface the transient disk revert when a foreign row drains after a local ack', async () => {
+    const { a, b, server } = await setup()
+
+    // B's edit reaches A's STAGING but is not materialized yet.
+    await b.repo.tx(async tx => {
+      await tx.update(TARGET, { content: 'B-content' })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(b, server)
+    await deliverOnly(a, server)
+
+    // A edits against its pre-B base and gets acked. `ps_crud` is now empty,
+    // so the staged row from B no longer looks like it is racing a local edit.
+    await a.repo.tx(async tx => {
+      await tx.update(TARGET, { content: 'A-content' })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(a, server)
+
+    await drainOnly(a)
+
+    // Precondition — without this the test would pass vacuously if the staged
+    // row never reached the disk gate at all. This IS the transient revert.
+    expect((await readRow(a, TARGET))?.content,
+      'precondition: the disk gate applied the older foreign row').toBe('B-content')
+
+    // The claim: the UI does not follow it down.
+    expect(a.cache.getSnapshot(TARGET)?.content,
+      'A keeps rendering its own edit while disk is transiently reverted').toBe('A-content')
+
+    // ...and the echo converges both, so the transient really was transient.
+    await quiesce([a, b], server)
+    expect(a.cache.getSnapshot(TARGET)?.content).toBe((await readRow(a, TARGET))?.content)
   })
 
   // Characterization, not a guarantee: this asserts a KNOWN-WRONG cache state
