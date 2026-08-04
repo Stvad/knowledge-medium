@@ -486,11 +486,13 @@ describe('upload-routing triggers', () => {
 
     const payload = JSON.parse(h.psCrud()[0].data)
     expect(payload).toMatchObject({op: 'PATCH', type: 'blocks', id: 'b1'})
-    // workspace_id is always emitted (even on a content-only edit) so the
-    // encrypt-on-upload hook can look up the WK + build AAD; the rest are
-    // change-gated.
+    // workspace_id and base_updated_at are always emitted (even on a
+    // content-only edit) — the first so the encrypt-on-upload hook can look up
+    // the WK + build AAD, the second so the server can tell a drifted merge
+    // from a clean one (#381). The rest are change-gated.
     expect(payload.data).toEqual({
       workspace_id: 'ws1',
+      base_updated_at: 1700000000000,
       content: 'new',
       updated_at: 1700000999000,
       updated_by: 'user-2',
@@ -504,7 +506,42 @@ describe('upload-routing triggers', () => {
     h.clearTxContext()
 
     const payload = JSON.parse(h.psCrud()[0].data)
-    expect(payload.data).toEqual({workspace_id: 'ws1', parent_id: null})
+    expect(payload.data).toEqual({
+      workspace_id: 'ws1',
+      base_updated_at: 1700000000000,
+      parent_id: null,
+    })
+  })
+
+  it('stamps base_updated_at with the row version the edit started from, not the one it wrote (#381)', () => {
+    // The base is the server-confirmed version this edit was made AGAINST, so
+    // the server can ask "did the row move under them?" and force the echo to
+    // materialize when it did. Emitting NEW.updated_at instead would make every
+    // patch look clean and leave the bug exactly where it was.
+    h.insertBlock({id: 'b1', content: 'old', updated_at: 1700000000000})
+    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'new', updated_at: 1700000000500})
+    h.clearTxContext()
+
+    const {data} = JSON.parse(h.psCrud()[0].data)
+    expect(data.base_updated_at).toBe(1700000000000)
+    expect(data.updated_at).toBe(1700000000500)
+  })
+
+  it('re-bases each edit in a burst on the previous local version', () => {
+    // Two edits before any upload: the second patch's base is the FIRST edit's
+    // stamp — a version the server has never seen. That is why the upload
+    // compactor keeps the EARLIEST base when it coalesces a burst into one wire
+    // PATCH (see mergePatchPayloads in services/powersync.ts); taking this one
+    // would describe a server state that never existed.
+    h.insertBlock({id: 'b1', content: 'v0', updated_at: 1700000000000})
+    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'v1', updated_at: 1700000000100})
+    h.updateBlock('b1', {content: 'v2', updated_at: 1700000000200})
+    h.clearTxContext()
+
+    const bases = h.psCrud().map(row => JSON.parse(row.data).data.base_updated_at)
+    expect(bases).toEqual([1700000000000, 1700000000100])
   })
 
   it('does not queue an empty PATCH for no-op UPDATE statements', () => {
