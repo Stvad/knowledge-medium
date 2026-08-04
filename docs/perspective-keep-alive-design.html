@@ -31,7 +31,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review; round 8 (2026-07-22) adds the codebase-wide seam audit (§"The broader sweep"), App/main sentinel-comment policy, and the two-PR rollout split — implementation of PR 1 (core seam + globals) starting. PR #425 review correction (2026-07-24): the active session id is <code>Repo</code> instance state (<code>repo.activeLayoutSessionId</code>, mirroring <code>activeWorkspaceId</code>), not a module store — three dispositions updated accordingly. <strong>Last verified against code:</strong> 2026-07-24 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. Branch rebased onto current master and re-verified 2026-07-21: every cited line checked (App.tsx untouched; the video-player notes-view extraction, projection drain-race fix, and barrel retirement don't move any claim); §"Retiring the globals" added per review; round 8 (2026-07-22) adds the codebase-wide seam audit (§"The broader sweep"), App/main sentinel-comment policy, and the two-PR rollout split — implementation of PR 1 (core seam + globals) starting. PR #425 review correction (2026-07-24): the active session id is <code>Repo</code> instance state (<code>repo.activeLayoutSessionId</code>, mirroring <code>activeWorkspaceId</code>), not a module store — three dispositions updated accordingly. <strong>2026-08-04: PR 1 merged (#425); the infrastructure slice (PR #446, "PR 1.5") implemented through six codex review rounds + the routing-seam architecture pass — see the new §"PR 1.5" for the landed contract (claims registry, <code>LayoutSessionRouter</code>, <code>LayoutWsContext</code>, staged panel-history effects, <code>isCancelled</code>) the host PR builds against.</strong> <strong>Last verified against code:</strong> 2026-08-04 (<code>layout-session-host</code> branch @ <code>d1d3c224f</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -698,7 +698,47 @@ two perspectives, once mounted in the visible one, immediately hydrates its hidd
   prerequisite for Activity-hiding media later.</li>
 </ol>
 
-<h3>PR 2 — perspectives (builds on PR 1)</h3>
+<h3>PR 1.5 — multi-session infrastructure + the routing seam (PR #446, landed through review)</h3>
+
+<p>Between the original two PRs, review iteration on PR #446 grew a piece this doc didn't
+originally spec: a <strong>route-owner seam</strong> that answers "which layout session does a URL
+address?" in ONE place, replacing the scattered per-caller guesses that six review rounds kept
+finding holes in. The contract the host (PR 2) builds against:</p>
+
+<ul>
+  <li><strong>Claims (boot-time knowledge, persisted per device)</strong> —
+  <code>repo.claimLayoutContextKey(workspaceId, key)</code> / <code>releaseLayoutContextKey</code>,
+  scoped <code>(user, workspace)</code>, merge-on-write across tabs. A claimed key marks its
+  ws-context routes as consumer-addressed <em>before the consumer's code loads</em>: boots defer
+  them instead of applying them to the base session. Claim at startup; release on
+  disable/uninstall.</li>
+  <li><strong><code>LayoutSessionRouter</code> (live authority)</strong> — register
+  <code>{resolveSessionKey(route) &rarr; session key | null}</code> via
+  <code>repo.setLayoutSessionRouter</code>. <code>applyCurrentLayoutUrl</code> computes every
+  same-workspace route's <em>addressee</em> and a session applies a route only when it is the
+  addressee (else <code>{kind: 'deferred'}</code>, touching neither rows nor URL):
+  claimed&nbsp;context + router &rarr; router resolves (null&nbsp;=&nbsp;base); claimed + no router
+  &rarr; defer; context-free + router &rarr; base-addressed, so <em>non-base sessions defer it</em>
+  (the router's presence is the multi-session-mode signal — a pasted plain link can't collapse a
+  lane); context-free + no router &rarr; single-session behavior, unchanged.</li>
+  <li><strong><code>LayoutWsContext</code> (link generation, the render-side half)</strong> — the
+  host wraps each warm session subtree in a provider carrying that session's
+  <code>{workspaceId, wsContext}</code>; in-app anchors build hrefs through
+  <code>useAppHashInContext</code>/<code>appHashForSession</code> so a warm-hidden tree
+  re-rendering under another active lane still stamps ITS OWN lane. No provider = global-hash
+  fallback (single-session core).</li>
+  <li><strong>Transactional discipline</strong> — <code>panelHistory</code> mutations are staged
+  and run post-commit (<code>peekUrlNavigation</code> supplies in-tx values), so tx aborts have
+  nothing to undo; <code>applyCurrentLayoutUrl</code> takes <code>isCancelled</code> (the
+  projection passes its <code>disposed</code>) so a dead projection can never write the URL.
+  Ordering contract stands: dispose the outgoing projection <em>before</em> installing the
+  successor hash.</li>
+  <li><strong>Canonical ids</strong> — <code>layoutSessionBlockIdForKey</code> /
+  <code>layoutSessionsContainerBlockId</code> are the session-key&rarr;block-id derivations
+  (exported + in the extension API catalog); never re-derive the uuid chain.</li>
+</ul>
+
+<h3>PR 2 — perspectives (builds on PR 1 + the routing seam)</h3>
 
 <ol>
   <li>Active-session store + <code>LayoutSessionHost</code> override behind a default-off switch;
