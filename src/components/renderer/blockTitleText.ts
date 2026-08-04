@@ -1,5 +1,8 @@
 import type { Block } from '@/data/block.js'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
+import { useBlockAliases } from '@/hooks/block.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import { blockTextClassFacet } from '@/extensions/blockInteraction.js'
 
 /** Title typography (1.5rem/600) for the focal block's own text.
  *
@@ -32,7 +35,23 @@ import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
  *  `useIsFocalRender`. */
 export const BLOCK_TITLE_TEXT_CLASS = 'block-title-text'
 
-/** `BLOCK_TITLE_TEXT_CLASS` when this render of `block` is its panel's document
- *  body, `''` otherwise — shaped for `clsx`-free className concatenation. */
-export const useBlockTitleTextClass = (block: Block): string =>
-  useIsFocalRender(block) ? BLOCK_TITLE_TEXT_CLASS : ''
+/** Every class this render of `block` puts on its own text: the focal title
+ *  class, plus whatever plugins contribute through `blockTextClassFacet`
+ *  (the alias plugin marks pages here). `''` when there is nothing to add —
+ *  shaped for `clsx`-free className concatenation.
+ *
+ *  Plugin text styling comes through this one seam for the reason above: a
+ *  plugin that wanted to make page titles bigger would otherwise reach for
+ *  the content-surface facet and re-create the inheritance bug.
+ *
+ *  `aliases` is read HERE, reactively, and passed down — a facet contribution
+ *  can't call hooks, and reading `block.peek()` inside one would freeze at
+ *  resolve time, so renaming a block wouldn't restyle it. */
+export const useBlockTitleTextClass = (block: Block): string => {
+  const isFocal = useIsFocalRender(block)
+  const aliases = useBlockAliases(block)
+  const runtime = useAppRuntime()
+  const resolveTextClasses = runtime.read(blockTextClassFacet)
+  const contributed = resolveTextClasses({block, isFocal, aliases})
+  return [isFocal ? BLOCK_TITLE_TEXT_CLASS : '', contributed].filter(Boolean).join(' ')
+}

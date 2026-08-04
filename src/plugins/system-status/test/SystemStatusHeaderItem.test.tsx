@@ -54,7 +54,10 @@ vi.mock('@/components/Login.js', () => ({
 // The dropdown's diagnostic buttons (Inspect / Reload / Enable) dispatch by
 // action id through runActionById; assert the id rather than the side effect.
 vi.mock('@/shortcuts/runAction.js', () => ({
-  runActionById: (...args: unknown[]) => mocks.runActionById(...args),
+  runActionByIdSafely: async (...args: unknown[]) => {
+    mocks.runActionById(...args)
+    return true
+  },
 }))
 
 vi.mock('../RejectionDialog.tsx', () => ({
@@ -446,4 +449,5 @@ describe('SystemStatusHeaderItem', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Reload'}))
     expect(mocks.runActionById).toHaveBeenCalledWith('app.reload', expect.anything())
   })
+
 })

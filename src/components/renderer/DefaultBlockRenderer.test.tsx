@@ -14,7 +14,8 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
-import { focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
+import { aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
+import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -116,14 +117,20 @@ const dispatchPaste = (target: Element, text: string): Event => {
   return event
 }
 
+// ONE database for the whole file (AGENTS.md: share one DB per test file).
+// The three describes below differ only in the extensions their repo is built
+// with, not in storage, so they reset this handle rather than each standing up
+// their own PowerSync instance — three per worker is exactly the kind of setup
+// cost that turns into timeout flakes under full-gate parallelism.
+let sharedDb: TestDb
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
 describe('DefaultBlockRenderer paste handling', () => {
-  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     vi.mocked(pasteMultilineText).mockClear()
 
@@ -308,12 +315,9 @@ const ContentShellLayout: BlockLayout = ({Content, Shell, block}) => {
 }
 
 describe('DefaultBlockRenderer slot identity', () => {
-  let sharedDb: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     contentMountCount = 0
     await resetTestDb(sharedDb.db)
@@ -377,9 +381,125 @@ describe('DefaultBlockRenderer slot identity', () => {
   })
 })
 
-// A surface renderer supplied through the FACET rather than the prop — the
-// hello-content shape from `exampleExtensions`. Gated on block id so one
-// fixture serves both the facet and non-facet cases.
+describe('page styling via the alias plugin contribution', () => {
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    // The alias plugin's contribution is registered explicitly: the styling is
+    // ITS decision, so this asserts the whole seam (core reads `aliases`
+    // reactively → plugin returns a class → the text renderer applies it),
+    // not a class the renderer hardcodes.
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [defaultEditorInteractionExtension, aliasPageStylingContribution],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'page', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Inbox',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Inbox'])},
+      })
+      await tx.create({
+        id: 'plain', workspaceId: 'ws-1', parentId: null, orderKey: 'a1', content: 'just a bullet',
+      })
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a2',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'page styling fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  // No ContentRenderer override — the real markdown renderer is what applies
+  // text classes, so a stub would make every assertion below vacuous.
+  const renderBlock = (blockId: string) =>
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: blockId}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block(blockId)} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const textClasses = async (text: string): Promise<string> => {
+    const node = await screen.findByText(text)
+    // The class lands on the text container the renderer builds, which is the
+    // node holding the text or its parent depending on the markdown wrapper.
+    const carrier = node.closest('.page-title-text, .page-name-text, .block-title-text')
+    return carrier?.className ?? node.className
+  }
+
+  it('marks the open page as a page title', async () => {
+    renderBlock('page')
+    expect(await textClasses('Inbox')).toContain('page-title-text')
+  })
+
+  it('marks a named page seen in the hierarchy, not only when it is open', async () => {
+    // 'page' is not the focal block here, so it renders as an ordinary row —
+    // the case where page-ness was previously invisible. It gets the
+    // weight-only marker, NOT the heading: it is one row among siblings.
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+
+    const classes = await textClasses('Inbox')
+    expect(classes).toContain('page-name-text')
+    expect(classes).not.toContain('page-title-text')
+    expect(classes).not.toContain(BLOCK_TITLE_TEXT_CLASS)
+  })
+
+  it('leaves a plain block alone wherever it appears', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'page')
+    })
+
+    renderBlock('plain')
+
+    const classes = await textClasses('just a bullet')
+    expect(classes).not.toContain('page-name-text')
+    expect(classes).not.toContain('page-title-text')
+  })
+
+  it('restyles in place when a block gains an alias', async () => {
+    // `aliases` is read reactively in `useBlockTitleTextClass` precisely so
+    // this works: a contribution resolved from frozen data would keep the
+    // pre-rename styling until something unrelated invalidated it.
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+    expect(await textClasses('Inbox')).toContain('page-name-text')
+
+    await act(async () => {
+      await repo.block('page').set(aliasesProp, [])
+    })
+
+    await vi.waitFor(async () =>
+      expect(await textClasses('Inbox')).not.toContain('page-name-text'))
+  })
+})
+
+// A plugin surface that wins the content-renderer FACET rather than being
+// passed as a prop — the shape a real content-renderer contribution takes.
+// Gated on block id so one fixture serves both the facet and non-facet cases.
 const FacetSurfaceRenderer = ({block}: BlockRendererProps) => (
   <div className="facet-surface">{block.id}</div>
 )

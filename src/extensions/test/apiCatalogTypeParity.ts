@@ -73,6 +73,8 @@ export type {
   BlockContentRendererSlot,
   BlockContentSurfaceContribution,
   BlockContentSurfaceProps,
+  BlockTextClassContext,
+  BlockTextClassContribution,
   BlockInteractionContext,
   BlockResolveContext,
   BlockLayout,

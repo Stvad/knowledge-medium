@@ -8,10 +8,12 @@
  */
 import { systemToggle } from '@/facets/togglable.js'
 import { actionsFacet, workspaceLandingFacet } from '@/extensions/core.js'
+import { blockHeaderFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import type { Repo } from '@/data/repo'
 import { onboardingLanding } from './landing.ts'
 import { insertTutorialAction } from './action.ts'
+import { tutorialBannerHeader } from './TutorialBanner.tsx'
 
 // The seeded tutorial tags demo blocks with the todo / char-counter / srs /
 // place / map types. The seed runs at bootstrap (before the app runtime is
@@ -33,6 +35,12 @@ export const onboardingPlugin = ({ repo }: { repo: Repo }): AppExtension =>
     // daily-notes resolver lands; returns null to defer the landing target.
     workspaceLandingFacet.of(onboardingLanding, { source: 'onboarding', precedence: 10 }),
     actionsFacet.of(insertTutorialAction({ repo }), { source: 'onboarding' }),
+    // Prominent entry point, scoped to the daily note the app lands on —
+    // the seeded `[[Tutorial]]` bullet scrolls away with the day's writing,
+    // and the palette action is undiscoverable for the user who needs it
+    // most. Self-gates so every other block pays no header cost; the banner
+    // itself renders nothing once dismissed.
+    blockHeaderFacet.of(tutorialBannerHeader, { source: 'onboarding' }),
   ])
 
 export { seedTutorial } from './seed.ts'

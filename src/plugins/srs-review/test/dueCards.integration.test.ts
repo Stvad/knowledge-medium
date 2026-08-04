@@ -20,7 +20,7 @@ import {
   srsNextReviewDateProp,
   srsArchivedProp,
 } from '@/plugins/srs-rescheduling/schema.ts'
-import { buildDueCardsQuery } from '../dueQuery.ts'
+import { buildDueCardsQuery, buildTaggedCandidatesQuery, selectNewCards } from '../dueQuery.ts'
 
 const WS = 'ws-1'
 const NOW = new Date('2026-06-02T12:00:00')
@@ -152,5 +152,65 @@ describe('SRS due cards (end-to-end)', () => {
     await card('off-roam', 'dn-past')
 
     expect(await runIds({workspaceId: WS, tagBlockId: 'roam-page', now: NOW})).toEqual(['on-roam'])
+  })
+})
+
+describe('SRS new cards — tagged but not enrolled (end-to-end)', () => {
+  const tagged = (id: string, opts: {parentId?: string | null; types?: readonly string[]} = {}) =>
+    create({
+      id,
+      parentId: opts.parentId ?? null,
+      types: opts.types,
+      references: [{id: 'tag-flash', alias: 'Flashcards', sourceField: ''}],
+    })
+
+  const newIds = async (tagBlockId: string | null) =>
+    selectNewCards(
+      await env.repo.queryBlocks(buildTaggedCandidatesQuery({workspaceId: WS, tagBlockId})),
+    ).map(b => b.id)
+
+  beforeEach(async () => {
+    await create({id: 'tag-flash', properties: {alias: ['Flashcards']}})
+  })
+
+  it('collects a tagged block that carries no SRS metadata', async () => {
+    await tagged('fresh')
+
+    expect(await newIds('tag-flash')).toEqual(['fresh'])
+  })
+
+  it('leaves an already-enrolled card out, even when it is not due', async () => {
+    await dailyNote('dn-future', '2026-07-01')
+    await tagged('enrolled', {types: [SRS_SM25_TYPE]})
+    await env.repo.tx(tx => tx.update('enrolled', {
+      properties: {
+        [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode('dn-future'),
+      },
+    }), {scope: ChangeScope.BlockDefault})
+
+    // Not due (July) and not new — otherwise the next grade would reset it
+    // to the SM-2.5 defaults.
+    expect(await runIds({workspaceId: WS, tagBlockId: 'tag-flash', now: NOW})).toEqual([])
+    expect(await newIds('tag-flash')).toEqual([])
+  })
+
+  it('does NOT sweep in untagged descendants of a tagged block', async () => {
+    // The load-bearing scope decision: a card's answer usually lives as a
+    // child of the tagged question. Ancestor scope would enroll it as its
+    // own card.
+    await tagged('question')
+    await create({id: 'answer', parentId: 'question'})
+
+    expect(await newIds('tag-flash')).toEqual(['question'])
+  })
+
+  it('collects nothing for the untagged all-due deck', async () => {
+    // No tag means no "tagged for SRS" set — the query must not degrade
+    // into every block in the workspace.
+    await tagged('fresh')
+    await create({id: 'unrelated'})
+
+    expect(await newIds(null)).toEqual([])
   })
 })

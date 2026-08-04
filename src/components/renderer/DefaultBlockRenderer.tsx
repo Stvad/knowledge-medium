@@ -40,7 +40,7 @@ import {
   ContextMenuContent,
 } from '@/components/ui/context-menu.js'
 import { useBlockContext } from '@/context/block.js'
-import { useHasChildren, usePropertyValue } from '@/hooks/block.js'
+import { useBlockAliases, useHasChildren, usePropertyValue } from '@/hooks/block.js'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
@@ -528,6 +528,11 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
+  // The block's page names, surfaced on the resolve context so plugins can key
+  // on "is this a page" (see `aliases` on BlockResolveContext). Core reports the
+  // fact and takes no view on what it should look like — the alias plugin owns
+  // that, via `blockContentSurfacePropsFacet`.
+  const aliases = useBlockAliases(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
   // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
@@ -563,6 +568,7 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     types,
+    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -586,6 +592,7 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     types,
+    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -644,6 +651,8 @@ export function DefaultBlockRenderer(
       // player, a Readwise backlog — and font-size/weight inherit, so styling
       // the container styles an arbitrary plugin subtree. It lives on the
       // renderers that draw the block's own TEXT instead (`blockTitleText.ts`).
+      // Page styling follows the same rule for the same reason — see
+      // `blockTitleText.ts` and the alias plugin's `pageStyling.ts`.
       const topLevelClass = isTopLevel ? ' top-level-content' : ''
       return (
         <div

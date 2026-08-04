@@ -18,7 +18,7 @@ import {
   useUIStateProperty,
 } from '@/data/globalState.js'
 import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.js'
-import { usePropertyValue } from '@/hooks/block.js'
+import { usePropertyValue, useBlockAliases } from '@/hooks/block.js'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
@@ -52,6 +52,9 @@ export function useShortcutSurfaceActivations(
   const blockContext = useBlockContext()
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [types] = usePropertyValue(block, typesProp)
+  // Every BlockResolveContext carries `aliases` alongside `types`, so a
+  // shortcut-surface facet can gate on page-ness too.
+  const aliases = useBlockAliases(block)
   const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
   const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
     ? blockContext.layoutSessionBlockId
@@ -89,6 +92,7 @@ export function useShortcutSurfaceActivations(
       repo,
       uiStateBlock,
       types,
+      aliases,
       topLevelBlockId,
       scopeRootId,
       isTopLevel: block.id === topLevelBlockId && !blockContext.isNestedSurface,
@@ -111,6 +115,7 @@ export function useShortcutSurfaceActivations(
       repo,
       uiStateBlock,
       types,
+      aliases,
       topLevelBlockId,
       scopeRootId,
       scopeRootForcesOpen,

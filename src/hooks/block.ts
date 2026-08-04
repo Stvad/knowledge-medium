@@ -34,6 +34,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
+import { getAliases } from '@/data/properties.js'
 import { Block } from '../data/block'
 import { useRepo } from '@/context/repo.js'
 
@@ -285,6 +286,21 @@ export const usePropertyValue = useProperty
 // ════════════════════════════════════════════════════════════════════
 
 const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
+
+/** The block's page names (`alias`), reactively.
+ *
+ *  Deliberately NOT `usePropertyValue(block, aliasesProp)`: that calls
+ *  `codec.decode` with no catch, and this read runs for EVERY rendered block
+ *  (it feeds `BlockResolveContext.aliases`). One malformed stored value —
+ *  imported, hand-written, arrived over sync — would throw inside the renderer
+ *  itself, above the per-block error boundary, and blank out that block's whole
+ *  subtree. `getAliases` is the codebase's existing tolerant decode for exactly
+ *  this case; the shared empty array keeps the common no-alias path
+ *  identity-stable through `useHandle`'s equality bail-out. */
+export const useBlockAliases = (block: Block): readonly string[] =>
+  useHandle(block, {
+    selector: data => (data ? getAliases(data) : EMPTY_STRING_ARRAY),
+  }) as readonly string[]
 
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
  *  while the handle is loading or for a leaf block.
