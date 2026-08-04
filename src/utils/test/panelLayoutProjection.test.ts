@@ -549,6 +549,35 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelHistory.consumeRestore(rowId)).toBe(restoredState)
   })
 
+  it('a competing mid-tx CLEAR of the pending restore blocks the staged restore (clear ≠ drain)', async () => {
+    // recovery falling back without a snapshot calls
+    // enqueueRestore(undefined) — an intentional WRITE meaning "no restore
+    // should be pending" — while leaving the stacks untouched. Unlike a
+    // renderer drain, that decision must stand: the staged commit must not
+    // install its stale restore over it (the recovery's row write wins the
+    // pane content, and a stale scroll/focus would replay onto it).
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'b', state: {scrollTop: 7}})
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.enqueueRestore(rowId, undefined) // recovery's clear
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(panelHistory.consumeRestore(rowId)).toBeUndefined()
+  })
+
   it('a THROWING router defers the route instead of failing the apply', async () => {
     // resolveSessionKey is third-party extension code on core's boot path —
     // a throw must not fail bootstrap or reject the projection's queue.

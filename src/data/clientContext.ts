@@ -118,13 +118,26 @@ export interface ClientContextReader {
  *  synchronous bootstrap read; typeof-guarded so non-browser environments
  *  (node tests, SSR) degrade to in-memory claims. */
 const LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY = 'layout-context-claims'
+/** Acquire localStorage WITHOUT trusting the getter: in an opaque-origin /
+ *  sandboxed WebView (or under a deny-DOM-storage policy) merely evaluating
+ *  `localStorage` throws SecurityError — and the claims read runs as a
+ *  ClientContext field initializer, so an unguarded access would fail Repo
+ *  construction instead of degrading to in-memory claims. */
+const safeLocalStorage = (): Storage | null => {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage
+  } catch {
+    return null
+  }
+}
 const layoutContextClaimScope = (userId: string, workspaceId: string): string =>
   `${userId}/${workspaceId}`
 const readPersistedLayoutContextClaims = (): Map<string, Set<string>> => {
   const claims = new Map<string, Set<string>>()
-  if (typeof localStorage === 'undefined') return claims
+  const storage = safeLocalStorage()
+  if (!storage) return claims
   try {
-    const raw = localStorage.getItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY)
+    const raw = storage.getItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY)
     const parsed: unknown = raw === null ? {} : JSON.parse(raw)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       for (const [scope, keys] of Object.entries(parsed)) {
@@ -138,14 +151,15 @@ const readPersistedLayoutContextClaims = (): Map<string, Set<string>> => {
   }
 }
 const writePersistedLayoutContextClaims = (claims: ReadonlyMap<string, ReadonlySet<string>>): boolean => {
-  if (typeof localStorage === 'undefined') return false
+  const storage = safeLocalStorage()
+  if (!storage) return false
   try {
     const serialized = Object.fromEntries(
       [...claims.entries()]
         .filter(([, keys]) => keys.size > 0)
         .map(([scope, keys]) => [scope, [...keys].sort()]),
     )
-    localStorage.setItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY, JSON.stringify(serialized))
+    storage.setItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY, JSON.stringify(serialized))
     return true
   } catch {
     // Quota/private-mode failures degrade to in-memory claims (the caller
@@ -194,11 +208,12 @@ export class ClientContext implements ClientContextReader {
   private _claimsPersistenceDegraded = false
 
   private mutateLayoutContextClaims(mutate: (claims: Map<string, Set<string>>) => boolean): void {
-    const canReadPersisted = typeof localStorage !== 'undefined' && !this._claimsPersistenceDegraded
+    const hasStorage = safeLocalStorage() !== null
+    const canReadPersisted = hasStorage && !this._claimsPersistenceDegraded
     const fresh = canReadPersisted ? readPersistedLayoutContextClaims() : this._claimedLayoutContextKeys
     const changed = mutate(fresh)
     this._claimedLayoutContextKeys = fresh
-    if (changed && typeof localStorage !== 'undefined') {
+    if (changed && hasStorage) {
       this._claimsPersistenceDegraded = !writePersistedLayoutContextClaims(fresh)
     }
   }

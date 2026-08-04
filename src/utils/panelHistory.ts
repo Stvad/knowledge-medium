@@ -77,7 +77,7 @@ const EMPTY: PanelHistoryState = {back: [], forward: []}
  *  see stageUrlNavigation / commitUrlNavigation. */
 export interface UrlNavigationStage {
   state: PanelHistoryState
-  pending: VisitState | undefined
+  pendingWriteVersion: number
 }
 
 /** Carry the enter marker from the entry being consumed onto the entry
@@ -90,6 +90,18 @@ export class PanelHistoryStore {
   private readonly listeners = new Map<string, CallbackSet<[]>>()
   private readonly snapshotters = new Map<string, () => VisitState | undefined>()
   private readonly pendingRestore = new Map<string, VisitState>()
+  /** Monotonic per-panel counter of pending-restore WRITES — bumped by
+   *  every enqueueRestore (set AND clear) and by clear(), never by
+   *  consumeRestore. The staged-commit protocol compares it to tell a
+   *  competing WRITER (a recovery's queued restore, or its intentional
+   *  clear — both mean "my restore decision stands") from a benign
+   *  renderer DRAIN (a delivered previous restore leaves the slot empty
+   *  naturally, and the committed entry's restore should still install). */
+  private readonly pendingRestoreWriteVersion = new Map<string, number>()
+
+  private bumpPendingWrite(panelId: string): void {
+    this.pendingRestoreWriteVersion.set(panelId, (this.pendingRestoreWriteVersion.get(panelId) ?? 0) + 1)
+  }
 
   getSnapshot = (panelId: string): PanelHistoryState =>
     this.state.get(panelId) ?? EMPTY
@@ -204,7 +216,7 @@ export class PanelHistoryStore {
   stageUrlNavigation(panelId: string): UrlNavigationStage {
     return {
       state: this.getSnapshot(panelId),
-      pending: this.pendingRestore.get(panelId),
+      pendingWriteVersion: this.pendingRestoreWriteVersion.get(panelId) ?? 0,
     }
   }
 
@@ -227,12 +239,14 @@ export class PanelHistoryStore {
   ): void {
     if (this.getSnapshot(panelId) !== stagedAt.state) return
     const committed = currentEntry ? this.reconcileUrlNavigation(panelId, currentEntry, targetBlockId) : null
-    // Only a PRESENT, different pending value marks a live competing
-    // writer (e.g. a recovery's queued restore) — an empty slot can't be
-    // clobbered, and a benign mid-tx drain (consumeRestore) must not
-    // strand the committed entry's restore.
-    const pendingNow = this.pendingRestore.get(panelId)
-    if (pendingNow === stagedAt.pending || pendingNow === undefined) {
+    // Version compare, not value compare: a competing WRITER bumps the
+    // write version whether it queued a restore or intentionally CLEARED
+    // the slot (enqueueRestore(undefined) — e.g. recovery falling back
+    // with no snapshot; a value compare reads that clear as identical to
+    // a benign drain and would install a stale restore over it). Renderer
+    // drains (consumeRestore) don't bump, so a delivered previous restore
+    // never strands the committed entry's restore.
+    if ((this.pendingRestoreWriteVersion.get(panelId) ?? 0) === stagedAt.pendingWriteVersion) {
       this.enqueueRestore(panelId, committed?.state)
     }
   }
@@ -276,6 +290,7 @@ export class PanelHistoryStore {
     const had = this.state.has(panelId)
     this.state.delete(panelId)
     this.pendingRestore.delete(panelId)
+    this.bumpPendingWrite(panelId)
     if (had) this.notify(panelId)
   }
 
@@ -306,6 +321,7 @@ export class PanelHistoryStore {
    *  Used by back/forward to hand the popped entry's snapshot to the
    *  renderer; the renderer's post-navigation effect drains it. */
   enqueueRestore(panelId: string, state: VisitState | undefined): void {
+    this.bumpPendingWrite(panelId)
     if (!state) {
       this.pendingRestore.delete(panelId)
       return

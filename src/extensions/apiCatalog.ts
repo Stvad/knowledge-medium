@@ -215,6 +215,13 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
     types: [],
   },
   {
+    category: 'ui',
+    importPath: '@/context/layoutWsContext.js',
+    description: 'Session-scoped link context. Session hosts MUST wrap each warm session subtree in a LayoutWsContext provider ({workspaceId, wsContext}), or hidden sessions\' anchors carry the active lane.',
+    exports: ['LayoutWsContext', 'useAppHashInContext', 'appHashForSession'],
+    types: ['LayoutWsContextValue'],
+  },
+  {
     category: 'data',
     importPath: '@/data/api/index.js',
     description: 'Data-layer public API — property/type authoring (seedType, defineProperty, seedProperty, codecs, ChangeScope). Directory module: import the explicit /index.js.',

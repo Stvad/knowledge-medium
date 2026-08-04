@@ -117,6 +117,25 @@ describe('ClientContext layout-context claims (persistence)', () => {
     expect(tabA.hasClaimedLayoutContextKey('ws-2', 'persp')).toBe(true)
   })
 
+  it('a THROWING localStorage getter (sandboxed WebView SecurityError) degrades to in-memory claims', () => {
+    // In opaque-origin/sandboxed contexts merely EVALUATING `localStorage`
+    // throws — and the claims read runs as a ClientContext field
+    // initializer, so an unguarded access would fail Repo construction.
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw new Error('SecurityError: access denied') },
+    })
+    try {
+      const tabX = tab('sandboxed') // must not throw
+      tabX.claimLayoutContextKey('ws-1', 'persp') // must not throw
+      expect(tabX.hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(true)
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor)
+      else delete (globalThis as Record<string, unknown>).localStorage
+    }
+  })
+
   it('a NO-OP release still absorbs the persisted state', () => {
     const tabA = tab('a')
     tabA.claimLayoutContextKey('ws-1', 'persp')
