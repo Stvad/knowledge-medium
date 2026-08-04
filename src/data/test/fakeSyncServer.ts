@@ -106,6 +106,12 @@ const CONTENT_COLUMNS = [
 
 const asBool = (v: unknown): boolean => v === true || v === 1 || v === 'true'
 
+/** How far past server-now the drift bump trusts a client's proposed stamp
+ *  (`max_trusted_skew_ms`, 20260803000000). Unbounded, a crafted or badly
+ *  broken clock could pin a row's version at bigint max, after which every
+ *  later `+ 1` raises 22003 and the row is permanently uneditable. */
+const MAX_TRUSTED_SKEW_MS = 3_600_000
+
 export interface FakeSyncServer {
   /** `BlockUploadSink.createRows` — apply_block_creates semantics. */
   createRows(rows: readonly Record<string, unknown>[]): Promise<void>
@@ -281,7 +287,11 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
           || baseVersion !== old.updated_at
 
         if (drifted) {
-          next.updated_at = Math.max(serverNow, old.updated_at, rawProposed) + 1
+          next.updated_at = Math.max(
+            serverNow,
+            old.updated_at,
+            Math.min(rawProposed, serverNow + MAX_TRUSTED_SKEW_MS),
+          ) + 1
         } else {
           next.updated_at = Math.max(next.updated_at, old.updated_at)
           const contentChanged = CONTENT_COLUMNS.some(col => next[col] !== old[col])

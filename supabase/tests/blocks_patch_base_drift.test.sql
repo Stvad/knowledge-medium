@@ -21,7 +21,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(11);
+SELECT plan(14);
 
 CREATE TEMP TABLE drift_test_ctx AS
 SELECT
@@ -130,14 +130,16 @@ SELECT cmp_ok(
 --    value would yield server_now + 1, which for a client one millisecond
 --    ahead lands back ON the author's stamp and re-opens #381.
 -------------------------------------------------------------------------
+-- 60s ahead: a realistic fast clock, comfortably inside the trusted-skew bound
+-- that test 9 exercises the far side of.
 SELECT pg_temp.seed_block('d-fast', (SELECT then_ms FROM drift_test_ctx), 'theirs');
 SELECT pg_temp.patch_block('d-fast', 'mine',
-  (SELECT now_ms + 3600000 FROM drift_test_ctx),
+  (SELECT now_ms + 60000 FROM drift_test_ctx),
   (SELECT then_ms - 5000 FROM drift_test_ctx));
 
 SELECT is(
   (SELECT updated_at FROM public.blocks WHERE id = 'd-fast'),
-  (SELECT now_ms + 3600000 + 1 FROM drift_test_ctx),
+  (SELECT now_ms + 60000 + 1 FROM drift_test_ctx),
   'fast-clock drifted patch bumps to proposed + 1 (pre-clamp)'
 );
 -- The display stamp is NOT dragged along: it stays clamped to server now.
@@ -217,6 +219,36 @@ SELECT is(
   (SELECT updated_at FROM public.blocks WHERE id = 'd-batch-b'),
   (SELECT then_ms + 4000 FROM drift_test_ctx),
   'a clean patch following a drifted one in the same batch is unaffected'
+);
+
+-------------------------------------------------------------------------
+-- 9. The drift branch steps around the future-clamp, so it carries its own
+--    bound. `apply_block_patches` is SECURITY INVOKER and granted to
+--    `authenticated`: unbounded, any workspace writer could send bigint max and
+--    pin the version there, after which every later `+ 1` raises 22003 and the
+--    row is permanently uneditable (and the value is past JS's safe-integer
+--    range, so the client cannot represent it either).
+-------------------------------------------------------------------------
+SELECT pg_temp.seed_block('d-huge', (SELECT then_ms FROM drift_test_ctx), 'v0');
+SELECT pg_temp.patch_block('d-huge', 'v1', 9223372036854775806, 0);
+
+SELECT cmp_ok(
+  (SELECT updated_at FROM public.blocks WHERE id = 'd-huge'), '<=',
+  (extract(epoch from now()) * 1000)::bigint + 3600000 + 1000,
+  'a crafted far-future stamp is bounded to ~server now + the trusted skew'
+);
+SELECT cmp_ok(
+  (SELECT updated_at FROM public.blocks WHERE id = 'd-huge'), '<',
+  9007199254740991::bigint,
+  'the bounded version stays inside JS safe-integer range'
+);
+
+-- ...and the row is still editable afterwards, which is the failure that made
+-- this a data-loss bug rather than a cosmetic one.
+SELECT lives_ok(
+  $$ SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object(
+       'id', 'd-huge', 'content', 'v2', 'updated_at', '1', 'base_updated_at', '1'))) $$,
+  'a row that received a crafted stamp is still editable'
 );
 
 SELECT * FROM finish();

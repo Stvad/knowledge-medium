@@ -79,6 +79,21 @@ declare
   -- which is the author's local stamp again — equal stamps, echo skipped,
   -- exactly the bug this migration exists to fix.
   raw_proposed bigint := NEW.updated_at;
+  -- How far past server-now the drift bump is willing to trust a client's
+  -- proposed stamp. Real clock skew is seconds; an hour is already generous.
+  --
+  -- Without this bound the drift branch would persist whatever a caller sent:
+  -- `apply_block_patches` is SECURITY INVOKER and granted to `authenticated`,
+  -- so any workspace writer (or a client with a wildly wrong clock) could send
+  -- `updated_at` = bigint max and pin the row's version there. Every later
+  -- write's `+ 1` then raises 22003 and the row becomes permanently uneditable
+  -- — and the client classifies 22003 as permanent, so those edits are
+  -- quarantined rather than retried. Such a value is also past JS's
+  -- safe-integer range, which `BlockRow.updated_at` (a `number`) cannot
+  -- represent. The pre-#381 code was immune only because it clamped every
+  -- proposal to server-now; the drift branch deliberately steps around that
+  -- clamp, so it has to carry its own bound.
+  max_trusted_skew_ms constant bigint := 3600000;
   base_setting text;
   base_version bigint;
   drifted boolean := false;
@@ -119,15 +134,27 @@ begin
     end if;
 
     if drifted then
-      -- Deliberate, BOUNDED exception to the future-clamp above. The result can
-      -- exceed server-now by at most (the author's own clock skew + 1ms) — it
-      -- is never further ahead than the stamp that client already minted on its
-      -- own row, so this cannot pin a row's version arbitrarily far in the
-      -- future the way an unclamped proposal could. `updated_at` is a pure
-      -- row-version post-20260612 (display reads `user_updated_at`), so being
-      -- ahead of wall-clock costs nothing; the floor already relies on that.
-      -- OLD is inside the greatest(), so this subsumes the monotonic floor.
-      NEW.updated_at := greatest(server_now_ms, OLD.updated_at, raw_proposed) + 1;
+      -- Deliberate, BOUNDED exception to the future-clamp above: the result may
+      -- exceed server-now by at most `max_trusted_skew_ms + 1`. `updated_at` is
+      -- a pure row-version post-20260612 (display reads `user_updated_at`), so
+      -- sitting a little ahead of wall-clock costs nothing — the floor already
+      -- relies on that. OLD is inside the greatest(), so this subsumes the
+      -- monotonic floor.
+      --
+      -- Clearing `raw_proposed` (the PRE-clamp proposal) is what makes the echo
+      -- materialize on the author's device, since that is the stamp it wrote
+      -- locally. A client skewed further ahead than the cap gets the bound
+      -- instead, so its echo can land BELOW its local stamp: the merged row
+      -- still reaches disk, but the in-memory cache's LWW gate rejects it and
+      -- the UI shows the stale row until the next reload. That is the same
+      -- degradation such a client already gets today on every ordinary edit
+      -- (the future-clamp knocks its stamp down the same way), so the cap
+      -- trades a pre-existing nuisance for an unbounded, unrecoverable one.
+      NEW.updated_at := greatest(
+        server_now_ms,
+        OLD.updated_at,
+        least(raw_proposed, server_now_ms + max_trusted_skew_ms)
+      ) + 1;
     else
       -- Un-drifted (or not a patch write): pre-#381 behavior, verbatim.
       --
@@ -160,10 +187,15 @@ end $$;
 
 -- 2. Publish each patch's base version to the trigger, per row.
 --
--- Set immediately before the UPDATE it describes and cleared immediately after,
--- so patch N's base can never be read by patch N+1 — nor by any non-patch
--- UPDATE that follows in the same transaction. An absent key becomes '0'
--- ("no usable base"), which the trigger already treats as drifted.
+-- Set immediately before the UPDATE it describes and cleared immediately after.
+-- What the clear actually buys is the state left behind AFTER the loop: any
+-- non-patch UPDATE later in the same transaction — a create-TOUCH above all —
+-- must not see a leftover base and read as drifted (#244). Patch N+1 is already
+-- safe from patch N without it, since it sets its own base first; the clear is
+-- kept per-iteration rather than hoisted so that the invariant is "no statement
+-- but the one it describes ever sees a base", which stays true if a future
+-- edit adds a statement inside the loop. An absent key becomes '0' ("no usable
+-- base"), which the trigger already treats as drifted.
 --
 -- `base_updated_at` itself never reaches the column list: the UPDATE below is a
 -- closed set of real columns and unknown patch keys are ignored, which is also
