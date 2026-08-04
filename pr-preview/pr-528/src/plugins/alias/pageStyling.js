@@ -1,0 +1,2 @@
+import{blockTextClassFacet as e}from"../../extensions/blockInteraction.js";var t=e=>e.aliases.length===0?null:e.isFocal?`page-title-text`:`page-name-text`,n=e.of(t,{source:`alias`});export{t as aliasPageStyling,n as aliasPageStylingContribution};
+//# sourceMappingURL=pageStyling.js.map
