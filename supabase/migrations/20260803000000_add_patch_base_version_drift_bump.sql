@@ -133,6 +133,27 @@ begin
   -- so clamping it down is always safe.)
   NEW.user_updated_at := least(coalesce(NEW.user_updated_at, NEW.updated_at), server_now_ms);
 
+  -- Accepted residual, widened by this migration and recorded rather than
+  -- fixed. Once a row's version sits ABOVE server-now — which the drift bump
+  -- below now arranges for up to `max_trusted_skew_ms` after any contended
+  -- write — an UN-drifted patch from a clock-ahead client can converge on
+  -- `updated_at` while permanently diverging on `user_updated_at`:
+  --
+  --   OLD.updated_at = 5001, server-now = 1002, the author's clock = 1500.
+  --   Its proposed updated_at (5002, by I3) is future-clamped to 1002, then the
+  --   floor and the content bump restore it to 5002 — equal to the author's own
+  --   local stamp, so the echo is skipped. But `user_updated_at` was clamped
+  --   from 1500 to 1002 on the way in, and the skipped echo is what would have
+  --   carried that correction back.
+  --
+  -- Left alone deliberately: `user_updated_at` is display-only, so the cost is a
+  -- slightly-off "last edited" on one device. Including it in the content-change
+  -- test below would fix it, at the price of a version bump — and therefore a
+  -- fleet-wide re-materialize — on every metadata-only write, which is a much
+  -- worse trade. Note this does NOT violate I1 as reconcile.ts states it: the
+  -- content columns are identical, and metadata is excluded from the version by
+  -- design (20260612).
+
   if TG_OP = 'UPDATE' then
     base_setting := current_setting('km.patch_base_updated_at', true);
 
