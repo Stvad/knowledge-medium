@@ -25,11 +25,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { createFakeSyncServer, type FakeSyncServer } from '@/data/test/fakeSyncServer'
+import {
+  createFakeSyncServer,
+  MAX_TRUSTED_SKEW_MS,
+  type FakeSyncServer,
+} from '@/data/test/fakeSyncServer'
 import {
   __applyCompactedBlockOperationsForTest,
+  __compactBlockCrudEntriesForTest,
   __runUploadLoopForTest,
 } from '@/services/powersync'
+import { CrudEntry, UpdateType } from '@powersync/common'
 import { applySyncInvalidation } from '@/data/internals/syncObserver/invalidate.js'
 import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness.js'
 import { ChangeScope } from '@/data/api'
@@ -284,7 +290,6 @@ describe('concurrent edits on one row converge (issue #381)', () => {
   // arithmetic goes wrong.
   it('never returns a drifted patch at the author\'s own proposed stamp, even at the cap boundary', async () => {
     const SERVER_NOW = 1_700_000_000_000
-    const CAP_MS = 3_600_000
     const server = createFakeSyncServer({ now: () => SERVER_NOW })
 
     await server.createRows([{
@@ -298,7 +303,7 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     // One millisecond past the cap: least() returns the cap, and `+ 1` lands
     // back exactly on the proposal — the author's own local stamp, which is
     // what the echo skip keys on.
-    const proposed = SERVER_NOW + CAP_MS + 1
+    const proposed = SERVER_NOW + MAX_TRUSTED_SKEW_MS + 1
     await server.applyPatches([{
       id: 'x',
       payload: {
@@ -312,6 +317,96 @@ describe('concurrent edits on one row converge (issue #381)', () => {
       server.rows().find(row => row.id === 'x')?.updated_at,
       'a drifted merge must never come back at the stamp the author already holds',
     ).not.toBe(proposed)
+  })
+
+  it('a pre-upgrade patch leading a burst still forces the echo, through the real compactor', async () => {
+    // The compactor's keep-first-base rule has a unit test, but that one asserts
+    // a payload SHAPE. The claim that actually matters is the one in its
+    // comment: inheriting a later patch's base can make a burst read as clean
+    // and hand the row back at the author's own stamp — the equal-stamp skip,
+    // i.e. #381 again. Nothing pinned that, so reverting the rule broke only
+    // the shape assertion. This drives the real `compactBlockCrudEntries` into
+    // the real server model and asserts the STAMP outcome instead.
+    //
+    // `ps_crud` is persistent across a bundle upgrade, so the leading patch
+    // carries no base (queued by the old build) while the trailing one does.
+    const V = 1_700_000_001_000
+    const server = createFakeSyncServer({ now: () => 1_800_000_000_000 })
+    await server.createRows([{
+      id: 'x', workspace_id: WS, parent_id: null, order_key: 'a0', content: 'original',
+      properties_json: '{}', references_json: '[]',
+      created_at: V, updated_at: V, user_updated_at: V,
+      created_by: 'user-a', updated_by: 'user-a', deleted: false,
+    }])
+
+    // Device B's concurrent edit lands first and advances the server to V+1 —
+    // which is exactly the local stamp A's second edit was made against.
+    await server.applyPatches([{
+      id: 'x',
+      payload: {workspace_id: WS, content: 'B-content', updated_at: V + 1, base_updated_at: V},
+    }])
+    expect(server.rows().find(r => r.id === 'x')?.updated_at).toBe(V + 1)
+
+    // Device A's burst: edit 1 pre-upgrade (no base), edit 2 post-upgrade
+    // (base = A's own local stamp from edit 1, V+1).
+    const [operation] = __compactBlockCrudEntriesForTest([
+      new CrudEntry(1, UpdateType.PATCH, 'blocks', 'x',
+        1, {workspace_id: WS, properties_json: '{"color":"red"}', updated_at: V + 1}),
+      new CrudEntry(2, UpdateType.PATCH, 'blocks', 'x',
+        2, {workspace_id: WS, properties_json: '{"color":"blue"}', updated_at: V + 2,
+          base_updated_at: V + 1}),
+    ])
+    // Narrows the compacted-operation union, and fails loudly if the burst ever
+    // stops coalescing to a single patch (which would make the rest vacuous).
+    if (operation?.kind !== 'patch') {
+      throw new Error(`expected one compacted patch op, got ${operation?.kind}`)
+    }
+    await server.applyPatches([{id: 'x', payload: operation.payload}])
+
+    // A's local row sits at V+2. If the burst shipped the inherited base it read
+    // as clean, the server took A's proposal verbatim, and A's echo would come
+    // back at V+2 — its own stamp — and be skipped, leaving A on 'original'.
+    expect(
+      server.rows().find(r => r.id === 'x')?.updated_at,
+      "the echo must not return at the author's own stamp",
+    ).not.toBe(V + 2)
+    expect(server.rows().find(r => r.id === 'x')?.content).toBe('B-content')
+  })
+
+  it('reads a digit-string base the same way a numeric one is read, as Postgres does', async () => {
+    // Oracle fidelity, not product behaviour: the real RPC reads the base with
+    // `patch->>'base_updated_at'`, which returns the same text for a JSON number
+    // and a JSON string of digits — verified against a live Postgres, where the
+    // two forms produce byte-identical rows. The shipped client only ever emits
+    // a number (`json_set` over an INTEGER column), so this is unreachable in
+    // production; it matters because this fake is the convergence fuzzer's model
+    // of the server, and a model that treats a string base as "absent" would
+    // BUMP where production does not — masking a real #381 case rather than
+    // inventing a false one.
+    const SERVER_NOW = 1_700_000_000_000
+    const seededVersion = SERVER_NOW - 1000
+
+    const build = async (base: unknown) => {
+      const server = createFakeSyncServer({ now: () => SERVER_NOW })
+      await server.createRows([{
+        id: 'x', workspace_id: WS, parent_id: null, order_key: 'a0', content: 'v0',
+        properties_json: '{}', references_json: '[]',
+        created_at: seededVersion, updated_at: seededVersion,
+        user_updated_at: seededVersion, created_by: 'u', updated_by: 'u', deleted: false,
+      }])
+      await server.applyPatches([{
+        id: 'x',
+        payload: {
+          workspace_id: WS, content: 'v1', updated_at: SERVER_NOW,
+          user_updated_at: SERVER_NOW, updated_by: 'u', base_updated_at: base,
+        },
+      }])
+      return server.rows().find(row => row.id === 'x')?.updated_at
+    }
+
+    // A base equal to the row's version means no drift, so the proposal stands.
+    expect(await build(String(seededVersion))).toBe(await build(seededVersion))
+    expect(await build(seededVersion)).toBe(SERVER_NOW)
   })
 
   it('leaves an UNCONTENDED echo skippable, so the fix costs one re-materialize per contended write and no more', async () => {

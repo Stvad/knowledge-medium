@@ -110,8 +110,13 @@ const asBool = (v: unknown): boolean => v === true || v === 1 || v === 'true'
 /** How far past server-now the drift bump trusts a client's proposed stamp
  *  (`max_trusted_skew_ms`, 20260803000000). Unbounded, a crafted or badly
  *  broken clock could pin a row's version at bigint max, after which every
- *  later `+ 1` raises 22003 and the row is permanently uneditable. */
-const MAX_TRUSTED_SKEW_MS = 3_600_000
+ *  later `+ 1` raises 22003 and the row is permanently uneditable.
+ *
+ *  Exported so a boundary test can derive its input from this rather than
+ *  restating the number: a test that hardcodes 3_600_000 stops sitting on the
+ *  boundary the moment this value changes, and goes on passing while testing
+ *  nothing. */
+export const MAX_TRUSTED_SKEW_MS = 3_600_000
 
 export interface FakeSyncServer {
   /** `BlockUploadSink.createRows` — apply_block_creates semantics. */
@@ -282,8 +287,17 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
         // 0 pristine sentinel carry no information, so both read as drifted.
         // Deliberately NOT content-gated — see the migration header for why
         // comparing the merged row to OLD answers the wrong question.
+        // `apply_block_patches` reads the base with `patch->>'base_updated_at'`,
+        // which yields the same TEXT for a JSON number and a JSON string of
+        // digits — so the real server compares both, and both are then filtered
+        // by `^[0-9]{1,18}$` (anything else, including an explicit JSON null and
+        // an absent key, becomes the '0' sentinel). Modelling only the number
+        // form would make this oracle bump where production does not, which is
+        // the direction that HIDES a convergence bug rather than inventing one.
         const base = payload.base_updated_at
-        const baseVersion = typeof base === 'number' ? base : null
+        const baseVersion = typeof base === 'number' ? base
+          : typeof base === 'string' && /^[0-9]{1,18}$/.test(base) ? Number(base)
+            : null
         const drifted = baseVersion === null || baseVersion === 0
           || baseVersion !== old.updated_at
 

@@ -137,6 +137,11 @@ begin
     base_setting := current_setting('km.patch_base_updated_at', true);
 
     if coalesce(base_setting, '') <> '' then
+      -- This cast is total only because `apply_block_patches` is the sole
+      -- writer of this GUC and normalizes to `^[0-9]{1,18}$` before setting it.
+      -- Anything else that ever writes `km.patch_base_updated_at` must do the
+      -- same, or a malformed value raises here and rolls back its whole
+      -- transaction.
       base_version := base_setting::bigint;
       -- `0` is the pristine sentinel: a speculative deterministic-id mint that
       -- every device stamps 0 independently (see `systemMint` in txEngine.ts and
@@ -150,22 +155,46 @@ begin
     end if;
 
     if drifted then
-      -- Deliberate, BOUNDED exception to the future-clamp above: the result may
-      -- exceed server-now by at most `max_trusted_skew_ms + 1`. `updated_at` is
-      -- a pure row-version post-20260612 (display reads `user_updated_at`), so
-      -- sitting a little ahead of wall-clock costs nothing — the floor already
-      -- relies on that. OLD is inside the greatest(), so this subsumes the
-      -- monotonic floor.
+      -- Deliberate exception to the future-clamp above. `updated_at` is a pure
+      -- row-version post-20260612 (display reads `user_updated_at`), so sitting
+      -- ahead of wall-clock costs nothing — the floor already relies on that.
+      --
+      -- OLD is inside the greatest(), and that term is load-bearing rather than
+      -- decorative: it is the ONLY thing keeping the version monotonic on this
+      -- path, since the clamp this branch steps around cannot help here. Drop it
+      -- and a row already sitting above server-now regresses by the whole cap.
+      --
+      -- The precise bound is `max(server_now + max_trusted_skew_ms + 2, OLD + 2)`
+      -- — NOT `server_now + cap`, which an earlier version of this comment
+      -- claimed. Two reasons: the collision guard below can add a second
+      -- millisecond, and the OLD term ratchets +1 per drifted write with no
+      -- ceiling, so a long enough run of them climbs without limit (one RPC may
+      -- carry the same id many times). Measured, that ratchet is ~1.3s of excess
+      -- per wall-clock second of sustained drifted writes, so reaching 2^53 from
+      -- a 2026 stamp takes on the order of 10^5 years — safe in practice, but by
+      -- measurement, not by construction. Do NOT clamp the result to recover the
+      -- tidier bound: monotonicity is worth more than a neat ceiling.
       --
       -- Clearing `raw_proposed` (the PRE-clamp proposal) is what makes the echo
       -- materialize on the author's device, since that is the stamp it wrote
       -- locally. A client skewed further ahead than the cap gets the bound
-      -- instead, so its echo can land BELOW its local stamp: the merged row
-      -- still reaches disk, but the in-memory cache's LWW gate rejects it and
-      -- the UI shows the stale row until the next reload. That is the same
-      -- degradation such a client already gets today on every ordinary edit
-      -- (the future-clamp knocks its stamp down the same way), so the cap
-      -- trades a pre-existing nuisance for an unbounded, unrecoverable one.
+      -- instead, so its echo lands BELOW its local stamp: the merged row still
+      -- reaches disk, but the in-memory cache's LWW gate rejects it and the UI
+      -- keeps showing the local row until the next reload.
+      --
+      -- Be precise about what that costs, because the obvious comparison is
+      -- wrong. A far-skewed client ALREADY has its stamps knocked down by the
+      -- future-clamp on ordinary edits, and its cache already rejects those
+      -- echoes — but invisibly, because the content agrees and only the stamps
+      -- differ. Here the content does NOT agree: the rejected echo is the one
+      -- carrying the other device's edit, so until reload the UI shows a row
+      -- from before that edit. Same mechanism, worse consequence, and the cap
+      -- is what introduces it (measured, not assumed).
+      --
+      -- Kept anyway: the alternative is the unbounded ratchet this cap exists
+      -- to stop, which ends in a row no write can ever touch again. A
+      -- reload-recoverable stale view for a client whose clock is more than an
+      -- hour out is the better end of that trade.
       NEW.updated_at := greatest(
         server_now_ms,
         OLD.updated_at,
@@ -262,7 +291,12 @@ BEGIN
     --   * any non-numeric text raises 22P02 inside the trigger, which rolls
     --     back the whole RPC — and the client classifies 22xxx as PERMANENT, so
     --     one bad key quarantines the entire crud transaction to
-    --     `ps_crud_rejected` rather than retrying it.
+    --     `ps_crud_rejected` rather than retrying it. Scope note: this closes
+    --     that hazard for `base_updated_at` ONLY. The UPDATE below still casts
+    --     `updated_at`, `created_at`, `user_updated_at` and `deleted` straight
+    --     from the payload, and a malformed value in any of those raises the
+    --     same way. They are no worse than they were before this migration, and
+    --     `base_updated_at` is guarded because this migration is what added it.
     --
     -- 18 digits is the widest value that cannot overflow bigint on cast; real
     -- stamps are 13.

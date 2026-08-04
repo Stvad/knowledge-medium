@@ -21,7 +21,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(18);
+SELECT plan(19);
 
 CREATE TEMP TABLE drift_test_ctx AS
 SELECT
@@ -317,6 +317,42 @@ END $$;
 SELECT is(
   pg_temp.cap_boundary_collision(), 0,
   'a drifted patch at the cap boundary never returns the author''s own stamp'
+);
+
+-------------------------------------------------------------------------
+-- 13. `OLD.updated_at` inside the drift greatest() is the ONLY thing keeping
+--     the version monotonic on this path — the branch deliberately steps
+--     around the future-clamp, so the clamp cannot help here. Nothing else in
+--     any of the five test files pins it: dropping the term leaves the whole
+--     suite green while a ratcheted row REGRESSES by the full cap.
+--
+--     Two steps, because the regression is only visible once the row sits
+--     above server-now: ratchet it with a far-future proposal, then send an
+--     ordinary drifted patch and require the version to keep climbing.
+-------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pg_temp.drift_after_ratchet() RETURNS bigint[]
+LANGUAGE plpgsql AS $$
+DECLARE
+  server_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  ratcheted  bigint;
+  next_v     bigint;
+BEGIN
+  PERFORM pg_temp.seed_block('d-ratchet', server_now - 10000, 'v0');
+  -- Far-future proposal: bounded by the cap, but leaves the row above now.
+  PERFORM pg_temp.patch_block('d-ratchet', 'v1', 9223372036854775806, 1);
+  SELECT updated_at INTO ratcheted FROM public.blocks WHERE id = 'd-ratchet';
+  -- An ordinary drifted patch, proposing a perfectly normal current stamp.
+  PERFORM pg_temp.patch_block('d-ratchet', 'v2',
+                              (extract(epoch from now()) * 1000)::bigint, 1);
+  SELECT updated_at INTO next_v FROM public.blocks WHERE id = 'd-ratchet';
+  RETURN ARRAY[ratcheted, next_v];
+END $$;
+
+CREATE TEMP TABLE ratchet_probe AS SELECT pg_temp.drift_after_ratchet() AS v;
+
+SELECT cmp_ok(
+  (SELECT v[2] FROM ratchet_probe), '>', (SELECT v[1] FROM ratchet_probe),
+  'a drifted patch on a row already above server-now still advances the version'
 );
 
 SELECT * FROM finish();
