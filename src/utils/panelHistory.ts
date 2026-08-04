@@ -73,11 +73,17 @@ interface PanelHistoryState {
 
 const EMPTY: PanelHistoryState = {back: [], forward: []}
 
-/** Opaque first-touch capture for the transactional-rollback seam below. */
+/** Opaque first-touch capture for the transactional-rollback seam below.
+ *  `state`/`pending` are the BEFORE refs; `sealedState`/`sealedPending`
+ *  (set by sealRollback) are the refs the capturing caller's own
+ *  mutations produced — restoreRollback's CAS compares against them. */
 export interface PanelHistoryRollback {
   panelId: string
   state: PanelHistoryState | undefined
   pending: VisitState | undefined
+  sealedState?: PanelHistoryState | undefined
+  sealedPending?: VisitState | undefined
+  sealed?: boolean
 }
 
 /** Carry the enter marker from the entry being consumed onto the entry
@@ -232,9 +238,11 @@ export class PanelHistoryStore {
    *  inside a repo.tx (reconcileUrlNavigation consumes stack entries,
    *  enqueueRestore replaces the pending restore), so a tx abort would
    *  otherwise leave history consumed for row writes that rolled back.
-   *  Capture BEFORE the first mutation of each panel; restore every capture
-   *  if the tx throws. Entries/state values are immutable, so keeping refs
-   *  is a faithful snapshot. */
+   *  Protocol: capture BEFORE the first mutation of each panel, seal right
+   *  AFTER that panel's mutations (synchronously — no await in between),
+   *  restore every capture if the tx throws. Entries/state values are
+   *  immutable and replaced wholesale on every store mutation, so refs are
+   *  faithful snapshots AND serve as version stamps for the restore CAS. */
   captureRollback(panelId: string): PanelHistoryRollback {
     return {
       panelId,
@@ -243,12 +251,34 @@ export class PanelHistoryStore {
     }
   }
 
+  /** Record the refs the caller's own mutations produced. Restore only
+   *  rewinds slots that STILL hold these refs — a concurrent mutation (a
+   *  user navigation racing the suspended tx) replaces the ref, and the
+   *  concurrent writer wins over the rewind. */
+  sealRollback(capture: PanelHistoryRollback): void {
+    capture.sealedState = this.state.get(capture.panelId)
+    capture.sealedPending = this.pendingRestore.get(capture.panelId)
+    capture.sealed = true
+  }
+
   restoreRollback(capture: PanelHistoryRollback): void {
-    if (capture.state === undefined) this.state.delete(capture.panelId)
-    else this.state.set(capture.panelId, capture.state)
-    if (capture.pending === undefined) this.pendingRestore.delete(capture.panelId)
-    else this.pendingRestore.set(capture.panelId, capture.pending)
-    this.notify(capture.panelId)
+    // Unsealed capture = the tx threw between capture and the panel's
+    // mutations — nothing of ours to rewind, and rewinding anyway would
+    // clobber a concurrent writer.
+    if (!capture.sealed) return
+    let changed = false
+    // CAS per slot: rewind only what still holds OUR ref (see sealRollback).
+    if (this.state.get(capture.panelId) === capture.sealedState) {
+      if (capture.state === undefined) this.state.delete(capture.panelId)
+      else this.state.set(capture.panelId, capture.state)
+      changed = true
+    }
+    if (this.pendingRestore.get(capture.panelId) === capture.sealedPending) {
+      if (capture.pending === undefined) this.pendingRestore.delete(capture.panelId)
+      else this.pendingRestore.set(capture.panelId, capture.pending)
+      changed = true
+    }
+    if (changed) this.notify(capture.panelId)
   }
 
   /** Register a snapshotter for a panel — a function that reads the

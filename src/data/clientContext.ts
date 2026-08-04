@@ -58,10 +58,10 @@ export interface ClientContextReader {
   /** The per-device BASE session id (the no-override fallback). Only for
    *  base-ness checks — see the class getter's doc. */
   readonly baseLayoutSessionId: string
-  /** Read side of the layout-context claim registry — see the class
-   *  method's doc. (Claiming/releasing goes through the Repo shims, same
-   *  split as the set methods above.) */
-  hasClaimedLayoutContextKey(key: string): boolean
+  /** Read side of the layout-context claim registry, scoped to (this
+   *  user, `workspaceId`) — see the class method's doc. (Claiming/releasing
+   *  goes through the Repo shims, same split as the set methods above.) */
+  hasClaimedLayoutContextKey(workspaceId: string, key: string): boolean
   /** Subscribe to EFFECTIVE changes of either field (no-op sets — including
    *  the layout-session id's null⇄base-id folding — do not notify). Returns
    *  an idempotent unsubscribe. */
@@ -69,25 +69,43 @@ export interface ClientContextReader {
 }
 
 /** Device-local persistence for layout-context claims (see
- *  {@link ClientContext.claimLayoutContextKey}). localStorage so a claim
- *  made by an async-loaded consumer is visible to the NEXT boot's
+ *  {@link ClientContext.claimLayoutContextKey}). Persisted as a map of
+ *  `"<userId>/<workspaceId>" → keys` — consumers are installed per
+ *  workspace and localStorage is shared across every account on the
+ *  origin, so an unscoped claim made in workspace A would defer routes in
+ *  workspace B where no consumer exists to pick them up. localStorage so
+ *  a claim made by an async-loaded consumer is visible to the NEXT boot's
  *  synchronous bootstrap read; typeof-guarded so non-browser environments
  *  (node tests, SSR) degrade to in-memory claims. */
 const LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY = 'layout-context-claims'
-const readPersistedLayoutContextClaims = (): string[] => {
-  if (typeof localStorage === 'undefined') return []
+const layoutContextClaimScope = (userId: string, workspaceId: string): string =>
+  `${userId}/${workspaceId}`
+const readPersistedLayoutContextClaims = (): Map<string, Set<string>> => {
+  const claims = new Map<string, Set<string>>()
+  if (typeof localStorage === 'undefined') return claims
   try {
     const raw = localStorage.getItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY)
-    const parsed: unknown = raw === null ? [] : JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === 'string') : []
+    const parsed: unknown = raw === null ? {} : JSON.parse(raw)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [scope, keys] of Object.entries(parsed)) {
+        if (!Array.isArray(keys)) continue
+        claims.set(scope, new Set(keys.filter((key): key is string => typeof key === 'string')))
+      }
+    }
+    return claims
   } catch {
-    return []
+    return claims
   }
 }
-const writePersistedLayoutContextClaims = (keys: ReadonlySet<string>): void => {
+const writePersistedLayoutContextClaims = (claims: ReadonlyMap<string, ReadonlySet<string>>): void => {
   if (typeof localStorage === 'undefined') return
   try {
-    localStorage.setItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY, JSON.stringify([...keys].sort()))
+    const serialized = Object.fromEntries(
+      [...claims.entries()]
+        .filter(([, keys]) => keys.size > 0)
+        .map(([scope, keys]) => [scope, [...keys].sort()]),
+    )
+    localStorage.setItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY, JSON.stringify(serialized))
   } catch {
     // Quota/private-mode failures degrade to in-memory claims.
   }
@@ -104,10 +122,12 @@ export class ClientContext implements ClientContextReader {
    *  the per-device base id. */
   private _activeLayoutSessionId: string | null = null
 
-  /** Ws-context keys some session consumer has claimed on THIS device —
-   *  seeded from the persisted set so bootstrap (which runs before async
-   *  user extensions load) sees claims made on earlier boots. */
-  private readonly _claimedLayoutContextKeys = new Set<string>(readPersistedLayoutContextClaims())
+  /** Ws-context keys session consumers have claimed on THIS device, keyed
+   *  by `"<userId>/<workspaceId>"` scope — seeded from the persisted map so
+   *  bootstrap (which runs before async user extensions load) sees claims
+   *  made on earlier boots. The whole map stays in memory (other scopes'
+   *  entries ride along untouched through writes). */
+  private readonly _claimedLayoutContextKeys = readPersistedLayoutContextClaims()
 
   /** Fires on EFFECTIVE changes to `activeWorkspaceId` / `activeLayoutSessionId`
    *  — see {@link onActingAsChange}. Notified from THIS class's own set
@@ -160,34 +180,46 @@ export class ClientContext implements ClientContextReader {
     return this._activeLayoutSessionId ?? getLayoutSessionId()
   }
 
-  /** Has some session consumer claimed this ws-context key on this device?
-   *  Read side of {@link claimLayoutContextKey} — URL application consults
-   *  it to decide whether a context-bearing route is addressed to a
-   *  consumer-selected session (defer at base) or is unclaimed noise
-   *  (apply normally). */
-  hasClaimedLayoutContextKey(key: string): boolean {
-    return this._claimedLayoutContextKeys.has(key)
+  /** Has some session consumer claimed this ws-context key for THIS user
+   *  in `workspaceId` on this device? Read side of
+   *  {@link claimLayoutContextKey} — URL application consults it to decide
+   *  whether a context-bearing route is addressed to a consumer-selected
+   *  session (defer at base) or is unclaimed noise (apply normally). */
+  hasClaimedLayoutContextKey(workspaceId: string, key: string): boolean {
+    return this._claimedLayoutContextKeys
+      .get(layoutContextClaimScope(this.user.id, workspaceId))?.has(key) ?? false
   }
 
-  /** Claim a ws-context key (e.g. `persp`) for a session consumer: routes
-   *  whose ws-context carries a claimed key are treated as addressed to a
-   *  consumer-selected session, so the BASE session defers them (see
-   *  applyCurrentLayoutUrl) instead of applying them to itself. Idempotent;
-   *  persisted per-device so bootstrap — which runs before async user
-   *  extensions load — honors claims from earlier boots. Residue: the very
-   *  first boot on a device where the consumer has never run yet applies a
-   *  context URL to base; the consumer reconciles once it loads. Consumers
-   *  should {@link releaseLayoutContextKey} when disabled/uninstalled, or a
-   *  stale claim keeps deferring routes nothing will pick up. */
-  claimLayoutContextKey(key: string): void {
-    if (this._claimedLayoutContextKeys.has(key)) return
-    this._claimedLayoutContextKeys.add(key)
+  /** Claim a ws-context key (e.g. `persp`) for a session consumer in
+   *  `workspaceId`: routes for that workspace whose ws-context carries a
+   *  claimed key are treated as addressed to a consumer-selected session,
+   *  so the BASE session defers them (see applyCurrentLayoutUrl) instead
+   *  of applying them to itself. Scoped to (user, workspace) — consumers
+   *  are installed per workspace and localStorage is shared across the
+   *  origin's accounts, so a broader claim would defer routes in
+   *  workspaces that have no consumer. Idempotent; persisted per-device so
+   *  bootstrap — which runs before async user extensions load — honors
+   *  claims from earlier boots. Residue: the very first boot on a device
+   *  where the consumer has never run yet applies a context URL to base;
+   *  the consumer reconciles once it loads. Consumers should
+   *  {@link releaseLayoutContextKey} when disabled/uninstalled, or a stale
+   *  claim keeps deferring routes nothing will pick up. */
+  claimLayoutContextKey(workspaceId: string, key: string): void {
+    const scope = layoutContextClaimScope(this.user.id, workspaceId)
+    let keys = this._claimedLayoutContextKeys.get(scope)
+    if (keys?.has(key)) return
+    if (!keys) {
+      keys = new Set()
+      this._claimedLayoutContextKeys.set(scope, keys)
+    }
+    keys.add(key)
     writePersistedLayoutContextClaims(this._claimedLayoutContextKeys)
   }
 
-  /** Undo {@link claimLayoutContextKey}. */
-  releaseLayoutContextKey(key: string): void {
-    if (!this._claimedLayoutContextKeys.delete(key)) return
+  /** Undo {@link claimLayoutContextKey} for this user in `workspaceId`. */
+  releaseLayoutContextKey(workspaceId: string, key: string): void {
+    const scope = layoutContextClaimScope(this.user.id, workspaceId)
+    if (!this._claimedLayoutContextKeys.get(scope)?.delete(key)) return
     writePersistedLayoutContextClaims(this._claimedLayoutContextKeys)
   }
 

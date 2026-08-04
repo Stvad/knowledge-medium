@@ -1381,18 +1381,19 @@ export class Repo {
     this._client.setActiveLayoutSessionId(id)
   }
 
-  /** Claim a ws-context key for a session consumer (pure delegation — see
-   *  {@link ClientContext.claimLayoutContextKey} for semantics, persistence
-   *  and the first-boot residue). Read side: `repo.client.hasClaimedLayoutContextKey`. */
-  claimLayoutContextKey(key: string): void {
-    this._client.claimLayoutContextKey(key)
+  /** Claim a ws-context key for a session consumer in `workspaceId` (pure
+   *  delegation — see {@link ClientContext.claimLayoutContextKey} for
+   *  semantics, the (user, workspace) scoping, persistence and the
+   *  first-boot residue). Read side: `repo.client.hasClaimedLayoutContextKey`. */
+  claimLayoutContextKey(workspaceId: string, key: string): void {
+    this._client.claimLayoutContextKey(workspaceId, key)
   }
 
   /** Undo {@link claimLayoutContextKey} — consumers release on
    *  disable/uninstall so stale claims don't keep deferring routes nothing
    *  will pick up. */
-  releaseLayoutContextKey(key: string): void {
-    this._client.releaseLayoutContextKey(key)
+  releaseLayoutContextKey(workspaceId: string, key: string): void {
+    this._client.releaseLayoutContextKey(workspaceId, key)
   }
 
   /** Wait until persisted property definitions have produced their first

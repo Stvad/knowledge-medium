@@ -716,13 +716,20 @@ export const reconcilePanelRows = async (
   const deletedPanelRowIds: string[] = []
   // panelHistory is NON-transactional but mutated from inside the tx (the
   // content-swap path consumes stack entries + replaces pending restores).
-  // First-touch capture per panel; restored below if the tx throws (the
-  // cancellation abort made that path routine, not just exceptional).
+  // First-touch capture per panel, sealed right after the panel's
+  // mutations; restored below if the tx throws (the cancellation abort
+  // made that path routine, not just exceptional). The seal makes the
+  // restore a CAS — a concurrent user navigation racing the suspended tx
+  // wins over the rewind (see sealRollback).
   const historyRollbacks = new Map<string, PanelHistoryRollback>()
   const touchHistory = (panelId: string): void => {
     if (!historyRollbacks.has(panelId)) {
       historyRollbacks.set(panelId, panelHistory.captureRollback(panelId))
     }
+  }
+  const sealHistory = (panelId: string): void => {
+    const capture = historyRollbacks.get(panelId)
+    if (capture) panelHistory.sealRollback(capture)
   }
 
   const runTx = async (): Promise<boolean> => repo.tx(async tx => {
@@ -863,6 +870,7 @@ export const reconcilePanelRows = async (
             }, blockId)
             : null
           panelHistory.enqueueRestore(slot.row.id, restored?.state)
+          sealHistory(slot.row.id)
           // The URL's slot context is authoritative for the mode here — the
           // restored VisitState's remembered viewMode is deliberately NOT
           // applied (that happens only on chevron back/forward).
@@ -941,12 +949,14 @@ export const retargetPanelBlockIds = async (
         .filter(row => panelBlockId(row) === fromId)
 
       for (const row of panelRows) {
-        historyRollbacks.push(panelHistory.captureRollback(row.id))
+        const capture = panelHistory.captureRollback(row.id)
+        historyRollbacks.push(capture)
         const restored = panelHistory.reconcileUrlNavigation(row.id, {
           blockId: fromId,
           state: panelHistory.snapshot(row.id),
         }, toId)
         panelHistory.enqueueRestore(row.id, restored?.state)
+        panelHistory.sealRollback(capture)
         // No viewMode option: a merge retarget clears the mode (it belonged
         // to the (pane, source-block) pair, and the source block is gone).
         await writePanelContent(tx, row.id, toId, restored?.state)
@@ -1008,7 +1018,7 @@ export const applyCurrentLayoutUrl = async ({
   // an existing one honors the URL's slots. Entry grammar is
   // `key[=value]`, canonicalized by parseLayout, so the key is everything
   // before the first '='.
-  if (route.wsContext?.some(entry => repo.client.hasClaimedLayoutContextKey(entry.split('=')[0]))
+  if (route.wsContext?.some(entry => repo.client.hasClaimedLayoutContextKey(workspaceId, entry.split('=')[0]))
     && layoutSessionBlock.id === layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)) {
     return {kind: 'deferred'}
   }

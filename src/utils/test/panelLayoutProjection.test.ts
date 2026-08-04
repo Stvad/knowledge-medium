@@ -298,12 +298,48 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x'])
   })
 
+  it('a rollback does NOT rewind history a concurrent navigation wrote while the tx was suspended', async () => {
+    // navigateInPanel / back / forward mutate the store and only THEN await
+    // their own db writes — so a user action can land between this tx's
+    // history mutations and its abort. The rewind is a CAS: it only undoes
+    // its own refs, and the concurrent writer wins. The isCancelled probe
+    // doubles as the interleave hook — the tx-exit check (3rd call) runs
+    // after the content-swap's history mutations, so a push there is
+    // exactly "concurrent nav during the suspended tx".
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'x'})
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        calls += 1
+        if (calls === 3) panelHistory.push(rowId, {blockId: 'concurrent'})
+        return calls >= 3
+      },
+    })
+
+    expect(result.kind).toBe('cancelled')
+    // The concurrent push survives; the tx's own consumption (which wiped
+    // the 'x' stack before the push) is NOT rewound underneath it.
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['concurrent'])
+  })
+
   it('defers a CLAIMED ws-context route addressed at the per-device BASE session', async () => {
     // Core keeps ws-context opaque; the one thing it knows is the negative —
     // the base session is never a CLAIMED context's addressee. Boot used to
     // reconcile `#ws;persp=lane/…` INTO the base session (clobbering its
     // layout) and normalize a slot-less lane URL FROM base rows.
-    env.repo.claimLayoutContextKey('persp')
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    // Claims are (user, workspace)-scoped — a claim here must not defer
+    // routes in a workspace whose consumer never claimed.
+    expect(env.repo.client.hasClaimedLayoutContextKey('ws-other', 'persp')).toBe(false)
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
     const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
     const replaces: string[] = []
@@ -338,8 +374,8 @@ describe('applyCurrentLayoutUrl', () => {
     // released the claim: deferring would strand it (blank fresh-workspace
     // boot, ignored slots on an existing one) — base applies it like any
     // deep link, and a released claim stops deferring immediately.
-    env.repo.claimLayoutContextKey('persp')
-    env.repo.releaseLayoutContextKey('persp')
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.releaseLayoutContextKey(WS, 'persp')
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
     const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
 
