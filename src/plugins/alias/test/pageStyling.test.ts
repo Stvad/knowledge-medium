@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { BlockTextClassContext } from '@/extensions/blockInteraction'
-import { aliasPageStyling } from '../pageStyling.ts'
+import type { BlockBulletClassContext, BlockTextClassContext } from '@/extensions/blockInteraction'
+import { aliasPageBullet, aliasPageStyling } from '../pageStyling.ts'
 
 const ctx = (over: Partial<BlockTextClassContext>): BlockTextClassContext =>
   ({aliases: [], isFocal: false, ...over}) as BlockTextClassContext
+
+const bulletCtx = (aliases: readonly string[]): BlockBulletClassContext =>
+  ({aliases}) as BlockBulletClassContext
 
 describe('aliasPageStyling', () => {
   it('leaves the open page\'s title alone', () => {
@@ -34,5 +37,15 @@ describe('aliasPageStyling', () => {
     // reads as a page reference rather than sprouting a title mid-outline.
     expect(aliasPageStyling(ctx({aliases: ['Inbox'], isFocal: false})))
       .toBe('page-name-text')
+  })
+})
+
+describe('aliasPageBullet', () => {
+  it('rings the bullet of a block that carries a page name', () => {
+    expect(aliasPageBullet(bulletCtx(['Inbox']))).toBe('page-bullet')
+  })
+
+  it('contributes nothing for an ordinary block', () => {
+    expect(aliasPageBullet(bulletCtx([]))).toBeNull()
   })
 })

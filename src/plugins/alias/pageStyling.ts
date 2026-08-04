@@ -27,11 +27,19 @@
  *     the rule stopped at the last character; without chips it spanned the
  *     panel. Same page, two rules, chosen by whether you had tagged it.
  *
+ * What carries the signal instead is positional: an aliased block's BULLET is
+ * a ring rather than a filled dot (`aliasPageBullet` below). It sits in the
+ * column where an outline already encodes structure, no content decorator can
+ * move or resize it, and it is the same mark on every row that has it.
+ *
  * Inline `[[links]]` are deliberately untouched: those already render as
  * links, so they are not the case where page-ness is invisible.
  */
-import { blockTextClassFacet } from '@/extensions/blockInteraction.js'
-import type { BlockTextClassContribution } from '@/extensions/blockInteraction.js'
+import { blockBulletClassFacet, blockTextClassFacet } from '@/extensions/blockInteraction.js'
+import type {
+  BlockBulletClassContribution,
+  BlockTextClassContribution,
+} from '@/extensions/blockInteraction.js'
 
 /** Rides `blockTextClassFacet`, NOT the content-surface facet, and that is the
  *  whole point: the treatment is typography, font-size/weight inherit, and
@@ -54,7 +62,25 @@ export const aliasPageStyling: BlockTextClassContribution = ctx => {
   return 'page-name-text'
 }
 
+/** A page's bullet is a ring; an ordinary block's is a filled dot.
+ *
+ *  Paint only — the ring is drawn with an inset shadow inside the dot's own
+ *  box, so it composes with the collapsed-with-children halo (a border drawn
+ *  outside it) instead of fighting for the same property, and the bullet's
+ *  footprint is unchanged, so no row's text moves.
+ *
+ *  There is no focal branch because there is nothing to branch on: the focal
+ *  block renders no bullet at all (`ControlsSlot` returns null for it), so
+ *  this is simply never consulted for the open page's own title. */
+export const aliasPageBullet: BlockBulletClassContribution = ctx =>
+  ctx.aliases.length === 0 ? null : 'page-bullet'
+
 export const aliasPageStylingContribution = blockTextClassFacet.of(
   aliasPageStyling,
+  {source: 'alias'},
+)
+
+export const aliasPageBulletContribution = blockBulletClassFacet.of(
+  aliasPageBullet,
   {source: 'alias'},
 )

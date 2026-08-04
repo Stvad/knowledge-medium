@@ -14,7 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
-import { aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
+import { aliasPageBulletContribution, aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
 import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -395,7 +395,11 @@ describe('page styling via the alias plugin contribution', () => {
       db: sharedDb.db,
       user: {id: 'user-1'},
       newId: () => crypto.randomUUID(),
-      extensions: [defaultEditorInteractionExtension, aliasPageStylingContribution],
+      extensions: [
+        defaultEditorInteractionExtension,
+        aliasPageStylingContribution,
+        aliasPageBulletContribution,
+      ],
     }).repo
     runtime = repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
@@ -479,6 +483,58 @@ describe('page styling via the alias plugin contribution', () => {
 
     const classes = await textClasses('just a bullet')
     expect(classes).not.toContain('page-name-text')
+  })
+
+  const bulletClasses = async (text: string): Promise<string> => {
+    // Fence on the row's own text first: the bullet is a sibling of the
+    // content, so querying it before the block has rendered would find
+    // nothing and make an "absent" assertion pass vacuously.
+    await screen.findByText(text)
+    const bullet = document.querySelector('.bullet')
+    expect(bullet).toBeTruthy()
+    return bullet!.className
+  }
+
+  it('rings the bullet of a page in the hierarchy', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+
+    expect(await bulletClasses('Inbox')).toContain('page-bullet')
+  })
+
+  it('leaves an ordinary block\'s bullet a plain dot', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'page')
+    })
+
+    renderBlock('plain')
+
+    const classes = await bulletClasses('just a bullet')
+    // Positive half: the bullet IS being classed, so what's absent is the page
+    // mark rather than the whole mechanism.
+    expect(classes).toContain('bullet')
+    expect(classes).not.toContain('page-bullet')
+  })
+
+  it('re-marks the bullet in place when a block loses its alias', async () => {
+    // Same reactivity contract as the text classes: `aliases` is read at the
+    // bullet via the hook, so un-naming a block un-rings it without a remount.
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+    expect(await bulletClasses('Inbox')).toContain('page-bullet')
+
+    await act(async () => {
+      await repo.block('page').set(aliasesProp, [])
+    })
+
+    await vi.waitFor(async () =>
+      expect(await bulletClasses('Inbox')).not.toContain('page-bullet'))
   })
 
   it('restyles in place when a block gains an alias', async () => {
