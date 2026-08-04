@@ -34,6 +34,22 @@
 -- that leaks. Same reason this also seals the metadata-only PATCH (a patch that
 -- touches no content column at all, reachable via undo-to-identical-state):
 -- drifted or not is decided without asking what changed.
+--
+-- KNOWN COST, on the retry path: upload is at-least-once, and a REPLAYED patch
+-- carries the base it was built with while the row has already moved to what
+-- the first delivery wrote — so it reads as drifted and bumps again. Before
+-- this migration a replay was a true no-op. `applyBlockPatchesRpc` chunks at
+-- MAX_PATCHES_PER_SUPABASE_RPC per transaction and PowerSync retries the whole
+-- crud transaction, so a failure in chunk N re-delivers chunks 1..N-1 and each
+-- of those rows takes one forced re-materialization fleet-wide (plus a
+-- `blocks_history` row). No divergence and no loss — every device converges on
+-- the same content — but the "zero echoes for an uncontended edit" property
+-- holds only absent retries, which mostly means bulk imports and large offline
+-- backlogs, since an ordinary batch is one chunk. Deliberately NOT special-
+-- cased: the signature of a replay ("merged row identical to OLD AND proposed
+-- = OLD.updated_at") is distinguishable, but adding a third branch here to save
+-- cost on an error path is a poor trade against the risk of getting the version
+-- rule wrong. Revisit if bulk-import echo churn ever shows up in practice.
 
 -- 1. Carry the base version from the RPC to the trigger.
 --
@@ -155,6 +171,17 @@ begin
         OLD.updated_at,
         least(raw_proposed, server_now_ms + max_trusted_skew_ms)
       ) + 1;
+
+      -- Capping the input costs the one property the whole branch rests on.
+      -- Before the cap, `raw_proposed` sat inside the greatest(), so the result
+      -- was `>= raw_proposed + 1` for every input. With it, a proposal exactly
+      -- one past the cap makes least() return the cap and `+ 1` hand back that
+      -- same proposal — the author's own stamp, which is precisely the equal
+      -- stamp the echo skip keys on, on a genuinely drifted merge. One more
+      -- millisecond restores "the result never equals the proposal".
+      if NEW.updated_at = raw_proposed then
+        NEW.updated_at := NEW.updated_at + 1;
+      end if;
     else
       -- Un-drifted (or not a patch write): pre-#381 behavior, verbatim.
       --
@@ -221,9 +248,30 @@ BEGIN
     patch := rec.value;
     patch_id := patch->>'id';
 
+    -- Normalize to a digit string the trigger can cast without raising. Absent,
+    -- empty, malformed and over-wide all collapse to '0' ("no usable base" ⇒
+    -- drift), which is the safe default. Two distinct hazards, both reachable
+    -- because this RPC is SECURITY INVOKER and granted to `authenticated`:
+    --
+    --   * an EMPTY string would reach the trigger as the same value the clear
+    --     below writes, i.e. "not a patch write" — so a caller could make its
+    --     PATCH indistinguishable from a backfill and silently opt that write
+    --     out of the drift check entirely. Verified by execution: with a raw
+    --     COALESCE, a stale-based patch sent with `base_updated_at: ""` came
+    --     back at the author's own stamp, i.e. #381 un-fixed for that patch.
+    --   * any non-numeric text raises 22P02 inside the trigger, which rolls
+    --     back the whole RPC — and the client classifies 22xxx as PERMANENT, so
+    --     one bad key quarantines the entire crud transaction to
+    --     `ps_crud_rejected` rather than retrying it.
+    --
+    -- 18 digits is the widest value that cannot overflow bigint on cast; real
+    -- stamps are 13.
     PERFORM set_config(
       'km.patch_base_updated_at',
-      COALESCE(patch->>'base_updated_at', '0'),
+      CASE
+        WHEN patch->>'base_updated_at' ~ '^[0-9]{1,18}$' THEN patch->>'base_updated_at'
+        ELSE '0'
+      END,
       true
     );
 

@@ -214,7 +214,7 @@ const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
 const BASE_VERSION_KEY = 'base_updated_at'
 
 /** Merge a later PATCH's columns over an earlier one, keeping the EARLIER
- *  base version.
+ *  base version — including when the earlier one HAS no base.
  *
  *  Every other column is last-write-wins — the newest value is the one to
  *  ship. The base is the exact opposite: it is a claim about the server
@@ -224,13 +224,26 @@ const BASE_VERSION_KEY = 'base_updated_at'
  *  never seen. Taking the last one would make an un-drifted burst look
  *  drifted (harmless — one extra echo) and, worse, could make a genuinely
  *  drifted burst look clean when the last local stamp happens to equal the
- *  server's current version, silently reintroducing #381. */
+ *  server's current version, silently reintroducing #381.
+ *
+ *  An ABSENT base on the earlier patch is not "no opinion", it is the
+ *  strongest opinion the protocol has: unknown base ⇒ assume drift. That
+ *  happens for real during a version upgrade — `ps_crud` is persistent, so a
+ *  PATCH queued offline by the previous bundle carries no base while a PATCH
+ *  queued after the reload does. Letting the spread inherit the later base
+ *  there would assert a starting point this burst never had, which is exactly
+ *  the "looks clean but isn't" case above. So absence wins too, and the merged
+ *  patch reaches the server with no base at all — which it reads as drifted. */
 const mergePatchPayloads = (
   earlier: Record<string, unknown>,
   later: Record<string, unknown>,
 ): Record<string, unknown> => {
   const merged = {...earlier, ...later}
-  if (BASE_VERSION_KEY in earlier) merged[BASE_VERSION_KEY] = earlier[BASE_VERSION_KEY]
+  if (BASE_VERSION_KEY in earlier) {
+    merged[BASE_VERSION_KEY] = earlier[BASE_VERSION_KEY]
+  } else {
+    delete merged[BASE_VERSION_KEY]
+  }
   return merged
 }
 

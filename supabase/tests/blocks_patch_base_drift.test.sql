@@ -21,7 +21,7 @@ BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path TO public, extensions;
 
-SELECT plan(14);
+SELECT plan(18);
 
 CREATE TEMP TABLE drift_test_ctx AS
 SELECT
@@ -249,6 +249,74 @@ SELECT lives_ok(
   $$ SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object(
        'id', 'd-huge', 'content', 'v2', 'updated_at', '1', 'base_updated_at', '1'))) $$,
   'a row that received a crafted stamp is still editable'
+);
+
+-------------------------------------------------------------------------
+-- 10. A malformed base must not be mistaken for "not a patch write". The
+--     trigger reads NULL/'' as "this UPDATE did not come from the RPC" and
+--     runs pre-#381 behavior; if an empty string reached it, a caller could
+--     make its PATCH indistinguishable from a backfill and opt out of the
+--     drift check entirely. The RPC normalizes anything non-numeric to '0'.
+-------------------------------------------------------------------------
+SELECT pg_temp.seed_block('d-empty', (SELECT then_ms FROM drift_test_ctx), 'v0');
+SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object(
+  'id', 'd-empty', 'content', 'v1',
+  'updated_at', (SELECT (then_ms + 5000)::text FROM drift_test_ctx),
+  'base_updated_at', '')));
+
+SELECT cmp_ok(
+  (SELECT updated_at FROM public.blocks WHERE id = 'd-empty'), '>',
+  (SELECT then_ms + 5000 FROM drift_test_ctx),
+  'an empty base_updated_at reads as drifted, not as a non-patch write'
+);
+
+-------------------------------------------------------------------------
+-- 11. Non-numeric / over-wide bases must not raise. The cast lives in the
+--     trigger, so a raise would roll back the whole RPC — and the client
+--     classifies 22xxx as permanent, quarantining the entire crud
+--     transaction over one bad key rather than retrying it.
+-------------------------------------------------------------------------
+SELECT pg_temp.seed_block('d-junk', (SELECT then_ms FROM drift_test_ctx), 'v0');
+SELECT lives_ok(
+  $$ SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object(
+       'id', 'd-junk', 'content', 'v1', 'updated_at', '1', 'base_updated_at', 'abc'))) $$,
+  'a non-numeric base does not raise (and so cannot quarantine the batch)'
+);
+SELECT lives_ok(
+  $$ SELECT public.apply_block_patches(jsonb_build_array(jsonb_build_object(
+       'id', 'd-junk', 'content', 'v2', 'updated_at', '1',
+       'base_updated_at', '99999999999999999999'))) $$,
+  'an over-wide base does not overflow the cast'
+);
+
+-------------------------------------------------------------------------
+-- 12. The cap boundary. Capping the INPUT costs the property the branch
+--     rests on: a proposal exactly one past the cap makes least() return the
+--     cap, so `+ 1` hands back that same proposal — the author's own stamp,
+--     the equal stamp the echo skip keys on. The result must never equal the
+--     proposal.
+-------------------------------------------------------------------------
+-- Returns 1 if the server handed the row back at the author's own proposed
+-- stamp (the collision), 0 otherwise. A plain function rather than a DO block
+-- because `PERFORM ok(...)` registers the assertion but never emits its TAP
+-- line, leaving the file one line short of its plan.
+CREATE OR REPLACE FUNCTION pg_temp.cap_boundary_collision() RETURNS int
+LANGUAGE plpgsql AS $$
+DECLARE
+  server_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  proposed   bigint;
+  got        bigint;
+BEGIN
+  proposed := server_now + 3600000 + 1;
+  PERFORM pg_temp.seed_block('d-boundary', server_now - 10000, 'theirs');
+  PERFORM pg_temp.patch_block('d-boundary', 'mine', proposed, server_now - 20000);
+  SELECT updated_at INTO got FROM public.blocks WHERE id = 'd-boundary';
+  RETURN CASE WHEN got = proposed THEN 1 ELSE 0 END;
+END $$;
+
+SELECT is(
+  pg_temp.cap_boundary_collision(), 0,
+  'a drifted patch at the cap boundary never returns the author''s own stamp'
 );
 
 SELECT * FROM finish();

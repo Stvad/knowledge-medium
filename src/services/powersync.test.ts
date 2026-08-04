@@ -220,6 +220,29 @@ describe('PowerSync upload compaction', () => {
     ])
   })
 
+  it('keeps the earliest base UNKNOWN when a pre-upgrade patch leads the burst (#381)', () => {
+    // `ps_crud` is persistent, so an upgrade can leave a PATCH queued by the
+    // previous bundle (no base — it predates the trigger change) ahead of one
+    // queued after the reload (base present). An absent base is not "no
+    // opinion": the protocol reads unknown as drifted. Inheriting the later
+    // patch's base would assert a starting point this burst never had, and if
+    // that stamp happened to match the server's current version the merged
+    // patch would read as CLEAN — the equal-stamp skip, right back again.
+    const operations = __compactBlockCrudEntriesForTest([
+      patch(1, 'block-a', {content: 'v1', updated_at: 101}, 1),
+      patch(2, 'block-a', {content: 'v2', updated_at: 102, base_updated_at: 101}, 2),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {content: 'v2', updated_at: 102},
+      },
+    ])
+  })
+
   it('drops base_updated_at when a same-tx PATCH fuses into its CREATE', () => {
     // Creates go to apply_block_creates, which has no drift concept: an INSERT
     // has no prior version and the ON CONFLICT branch is a deliberate no-op

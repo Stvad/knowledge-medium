@@ -34,12 +34,13 @@
  *    `user_updated_at := least(coalesce(user_updated_at, updated_at), now)`.
  *    On UPDATE, the patch's `base_updated_at` (issue #381) decides:
  *      · DRIFTED (base absent, 0, or != old.updated_at) —
- *        `updated_at := greatest(server_now, old, RAW proposed) + 1`, where
- *        RAW is the pre-clamp client value, so the result strictly exceeds
- *        the author's own local stamp and the echo cannot be equal-stamp
- *        -skipped. Not content-gated: two devices writing the same value
- *        merge to a row identical to OLD while the author still lacks
- *        whatever else the other device changed.
+ *        `updated_at := greatest(server_now, old, least(RAW proposed,
+ *        server_now + MAX_TRUSTED_SKEW_MS)) + 1`, where RAW is the pre-clamp
+ *        client value, plus one more if that lands exactly on RAW. The result
+ *        therefore never equals the author's own local stamp, so the echo
+ *        cannot be equal-stamp-skipped. Not content-gated: two devices writing
+ *        the same value merge to a row identical to OLD while the author still
+ *        lacks whatever else the other device changed.
  *      · UN-DRIFTED — the pre-#381 path verbatim: floor
  *        `updated_at := greatest(new, old)` then bump
  *        `updated_at := greatest(new, old + 1)` iff a CONTENT column changed
@@ -161,9 +162,9 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
   let version = 0
   const touch = (id: string): void => { versions.set(id, ++version) }
 
-  /** The clamp trigger's BOTH-paths section (20260612000000 L38-46):
-   *  future-clamp both stamps, then populate/clamp user_updated_at from
-   *  the ALREADY-CLAMPED updated_at.
+  /** The clamp trigger's BOTH-paths section (20260803000000, the section
+   *  20260612000000 originally introduced): future-clamp both stamps, then
+   *  populate/clamp user_updated_at from the ALREADY-CLAMPED updated_at.
    *
    *  `serverNow` is passed in rather than read here because the trigger
    *  computes `server_now_ms` ONCE per invocation and the drift branch below
@@ -292,6 +293,10 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
             old.updated_at,
             Math.min(rawProposed, serverNow + MAX_TRUSTED_SKEW_MS),
           ) + 1
+          // A proposal exactly one past the cap makes the min() return the cap,
+          // so `+ 1` hands back that same proposal — the author's own stamp,
+          // which is the equal stamp the echo skip keys on.
+          if (next.updated_at === rawProposed) next.updated_at += 1
         } else {
           next.updated_at = Math.max(next.updated_at, old.updated_at)
           const contentChanged = CONTENT_COLUMNS.some(col => next[col] !== old[col])

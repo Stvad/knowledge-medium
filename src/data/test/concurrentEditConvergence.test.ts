@@ -218,6 +218,102 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     expect(await readRow(a, TARGET)).toEqual(await readRow(b, TARGET))
   })
 
+  it('converges when the contending author\'s clock runs past the trusted-skew cap', async () => {
+    // Smoke coverage for a region nothing else in JS reaches: both this file's
+    // `setup` and the two-repo fuzzer pin the server clock ~1e11 ms AHEAD of
+    // both devices so the future-clamp never fires. Here the server clock sits
+    // BELOW the devices, so the clamp is live and A's proposal lands past the
+    // cap.
+    //
+    // Being precise about what this does and does not prove: it does NOT pin
+    // the cap or the collision guard — mutating either away leaves it green.
+    // The reason is worth recording, because it is the useful finding: once the
+    // clamp is live it has ALREADY pushed the server's stamp off A's local one,
+    // so the equal-stamp collision #381 needs cannot form via this path at all.
+    // The cap boundary is pinned by the model-level test below (and pgTAP 9);
+    // this one guards against the far-ahead-clock case diverging some other way.
+    await resetTestDb(dbA.db)
+    await resetTestDb(dbB.db)
+    let serverClock = 1_700_000_000_000
+    const server = createFakeSyncServer({ now: () => ++serverClock })
+
+    const mk = (db: TestDb['db'], tag: 'a' | 'b', clockStart: number): Device => {
+      let time = clockStart
+      let idCursor = 0
+      const { repo, cache } = createTestRepo({
+        db, user: { id: `user-${tag}` }, now: () => ++time,
+        newId: () => `${tag}-gen-${++idCursor}`,
+      })
+      repo.setActiveWorkspaceId(WS)
+      return { db, repo, cache, cursor: 0 }
+    }
+    // A is an hour and a half ahead of the server — past the 1h cap.
+    const a = mk(dbA.db, 'a', 1_700_000_000_000 + 5_400_000)
+    const b = mk(dbB.db, 'b', 1_700_000_000_000)
+
+    await a.repo.tx(async tx => {
+      await tx.create({ id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0' })
+      await tx.create({
+        id: TARGET, workspaceId: WS, parentId: ROOT, orderKey: 'a1', content: 'original',
+      })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(a, server)
+    for (const device of [a, b]) await deliverAndDrain(device, server)
+
+    await b.repo.tx(async tx => {
+      await tx.update(TARGET, { content: 'B-content' })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(b, server)
+
+    await a.repo.tx(async tx => {
+      await tx.update(TARGET, { properties: { color: 'red' } })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(a, server)
+
+    await quiesce([a, b], server)
+
+    expect(await readRow(a, TARGET), 'the far-ahead author still learns the merged content')
+      .toMatchObject({ content: 'B-content' })
+    expect(await readRow(a, TARGET)).toEqual(await readRow(b, TARGET))
+  })
+
+  // The exact cap-boundary collision below can't be steered through the real
+  // pipeline (the proposal has to land on one specific millisecond), so it is
+  // pinned against the server model directly. The end-to-end case above covers
+  // the clamp-live region broadly; this covers the single value where the
+  // arithmetic goes wrong.
+  it('never returns a drifted patch at the author\'s own proposed stamp, even at the cap boundary', async () => {
+    const SERVER_NOW = 1_700_000_000_000
+    const CAP_MS = 3_600_000
+    const server = createFakeSyncServer({ now: () => SERVER_NOW })
+
+    await server.createRows([{
+      id: 'x', workspace_id: WS, parent_id: null, order_key: 'a0', content: 'theirs',
+      properties_json: '{}', references_json: '[]',
+      created_at: SERVER_NOW - 1000, updated_at: SERVER_NOW - 1000,
+      user_updated_at: SERVER_NOW - 1000, created_by: 'user-b', updated_by: 'user-b',
+      deleted: false,
+    }])
+
+    // One millisecond past the cap: least() returns the cap, and `+ 1` lands
+    // back exactly on the proposal — the author's own local stamp, which is
+    // what the echo skip keys on.
+    const proposed = SERVER_NOW + CAP_MS + 1
+    await server.applyPatches([{
+      id: 'x',
+      payload: {
+        workspace_id: WS, content: 'mine', updated_at: proposed,
+        user_updated_at: proposed, updated_by: 'user-a',
+        base_updated_at: SERVER_NOW - 999_999, // stale ⇒ drifted
+      },
+    }])
+
+    expect(
+      server.rows().find(row => row.id === 'x')?.updated_at,
+      'a drifted merge must never come back at the stamp the author already holds',
+    ).not.toBe(proposed)
+  })
+
   it('leaves an UNCONTENDED echo skippable, so the fix costs one re-materialize per contended write and no more', async () => {
     // The cost floor. Making every echo re-materialize would also fix #381 —
     // and would rewrite every edited row on its author's device, fleet-wide,
