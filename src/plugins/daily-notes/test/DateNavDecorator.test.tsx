@@ -14,7 +14,7 @@ import type { ReactNode } from 'react'
 import { BlockContextProvider } from '@/context/block'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { activePanelIdProp, topLevelBlockIdProp } from '@/data/properties'
+import { activePanelIdProp, aliasesProp, topLevelBlockIdProp } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -129,22 +129,39 @@ describe('date-nav arrows', () => {
     })
   }, 20_000)
 
-  it('leaves a non-daily-note page undecorated', async () => {
-    const panelId = await insertPanelRow(env.repo, env.layoutSession, 'plain-page')
-
-    // Fence: prove the arrows DO appear in this harness first, so the absence
-    // below can't be "the alias read simply had not resolved yet".
+  /** Render `block` after PROVING the arrows appear for a real daily note in
+   *  the same harness — otherwise "no arrows" passes trivially on the first
+   *  render, before the alias read has resolved, and stays green with the gate
+   *  deleted. */
+  const expectUndecorated = async (panelId: string, block: Block) => {
     const note = await getOrCreateDailyNote(env.repo, WS, TODAY)
     await note.load()
     render(<InPanel panelId={panelId}><Decorated block={note}/></InPanel>)
     await screen.findByRole('button', {name: 'Open previous daily note'})
     cleanup()
 
-    const plain = await createRootBlock('plain-page', 'Plain')
-    render(<InPanel panelId={panelId}><Decorated block={plain}/></InPanel>)
-
+    render(<InPanel panelId={panelId}><Decorated block={block}/></InPanel>)
     await screen.findByTestId('inner')
     expect(screen.queryAllByRole('button')).toEqual([])
+  }
+
+  it('leaves a non-daily-note page undecorated', async () => {
+    const panelId = await insertPanelRow(env.repo, env.layoutSession, 'plain-page')
+
+    await expectUndecorated(panelId, await createRootBlock('plain-page', 'Plain'))
+  }, 20_000)
+
+  it('leaves a page whose alias only LOOKS like a date undecorated', async () => {
+    // `2026-02-30` is date-SHAPED but not a calendar day, so the references
+    // processor routes it to an ordinary alias target — a normal page, not a
+    // daily note. A shape-only alias check hands that page the arrows, and
+    // `addDaysIso` then reads it as March 2nd: "previous day" jumps FORWARD
+    // to 2026-03-01.
+    const panelId = await insertPanelRow(env.repo, env.layoutSession, 'alias-page')
+    const aliasPage = await createRootBlock('alias-page', '2026-02-30')
+    await aliasPage.set(aliasesProp, ['2026-02-30'])
+
+    await expectUndecorated(panelId, aliasPage)
   }, 20_000)
 
   it('opts out on any surface that is not the panel body', () => {
