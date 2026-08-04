@@ -25,9 +25,20 @@
  * NONZERO shadow heals on disk now + in the cache on the next reload. This is
  * the invariant commit cd8f87a9 established (force-heal only when the disk gate
  * protected real edits) — the gate is uniformly indiscriminate, so the cache is
- * uniformly LWW. A row the cache rejects produced no user-visible change, so it
- * contributes no invalidation, avoiding the re-read flicker that waking handles
- * to stale SQL would cause.
+ * uniformly LWW. A rejected row normally contributes no invalidation, avoiding
+ * the re-read flicker that waking handles to stale SQL would cause.
+ *
+ * KNOWN GAP (#526): "masks the transient" assumes some later delivery
+ * out-stamps the cached value. For a client whose clock runs past the
+ * trusted-skew cap that never happens — the server cannot issue a stamp that
+ * high — so a drifted merge converges on disk while the cache keeps the
+ * pre-merge row for the rest of the session. There the rejected row DID
+ * suppress a real user-visible change, which is why the sentence above says
+ * "normally". The two cases are indistinguishable here (both are "incoming
+ * stamp < cached stamp" over a cache that matched disk beforehand); telling
+ * them apart needs to know whether the local clock is ahead of the server's,
+ * which nothing tracks today. Pinned by a characterization test in
+ * `@/data/test/concurrentEditConvergence.test.ts`.
  */
 
 import type { BlockCache } from '@/data/blockCache.js'

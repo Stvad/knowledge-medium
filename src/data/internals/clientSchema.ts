@@ -564,11 +564,34 @@ const blockUploadDiffPredicateSql = BLOCK_UPLOAD_COLUMNS
 // otherwise change workspace_id and so would omit it. A self-write of the
 // unchanged workspace_id is a harmless no-op server-side. The remaining columns
 // stay change-gated to keep PATCHes column-narrow.
+//
+// `base_updated_at` (issue #381) is a WIRE-ONLY key — not a `blocks` column, so
+// it is deliberately not in BLOCK_UPLOAD_COLUMNS (which also drives the PUT
+// payload and the change-gate predicate). It carries the row-version this edit
+// was made AGAINST — `OLD.updated_at`, captured here inside the same SQLite
+// write tx as the edit itself, which is the only place the pre-edit version is
+// still available. `apply_block_patches` compares it to the server's current
+// `updated_at`: unequal ⇒ the server row drifted under this edit (someone
+// else's write landed in between) ⇒ the merged row is content the author has
+// never seen, so its stamp must clear the author's own proposed stamp or the
+// echo equal-stamp-skips and that device silently keeps stale content.
+//
+// Why not capture it at upload time instead: a foreign row delivered while this
+// edit sat in `ps_crud` is held un-materialized by the reconcile gate's
+// `hasPendingUpload` branch, so `blocks_synced` (and, once drained, `blocks`)
+// would hand back the FOREIGN stamp — the server would read "no drift" and
+// #381 reproduces exactly. Write time is the only correct capture point.
+//
+// Emitted unconditionally, like workspace_id: a drifted patch that happens to
+// change no upload column never reaches this trigger at all (the change-gate
+// vetoes it), but every patch that DOES reach it needs the base regardless of
+// which columns it carries.
 const blockUploadPatchJsonSql = () => `
       json_remove(
         json_set(
           '{}',
           '$.workspace_id', NEW.workspace_id,
+          '$.base_updated_at', OLD.updated_at,
 ${BLOCK_UPLOAD_COLUMNS.filter(column => column.name !== 'workspace_id').map(column =>
   `          CASE WHEN OLD.${column.name} IS NOT NEW.${column.name} THEN '$.${column.name}' ELSE '$.__noop' END, ${column.jsonValue('NEW')}`,
 ).join(',\n')}
