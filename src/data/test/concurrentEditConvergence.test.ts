@@ -158,6 +158,57 @@ const quiesce = async (devices: readonly Device[], server: FakeSyncServer) => {
   }
 }
 
+/** Like `setup`, but the SERVER clock sits BELOW both devices and A runs an
+ *  hour and a half ahead of it — past the trusted-skew cap. That makes the
+ *  future-clamp live (the default `setup` deliberately keeps it quiet), which
+ *  is the region the two tests at the bottom of this file are about. */
+const setupFarAheadClock = async () => {
+  await resetTestDb(dbA.db)
+  await resetTestDb(dbB.db)
+  let serverClock = 1_700_000_000_000
+  const server = createFakeSyncServer({ now: () => ++serverClock })
+
+  const mk = (db: TestDb['db'], tag: 'a' | 'b', clockStart: number): Device => {
+    let time = clockStart
+    let idCursor = 0
+    const { repo, cache } = createTestRepo({
+      db, user: { id: `user-${tag}` }, now: () => ++time,
+      newId: () => `${tag}-gen-${++idCursor}`,
+    })
+    repo.setActiveWorkspaceId(WS)
+    return { db, repo, cache, cursor: 0 }
+  }
+  const a = mk(dbA.db, 'a', 1_700_000_000_000 + 5_400_000)
+  const b = mk(dbB.db, 'b', 1_700_000_000_000)
+
+  await a.repo.tx(async tx => {
+    await tx.create({ id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0' })
+    await tx.create({
+      id: TARGET, workspaceId: WS, parentId: ROOT, orderKey: 'a1', content: 'original',
+    })
+  }, { scope: ChangeScope.BlockDefault })
+  await upload(a, server)
+  for (const device of [a, b]) await deliverAndDrain(device, server)
+
+  return { a, b, server }
+}
+
+/** The contended edit both far-ahead-clock tests share: B changes content and
+ *  lands first; A, which has not seen B's edit, changes a different column. */
+const contendOnTarget = async (a: Device, b: Device, server: FakeSyncServer) => {
+  await b.repo.tx(async tx => {
+    await tx.update(TARGET, { content: 'B-content' })
+  }, { scope: ChangeScope.BlockDefault })
+  await upload(b, server)
+
+  await a.repo.tx(async tx => {
+    await tx.update(TARGET, { properties: { color: 'red' } })
+  }, { scope: ChangeScope.BlockDefault })
+  await upload(a, server)
+
+  await quiesce([a, b], server)
+}
+
 describe('concurrent edits on one row converge (issue #381)', () => {
   it('the second editor materializes the merged row instead of equal-stamp-skipping its own echo', async () => {
     const { a, b, server } = await setup()
@@ -238,49 +289,47 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     // so the equal-stamp collision #381 needs cannot form via this path at all.
     // The cap boundary is pinned by the model-level test below (and pgTAP 9);
     // this one guards against the far-ahead-clock case diverging some other way.
-    await resetTestDb(dbA.db)
-    await resetTestDb(dbB.db)
-    let serverClock = 1_700_000_000_000
-    const server = createFakeSyncServer({ now: () => ++serverClock })
-
-    const mk = (db: TestDb['db'], tag: 'a' | 'b', clockStart: number): Device => {
-      let time = clockStart
-      let idCursor = 0
-      const { repo, cache } = createTestRepo({
-        db, user: { id: `user-${tag}` }, now: () => ++time,
-        newId: () => `${tag}-gen-${++idCursor}`,
-      })
-      repo.setActiveWorkspaceId(WS)
-      return { db, repo, cache, cursor: 0 }
-    }
-    // A is an hour and a half ahead of the server — past the 1h cap.
-    const a = mk(dbA.db, 'a', 1_700_000_000_000 + 5_400_000)
-    const b = mk(dbB.db, 'b', 1_700_000_000_000)
-
-    await a.repo.tx(async tx => {
-      await tx.create({ id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0' })
-      await tx.create({
-        id: TARGET, workspaceId: WS, parentId: ROOT, orderKey: 'a1', content: 'original',
-      })
-    }, { scope: ChangeScope.BlockDefault })
-    await upload(a, server)
-    for (const device of [a, b]) await deliverAndDrain(device, server)
-
-    await b.repo.tx(async tx => {
-      await tx.update(TARGET, { content: 'B-content' })
-    }, { scope: ChangeScope.BlockDefault })
-    await upload(b, server)
-
-    await a.repo.tx(async tx => {
-      await tx.update(TARGET, { properties: { color: 'red' } })
-    }, { scope: ChangeScope.BlockDefault })
-    await upload(a, server)
-
-    await quiesce([a, b], server)
+    const { a, b, server } = await setupFarAheadClock()
+    await contendOnTarget(a, b, server)
 
     expect(await readRow(a, TARGET), 'the far-ahead author still learns the merged content')
       .toMatchObject({ content: 'B-content' })
     expect(await readRow(a, TARGET)).toEqual(await readRow(b, TARGET))
+  })
+
+  // Characterization, not a guarantee: this asserts a KNOWN-WRONG cache state
+  // on purpose (issue #526). The test above proves DISK converges for the
+  // far-ahead author; the in-memory cache does not, and this pins where that
+  // line currently sits so a fix flips a named test rather than passing
+  // silently.
+  //
+  // Why it is not fixed here: `applySyncInvalidation` writes each materialized
+  // row through `cache.applyIfNewer(after, 'sync')`, whose LWW reject is
+  // load-bearing — it masks the transient disk revert a rescan causes inside
+  // the ack→echo window (invariant cd8f87a9). A skewed client's local stamp is
+  // above anything the server can ever issue for the row, so no later delivery
+  // out-stamps it and the reject becomes permanent. The two situations are
+  // indistinguishable at this seam: both show "incoming stamp < cached stamp"
+  // over a cache that matched disk beforehand. Separating them needs to know
+  // whether OUR CLOCK is ahead of the server's, which no layer tracks today —
+  // so the fix is a clock-offset estimate or a stamp clamp, not a predicate
+  // here. #526 has both candidate shapes and the refutations of the two cheap
+  // ones.
+  it('the far-ahead author\'s cache keeps the pre-merge row even though disk converged (#526)', async () => {
+    const { a, b, server } = await setupFarAheadClock()
+    await contendOnTarget(a, b, server)
+
+    const disk = await readRow(a, TARGET)
+    const cached = a.cache.getSnapshot(TARGET)
+
+    expect(disk, 'precondition: disk converged (the guarantee this PR adds)')
+      .toMatchObject({ content: 'B-content' })
+    expect(cached?.content, 'the gap: A renders its pre-merge content until reload')
+      .toBe('original')
+    // The mechanism, asserted rather than described: A's local stamp sits above
+    // the capped server stamp, so every delivery for this row loses the LWW.
+    expect(cached!.updatedAt).toBeGreaterThan(disk!.updated_at)
+    expect(a.cache.metrics.snapshot().applyIfNewerSyncRejected).toBeGreaterThan(0)
   })
 
   // The exact cap-boundary collision below can't be steered through the real
