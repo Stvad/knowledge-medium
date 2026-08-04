@@ -440,13 +440,19 @@ describe('page styling via the alias plugin contribution', () => {
     const node = await screen.findByText(text)
     // The class lands on the text container the renderer builds, which is the
     // node holding the text or its parent depending on the markdown wrapper.
-    const carrier = node.closest('.page-title-text, .page-name-text, .block-title-text')
+    const carrier = node.closest('.page-name-text, .block-title-text')
     return carrier?.className ?? node.className
   }
 
-  it('marks the open page as a page title', async () => {
+  it('leaves the open page\'s title as a plain focal heading', async () => {
     renderBlock('page')
-    expect(await textClasses('Inbox')).toContain('page-title-text')
+
+    const classes = await textClasses('Inbox')
+    // The positive half is the non-vacuity fence: this asserts the title text
+    // IS being classed (so the carrier lookup and the render both worked) and
+    // that the page treatment is what's absent, not the whole mechanism.
+    expect(classes).toContain(BLOCK_TITLE_TEXT_CLASS)
+    expect(classes).not.toContain('page-name-text')
   })
 
   it('marks a named page seen in the hierarchy, not only when it is open', async () => {
@@ -461,7 +467,6 @@ describe('page styling via the alias plugin contribution', () => {
 
     const classes = await textClasses('Inbox')
     expect(classes).toContain('page-name-text')
-    expect(classes).not.toContain('page-title-text')
     expect(classes).not.toContain(BLOCK_TITLE_TEXT_CLASS)
   })
 
@@ -474,7 +479,6 @@ describe('page styling via the alias plugin contribution', () => {
 
     const classes = await textClasses('just a bullet')
     expect(classes).not.toContain('page-name-text')
-    expect(classes).not.toContain('page-title-text')
   })
 
   it('restyles in place when a block gains an alias', async () => {

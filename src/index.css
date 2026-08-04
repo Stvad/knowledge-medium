@@ -416,22 +416,9 @@
     line-height: 1.25;
   }
 
-  /* A focal block that is also a named page (it carries an `alias`, so
-     `[[Name]]` resolves to it) reads as a page TITLE; a focal block without
-     one is just a bullet you zoomed into, and keeps the plainer heading
-     above. Deliberately restrained — a size/weight step plus a hairline
-     rule, not a different type family or colour. Scoped to the focal title
-     only: inline `[[links]]` to the page are left alone. */
-  /* The open page's own title. Sits on the TEXT (see blockTitleText.ts), not
-     the content slot, so it can never inherit into a plugin surface that an
-     aliased block happens to render. */
-  .block-title-text.page-title-text {
-    font-size: 1.75rem;
-    font-weight: 700;
-    letter-spacing: -0.015em;
-    padding-bottom: 0.25rem;
-    border-bottom: 1px solid hsl(var(--border));
-  }
+  /* NOTE: the open page's title deliberately gets NO extra treatment — see
+     `pageStyling.ts` in the alias plugin for why the size step + hairline
+     rule that used to live here were removed. */
 
   /* A page seen anywhere OTHER than as the open page — nested in the outline,
      in search results, in a backlink entry. Deliberately weight-only: these

@@ -6,9 +6,12 @@ const ctx = (over: Partial<BlockTextClassContext>): BlockTextClassContext =>
   ({aliases: [], isFocal: false, ...over}) as BlockTextClassContext
 
 describe('aliasPageStyling', () => {
-  it('gives the open page the title treatment', () => {
-    expect(aliasPageStyling(ctx({aliases: ['Inbox'], isFocal: true})))
-      .toBe('page-title-text')
+  it('leaves the open page\'s title alone', () => {
+    // The title is not where page-ness is ambiguous (breadcrumb + panel chrome
+    // already answer it), and every decoration available there — a rule, a size
+    // step — either collides with the link/reference vocabulary or gets its
+    // geometry from the type-chips layout. See the module comment.
+    expect(aliasPageStyling(ctx({aliases: ['Inbox'], isFocal: true}))).toBeNull()
   })
 
   it('marks a page seen anywhere else without resizing it', () => {
