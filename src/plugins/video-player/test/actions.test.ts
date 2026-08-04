@@ -62,6 +62,7 @@ const baseContext = {
   } as unknown as Repo,
   uiStateBlock: {id: 'ui-state'} as Block,
   types: [],
+    aliases: [],
   topLevelBlockId: 'root',
   inFocus: true,
   inEditMode: false,

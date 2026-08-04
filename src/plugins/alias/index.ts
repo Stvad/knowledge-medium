@@ -20,16 +20,19 @@ import { systemToggle } from '@/facets/togglable.js'
 import { rejectionToastFacet } from '@/extensions/core.js'
 import { aliasDataExtension } from './dataExtension.ts'
 import { aliasCollisionRejectionToast } from './rejectionToast.tsx'
+import { aliasPageStylingContribution } from './pageStyling.ts'
 
 export const aliasPlugin: AppExtension = systemToggle({
   id: 'system:alias',
   name: 'Aliases',
-  description: 'Alias property + sync processor so blocks can be referenced by name.',
+  description: 'Alias property, sync processor, and page styling so blocks can be referenced by name.',
 }).of([
   aliasDataExtension,
   rejectionToastFacet.of(aliasCollisionRejectionToast, {source: 'alias'}),
+  aliasPageStylingContribution,
 ])
 
 export { aliasDataExtension } from './dataExtension.ts'
 export { ALIAS_COLLISION_MERGE_MUTATOR, aliasCollisionMerge } from './collisionMerge.ts'
 export { ALIAS_SYNC_PROCESSOR, aliasSyncProcessor } from './syncProcessor.ts'
+export { aliasPageStyling } from './pageStyling.ts'

@@ -6,7 +6,6 @@ import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
 import type { ComponentType, FunctionComponent, RefObject } from 'react'
 import {
-  getAliases,
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -41,7 +40,7 @@ import {
   ContextMenuContent,
 } from '@/components/ui/context-menu.js'
 import { useBlockContext } from '@/context/block.js'
-import { useHandle, useHasChildren, usePropertyValue } from '@/hooks/block.js'
+import { useBlockAliases, useHasChildren, usePropertyValue } from '@/hooks/block.js'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
@@ -529,23 +528,11 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
-  // Does this block carry a page name (`[[Inbox]]`)? Every top-level block
-  // currently renders as the same 1.5rem heading, so a real named page and
-  // a plain bullet you happened to zoom into are typographically identical.
-  // Only the FOCAL title is distinguished (see `.page-title-content`);
-  // inline `[[links]]` to the page are deliberately left alone.
-  // Read through `getAliases` rather than `usePropertyValue(block, aliasesProp)`:
-  // the raw hook calls `codec.decode` with no catch, and this read now runs for
-  // EVERY rendered block. One malformed `alias` value (imported, hand-written,
-  // arrived over sync) would throw here — in the renderer itself, above the
-  // per-block error boundary — and blank out that block's whole subtree, purely
-  // to decide a font size. `getAliases` is the codebase's existing tolerant
-  // decode for exactly this. The selector also returns a boolean, so it can't
-  // churn identity the way an array would.
-  const hasAlias = useHandle(block, {
-    selector: data => (data ? getAliases(data).length > 0 : false),
-  }) as boolean
-  const isAliasedPage = isTopLevel && hasAlias
+  // The block's page names, surfaced on the resolve context so plugins can key
+  // on "is this a page" (see `aliases` on BlockResolveContext). Core reports the
+  // fact and takes no view on what it should look like — the alias plugin owns
+  // that, via `blockContentSurfacePropsFacet`.
+  const aliases = useBlockAliases(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
   // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
@@ -581,6 +568,7 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     types,
+    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -604,6 +592,7 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     types,
+    aliases,
     topLevelBlockId,
     scopeRootId,
     isTopLevel,
@@ -656,16 +645,15 @@ export function DefaultBlockRenderer(
       )
       // Top-of-panel content renders as a title: larger font, less bullet-list
       // weight. The Controls slot already returns null for top-level so there's
-      // no inline bullet to suppress here. A focal block that is also a named
-      // page gets the extra `page-title-content` marker so it reads as a page
-      // title rather than as a zoomed-in bullet.
+      // no inline bullet to suppress here. Page-vs-plain-bullet styling is NOT
+      // decided here — the alias plugin contributes it through
+      // `blockContentSurfacePropsFacet`, whose className merges in below.
       const topLevelClass = isTopLevel ? ' top-level-content' : ''
-      const pageTitleClass = isAliasedPage ? ' page-title-content' : ''
       return (
         <div
           {...contentSurfaceProps}
           data-block-visibility-target="true"
-          className={`block-content${topLevelClass}${pageTitleClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
+          className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
           <ErrorBoundary FallbackComponent={FallbackComponent}>
@@ -674,7 +662,7 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, resolveContext, runtime, isTopLevel, isAliasedPage, DefaultContentRenderer, contentContainerRef])
+  }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null

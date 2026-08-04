@@ -421,6 +421,15 @@
     border-bottom: 1px solid hsl(var(--border));
   }
 
+  /* A page seen anywhere OTHER than as the open page — nested in the outline,
+     in search results, in a backlink entry. Deliberately weight-only: these
+     sit in a list of sibling bullets, and changing their size would break the
+     vertical rhythm that makes an outline scannable. The goal is "I can tell
+     that line is a page", not "that line is a heading". */
+  .block-content.page-name-content {
+    font-weight: 600;
+  }
+
   .tm-block[data-editing='true'] {
     z-index: 20;
   }

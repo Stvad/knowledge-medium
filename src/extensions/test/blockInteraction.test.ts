@@ -21,6 +21,7 @@ const context = {
   repo: {} as Repo,
   uiStateBlock: {} as Block,
   types: [],
+    aliases: [],
   topLevelBlockId: 'root',
   inFocus: true,
   inEditMode: false,

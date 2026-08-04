@@ -53,6 +53,13 @@ export interface BlockResolveContext {
   repo: Repo
   uiStateBlock: Block
   types: readonly string[]
+  /** The block's page names (`[[Inbox]]`), or `[]`. Reactive, like `types`:
+   *  populated by the renderer from the block's `alias` property so a
+   *  contribution that keys on "is this a page" re-resolves when one is
+   *  added or removed, instead of freezing at the value it had when the
+   *  contribution set was first resolved. Decoded tolerantly — a malformed
+   *  stored value reads as no aliases rather than throwing. */
+  aliases: readonly string[]
   topLevelBlockId?: string
   /** Root of the visible subtree this mount renders (see
    *  `BlockContextType.scopeRootId`). Equals `topLevelBlockId` on the

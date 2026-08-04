@@ -14,6 +14,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { typeSeedsFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
+import { aliasPageStylingContribution } from '@/plugins/alias/pageStyling'
 import { aliasesProp, focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -377,7 +378,7 @@ describe('DefaultBlockRenderer slot identity', () => {
   })
 })
 
-describe('DefaultBlockRenderer page-title styling', () => {
+describe('page styling via the alias plugin contribution', () => {
   let repo: Repo
   let runtime: FacetRuntime
 
@@ -385,11 +386,15 @@ describe('DefaultBlockRenderer page-title styling', () => {
     await resetTestDb(sharedDb.db)
     // No blockLayoutFacet contribution — this exercises DefaultBlockLayout,
     // which is what actually mounts the `block-content` wrapper under test.
+    // The alias plugin's contribution is registered explicitly: the styling is
+    // ITS decision now, so this asserts the whole seam (core feeds reactive
+    // `ctx.aliases` → plugin returns a className → the renderer merges it),
+    // not just a class the renderer hardcodes.
     repo = createTestRepo({
       db: sharedDb.db,
       user: {id: 'user-1'},
       newId: () => crypto.randomUUID(),
-      extensions: [defaultEditorInteractionExtension],
+      extensions: [defaultEditorInteractionExtension, aliasPageStylingContribution],
     }).repo
     runtime = repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
@@ -456,10 +461,11 @@ describe('DefaultBlockRenderer page-title styling', () => {
     expect(classes).not.toContain('page-title-content')
   })
 
-  it('does not restyle a named page rendered inline, only the focal title', async () => {
+  it('marks a named page seen in the hierarchy, not only when it is open', async () => {
     // 'page' has an alias but isn't the focal block here, so it renders as an
-    // ordinary bullet. This is what scopes the treatment to the page's OWN
-    // title rather than every appearance of the page.
+    // ordinary bullet — the case where page-ness was previously invisible.
+    // It gets the weight-only marker, NOT the heading treatment: it is one row
+    // among siblings and resizing it would break the outline's rhythm.
     await act(async () => {
       await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
     })
@@ -467,7 +473,37 @@ describe('DefaultBlockRenderer page-title styling', () => {
     renderFocal('page')
 
     const classes = await contentClasses('page')
+    expect(classes).toContain('page-name-content')
     expect(classes).not.toContain('top-level-content')
     expect(classes).not.toContain('page-title-content')
+  })
+
+  it('leaves a plain block alone wherever it appears', async () => {
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'page')
+    })
+
+    renderFocal('plain')
+
+    const classes = await contentClasses('plain')
+    expect(classes).not.toContain('page-name-content')
+    expect(classes).not.toContain('page-title-content')
+  })
+
+  it('restyles in place when a block gains an alias', async () => {
+    // `ctx.aliases` is fed reactively (like `ctx.types`) precisely so this
+    // works: a facet contribution resolved from frozen data would keep the
+    // pre-rename styling until something unrelated invalidated it. Rendered
+    // non-focal ('page' stays the focal block) so this pins the hierarchy
+    // marker, which is the case that has no other way to become visible.
+    renderFocal('plain')
+    expect(await contentClasses('plain')).not.toContain('page-name-content')
+
+    await act(async () => {
+      await repo.block('plain').set(aliasesProp, ['Now A Page'])
+    })
+
+    await vi.waitFor(async () =>
+      expect(await contentClasses('plain')).toContain('page-name-content'))
   })
 })
