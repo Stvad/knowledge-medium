@@ -298,11 +298,12 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x'])
   })
 
-  it('defers a ws-context route addressed at the per-device BASE session', async () => {
+  it('defers a CLAIMED ws-context route addressed at the per-device BASE session', async () => {
     // Core keeps ws-context opaque; the one thing it knows is the negative —
-    // the base session is never a context's addressee. Boot used to
+    // the base session is never a CLAIMED context's addressee. Boot used to
     // reconcile `#ws;persp=lane/…` INTO the base session (clobbering its
     // layout) and normalize a slot-less lane URL FROM base rows.
+    env.repo.claimLayoutContextKey('persp')
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
     const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
     const replaces: string[] = []
@@ -330,6 +331,34 @@ describe('applyCurrentLayoutUrl', () => {
 
     // Context-free routes still address base normally.
     expect((await apply('#ws-1/a')).kind).toBe('noop')
+  })
+
+  it('applies an UNCLAIMED ws-context route to base normally (no consumer will ever pick it up)', async () => {
+    // `#ws;foo=bar/a` with no claimant, or a lane bookmark after its host
+    // released the claim: deferring would strand it (blank fresh-workspace
+    // boot, ignored slots on an existing one) — base applies it like any
+    // deep link, and a released claim stops deferring immediately.
+    env.repo.claimLayoutContextKey('persp')
+    env.repo.releaseLayoutContextKey('persp')
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      hash: '#ws-1;foo=bar/b1',
+    })
+    expect(result.kind).toBe('applied')
+    expect(layoutBlockIdsFromRows(base.id, await env.repo.query.subtree({id: base.id}).load())).toEqual(['b1'])
+
+    const released = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      hash: '#ws-1;persp=lane/b1',
+    })
+    expect(released.kind).toBe('noop') // rows already ['b1'] — applied, not deferred
   })
 
   it('cancellation after the tx committed keeps the rows but suppresses the canonicalization replace', async () => {

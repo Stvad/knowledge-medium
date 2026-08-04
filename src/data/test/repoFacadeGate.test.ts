@@ -65,6 +65,8 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   // ── reads (getters / pure lookups) ──
   activeWorkspaceId: 'getter read (delegates to the shared ClientContext)',
   activeLayoutSessionId: 'getter read (delegates to the shared ClientContext)',
+  claimLayoutContextKey: 'interior mutation of the shared ClientContext (claim set + device persistence) — assigns no Repo field, safe through the chain',
+  releaseLayoutContextKey: 'interior mutation of the shared ClientContext (claim set + device persistence) — assigns no Repo field, safe through the chain',
   user: 'getter read (delegates to the shared ClientContext)',
   client: 'getter read — narrows the private `_client` field to ClientContextReader (see its SAFE_INSTANCE_FIELDS entry); assigns nothing',
   facetRuntime: 'getter read',

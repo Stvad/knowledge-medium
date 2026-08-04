@@ -1381,6 +1381,20 @@ export class Repo {
     this._client.setActiveLayoutSessionId(id)
   }
 
+  /** Claim a ws-context key for a session consumer (pure delegation — see
+   *  {@link ClientContext.claimLayoutContextKey} for semantics, persistence
+   *  and the first-boot residue). Read side: `repo.client.hasClaimedLayoutContextKey`. */
+  claimLayoutContextKey(key: string): void {
+    this._client.claimLayoutContextKey(key)
+  }
+
+  /** Undo {@link claimLayoutContextKey} — consumers release on
+   *  disable/uninstall so stale claims don't keep deferring routes nothing
+   *  will pick up. */
+  releaseLayoutContextKey(key: string): void {
+    this._client.releaseLayoutContextKey(key)
+  }
+
   /** Wait until persisted property definitions have produced their first
    * complete workspace snapshot. Bootstrap calls this before typed writes so
    * declaration synthesis cannot temporarily outrank a stored rename/shadow. */

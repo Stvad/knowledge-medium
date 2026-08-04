@@ -58,10 +58,39 @@ export interface ClientContextReader {
   /** The per-device BASE session id (the no-override fallback). Only for
    *  base-ness checks — see the class getter's doc. */
   readonly baseLayoutSessionId: string
+  /** Read side of the layout-context claim registry — see the class
+   *  method's doc. (Claiming/releasing goes through the Repo shims, same
+   *  split as the set methods above.) */
+  hasClaimedLayoutContextKey(key: string): boolean
   /** Subscribe to EFFECTIVE changes of either field (no-op sets — including
    *  the layout-session id's null⇄base-id folding — do not notify). Returns
    *  an idempotent unsubscribe. */
   onActingAsChange(listener: () => void): () => void
+}
+
+/** Device-local persistence for layout-context claims (see
+ *  {@link ClientContext.claimLayoutContextKey}). localStorage so a claim
+ *  made by an async-loaded consumer is visible to the NEXT boot's
+ *  synchronous bootstrap read; typeof-guarded so non-browser environments
+ *  (node tests, SSR) degrade to in-memory claims. */
+const LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY = 'layout-context-claims'
+const readPersistedLayoutContextClaims = (): string[] => {
+  if (typeof localStorage === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY)
+    const parsed: unknown = raw === null ? [] : JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === 'string') : []
+  } catch {
+    return []
+  }
+}
+const writePersistedLayoutContextClaims = (keys: ReadonlySet<string>): void => {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY, JSON.stringify([...keys].sort()))
+  } catch {
+    // Quota/private-mode failures degrade to in-memory claims.
+  }
 }
 
 export class ClientContext implements ClientContextReader {
@@ -74,6 +103,11 @@ export class ClientContext implements ClientContextReader {
   /** `null` means "no override" — `activeLayoutSessionId` falls back to
    *  the per-device base id. */
   private _activeLayoutSessionId: string | null = null
+
+  /** Ws-context keys some session consumer has claimed on THIS device —
+   *  seeded from the persisted set so bootstrap (which runs before async
+   *  user extensions load) sees claims made on earlier boots. */
+  private readonly _claimedLayoutContextKeys = new Set<string>(readPersistedLayoutContextClaims())
 
   /** Fires on EFFECTIVE changes to `activeWorkspaceId` / `activeLayoutSessionId`
    *  — see {@link onActingAsChange}. Notified from THIS class's own set
@@ -124,6 +158,37 @@ export class ClientContext implements ClientContextReader {
    *  this getter is behavior-identical to reading the base id directly. */
   get activeLayoutSessionId(): string {
     return this._activeLayoutSessionId ?? getLayoutSessionId()
+  }
+
+  /** Has some session consumer claimed this ws-context key on this device?
+   *  Read side of {@link claimLayoutContextKey} — URL application consults
+   *  it to decide whether a context-bearing route is addressed to a
+   *  consumer-selected session (defer at base) or is unclaimed noise
+   *  (apply normally). */
+  hasClaimedLayoutContextKey(key: string): boolean {
+    return this._claimedLayoutContextKeys.has(key)
+  }
+
+  /** Claim a ws-context key (e.g. `persp`) for a session consumer: routes
+   *  whose ws-context carries a claimed key are treated as addressed to a
+   *  consumer-selected session, so the BASE session defers them (see
+   *  applyCurrentLayoutUrl) instead of applying them to itself. Idempotent;
+   *  persisted per-device so bootstrap — which runs before async user
+   *  extensions load — honors claims from earlier boots. Residue: the very
+   *  first boot on a device where the consumer has never run yet applies a
+   *  context URL to base; the consumer reconciles once it loads. Consumers
+   *  should {@link releaseLayoutContextKey} when disabled/uninstalled, or a
+   *  stale claim keeps deferring routes nothing will pick up. */
+  claimLayoutContextKey(key: string): void {
+    if (this._claimedLayoutContextKeys.has(key)) return
+    this._claimedLayoutContextKeys.add(key)
+    writePersistedLayoutContextClaims(this._claimedLayoutContextKeys)
+  }
+
+  /** Undo {@link claimLayoutContextKey}. */
+  releaseLayoutContextKey(key: string): void {
+    if (!this._claimedLayoutContextKeys.delete(key)) return
+    writePersistedLayoutContextClaims(this._claimedLayoutContextKeys)
   }
 
   /** The per-device BASE layout-session id — what `activeLayoutSessionId`

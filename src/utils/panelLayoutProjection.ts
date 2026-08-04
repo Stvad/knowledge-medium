@@ -989,17 +989,26 @@ export const applyCurrentLayoutUrl = async ({
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
   }
-  // A ws-context-bearing route (`#ws;persp=…/…`) is addressed to a
-  // CONSUMER-SELECTED session, and core keeps the context opaque — so the
+  // A ws-context route whose key some session consumer has CLAIMED
+  // (`#ws;persp=…/…` once a host claimed `persp`) is addressed to a
+  // consumer-selected session, and core keeps the context opaque — so the
   // one thing core can know is the negative: the per-device BASE session is
-  // never the addressee (context-free is what addresses base). Defer —
-  // touch neither rows nor URL — and let whoever owns the context (the
-  // session host) select the addressee session, whose own projection then
+  // never a claimed context's addressee (context-free is what addresses
+  // base). Defer — touch neither rows nor URL — and let the claiming
+  // consumer select the addressee session, whose own projection then
   // applies the route. Without this, booting on `#ws;persp=lane/a`
   // reconciled the BASE layout to the lane's slots, and a slot-less lane
   // URL was first normalized from base rows and then applied to the lane —
   // clobbering both sessions' persisted state.
-  if (route.wsContext !== undefined
+  //
+  // UNCLAIMED context entries (`#ws;foo=bar/a`, or a lane bookmark on a
+  // device whose host was uninstalled and released its claim) do NOT
+  // defer: nothing will ever pick the route up, so base applies it
+  // normally — a fresh workspace still reaches the empty-landing path and
+  // an existing one honors the URL's slots. Entry grammar is
+  // `key[=value]`, canonicalized by parseLayout, so the key is everything
+  // before the first '='.
+  if (route.wsContext?.some(entry => repo.client.hasClaimedLayoutContextKey(entry.split('=')[0]))
     && layoutSessionBlock.id === layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)) {
     return {kind: 'deferred'}
   }
