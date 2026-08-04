@@ -213,7 +213,12 @@ export class ClientContext implements ClientContextReader {
     const fresh = canReadPersisted ? readPersistedLayoutContextClaims() : this._claimedLayoutContextKeys
     const changed = mutate(fresh)
     this._claimedLayoutContextKeys = fresh
-    if (changed && hasStorage) {
+    // While DEGRADED, retry the healing write on EVERY mutation, no-ops
+    // included — the common recovery path is an extension restart
+    // idempotently re-claiming its keys, and gating on the delta would
+    // leave storage stale until some effective mutation happens to come
+    // along (the next boot would then read the stale claims).
+    if (hasStorage && (changed || this._claimsPersistenceDegraded)) {
       this._claimsPersistenceDegraded = !writePersistedLayoutContextClaims(fresh)
     }
   }

@@ -117,6 +117,29 @@ describe('ClientContext layout-context claims (persistence)', () => {
     expect(tabA.hasClaimedLayoutContextKey('ws-2', 'persp')).toBe(true)
   })
 
+  it('a NO-OP mutation while degraded still retries the healing write (extension-restart recovery)', () => {
+    // The common recovery path is an extension restart idempotently
+    // re-claiming its keys — changed === false. Gating the healing write
+    // on the delta would leave storage stale forever, and the NEXT boot
+    // would read the stale claims (applying lane URLs to base again).
+    const tabA = tab('a')
+    const real = localStorage
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => real.getItem(key),
+      setItem: () => { throw new Error('quota') },
+      removeItem: (key: string) => real.removeItem(key),
+    })
+    try {
+      tabA.claimLayoutContextKey('ws-1', 'persp') // fails → degraded
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    tabA.claimLayoutContextKey('ws-1', 'persp') // storage healthy again, but a NO-OP
+
+    // The healing write ran anyway: the next boot sees the claim.
+    expect(tab('next-boot').hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(true)
+  })
+
   it('a THROWING localStorage getter (sandboxed WebView SecurityError) degrades to in-memory claims', () => {
     // In opaque-origin/sandboxed contexts merely EVALUATING `localStorage`
     // throws — and the claims read runs as a ClientContext field
