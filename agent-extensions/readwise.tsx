@@ -2222,7 +2222,7 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
 
   if (shown === 0) {
     return (
-      <div className="mx-auto w-full max-w-3xl py-6 text-sm text-muted-foreground">
+      <div className="mx-auto w-full max-w-3xl py-6 text-sm font-normal text-muted-foreground">
         {/* `useBlockQuery` reports [] while the handle is still unresolved, so
             without the readiness signal a cold open asserts "nothing to review"
             for a beat before the real list appears. */}
@@ -2232,7 +2232,15 @@ const ReviewBacklogContent: BlockRenderer = ({ block }: BlockRendererProps) => {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 py-4">
+    // `text-base font-normal` is a RESET, not styling, and it is deliberately
+    // redundant with the app: title typography now travels with the title TEXT
+    // (`blockTitleText.ts`), so a surface mounted in the focal content slot no
+    // longer inherits 24px/600. An installed extension runs against whatever
+    // version is DEPLOYED, though, which lags this repo — so the surface states
+    // its own baseline rather than trusting the frame around it. Without either,
+    // the chrome here is fine (it sets its own sizes) but the highlights are
+    // rendered by `BlockComponent` and set none, so they came out as headings.
+    <div className="mx-auto w-full max-w-3xl space-y-6 py-4 text-base font-normal">
       <div className="flex items-baseline justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">Readwise review</h2>

@@ -6,6 +6,7 @@ import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { markdownExtensionsFacet, type MarkdownRenderData } from '@/markdown/extensions.js'
+import { useBlockTitleTextClass } from './blockTitleText.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
 
@@ -45,6 +46,10 @@ export function MarkdownContentRenderer({
   })
   const blockContext = useBlockContext()
   const runtime = useAppRuntime()
+  // Title typography travels with the title text. A surface that wants a real
+  // page title renders this component (the recents page does) and gets one;
+  // one that doesn't, doesn't. Above the early return to keep hook order fixed.
+  const titleClass = useBlockTitleTextClass(block)
 
   if (!renderData) return null
 
@@ -57,7 +62,8 @@ export function MarkdownContentRenderer({
   // preview) still wins.
   const inline = blockContext.isReference === true
   const Container = containerElement ?? (inline ? 'span' : 'div')
-  const className = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
+  const baseClassName = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
+  const className = [baseClassName, titleClass].filter(Boolean).join(' ')
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   // Pass the reactive `renderData` as `data` so the (React-Compiler-memoized)

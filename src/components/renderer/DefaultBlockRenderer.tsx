@@ -636,9 +636,14 @@ export function DefaultBlockRenderer(
         () => resolveContentSurfaceProps(resolveContext),
         [resolveContentSurfaceProps],
       )
-      // Top-of-panel content renders as a title: larger font, less bullet-list
-      // weight. The Controls slot already returns null for top-level so there's
-      // no inline bullet to suppress here.
+      // Marks the focal block's content slot. SPACING only — the gap under the
+      // document body, which is the slot's own business whatever it holds.
+      //
+      // Title TYPOGRAPHY is deliberately not here: this slot holds whatever
+      // renderer won the content facet — a review deck, a recents list, a video
+      // player, a Readwise backlog — and font-size/weight inherit, so styling
+      // the container styles an arbitrary plugin subtree. It lives on the
+      // renderers that draw the block's own TEXT instead (`blockTitleText.ts`).
       const topLevelClass = isTopLevel ? ' top-level-content' : ''
       return (
         <div
@@ -653,7 +658,10 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
+  }, [
+    block, resolveContext, runtime, isTopLevel,
+    DefaultContentRenderer, contentContainerRef,
+  ])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
