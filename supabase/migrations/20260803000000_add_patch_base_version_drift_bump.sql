@@ -190,18 +190,21 @@ begin
       -- claimed. Two reasons: the collision guard below can add a second
       -- millisecond, and the OLD term ratchets +1 per drifted write with no
       -- ceiling, so a long enough run of them climbs without limit (one RPC may
-      -- carry the same id many times). Measured, that ratchet is ~1.3s of excess
-      -- per wall-clock second of sustained drifted writes, so reaching 2^53 from
-      -- a 2026 stamp takes on the order of 10^5 years — safe in practice, but by
-      -- measurement, not by construction. Do NOT clamp the result to recover the
-      -- tidier bound: monotonicity is worth more than a neat ceiling.
+      -- carry the same id many times). Measured, sustained drifted writes
+      -- advance the version ~1.2s per wall-clock second — so the EXCESS over
+      -- wall-clock is only ~0.2s/s, and it goes negative once many ids ride a
+      -- single RPC (~0.9s/s). Either way reaching 2^53 from a 2026 stamp takes
+      -- on the order of 10^5 years — safe in practice, but by measurement, not
+      -- by construction. Do NOT clamp the result to recover the tidier bound:
+      -- monotonicity is worth more than a neat ceiling.
       --
       -- Clearing `raw_proposed` (the PRE-clamp proposal) is what makes the echo
       -- materialize on the author's device, since that is the stamp it wrote
       -- locally. A client skewed further ahead than the cap gets the bound
       -- instead, so its echo lands BELOW its local stamp: the merged row still
-      -- reaches disk, but the in-memory cache's LWW gate rejects it and the UI
-      -- keeps showing the local row until the next reload.
+      -- reaches disk, but the in-memory cache's LWW gate rejects it
+      -- (`blockCache.ts` `applyIfNewer`, which drops any `<=` snapshot) and the
+      -- UI keeps showing the pre-merge local row.
       --
       -- Be precise about what that costs, because the obvious comparison is
       -- wrong. A far-skewed client ALREADY has its stamps knocked down by the
@@ -212,10 +215,26 @@ begin
       -- from before that edit. Same mechanism, worse consequence, and the cap
       -- is what introduces it (measured, not assumed).
       --
-      -- Kept anyway: the alternative is the unbounded ratchet this cap exists
-      -- to stop, which ends in a row no write can ever touch again. A
-      -- reload-recoverable stale view for a client whose clock is more than an
-      -- hour out is the better end of that trade.
+      -- Worse, in fact, than "stale until reload" would suggest. A reload does
+      -- repaint from disk, but it cannot undo a write that already went out —
+      -- and while the stale view is live, the
+      -- ordinary read-modify-write shape (`block.peek()` then `setContent`, as
+      -- in `plugins/video-player/actions.ts` `appendToBlock`) builds its next
+      -- edit from the pre-merge string and ships THAT to the server. The other
+      -- device's edit is then overwritten for the whole fleet, and no reload
+      -- recovers it. Measured, not assumed.
+      --
+      -- Kept anyway, because the comparison that matters is against the old
+      -- server, not against perfection: with this branch mutated out, the same
+      -- sweep loses the peer's edit at EVERY skew, 0 included. The cap narrows
+      -- that from "every clock-ahead client" to "clients more than an hour
+      -- out", and the alternative to the cap is the unbounded ratchet it exists
+      -- to stop, which ends in a row no write can ever touch again. Narrower
+      -- hazard plus a bounded version is the better end of that trade — but it
+      -- is a narrowing, not a fix. Closing it properly means the cache falling
+      -- back to `setSnapshot` when it rejects a sync echo; every row reaching
+      -- that path has already cleared the disk gate's in-tx `hasPendingUpload`
+      -- check, so no unsent local edit would be clobbered by doing so.
       NEW.updated_at := greatest(
         server_now_ms,
         OLD.updated_at,
