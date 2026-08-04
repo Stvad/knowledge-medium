@@ -51,19 +51,20 @@ import {
   navigateFromGlobalCommand,
   resolveGlobalCommandTarget,
 } from '@/utils/navigation.js'
-import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+import {
+  addDaysIso,
+  dailyNoteIsoFromAliases,
+  getOrCreateDailyNote,
+  todayIso,
+} from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
 export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
 
-const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
-
-const dailyNoteIsoFromBlock = (block: Block): string | null => {
-  const aliases = block.peekProperty(aliasesProp) ?? []
-  return aliases.find(alias => ISO_ALIAS_RE.test(alias)) ?? null
-}
+const dailyNoteIsoFromBlock = (block: Block): string | null =>
+  dailyNoteIsoFromAliases(block.peekProperty(aliasesProp) ?? [])
 
 const findContainingDailyNoteIso = async (
   repo: Repo,

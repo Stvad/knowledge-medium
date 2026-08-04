@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import {
+  blockContentDecoratorsFacet,
+  type BlockResolveContext,
+} from '@/extensions/blockInteraction.js'
 import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
+import type { BlockRenderer } from '@/types.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { typeSeedsFacet } from '@/data/facets.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
@@ -43,6 +48,21 @@ describe('dailyNotesPlugin', () => {
     const pickerAction = actions.find(action => action.id === OPEN_DAILY_NOTE_PICKER_ACTION_ID)
     expect(pickerAction).toBeTruthy()
     expect(openDailyNotePickerAction({repo: fakeRepo}).id).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
+  })
+
+  it('contributes the title date-nav arrows as a content decorator', () => {
+    // Registration is the only thing DateNavDecorator.test.tsx can't see (it
+    // drives the contribution directly) — without this the arrows are dead
+    // code and nothing else fails.
+    const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
+    const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))
+    const decorateContent = runtime.read(blockContentDecoratorsFacet)
+    const inner: BlockRenderer = () => null
+
+    expect(decorateContent({isTopLevel: true, blockContext: {}} as BlockResolveContext, inner))
+      .not.toBe(inner)
+    expect(decorateContent({isTopLevel: false, blockContext: {}} as BlockResolveContext, inner))
+      .toBe(inner)
   })
 
   it('contributes the Reschedule quick action on the primary row', () => {

@@ -274,6 +274,15 @@ export {dailyNoteCreatedAt}
 export const isDateAlias = (alias: string): boolean =>
   /^\d{4}-\d{2}-\d{2}$/.test(alias)
 
+/** "Which daily note is this?" from a block's alias list — the ISO-shaped
+ *  alias `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for
+ *  a block that isn't a daily note. The one definition of that read, shared
+ *  by the prev/next keyboard actions (which peek it off a Block) and the
+ *  title date-nav arrows (which get it from a reactive `aliases` hook). */
+export const dailyNoteIsoFromAliases = (
+  aliases: readonly string[],
+): string | null => aliases.find(isDateAlias) ?? null
+
 /** Shape + calendar-validity check. Returns `true` only for strings
  *  that parse to a real calendar day (rejects `2026-13-01`,
  *  `2026-02-30`, etc. via a round-trip-to-ISO comparison — naive

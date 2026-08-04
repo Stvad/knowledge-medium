@@ -32,6 +32,8 @@
  * The `dailyNotesPlugin` AppExtension contributes:
  *   - the three global `open_*_daily_note` actions, and
  *   - a header button that opens the daily-note picker dialog, and
+ *   - prev/next-day arrows flanking a zoomed-in daily note's title
+ *     (`DateNavDecorator`), which navigate their own panel, and
  *   - a `workspaceLandingFacet` resolver that lands the user on
  *     today's note when the panel layout is empty (plus a tutorial
  *     bullet on first-run workspaces).
@@ -54,6 +56,7 @@ import {
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.js'
+import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
@@ -64,6 +67,7 @@ import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
+import { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
 import { openDialog } from '@/utils/dialogs.js'
 import { todayDailyNoteLanding } from './landing.ts'
 import { dailyNotesDeletionGuard } from './deletionGuard.ts'
@@ -201,12 +205,16 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
       source: 'daily-notes',
       precedence: 5,
     }),
+    // Prev/next-day arrows on the zoomed-in note's title (they used to be a
+    // pair of header buttons — see DateNavDecorator.tsx for why they moved).
+    blockContentDecoratorsFacet.of(dateNavDecoratorContribution, {source: 'daily-notes'}),
     workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
     // Daily notes and the Journal are get-or-create, so a UI delete never
     // sticks — it just discards the contents. Refuse it (see deletionGuard.ts).
     blockDeletionGuardsFacet.of(dailyNotesDeletionGuard, {source: 'daily-notes'}),
   ])
 
+export { dateNavDecoratorContribution } from './DateNavDecorator.tsx'
 export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'
 export {
@@ -218,6 +226,7 @@ export {
   ensureDailyNoteTarget,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
+  dailyNoteIsoFromAliases,
   isDateAlias,
   isValidDateAlias,
   journalBlockId,
