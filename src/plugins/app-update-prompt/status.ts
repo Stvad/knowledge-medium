@@ -37,13 +37,6 @@ const appReloadAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
 
 export const APP_CHECK_FOR_UPDATES_ACTION_ID = 'app.checkForUpdates'
 
-/** Whether there's a service worker to ask at all — false in dev and in
- *  browsers without SW support, where a check could only ever report
- *  "not active". Gates both the palette entry and the status-chip button,
- *  so the two can't drift into offering the action in different places. */
-export const canCheckForAppUpdates = (): boolean =>
-  typeof navigator !== 'undefined' && !!navigator.serviceWorker
-
 // One transient toast, replaced in place by id as the check progresses.
 const CHECK_TOAST_ID = 'app-update-check'
 
@@ -59,7 +52,7 @@ const appCheckForUpdatesAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
   context: ActionContextTypes.GLOBAL,
   icon: RefreshCcw,
   // Hidden where there's no service worker to ask (dev, unsupported browsers).
-  isVisible: canCheckForAppUpdates,
+  isVisible: () => typeof navigator !== 'undefined' && !!navigator.serviceWorker,
   handler: async () => {
     showInfo('Checking for updates…', {id: CHECK_TOAST_ID, duration: Number.POSITIVE_INFINITY})
     const result = await checkForAppUpdate()

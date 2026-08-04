@@ -5,7 +5,6 @@ import {
   CloudOff,
   CloudUpload,
   HardDrive,
-  RefreshCcw,
   RefreshCw,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -33,12 +32,6 @@ import {
 import { RejectionDialog } from './RejectionDialog.tsx'
 import { useDiagnostics } from '@/plugins/diagnostics/useDiagnostics.js'
 import { runActionByIdSafely } from '@/shortcuts/runAction.js'
-import {
-  APP_CHECK_FOR_UPDATES_ACTION_ID,
-  canCheckForAppUpdates,
-} from '@/plugins/app-update-prompt/status.js'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
 
 interface UploadQueueCountRow {
   count: number
@@ -131,62 +124,12 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
   return date.toLocaleString()
 }
 
-// Fire-and-forget dispatch of a global action by id — the same indirection
-// every control in this dropdown uses (a diagnostic's Inspect/Reload, the
-// update check). Failures are logged, never surfaced into render.
+// Fire-and-forget dispatch of a global action by id — the indirection every
+// control in this dropdown uses (a diagnostic's Inspect / Reload). Failures
+// are logged, never surfaced into render.
 const dispatchAction = (actionId: string): Promise<boolean> =>
   runActionByIdSafely(actionId, new CustomEvent('run-diagnostic-action'))
 
-/**
- * Proactive "is there a new build?" control.
- *
- * The check has always existed as a global action (`app.checkForUpdates`),
- * but only in the command palette — a poor discovery route on mobile, and
- * the chip itself said nothing about updates until one had *already* been
- * found. This puts the action where a user goes to see what build they're
- * on. A found update then surfaces in this same dropdown as the ordinary
- * app-update diagnostic row, with its Reload button.
- *
- * Hidden when there's no service worker to ask, mirroring the action's own
- * `isVisible` via the shared predicate so the two can't drift.
- */
-function CheckForUpdatesRow() {
-  const [checking, setChecking] = useState(false)
-  // Two independent gates, both required.
-  //
-  // Browser capability: no service worker to ask (dev, unsupported browsers).
-  // Shared with the action's own `isVisible` so the two can't drift.
-  //
-  // Action availability: `app-update-prompt` is its OWN system toggle, so a
-  // user can disable it while leaving System status on. Its toggle boundary
-  // then withdraws `app.checkForUpdates` from the runtime and `runActionById`
-  // throws "Active action ... not found" — which `dispatchAction` only logs,
-  // leaving a button that spins briefly and does nothing. Ask the runtime
-  // whether the action is actually there rather than assuming its plugin is.
-  const runtime = useAppRuntime()
-  const actionAvailable = getEffectiveActions(runtime)
-    .some(action => action.id === APP_CHECK_FOR_UPDATES_ACTION_ID)
-  if (!canCheckForAppUpdates() || !actionAvailable) return null
-  return (
-    <div className="border-t pt-2">
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        className="h-7 w-full justify-start gap-2 px-2 text-xs"
-        disabled={checking}
-        onClick={() => {
-          setChecking(true)
-          void dispatchAction(APP_CHECK_FOR_UPDATES_ACTION_ID)
-            .finally(() => setChecking(false))
-        }}
-      >
-        <RefreshCcw className={cn('h-3.5 w-3.5', checking && 'animate-spin')}/>
-        Check for updates
-      </Button>
-    </div>
-  )
-}
 
 // The build the client is running — the committer-date version (e.g.
 // "2026.06.13-1216"). Rendered as quiet metadata: muted, no underline (the
@@ -486,7 +429,6 @@ function SyncStatusHeaderContent({
                 )}
               </div>
             ))}
-            <CheckForUpdatesRow/>
           </div>
         </DropdownMenuContent>
       </DropdownMenu>
