@@ -138,7 +138,7 @@ import { UndoManager, type UndoEntry } from './internals/undoManager'
 import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
-import { ClientContext, type ClientContextReader } from './clientContext'
+import { ClientContext, type ClientContextReader, type LayoutSessionRouter } from './clientContext'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
@@ -1394,6 +1394,14 @@ export class Repo {
    *  will pick up. */
   releaseLayoutContextKey(workspaceId: string, key: string): void {
     this._client.releaseLayoutContextKey(workspaceId, key)
+  }
+
+  /** Register (null = unregister) the session route-owner (pure delegation
+   *  — see {@link ClientContext.setLayoutSessionRouter} and the
+   *  LayoutSessionRouter protocol doc). Read side:
+   *  `repo.client.layoutSessionRouter`. */
+  setLayoutSessionRouter(router: LayoutSessionRouter | null): void {
+    this._client.setLayoutSessionRouter(router)
   }
 
   /** Wait until persisted property definitions have produced their first

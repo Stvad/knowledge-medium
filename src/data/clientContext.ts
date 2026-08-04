@@ -51,6 +51,37 @@ export interface ClientContextOptions {
  * convention. Mutate ONLY via `repo.setActiveWorkspaceId` /
  * `repo.setActiveLayoutSessionId`.
  */
+/** A same-workspace app route as the session router sees it: the clean
+ *  workspace id plus the canonicalized ws-context entries (`key[=value]`,
+ *  parse-sorted). Slots are deliberately absent — routing decides WHERE a
+ *  route applies, never WHAT it applies. */
+export interface LayoutSessionRoute {
+  workspaceId: string
+  wsContext: readonly string[]
+}
+
+/** The session consumer's route-owner: the single authority for "which
+ *  layout session does a ws-context-bearing route address?". Core keeps
+ *  ws-context opaque, so only the consumer that mints those entries can
+ *  answer — it registers this via `repo.setLayoutSessionRouter` and URL
+ *  application (`applyCurrentLayoutUrl`, and through it bootstrap and
+ *  every projection) consults it instead of guessing.
+ *
+ *  Registration protocol: register EARLY (before switching sessions or
+ *  installing context-bearing hashes), and keep
+ *  `claimLayoutContextKey` in sync for your keys — persisted claims are
+ *  what boots BEFORE your code loads use to defer your routes instead of
+ *  applying them to the base session. Unregister (set null) on
+ *  disable/uninstall together with releasing the claims. */
+export interface LayoutSessionRouter {
+  /** The session KEY (the `repo.client.activeLayoutSessionId` domain —
+   *  NOT a block id; core derives the block id via
+   *  layoutSessionBlockIdForKey) the route addresses, or `null` for the
+   *  per-device base session. Only called for routes whose ws-context
+   *  carries a claimed key. */
+  resolveSessionKey(route: LayoutSessionRoute): string | null
+}
+
 export interface ClientContextReader {
   readonly user: User
   readonly activeWorkspaceId: string | null
@@ -62,6 +93,12 @@ export interface ClientContextReader {
    *  user, `workspaceId`) — see the class method's doc. (Claiming/releasing
    *  goes through the Repo shims, same split as the set methods above.) */
   hasClaimedLayoutContextKey(workspaceId: string, key: string): boolean
+  /** The registered session route-owner, or null before the consumer
+   *  loads (registration goes through `repo.setLayoutSessionRouter`).
+   *  Its presence is also the "multi-session mode" signal: with a router
+   *  up, a projection bound to a NON-base session defers base-addressed
+   *  (context-free) routes instead of applying them. */
+  readonly layoutSessionRouter: LayoutSessionRouter | null
   /** Subscribe to EFFECTIVE changes of either field (no-op sets — including
    *  the layout-session id's null⇄base-id folding — do not notify). Returns
    *  an idempotent unsubscribe. */
@@ -241,6 +278,20 @@ export class ClientContext implements ClientContextReader {
   releaseLayoutContextKey(workspaceId: string, key: string): void {
     const scope = layoutContextClaimScope(this.user.id, workspaceId)
     this.mutateLayoutContextClaims(claims => claims.get(scope)?.delete(key) ?? false)
+  }
+
+  private _layoutSessionRouter: LayoutSessionRouter | null = null
+
+  get layoutSessionRouter(): LayoutSessionRouter | null {
+    return this._layoutSessionRouter
+  }
+
+  /** Register (or with `null` unregister) the session route-owner — see
+   *  {@link LayoutSessionRouter} for the protocol. Deliberately no change
+   *  notification: consumers register before driving any navigation, and
+   *  URL application reads the router at apply time. */
+  setLayoutSessionRouter(router: LayoutSessionRouter | null): void {
+    this._layoutSessionRouter = router
   }
 
   /** The per-device BASE layout-session id — what `activeLayoutSessionId`

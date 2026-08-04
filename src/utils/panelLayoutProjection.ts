@@ -23,7 +23,7 @@ import {
   splitHashRouteAndParams,
   type LayoutSlot,
 } from '@/utils/routing'
-import { isBlockConfirmedDeleted, panelHistory, writePanelContent, type PanelHistoryRollback } from '@/utils/panelHistory'
+import { isBlockConfirmedDeleted, panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
@@ -714,23 +714,15 @@ export const reconcilePanelRows = async (
   )
   const targetBlockIds = flattenSlots(targetSlots)
   const deletedPanelRowIds: string[] = []
-  // panelHistory is NON-transactional but mutated from inside the tx (the
-  // content-swap path consumes stack entries + replaces pending restores).
-  // First-touch capture per panel, sealed right after the panel's
-  // mutations; restored below if the tx throws (the cancellation abort
-  // made that path routine, not just exceptional). The seal makes the
-  // restore a CAS — a concurrent user navigation racing the suspended tx
-  // wins over the rewind (see sealRollback).
-  const historyRollbacks = new Map<string, PanelHistoryRollback>()
-  const touchHistory = (panelId: string): void => {
-    if (!historyRollbacks.has(panelId)) {
-      historyRollbacks.set(panelId, panelHistory.captureRollback(panelId))
-    }
-  }
-  const sealHistory = (panelId: string): void => {
-    const capture = historyRollbacks.get(panelId)
-    if (capture) panelHistory.sealRollback(capture)
-  }
+  // panelHistory is NON-transactional, so nothing inside the tx may mutate
+  // it — an abort (routine via the cancellation checks, or any throw)
+  // must have nothing to undo. The content-swap path PEEKS the would-be
+  // destination for its in-tx row writes and STAGES the real store
+  // mutation here; effects run only after the tx commits (row deletes
+  // already follow this pattern via the post-commit clear below). The
+  // commit-time reconcile recomputes against live state, so a concurrent
+  // user navigation that landed mid-tx is respected rather than clobbered.
+  const stagedHistoryEffects: (() => void)[] = []
 
   const runTx = async (): Promise<boolean> => repo.tx(async tx => {
     if (isCancelled?.()) throw new ReconcileCancelled()
@@ -862,15 +854,19 @@ export const reconcilePanelRows = async (
           await tx.move(slot.row.id, {parentId, orderKey})
         }
         if (slot.blockId !== blockId) {
-          touchHistory(slot.row.id)
-          const restored = slot.blockId
-            ? panelHistory.reconcileUrlNavigation(slot.row.id, {
-              blockId: slot.blockId,
-              state: panelHistory.snapshot(slot.row.id),
-            }, blockId)
+          // Peek for the in-tx row write; stage the real store mutation.
+          // The snapshot of the pane being left is taken NOW (tx time) —
+          // commit-time state would snapshot a pane that already moved on.
+          const restored = slot.blockId ? panelHistory.peekUrlNavigation(slot.row.id, blockId) : null
+          const currentEntry = slot.blockId
+            ? {blockId: slot.blockId, state: panelHistory.snapshot(slot.row.id)}
             : null
-          panelHistory.enqueueRestore(slot.row.id, restored?.state)
-          sealHistory(slot.row.id)
+          stagedHistoryEffects.push(() => {
+            const committed = currentEntry
+              ? panelHistory.reconcileUrlNavigation(slot.row.id, currentEntry, blockId)
+              : null
+            panelHistory.enqueueRestore(slot.row.id, committed?.state)
+          })
           // The URL's slot context is authoritative for the mode here — the
           // restored VisitState's remembered viewMode is deliberately NOT
           // applied (that happens only on chevron back/forward).
@@ -902,24 +898,19 @@ export const reconcilePanelRows = async (
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
-  let changed: boolean
-  try {
-    changed = await runTx()
-  } catch (error) {
-    // The row writes rolled back — un-consume the history mutations that
-    // rode along inside the tx so the surviving rows keep their stacks.
-    for (const capture of historyRollbacks.values()) {
-      panelHistory.restoreRollback(capture)
-    }
-    throw error
-  }
+  const changed = await runTx()
 
-  // Clear in-memory history only after the tx committed: ANY in-tx throw
-  // (materialization, stack cleanup, active-panel repair) rolls the row
-  // deletes back, and the non-transactional history must survive with them
-  // (content-swap mutations are restored above for exactly that reason).
-  // (clear is a plain Map delete and cannot throw in production; a throw here
-  // would leak the remaining ids' history, which only the probe test does.)
+  // History effects only after the tx committed: ANY in-tx throw
+  // (materialization, stack cleanup, active-panel repair, a cancellation
+  // abort) rolls the row writes back, and the untouched non-transactional
+  // history simply survives with them. Swap reconciles first, then the
+  // deletes' clears — same order the tx staged them.
+  // (These are plain Map operations and cannot throw in production; a
+  // throw here would strand the remaining effects, which only probe tests
+  // provoke.)
+  for (const effect of stagedHistoryEffects) {
+    effect()
+  }
   for (const id of deletedPanelRowIds) {
     panelHistory.clear(id)
   }
@@ -934,39 +925,34 @@ export const retargetPanelBlockIds = async (
 ): Promise<void> => {
   if (fromId === toId) return
 
-  // Same non-transactional-history rollback discipline as reconcilePanelRows.
-  const historyRollbacks: PanelHistoryRollback[] = []
-  try {
-    await repo.tx(async tx => {
-      const parent = await tx.get(layoutSessionBlock.id)
-      if (!parent) {
-        throw new Error(`retargetPanelBlockIds: layout session block ${layoutSessionBlock.id} not found`)
-      }
-
-      const currentRows = await loadSubtreeRowsInTx(tx, parent)
-      const panelRows = currentRows
-        .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
-        .filter(row => panelBlockId(row) === fromId)
-
-      for (const row of panelRows) {
-        const capture = panelHistory.captureRollback(row.id)
-        historyRollbacks.push(capture)
-        const restored = panelHistory.reconcileUrlNavigation(row.id, {
-          blockId: fromId,
-          state: panelHistory.snapshot(row.id),
-        }, toId)
-        panelHistory.enqueueRestore(row.id, restored?.state)
-        panelHistory.sealRollback(capture)
-        // No viewMode option: a merge retarget clears the mode (it belonged
-        // to the (pane, source-block) pair, and the source block is gone).
-        await writePanelContent(tx, row.id, toId, restored?.state)
-      }
-    }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
-  } catch (error) {
-    for (const capture of historyRollbacks) {
-      panelHistory.restoreRollback(capture)
+  // Same staged-history discipline as reconcilePanelRows: peek in-tx,
+  // mutate the non-transactional store only after commit.
+  const stagedHistoryEffects: (() => void)[] = []
+  await repo.tx(async tx => {
+    const parent = await tx.get(layoutSessionBlock.id)
+    if (!parent) {
+      throw new Error(`retargetPanelBlockIds: layout session block ${layoutSessionBlock.id} not found`)
     }
-    throw error
+
+    const currentRows = await loadSubtreeRowsInTx(tx, parent)
+    const panelRows = currentRows
+      .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
+      .filter(row => panelBlockId(row) === fromId)
+
+    for (const row of panelRows) {
+      const restored = panelHistory.peekUrlNavigation(row.id, toId)
+      const currentEntry = {blockId: fromId, state: panelHistory.snapshot(row.id)}
+      stagedHistoryEffects.push(() => {
+        const committed = panelHistory.reconcileUrlNavigation(row.id, currentEntry, toId)
+        panelHistory.enqueueRestore(row.id, committed?.state)
+      })
+      // No viewMode option: a merge retarget clears the mode (it belonged
+      // to the (pane, source-block) pair, and the source block is gone).
+      await writePanelContent(tx, row.id, toId, restored?.state)
+    }
+  }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
+  for (const effect of stagedHistoryEffects) {
+    effect()
   }
 }
 
@@ -999,27 +985,45 @@ export const applyCurrentLayoutUrl = async ({
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
   }
-  // A ws-context route whose key some session consumer has CLAIMED
-  // (`#ws;persp=…/…` once a host claimed `persp`) is addressed to a
-  // consumer-selected session, and core keeps the context opaque — so the
-  // one thing core can know is the negative: the per-device BASE session is
-  // never a claimed context's addressee (context-free is what addresses
-  // base). Defer — touch neither rows nor URL — and let the claiming
-  // consumer select the addressee session, whose own projection then
-  // applies the route. Without this, booting on `#ws;persp=lane/a`
-  // reconciled the BASE layout to the lane's slots, and a slot-less lane
-  // URL was first normalized from base rows and then applied to the lane —
-  // clobbering both sessions' persisted state.
+  // ── Route addressing (the session-router seam) ──
+  // One authority decides WHICH session a same-workspace route addresses;
+  // a session applies a route only when it is the addressee, and returns
+  // 'deferred' (touching neither rows nor URL) otherwise. Core keeps
+  // ws-context opaque, so the addressee of a CLAIMED context (see
+  // claimLayoutContextKey) comes from the consumer's registered
+  // LayoutSessionRouter; everything else falls out of two facts core does
+  // own: context-free routes address the per-device BASE session, and the
+  // base session is never a claimed context's addressee. Concretely:
   //
-  // UNCLAIMED context entries (`#ws;foo=bar/a`, or a lane bookmark on a
-  // device whose host was uninstalled and released its claim) do NOT
-  // defer: nothing will ever pick the route up, so base applies it
-  // normally — a fresh workspace still reaches the empty-landing path and
-  // an existing one honors the URL's slots. Entry grammar is
-  // `key[=value]`, canonicalized by parseLayout, so the key is everything
-  // before the first '='.
-  if (route.wsContext?.some(entry => repo.client.hasClaimedLayoutContextKey(workspaceId, entry.split('=')[0]))
-    && layoutSessionBlock.id === layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)) {
+  //   claimed context + router      → addressee = resolveSessionKey(route)
+  //                                   (null = base); apply iff that's us.
+  //   claimed context + NO router   → addressee unknowable (consumer not
+  //                                   loaded yet — the boot race): defer.
+  //   unclaimed/no context + router → base-addressed; a NON-base session
+  //                                   defers it (the router's presence is
+  //                                   the multi-session-mode signal — this
+  //                                   is what keeps a pasted context-free
+  //                                   link from collapsing a lane's rows).
+  //   unclaimed/no context, no router → single-session behavior: apply
+  //                                   (fresh workspaces still reach the
+  //                                   empty-landing path; `#ws;foo=bar/a`
+  //                                   with no claimant applies like any
+  //                                   deep link).
+  //
+  // Entry grammar is `key[=value]` (canonicalized by parseLayout), so the
+  // key is everything before the first '='.
+  const baseBlockId = layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)
+  const claimedContext = route.wsContext?.some(entry =>
+    repo.client.hasClaimedLayoutContextKey(workspaceId, entry.split('=')[0])) ?? false
+  const router = repo.client.layoutSessionRouter
+  if (claimedContext) {
+    if (!router) return {kind: 'deferred'}
+    const sessionKey = router.resolveSessionKey({workspaceId, wsContext: route.wsContext!})
+    const addressee = sessionKey === null
+      ? baseBlockId
+      : layoutSessionBlockIdForKey(workspaceId, repo.user.id, sessionKey)
+    if (addressee !== layoutSessionBlock.id) return {kind: 'deferred'}
+  } else if (router && layoutSessionBlock.id !== baseBlockId) {
     return {kind: 'deferred'}
   }
   // Degrade sublayout columns BEFORE they can reach row materialization

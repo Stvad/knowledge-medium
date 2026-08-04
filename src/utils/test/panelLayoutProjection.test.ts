@@ -298,14 +298,15 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x'])
   })
 
-  it('a rollback does NOT rewind history a concurrent navigation wrote while the tx was suspended', async () => {
+  it('an aborted tx leaves history fully intact — including a concurrent navigation that landed mid-tx', async () => {
     // navigateInPanel / back / forward mutate the store and only THEN await
-    // their own db writes — so a user action can land between this tx's
-    // history mutations and its abort. The rewind is a CAS: it only undoes
-    // its own refs, and the concurrent writer wins. The isCancelled probe
-    // doubles as the interleave hook — the tx-exit check (3rd call) runs
-    // after the content-swap's history mutations, so a push there is
-    // exactly "concurrent nav during the suspended tx".
+    // their own db writes — so a user action can land while this tx is
+    // suspended. History mutations are STAGED until commit, so an abort has
+    // nothing to undo: both the pre-existing stack and the concurrent push
+    // survive untouched. The isCancelled probe doubles as the interleave
+    // hook — the tx-exit check (3rd call) runs after the content-swap
+    // staged its effect, so a push there is exactly "concurrent nav during
+    // the suspended tx".
     await createPanelRows(['a'])
     const rowId = (await rowIdsByBlock()).get('a')
     if (!rowId) throw new Error('missing a row')
@@ -326,9 +327,7 @@ describe('applyCurrentLayoutUrl', () => {
     })
 
     expect(result.kind).toBe('cancelled')
-    // The concurrent push survives; the tx's own consumption (which wiped
-    // the 'x' stack before the push) is NOT rewound underneath it.
-    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['concurrent'])
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x', 'concurrent'])
   })
 
   it('defers a CLAIMED ws-context route addressed at the per-device BASE session', async () => {
@@ -367,6 +366,42 @@ describe('applyCurrentLayoutUrl', () => {
 
     // Context-free routes still address base normally.
     expect((await apply('#ws-1/a')).kind).toBe('noop')
+  })
+
+  it('routes CLAIMED contexts through the registered LayoutSessionRouter (apply iff addressee)', async () => {
+    // The route-owner seam: with a router registered, the addressee of a
+    // claimed context is whatever session key the router resolves — the
+    // matching session applies, everyone else defers.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({
+      resolveSessionKey: route => {
+        const persp = route.wsContext.find(entry => entry.startsWith('persp='))
+        return persp ? persp.slice('persp='.length) : null
+      },
+    })
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const lane = await getLayoutSessionBlock(uiState, 'lane')
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+    const apply = (block: Block, hash: string) => applyCurrentLayoutUrl({
+      repo: env.repo, workspaceId: WS, layoutSessionBlock: block, hash,
+    })
+
+    // The resolved lane session applies its route; base and other sessions defer.
+    expect((await apply(lane, '#ws-1;persp=lane/b1')).kind).toBe('applied')
+    expect(layoutBlockIdsFromRows(lane.id, await env.repo.query.subtree({id: lane.id}).load())).toEqual(['b1'])
+    expect((await apply(base, '#ws-1;persp=lane/b2')).kind).toBe('deferred')
+    expect((await apply(layoutSessionBlock(), '#ws-1;persp=lane/b2')).kind).toBe('deferred')
+
+    // A router resolving null addresses BASE — the lane defers, base applies.
+    expect((await apply(lane, '#ws-1;persp/b3')).kind).toBe('deferred') // bare claimed key → resolver null
+    expect((await apply(base, '#ws-1;persp/b3')).kind).toBe('applied')
+
+    // Multi-session mode: a NON-base session defers context-free routes
+    // (base-addressed) — a pasted plain link can't collapse a lane's rows.
+    expect((await apply(lane, '#ws-1/b4')).kind).toBe('deferred')
+    expect(layoutBlockIdsFromRows(lane.id, await env.repo.query.subtree({id: lane.id}).load())).toEqual(['b1'])
+
+    env.repo.setLayoutSessionRouter(null)
   })
 
   it('applies an UNCLAIMED ws-context route to base normally (no consumer will ever pick it up)', async () => {
