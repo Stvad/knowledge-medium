@@ -105,6 +105,11 @@ const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
     // no `flex-1` on the content, so the next-day arrow sits right after the
     // date instead of floating at the far right edge. `min-w-0` lets a long
     // title shrink instead of pushing the arrow off-screen.
+    //
+    // `items-center` centres against whatever this row CONTAINS, so it is only
+    // correct while the row is the title line alone. That is what the -50
+    // registration precedence buys (see index.ts) — a decorator stacking a
+    // second line inside here would drag the arrows off the title.
     <div className="flex w-full items-center gap-1">
       <DateNavArrow
         Icon={ChevronLeft}
