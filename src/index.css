@@ -400,11 +400,20 @@
     color: hsl(var(--muted-foreground));
   }
 
+  /* The focal block's content slot: spacing under the document body. Holds
+     whatever renderer won the content facet, so nothing INHERITABLE belongs
+     here — see `blockTitleText.ts`. */
   .block-content.top-level-content {
+    margin-bottom: 0.5rem;
+  }
+
+  /* Title typography, applied by the renderers that draw the focal block's own
+     text (markdown read + CodeMirror edit), so it can never leak into a plugin
+     surface mounted in the same slot. */
+  .block-title-text {
     font-size: 1.5rem;
     font-weight: 600;
     line-height: 1.25;
-    margin-bottom: 0.5rem;
   }
 
   /* A focal block that is also a named page (it carries an `alias`, so
@@ -413,7 +422,10 @@
      above. Deliberately restrained — a size/weight step plus a hairline
      rule, not a different type family or colour. Scoped to the focal title
      only: inline `[[links]]` to the page are left alone. */
-  .block-content.top-level-content.page-title-content {
+  /* The open page's own title. Sits on the TEXT (see blockTitleText.ts), not
+     the content slot, so it can never inherit into a plugin surface that an
+     aliased block happens to render. */
+  .block-title-text.page-title-text {
     font-size: 1.75rem;
     font-weight: 700;
     letter-spacing: -0.015em;
@@ -426,7 +438,7 @@
      sit in a list of sibling bullets, and changing their size would break the
      vertical rhythm that makes an outline scannable. The goal is "I can tell
      that line is a page", not "that line is a heading". */
-  .block-content.page-name-content {
+  .page-name-text {
     font-weight: 600;
   }
 

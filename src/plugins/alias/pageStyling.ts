@@ -15,28 +15,35 @@
  *
  * Two treatments, because the two contexts want different things:
  *   - focal: it IS the page title, so it earns the heading weight and a rule
- *     under it — `page-title-content`.
+ *     under it — `page-title-text`.
  *   - anywhere else: it is one line among many, so it only needs to be
- *     legible AS a page at a glance — `page-name-content`, a weight step, no
+ *     legible AS a page at a glance — `page-name-text`, a weight step, no
  *     size change. Making outline rows bigger would wreck the hierarchy's
  *     vertical rhythm, which is the thing that makes an outline readable.
  *
  * Inline `[[links]]` are deliberately untouched: those already render as
  * links, so they are not the case where page-ness is invisible.
  */
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
-import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.js'
-import { isFocalRender } from '@/hooks/useIsFocalRender.js'
+import { blockTextClassFacet } from '@/extensions/blockInteraction.js'
+import type { BlockTextClassContribution } from '@/extensions/blockInteraction.js'
 
-/** Keyed on `ctx.aliases`, which the renderer feeds reactively (like
- *  `ctx.types`) — so naming or un-naming a block restyles it in place
- *  instead of freezing at whatever it was when the facet last resolved. */
-export const aliasPageStyling: BlockContentSurfaceContribution = ctx => {
+/** Rides `blockTextClassFacet`, NOT the content-surface facet, and that is the
+ *  whole point: both treatments are typography, font-size/weight inherit, and
+ *  the content slot holds whatever won the content-renderer facet. A page IS a
+ *  block, so an aliased block can perfectly well render as a review deck or a
+ *  Readwise backlog — styling the slot would push a 1.75rem/700 heading down
+ *  into that entire surface. Carried by the text, it lands only on the block's
+ *  own words.
+ *
+ *  Keyed on `ctx.aliases`, which the hook reads reactively — so naming or
+ *  un-naming a block restyles it in place instead of freezing at whatever it
+ *  was when the facet last resolved. */
+export const aliasPageStyling: BlockTextClassContribution = ctx => {
   if (ctx.aliases.length === 0) return null
-  return {className: isFocalRender(ctx) ? 'page-title-content' : 'page-name-content'}
+  return ctx.isFocal ? 'page-title-text' : 'page-name-text'
 }
 
-export const aliasPageStylingContribution = blockContentSurfacePropsFacet.of(
+export const aliasPageStylingContribution = blockTextClassFacet.of(
   aliasPageStyling,
   {source: 'alias'},
 )

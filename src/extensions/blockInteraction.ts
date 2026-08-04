@@ -503,6 +503,44 @@ export const blockContentSurfacePropsFacet = defineFacet<
   validate: isFunction<BlockContentSurfaceContribution>,
 })
 
+/** What a text-class contribution gets to decide from. Deliberately tiny: the
+ *  renderers that draw block text have a `block`, not a full
+ *  `BlockResolveContext`. `aliases` is read reactively by the hook (a
+ *  contribution can't call hooks, and `block.peek()` would freeze at resolve
+ *  time — the failure mode `blockContentDecoratorsFacet` documents). */
+export interface BlockTextClassContext {
+  block: Block
+  /** This render is its panel's document body — see `useIsFocalRender`. */
+  isFocal: boolean
+  /** The block's page names, or `[]`. */
+  aliases: readonly string[]
+}
+
+export type BlockTextClassContribution = (ctx: BlockTextClassContext) => string | null
+export type BlockTextClassResolver = (ctx: BlockTextClassContext) => string
+
+/**
+ * Classes for the block's own TEXT, contributed by plugins.
+ *
+ * The counterpart to `blockContentSurfacePropsFacet`, and the difference is
+ * load-bearing. That one styles the content SLOT, whose occupant is whatever
+ * won `blockContentRendererFacet` — a review deck, a recents list, a video
+ * player. font-size/weight/line-height inherit, so anything typographic put
+ * there styles an arbitrary plugin subtree (see `blockTitleText.ts` for the
+ * bug that taught us). Use this facet for typography and that one for box
+ * properties the slot genuinely owns.
+ */
+export const blockTextClassFacet = defineFacet<
+  BlockTextClassContribution,
+  BlockTextClassResolver
+>({
+  id: 'core.block-text-class',
+  combine: contributions => context =>
+    contributions.map(contribute => contribute(context)).filter(Boolean).join(' '),
+  empty: () => () => '',
+  validate: isFunction<BlockTextClassContribution>,
+})
+
 export const resolveShortcutActivations = (
   contributions: readonly ShortcutActivationContribution[],
   context: ShortcutSurfaceContext,

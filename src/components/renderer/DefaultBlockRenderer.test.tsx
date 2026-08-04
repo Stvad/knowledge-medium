@@ -21,7 +21,8 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
-import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import { blockContentRendererFacet, blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import { defineVariant } from '@/facets/variantFacet'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -29,6 +30,8 @@ import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
+import { MarkdownContentRenderer } from './MarkdownContentRenderer'
+import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -384,12 +387,10 @@ describe('page styling via the alias plugin contribution', () => {
 
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
-    // No blockLayoutFacet contribution — this exercises DefaultBlockLayout,
-    // which is what actually mounts the `block-content` wrapper under test.
     // The alias plugin's contribution is registered explicitly: the styling is
-    // ITS decision now, so this asserts the whole seam (core feeds reactive
-    // `ctx.aliases` → plugin returns a className → the renderer merges it),
-    // not just a class the renderer hardcodes.
+    // ITS decision, so this asserts the whole seam (core reads `aliases`
+    // reactively → plugin returns a class → the text renderer applies it),
+    // not a class the renderer hardcodes.
     repo = createTestRepo({
       db: sharedDb.db,
       user: {id: 'user-1'},
@@ -412,7 +413,7 @@ describe('page styling via the alias plugin contribution', () => {
         id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a2',
         properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('page')},
       })
-    }, {scope: ChangeScope.BlockDefault, description: 'page-title fixture'})
+    }, {scope: ChangeScope.BlockDefault, description: 'page styling fixture'})
     uiStateBlockRef.current = repo.block('ui-state')
   })
 
@@ -422,60 +423,46 @@ describe('page styling via the alias plugin contribution', () => {
     uiStateBlockRef.current = undefined
   })
 
-  const renderFocal = (blockId: string) =>
+  // No ContentRenderer override — the real markdown renderer is what applies
+  // text classes, so a stub would make every assertion below vacuous.
+  const renderBlock = (blockId: string) =>
     render(
       <AppRuntimeContextProvider value={runtime}>
         <BlockContextProvider initialValue={{scopeRootId: blockId}}>
           <ActiveContextsProvider>
-            <DefaultBlockRenderer block={repo.block(blockId)} ContentRenderer={TestContentRenderer} />
+            <DefaultBlockRenderer block={repo.block(blockId)} />
           </ActiveContextsProvider>
         </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
 
-  const contentClasses = async (blockId: string): Promise<string> => {
-    await screen.findByText(blockId)
-    const content = document.querySelector('.block-content')
-    expect(content).toBeTruthy()
-    return content!.className
+  const textClasses = async (text: string): Promise<string> => {
+    const node = await screen.findByText(text)
+    // The class lands on the text container the renderer builds, which is the
+    // node holding the text or its parent depending on the markdown wrapper.
+    const carrier = node.closest('.page-title-text, .page-name-text, .block-title-text')
+    return carrier?.className ?? node.className
   }
 
-  it('marks a focal block that is a named page as a page title', async () => {
-    renderFocal('page')
-
-    const classes = await contentClasses('page')
-    expect(classes).toContain('top-level-content')
-    expect(classes).toContain('page-title-content')
-  })
-
-  it('leaves a focal block with no alias as a plain top-level heading', async () => {
-    await act(async () => {
-      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
-    })
-
-    renderFocal('plain')
-
-    const classes = await contentClasses('plain')
-    // Still a top-level heading — zooming into a bullet must keep working.
-    expect(classes).toContain('top-level-content')
-    expect(classes).not.toContain('page-title-content')
+  it('marks the open page as a page title', async () => {
+    renderBlock('page')
+    expect(await textClasses('Inbox')).toContain('page-title-text')
   })
 
   it('marks a named page seen in the hierarchy, not only when it is open', async () => {
-    // 'page' has an alias but isn't the focal block here, so it renders as an
-    // ordinary bullet — the case where page-ness was previously invisible.
-    // It gets the weight-only marker, NOT the heading treatment: it is one row
-    // among siblings and resizing it would break the outline's rhythm.
+    // 'page' is not the focal block here, so it renders as an ordinary row —
+    // the case where page-ness was previously invisible. It gets the
+    // weight-only marker, NOT the heading: it is one row among siblings.
     await act(async () => {
       await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
     })
 
-    renderFocal('page')
+    renderBlock('page')
 
-    const classes = await contentClasses('page')
-    expect(classes).toContain('page-name-content')
-    expect(classes).not.toContain('top-level-content')
-    expect(classes).not.toContain('page-title-content')
+    const classes = await textClasses('Inbox')
+    expect(classes).toContain('page-name-text')
+    expect(classes).not.toContain('page-title-text')
+    expect(classes).not.toContain(BLOCK_TITLE_TEXT_CLASS)
   })
 
   it('leaves a plain block alone wherever it appears', async () => {
@@ -483,27 +470,156 @@ describe('page styling via the alias plugin contribution', () => {
       await repo.block('ui-state').set(topLevelBlockIdProp, 'page')
     })
 
-    renderFocal('plain')
+    renderBlock('plain')
 
-    const classes = await contentClasses('plain')
-    expect(classes).not.toContain('page-name-content')
-    expect(classes).not.toContain('page-title-content')
+    const classes = await textClasses('just a bullet')
+    expect(classes).not.toContain('page-name-text')
+    expect(classes).not.toContain('page-title-text')
   })
 
   it('restyles in place when a block gains an alias', async () => {
-    // `ctx.aliases` is fed reactively (like `ctx.types`) precisely so this
-    // works: a facet contribution resolved from frozen data would keep the
-    // pre-rename styling until something unrelated invalidated it. Rendered
-    // non-focal ('page' stays the focal block) so this pins the hierarchy
-    // marker, which is the case that has no other way to become visible.
-    renderFocal('plain')
-    expect(await contentClasses('plain')).not.toContain('page-name-content')
+    // `aliases` is read reactively in `useBlockTitleTextClass` precisely so
+    // this works: a contribution resolved from frozen data would keep the
+    // pre-rename styling until something unrelated invalidated it.
+    await act(async () => {
+      await repo.block('ui-state').set(topLevelBlockIdProp, 'plain')
+    })
+
+    renderBlock('page')
+    expect(await textClasses('Inbox')).toContain('page-name-text')
 
     await act(async () => {
-      await repo.block('plain').set(aliasesProp, ['Now A Page'])
+      await repo.block('page').set(aliasesProp, [])
     })
 
     await vi.waitFor(async () =>
-      expect(await contentClasses('plain')).toContain('page-name-content'))
+      expect(await textClasses('Inbox')).not.toContain('page-name-text'))
+  })
+})
+
+// A plugin surface that wins the content-renderer FACET rather than being
+// passed as a prop — the shape a real content-renderer contribution takes.
+// Gated on block id so one fixture serves both the facet and non-facet cases.
+const FacetSurfaceRenderer = ({block}: BlockRendererProps) => (
+  <div className="facet-surface">{block.id}</div>
+)
+
+// The recents-page shape: a custom content renderer that draws the real page
+// title AND a surface below it (`RecentsPageBlockRenderer`).
+const TitlePlusSurfaceRenderer = (props: BlockRendererProps) => (
+  <div>
+    <MarkdownContentRenderer {...props} />
+    <div className="composed-surface">surface</div>
+  </div>
+)
+
+describe('title typography', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
+          {source: 'test'},
+        ),
+        blockContentRendererFacet.of(
+          ctx => ctx.block.id === 'surface-root'
+            ? defineVariant('test.surface', 'Surface', FacetSurfaceRenderer)
+            : null,
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Page title'})
+      await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Body text'})
+      await tx.create({id: 'surface-root', workspaceId: 'ws-1', parentId: null, orderKey: 'a2', content: 'Surface page'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'title typography fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  const renderBlock = (id: string, ContentRenderer?: typeof FacetSurfaceRenderer) =>
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: id}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block(id)} ContentRenderer={ContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+  const titleElement = () => document.querySelector(`.${BLOCK_TITLE_TEXT_CLASS}`)
+
+  it('is carried by the focal block\'s own text', async () => {
+    renderBlock('root')
+
+    await screen.findByText('Page title')
+    expect(titleElement()?.textContent).toBe('Page title')
+  })
+
+  it('is not carried by a non-focal block\'s text', async () => {
+    renderBlock('block-1')
+
+    // The positive is proven first, so the absence below can't be the text
+    // simply not having rendered yet.
+    await screen.findByText('Body text')
+    expect(titleElement()).toBeNull()
+  })
+
+  it('does not reach a surface supplied as the ContentRenderer prop', async () => {
+    // The Readwise-backlog bug: the slot's 1.5rem/600 was inherited by every
+    // embedded block body, which sets no size of its own. 24px/600 where the
+    // same block reads 16px/400 anywhere else.
+    renderBlock('root', CountingContentRenderer)
+
+    await waitFor(() => expect(document.querySelector('.counting-content')).not.toBeNull())
+    expect(titleElement()).toBeNull()
+  })
+
+  it('does not reach a surface supplied through the content-renderer facet', async () => {
+    // The facet is the other half of the same door, and the one a heuristic on
+    // the prop cannot see: the caller passes nothing, the facet decides.
+    await repo.block('ui-state').set(topLevelBlockIdProp, 'surface-root')
+    renderBlock('surface-root')
+
+    await waitFor(() => expect(document.querySelector('.facet-surface')).not.toBeNull())
+    expect(titleElement()).toBeNull()
+  })
+
+  it('still reaches a surface that composes the text renderer', async () => {
+    // The recents page renders the real page title above its list. Nothing is
+    // declared for this to work — the title styling arrives with the title.
+    renderBlock('root', TitlePlusSurfaceRenderer)
+
+    await screen.findByText('Page title')
+    const title = titleElement()
+    expect(title?.textContent).toBe('Page title')
+    // …and stops there: the list beside it is body text.
+    expect(title?.contains(document.querySelector('.composed-surface'))).toBe(false)
   })
 })
