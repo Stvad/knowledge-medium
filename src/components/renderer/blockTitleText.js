@@ -1,0 +1,2 @@
+import{useIsFocalRender as e}from"../../hooks/useIsFocalRender.js";var t=`block-title-text`,n=n=>e(n)?t:``;export{t as BLOCK_TITLE_TEXT_CLASS,n as useBlockTitleTextClass};
+//# sourceMappingURL=blockTitleText.js.map
