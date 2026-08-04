@@ -719,9 +719,9 @@ export const reconcilePanelRows = async (
   // must have nothing to undo. The content-swap path PEEKS the would-be
   // destination for its in-tx row writes and STAGES the real store
   // mutation here; effects run only after the tx commits (row deletes
-  // already follow this pattern via the post-commit clear below). The
-  // commit-time reconcile recomputes against live state, so a concurrent
-  // user navigation that landed mid-tx is respected rather than clobbered.
+  // already follow this pattern via the post-commit clear below), and each
+  // commit is ref-CAS'd against the state captured at peek time so a
+  // concurrent navigation that landed mid-tx wins (see commitUrlNavigation).
   const stagedHistoryEffects: (() => void)[] = []
 
   const runTx = async (): Promise<boolean> => repo.tx(async tx => {
@@ -858,15 +858,12 @@ export const reconcilePanelRows = async (
           // The snapshot of the pane being left is taken NOW (tx time) —
           // commit-time state would snapshot a pane that already moved on.
           const restored = slot.blockId ? panelHistory.peekUrlNavigation(slot.row.id, blockId) : null
+          const stagedAt = panelHistory.getSnapshot(slot.row.id)
           const currentEntry = slot.blockId
             ? {blockId: slot.blockId, state: panelHistory.snapshot(slot.row.id)}
             : null
-          stagedHistoryEffects.push(() => {
-            const committed = currentEntry
-              ? panelHistory.reconcileUrlNavigation(slot.row.id, currentEntry, blockId)
-              : null
-            panelHistory.enqueueRestore(slot.row.id, committed?.state)
-          })
+          stagedHistoryEffects.push(() =>
+            panelHistory.commitUrlNavigation(slot.row.id, currentEntry, blockId, stagedAt))
           // The URL's slot context is authoritative for the mode here — the
           // restored VisitState's remembered viewMode is deliberately NOT
           // applied (that happens only on chevron back/forward).
@@ -903,8 +900,9 @@ export const reconcilePanelRows = async (
   // History effects only after the tx committed: ANY in-tx throw
   // (materialization, stack cleanup, active-panel repair, a cancellation
   // abort) rolls the row writes back, and the untouched non-transactional
-  // history simply survives with them. Swap reconciles first, then the
-  // deletes' clears — same order the tx staged them.
+  // history simply survives with them. Swap commits and the deletes'
+  // clears touch disjoint rows (planReconciliation), so their relative
+  // order is unobservable.
   // (These are plain Map operations and cannot throw in production; a
   // throw here would strand the remaining effects, which only probe tests
   // provoke.)
@@ -941,11 +939,10 @@ export const retargetPanelBlockIds = async (
 
     for (const row of panelRows) {
       const restored = panelHistory.peekUrlNavigation(row.id, toId)
+      const stagedAt = panelHistory.getSnapshot(row.id)
       const currentEntry = {blockId: fromId, state: panelHistory.snapshot(row.id)}
-      stagedHistoryEffects.push(() => {
-        const committed = panelHistory.reconcileUrlNavigation(row.id, currentEntry, toId)
-        panelHistory.enqueueRestore(row.id, committed?.state)
-      })
+      stagedHistoryEffects.push(() =>
+        panelHistory.commitUrlNavigation(row.id, currentEntry, toId, stagedAt))
       // No viewMode option: a merge retarget clears the mode (it belonged
       // to the (pane, source-block) pair, and the source block is gone).
       await writePanelContent(tx, row.id, toId, restored?.state)
@@ -954,6 +951,62 @@ export const retargetPanelBlockIds = async (
   for (const effect of stagedHistoryEffects) {
     effect()
   }
+}
+
+/**
+ * Is `sessionBlockId` the addressee of a same-workspace route carrying
+ * `wsContext`? ONE authority for both URL directions — inbound application
+ * (applyCurrentLayoutUrl defers non-addressees) and outbound projection
+ * (handleRowsChanged refuses to write this session's rows under another
+ * addressee's hash). Core keeps ws-context opaque, so the addressee of a
+ * CLAIMED context (see claimLayoutContextKey) comes from the consumer's
+ * registered LayoutSessionRouter; everything else falls out of two facts
+ * core does own: context-free routes address the per-device BASE session,
+ * and the base session is never a claimed context's addressee.
+ *
+ *   claimed context + router      → addressee = resolveSessionKey(route);
+ *                                   null OR '' fold to base. A THROWING
+ *                                   router (third-party code on core's
+ *                                   boot path) is logged and treated as
+ *                                   "not the addressee" — the safe default
+ *                                   for a claimed context is defer.
+ *   claimed context + NO router   → addressee unknowable (consumer not
+ *                                   loaded yet — the boot race): nobody.
+ *   unclaimed/no context + router → base-addressed; NON-base sessions are
+ *                                   not it (the router's presence is the
+ *                                   multi-session-mode signal — this keeps
+ *                                   a pasted context-free link from
+ *                                   collapsing a lane's rows).
+ *   unclaimed/no context, no router → single-session behavior: everyone
+ *                                   is the addressee (fresh workspaces
+ *                                   still reach the empty-landing path;
+ *                                   `#ws;foo=bar/a` with no claimant
+ *                                   applies like any deep link).
+ *
+ * Entry grammar is `key[=value]` (canonicalized by parseLayout), so the
+ * key is everything before the first '='.
+ */
+const isRouteAddressee = (
+  repo: Repo,
+  workspaceId: string,
+  wsContext: readonly string[] | undefined,
+  sessionBlockId: string,
+): boolean => {
+  const baseBlockId = layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)
+  const claimedContext = wsContext?.some(entry =>
+    repo.client.hasClaimedLayoutContextKey(workspaceId, entry.split('=')[0])) ?? false
+  const router = repo.client.layoutSessionRouter
+  if (!claimedContext) return router ? sessionBlockId === baseBlockId : true
+  if (!router) return false
+  let sessionKey: string | null
+  try {
+    sessionKey = router.resolveSessionKey({workspaceId, wsContext: wsContext!})
+  } catch (error) {
+    console.error('LayoutSessionRouter.resolveSessionKey threw — treating the route as not addressed here', error)
+    return false
+  }
+  const addressee = sessionKey ? layoutSessionBlockIdForKey(workspaceId, repo.user.id, sessionKey) : baseBlockId
+  return addressee === sessionBlockId
 }
 
 export interface ApplyCurrentLayoutUrlArgs {
@@ -985,45 +1038,10 @@ export const applyCurrentLayoutUrl = async ({
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
   }
-  // ── Route addressing (the session-router seam) ──
-  // One authority decides WHICH session a same-workspace route addresses;
-  // a session applies a route only when it is the addressee, and returns
-  // 'deferred' (touching neither rows nor URL) otherwise. Core keeps
-  // ws-context opaque, so the addressee of a CLAIMED context (see
-  // claimLayoutContextKey) comes from the consumer's registered
-  // LayoutSessionRouter; everything else falls out of two facts core does
-  // own: context-free routes address the per-device BASE session, and the
-  // base session is never a claimed context's addressee. Concretely:
-  //
-  //   claimed context + router      → addressee = resolveSessionKey(route)
-  //                                   (null = base); apply iff that's us.
-  //   claimed context + NO router   → addressee unknowable (consumer not
-  //                                   loaded yet — the boot race): defer.
-  //   unclaimed/no context + router → base-addressed; a NON-base session
-  //                                   defers it (the router's presence is
-  //                                   the multi-session-mode signal — this
-  //                                   is what keeps a pasted context-free
-  //                                   link from collapsing a lane's rows).
-  //   unclaimed/no context, no router → single-session behavior: apply
-  //                                   (fresh workspaces still reach the
-  //                                   empty-landing path; `#ws;foo=bar/a`
-  //                                   with no claimant applies like any
-  //                                   deep link).
-  //
-  // Entry grammar is `key[=value]` (canonicalized by parseLayout), so the
-  // key is everything before the first '='.
-  const baseBlockId = layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)
-  const claimedContext = route.wsContext?.some(entry =>
-    repo.client.hasClaimedLayoutContextKey(workspaceId, entry.split('=')[0])) ?? false
-  const router = repo.client.layoutSessionRouter
-  if (claimedContext) {
-    if (!router) return {kind: 'deferred'}
-    const sessionKey = router.resolveSessionKey({workspaceId, wsContext: route.wsContext!})
-    const addressee = sessionKey === null
-      ? baseBlockId
-      : layoutSessionBlockIdForKey(workspaceId, repo.user.id, sessionKey)
-    if (addressee !== layoutSessionBlock.id) return {kind: 'deferred'}
-  } else if (router && layoutSessionBlock.id !== baseBlockId) {
+  // Route addressing (the session-router seam): a session applies a route
+  // only when it is the addressee — 'deferred' touches neither rows nor
+  // URL. See isRouteAddressee for the rule.
+  if (!isRouteAddressee(repo, workspaceId, route.wsContext, layoutSessionBlock.id)) {
     return {kind: 'deferred'}
   }
   // Degrade sublayout columns BEFORE they can reach row materialization
@@ -1308,6 +1326,15 @@ export class PanelLayoutProjection {
     // `rest` entries never do.)
     const current = parseLayout(this.getHash())
     const sameWorkspace = current.workspaceId === this.workspaceId
+    // Outbound mirror of the inbound addressing rule (isRouteAddressee):
+    // if the CURRENT hash is addressed to some other session — e.g. a
+    // popstate-installed lane entry reaching a still-live base projection
+    // in the window before the host reacts — writing our rows over it
+    // would smuggle THIS session's layout under the other addressee's
+    // attribution. Skip the write entirely; re-activation re-normalizes
+    // rows into the hash through the inbound path.
+    if (sameWorkspace
+      && !isRouteAddressee(this.repo, this.workspaceId, current.wsContext, this.layoutSessionBlock.id)) return
     if (sameWorkspace && sameLayoutSlots(current.slots, slots)) return
 
     // Same carry rule as slot `rest`: the current hash's ws-context (e.g.

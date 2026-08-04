@@ -179,18 +179,35 @@ export class PanelHistoryStore {
   }
 
   /** What {@link reconcileUrlNavigation} WOULD return, without mutating —
-   *  for transactional callers that need the destination entry inside a
-   *  repo.tx but must stage the actual store mutation until the tx
-   *  commits (an abort then has nothing to undo; see reconcilePanelRows).
-   *  Computed from live state, so run the real reconcile at commit time
-   *  rather than replaying this result. */
+   *  the peek half of the staged (write-ahead) protocol for transactional
+   *  callers: peek inside the repo.tx for the row writes, then hand the
+   *  panel's state ref to {@link commitUrlNavigation} after the tx commits
+   *  (an abort then has nothing to undo; see reconcilePanelRows). */
   peekUrlNavigation(panelId: string, targetBlockId: string): HistoryEntry | null {
-    const current = this.state.get(panelId) ?? EMPTY
-    const backTop = current.back[current.back.length - 1]
+    const backTop = this.peek(panelId, 'back')
     if (backTop?.blockId === targetBlockId) return backTop
-    const forwardTop = current.forward[current.forward.length - 1]
+    const forwardTop = this.peek(panelId, 'forward')
     if (forwardTop?.blockId === targetBlockId) return forwardTop
     return null
+  }
+
+  /** Commit half of the staged protocol: run the real reconcile +
+   *  pending-restore write, but ONLY if the panel's state is still the
+   *  `stagedAt` ref captured at peek time (state objects are immutable and
+   *  replaced wholesale on every mutation, so the ref doubles as a version
+   *  stamp). A concurrent navigation that landed while the tx was
+   *  suspended replaced the ref — it WINS: running the reconcile anyway
+   *  would hit its no-match wipe branch and delete the concurrent entry,
+   *  and the stale restore would replay another epoch's scroll/focus. */
+  commitUrlNavigation(
+    panelId: string,
+    currentEntry: HistoryEntry | null,
+    targetBlockId: string,
+    stagedAt: PanelHistoryState,
+  ): void {
+    if (this.getSnapshot(panelId) !== stagedAt) return
+    const committed = currentEntry ? this.reconcileUrlNavigation(panelId, currentEntry, targetBlockId) : null
+    this.enqueueRestore(panelId, committed?.state)
   }
 
   reconcileUrlNavigation(

@@ -56,4 +56,25 @@ describe('ClientContext layout-context claims (persistence)', () => {
     // tabB's merge-on-write re-read picked up tabA's claim.
     expect(tabB.hasClaimedLayoutContextKey('ws-a', 'persp')).toBe(true)
   })
+
+  it('a NO-OP re-claim still absorbs the persisted state (the claim postcondition)', () => {
+    // Both tabs exist before any claim; A claims first, then B claims the
+    // SAME (scope, key) — a no-delta write against the persisted map. B's
+    // in-memory view must still learn the key, or hasClaimed lies right
+    // after B itself claimed and B's base session applies lane routes.
+    const tabA = tab('a')
+    const tabB = tab('b')
+    tabA.claimLayoutContextKey('ws-1', 'persp')
+    tabB.claimLayoutContextKey('ws-1', 'persp')
+    expect(tabB.hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(true)
+  })
+
+  it('a NO-OP release still absorbs the persisted state', () => {
+    const tabA = tab('a')
+    tabA.claimLayoutContextKey('ws-1', 'persp')
+    const tabB = tab('b') // sees the claim from construction
+    tabA.releaseLayoutContextKey('ws-1', 'persp')
+    tabB.releaseLayoutContextKey('ws-1', 'persp') // no-delta vs persisted
+    expect(tabB.hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(false)
+  })
 })

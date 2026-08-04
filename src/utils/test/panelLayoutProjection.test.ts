@@ -404,6 +404,89 @@ describe('applyCurrentLayoutUrl', () => {
     env.repo.setLayoutSessionRouter(null)
   })
 
+  it('a concurrent navigation racing the COMMITTED tx wins — the staged commit is skipped, not wiped', async () => {
+    // The commit-time reconcile runs against live state; if a user
+    // navigation landed while the tx was suspended, replaying the staged
+    // reconcile would hit its no-match wipe branch and delete the
+    // concurrent entry. commitUrlNavigation ref-CASes against the state
+    // captured at peek time and skips instead. Push at the tx-exit probe
+    // (3rd isCancelled call — after staging, before commit), never cancel.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'b'}) // peek matches the swap target
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.push(rowId, {blockId: 'concurrent'})
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['b'])
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['b', 'concurrent'])
+  })
+
+  it('outbound: a projection whose session is NOT the current hash\'s addressee never writes the URL', async () => {
+    // The outbound mirror of the addressing rule: a popstate-installed
+    // lane entry can reach a still-live projection for another session; a
+    // rows event in that window must not stamp THIS session's rows under
+    // the lane's attribution.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({resolveSessionKey: () => 'lane'})
+    await createPanelRows(['a'])
+    const {projection, pushes, replaces} = startProjection('#ws-1;persp=lane/x')
+    await projection.start()
+
+    await createPanelRows(['b']) // rows now diverge from the hash
+    deliverRowsEvent(projection, await layoutRows())
+
+    expect(pushes).toEqual([]) // without the guard: pushHash('#ws-1;persp=lane/a/b')
+    expect(replaces).toEqual([])
+    projection.dispose()
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('a THROWING router defers the route instead of failing the apply', async () => {
+    // resolveSessionKey is third-party extension code on core's boot path —
+    // a throw must not fail bootstrap or reject the projection's queue.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({
+      resolveSessionKey: () => { throw new Error('extension bug') },
+    })
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=lane/b1',
+    })
+    expect(result.kind).toBe('deferred')
+    expect(await base.children.load()).toEqual([])
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('an EMPTY-string session key folds to base (never mints an unreachable derived id)', async () => {
+    // `persp=` is a canonical entry; the natural slice-idiom router returns
+    // '' for it — that must address BASE, not blockIdForKey(ws, user, '').
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({resolveSessionKey: () => ''})
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=/b1',
+    })
+    expect(result.kind).toBe('applied')
+    env.repo.setLayoutSessionRouter(null)
+  })
+
   it('applies an UNCLAIMED ws-context route to base normally (no consumer will ever pick it up)', async () => {
     // `#ws;foo=bar/a` with no claimant, or a lane bookmark after its host
     // released the claim: deferring would strand it (blank fresh-workspace

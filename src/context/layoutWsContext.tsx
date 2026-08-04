@@ -24,10 +24,11 @@ export interface LayoutWsContextValue {
 
 export const LayoutWsContext = createContext<LayoutWsContextValue | null>(null)
 
-/** Pure core of {@link useAppHashInContext}, split out for direct testing:
- *  with a provided session context, synthesize the hash that session lives
- *  under and thread it through buildAppHashInContext (keeping the
- *  same-workspace drop rule in one place); with none, defer to the
+/** Pure core of {@link useAppHashInContext}, split out for direct testing
+ *  and for loop/conditional call sites where the hook can't run per item.
+ *  With a provided session context, build directly (the same-workspace
+ *  drop rule is the one equality; buildLayoutFromSlots canonicalizes the
+ *  entries exactly as the parse path would); with none, defer to the
  *  render-time global-hash read. */
 export const appHashForSession = (
   provided: LayoutWsContextValue | null,
@@ -36,8 +37,11 @@ export const appHashForSession = (
 ): string =>
   provided === null
     ? buildAppHashInContext(workspaceId, blockId)
-    : buildAppHashInContext(
-      workspaceId, blockId, buildLayoutFromSlots(provided.workspaceId, [], provided.wsContext))
+    : buildLayoutFromSlots(
+      workspaceId,
+      blockId ? [{kind: 'leaf', blockId}] : [],
+      provided.workspaceId === workspaceId ? provided.wsContext : undefined,
+    )
 
 /** `buildAppHashInContext` for components: same-workspace lane context
  *  comes from the RENDERING session's provider when one is mounted, else

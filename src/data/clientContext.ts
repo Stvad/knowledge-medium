@@ -41,16 +41,6 @@ export interface ClientContextOptions {
   user: User
 }
 
-/**
- * Read-only + subscribe view onto {@link ClientContext} — what `repo.client`
- * and `useClientContext()` expose. Deliberately omits `setActiveWorkspaceId`
- * / `setActiveLayoutSessionId`: those bypass Repo's transition (facet-bridge
- * notification, projector pin/rollback, seed-materialization generation
- * turnover), so a caller reaching them would silently desync those systems.
- * This type makes that mistake a compile error rather than a documented
- * convention. Mutate ONLY via `repo.setActiveWorkspaceId` /
- * `repo.setActiveLayoutSessionId`.
- */
 /** A same-workspace app route as the session router sees it: the clean
  *  workspace id plus the canonicalized ws-context entries (`key[=value]`,
  *  parse-sorted). Slots are deliberately absent — routing decides WHERE a
@@ -77,11 +67,24 @@ export interface LayoutSessionRouter {
   /** The session KEY (the `repo.client.activeLayoutSessionId` domain —
    *  NOT a block id; core derives the block id via
    *  layoutSessionBlockIdForKey) the route addresses, or `null` for the
-   *  per-device base session. Only called for routes whose ws-context
-   *  carries a claimed key. */
+   *  per-device base session (an empty string folds to base too — the
+   *  natural `entry.slice('persp='.length)` idiom on a bare value must
+   *  not mint an unreachable derived id). Only called for routes whose
+   *  ws-context carries a claimed key; a throw is treated as "not
+   *  addressed here" (defer) and logged. */
   resolveSessionKey(route: LayoutSessionRoute): string | null
 }
 
+/**
+ * Read-only + subscribe view onto {@link ClientContext} — what `repo.client`
+ * and `useClientContext()` expose. Deliberately omits `setActiveWorkspaceId`
+ * / `setActiveLayoutSessionId`: those bypass Repo's transition (facet-bridge
+ * notification, projector pin/rollback, seed-materialization generation
+ * turnover), so a caller reaching them would silently desync those systems.
+ * This type makes that mistake a compile error rather than a documented
+ * convention. Mutate ONLY via `repo.setActiveWorkspaceId` /
+ * `repo.setActiveLayoutSessionId`.
+ */
 export interface ClientContextReader {
   readonly user: User
   readonly activeWorkspaceId: string | null
@@ -162,27 +165,27 @@ export class ClientContext implements ClientContextReader {
   /** Ws-context keys session consumers have claimed on THIS device, keyed
    *  by `"<userId>/<workspaceId>"` scope — seeded from the persisted map so
    *  bootstrap (which runs before async user extensions load) sees claims
-   *  made on earlier boots. NOT the write source of truth: every write
-   *  re-reads the persisted map and applies the delta to THAT (see
-   *  mutateLayoutContextClaims) — two tabs each writing their
-   *  construction-time snapshot back wholesale would drop each other's
-   *  claims. This field is refreshed from the merged result. */
+   *  made on earlier boots. A read cache, not the write source of truth —
+   *  see mutateLayoutContextClaims. */
   private _claimedLayoutContextKeys = readPersistedLayoutContextClaims()
 
   /** Merge-on-write for the claim registry: re-read persisted state, apply
    *  the delta to the FRESH map, persist, and adopt the merged map as the
-   *  new in-memory view (also absorbing other tabs' claims). localStorage
-   *  has no transactions, but this shrinks the lost-update window from
-   *  "construction → write" to the microseconds between read and write —
-   *  and claim/release are idempotent per (scope, key), so replays are
-   *  harmless. */
+   *  new in-memory view (also absorbing other tabs' claims). The adoption
+   *  happens even when the mutation is a NO-OP — an idempotent re-claim of
+   *  a key another tab already persisted must still teach THIS tab's
+   *  in-memory view about it, or hasClaimedLayoutContextKey lies right
+   *  after the caller claimed. localStorage has no transactions, but this
+   *  shrinks the lost-update window from "construction → write" to the
+   *  microseconds between read and write — and claim/release are
+   *  idempotent per (scope, key), so replays are harmless. */
   private mutateLayoutContextClaims(mutate: (claims: Map<string, Set<string>>) => boolean): void {
     const fresh = typeof localStorage === 'undefined'
       ? this._claimedLayoutContextKeys
       : readPersistedLayoutContextClaims()
-    if (!mutate(fresh)) return
-    writePersistedLayoutContextClaims(fresh)
+    const changed = mutate(fresh)
     this._claimedLayoutContextKeys = fresh
+    if (changed) writePersistedLayoutContextClaims(fresh)
   }
 
   /** Fires on EFFECTIVE changes to `activeWorkspaceId` / `activeLayoutSessionId`
@@ -259,7 +262,10 @@ export class ClientContext implements ClientContextReader {
    *  where the consumer has never run yet applies a context URL to base;
    *  the consumer reconciles once it loads. Consumers should
    *  {@link releaseLayoutContextKey} when disabled/uninstalled, or a stale
-   *  claim keeps deferring routes nothing will pick up. */
+   *  claim keeps deferring routes nothing will pick up — and on a boot
+   *  where the base session also has no rows yet, a deferred route means
+   *  a BLANK layout (deferral bypasses the empty-landing fallback by
+   *  design: landing would rewrite the deferred route's hash). */
   claimLayoutContextKey(workspaceId: string, key: string): void {
     const scope = layoutContextClaimScope(this.user.id, workspaceId)
     this.mutateLayoutContextClaims(claims => {
@@ -287,10 +293,17 @@ export class ClientContext implements ClientContextReader {
   }
 
   /** Register (or with `null` unregister) the session route-owner — see
-   *  {@link LayoutSessionRouter} for the protocol. Deliberately no change
-   *  notification: consumers register before driving any navigation, and
-   *  URL application reads the router at apply time. */
+   *  {@link LayoutSessionRouter} for the protocol. SINGLE-CONSUMER slot:
+   *  there is one route-owner per client, and a second registration
+   *  replaces the first (warned below — two session consumers cannot
+   *  coexist; the claims registry supporting many keys does not change
+   *  that). Deliberately no change notification: consumers register
+   *  before driving any navigation, and URL application reads the router
+   *  at apply time. */
   setLayoutSessionRouter(router: LayoutSessionRouter | null): void {
+    if (router !== null && this._layoutSessionRouter !== null && this._layoutSessionRouter !== router) {
+      console.warn('setLayoutSessionRouter: replacing an already-registered router — the layout-session route-owner is a single-consumer slot, and the previous consumer\'s routing just broke')
+    }
     this._layoutSessionRouter = router
   }
 
