@@ -435,25 +435,69 @@ export const coreContentSearchSource: SearchSourceContribution = {
   },
 }
 
-/** Of two candidates for the SAME block id, pick which one's `block`
- *  payload should survive the merge. Ranking always uses the max score
- *  across duplicates (see `searchBlocksAcrossSources`), but the payload
- *  itself can come from a stale index copy — e.g. a semantic-search
- *  source's own snapshot of the block lagging live data — so prefer
- *  whichever candidate's `block.userUpdatedAt` (the user-facing
- *  "last edited" timestamp, `src/data/api/blockData.ts`) is newest,
- *  falling back to the higher-scored candidate when timestamps tie or
- *  either is missing/non-numeric. */
+/** Of every candidate contributed for the SAME block id, pick which one's
+ *  `block` payload should survive the merge — implements the contract
+ *  documented on `SearchSourceContribution` (`src/data/facets.ts`): "the
+ *  surviving `block` payload is whichever duplicate's `userUpdatedAt` is
+ *  newest (falling back to the higher-scored one on a tie/missing
+ *  timestamp), so a stale index copy can't shadow live data just because
+ *  it scored higher." Generalized to a whole group (not just a pair):
+ *  timestamp comparison only decides the group when EVERY candidate in
+ *  it has one — a single timestamp-less candidate (a stale/legacy index
+ *  copy that never recorded `userUpdatedAt`) hands the WHOLE group's
+ *  decision to score, per the contract's "missing timestamp" fallback,
+ *  not just that one candidate's own comparisons.
+ *
+ *  "Has one" means FINITE, not `typeof === 'number'`. `NaN` passes the
+ *  typeof test and then loses every comparison it appears in, including
+ *  `NaN !== NaN`, so a group containing one would resolve to whichever
+ *  candidate the fold happened to be holding — order-dependent, which is
+ *  the exact defect this function exists to remove (issue #450, Codex
+ *  review on PR #449). `Infinity` is order-INdependent but wins
+ *  unconditionally, which is no better a claim for a corrupt row to
+ *  have. Both route to the score fallback instead.
+ *
+ *  Concretely:
+ *   - every candidate has a finite `userUpdatedAt` → newest wins; a
+ *     timestamp tie falls back to higher score; a full tie keeps the
+ *     earliest-encountered candidate (deterministic, arbitrary — group
+ *     order is registration-then-within-source, see
+ *     `searchBlocksAcrossSources`).
+ *   - any candidate lacks a finite `userUpdatedAt` → highest score wins
+ *     across the WHOLE group (timestamps are ignored entirely, including
+ *     the timed candidates' own), same earliest-encountered tie-break.
+ *
+ *  Order-independent total order over the WHOLE group at once — not a
+ *  pairwise running fold over an already-partially-merged accumulator.
+ *  A pairwise fold is unsound here: once two candidates are folded, the
+ *  survivor's `score` field gets overwritten with the running max across
+ *  BOTH of them (see `searchBlocksAcrossSources`), so a later comparison
+ *  against that survivor is comparing a real candidate's timestamp
+ *  against a score that may belong to a *different*, already-eliminated
+ *  candidate — decoupling the payload-selection criteria from the
+ *  payload being carried, AND silently narrowing "missing timestamp" from
+ *  a whole-group fallback to a pairwise one. For a 3+-way duplicate group
+ *  with mixed/missing timestamps that made payload selection
+ *  order-dependent (issue #450): e.g. candidates A(t=10, score=5),
+ *  B(t=20, score=0), C(no timestamp, score=3) — every order must resolve
+ *  to A (highest score; C's missing timestamp sends the whole group to
+ *  score), but some pairwise fold orders picked B instead. Operating on
+ *  the raw group up front avoids that: only real candidates' own
+ *  (timestamp, score) pairs are ever compared, and "any candidate missing
+ *  a timestamp" is checked across the group before any comparison runs. */
 const freshestCandidatePayload = (
-  a: SearchSourceCandidate,
-  b: SearchSourceCandidate,
+  candidates: readonly SearchSourceCandidate[],
 ): SearchSourceCandidate => {
-  const aTime = a.block.userUpdatedAt
-  const bTime = b.block.userUpdatedAt
-  if (typeof aTime === 'number' && typeof bTime === 'number' && aTime !== bTime) {
-    return aTime > bTime ? a : b
+  const allTimed = candidates.every(c => Number.isFinite(c.block.userUpdatedAt))
+  if (!allTimed) {
+    return candidates.reduce((best, candidate) => candidate.score > best.score ? candidate : best)
   }
-  return a.score >= b.score ? a : b
+  return candidates.reduce((best, candidate) => {
+    const bestTime = best.block.userUpdatedAt
+    const time = candidate.block.userUpdatedAt
+    if (time !== bestTime) return time > bestTime ? candidate : best
+    return candidate.score > best.score ? candidate : best
+  })
 }
 
 /** Fan out `query` to every contributed `searchSourcesFacet` source (core's
@@ -476,12 +520,19 @@ const freshestCandidatePayload = (
  *  the order candidates were produced in — `Array.prototype.sort` is
  *  stable, and that order is source-registration order then
  *  within-source order — so a single-source call reproduces that
- *  source's own ordering exactly. Same block id from two sources
- *  survives once, ranked at the MAX score across the duplicates; its
- *  `block` payload is picked by `freshestCandidatePayload` (newest
- *  `userUpdatedAt` wins, falling back to the higher-scored candidate on
- *  a tie/missing timestamp) so a stale index copy can't shadow live
- *  data just because it scored higher.
+ *  source's own ordering exactly. Same block id contributed by two or
+ *  more sources survives once, ranked at the MAX score across the whole
+ *  duplicate group; its `block` payload is picked by
+ *  `freshestCandidatePayload` per the contract on `SearchSourceContribution`
+ *  (`src/data/facets.ts`), evaluated over the WHOLE group at once
+ *  (order-independent — see that function's docblock and issue #450 for
+ *  why a pairwise fold over 3+ duplicates isn't): newest `userUpdatedAt`
+ *  wins when EVERY candidate in the group has one, falling back to the
+ *  highest-scored candidate across the WHOLE group the moment ANY
+ *  candidate is missing one — so a stale index copy can't shadow live
+ *  data just because it scored higher, but also can't SUPPRESS a
+ *  legitimately high-scoring stale-timestamped candidate just because
+ *  some other duplicate happens to carry a timestamp.
  *
  *  A `repo` with no `FacetRuntime` wired (a hand-built test double, or a
  *  `Repo` read before its first `setFacetRuntime`) still gets core
@@ -522,21 +573,24 @@ export const searchBlocksAcrossSources = async (
 
   const merged = candidateLists.flat()
 
-  const byId = new Map<string, SearchSourceCandidate>()
+  // Group first, fold second: `freshestCandidatePayload` needs the whole
+  // duplicate-id group's raw candidates at once to stay order-independent
+  // (see its docblock) — a single-pass running fold over the flat list
+  // would re-decouple payload selection from the real per-candidate
+  // (timestamp, score) pairs, same as the bug it replaces.
+  const groups = new Map<string, SearchSourceCandidate[]>()
   for (const candidate of merged) {
-    const existing = byId.get(candidate.block.id)
-    if (!existing) {
-      byId.set(candidate.block.id, candidate)
-      continue
-    }
-    const payload = freshestCandidatePayload(existing, candidate)
-    byId.set(candidate.block.id, {
-      block: payload.block,
-      score: Math.max(existing.score, candidate.score),
-    })
+    const bucket = groups.get(candidate.block.id)
+    if (bucket) bucket.push(candidate)
+    else groups.set(candidate.block.id, [candidate])
   }
 
-  return [...byId.values()]
+  const byId = [...groups.values()].map((group): SearchSourceCandidate => ({
+    block: freshestCandidatePayload(group).block,
+    score: group.reduce((max, c) => Math.max(max, c.score), -Infinity),
+  }))
+
+  return byId
     .sort((a, b) => b.score - a.score)
     .slice(0, args.limit)
     .map(candidate => candidate.block)
