@@ -248,13 +248,19 @@ export class BlockCache {
     else this.metrics.applyIfNewerHydrateCalls++
     const existing = this.snapshots.get(snapshot.id)
     const priorObserved = this.observedVersion.get(snapshot.id)
-    // Record from BOTH sources: a sync delivery and a disk re-read are equally
-    // durable, and only the latter exists on the restart path. `Math.max` keeps
-    // a stale re-read from lowering the line.
-    this.observedVersion.set(
-      snapshot.id,
-      Math.max(priorObserved ?? Number.NEGATIVE_INFINITY, snapshot.updatedAt),
-    )
+    // A sync delivery always records. A disk re-read records only for a COLD
+    // entry: once the cache holds a row, a hydrate can be returning our OWN
+    // unechoed local write read back off disk, and promoting that
+    // client-authored stamp into the line puts it above every version the
+    // server can issue — which is the exact condition the escape exists to
+    // break out of. Cold entries are the restart path, where the disk row is
+    // the last synced value and there is no in-memory write to confuse it with.
+    if (source === 'sync' || existing === undefined) {
+      this.observedVersion.set(
+        snapshot.id,
+        Math.max(priorObserved ?? Number.NEGATIVE_INFINITY, snapshot.updatedAt),
+      )
+    }
     if (existing && snapshot.updatedAt <= existing.updatedAt) {
       if (source === 'sync') this.metrics.applyIfNewerSyncRejected++
       else this.metrics.applyIfNewerHydrateRejected++
