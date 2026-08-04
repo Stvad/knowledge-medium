@@ -24,9 +24,20 @@ import {
  *  (same hazard `selectNewCards` guards against). Unreadable state means "not
  *  a live card", which routes to the conservative branch rather than crashing
  *  the session. */
+/** Does the block carry the SRS type — i.e. has it been enrolled at all?
+ *  Tolerant of a malformed `types` value (reads as "not enrolled" rather than
+ *  throwing out of a render or a grade handler). */
+export const carriesSrsType = (data: BlockData): boolean => {
+  try {
+    return getBlockTypes(data).includes(SRS_SM25_TYPE)
+  } catch {
+    return false
+  }
+}
+
 export const isLiveSrsCard = (data: BlockData): boolean => {
   try {
-    if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
+    if (!carriesSrsType(data)) return false
     const archivedRaw = data.properties[srsArchivedProp.name]
     if (archivedRaw !== undefined && srsArchivedProp.codec.decode(archivedRaw)) return false
     const dateRaw = data.properties[srsNextReviewDateProp.name]
@@ -81,14 +92,17 @@ export const decideGrade = (
  * Whether to offer the controls that only work on an ENROLLED card —
  * Reschedule and Archive. `archiveSrsCard` returns false for a block with no
  * SRS type (surfacing "Couldn't archive this card"), and the SRS date adapter
- * doesn't claim an unenrolled block, so neither does anything useful for a new
- * card.
+ * doesn't claim an unenrolled block, so neither does anything useful without
+ * the type.
  *
- * Shares `decideGrade`'s readiness rule deliberately, rather than restating
- * `!isNew` at the call site: gating grading on `ready` while leaving these
- * controls on the raw flag is precisely the drift that shipped once already —
- * the session gated one and not the other, so a restored session briefly
- * offered both for a new card. One rule, one place.
+ * Asks the BLOCK, not the new-set. `ready && !isNew` was inference: it read
+ * "not currently in the deck's new set" as "therefore enrolled", which misses
+ * a third state — a block that was new and has since lost its deck tag stays
+ * on screen in the frozen queue, leaves `newIds`, and still has no SRS type.
+ * That inferred `true` put both broken controls back. Enrollment is a fact
+ * about the block and is available here, so read it directly; readiness then
+ * doesn't enter into it, because nothing is being inferred from an
+ * not-yet-loaded set.
  */
-export const showsEnrolledCardActions = ({isNew, ready}: GradeDecisionInput): boolean =>
-  ready && !isNew
+export const showsEnrolledCardActions = (data: BlockData | null | undefined): boolean =>
+  !!data && carriesSrsType(data)

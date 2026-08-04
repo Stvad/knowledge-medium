@@ -9,21 +9,24 @@
  * only job is to hide a first-run nudge. The cost of getting it wrong is
  * that the banner shows once more on a second device, where one click
  * retires it again.
+ *
+ * Backed by a SUBSCRIBABLE store, not a bare module flag. Neither
+ * `localStorage` nor a plain variable notifies anyone, so with two panels
+ * focused on the same daily note — or the same note open twice — dismissing
+ * in one left the other on screen, still offering to dismiss again. The store
+ * is the app's blessed mechanism for exactly this (`createToggleStore`, over
+ * `CallbackSet`), so all mounted banners retire together.
+ *
+ * Cross-TAB sync is deliberately not attempted: no `storage` listener, so a
+ * second tab keeps its banner until reload. One click there retires it again,
+ * which is the same cost the per-device decision above already accepts.
  */
+import { useSyncExternalStore } from 'react'
+import { createToggleStore } from '@/utils/toggleStore.js'
+
 const DISMISSED_KEY = 'onboarding:tutorial-banner-dismissed'
 
-/** Set on every dismissal, whether or not it reached storage.
- *
- *  The banner's own `useState` cannot serve as the fallback: it is per-MOUNT,
- *  and the banner unmounts as soon as you navigate to another daily note. So
- *  where `localStorage` is blocked (private mode, storage policy), a
- *  component-state-only fallback means Dismiss appears to work and then the
- *  prompt returns on the next note — indistinguishable from the button being
- *  broken. Module scope degrades that to "dismissed until reload" instead. */
-let dismissedThisSession = false
-
-export const isTutorialBannerDismissed = (): boolean => {
-  if (dismissedThisSession) return true
+const readStoredDismissal = (): boolean => {
   try {
     return window.localStorage?.getItem(DISMISSED_KEY) === 'true'
   } catch {
@@ -32,19 +35,33 @@ export const isTutorialBannerDismissed = (): boolean => {
   }
 }
 
+/** `isOpen()` reads "dismissed". Seeded from storage at module load, which is
+ *  also what makes the store the single source of truth afterwards — nothing
+ *  re-reads `localStorage` per render. */
+const dismissalStore = createToggleStore('tutorial-banner-dismissed')
+dismissalStore.set(readStoredDismissal())
+
+export const isTutorialBannerDismissed = (): boolean => dismissalStore.isOpen()
+
+/** Reactive read for the banner. Every mounted instance re-renders on
+ *  dismissal, so they disappear together. */
+export const useTutorialBannerDismissed = (): boolean =>
+  useSyncExternalStore(dismissalStore.subscribe, dismissalStore.isOpen, dismissalStore.isOpen)
+
 export const dismissTutorialBanner = (): void => {
-  // Before the write, so a throwing setItem still retires it for this page
-  // session rather than leaving Dismiss with no effect at all.
-  dismissedThisSession = true
+  // Flipped BEFORE the write, so a throwing setItem still retires the banner
+  // for this page session (and across every mounted instance) rather than
+  // leaving Dismiss with no visible effect at all.
+  dismissalStore.set(true)
   try {
     window.localStorage?.setItem(DISMISSED_KEY, 'true')
   } catch {
-    /* ignore — `dismissedThisSession` is the fallback */
+    /* ignore — the store is the fallback */
   }
 }
 
-/** Test seam for the module-scope flag, mirroring `resetConsistencyAuditStore`.
- *  Without it a dismissal in one test leaks into the next. */
+/** Test seam, mirroring `resetConsistencyAuditStore`. Without it a dismissal
+ *  in one test leaks into the next. */
 export const resetTutorialBannerDismissal = (): void => {
-  dismissedThisSession = false
+  dismissalStore.set(false)
 }

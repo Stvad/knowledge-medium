@@ -21,16 +21,19 @@ import type { BlockHeaderContribution } from '@/extensions/blockInteraction.js'
 import { isFocalRender } from '@/hooks/useIsFocalRender.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { openTutorialInActiveWorkspace } from './action.ts'
-import { dismissTutorialBanner, isTutorialBannerDismissed } from './bannerDismissal.ts'
+import { dismissTutorialBanner, useTutorialBannerDismissed } from './bannerDismissal.ts'
 
 export const TutorialBanner = () => {
   const repo = useRepo()
-  const [dismissed, setDismissed] = useState(isTutorialBannerDismissed)
-  if (dismissed) return null
+  // Shared store, not local state: two panels can have this mounted for the
+  // same daily note, and a per-mount flag left the other one on screen after
+  // a dismissal. `hiding` is the separate, genuinely local concern — see below.
+  const dismissed = useTutorialBannerDismissed()
+  const [hiding, setHiding] = useState(false)
+  if (dismissed || hiding) return null
 
   const dismiss = () => {
     dismissTutorialBanner()
-    setDismissed(true)
   }
 
   const openTutorial = () => {
@@ -38,16 +41,18 @@ export const TutorialBanner = () => {
     // waiting would leave the card on screen through the transition, while
     // persisting up front would burn the only prominent route in even when
     // nothing opened. Persist once the tutorial is genuinely on screen;
-    // restore the banner if it isn't.
+    // restore the banner if it isn't. This one IS local state — it's a
+    // per-instance transition, not a decision about the nudge's fate, so it
+    // must not retire the banner in other panels before the open succeeds.
     //
     // Calls the shared helper rather than dispatching the action: the action
     // reports its own failures as toasts and then returns normally, so a
     // dispatch resolves "successfully" even when no tutorial opened — which
     // would permanently dismiss the banner on exactly the failures the user
     // most needs a retry route for.
-    setDismissed(true)
+    setHiding(true)
     void openTutorialInActiveWorkspace(repo)
-      .then(opened => (opened ? dismissTutorialBanner() : setDismissed(false)))
+      .then(opened => (opened ? dismissTutorialBanner() : setHiding(false)))
   }
 
   return (

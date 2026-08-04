@@ -15,24 +15,38 @@ import {
  *  A non-empty `tagName` is resolved via `core.aliasLookup`; when the page
  *  doesn't exist the deck targets `UNRESOLVED_TAG_ID` so it reports zero
  *  rather than every due card. */
-const useTagBlockId = (workspaceId: string, tagName: string): string | null => {
+interface ResolvedTag {
+  tagBlockId: string | null
+  /** False while `aliasLookup` is still loading. Load and "no such page" both
+   *  produce a null id, and the difference matters: an unresolved tag falls
+   *  back to `UNRESOLVED_TAG_ID`, whose queries match NOTHING and settle
+   *  immediately. Without this flag the deck reports ready with an empty new
+   *  set before the real tag has even been looked up — and a restored session
+   *  graded in that window drops a valid new card. */
+  resolved: boolean
+}
+
+const useTagBlockId = (workspaceId: string, tagName: string): ResolvedTag => {
   const repo = useRepo()
   const alias = tagName.trim()
   const wantsTag = alias.length > 0
 
-  // aliasLookup short-circuits to null on an empty alias, so the
-  // all-due deck simply gets a null tag id.
+  // `undefined` is preserved as "still loading" — the selector must NOT
+  // collapse it to null, which is also what a genuinely missing page returns.
   const resolvedId = useHandle(
     repo.query.aliasLookup({workspaceId, alias: wantsTag ? alias : ''}),
-    {selector: data => (data ? data.id : null)},
-  ) as string | null
-  return wantsTag ? (resolvedId ?? UNRESOLVED_TAG_ID) : null
+    {selector: data => (data === undefined ? undefined : (data ? data.id : null))},
+  ) as string | null | undefined
+
+  // The all-due deck asks no question, so there is nothing to wait for.
+  if (!wantsTag) return {tagBlockId: null, resolved: true}
+  return {tagBlockId: resolvedId ?? UNRESOLVED_TAG_ID, resolved: resolvedId !== undefined}
 }
 
 /** Shared query builder for the due-cards hooks, so `useDueCards` and
  *  `useDueCardsReady` observe the exact same typed-blocks handle. */
 const useDueCardsQuery = (workspaceId: string, tagName: string): TypedBlockQuery => {
-  const tagBlockId = useTagBlockId(workspaceId, tagName)
+  const {tagBlockId} = useTagBlockId(workspaceId, tagName)
 
   // Drives the due cutoff off today's local midnight, which advances
   // overnight — so a deck left open past midnight starts surfacing the
@@ -104,8 +118,10 @@ export interface ReviewDeckCards {
    *  block that loses its tag — or gains the SRS type elsewhere — leaves
    *  the set on its own. */
   newIds: ReadonlySet<string>
-  /** False until BOTH queries have resolved. Reconciling a restored session
-   *  against a half-loaded collection would drop its new cards. */
+  /** False until the tag lookup AND both queries have resolved. Reconciling a
+   *  restored session against a half-loaded collection would drop its new
+   *  cards — and the tag lookup counts, because an unresolved tag makes both
+   *  queries settle instantly against a sentinel that matches nothing. */
   ready: boolean
 }
 
@@ -119,7 +135,7 @@ export const useReviewDeckCards = (
   // Going through `useDueCards` + a separate ready hook would re-run
   // `useDueCardsQuery` per call — three `aliasLookup` subscriptions and two
   // identical 60s midnight timers for one screen's worth of state.
-  const tagBlockId = useTagBlockId(workspaceId, tagName)
+  const {tagBlockId, resolved: tagResolved} = useTagBlockId(workspaceId, tagName)
   const startOfToday = useStartOfToday()
 
   const dueQuery = useMemo(
@@ -147,7 +163,7 @@ export const useReviewDeckCards = (
     return {
       cards: [...dueCards, ...newCards],
       newIds: newCards.length === 0 ? EMPTY_IDS : new Set(newCards.map(c => c.id)),
-      ready: dueReady && candidatesReady,
+      ready: tagResolved && dueReady && candidatesReady,
     }
-  }, [dueCards, candidates, dueReady, candidatesReady])
+  }, [dueCards, candidates, tagResolved, dueReady, candidatesReady])
 }

@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
-import { useManyParents, useProperty } from '@/hooks/block.js'
+import { useHandle, useManyParents, useProperty } from '@/hooks/block.js'
 import { usePluginUIStateChildBlock } from '@/data/globalState.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
@@ -120,6 +120,54 @@ const GradeButtons = ({card, busy, onGrade}: {
         </Button>
       ))}
     </div>
+  )
+}
+
+/** Reschedule and Archive, shown only for a card that is actually ENROLLED.
+ *
+ *  Both fail confusingly otherwise: `archiveSrsCard` returns false for a block
+ *  with no SRS type (surfacing "Couldn't archive this card" and leaving the
+ *  card in place), and the SRS date adapter doesn't claim an unenrolled block,
+ *  so the picker either no-ops or edits an unrelated date without enrolling it.
+ *  Grading is how a card gets a schedule in the first place.
+ *
+ *  Reads enrollment off the BLOCK rather than inferring it from the deck's new
+ *  set. `!currentIsNew` was inference, and it missed a third state: a card that
+ *  was new and has since lost its deck tag stays on screen in the frozen queue,
+ *  leaves `newIds`, and still has no SRS type — so the inferred "enrolled" put
+ *  both broken controls back. Own component so the reactive read only runs for
+ *  the card on screen, and so enrollment gained elsewhere shows up live. */
+const EnrolledCardActions = ({card, busy, onReschedule, onArchive}: {
+  card: Block
+  busy: boolean
+  onReschedule: () => void
+  onArchive: () => void
+}) => {
+  const enrolled = useHandle(card, {
+    selector: data => showsEnrolledCardActions(data),
+  }) as boolean
+  if (!enrolled) return null
+  return (
+    <>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+        onClick={onReschedule}
+        disabled={busy}
+      >
+        <CalendarClock className="h-3.5 w-3.5" />
+        Reschedule
+      </button>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
+        onClick={onArchive}
+        disabled={busy}
+      >
+        <ArchiveX className="h-3.5 w-3.5" />
+        Archive
+      </button>
+    </>
   )
 }
 
@@ -600,42 +648,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           <ExternalLink className="h-3.5 w-3.5" />
           Open
         </button>
-        {/* Reschedule and Archive both operate on an ENROLLED card, and both
-            fail silently or confusingly on a new one: `archiveSrsCard`
-            returns false for a block with no SRS type (surfacing
-            "Couldn't archive this card" and leaving the card in place), and
-            the SRS date adapter doesn't claim an unenrolled block, so the
-            picker either no-ops or edits an unrelated date without enrolling
-            it. Grading is how a new card gets a schedule in the first place,
-            so offer these only once it has one.
-
-            Shares grading's readiness rule via `showsEnrolledCardActions`:
-            `currentIsNew` reads a live `newIds` that is EMPTY until the
-            tagged-candidates query resolves, so a raw `!currentIsNew` renders
-            these for a new card in a restored session — the exact case this
-            branch exists to exclude. Unknown membership means "don't offer". */}
-        {showsEnrolledCardActions({isNew: currentIsNew, ready: dueLoaded}) && (
-          <>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-              onClick={reschedule}
-              disabled={busy}
-            >
-              <CalendarClock className="h-3.5 w-3.5" />
-              Reschedule
-            </button>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 hover:text-foreground disabled:opacity-50"
-              onClick={() => void archive()}
-              disabled={busy}
-            >
-              <ArchiveX className="h-3.5 w-3.5" />
-              Archive
-            </button>
-          </>
-        )}
+        {currentBlock && <EnrolledCardActions
+          card={currentBlock}
+          busy={busy}
+          onReschedule={reschedule}
+          onArchive={() => void archive()}
+        />}
       </div>
     </div>
   )

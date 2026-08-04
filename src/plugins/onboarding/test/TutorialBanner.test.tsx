@@ -176,6 +176,19 @@ describe('TutorialBanner', () => {
     await vi.waitFor(() => expect(isTutorialBannerDismissed()).toBe(true))
   })
 
+  it('retires every mounted banner at once, not just the one clicked', async () => {
+    // Two focal daily-note panels can each mount this. Dismissal used to be
+    // per-mount `useState`, so the other panel kept its banner and could be
+    // dismissed again — the flag and localStorage notify nobody.
+    render(<><TutorialBanner/><TutorialBanner/></>)
+    expect(screen.getAllByText(/Start with the tutorial/)).toHaveLength(2)
+
+    fireEvent.click(screen.getAllByRole('button', {name: 'Dismiss tutorial prompt'})[0])
+
+    await vi.waitFor(() =>
+      expect(screen.queryByText(/Start with the tutorial/)).not.toBeInTheDocument())
+  })
+
   it('can be dismissed without opening the tutorial', () => {
     const view = render(<TutorialBanner/>)
 

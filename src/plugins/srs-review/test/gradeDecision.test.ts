@@ -56,29 +56,43 @@ describe('decideGrade', () => {
 })
 
 describe('showsEnrolledCardActions', () => {
-  it('offers Reschedule/Archive only for a settled, enrolled card', () => {
-    expect(showsEnrolledCardActions({isNew: false, ready: true})).toBe(true)
-    expect(showsEnrolledCardActions({isNew: true, ready: true})).toBe(false)
+  it('offers Reschedule/Archive for an enrolled card', () => {
+    expect(showsEnrolledCardActions(enrolled)).toBe(true)
   })
 
-  it('hides them while membership is still unknown', () => {
-    // The restored-before-ready window again: `isNew` is false only because
-    // the candidates query hasn't resolved, so a raw `!isNew` would offer
-    // controls that fail on a new card — Archive reports "Couldn't archive
-    // this card" and the date picker has no SRS adapter to drive.
-    expect(showsEnrolledCardActions({isNew: false, ready: false})).toBe(false)
+  it('hides them for a block that was never enrolled', () => {
+    expect(showsEnrolledCardActions(untyped)).toBe(false)
   })
 
-  it('agrees with decideGrade about when membership is knowable', () => {
-    // The drift this pairing exists to prevent: grading gated on readiness
-    // while the controls were not. Wherever grading has to `wait`, the
-    // enrolled-only controls must not be offered either.
-    for (const isNew of [true, false]) {
-      for (const ready of [true, false]) {
-        const waiting = decideGrade(untyped, {isNew, ready}) === 'wait'
-        if (waiting) expect(showsEnrolledCardActions({isNew, ready})).toBe(false)
-      }
-    }
+  it('hides them for a card that left the new set without gaining the type', () => {
+    // The third state, and the reason this asks the BLOCK instead of negating
+    // new-set membership: a card queued as new, whose deck tag is removed
+    // mid-session, stays on screen in the frozen queue and drops out of
+    // `newIds`. Inferring "not new, therefore enrolled" put both broken
+    // controls back — Archive reports "Couldn't archive this card" and the
+    // date picker has no SRS adapter to drive.
+    expect(showsEnrolledCardActions(untyped)).toBe(false)
+  })
+
+  it('has no opinion to be wrong about while the queries are loading', () => {
+    // Enrollment is a fact about the block, readable whether or not the deck's
+    // queries have settled — so unlike grading there is no unknown state here.
+    expect(showsEnrolledCardActions(enrolled)).toBe(true)
+    expect(showsEnrolledCardActions(untyped)).toBe(false)
+  })
+
+  it('survives a malformed types value', () => {
+    const malformed = {
+      id: 'b1', workspaceId: 'ws-1',
+      properties: {[typesProp.name]: '{not-a-list'},
+    } as unknown as BlockData
+    expect(() => showsEnrolledCardActions(malformed)).not.toThrow()
+    expect(showsEnrolledCardActions(malformed)).toBe(false)
+  })
+
+  it('hides them when there is no block at all', () => {
+    expect(showsEnrolledCardActions(null)).toBe(false)
+    expect(showsEnrolledCardActions(undefined)).toBe(false)
   })
 })
 
