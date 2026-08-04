@@ -58,14 +58,22 @@
  *  suite: both devices converging to the same (possibly cyclic/orphaned)
  *  graph IS the property here.
  *
- * KNOWN RED (deep tier): this suite's first deep run found issue #381 —
- * a content-changing patch merged onto a drifted base can produce a
- * server stamp EQUAL to the patch author's local stamp (the +1 bump only
- * clears the old server stamp, not the author's proposed stamp), so the
- * author's echo equal-stamp-skips and that device permanently misses the
- * other device's merged-under edit. The convergence property is left
- * strict per the oracle discipline; deep runs stay red on that seed
- * until the protocol fix lands. Repro in the issue.
+ * FIXED, was KNOWN RED (deep tier): this suite's first deep run found
+ * issue #381 — a content-changing patch merged onto a drifted base could
+ * produce a server stamp EQUAL to the patch author's local stamp (the +1
+ * bump only cleared the old server stamp, not the author's proposed
+ * stamp), so the author's echo equal-stamp-skipped and that device
+ * permanently missed the other device's merged-under edit. The protocol
+ * fix (a wire-only `base_updated_at` on every PATCH, server bumps past
+ * the proposal when the base drifted) landed in PR #525; the #381 seed
+ * and the 2026-07-17 nightly seed both go green. The convergence property
+ * was left strict throughout, per the oracle discipline.
+ *
+ * NOT covered by the convergence oracle: it compares the `blocks` tables
+ * and the server's rows — DISK only. A device whose in-memory cache
+ * disagrees with its own disk still passes (that is #526's shape, fixed
+ * in `blockCache.applyIfNewer` but pinned only by hand-built tests). A
+ * cache-vs-disk oracle here would generalise it.
  *
  * Known blind spot, deliberately unreachable: the reconcile gate's I1
  * assumption (equal nonzero stamps ⟺ same write — reconcile.ts:108-121)

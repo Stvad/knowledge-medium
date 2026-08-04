@@ -354,39 +354,33 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     expect(a.cache.getSnapshot(TARGET)?.content).toBe((await readRow(a, TARGET))?.content)
   })
 
-  // Characterization, not a guarantee: this asserts a KNOWN-WRONG cache state
-  // on purpose (issue #526). The test above proves DISK converges for the
-  // far-ahead author; the in-memory cache does not, and this pins where that
-  // line currently sits so a fix flips a named test rather than passing
-  // silently.
+  // The #526 fix, from the far-ahead author's side. Disk convergence is the
+  // test above; this is the same scenario asserted on the in-memory cache,
+  // which used to keep the pre-merge row for the rest of the session because
+  // A's local stamp sits above anything the server can ever issue for the row,
+  // so every delivery lost the LWW comparison permanently.
   //
-  // Why it is not fixed here: `applySyncInvalidation` writes each materialized
-  // row through `cache.applyIfNewer(after, 'sync')`, whose LWW reject is
-  // load-bearing — it masks the transient disk revert a rescan causes inside
-  // the ack→echo window (invariant cd8f87a9). A skewed client's local stamp is
-  // above anything the server can ever issue for the row, so no later delivery
-  // out-stamps it and the reject becomes permanent. The two situations are
-  // indistinguishable at this seam: both show "incoming stamp < cached stamp"
-  // over a cache that matched disk beforehand. Separating them needs to know
-  // whether OUR CLOCK is ahead of the server's, which no layer tracks today —
-  // so the fix is a clock-offset estimate or a stamp clamp, not a predicate
-  // here. #526 has both candidate shapes and the refutations of the two cheap
-  // ones.
-  it('the far-ahead author\'s cache keeps the pre-merge row even though disk converged (#526)', async () => {
+  // What makes it land now is the advanced-server-line escape in
+  // `applyIfNewer`: the merged echo is a server version A has NEVER observed,
+  // so it clears `serverBase` and is taken despite losing on stamps. The
+  // ack→echo transient does not qualify — a rescan re-delivers a version A has
+  // already seen — which is what the test above pins.
+  it('the far-ahead author\'s cache converges too, not just its disk (#526)', async () => {
     const { a, b, server } = await setupFarAheadClock()
     await contendOnTarget(a, b, server)
 
     const disk = await readRow(a, TARGET)
     const cached = a.cache.getSnapshot(TARGET)
 
-    expect(disk, 'precondition: disk converged (the guarantee this PR adds)')
-      .toMatchObject({ content: 'B-content' })
-    expect(cached?.content, 'the gap: A renders its pre-merge content until reload')
-      .toBe('original')
-    // The mechanism, asserted rather than described: A's local stamp sits above
-    // the capped server stamp, so every delivery for this row loses the LWW.
-    expect(cached!.updatedAt).toBeGreaterThan(disk!.updated_at)
-    expect(a.cache.metrics.snapshot().applyIfNewerSyncRejected).toBeGreaterThan(0)
+    expect(disk, 'precondition: disk converged').toMatchObject({ content: 'B-content' })
+    expect(cached?.content, 'and the cache no longer lags it until reload')
+      .toBe('B-content')
+    // Assert the ROUTE, not just the outcome: this converged by escaping a
+    // stamp-losing delivery, not because the stamps happened to line up. The
+    // cache now holds the same row as disk, so their stamps are equal — it is
+    // the escape counter that says HOW it got there.
+    expect(cached!.updatedAt).toBe(disk!.updated_at)
+    expect(a.cache.metrics.snapshot().applyIfNewerServerLineEscapes).toBeGreaterThan(0)
   })
 
   // The exact cap-boundary collision below can't be steered through the real

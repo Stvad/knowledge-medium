@@ -45,6 +45,12 @@ export class BlockCacheMetrics {
    *  expected — every cached row re-read during a query resolves to
    *  a reject — and are essentially free (Map.get + comparison). */
   applyIfNewerHydrateRejected = 0
+  /** `applyIfNewer(_, 'sync')` rejections overridden by the
+   *  advanced-server-line escape (#526) — the server's version line
+   *  moved past anything previously observed for the row, so a
+   *  stamp-losing delivery was taken anyway. Expected to sit at 0 on a
+   *  well-clocked device; a nonzero rate points at clock skew. */
+  applyIfNewerServerLineEscapes = 0
   /** Total internal `notify(id)` invocations across all paths
    *  (setSnapshot writes, deleteSnapshot, markMissing, clearMissing).
    *  Counts the call, not the per-listener fan-out. */
@@ -58,6 +64,7 @@ export class BlockCacheMetrics {
     this.applyIfNewerSyncRejected = 0
     this.applyIfNewerHydrateCalls = 0
     this.applyIfNewerHydrateRejected = 0
+    this.applyIfNewerServerLineEscapes = 0
     this.notifies = 0
   }
 
@@ -72,6 +79,7 @@ export class BlockCacheMetrics {
       applyIfNewerSyncRejected: this.applyIfNewerSyncRejected,
       applyIfNewerHydrateCalls: this.applyIfNewerHydrateCalls,
       applyIfNewerHydrateRejected: this.applyIfNewerHydrateRejected,
+      applyIfNewerServerLineEscapes: this.applyIfNewerServerLineEscapes,
       notifies: this.notifies,
     })
   }
@@ -98,6 +106,13 @@ export class BlockCache {
    *  missing" (peek → null) per spec §5.2. Cleared on setSnapshot
    *  (the row exists now). */
   private readonly missingIds = new Set<string>()
+  /** Highest server-authored `updatedAt` OBSERVED for an id, whether or not
+   *  the cache accepted it — i.e. where the server's version line is, as
+   *  distinct from what the cache chose to display. Read by `applyIfNewer`'s
+   *  advanced-server-line escape (#526); see the comment there for why it
+   *  tracks observations rather than accepted writes. Dropped with the
+   *  snapshot in `deleteSnapshot` so it can't outlive the row. */
+  private readonly serverBase = new Map<string, number>()
   /** Mutable counters for cache write/notify activity. Increments
    *  inline in the hot path; consumers snapshot via `metrics.snapshot()`
    *  through `repo.metrics()`. */
@@ -172,23 +187,72 @@ export class BlockCache {
    *  the deep-equal dedup in `setSnapshot`, so this only blocks the
    *  harmful clobber.
    *
-   *  The `source` argument is telemetry-only — it routes the call/
-   *  reject counts into separate metric buckets so a rejection-rate
-   *  snapshot tells you which path drove it. The gate itself is
-   *  identical for both sources. */
+   *  ADVANCED-SERVER-LINE ESCAPE (#526). Stamps come from two different
+   *  lines. A local row's stamp is client-authored — `max(now, before+1)` —
+   *  while a synced row's is server-authored. LWW compares across the two,
+   *  which is fine while the clocks agree and permanently wrong when they
+   *  don't: a client whose clock runs past the server's trusted-skew cap
+   *  mints stamps the server can NEVER issue, so every delivery for that row
+   *  loses forever and the device renders pre-merge content until reload.
+   *
+   *  So the reject carries one escape: take the row anyway when the SERVER
+   *  line has advanced past the newest server-authored stamp we have ever
+   *  observed for this id. That separates the two shapes the plain gate
+   *  conflates, and it separates them by construction rather than by luck:
+   *
+   *    - the ack→echo transient (a rescan re-delivering the version our own
+   *      unechoed edit was based on) is a version we HAVE seen, so it is
+   *      `<= serverBase` and the reject stands — no new→old→new flash;
+   *    - a capped echo carrying a merge we lack is a version we have NEVER
+   *      seen, so it is `> serverBase` and it lands.
+   *
+   *  `serverBase` tracks every OBSERVED sync stamp, accepted or rejected —
+   *  what the server's line is at, not what we chose to display. Tracking
+   *  only accepted ones would leave it unset on exactly the devices that
+   *  reject everything, which are the devices this exists for.
+   *
+   *  Undefined `serverBase` (no sync row ever seen for this id) does NOT
+   *  escape: a locally-created row's first echo must not be able to clobber
+   *  an edit made between create and echo.
+   *
+   *  Residual, narrower than what it fixes: a foreign row we have never seen,
+   *  stamped BELOW our local stamp, delivered inside our own ack→echo window,
+   *  escapes and shows a transient flash the echo then resolves. That needs
+   *  our clock ahead of the writing device's but under the cap. Traded
+   *  deliberately against the permanent staleness above.
+   *
+   *  The `source` argument routes call/reject counts into separate metric
+   *  buckets, and gates the escape: `hydrate` re-reads SQL and can legitimately
+   *  return a row older than an in-flight local write, so it stays pure LWW. */
   applyIfNewer(snapshot: BlockData, source: ApplyIfNewerSource): boolean {
     if (source === 'sync') this.metrics.applyIfNewerSyncCalls++
     else this.metrics.applyIfNewerHydrateCalls++
     const existing = this.snapshots.get(snapshot.id)
+    const priorServerBase = this.serverBase.get(snapshot.id)
+    if (source === 'sync') {
+      this.serverBase.set(
+        snapshot.id,
+        Math.max(priorServerBase ?? Number.NEGATIVE_INFINITY, snapshot.updatedAt),
+      )
+    }
     if (existing && snapshot.updatedAt <= existing.updatedAt) {
       if (source === 'sync') this.metrics.applyIfNewerSyncRejected++
       else this.metrics.applyIfNewerHydrateRejected++
+      if (
+        source === 'sync'
+        && priorServerBase !== undefined
+        && snapshot.updatedAt > priorServerBase
+      ) {
+        this.metrics.applyIfNewerServerLineEscapes++
+        return this.setSnapshot(snapshot)
+      }
       return false
     }
     return this.setSnapshot(snapshot)
   }
 
   deleteSnapshot(id: string): boolean {
+    this.serverBase.delete(id)
     if (!this.snapshots.delete(id)) return false
 
     this.notify(id)
