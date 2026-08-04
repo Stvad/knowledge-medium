@@ -201,8 +201,11 @@ const modelApplyIfNewer = (
   else metrics.applyIfNewerHydrateCalls++
   const existing = model.snapshots.get(id)
   const priorObserved = model.observedVersion.get(id)
-  // Recorded from BOTH sources — hydration establishes the line too.
-  model.observedVersion.set(id, Math.max(priorObserved ?? Number.NEGATIVE_INFINITY, updatedAt))
+  // Sync always records; a disk re-read records only for a COLD entry, so our
+  // own unechoed write can't round-trip through disk into the line.
+  if (source === 'sync' || existing === undefined) {
+    model.observedVersion.set(id, Math.max(priorObserved ?? Number.NEGATIVE_INFINITY, updatedAt))
+  }
   if (existing && updatedAt <= existing.updatedAt) {
     if (source === 'sync') metrics.applyIfNewerSyncRejected++
     else metrics.applyIfNewerHydrateRejected++
