@@ -5,7 +5,7 @@
  * Multiple ClientContext instances in one test stand in for multiple TABS
  * (each tab constructs its own instance over the same localStorage).
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ClientContext } from '@/data/clientContext'
 
 const tab = (name: string) => new ClientContext({user: {id: 'user-1', name}})
@@ -67,6 +67,30 @@ describe('ClientContext layout-context claims (persistence)', () => {
     tabA.claimLayoutContextKey('ws-1', 'persp')
     tabB.claimLayoutContextKey('ws-1', 'persp')
     expect(tabB.hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(true)
+  })
+
+  it('a failed persist flips the instance to in-memory-authoritative (no silent claim loss)', () => {
+    // Quota/private-mode: the write is swallowed, so storage is BEHIND the
+    // in-memory map. A later mutation must not re-read storage and adopt
+    // it — that would silently drop the unpersisted claim.
+    const tabA = tab('a')
+    // happy-dom's localStorage is a Proxy that swallows property sets, so
+    // stub the GLOBAL with a quota-throwing wrapper instead.
+    const real = localStorage
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => real.getItem(key),
+      setItem: () => { throw new Error('quota') },
+      removeItem: (key: string) => real.removeItem(key),
+    })
+    try {
+      tabA.claimLayoutContextKey('ws-1', 'persp') // persist fails, degrades
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(tabA.hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(true)
+    tabA.claimLayoutContextKey('ws-1', 'other') // must NOT re-read stale storage
+    expect(tabA.hasClaimedLayoutContextKey('ws-1', 'persp')).toBe(true)
+    expect(tabA.hasClaimedLayoutContextKey('ws-1', 'other')).toBe(true)
   })
 
   it('a NO-OP release still absorbs the persisted state', () => {

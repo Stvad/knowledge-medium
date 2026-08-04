@@ -73,6 +73,13 @@ interface PanelHistoryState {
 
 const EMPTY: PanelHistoryState = {back: [], forward: []}
 
+/** Opaque stage-time refs for the staged URL-navigation protocol —
+ *  see stageUrlNavigation / commitUrlNavigation. */
+export interface UrlNavigationStage {
+  state: PanelHistoryState
+  pending: VisitState | undefined
+}
+
 /** Carry the enter marker from the entry being consumed onto the entry
  *  reconstructed on the opposite stack (the `viewModeEnter` invariant). */
 const withCarriedEnterMark = (entry: HistoryEntry, consumed: HistoryEntry): HistoryEntry =>
@@ -191,23 +198,38 @@ export class PanelHistoryStore {
     return null
   }
 
+  /** Stage-time ref capture for {@link commitUrlNavigation}'s CASes —
+   *  taken alongside peekUrlNavigation, inside the tx, before anything can
+   *  interleave. */
+  stageUrlNavigation(panelId: string): UrlNavigationStage {
+    return {
+      state: this.getSnapshot(panelId),
+      pending: this.pendingRestore.get(panelId),
+    }
+  }
+
   /** Commit half of the staged protocol: run the real reconcile +
-   *  pending-restore write, but ONLY if the panel's state is still the
-   *  `stagedAt` ref captured at peek time (state objects are immutable and
-   *  replaced wholesale on every mutation, so the ref doubles as a version
-   *  stamp). A concurrent navigation that landed while the tx was
-   *  suspended replaced the ref — it WINS: running the reconcile anyway
-   *  would hit its no-match wipe branch and delete the concurrent entry,
-   *  and the stale restore would replay another epoch's scroll/focus. */
+   *  pending-restore write, but ONLY where the store still holds the refs
+   *  captured by {@link stageUrlNavigation} (state objects are immutable
+   *  and replaced wholesale on every mutation, so refs double as version
+   *  stamps). A concurrent writer that landed while the tx was suspended
+   *  WINS per slot: a navigation that replaced the state ref keeps its
+   *  stacks (running the reconcile anyway would hit its no-match wipe
+   *  branch and delete the concurrent entry), and a recovery that queued a
+   *  pending restore keeps it (the stale clear/replace would strip its
+   *  landing's focus/scroll — reachable because recovery can enqueue
+   *  without touching the stacks). */
   commitUrlNavigation(
     panelId: string,
     currentEntry: HistoryEntry | null,
     targetBlockId: string,
-    stagedAt: PanelHistoryState,
+    stagedAt: UrlNavigationStage,
   ): void {
-    if (this.getSnapshot(panelId) !== stagedAt) return
+    if (this.getSnapshot(panelId) !== stagedAt.state) return
     const committed = currentEntry ? this.reconcileUrlNavigation(panelId, currentEntry, targetBlockId) : null
-    this.enqueueRestore(panelId, committed?.state)
+    if (this.pendingRestore.get(panelId) === stagedAt.pending) {
+      this.enqueueRestore(panelId, committed?.state)
+    }
   }
 
   reconcileUrlNavigation(

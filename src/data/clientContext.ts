@@ -137,8 +137,8 @@ const readPersistedLayoutContextClaims = (): Map<string, Set<string>> => {
     return claims
   }
 }
-const writePersistedLayoutContextClaims = (claims: ReadonlyMap<string, ReadonlySet<string>>): void => {
-  if (typeof localStorage === 'undefined') return
+const writePersistedLayoutContextClaims = (claims: ReadonlyMap<string, ReadonlySet<string>>): boolean => {
+  if (typeof localStorage === 'undefined') return false
   try {
     const serialized = Object.fromEntries(
       [...claims.entries()]
@@ -146,8 +146,11 @@ const writePersistedLayoutContextClaims = (claims: ReadonlyMap<string, ReadonlyS
         .map(([scope, keys]) => [scope, [...keys].sort()]),
     )
     localStorage.setItem(LAYOUT_CONTEXT_CLAIMS_STORAGE_KEY, JSON.stringify(serialized))
+    return true
   } catch {
-    // Quota/private-mode failures degrade to in-memory claims.
+    // Quota/private-mode failures degrade to in-memory claims (the caller
+    // flips to in-memory-authoritative mode — see mutateLayoutContextClaims).
+    return false
   }
 }
 
@@ -179,13 +182,21 @@ export class ClientContext implements ClientContextReader {
    *  shrinks the lost-update window from "construction → write" to the
    *  microseconds between read and write — and claim/release are
    *  idempotent per (scope, key), so replays are harmless. */
+  /** Once a persist FAILED (quota/private mode), storage is behind the
+   *  in-memory map — a later re-read would adopt the stale persisted state
+   *  and silently drop the unpersisted claim. From then on this instance
+   *  is in-memory-authoritative (exactly the no-localStorage path); writes
+   *  are still attempted so storage heals if the quota frees up. */
+  private _claimsPersistenceDegraded = false
+
   private mutateLayoutContextClaims(mutate: (claims: Map<string, Set<string>>) => boolean): void {
-    const fresh = typeof localStorage === 'undefined'
-      ? this._claimedLayoutContextKeys
-      : readPersistedLayoutContextClaims()
+    const canReadPersisted = typeof localStorage !== 'undefined' && !this._claimsPersistenceDegraded
+    const fresh = canReadPersisted ? readPersistedLayoutContextClaims() : this._claimedLayoutContextKeys
     const changed = mutate(fresh)
     this._claimedLayoutContextKeys = fresh
-    if (changed) writePersistedLayoutContextClaims(fresh)
+    if (changed && typeof localStorage !== 'undefined' && !writePersistedLayoutContextClaims(fresh)) {
+      this._claimsPersistenceDegraded = true
+    }
   }
 
   /** Fires on EFFECTIVE changes to `activeWorkspaceId` / `activeLayoutSessionId`

@@ -858,7 +858,7 @@ export const reconcilePanelRows = async (
           // The snapshot of the pane being left is taken NOW (tx time) —
           // commit-time state would snapshot a pane that already moved on.
           const restored = slot.blockId ? panelHistory.peekUrlNavigation(slot.row.id, blockId) : null
-          const stagedAt = panelHistory.getSnapshot(slot.row.id)
+          const stagedAt = panelHistory.stageUrlNavigation(slot.row.id)
           const currentEntry = slot.blockId
             ? {blockId: slot.blockId, state: panelHistory.snapshot(slot.row.id)}
             : null
@@ -939,7 +939,7 @@ export const retargetPanelBlockIds = async (
 
     for (const row of panelRows) {
       const restored = panelHistory.peekUrlNavigation(row.id, toId)
-      const stagedAt = panelHistory.getSnapshot(row.id)
+      const stagedAt = panelHistory.stageUrlNavigation(row.id)
       const currentEntry = {blockId: fromId, state: panelHistory.snapshot(row.id)}
       stagedHistoryEffects.push(() =>
         panelHistory.commitUrlNavigation(row.id, currentEntry, toId, stagedAt))
@@ -1181,9 +1181,12 @@ export class PanelLayoutProjection {
    *  happen-before the successor session's hash is installed. The
    *  cancellation guards all key off `disposed` — a host that installs the
    *  new hash FIRST leaves this projection live to receive it (via
-   *  hashchange or a queued apply), reconcile its OWN rows toward the other
-   *  session's layout, and canonicalize over the fresh hash. Nothing in
-   *  here can defend against that ordering; only the host can. */
+   *  hashchange or a queued apply). With a router registered the
+   *  addressing seam (isRouteAddressee) now catches that mis-delivery in
+   *  BOTH directions — the inbound apply defers, the outbound write
+   *  skips — so the contract is defense-in-depth rather than the only
+   *  line; it remains load-bearing for context-free hashes when no
+   *  router is up. */
   dispose(): void {
     this.disposed = true
     this.unsubscribeRows?.()
@@ -1331,8 +1334,11 @@ export class PanelLayoutProjection {
     // popstate-installed lane entry reaching a still-live base projection
     // in the window before the host reacts — writing our rows over it
     // would smuggle THIS session's layout under the other addressee's
-    // attribution. Skip the write entirely; re-activation re-normalizes
-    // rows into the hash through the inbound path.
+    // attribution. Skip the write entirely. The swallowed divergence is
+    // NOT retried outbound: on re-activation the inbound apply makes the
+    // URL win (rows changed during the foreign-hash window revert), which
+    // is session-switch semantics — the alternative was a mis-attributed
+    // push.
     if (sameWorkspace
       && !isRouteAddressee(this.repo, this.workspaceId, current.wsContext, this.layoutSessionBlock.id)) return
     if (sameWorkspace && sameLayoutSlots(current.slots, slots)) return

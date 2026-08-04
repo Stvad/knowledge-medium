@@ -454,6 +454,73 @@ describe('applyCurrentLayoutUrl', () => {
     env.repo.setLayoutSessionRouter(null)
   })
 
+  it('outbound: a still-live BASE projection under a lane hash never writes the URL', async () => {
+    // The scenario the guard exists for: a popstate-installed lane entry
+    // reaching the base projection before the host reacts. Distinct from
+    // the non-base flavor above — a guard that ignored the hash's
+    // ws-context would still pass that one (unclaimed+router+non-base
+    // branch) while base would write here.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({resolveSessionKey: () => 'lane'})
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: WS, parentId: base.id, orderKey: 'a0', blockId: 'a',
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed base row'})
+    const pushes: string[] = []
+    const replaces: string[] = []
+    const projection = new PanelLayoutProjection({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      getHash: () => '#ws-1;persp=lane/x',
+      pushHash: hash => pushes.push(hash),
+      replaceHash: hash => replaces.push(hash),
+      subscribeToUrl: () => () => {},
+    })
+    await projection.start()
+
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: WS, parentId: base.id, orderKey: 'a1', blockId: 'b',
+      })
+    }, {scope: ChangeScope.UiState, description: 'diverge base rows'})
+    deliverRowsEvent(projection, await env.repo.query.subtree({id: base.id}).load())
+
+    expect(pushes).toEqual([]) // without the context check: pushHash('#ws-1;persp=lane/a/b')
+    expect(replaces).toEqual([])
+    projection.dispose()
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('a pending restore queued mid-tx (stacks untouched) survives the staged commit', async () => {
+    // recoverPanelOffDeadContent can enqueue a restore WITHOUT mutating the
+    // stacks; the staged commit's pending-restore write is CAS'd on its own
+    // ref so that racing restore is kept, not cleared/replaced.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    const racingRestore = {scrollTop: 42}
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.enqueueRestore(rowId, racingRestore)
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(panelHistory.consumeRestore(rowId)).toBe(racingRestore)
+  })
+
   it('a THROWING router defers the route instead of failing the apply', async () => {
     // resolveSessionKey is third-party extension code on core's boot path —
     // a throw must not fail bootstrap or reject the projection's queue.
