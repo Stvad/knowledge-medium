@@ -38,8 +38,16 @@ Recovery if the connection is already clobbered: re-run a full deploy with `PS_D
 `deploy` can exit with **"Deployment did not complete within 300 seconds. Check instance status and try again."** even when the deployment *succeeded* — that's the CLI's wait-for-go-live timing out, not a rejection (validations already passed at that point). **Verify the real state instead of blindly retrying:**
 
 ```bash
-npx powersync@latest fetch config   # prints the LIVE deployed config — grep for your change
+npx powersync@latest fetch config | grep -n "<your_change>"   # LIVE deployed config
 ```
+
+⚠️ **`fetch config` prints the connection URI with the PASSWORD in it.** It returns the whole live
+config, and `replication.connections[].uri` comes back **resolved** — the real
+`postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres`, not the `!env PS_DATABASE_URI`
+placeholder `service.yaml` holds locally. **Never tee it to a file, diff it whole, or dump it
+unfiltered** — grep at the pipe for the specific change you're verifying. To compare sync rules,
+read the local (generated, checked-in) `powersync/sync-config.yaml` instead, or slice the fetched
+output from `streams:` onward.
 
 If the deployed sync rules already reflect your change, you're done. If not, retry with a longer wait: `npx powersync@latest deploy sync-config --deploy-timeout=600`.
 - **`powersync/sync-config.yaml` is GENERATED** by `pnpm gen:sync-config` from the TS column lists (`src/data/blockSchema.ts` / `workspaceSchema.ts`). **Never hand-edit it** — `pnpm run check` runs `check:sync-config` and fails on hand-edits.
