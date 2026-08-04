@@ -290,6 +290,28 @@ export const isValidDateAlias = (alias: string): boolean => {
   return new Date(ms).toISOString().slice(0, 10) === alias
 }
 
+/** "Which daily note is this?" from a block's alias list — the ISO alias
+ *  `getOrCreateDailyNote` writes via `dailyPageAliases`, or `null` for a block
+ *  that isn't a daily note. The one definition of that read, shared by the
+ *  prev/next keyboard actions (which peek it off a Block) and the title
+ *  date-nav arrows (which get it from a reactive `aliases` hook).
+ *
+ *  `isValidDateAlias`, NOT `isDateAlias`: a date-SHAPED alias that isn't a
+ *  calendar day (`2026-02-30`) belongs to an ordinary alias-target page — the
+ *  references processor routes it to `ensureAliasTarget` precisely because
+ *  `parseLiteralDailyPageTitle` rejects it. Treating such an alias as the
+ *  block's date hands a normal page the daily-note affordances, and
+ *  `addDaysIso` then reads it as March 2nd — so "previous day" lands on
+ *  2026-03-01, forward by a month. Callers fall back to today instead, the
+ *  same as on any other non-daily page.
+ *
+ *  Deliberately NOT a `DAILY_NOTE_TYPE` check: the ISO alias is the marker
+ *  every daily-note writer sets, and gating on the type instead would couple
+ *  these read paths to type-tagging having reached every historical row. */
+export const dailyNoteIsoFromAliases = (
+  aliases: readonly string[],
+): string | null => aliases.find(isValidDateAlias) ?? null
+
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at
  *  workspace-root when nobody has authored a real daily-note row for
