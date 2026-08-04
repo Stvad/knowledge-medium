@@ -182,11 +182,15 @@ export class ClientContext implements ClientContextReader {
    *  shrinks the lost-update window from "construction → write" to the
    *  microseconds between read and write — and claim/release are
    *  idempotent per (scope, key), so replays are harmless. */
-  /** Once a persist FAILED (quota/private mode), storage is behind the
-   *  in-memory map — a later re-read would adopt the stale persisted state
-   *  and silently drop the unpersisted claim. From then on this instance
-   *  is in-memory-authoritative (exactly the no-localStorage path); writes
-   *  are still attempted so storage heals if the quota frees up. */
+  /** While a persist has FAILED (quota/private mode), storage is behind
+   *  the in-memory map — a re-read would adopt the stale persisted state
+   *  and silently drop the unpersisted claim, so reads are suspended and
+   *  this instance is in-memory-authoritative. Writes are still attempted,
+   *  and a SUCCESSFUL write clears the flag: at that instant storage
+   *  equals the in-memory map, so merge-reads are safe again. (That
+   *  healing write is a whole-map publish — claims peers persisted during
+   *  the degraded window are overwritten by it, once; never resetting
+   *  would instead make EVERY later write a clobber.) */
   private _claimsPersistenceDegraded = false
 
   private mutateLayoutContextClaims(mutate: (claims: Map<string, Set<string>>) => boolean): void {
@@ -194,8 +198,8 @@ export class ClientContext implements ClientContextReader {
     const fresh = canReadPersisted ? readPersistedLayoutContextClaims() : this._claimedLayoutContextKeys
     const changed = mutate(fresh)
     this._claimedLayoutContextKeys = fresh
-    if (changed && typeof localStorage !== 'undefined' && !writePersistedLayoutContextClaims(fresh)) {
-      this._claimsPersistenceDegraded = true
+    if (changed && typeof localStorage !== 'undefined') {
+      this._claimsPersistenceDegraded = !writePersistedLayoutContextClaims(fresh)
     }
   }
 

@@ -93,6 +93,30 @@ describe('ClientContext layout-context claims (persistence)', () => {
     expect(tabA.hasClaimedLayoutContextKey('ws-1', 'other')).toBe(true)
   })
 
+  it('a SUCCESSFUL write after degradation resumes merge-reads (one transient failure is not permanent)', () => {
+    // Without the reset, one transient quota failure turns the tab into a
+    // permanent whole-map last-writer — every later successful write
+    // republishes its never-merged map, deleting peers' claims forever.
+    const tabA = tab('a')
+    const real = localStorage
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => real.getItem(key),
+      setItem: () => { throw new Error('quota') },
+      removeItem: (key: string) => real.removeItem(key),
+    })
+    try {
+      tabA.claimLayoutContextKey('ws-1', 'persp') // fails → degraded
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    tabA.claimLayoutContextKey('ws-1', 'other') // succeeds → heals, resets
+
+    // Merge-reads resumed: another tab's later claim is absorbed again.
+    tab('b').claimLayoutContextKey('ws-2', 'persp')
+    tabA.claimLayoutContextKey('ws-1', 'third')
+    expect(tabA.hasClaimedLayoutContextKey('ws-2', 'persp')).toBe(true)
+  })
+
   it('a NO-OP release still absorbs the persisted state', () => {
     const tabA = tab('a')
     tabA.claimLayoutContextKey('ws-1', 'persp')

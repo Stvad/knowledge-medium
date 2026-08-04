@@ -521,6 +521,34 @@ describe('applyCurrentLayoutUrl', () => {
     expect(panelHistory.consumeRestore(rowId)).toBe(racingRestore)
   })
 
+  it('a benign mid-tx DRAIN of the pending restore does not strand the committed entry\'s restore', async () => {
+    // consumeRestore (the renderer's post-navigation effect) empties the
+    // pending slot without touching the stacks. That is not a competing
+    // writer — the commit must still queue the reconciled entry's restore.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    const restoredState = {scrollTop: 7}
+    panelHistory.push(rowId, {blockId: 'b', state: restoredState}) // peek target
+    panelHistory.enqueueRestore(rowId, {scrollTop: 1}) // stale, undrained at stage time
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.consumeRestore(rowId) // renderer drains mid-tx
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(panelHistory.consumeRestore(rowId)).toBe(restoredState)
+  })
+
   it('a THROWING router defers the route instead of failing the apply', async () => {
     // resolveSessionKey is third-party extension code on core's boot path —
     // a throw must not fail bootstrap or reject the projection's queue.

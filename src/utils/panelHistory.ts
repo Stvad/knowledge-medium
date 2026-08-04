@@ -227,7 +227,12 @@ export class PanelHistoryStore {
   ): void {
     if (this.getSnapshot(panelId) !== stagedAt.state) return
     const committed = currentEntry ? this.reconcileUrlNavigation(panelId, currentEntry, targetBlockId) : null
-    if (this.pendingRestore.get(panelId) === stagedAt.pending) {
+    // Only a PRESENT, different pending value marks a live competing
+    // writer (e.g. a recovery's queued restore) — an empty slot can't be
+    // clobbered, and a benign mid-tx drain (consumeRestore) must not
+    // strand the committed entry's restore.
+    const pendingNow = this.pendingRestore.get(panelId)
+    if (pendingNow === stagedAt.pending || pendingNow === undefined) {
       this.enqueueRestore(panelId, committed?.state)
     }
   }
