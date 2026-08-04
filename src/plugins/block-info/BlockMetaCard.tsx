@@ -13,7 +13,7 @@ import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import { useMinuteClock } from '@/hooks/useMinuteClock.js'
 import { useUserPage } from '@/data/globalState.js'
-import { buildAppHashInContext } from '@/utils/routing.js'
+import { useAppHashInContext } from '@/context/layoutWsContext.js'
 import { useOpenBlock } from '@/utils/navigation.js'
 import { formatAbsoluteDateTime, formatRelativeTime } from '@/utils/relativeTime.js'
 
@@ -49,12 +49,13 @@ const Author = ({userId, workspaceId}: {userId: string; workspaceId: string}): R
   // Hook must run unconditionally; the handler is only wired when there's a
   // user page to open.
   const openUser = useOpenBlock({blockId: blockId ?? '', workspaceId})
+  const href = useAppHashInContext(workspaceId, blockId)
   return (
     <span>
       by{' '}
       {blockId ? (
         <a
-          href={buildAppHashInContext(workspaceId, blockId)}
+          href={href}
           className="hover:underline"
           onClick={openUser}
         >

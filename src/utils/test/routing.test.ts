@@ -9,6 +9,7 @@ import {
   parseLayout,
   preserveHashQueryParams,
 } from '@/utils/routing'
+import { appHashForSession } from '@/context/layoutWsContext'
 
 describe('parseLayout', () => {
   it('returns an empty block list when hash is empty/undefined/null', () => {
@@ -410,6 +411,21 @@ describe('ws-token context (`#ws;persp=x/...`)', () => {
     it('carries every opaque ws entry, not just persp', () => {
       expect(buildAppHashInContext('ws', 'b1', '#ws;persp=x;zed/a'))
         .toBe('#ws;persp=x;zed/b1')
+    })
+
+    it('appHashForSession threads the RENDERING session context, not the global hash', () => {
+      // A provided session wins (warm-hidden trees re-render while another
+      // lane owns the global hash — see layoutWsContext).
+      expect(appHashForSession({workspaceId: 'ws-1', wsContext: ['persp=lane']}, 'ws-1', 'b1'))
+        .toBe('#ws-1;persp=lane/b1')
+      // Base-session provider (empty context) → deliberately context-free.
+      expect(appHashForSession({workspaceId: 'ws-1', wsContext: []}, 'ws-1', 'b1'))
+        .toBe('#ws-1/b1')
+      // Cross-workspace target still drops the lane.
+      expect(appHashForSession({workspaceId: 'ws-1', wsContext: ['persp=lane']}, 'ws-2', 'b1'))
+        .toBe('#ws-2/b1')
+      // No provider → the global-hash fallback (context-free here in node).
+      expect(appHashForSession(null, 'ws-1', 'b1')).toBe('#ws-1/b1')
     })
   })
 

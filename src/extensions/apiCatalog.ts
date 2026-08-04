@@ -207,10 +207,10 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/stateBlocks.js',
-    description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session).',
+    description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session). layoutSessionBlockIdForKey / layoutSessionsContainerBlockId are the canonical session-key → block-id derivations for out-of-core session hosts — never re-derive the uuid chain.',
     exports: [
       'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUserBlock',
-      'getUserPrefsBlock',
+      'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
     ],
     types: [],
   },

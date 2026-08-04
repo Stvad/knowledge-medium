@@ -1,7 +1,7 @@
 import { Settings2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { useOpenBlock } from '@/utils/navigation.js'
-import { buildAppHashInContext } from '@/utils/routing.js'
+import { useAppHashInContext } from '@/context/layoutWsContext.js'
 import { METADATA_ROW_GRID_STYLE, PROPERTY_ROW_GRID_STYLE } from './layout'
 import type { PropertyPanelMetadataRow, PropertyPanelModelSection } from './model'
 
@@ -32,6 +32,7 @@ export function MetadataRow({row}: {row: PropertyPanelMetadataRow}) {
   // Hooks must be unconditional; the opener is only wired up for rows
   // that actually carry a link target (currently just "Changed by").
   const openBlock = useOpenBlock({blockId: blockId ?? '', workspaceId})
+  const href = useAppHashInContext(workspaceId ?? '', blockId)
   const showLink = Boolean(row.linkTo)
 
   return (
@@ -43,7 +44,7 @@ export function MetadataRow({row}: {row: PropertyPanelMetadataRow}) {
       <div className="truncate text-muted-foreground" title={row.label}>{row.label}</div>
       {showLink ? (
         <a
-          href={buildAppHashInContext(workspaceId!, blockId!)}
+          href={href}
           onClick={openBlock}
           title={row.value}
           className="inline-flex h-7 min-w-0 items-center rounded-sm px-2 text-sm text-foreground no-underline hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

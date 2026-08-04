@@ -125,9 +125,28 @@ export class ClientContext implements ClientContextReader {
   /** Ws-context keys session consumers have claimed on THIS device, keyed
    *  by `"<userId>/<workspaceId>"` scope — seeded from the persisted map so
    *  bootstrap (which runs before async user extensions load) sees claims
-   *  made on earlier boots. The whole map stays in memory (other scopes'
-   *  entries ride along untouched through writes). */
-  private readonly _claimedLayoutContextKeys = readPersistedLayoutContextClaims()
+   *  made on earlier boots. NOT the write source of truth: every write
+   *  re-reads the persisted map and applies the delta to THAT (see
+   *  mutateLayoutContextClaims) — two tabs each writing their
+   *  construction-time snapshot back wholesale would drop each other's
+   *  claims. This field is refreshed from the merged result. */
+  private _claimedLayoutContextKeys = readPersistedLayoutContextClaims()
+
+  /** Merge-on-write for the claim registry: re-read persisted state, apply
+   *  the delta to the FRESH map, persist, and adopt the merged map as the
+   *  new in-memory view (also absorbing other tabs' claims). localStorage
+   *  has no transactions, but this shrinks the lost-update window from
+   *  "construction → write" to the microseconds between read and write —
+   *  and claim/release are idempotent per (scope, key), so replays are
+   *  harmless. */
+  private mutateLayoutContextClaims(mutate: (claims: Map<string, Set<string>>) => boolean): void {
+    const fresh = typeof localStorage === 'undefined'
+      ? this._claimedLayoutContextKeys
+      : readPersistedLayoutContextClaims()
+    if (!mutate(fresh)) return
+    writePersistedLayoutContextClaims(fresh)
+    this._claimedLayoutContextKeys = fresh
+  }
 
   /** Fires on EFFECTIVE changes to `activeWorkspaceId` / `activeLayoutSessionId`
    *  — see {@link onActingAsChange}. Notified from THIS class's own set
@@ -206,21 +225,22 @@ export class ClientContext implements ClientContextReader {
    *  claim keeps deferring routes nothing will pick up. */
   claimLayoutContextKey(workspaceId: string, key: string): void {
     const scope = layoutContextClaimScope(this.user.id, workspaceId)
-    let keys = this._claimedLayoutContextKeys.get(scope)
-    if (keys?.has(key)) return
-    if (!keys) {
-      keys = new Set()
-      this._claimedLayoutContextKeys.set(scope, keys)
-    }
-    keys.add(key)
-    writePersistedLayoutContextClaims(this._claimedLayoutContextKeys)
+    this.mutateLayoutContextClaims(claims => {
+      let keys = claims.get(scope)
+      if (keys?.has(key)) return false
+      if (!keys) {
+        keys = new Set()
+        claims.set(scope, keys)
+      }
+      keys.add(key)
+      return true
+    })
   }
 
   /** Undo {@link claimLayoutContextKey} for this user in `workspaceId`. */
   releaseLayoutContextKey(workspaceId: string, key: string): void {
     const scope = layoutContextClaimScope(this.user.id, workspaceId)
-    if (!this._claimedLayoutContextKeys.get(scope)?.delete(key)) return
-    writePersistedLayoutContextClaims(this._claimedLayoutContextKeys)
+    this.mutateLayoutContextClaims(claims => claims.get(scope)?.delete(key) ?? false)
   }
 
   /** The per-device BASE layout-session id — what `activeLayoutSessionId`

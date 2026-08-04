@@ -25,7 +25,7 @@ import {
   useInEditMode,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
-import { buildAppHashInContext } from '@/utils/routing.js'
+import { useAppHashInContext } from '@/context/layoutWsContext.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
@@ -147,13 +147,14 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   // the non-null assertion is the contract — not a defensive fallback.
   const workspaceId = repo.activeWorkspaceId!
   const onClick = useOpenBlock({blockId: block.id, workspaceId})
+  const bulletHref = useAppHashInContext(workspaceId, block.id)
 
   return (
     <>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <a
-            href={buildAppHashInContext(workspaceId, block.id)}
+            href={bulletHref}
             className="bullet-link flex items-center justify-center h-6 w-5"
             onClick={(event) => {
               hover.close()

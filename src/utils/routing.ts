@@ -396,12 +396,17 @@ export const buildAppHash = (workspaceId: string, blockId?: string): string =>
  * `setHash` sites also keep it — they all fire cross-workspace-only, where
  * this variant would drop the context anyway.
  *
- * `currentHash` is read at call (render) time. Anchors INSIDE a layout
- * session re-render under their session's own hash (and a warm-hidden
- * session's anchors correctly keep ITS lane), but a chrome-level anchor
- * outside the sessions (e.g. the account header) does not re-render on a
- * lane switch — pushState fires no hashchange — so such anchors must
- * refresh their href at interaction time (see AccountHeaderItem).
+ * `currentHash` is read at call (render) time, which is only correct while
+ * a SINGLE session's tree renders: a warm-hidden session re-rendering while
+ * another lane is active (shared repo data reaches mounted-but-hidden
+ * trees) would stamp the ACTIVE lane onto its anchors. Anchor components
+ * therefore use `useAppHashInContext` / `appHashForSession`
+ * (src/context/layoutWsContext.tsx), which a session host overrides per
+ * warm subtree and which falls back to this function's global-hash read
+ * when no provider is mounted. Chrome-level anchors outside any session
+ * (the account header) refresh at interaction time instead — pushState
+ * fires no hashchange, so their render-time read goes stale either way
+ * (see AccountHeaderItem).
  *
  * Known trade-off for the out-of-core session host: a lane-carrying href
  * opened in a NEW tab deep-links into that lane's session — and since a

@@ -17,14 +17,14 @@
  *     `aria-level` carries the nesting for assistive tech and tests.
  */
 
-import {Fragment, useMemo} from 'react'
+import {Fragment, useContext, useMemo} from 'react'
 import {Button} from '@/components/ui/button.js'
 import {Checkbox} from '@/components/ui/checkbox.js'
 import {Label} from '@/components/ui/label.js'
 import {useExtensionApprovalStatus} from '@/extensions/extensionApprovalStatus.js'
 import type {ToggleNode} from '@/facets/discoverToggleTree.js'
 import {isEnabled, type Overrides, type Togglable} from '@/facets/togglable.js'
-import {buildAppHashInContext} from '@/utils/routing.js'
+import {appHashForSession, LayoutWsContext} from '@/context/layoutWsContext.js'
 
 /** Stable-sort the tree so essentials surface first within each level,
  *  then alphabetical (case-insensitive, locale-aware) within each
@@ -155,10 +155,11 @@ const ToggleRow = ({node, overrides, onToggle, onApprove, workspaceId, level}: T
   // the hook returns undefined for system rows (and when no provider is
   // mounted, e.g. presentational tests).
   const approvalStatus = useExtensionApprovalStatus(handle.id)
+  const wsSession = useContext(LayoutWsContext)
   const checkboxId = `system-plugin-toggle-${handle.id}`
   const labelId = `${checkboxId}-label`
   const definitionHref = handle.kind === 'user' && workspaceId
-    ? buildAppHashInContext(workspaceId, handle.id)
+    ? appHashForSession(wsSession, workspaceId, handle.id)
     : undefined
   // Pad inward per level; level 1 stays flush so the outer row aligns
   // with the parent container.
