@@ -197,6 +197,50 @@ describe('PowerSync upload compaction', () => {
     ])
   })
 
+  it('keeps the EARLIEST base_updated_at when coalescing a burst of patches (#381)', () => {
+    // Every other column is last-write-wins — the newest value is what ships.
+    // The base is the opposite: it describes the server state the burst started
+    // from, and only the first patch knows that. Each later patch was stamped
+    // against the previous LOCAL version, which the server has never seen, so
+    // taking the last one could make a genuinely drifted burst look clean and
+    // silently reintroduce the equal-stamp skip this key exists to prevent.
+    const operations = __compactBlockCrudEntriesForTest([
+      patch(1, 'block-a', {content: 'v1', updated_at: 101, base_updated_at: 100}, 1),
+      patch(2, 'block-a', {content: 'v2', updated_at: 102, base_updated_at: 101}, 2),
+      patch(3, 'block-a', {content: 'v3', updated_at: 103, base_updated_at: 102}, 3),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {content: 'v3', updated_at: 103, base_updated_at: 100},
+      },
+    ])
+  })
+
+  it('drops base_updated_at when a same-tx PATCH fuses into its CREATE', () => {
+    // Creates go to apply_block_creates, which has no drift concept: an INSERT
+    // has no prior version and the ON CONFLICT branch is a deliberate no-op
+    // TOUCH that must not advance the stamp (#244). The key would be ignored by
+    // that RPC's closed column list anyway — stripping keeps the create payload
+    // to real columns.
+    const operations = __compactBlockCrudEntriesForTest([
+      put(1, 'block-a', {workspace_id: 'ws', content: 'A', updated_at: 1}, 1),
+      patch(2, 'block-a', {content: 'A2', updated_at: 2, base_updated_at: 1}, 1),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'create',
+        id: 'block-a',
+        order: 0,
+        payload: {id: 'block-a', workspace_id: 'ws', content: 'A2', updated_at: 2},
+      },
+    ])
+  })
+
   it('lets a final delete supersede earlier writes for the same block', () => {
     const operations = __compactBlockCrudEntriesForTest([
       put(1, 'block-a', {content: 'A'}),

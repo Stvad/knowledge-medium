@@ -28,15 +28,26 @@
  *    (creates always precede patches, cross-device ids arrive via
  *    delivery), so this fake throws and the fuzzer treats it as a bug.
  *
- *  - `blocks_clamp_updated_at` (20260612000000, L27-77 — the NET current
- *    behavior): on INSERT and UPDATE, future-clamp `updated_at` and
- *    `created_at` to server-now and set
- *    `user_updated_at := least(coalesce(user_updated_at, updated_at), now)`;
- *    on UPDATE only, floor `updated_at := greatest(new, old)` then bump
- *    `updated_at := greatest(new, old + 1)` iff a CONTENT column changed —
- *    content columns are exactly {parent_id, order_key, content,
- *    properties_json, references_json, deleted} (metadata columns
- *    deliberately never bump).
+ *  - `blocks_clamp_updated_at` (20260803000000 — the NET current behavior):
+ *    on INSERT and UPDATE, future-clamp `updated_at` and `created_at` to
+ *    server-now and set
+ *    `user_updated_at := least(coalesce(user_updated_at, updated_at), now)`.
+ *    On UPDATE, the patch's `base_updated_at` (issue #381) decides:
+ *      · DRIFTED (base absent, 0, or != old.updated_at) —
+ *        `updated_at := greatest(server_now, old, RAW proposed) + 1`, where
+ *        RAW is the pre-clamp client value, so the result strictly exceeds
+ *        the author's own local stamp and the echo cannot be equal-stamp
+ *        -skipped. Not content-gated: two devices writing the same value
+ *        merge to a row identical to OLD while the author still lacks
+ *        whatever else the other device changed.
+ *      · UN-DRIFTED — the pre-#381 path verbatim: floor
+ *        `updated_at := greatest(new, old)` then bump
+ *        `updated_at := greatest(new, old + 1)` iff a CONTENT column changed
+ *        (exactly {parent_id, order_key, content, properties_json,
+ *        references_json, deleted}; metadata columns deliberately never bump).
+ *    A non-patch UPDATE (the create-TOUCH below) takes the un-drifted path —
+ *    server-side that is the "GUC unset" state, which keeps the TOUCH
+ *    stamp-preserving (#244).
  *
  *  - `blocks_prevent_workspace_change` (consolidated initial, ~L187-200):
  *    an UPDATE changing `workspace_id` raises. The upload PATCH emits
@@ -146,9 +157,13 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
 
   /** The clamp trigger's BOTH-paths section (20260612000000 L38-46):
    *  future-clamp both stamps, then populate/clamp user_updated_at from
-   *  the ALREADY-CLAMPED updated_at. */
-  const clampCommon = (row: ServerBlockRow): void => {
-    const serverNow = opts.now()
+   *  the ALREADY-CLAMPED updated_at.
+   *
+   *  `serverNow` is passed in rather than read here because the trigger
+   *  computes `server_now_ms` ONCE per invocation and the drift branch below
+   *  needs the same value — and because `opts.now` is a counter in the fuzz
+   *  harness, so a second call would silently advance the server clock. */
+  const clampCommon = (row: ServerBlockRow, serverNow: number): void => {
     if (row.updated_at > serverNow) row.updated_at = serverNow
     if (row.created_at > serverNow) row.created_at = serverNow
     row.user_updated_at = Math.min(row.user_updated_at ?? row.updated_at, serverNow)
@@ -195,7 +210,7 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
           updated_by: payload.updated_by as string,
           deleted: asBool(payload.deleted ?? false),
         }
-        clampCommon(row) // INSERT path: future-clamp only — no floor, no bump.
+        clampCommon(row, opts.now()) // INSERT path: future-clamp only — no floor, no bump.
         rows.set(id, row)
         touch(id)
       }
@@ -248,13 +263,31 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
           next.deleted = asBool(payload.deleted)
         }
 
-        // UPDATE-path clamp: common future-clamps, then the monotonic
-        // floor, then the +1 content bump (20260612000000 L48-63).
-        clampCommon(next)
-        next.updated_at = Math.max(next.updated_at, old.updated_at)
-        const contentChanged = CONTENT_COLUMNS.some(col => next[col] !== old[col])
-        if (contentChanged) {
-          next.updated_at = Math.max(next.updated_at, old.updated_at + 1)
+        // UPDATE-path clamp (20260803000000, replacing 20260612000000 L48-63).
+        const serverNow = opts.now()
+        // The proposed stamp BEFORE the future-clamp — the drift bump must
+        // clear the AUTHOR'S local stamp, which is this raw value.
+        const rawProposed = next.updated_at
+        clampCommon(next, serverNow)
+
+        // Drift = "the server row moved under this edit". `base_updated_at` is
+        // the version the client edited against; absent (old client) or the
+        // 0 pristine sentinel carry no information, so both read as drifted.
+        // Deliberately NOT content-gated — see the migration header for why
+        // comparing the merged row to OLD answers the wrong question.
+        const base = payload.base_updated_at
+        const baseVersion = typeof base === 'number' ? base : null
+        const drifted = baseVersion === null || baseVersion === 0
+          || baseVersion !== old.updated_at
+
+        if (drifted) {
+          next.updated_at = Math.max(serverNow, old.updated_at, rawProposed) + 1
+        } else {
+          next.updated_at = Math.max(next.updated_at, old.updated_at)
+          const contentChanged = CONTENT_COLUMNS.some(col => next[col] !== old[col])
+          if (contentChanged) {
+            next.updated_at = Math.max(next.updated_at, old.updated_at + 1)
+          }
         }
 
         rows.set(id, next)
