@@ -208,12 +208,19 @@ export const extensionApiCatalog: ApiModuleGroup[] = [
   {
     category: 'data',
     importPath: '@/data/stateBlocks.js',
-    description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session).',
+    description: 'System state-block accessors (user, prefs, plugin prefs / UI-state, layout session). layoutSessionBlockIdForKey / layoutSessionsContainerBlockId are the canonical session-key → block-id derivations for out-of-core session hosts — never re-derive the uuid chain.',
     exports: [
       'getLayoutSessionBlock', 'getPluginPrefsBlock', 'getPluginUIStateBlock', 'getUserBlock',
-      'getUserPrefsBlock',
+      'getUserPrefsBlock', 'layoutSessionBlockIdForKey', 'layoutSessionsContainerBlockId',
     ],
     types: [],
+  },
+  {
+    category: 'ui',
+    importPath: '@/context/layoutWsContext.js',
+    description: 'Session-scoped link context. Session hosts MUST wrap each warm session subtree in a LayoutWsContext provider ({workspaceId, wsContext}), or hidden sessions\' anchors carry the active lane.',
+    exports: ['LayoutWsContext', 'useAppHashInContext', 'appHashForSession'],
+    types: ['LayoutWsContextValue'],
   },
   {
     category: 'data',

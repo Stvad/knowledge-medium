@@ -355,8 +355,11 @@ describe('describeRuntime', () => {
     expect(description.authoring.storage.patterns.length).toBeGreaterThan(0)
     expect(description.apiSurface.modules.length).toBeGreaterThan(0)
 
-    // Whole brief-mode response should be small — the whole point.
-    expect(JSON.stringify(description).length).toBeLessThan(40_000)
+    // Whole brief-mode response should be small — the whole point. The
+    // budget tracks apiSurface growth (brief mode keeps it): raised
+    // 40k → 41k when the layoutWsContext catalog entry landed with the
+    // headroom already consumed.
+    expect(JSON.stringify(description).length).toBeLessThan(41_000)
   })
 
   it('exposes the authoring primitives plugins reach for first', () => {

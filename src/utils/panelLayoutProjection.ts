@@ -28,9 +28,10 @@ import { CallbackSet } from '@/utils/callbackSet'
 import { panelRenderScopeId } from '@/utils/renderScope'
 import { deleteSubtreeInTx as deleteLayoutRowSubtreeInTx } from '@/data/subtreeDelete'
 import { visibleChildrenOf } from '@/data/visibleChildren'
+import { layoutSessionBlockIdForKey } from '@/data/stateBlocks'
 
 export interface ApplyLayoutResult {
-  kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
+  kind: 'applied' | 'cancelled' | 'deferred' | 'empty' | 'ignored' | 'noop' | 'normalized'
 }
 
 interface PanelSlot {
@@ -690,18 +691,41 @@ export const deletePanelRow = async (
   panelHistory.clear(panelId)
 }
 
+/** Thrown inside reconcilePanelRows' tx to ABORT it when the caller was
+ *  cancelled mid-transaction — the throw rolls every row write back (same
+ *  rollback contract as any in-tx throw; see the panelHistory note below).
+ *  applyCurrentLayoutUrl catches it and folds it into {kind: 'cancelled'}. */
+class ReconcileCancelled extends Error {
+  constructor() {
+    super('reconcilePanelRows: cancelled')
+  }
+}
+
 export const reconcilePanelRows = async (
   repo: Repo,
   layoutSessionBlock: Block,
   targetSlotsOrBlockIds: readonly (LayoutSlot | string)[],
+  /** Checked at the tx's entry and exits; a mid-tx cancellation ABORTS the
+   *  whole reconcile (rows roll back) via ReconcileCancelled. */
+  isCancelled?: () => boolean,
 ): Promise<{changed: boolean}> => {
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
   )
   const targetBlockIds = flattenSlots(targetSlots)
   const deletedPanelRowIds: string[] = []
+  // panelHistory is NON-transactional, so nothing inside the tx may mutate
+  // it — an abort (routine via the cancellation checks, or any throw)
+  // must have nothing to undo. The content-swap path PEEKS the would-be
+  // destination for its in-tx row writes and STAGES the real store
+  // mutation here; effects run only after the tx commits (row deletes
+  // already follow this pattern via the post-commit clear below), and each
+  // commit is ref-CAS'd against the state captured at peek time so a
+  // concurrent navigation that landed mid-tx wins (see commitUrlNavigation).
+  const stagedHistoryEffects: (() => void)[] = []
 
-  const changed = await repo.tx(async tx => {
+  const runTx = async (): Promise<boolean> => repo.tx(async tx => {
+    if (isCancelled?.()) throw new ReconcileCancelled()
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`reconcilePanelRows: layout session block ${layoutSessionBlock.id} not found`)
 
@@ -745,6 +769,7 @@ export const reconcilePanelRows = async (
         // dangling active id is cleared. Not counted as a layout change.
         await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, undefined)
       }
+      if (isCancelled?.()) throw new ReconcileCancelled()
       return wrote
     }
 
@@ -829,13 +854,16 @@ export const reconcilePanelRows = async (
           await tx.move(slot.row.id, {parentId, orderKey})
         }
         if (slot.blockId !== blockId) {
-          const restored = slot.blockId
-            ? panelHistory.reconcileUrlNavigation(slot.row.id, {
-              blockId: slot.blockId,
-              state: panelHistory.snapshot(slot.row.id),
-            }, blockId)
+          // Peek for the in-tx row write; stage the real store mutation.
+          // The snapshot of the pane being left is taken NOW (tx time) —
+          // commit-time state would snapshot a pane that already moved on.
+          const restored = slot.blockId ? panelHistory.peekUrlNavigation(slot.row.id, blockId) : null
+          const stagedAt = panelHistory.stageUrlNavigation(slot.row.id)
+          const currentEntry = slot.blockId
+            ? {blockId: slot.blockId, state: panelHistory.snapshot(slot.row.id)}
             : null
-          panelHistory.enqueueRestore(slot.row.id, restored?.state)
+          stagedHistoryEffects.push(() =>
+            panelHistory.commitUrlNavigation(slot.row.id, currentEntry, blockId, stagedAt))
           // The URL's slot context is authoritative for the mode here — the
           // restored VisitState's remembered viewMode is deliberately NOT
           // applied (that happens only on chevron back/forward).
@@ -863,14 +891,24 @@ export const reconcilePanelRows = async (
     } else {
       await repairActivePanelId(await loadSubtreeRowsInTx(tx, parent))
     }
+    if (isCancelled?.()) throw new ReconcileCancelled()
     return true
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 
-  // Clear in-memory history only after the tx committed: ANY in-tx throw
-  // (materialization, stack cleanup, active-panel repair) rolls the row
-  // deletes back, and the non-transactional history must survive with them.
-  // (clear is a plain Map delete and cannot throw in production; a throw here
-  // would leak the remaining ids' history, which only the probe test does.)
+  const changed = await runTx()
+
+  // History effects only after the tx committed: ANY in-tx throw
+  // (materialization, stack cleanup, active-panel repair, a cancellation
+  // abort) rolls the row writes back, and the untouched non-transactional
+  // history simply survives with them. Swap commits and the deletes'
+  // clears touch disjoint rows (planReconciliation), so their relative
+  // order is unobservable.
+  // (These are plain Map operations and cannot throw in production; a
+  // throw here would strand the remaining effects, which only probe tests
+  // provoke.)
+  for (const effect of stagedHistoryEffects) {
+    effect()
+  }
   for (const id of deletedPanelRowIds) {
     panelHistory.clear(id)
   }
@@ -885,6 +923,9 @@ export const retargetPanelBlockIds = async (
 ): Promise<void> => {
   if (fromId === toId) return
 
+  // Same staged-history discipline as reconcilePanelRows: peek in-tx,
+  // mutate the non-transactional store only after commit.
+  const stagedHistoryEffects: (() => void)[] = []
   await repo.tx(async tx => {
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) {
@@ -897,16 +938,75 @@ export const retargetPanelBlockIds = async (
       .filter(row => panelBlockId(row) === fromId)
 
     for (const row of panelRows) {
-      const restored = panelHistory.reconcileUrlNavigation(row.id, {
-        blockId: fromId,
-        state: panelHistory.snapshot(row.id),
-      }, toId)
-      panelHistory.enqueueRestore(row.id, restored?.state)
+      const restored = panelHistory.peekUrlNavigation(row.id, toId)
+      const stagedAt = panelHistory.stageUrlNavigation(row.id)
+      const currentEntry = {blockId: fromId, state: panelHistory.snapshot(row.id)}
+      stagedHistoryEffects.push(() =>
+        panelHistory.commitUrlNavigation(row.id, currentEntry, toId, stagedAt))
       // No viewMode option: a merge retarget clears the mode (it belonged
       // to the (pane, source-block) pair, and the source block is gone).
       await writePanelContent(tx, row.id, toId, restored?.state)
     }
   }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
+  for (const effect of stagedHistoryEffects) {
+    effect()
+  }
+}
+
+/**
+ * Is `sessionBlockId` the addressee of a same-workspace route carrying
+ * `wsContext`? ONE authority for both URL directions — inbound application
+ * (applyCurrentLayoutUrl defers non-addressees) and outbound projection
+ * (handleRowsChanged refuses to write this session's rows under another
+ * addressee's hash). Core keeps ws-context opaque, so the addressee of a
+ * CLAIMED context (see claimLayoutContextKey) comes from the consumer's
+ * registered LayoutSessionRouter; everything else falls out of two facts
+ * core does own: context-free routes address the per-device BASE session,
+ * and the base session is never a claimed context's addressee.
+ *
+ *   claimed context + router      → addressee = resolveSessionKey(route);
+ *                                   null OR '' fold to base. A THROWING
+ *                                   router (third-party code on core's
+ *                                   boot path) is logged and treated as
+ *                                   "not the addressee" — the safe default
+ *                                   for a claimed context is defer.
+ *   claimed context + NO router   → addressee unknowable (consumer not
+ *                                   loaded yet — the boot race): nobody.
+ *   unclaimed/no context + router → base-addressed; NON-base sessions are
+ *                                   not it (the router's presence is the
+ *                                   multi-session-mode signal — this keeps
+ *                                   a pasted context-free link from
+ *                                   collapsing a lane's rows).
+ *   unclaimed/no context, no router → single-session behavior: everyone
+ *                                   is the addressee (fresh workspaces
+ *                                   still reach the empty-landing path;
+ *                                   `#ws;foo=bar/a` with no claimant
+ *                                   applies like any deep link).
+ *
+ * Entry grammar is `key[=value]` (canonicalized by parseLayout), so the
+ * key is everything before the first '='.
+ */
+const isRouteAddressee = (
+  repo: Repo,
+  workspaceId: string,
+  wsContext: readonly string[] | undefined,
+  sessionBlockId: string,
+): boolean => {
+  const baseBlockId = layoutSessionBlockIdForKey(workspaceId, repo.user.id, repo.client.baseLayoutSessionId)
+  const claimedContext = wsContext?.some(entry =>
+    repo.client.hasClaimedLayoutContextKey(workspaceId, entry.split('=')[0])) ?? false
+  const router = repo.client.layoutSessionRouter
+  if (!claimedContext) return router ? sessionBlockId === baseBlockId : true
+  if (!router) return false
+  let sessionKey: string | null
+  try {
+    sessionKey = router.resolveSessionKey({workspaceId, wsContext: wsContext!})
+  } catch (error) {
+    console.error('LayoutSessionRouter.resolveSessionKey threw — treating the route as not addressed here', error)
+    return false
+  }
+  const addressee = sessionKey ? layoutSessionBlockIdForKey(workspaceId, repo.user.id, sessionKey) : baseBlockId
+  return addressee === sessionBlockId
 }
 
 export interface ApplyCurrentLayoutUrlArgs {
@@ -915,6 +1015,15 @@ export interface ApplyCurrentLayoutUrlArgs {
   layoutSessionBlock: Block
   hash?: string
   replaceHash?: (hash: string) => void
+  /** Caller liveness for an apply whose owner can die mid-flight (the
+   *  projection is disposed on a session switch). Guarantees after a
+   *  cancellation is observed: the URL is never written, and row writes
+   *  either roll back (cancellation observed inside the reconcile tx, which
+   *  aborts it) or stand as committed (cancellation landing after the tx
+   *  committed, during the final canonicalization load) — committed writes
+   *  targeted this apply's own session with the hash it started from, so
+   *  they are consistent saved state either way. */
+  isCancelled?: () => boolean
 }
 
 export const applyCurrentLayoutUrl = async ({
@@ -923,10 +1032,17 @@ export const applyCurrentLayoutUrl = async ({
   layoutSessionBlock,
   hash = typeof window === 'undefined' ? '' : window.location.hash,
   replaceHash,
+  isCancelled,
 }: ApplyCurrentLayoutUrlArgs): Promise<ApplyLayoutResult> => {
   const route = parseLayout(hash)
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
+  }
+  // Route addressing (the session-router seam): a session applies a route
+  // only when it is the addressee — 'deferred' touches neither rows nor
+  // URL. See isRouteAddressee for the rule.
+  if (!isRouteAddressee(repo, workspaceId, route.wsContext, layoutSessionBlock.id)) {
+    return {kind: 'deferred'}
   }
   // Degrade sublayout columns BEFORE they can reach row materialization
   // (which would throw); the canonicalization below rewrites the URL.
@@ -935,28 +1051,45 @@ export const applyCurrentLayoutUrl = async ({
     : route.slots
 
   const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
+  if (isCancelled?.()) return {kind: 'cancelled'}
   const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
   if (targetSlots.length === 0) {
     if (currentSlots.length > 0) {
-      replaceHash?.(preserveHashQueryParams(buildLayoutFromSlots(workspaceId, currentSlots), hash))
+      // Ws-context (e.g. `;persp=`) has no row representation — like slot
+      // `rest`, it lives in the URL only, so every rebuilt hash re-attaches
+      // the incoming route's entries or a normalization would eat them.
+      replaceHash?.(preserveHashQueryParams(
+        buildLayoutFromSlots(workspaceId, currentSlots, route.wsContext), hash))
       return {kind: 'normalized'}
     }
     return {kind: 'empty'}
   }
 
-  const {changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots)
+  let changed: boolean
+  try {
+    ({changed} = await reconcilePanelRows(repo, layoutSessionBlock, targetSlots, isCancelled))
+  } catch (error) {
+    // Cancellation observed INSIDE the tx aborted it — rows rolled back,
+    // nothing to canonicalize, and the URL belongs to whoever cancelled us.
+    if (error instanceof ReconcileCancelled) return {kind: 'cancelled'}
+    throw error
+  }
 
   // Canonicalize the URL against what the rows actually hold (adds `;active`,
   // canonical entry order, un-parenthesizes degraded sublayouts) in ONE
-  // replace. `rest` entries the hash carried are re-attached (rows can't
-  // store them). Cannot loop: replaceState fires no event, and a second
-  // pass over the replaced hash compares equal.
+  // replace. `rest` entries and the ws-context the hash carried are
+  // re-attached (rows can't store either). Cannot loop: replaceState fires
+  // no event, and a second pass over the replaced hash compares equal.
   const finalRows = changed
     ? await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id, hidePropertyChildren: true}).load()
     : currentRows
+  // Cancelled after the tx committed (during the final load): the committed
+  // rows stand — they targeted our own session with the hash this apply
+  // started from (see the isCancelled arg doc) — but the URL is off-limits.
+  if (isCancelled?.()) return {kind: 'cancelled'}
   const finalSlots = layoutSlotsFromRows(layoutSessionBlock.id, finalRows)
-  const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots))
+  const canonical = buildLayoutFromSlots(workspaceId, withRestFromUrl(route.slots, finalSlots), route.wsContext)
   if (canonical !== `#${splitHashRouteAndParams(hash).route}`) {
     replaceHash?.(preserveHashQueryParams(canonical, hash))
     return {kind: 'normalized'}
@@ -1006,6 +1139,15 @@ export class PanelLayoutProjection {
   private pendingInbound = 0
   private outboundSuppressed = false
   private outboundGeneration = 0
+  /** Terminal: set by dispose(), never cleared (projections are one-shot
+   *  per effect — nothing restarts a disposed one). Guards the QUEUED work
+   *  `applyCurrentUrl` schedules AND (via the apply's isCancelled hook) the
+   *  in-flight apply itself: with the hook applying post-start (see
+   *  usePanelLayoutProjection) a rapid session switch could otherwise have a
+   *  dead session's late apply rewrite the hash from ITS rows after the next
+   *  session took over — whether the dispose landed while the work was still
+   *  queued or mid-await inside applyCurrentLayoutUrl. */
+  private disposed = false
 
   constructor(options: PanelLayoutProjectionOptions) {
     this.repo = options.repo
@@ -1035,7 +1177,18 @@ export class PanelLayoutProjection {
     })
   }
 
+  /** ORDERING CONTRACT for session-switching hosts: dispose() must
+   *  happen-before the successor session's hash is installed. The
+   *  cancellation guards all key off `disposed` — a host that installs the
+   *  new hash FIRST leaves this projection live to receive it (via
+   *  hashchange or a queued apply). With a router registered the
+   *  addressing seam (isRouteAddressee) now catches that mis-delivery in
+   *  BOTH directions — the inbound apply defers, the outbound write
+   *  skips — so the contract is defense-in-depth rather than the only
+   *  line; it remains load-bearing for context-free hashes when no
+   *  router is up. */
   dispose(): void {
+    this.disposed = true
     this.unsubscribeRows?.()
     this.unsubscribeRows = null
     this.unsubscribeUrl?.()
@@ -1053,11 +1206,16 @@ export class PanelLayoutProjection {
       .catch(() => {})
       .then(async () => {
         try {
+          // Queued after dispose (or disposed while waiting in the queue):
+          // don't touch rows or the hash on behalf of a dead projection.
+          // (isCancelled extends this guard mid-flight — see `disposed`.)
+          if (this.disposed) return
           const result = await applyCurrentLayoutUrl({
             repo: this.repo,
             workspaceId: this.workspaceId,
             layoutSessionBlock: this.layoutSessionBlock,
             hash: this.getHash(),
+            isCancelled: () => this.disposed,
             replaceHash: hash => {
               this.replaceHash(hash)
               this.listeners.notify()
@@ -1068,7 +1226,7 @@ export class PanelLayoutProjection {
           }
         } finally {
           this.pendingInbound--
-          if (this.pendingInbound === 0 && this.outboundSuppressed) {
+          if (this.pendingInbound === 0 && this.outboundSuppressed && !this.disposed) {
             // One deferred outbound pass with FRESH rows: a rows state that
             // legitimately diverged while inbound was in flight still
             // projects; an echo of the inbound's own writes compares equal
@@ -1079,10 +1237,12 @@ export class PanelLayoutProjection {
             const generationAtDrain = this.outboundGeneration
             const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id, hidePropertyChildren: true}).load()
             // Re-check after the await: a NEW inbound may have queued during
-            // the load (and rows events suppressed under it re-set the flag).
-            // Bail WITHOUT clearing — that inbound's own drain owns the flag
-            // now; clearing here would strand its suppressed divergence.
-            if (this.pendingInbound === 0) {
+            // the load (and rows events suppressed under it re-set the flag),
+            // or the projection may have been disposed mid-load. Bail WITHOUT
+            // clearing — a new inbound's own drain owns the flag now
+            // (clearing here would strand its suppressed divergence), and a
+            // disposed projection must not write the hash at all.
+            if (this.pendingInbound === 0 && !this.disposed) {
               this.outboundSuppressed = false
               if (this.outboundGeneration === generationAtDrain) {
                 this.handleRowsChanged(rows)
@@ -1139,6 +1299,12 @@ export class PanelLayoutProjection {
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {
+    // Dead projections don't write the hash — the rows subscription is
+    // unsubscribed by dispose(), but the handle store snapshots its listener
+    // list before dispatching, so a co-subscriber earlier in the SAME
+    // dispatch can dispose this projection and our already-snapshotted
+    // callback still runs.
+    if (this.disposed) return
     // While an inbound apply is in flight, a rows event necessarily compares
     // OLD rows against the NEW hash — writing that back would clobber the
     // just-navigated hash (Back silently undone) and the queued reconcile
@@ -1163,10 +1329,29 @@ export class PanelLayoutProjection {
     // `rest` entries never do.)
     const current = parseLayout(this.getHash())
     const sameWorkspace = current.workspaceId === this.workspaceId
+    // Outbound mirror of the inbound addressing rule (isRouteAddressee):
+    // if the CURRENT hash is addressed to some other session — e.g. a
+    // popstate-installed lane entry reaching a still-live base projection
+    // in the window before the host reacts — writing our rows over it
+    // would smuggle THIS session's layout under the other addressee's
+    // attribution. Skip the write entirely. The swallowed divergence is
+    // NOT retried outbound: on re-activation the inbound apply makes the
+    // URL win (rows changed during the foreign-hash window revert), which
+    // is session-switch semantics — the alternative was a mis-attributed
+    // push.
+    if (sameWorkspace
+      && !isRouteAddressee(this.repo, this.workspaceId, current.wsContext, this.layoutSessionBlock.id)) return
     if (sameWorkspace && sameLayoutSlots(current.slots, slots)) return
 
+    // Same carry rule as slot `rest`: the current hash's ws-context (e.g.
+    // `;persp=`) has no row representation, so every outbound hash rebuilt
+    // from rows must re-attach it — dropping it on a row change would strip
+    // the perspective lane off every history entry the projection writes
+    // (breaking Back's lane attribution). Skipped on a workspace mismatch:
+    // the context belongs to the other workspace's token.
     const outboundSlots = sameWorkspace ? withRestFromUrl(current.slots, slots) : slots
-    const nextHash = buildLayoutFromSlots(this.workspaceId, outboundSlots)
+    const nextHash = buildLayoutFromSlots(
+      this.workspaceId, outboundSlots, sameWorkspace ? current.wsContext : undefined)
     if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'ignore-active')) {
       // Active-only diff: which pane is focused is not a history entry —
       // rewrite the current one instead of pushing.

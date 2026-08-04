@@ -17,13 +17,14 @@
  *  keeps identity stable across parent re-renders (same invariant as
  *  CharacterCountDecorator). */
 
+import { useContext } from 'react'
 import type { TypeContribution } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties'
 import { useContent, useProperty, useWorkspaceId } from '@/hooks/block.js'
 import { useTypes } from '@/hooks/typeRegistry.js'
 import { useBlockOpener } from '@/utils/navigation'
-import { buildAppHash } from '@/utils/routing'
+import { appHashForSession, LayoutWsContext } from '@/context/layoutWsContext'
 import { TypeChip } from '@/components/typeChip/TypeChip'
 import {
   type BlockContentDecorator,
@@ -44,6 +45,9 @@ const TypeChips = ({block, typeIds, registry}: {
   // 'follow-link' role: a chip is an inline link, so plain click swaps
   // this panel; shift / alt / cmd follow the canonical modifier matrix.
   const openBlock = useBlockOpener()
+  // Loop site below — hooks can't run per chip, so read the session once
+  // and build hrefs with the pure core (see layoutWsContext).
+  const wsSession = useContext(LayoutWsContext)
   return (
     // role="group": aria-label is ignored on a generic span, and the
     // row needs an accessible name to announce as one unit.
@@ -71,7 +75,7 @@ const TypeChips = ({block, typeIds, registry}: {
             type={type}
             withHash
             link={definitionId ? {
-              href: buildAppHash(workspaceId, definitionId),
+              href: appHashForSession(wsSession, workspaceId, definitionId),
               onClick: event => openBlock(event, {blockId: definitionId, workspaceId}),
             } : undefined}
             onRemove={removable ? () => { void block.removeType(typeId) } : undefined}

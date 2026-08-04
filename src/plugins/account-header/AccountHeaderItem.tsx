@@ -2,7 +2,7 @@ import { LogOut } from 'lucide-react'
 import { useSignOut, useUser } from '@/components/Login.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { userPageBlockId } from '@/data/stateBlocks.js'
-import { buildAppHash } from '@/utils/routing.js'
+import { buildAppHashInContext } from '@/utils/routing.js'
 import { useOpenBlock } from '@/utils/navigation.js'
 
 export function AccountHeaderItem() {
@@ -23,12 +23,28 @@ export function AccountHeaderItem() {
   if (!user || !workspaceId || !userBlockId) return null
 
   const displayName = user.name ?? user.id
+  const refreshHref = (event: {currentTarget: EventTarget & HTMLAnchorElement}): void => {
+    event.currentTarget.href = buildAppHashInContext(workspaceId, userBlockId)
+  }
 
   return (
     <div className="flex min-w-0 shrink items-center gap-1 text-xs text-muted-foreground sm:gap-2 sm:text-sm">
       <a
-        href={buildAppHash(workspaceId, userBlockId)}
-        onClick={handleUserLinkClick}
+        href={buildAppHashInContext(workspaceId, userBlockId)}
+        // Chrome-level anchor: the header does NOT re-render on a
+        // perspective-lane switch (pushState fires no hashchange; App only
+        // re-renders on a workspace change), so the render-time href can
+        // carry a stale lane. Refresh it just-in-time on every activation
+        // path: mousedown covers all pointer buttons (incl. middle-click,
+        // which never fires click), click covers keyboard activation
+        // (Enter fires click with no mousedown), and contextmenu covers
+        // the keyboard-opened menu (Shift+F10) for copy-link-address.
+        onMouseDown={refreshHref}
+        onContextMenu={refreshHref}
+        onClick={event => {
+          refreshHref(event)
+          handleUserLinkClick(event)
+        }}
         className="inline-flex h-7 min-w-0 max-w-[7rem] items-center rounded-sm px-0.5 leading-none text-muted-foreground no-underline transition-colors hover:text-foreground hover:no-underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:max-w-none"
       >
         <span className="min-w-0 truncate">{displayName}</span>

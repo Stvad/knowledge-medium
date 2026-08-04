@@ -210,6 +210,472 @@ describe('applyCurrentLayoutUrl', () => {
     ])
   })
 
+  it('accepts a persp-bearing hash for the SAME workspace (clean-id compare, not the garbage token)', async () => {
+    // Pre-fix, `#ws-1;persp=lane/a` parsed to workspaceId `ws-1;persp=lane`,
+    // mismatching `ws-1` → kind 'ignored' → the URL never applied (and the
+    // App-level layoutWorkspaceChanged spuriously full-remounted).
+    const result = await applyUrl('#ws-1;persp=lane/a')
+    expect(result.kind).toBe('applied')
+    expect(panelBlockIds(await rows())).toEqual(['a'])
+  })
+
+  it('still ignores a hash whose CLEAN workspace id differs, persp or not', async () => {
+    expect((await applyUrl('#ws-2;persp=lane/a')).kind).toBe('ignored')
+    expect(panelBlockIds(await rows())).toEqual([])
+  })
+
+  it('cancellation observed at the first await point stops row writes AND URL writes', async () => {
+    // isCancelled flips while the apply awaits its initial subtree load (the
+    // caller cancels synchronously after invoking, before the load resolves)
+    // — the apply must bail before reconciling rows or touching the hash.
+    await createPanelRows(['a'])
+    let cancelled = false
+    const replaces: string[] = []
+    const pending = applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      replaceHash: hash => replaces.push(hash),
+      isCancelled: () => cancelled,
+    })
+    cancelled = true
+    const result = await pending
+
+    expect(result.kind).toBe('cancelled')
+    expect(replaces).toEqual([])
+    // rows untouched — the a→b reconcile never ran
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a'])
+  })
+
+  // The next two pin the LATER checkpoints with a call-counting isCancelled.
+  // Check order for a destructive (topology-changing) reconcile is fixed:
+  // (1) after the initial subtree load, (2) at the reconcile tx's entry,
+  // (3) at the tx's exit, (4) after the reconcile, before canonicalization.
+  it('cancellation observed at the tx EXIT aborts the whole reconcile — rows roll back', async () => {
+    await createPanelRows(['a'])
+    let calls = 0
+    const replaces: string[] = []
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      replaceHash: hash => replaces.push(hash),
+      isCancelled: () => ++calls >= 3,
+    })
+
+    expect(result.kind).toBe('cancelled')
+    expect(replaces).toEqual([])
+    // The tx deleted the 'a' row and created 'b' — then the exit check threw
+    // and rolled ALL of it back.
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['a'])
+  })
+
+  it('a tx abort un-consumes the panel-history mutations that rode inside it', async () => {
+    // The content-swap path calls reconcileUrlNavigation/enqueueRestore on
+    // the NON-transactional history store from inside the tx. A rollback
+    // (routine now via the cancellation abort) must restore those stacks —
+    // otherwise the surviving row keeps its rows but loses its history.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'x'})
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => ++calls >= 3,
+    })
+
+    expect(result.kind).toBe('cancelled')
+    // Without the rollback: reconcileUrlNavigation('b') found no match and
+    // DELETED the row's stacks, while the row itself rolled back to 'a'.
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x'])
+  })
+
+  it('an aborted tx leaves history fully intact — including a concurrent navigation that landed mid-tx', async () => {
+    // navigateInPanel / back / forward mutate the store and only THEN await
+    // their own db writes — so a user action can land while this tx is
+    // suspended. History mutations are STAGED until commit, so an abort has
+    // nothing to undo: both the pre-existing stack and the concurrent push
+    // survive untouched. The isCancelled probe doubles as the interleave
+    // hook — the tx-exit check (3rd call) runs after the content-swap
+    // staged its effect, so a push there is exactly "concurrent nav during
+    // the suspended tx".
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'x'})
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        calls += 1
+        if (calls === 3) panelHistory.push(rowId, {blockId: 'concurrent'})
+        return calls >= 3
+      },
+    })
+
+    expect(result.kind).toBe('cancelled')
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['x', 'concurrent'])
+  })
+
+  it('defers a CLAIMED ws-context route addressed at the per-device BASE session', async () => {
+    // Core keeps ws-context opaque; the one thing it knows is the negative —
+    // the base session is never a CLAIMED context's addressee. Boot used to
+    // reconcile `#ws;persp=lane/…` INTO the base session (clobbering its
+    // layout) and normalize a slot-less lane URL FROM base rows.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    // Claims are (user, workspace)-scoped — a claim here must not defer
+    // routes in a workspace whose consumer never claimed.
+    expect(env.repo.client.hasClaimedLayoutContextKey('ws-other', 'persp')).toBe(false)
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+    const replaces: string[] = []
+    const apply = (hash: string) => applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      hash,
+      replaceHash: h => replaces.push(h),
+    })
+
+    // Slot-bearing lane deep link: must NOT materialize rows in base.
+    expect((await apply('#ws-1;persp=lane/b1')).kind).toBe('deferred')
+    expect(await base.children.load()).toEqual([])
+
+    // Slot-less lane URL over persisted BASE rows: must NOT normalize the
+    // lane URL from them (that would smuggle base's layout into the lane).
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: WS, parentId: base.id, orderKey: 'a0', blockId: 'a',
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed base row'})
+    expect((await apply('#ws-1;persp=lane')).kind).toBe('deferred')
+    expect(replaces).toEqual([])
+
+    // Context-free routes still address base normally.
+    expect((await apply('#ws-1/a')).kind).toBe('noop')
+  })
+
+  it('routes CLAIMED contexts through the registered LayoutSessionRouter (apply iff addressee)', async () => {
+    // The route-owner seam: with a router registered, the addressee of a
+    // claimed context is whatever session key the router resolves — the
+    // matching session applies, everyone else defers.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({
+      resolveSessionKey: route => {
+        const persp = route.wsContext.find(entry => entry.startsWith('persp='))
+        return persp ? persp.slice('persp='.length) : null
+      },
+    })
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const lane = await getLayoutSessionBlock(uiState, 'lane')
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+    const apply = (block: Block, hash: string) => applyCurrentLayoutUrl({
+      repo: env.repo, workspaceId: WS, layoutSessionBlock: block, hash,
+    })
+
+    // The resolved lane session applies its route; base and other sessions defer.
+    expect((await apply(lane, '#ws-1;persp=lane/b1')).kind).toBe('applied')
+    expect(layoutBlockIdsFromRows(lane.id, await env.repo.query.subtree({id: lane.id}).load())).toEqual(['b1'])
+    expect((await apply(base, '#ws-1;persp=lane/b2')).kind).toBe('deferred')
+    expect((await apply(layoutSessionBlock(), '#ws-1;persp=lane/b2')).kind).toBe('deferred')
+
+    // A router resolving null addresses BASE — the lane defers, base applies.
+    expect((await apply(lane, '#ws-1;persp/b3')).kind).toBe('deferred') // bare claimed key → resolver null
+    expect((await apply(base, '#ws-1;persp/b3')).kind).toBe('applied')
+
+    // Multi-session mode: a NON-base session defers context-free routes
+    // (base-addressed) — a pasted plain link can't collapse a lane's rows.
+    expect((await apply(lane, '#ws-1/b4')).kind).toBe('deferred')
+    expect(layoutBlockIdsFromRows(lane.id, await env.repo.query.subtree({id: lane.id}).load())).toEqual(['b1'])
+
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('a concurrent navigation racing the COMMITTED tx wins — the staged commit is skipped, not wiped', async () => {
+    // The commit-time reconcile runs against live state; if a user
+    // navigation landed while the tx was suspended, replaying the staged
+    // reconcile would hit its no-match wipe branch and delete the
+    // concurrent entry. commitUrlNavigation ref-CASes against the state
+    // captured at peek time and skips instead. Push at the tx-exit probe
+    // (3rd isCancelled call — after staging, before commit), never cancel.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'b'}) // peek matches the swap target
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.push(rowId, {blockId: 'concurrent'})
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['b'])
+    expect(panelHistory.getSnapshot(rowId).back.map(entry => entry.blockId)).toEqual(['b', 'concurrent'])
+  })
+
+  it('outbound: a projection whose session is NOT the current hash\'s addressee never writes the URL', async () => {
+    // The outbound mirror of the addressing rule: a popstate-installed
+    // lane entry can reach a still-live projection for another session; a
+    // rows event in that window must not stamp THIS session's rows under
+    // the lane's attribution.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({resolveSessionKey: () => 'lane'})
+    await createPanelRows(['a'])
+    const {projection, pushes, replaces} = startProjection('#ws-1;persp=lane/x')
+    await projection.start()
+
+    await createPanelRows(['b']) // rows now diverge from the hash
+    deliverRowsEvent(projection, await layoutRows())
+
+    expect(pushes).toEqual([]) // without the guard: pushHash('#ws-1;persp=lane/a/b')
+    expect(replaces).toEqual([])
+    projection.dispose()
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('outbound: a still-live BASE projection under a lane hash never writes the URL', async () => {
+    // The scenario the guard exists for: a popstate-installed lane entry
+    // reaching the base projection before the host reacts. Distinct from
+    // the non-base flavor above — a guard that ignored the hash's
+    // ws-context would still pass that one (unclaimed+router+non-base
+    // branch) while base would write here.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({resolveSessionKey: () => 'lane'})
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: WS, parentId: base.id, orderKey: 'a0', blockId: 'a',
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed base row'})
+    const pushes: string[] = []
+    const replaces: string[] = []
+    const projection = new PanelLayoutProjection({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      getHash: () => '#ws-1;persp=lane/x',
+      pushHash: hash => pushes.push(hash),
+      replaceHash: hash => replaces.push(hash),
+      subscribeToUrl: () => () => {},
+    })
+    await projection.start()
+
+    await env.repo.tx(async tx => {
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: WS, parentId: base.id, orderKey: 'a1', blockId: 'b',
+      })
+    }, {scope: ChangeScope.UiState, description: 'diverge base rows'})
+    deliverRowsEvent(projection, await env.repo.query.subtree({id: base.id}).load())
+
+    expect(pushes).toEqual([]) // without the context check: pushHash('#ws-1;persp=lane/a/b')
+    expect(replaces).toEqual([])
+    projection.dispose()
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('a pending restore queued mid-tx (stacks untouched) survives the staged commit', async () => {
+    // recoverPanelOffDeadContent can enqueue a restore WITHOUT mutating the
+    // stacks; the staged commit's pending-restore write is CAS'd on its own
+    // ref so that racing restore is kept, not cleared/replaced.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    const racingRestore = {scrollTop: 42}
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.enqueueRestore(rowId, racingRestore)
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(panelHistory.consumeRestore(rowId)).toBe(racingRestore)
+  })
+
+  it('a benign mid-tx DRAIN of the pending restore does not strand the committed entry\'s restore', async () => {
+    // consumeRestore (the renderer's post-navigation effect) empties the
+    // pending slot without touching the stacks. That is not a competing
+    // writer — the commit must still queue the reconciled entry's restore.
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    const restoredState = {scrollTop: 7}
+    panelHistory.push(rowId, {blockId: 'b', state: restoredState}) // peek target
+    panelHistory.enqueueRestore(rowId, {scrollTop: 1}) // stale, undrained at stage time
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.consumeRestore(rowId) // renderer drains mid-tx
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(panelHistory.consumeRestore(rowId)).toBe(restoredState)
+  })
+
+  it('a competing mid-tx CLEAR of the pending restore blocks the staged restore (clear ≠ drain)', async () => {
+    // recovery falling back without a snapshot calls
+    // enqueueRestore(undefined) — an intentional WRITE meaning "no restore
+    // should be pending" — while leaving the stacks untouched. Unlike a
+    // renderer drain, that decision must stand: the staged commit must not
+    // install its stale restore over it (the recovery's row write wins the
+    // pane content, and a stale scroll/focus would replay onto it).
+    await createPanelRows(['a'])
+    const rowId = (await rowIdsByBlock()).get('a')
+    if (!rowId) throw new Error('missing a row')
+    panelHistory.clear(rowId)
+    panelHistory.push(rowId, {blockId: 'b', state: {scrollTop: 7}})
+
+    let calls = 0
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/b',
+      isCancelled: () => {
+        if (++calls === 3) panelHistory.enqueueRestore(rowId, undefined) // recovery's clear
+        return false
+      },
+    })
+
+    expect(result.kind).toBe('applied')
+    expect(panelHistory.consumeRestore(rowId)).toBeUndefined()
+  })
+
+  it('a THROWING router defers the route instead of failing the apply', async () => {
+    // resolveSessionKey is third-party extension code on core's boot path —
+    // a throw must not fail bootstrap or reject the projection's queue.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({
+      resolveSessionKey: () => { throw new Error('extension bug') },
+    })
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=lane/b1',
+    })
+    expect(result.kind).toBe('deferred')
+    expect(await base.children.load()).toEqual([])
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('an EMPTY-string session key folds to base (never mints an unreachable derived id)', async () => {
+    // `persp=` is a canonical entry; the natural slice-idiom router returns
+    // '' for it — that must address BASE, not blockIdForKey(ws, user, '').
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.setLayoutSessionRouter({resolveSessionKey: () => ''})
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo, workspaceId: WS, layoutSessionBlock: base, hash: '#ws-1;persp=/b1',
+    })
+    expect(result.kind).toBe('applied')
+    env.repo.setLayoutSessionRouter(null)
+  })
+
+  it('applies an UNCLAIMED ws-context route to base normally (no consumer will ever pick it up)', async () => {
+    // `#ws;foo=bar/a` with no claimant, or a lane bookmark after its host
+    // released the claim: deferring would strand it (blank fresh-workspace
+    // boot, ignored slots on an existing one) — base applies it like any
+    // deep link, and a released claim stops deferring immediately.
+    env.repo.claimLayoutContextKey(WS, 'persp')
+    env.repo.releaseLayoutContextKey(WS, 'persp')
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const base = await getLayoutSessionBlock(uiState, env.repo.client.baseLayoutSessionId)
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      hash: '#ws-1;foo=bar/b1',
+    })
+    expect(result.kind).toBe('applied')
+    expect(layoutBlockIdsFromRows(base.id, await env.repo.query.subtree({id: base.id}).load())).toEqual(['b1'])
+
+    const released = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: base,
+      hash: '#ws-1;persp=lane/b1',
+    })
+    expect(released.kind).toBe('noop') // rows already ['b1'] — applied, not deferred
+  })
+
+  it('cancellation after the tx committed keeps the rows but suppresses the canonicalization replace', async () => {
+    await createPanelRows(['a'])
+    let calls = 0
+    const replaces: string[] = []
+    // A degraded-sublayout hash: its canonical rebuild differs from the
+    // input, so WITHOUT the post-reconcile check the late replaceHash fires.
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/(b/c)',
+      replaceHash: hash => replaces.push(hash),
+      isCancelled: () => ++calls >= 4,
+    })
+
+    expect(result.kind).toBe('cancelled')
+    // Committed rows stand (they belong to this session, from this hash)…
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['b', 'c'])
+    // …but the URL — now someone else's — is never touched.
+    expect(replaces).toEqual([])
+  })
+
+  it('preserves the ws-context when normalizing an empty-target hash against live rows', async () => {
+    await createPanelRows(['a'])
+    const replaces: string[] = []
+    const result = await applyUrl('#ws-1;persp=lane', hash => replaces.push(hash))
+    expect(result.kind).toBe('normalized')
+    expect(replaces).toEqual(['#ws-1;persp=lane/a'])
+  })
+
+  it('preserves the ws-context through inbound canonicalization (sublayout degrade)', async () => {
+    const replaces: string[] = []
+    const result = await applyUrl('#ws-1;persp=lane/(a/b)', hash => replaces.push(hash))
+    expect(result.kind).toBe('normalized')
+    expect(replaces).toEqual(['#ws-1;persp=lane/a,b'])
+  })
+
   it('repairs active panel when URL reconciliation deletes the active row', async () => {
     await applyUrl('#ws-1/a/b/c')
     const beforeByBlock = await rowIdsByBlock()
@@ -1216,6 +1682,24 @@ describe('PanelLayoutProjection', () => {
     projection.dispose()
   })
 
+  it('outbound pushes PRESERVE the current hash ws-context (persp lane attribution)', async () => {
+    // Ws-context has no row representation, so a hash rebuilt from rows must
+    // re-attach the current hash's entries — otherwise every row change would
+    // strip `;persp=` from the history entry being pushed and Back would lose
+    // its lane attribution.
+    await createPanelRows(['a'])
+    const {projection, pushes} = startProjection('#ws-1;persp=lane/a')
+    await projection.start()
+
+    const [row] = await rows()
+    await env.repo.tx(async tx => {
+      await tx.setProperty(row.id, topLevelBlockIdProp, 'b')
+    }, {scope: ChangeScope.UiState, description: 'navigate panel'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1;persp=lane/b']))
+    projection.dispose()
+  })
+
   it('pushes a stack URL when nested panel rows change', async () => {
     await applyUrl('#ws-1/a/x,b')
     let currentHash = '#ws-1/a/x,b'
@@ -1581,6 +2065,130 @@ describe('PanelLayoutProjection', () => {
     expect(notified).toBe(1)
     unsubscribe()
     projection.dispose()
+  })
+
+  // usePanelLayoutProjection now calls applyCurrentUrl() once after start()
+  // (pushState fires neither hashchange nor popstate, so a projection
+  // constructed after boot — the session-host switch — would otherwise
+  // never see the current URL). These pin the two ends of that contract.
+  describe('post-start applyCurrentUrl (the hook contract)', () => {
+    it('boot path: re-applying the already-canonical hash is a COMPLETE no-op — zero row writes, zero history mutations, no notify', async () => {
+      // Stand-in for bootstrapWorkspace's own apply + canonicalization:
+      // after it, rows and hash agree (';active' included).
+      await applyUrl('#ws-1/a/b;active')
+      const rowsBefore = await layoutRows()
+
+      const {projection, pushes, replaces, hash} = startProjection('#ws-1/a/b;active')
+      let notified = 0
+      const unsubscribe = projection.subscribe(() => { notified += 1 })
+      await projection.start()
+
+      await projection.applyCurrentUrl()
+      // StrictMode runs the effect (and thus the apply) twice — the second
+      // pass must be equally silent.
+      await projection.applyCurrentUrl()
+
+      // BlockData carries updatedAt, so even a same-value property rewrite
+      // inside the reconcile would fail this deep equality.
+      expect(await layoutRows()).toEqual(rowsBefore)
+      expect(pushes).toEqual([])
+      expect(replaces).toEqual([])
+      expect(hash()).toBe('#ws-1/a/b;active')
+      expect(notified).toBe(0) // kind 'noop' — the hook's explicit initial sync stays the only one
+      unsubscribe()
+      projection.dispose()
+    })
+
+    it('switch path: a slot-less persp hash over persisted rows normalizes with ONE replace; the next row mutation pushes ONE entry', async () => {
+      // The session-host switch protocol: the caller pushed `#ws;persp=…`
+      // (slot-less) and flipped the active session; the incoming session has
+      // persisted rows. Without the post-start apply the rows never entered
+      // the hash and the first mutation pushed a spurious extra entry.
+      await createPanelRows(['a', 'b'])
+      const {projection, pushes, replaces} = startProjection('#ws-1;persp=lane')
+      await projection.start()
+
+      await projection.applyCurrentUrl()
+
+      expect(replaces).toEqual(['#ws-1;persp=lane/a/b']) // replace, not push
+      expect(pushes).toEqual([])
+
+      const rowA = (await rowIdsByBlock()).get('a')
+      if (!rowA) throw new Error('missing a row')
+      await navigatePanel(rowA, 'c')
+
+      await vi.waitFor(() => expect(pushes).toEqual(['#ws-1;persp=lane/c/b'])) // ONE entry, no double
+      expect(replaces).toEqual(['#ws-1;persp=lane/a/b']) // still just the one normalization
+      projection.dispose()
+    })
+
+    it('an apply still queued when dispose() runs is inert (rapid switch-away)', async () => {
+      // The apply is queued on a microtask; a same-tick dispose (session
+      // switched away again before the apply ran) must keep the dead
+      // projection from normalizing ITS rows over the next session's hash.
+      await createPanelRows(['a'])
+      const {projection, pushes, replaces, hash} = startProjection('#ws-1;persp=lane')
+      await projection.start()
+
+      const pending = projection.applyCurrentUrl()
+      projection.dispose()
+      await pending
+
+      expect(pushes).toEqual([])
+      expect(replaces).toEqual([])
+      expect(hash()).toBe('#ws-1;persp=lane')
+    })
+
+    it('a dispose landing AFTER the entry guard, while the apply is in flight, still cannot write the hash', async () => {
+      // The other half of the race: the queued callback passes its disposed
+      // check, then the projection is disposed before the apply's awaits
+      // resolve. What this pins is the WIRING — applyCurrentUrl passing
+      // `isCancelled: () => this.disposed` into the apply (getHash runs
+      // after the entry guard, immediately before the apply is invoked, so
+      // disposing inside it exercises exactly that seam; the checkpoint
+      // placements themselves are pinned by the direct applyCurrentLayoutUrl
+      // cancellation tests).
+      await createPanelRows(['a'])
+      let currentHash = '#ws-1;persp=lane'
+      const pushes: string[] = []
+      const replaces: string[] = []
+      const projection: PanelLayoutProjection = new PanelLayoutProjection({
+        repo: env.repo,
+        workspaceId: WS,
+        layoutSessionBlock: layoutSessionBlock(),
+        getHash: () => {
+          projection.dispose()
+          return currentHash
+        },
+        pushHash: hash => { pushes.push(hash); currentHash = hash },
+        replaceHash: hash => { replaces.push(hash); currentHash = hash },
+        subscribeToUrl: () => () => {},
+      })
+      await projection.start()
+
+      await projection.applyCurrentUrl()
+
+      expect(pushes).toEqual([])
+      expect(replaces).toEqual([]) // without isCancelled this normalized to '#ws-1;persp=lane/a'
+      expect(currentHash).toBe('#ws-1;persp=lane')
+    })
+
+    it('a rows event delivered to an already-disposed projection is inert', async () => {
+      // The handle store snapshots its listener list before dispatching, so
+      // a co-subscriber earlier in the same dispatch can dispose the
+      // projection and the already-snapshotted rows listener still runs —
+      // it must not write the hash on behalf of a dead projection.
+      await createPanelRows(['a'])
+      const {projection, pushes, replaces} = startProjection('#ws-1/a')
+      await projection.start()
+
+      projection.dispose()
+      await createPanelRows(['b'])
+      deliverRowsEvent(projection, await layoutRows()) // rows now differ from lastSlots
+
+      expect(pushes).toEqual([]) // without the guard: pushHash('#ws-1/a/b')
+      expect(replaces).toEqual([])
+    })
   })
 })
 

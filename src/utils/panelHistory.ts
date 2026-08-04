@@ -73,6 +73,13 @@ interface PanelHistoryState {
 
 const EMPTY: PanelHistoryState = {back: [], forward: []}
 
+/** Opaque stage-time refs for the staged URL-navigation protocol —
+ *  see stageUrlNavigation / commitUrlNavigation. */
+export interface UrlNavigationStage {
+  state: PanelHistoryState
+  pendingWriteVersion: number
+}
+
 /** Carry the enter marker from the entry being consumed onto the entry
  *  reconstructed on the opposite stack (the `viewModeEnter` invariant). */
 const withCarriedEnterMark = (entry: HistoryEntry, consumed: HistoryEntry): HistoryEntry =>
@@ -83,6 +90,18 @@ export class PanelHistoryStore {
   private readonly listeners = new Map<string, CallbackSet<[]>>()
   private readonly snapshotters = new Map<string, () => VisitState | undefined>()
   private readonly pendingRestore = new Map<string, VisitState>()
+  /** Monotonic per-panel counter of pending-restore WRITES — bumped by
+   *  every enqueueRestore (set AND clear) and by clear(), never by
+   *  consumeRestore. The staged-commit protocol compares it to tell a
+   *  competing WRITER (a recovery's queued restore, or its intentional
+   *  clear — both mean "my restore decision stands") from a benign
+   *  renderer DRAIN (a delivered previous restore leaves the slot empty
+   *  naturally, and the committed entry's restore should still install). */
+  private readonly pendingRestoreWriteVersion = new Map<string, number>()
+
+  private bumpPendingWrite(panelId: string): void {
+    this.pendingRestoreWriteVersion.set(panelId, (this.pendingRestoreWriteVersion.get(panelId) ?? 0) + 1)
+  }
 
   getSnapshot = (panelId: string): PanelHistoryState =>
     this.state.get(panelId) ?? EMPTY
@@ -178,6 +197,60 @@ export class PanelHistoryStore {
     return true
   }
 
+  /** What {@link reconcileUrlNavigation} WOULD return, without mutating —
+   *  the peek half of the staged (write-ahead) protocol for transactional
+   *  callers: peek inside the repo.tx for the row writes, then hand the
+   *  panel's state ref to {@link commitUrlNavigation} after the tx commits
+   *  (an abort then has nothing to undo; see reconcilePanelRows). */
+  peekUrlNavigation(panelId: string, targetBlockId: string): HistoryEntry | null {
+    const backTop = this.peek(panelId, 'back')
+    if (backTop?.blockId === targetBlockId) return backTop
+    const forwardTop = this.peek(panelId, 'forward')
+    if (forwardTop?.blockId === targetBlockId) return forwardTop
+    return null
+  }
+
+  /** Stage-time ref capture for {@link commitUrlNavigation}'s CASes —
+   *  taken alongside peekUrlNavigation, inside the tx, before anything can
+   *  interleave. */
+  stageUrlNavigation(panelId: string): UrlNavigationStage {
+    return {
+      state: this.getSnapshot(panelId),
+      pendingWriteVersion: this.pendingRestoreWriteVersion.get(panelId) ?? 0,
+    }
+  }
+
+  /** Commit half of the staged protocol: run the real reconcile +
+   *  pending-restore write, but ONLY where the store still holds the refs
+   *  captured by {@link stageUrlNavigation} (state objects are immutable
+   *  and replaced wholesale on every mutation, so refs double as version
+   *  stamps). A concurrent writer that landed while the tx was suspended
+   *  WINS per slot: a navigation that replaced the state ref keeps its
+   *  stacks (running the reconcile anyway would hit its no-match wipe
+   *  branch and delete the concurrent entry), and a recovery that queued a
+   *  pending restore keeps it (the stale clear/replace would strip its
+   *  landing's focus/scroll — reachable because recovery can enqueue
+   *  without touching the stacks). */
+  commitUrlNavigation(
+    panelId: string,
+    currentEntry: HistoryEntry | null,
+    targetBlockId: string,
+    stagedAt: UrlNavigationStage,
+  ): void {
+    if (this.getSnapshot(panelId) !== stagedAt.state) return
+    const committed = currentEntry ? this.reconcileUrlNavigation(panelId, currentEntry, targetBlockId) : null
+    // Version compare, not value compare: a competing WRITER bumps the
+    // write version whether it queued a restore or intentionally CLEARED
+    // the slot (enqueueRestore(undefined) — e.g. recovery falling back
+    // with no snapshot; a value compare reads that clear as identical to
+    // a benign drain and would install a stale restore over it). Renderer
+    // drains (consumeRestore) don't bump, so a delivered previous restore
+    // never strands the committed entry's restore.
+    if ((this.pendingRestoreWriteVersion.get(panelId) ?? 0) === stagedAt.pendingWriteVersion) {
+      this.enqueueRestore(panelId, committed?.state)
+    }
+  }
+
   reconcileUrlNavigation(
     panelId: string,
     currentEntry: HistoryEntry,
@@ -217,6 +290,7 @@ export class PanelHistoryStore {
     const had = this.state.has(panelId)
     this.state.delete(panelId)
     this.pendingRestore.delete(panelId)
+    this.bumpPendingWrite(panelId)
     if (had) this.notify(panelId)
   }
 
@@ -247,6 +321,7 @@ export class PanelHistoryStore {
    *  Used by back/forward to hand the popped entry's snapshot to the
    *  renderer; the renderer's post-navigation effect drains it. */
   enqueueRestore(panelId: string, state: VisitState | undefined): void {
+    this.bumpPendingWrite(panelId)
     if (!state) {
       this.pendingRestore.delete(panelId)
       return

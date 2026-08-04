@@ -173,3 +173,5 @@ export type {
   ToastAction,
   ToastOptions,
 } from '@/utils/toast.js'
+
+export type { LayoutWsContextValue } from '@/context/layoutWsContext.js'
