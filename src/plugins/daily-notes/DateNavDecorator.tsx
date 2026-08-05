@@ -106,11 +106,16 @@ const DateNavDecorator = ({block, Inner}: DateNavDecoratorProps) => {
     // date instead of floating at the far right edge. `min-w-0` lets a long
     // title shrink instead of pushing the arrow off-screen.
     //
-    // `items-center` centres against whatever this row CONTAINS, so it is only
-    // correct while the row is the title line alone. That is what the -50
-    // registration precedence buys (see index.ts) — a decorator stacking a
-    // second line inside here would drag the arrows off the title.
-    <div className="flex w-full items-center gap-1">
+    // `items-start`, NOT `items-center`. The content box is TALLER than the
+    // text line it starts with — the block editor carries `min-h-[1.7em]`
+    // (40.8px at the 24px title size) around a 30px line, and that slack sits
+    // BELOW the text. Centring against the box therefore lands ~5px under the
+    // title's cap band, which reads as "not centred" even though the boxes
+    // agree exactly. Measured against canvas glyph metrics: items-center is
+    // +5.0px off the cap band, items-start +0.6px, items-baseline -1.4px.
+    // Top-aligning also keeps the arrows on the FIRST line no matter what
+    // stacks below them inside this row.
+    <div className="flex w-full items-start gap-1">
       <DateNavArrow
         Icon={ChevronLeft}
         label="Open previous daily note"
