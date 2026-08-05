@@ -28,7 +28,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { Activity, createContext, memo, useContext } from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { HandleStore, LoaderHandle } from '@/data/internals/handleStore'
 import { useHandle } from '@/hooks/block'
 
@@ -127,9 +127,85 @@ describe('useHandle re-acquires a disposed handle', () => {
     // Reveal. The reconnected subscription lands on a disposed handle; only
     // `useHandle` forcing a re-acquiring render gets the data back.
     rerender(<Harness hidden={false} tick={1}/>)
-    await act(async () => {})
-    await act(async () => {})
+    // waitFor, not a counted number of act() flushes: how many render passes
+    // the recovery takes is React's business, and pinning it to a count made
+    // this flake roughly 1 run in 20 under a loaded suite.
+    await waitFor(() => expect(screen.getByTestId('out').textContent).toBe('3'))
+  })
 
-    expect(screen.getByTestId('out').textContent).toBe('3')
+  it('recovers on a fresh mount that is handed an already-disposed handle', async () => {
+    // Pins the ensure-load guard on its own. The reveal case above is
+    // recovered by either guard, so without this test neither one is
+    // individually pinned and one could be deleted unnoticed.
+    const sched = manualScheduler()
+    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
+    const loader = async () => [1, 2, 3]
+    const acquire = () => store.getOrCreate(KEY, () => new LoaderHandle({ store, key: KEY, loader }))
+
+    // Create and immediately abandon a handle: never retained, so the
+    // constructor's GC sweep disposes it.
+    acquire()
+    sched.flush(100)
+
+    const Consumer = () => {
+      const value = useHandle(acquire(), { selector: v => (v as number[] | undefined) ?? EMPTY })
+      return <div data-testid="fresh">{value.length}</div>
+    }
+    render(<Consumer/>)
+    await waitFor(() => expect(screen.getByTestId('fresh').textContent).toBe('3'))
+  })
+
+  it('gives up instead of spinning when the factory mints a fresh dead handle each render', async () => {
+    // The shape that actually loops: every render hands useHandle a NEW
+    // disposed handle, so its deps change and the guard re-fires each time.
+    // The attempt cap is the only thing that ends it. The explicit throw
+    // keeps a regression here a fast failure rather than a hung run.
+    const sched = manualScheduler()
+    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
+    const loader = async () => [1, 2, 3]
+    let seq = 0
+    const freshDeadHandle = () => {
+      const key = `dead:${seq++}`
+      const h = store.getOrCreate(key, () => new LoaderHandle({ store, key, loader }))
+      h.dispose()
+      return h
+    }
+    let renders = 0
+    const Consumer = () => {
+      renders++
+      if (renders > 50) throw new Error(`render loop: ${renders} renders on dead handles`)
+      const value = useHandle(freshDeadHandle(), { selector: v => (v as number[] | undefined) ?? EMPTY })
+      return <div data-testid="spin">{value.length}</div>
+    }
+    render(<Consumer/>)
+    await act(async () => {})
+    await act(async () => {})
+    expect(renders).toBeLessThan(20)
+  })
+
+  it('gives up instead of spinning when the factory cannot replace a dead handle', async () => {
+    // A caller that memoizes its handle hands back the same corpse forever.
+    // Re-acquiring can't help, so useHandle must stop asking rather than
+    // drive an unbounded render loop. The explicit throw keeps a regression
+    // here a fast failure instead of a hung test run.
+    const sched = manualScheduler()
+    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
+    const loader = async () => [1, 2, 3]
+    const dead = store.getOrCreate(KEY, () => new LoaderHandle({ store, key: KEY, loader }))
+    sched.flush(100)
+    expect(dead.status()).toBe('disposed')
+
+    let renders = 0
+    const Consumer = () => {
+      renders++
+      if (renders > 50) throw new Error(`render loop: ${renders} renders on a dead handle`)
+      const value = useHandle(dead, { selector: v => (v as number[] | undefined) ?? EMPTY })
+      return <div data-testid="stuck">{value.length}</div>
+    }
+    render(<Consumer/>)
+    await act(async () => {})
+    await act(async () => {})
+    expect(renders).toBeLessThan(10)
+    expect(screen.getByTestId('stuck').textContent).toBe('0')
   })
 })

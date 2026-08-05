@@ -271,6 +271,29 @@ describe('LoaderHandle structural diffing (§9.4)', () => {
 })
 
 describe('LoaderHandle GC', () => {
+  it('read() on a disposed handle throws an Error, not a retry promise', async () => {
+    // Falling through to the promise path would hand a Suspense boundary a
+    // fresh rejected promise on every attempt — render, throw, reject,
+    // re-render, forever, with nothing surfacing. An Error reaches the
+    // nearest error boundary instead.
+    const sched = manualScheduler()
+    const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
+    const { loader } = collectingLoader([1, 2, 3])
+    const h = store.getOrCreate('read:disposed', () =>
+      new LoaderHandle({ store, key: 'read:disposed', loader }),
+    )
+    await h.load()
+    sched.flush(100)
+    expect(h.status()).toBe('disposed')
+    expect(() => h.read()).toThrow(/has been disposed/)
+    try {
+      h.read()
+    } catch (thrown) {
+      expect(thrown).toBeInstanceOf(Error)
+      expect(thrown).not.toBeInstanceOf(Promise)
+    }
+  })
+
   it('disposes after gcTimeMs once subscribers drain', async () => {
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })

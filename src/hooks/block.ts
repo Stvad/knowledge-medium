@@ -41,6 +41,11 @@ import { useRepo } from '@/context/repo.js'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
+/** How many times `useHandle` will force a render to re-acquire a disposed
+ *  handle before concluding the caller's factory can't produce a live one.
+ *  Small on purpose: a working factory succeeds on the first attempt. */
+const REACQUIRE_ATTEMPT_LIMIT = 3
+
 export interface BlockContentRevision {
   content: string
   updatedAt: number
@@ -173,21 +178,45 @@ export function useHandle<T, S = T | undefined>(
   }, [handle, selector, equality])
   /* eslint-enable react-hooks/immutability */
 
-  // Re-acquisition trigger for the dead-handle case below. A render is the
-  // ONLY way to get a live handle back: the factory (`repo.query.*` /
-  // `repo.block`) is called by our caller during ITS render, so nothing
-  // below this line can re-acquire on its own.
+  // Re-acquisition for the dead-handle case (see the subscribe callback
+  // below). A render is the ONLY way to get a live handle back: the factory
+  // (`repo.query.*` / `repo.block`) is called by our CALLER during its own
+  // render, so nothing here can re-acquire on its own.
+  //
+  // `attempts` is the circuit breaker: re-acquiring only helps if the caller
+  // then produces a LIVE handle, and two caller shapes never will — one that
+  // memoizes it (`useMemo(() => repo.query.subtree(...), [id])`, handing back
+  // the same corpse) and one that mints a fresh dead handle per render. The
+  // first goes quiet on its own (our deps don't change, so neither guard
+  // re-fires) but stays empty; the second would spin. Cap the attempts and
+  // say what's wrong — only the caller can fix either.
   const [, forceReacquire] = useReducer((n: number) => n + 1, 0)
+  const attempts = useRef(0)
+  const requestReacquire = useCallback(() => {
+    if (attempts.current >= REACQUIRE_ATTEMPT_LIMIT) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[useHandle] handle ${handle.key} is still disposed after ${attempts.current} re-acquire attempts. `
+          + 'Its factory must run on every render and return a live handle — a memoized handle can never be replaced.',
+        )
+      }
+      return
+    }
+    attempts.current++
+    forceReacquire()
+  }, [handle])
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
   // prevents an unnecessary roundtrip when the handle is already ready —
   // and skips a disposed one, whose load() only ever rejects.
   useEffect(() => {
-    if (handle.status() === 'disposed') {
-      forceReacquire()
-      return
-    }
+    // Don't ask a corpse to load — it only ever rejects. Recovery is NOT
+    // owned here: the subscribe callback below is the single owner, so this
+    // branch is noise-avoidance, not load-bearing (deleting it costs a
+    // swallowed rejection, nothing more).
+    if (handle.status() === 'disposed') return
+    attempts.current = 0
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
     }
@@ -200,20 +229,17 @@ export function useHandle<T, S = T | undefined>(
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
   //
-  // The disposed branch is what keeps a subtree recoverable after its
-  // effects have been unmounted for a while — `<Activity mode="hidden">`
-  // being the case that produces it (docs/handle-lifecycle-hidden-subtrees.html).
-  // Nothing retains a handle acquired by a render in that state, so the
-  // store GCs it; subscribing to the corpse is a silent no-op, and React
-  // won't re-render on its own because the snapshot never changes (both
-  // sides are the consumer's "not loaded" sentinel). Asking for a render is
-  // the only exit. React invokes this from a passive effect, so dispatching
-  // here is ordinary usage; it converges because the replacement handle is
-  // retained by the very subscription that follows this one.
+  // The disposed branch keeps a subtree recoverable after its effects have
+  // been unmounted long enough for the store to GC its handle —
+  // `<Activity mode="hidden">` is the case that produces it, and subscribing
+  // to the corpse is a silent no-op with no snapshot change left to trigger a
+  // re-render. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
+  // This is the single owner of recovery (the effect above only declines to
+  // load a corpse).
   const subscribe = useCallback(
     (listener: () => void) => {
       if (handle.status() === 'disposed') {
-        forceReacquire()
+        requestReacquire()
         return () => {}
       }
       return handle.subscribe(listener)

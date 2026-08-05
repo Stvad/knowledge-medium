@@ -25,6 +25,7 @@
  */
 
 import { isEqual } from 'lodash-es'
+import { devAssertionsEnabled } from './devAssertions'
 import type { Dependency, Handle, HandleStatus, Unsubscribe } from '@/data/api'
 import {
   collectPluginInvalidationsFromSnapshots,
@@ -760,10 +761,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       // Listening to a disposed handle is a no-op + immediate
       // unsubscribe; callers should re-acquire via the factory.
       // Warn rather than fail silently: a caller that lands here is wired to
-      // a handle that can never deliver, and the silence is what made this
-      // cost days to find the first time (`useHandle` now detects it via
-      // status() and forces the re-acquiring render).
-      if (import.meta.env?.DEV) {
+      // a handle that can never deliver. `useHandle` intercepts this case
+      // before it gets here, so the warning is aimed at the callers that
+      // don't go through it (hand-rolled useSyncExternalStore bridges).
+      if (devAssertionsEnabled()) {
         console.warn(
           `[handleStore] subscribe() on disposed handle ${this.key} — no events will be delivered. Re-acquire it through the factory.`,
         )
@@ -789,6 +790,16 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   read(): T {
+    // Disposed is terminal, and it must throw an ERROR rather than fall
+    // through to the promise path below: `load()` on a disposed handle
+    // returns a fresh rejected promise every call, so a Suspense boundary
+    // would retry forever — render, throw, reject, re-render — with nothing
+    // surfacing. An Error reaches the nearest error boundary instead.
+    if (this.disposed) {
+      throw new Error(
+        `Handle ${this.key} has been disposed — re-acquire it through the factory`,
+      )
+    }
     if (this.status_ === 'ready' && this.value !== undefined) return this.value
     if (this.status_ === 'error') throw this.error
     // Suspense path: throw a promise React can `await`.
