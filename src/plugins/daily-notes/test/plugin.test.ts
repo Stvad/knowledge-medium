@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   blockContentDecoratorsFacet,
+  type BlockContentDecoratorContribution,
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import { actionsFacet, headerItemsFacet } from '@/extensions/core.js'
@@ -63,6 +64,33 @@ describe('dailyNotesPlugin', () => {
       .not.toBe(inner)
     expect(decorateContent({isTopLevel: false, blockContext: {}} as BlockResolveContext, inner))
       .toBe(inner)
+  })
+
+  it('wraps closer to the text than a decorator that stacks chrome below it', () => {
+    // The arrows share a flex row with the title and centre against whatever
+    // that row CONTAINS. A decorator that stacks a second line inside it (the
+    // readwise backlog hint) makes the row two lines tall and drops the arrows
+    // 10px off the title. The stacking decorator is registered FIRST here, so
+    // at equal precedence registration order would make it the innermost one —
+    // only date-nav's explicit negative precedence keeps it inside.
+    const stacking: BlockContentDecoratorContribution = () => inner => {
+      const Decorated: BlockRenderer = () => null
+      Decorated.displayName = `Stacking(${(inner as {displayName?: string}).displayName ?? 'inner'})`
+      return Decorated
+    }
+    const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
+    const runtime = resolveFacetRuntimeSync([
+      blockContentDecoratorsFacet.of(stacking, {source: 'test'}),
+      dailyNotesPlugin({repo: fakeRepo}),
+    ])
+    const inner: BlockRenderer = () => null
+
+    const outermost = runtime.read(blockContentDecoratorsFacet)(
+      {isTopLevel: true, blockContext: {}} as BlockResolveContext,
+      inner,
+    )
+
+    expect((outermost as {displayName?: string}).displayName).toBe('Stacking(WithDateNav)')
   })
 
   it('contributes the Reschedule quick action on the primary row', () => {
