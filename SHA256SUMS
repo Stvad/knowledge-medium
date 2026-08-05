@@ -1721,7 +1721,7 @@ a4b29da45b71646760ea11229b8b6e46a7866453446de4638cdad117d9e9ebcb  ./src/App.js
 39808076fb3f1d8e9d016a11e4bcf0d52b4b7cac48154d753e23b687058e605c  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-d288cb9caa3713d224ef0eb7599180c7ff4e77df701692f64c055515d4900c32  ./src/appVersion.js
+3b80dc7d209385543c480ebe90a6390177bff66c233ec0d4ea5fad3a282afcfd  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 fea5c9bcdb0b19b9e7a2c87061e8af20afffcb227e47dba1dada4088258e6f93  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2543,7 +2543,7 @@ fbd3f8057bce9c54c94b87b00c4d0f929f53f45d09140095f88ccd5ddc313e28  ./src/plugins/
 c49e646bff7370a4414ee4218d5f120701b278c830fd2e1c33f8e64cd39a0261  ./src/plugins/daily-notes/DateKeyboardScrubController.js
 f2e357d03e6c87fe10408c6df8364259bbd183fceef1a61882acdf5ecd3f09e8  ./src/plugins/daily-notes/DateKeyboardScrubController.js.map
 d3c59d9ac0eb9236db4a06245ed011722418dc4c84744e9fbc69579a6ed23da2  ./src/plugins/daily-notes/DateNavDecorator.js
-d91d8810431d1e5f4658d2d264b11198af0e9c2255f7dcabca2ea74fa5e6a36b  ./src/plugins/daily-notes/DateNavDecorator.js.map
+05d62c034dbdf1c39db97989c5255357a50df77298cf58a9f5199edbe8747f77  ./src/plugins/daily-notes/DateNavDecorator.js.map
 6291464deb707bb02939f7dfbd6ed9fc72e85ee2f865aa2846ebec5f3c8778c7  ./src/plugins/daily-notes/DateScrubOverlay.js
 dbb4ce8940a7d8a0b134bcbc33b7c742b0fdbf935b9ce788ba73499d797a0165  ./src/plugins/daily-notes/DateScrubOverlay.js.map
 c6ebb5d4aaf20b4e7411506908560b8eff445150877c6868716f1df9bf8a9b9f  ./src/plugins/daily-notes/HeaderItem.js
@@ -2576,8 +2576,8 @@ d490d5faeb8cb1d591b48db7be8109a5df5f2a03ebe5134cbdc0f6d821a5e63b  ./src/plugins/
 99376898bc2bd16a1e500fad4ede8b4ddb3be291c832c4abc7373e75b56a4151  ./src/plugins/daily-notes/deletionGuard.js.map
 14dd8acb3bda9a8dce3a3367d878d51b9825b1da93dcd43dc067c9e5175b5990  ./src/plugins/daily-notes/dueQuery.js
 5210f2e9b429207d32e7e52344848dc6ee9ee0e87318a2cdb748cce7cf8d4218  ./src/plugins/daily-notes/dueQuery.js.map
-bc66a0035849a5bcd1b607acecd0537f8bd19a766861add7f58d3747e5aa1649  ./src/plugins/daily-notes/index.js
-73c1a462b1fb47e3997343244c4ec55434b9b4e48d6ddacec084d03a40660fd1  ./src/plugins/daily-notes/index.js.map
+fb4843928b17a1ddda4ebdd52b444317544da6b4be9d24238a0c52e6fced3b78  ./src/plugins/daily-notes/index.js
+e8dceb4d6a55faf80f35a0b725a5eb3f9359f010b9544dcfee0f267a8e9d2fc9  ./src/plugins/daily-notes/index.js.map
 e4c2c80f90151492cbc4da40f8df23b92c5cb309960df75da4aa1f55088f42af  ./src/plugins/daily-notes/landing.js
 3ae94b02c331cb527df0e19c14f260b5cdc2bccd719651df0082904195eb20e7  ./src/plugins/daily-notes/landing.js.map
 4ce9c2cc87613729eb7d45a0eba82f4df5df3d4ac1d8083c097ff555ca886acc  ./src/plugins/daily-notes/localSchema.js
@@ -3301,8 +3301,8 @@ ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/vi
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
 eda7cd6e992fb9f7324505e9817253123005c192d80e9c52ac4b14967936955c  ./src/utils/viewport.js
 a2bcdb138bcf84f7f3f9fc982c821e724fe578c3ea7971a890ea1ea9bc4c837f  ./src/utils/viewport.js.map
-a76e3bc6fa4bbc3e2c10d4a6209fbadb0a49126746d359f44e8621d5949e47c0  ./sw.js
-44672b23619f27c2089b8b8083d91a83b3055a2570caefb2cea36f7fdeeaa04c  ./version.json
+70b79234bd6d2952f4a51d42265eaf65a861af50c8dd2966bbef83fcf4febd94  ./sw.js
+006bf9c9b55bde26462b25cbc6591acec524fe34f9f879039459b178890b36d0  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
