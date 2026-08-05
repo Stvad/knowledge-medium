@@ -19,7 +19,10 @@ vi.mock('@/extensions/runtimeContext.ts', () => ({
 vi.mock('@/hooks/propertySchemas.ts', () => ({
   usePropertySchemas: () => store.schemas,
 }))
-vi.mock('./usePropertyEditingActivation', () => ({
+// The activation hook needs the shortcut providers; `consumeFieldEscape` from
+// the same module is real logic under test below, so keep the rest intact.
+vi.mock('./usePropertyEditingActivation', async (importOriginal) => ({
+  ...await importOriginal<object>(),
   usePropertyEditingActivation: () => ({onFocus: () => {}, onBlur: () => {}}),
 }))
 
@@ -79,6 +82,80 @@ describe('PropertyPicker', () => {
     // passes if reset() already cleared it. Highlight must be back at the top.
     fireEvent.focus(input)
     expect(activeOption()).toMatch(/-option-0$/)
+  })
+
+  // Escape has two jobs in a property field and they must not both run on one
+  // press: dismiss what the field has open, or (nothing open) exit the field
+  // via the property-editing `exit_property_editing` action, which listens on
+  // `window`. A window listener stands in for that action here.
+  describe('Escape ownership', () => {
+    const renderPicker = (onEscape?: () => void) => {
+      render(
+        <PropertyPicker
+          onAdd={vi.fn()}
+          onConfigureNewSchema={vi.fn()}
+          block={pickerBlock()}
+          onEscape={onEscape}
+        />,
+      )
+      const input = screen.getByPlaceholderText('Field')
+      fireEvent.focus(input)
+      return input
+    }
+
+    it('dismisses its own suggestion list first, then lets Escape exit the field', () => {
+      const reachedShortcuts = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker()
+        expect(activeOption()).toMatch(/-option-0$/)
+
+        fireEvent.keyDown(input, {key: 'Escape'})
+        expect(input.getAttribute('aria-activedescendant')).toBeNull()
+        expect(reachedShortcuts).not.toHaveBeenCalled()
+
+        fireEvent.keyDown(input, {key: 'Escape'})
+        expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+
+    it('leaves a composing Escape alone instead of dismissing the list', () => {
+      // Mid-composition Escape drops the IME's pending candidate. Dismissing
+      // the suggestion list here would consume the key (preventDefault +
+      // stopPropagation) and take it away from the input method entirely —
+      // the list is still open afterwards precisely because we did nothing.
+      const reachedShortcuts = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker()
+        expect(activeOption()).toMatch(/-option-0$/)
+
+        fireEvent.keyDown(input, {key: 'Escape', isComposing: true})
+
+        expect(activeOption()).toMatch(/-option-0$/)
+        expect(reachedShortcuts).toHaveBeenCalledTimes(1)
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
+
+    it('keeps Escape when the parent still has an add-row to cancel', () => {
+      const reachedShortcuts = vi.fn()
+      const onEscape = vi.fn()
+      window.addEventListener('keydown', reachedShortcuts)
+      try {
+        const input = renderPicker(onEscape)
+        fireEvent.keyDown(input, {key: 'Escape'}) // closes the list
+        fireEvent.keyDown(input, {key: 'Escape'}) // cancels the add row
+
+        expect(onEscape).toHaveBeenCalledTimes(1)
+        expect(reachedShortcuts).not.toHaveBeenCalled()
+      } finally {
+        window.removeEventListener('keydown', reachedShortcuts)
+      }
+    })
   })
 
   it('does not suggest, submit, or configure a hidden seed when bound or at stage 0', async () => {

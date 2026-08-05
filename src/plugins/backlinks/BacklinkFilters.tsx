@@ -36,6 +36,7 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from './query.ts'
+import { dismissOnFieldEscape } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
@@ -286,8 +287,15 @@ const RefPredicateInput = ({
         onBlur={() => setFocused(false)}
         onKeyDown={event => {
           if (event.key === 'Escape') {
-            setQuery('')
-            resetResults()
+            // Dismiss-first: clearing the typed filter (and its results) is a
+            // real dismiss, so claim the key and keep the caret here. Already
+            // empty → nothing to dismiss, and the press falls through to
+            // `exit_property_editing`, which blurs the field. Without the
+            // claim a single Escape would do both at once.
+            dismissOnFieldEscape(event, query !== '' && (() => {
+              setQuery('')
+              resetResults()
+            }))
             return
           }
           // Mid-debounce the visible results still belong to the previous text;

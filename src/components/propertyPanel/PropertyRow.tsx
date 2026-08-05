@@ -70,6 +70,12 @@ export function PropertyRow({
   const rowReadOnly = readOnly || row.readOnly
   const renameAllowed = row.canRename && !rowReadOnly
   const renameFocusHandlers = usePropertyEditingActivation(block)
+  // Activation for the VALUE cell lives here rather than in each editor: the
+  // row renders whatever editor a value preset resolved to, including one a
+  // plugin registered, and Escape has to exit those too. Focus events carry
+  // focusin semantics, so this catches the focused descendant whatever shape
+  // it is. Inner handlers still run first and can consume Escape themselves.
+  const valueFocusHandlers = usePropertyEditingActivation(block)
   const rowAlignment = isRefCodec(row.schema.codec) || isRefListCodec(row.schema.codec)
     ? 'items-start'
     : 'items-center'
@@ -156,7 +162,12 @@ export function PropertyRow({
           </span>
         )}
       </div>
-      <div className="min-w-0" data-property-value="true">
+      <div
+        className="min-w-0"
+        data-property-value="true"
+        onFocus={valueFocusHandlers.onFocus}
+        onBlur={valueFocusHandlers.onBlur}
+      >
         {Editor !== undefined && !row.decodeFailed && !row.readOnly ? (
           <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
         ) : row.decodeFailed ? (

@@ -5,6 +5,7 @@
 
 import { isEnumCodec, type PropertyEditorProps } from '@/data/api'
 import { Block } from '@/data/block'
+import { usePropertyEditingActivation } from '@/components/propertyPanel/usePropertyEditingActivation.js'
 
 const EMPTY_OPTIONS: readonly { value: string; label: string }[] = []
 
@@ -15,6 +16,11 @@ export function SelectPropertyEditor({
   schema,
 }: PropertyEditorProps<string>) {
   const readOnly = block instanceof Block && block.repo.isReadOnly
+  // A `<select>` is an editable target too (`hasEditableTarget`), so without
+  // this it's the one property shape where Escape still does nothing. No
+  // dismiss-first branch: the native popup is the browser's to close, and the
+  // exit binding leaves `preventDefault` alone so that still works.
+  const propertyEditingFocus = usePropertyEditingActivation(block)
   const options = schema && isEnumCodec(schema.codec) ? schema.codec.options : EMPTY_OPTIONS
   const current = typeof value === 'string' ? value : ''
   // The controlled value must always match a rendered <option>, or the
@@ -31,6 +37,8 @@ export function SelectPropertyEditor({
         value={current}
         disabled={readOnly}
         aria-label={schema?.name ? `Select ${schema.name}` : 'Select value'}
+        onFocus={propertyEditingFocus.onFocus}
+        onBlur={propertyEditingFocus.onBlur}
         onChange={event => {
           if (!readOnly) onChange(event.target.value)
         }}

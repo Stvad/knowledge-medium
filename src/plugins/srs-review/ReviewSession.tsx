@@ -427,12 +427,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // (non-editor) chrome is focused, so a deck in a background panel — or
   // a second open deck — never grabs Space/1-4.
   //
-  // We can't rely on the dispatcher's default editable-target filter to
-  // keep grade keys out of the revealed answer's CodeMirror: EDIT_MODE_CM
-  // opts editor events back in via its own eventFilter (filters OR
-  // together), and this modal context would then shadow edit-mode and
-  // eat Enter / 1-4. So we deactivate the context whenever focus lands on
-  // an editable element instead.
+  // Belt-and-braces since two changes landed under it: an `eventFilter` now
+  // widens only its own context's candidates, and this modal context shadows
+  // EDIT_MODE_CM anyway. Both mean the dispatcher's default editable-target
+  // filter would keep grade keys out of the revealed answer's CodeMirror on
+  // its own. It was load-bearing when filters OR'd across contexts, so
+  // EDIT_MODE_CM's opt-in pulled editor events back in and this context ate
+  // Enter / 1-4. Deactivating on editable focus is cheap and keeps the
+  // guarantee local, so it stays.
   const [surfaceFocused, setSurfaceFocused] = useState(false)
   const controller = useMemo<SrsReviewController>(() => ({
     reveal: () => { if (!busy) setRevealed(true) },

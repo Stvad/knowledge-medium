@@ -31,7 +31,7 @@ import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
-import { usePropertyEditingActivation } from './usePropertyEditingActivation'
+import { dismissOnFieldEscape, usePropertyEditingActivation } from './usePropertyEditingActivation'
 import type { Block } from '@/data/block'
 import {
   resolveEditorOverride,
@@ -296,9 +296,16 @@ export function PropertyPicker({
           className={inputClassName ?? 'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:border-transparent focus-visible:ring-0'}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
-              event.preventDefault()
-              if (suggestionsOpen) { setSuggestionsOpen(false); return }
-              onEscape?.()
+              // Dismiss the innermost thing that's actually up, and claim the
+              // key only then — with nothing to dismiss the event falls
+              // through to `exit_property_editing`, which blurs the field.
+              // Keyed on `showSuggestions`, not `suggestionsOpen`: focus opens
+              // the list eagerly, so a zero-suggestion `suggestionsOpen` would
+              // swallow the first Escape on an invisible dismiss.
+              dismissOnFieldEscape(
+                event,
+                showSuggestions ? () => setSuggestionsOpen(false) : onEscape,
+              )
               return
             }
             onKeyDown(event)
