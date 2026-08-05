@@ -81,7 +81,10 @@ design</a>.)</p>
 
 <h2>The defect</h2>
 
-<p>Three separately-reasonable behaviors compose into a trap.</p>
+<p>Three separately-reasonable behaviors compose into a trap. Line references in this section are to
+the code <em>as it stood before this PR</em> (upstream master <code>587136700</code>) — several of
+them are what the fix below changes, so they will not resolve to the same thing on the merged
+branch.</p>
 
 <div class="step">
 <b>1. A handle schedules its own GC at construction.</b>
@@ -112,7 +115,7 @@ subscription that no longer exists. The caller cannot even detect the situation:
 (<span class="filepath">src/data/api/handle.ts:1</span>). So a dead handle is indistinguishable from
 a fresh one — which is why <code>useHandle</code>'s ensure-load effect cheerfully calls
 <code>load()</code> on it, and that rejection lands in a swallowed catch
-(<span class="filepath">src/hooks/block.ts:211–218</span>).</p>
+(<span class="filepath">src/hooks/block.ts:175–182, pre-fix</span>).</p>
 </div>
 
 <div class="step">
@@ -140,7 +143,7 @@ out of the store when a handle dies — every render below is driven by React, n
   handle <b>H1</b> drops to <code>refCount 0</code> and schedules GC
   (<span class="filepath">handleStore.ts:885–897</span>).</li>
   <li>Five seconds later H1 disposes and drops its value; the store removes its key
-  (<span class="filepath">:891</span>), so the factory will mint a fresh handle next time it is
+  (<span class="filepath">:915</span>), so the factory will mint a fresh handle next time it is
   called.</li>
   <li>React re-renders the <strong>still-hidden</strong> subtree — e.g. because an ancestor's context
   value changed. The consumer reads <code>peek()</code> on the dead H1, gets <code>undefined</code>,
@@ -224,8 +227,20 @@ did.</p>
 rather than at each call site. In the subscribe callback — which React invokes from a passive effect,
 so dispatching state there is ordinary usage — ask for the render that re-acquires:</p>
 
-<pre><code>// add useReducer to the existing react import
-const [, forceReacquire] = useReducer(n =&gt; n + 1, 0)
+<pre><code>const [, forceReacquire] = useReducer(n =&gt; n + 1, 0)
+const attempts = useRef(0)
+
+// Capped: re-acquiring only helps if the caller then yields a LIVE handle,
+// and the two shapes above never will. Past the cap, say so instead of
+// looping — only the caller can fix it.
+const requestReacquire = useCallback(() =&gt; {
+  if (attempts.current &gt;= REACQUIRE_ATTEMPT_LIMIT) {
+    if (import.meta.env.DEV) console.warn(/* … still disposed after N attempts … */)
+    return
+  }
+  attempts.current++
+  forceReacquire()
+}, [handle])
 
 const subscribe = useCallback(
   (listener: () =&gt; void) =&gt; {
@@ -234,7 +249,7 @@ const subscribe = useCallback(
     // the store's GC. Subscribing to a disposed handle is a no-op, and only
     // a RENDER re-acquires from the factory — so ask for one.
     if (handle.status() === 'disposed') {
-      forceReacquire()
+      requestReacquire()
       return () =&gt; {}
     }
     return handle.subscribe(listener)
@@ -321,6 +336,16 @@ part of this diff rather than a separate concern.</p>
 
 <p>Otherwise this is the minimum that makes <code>&lt;Activity&gt;</code> usable with KM's data layer,
 and it removes a silent failure mode whether or not core adopts Activity anywhere.</p>
+
+<p>One known gap is left deliberately unfixed. <code>useHandle</code> is not the only way a component
+subscribes to a store-backed handle: <code>GroupedBacklinksLiveBridge</code>
+(<span class="filepath">src/plugins/grouped-backlinks/GroupedLinkedReferences.tsx:642–660</span>)
+acquires its handle during its parent's render and subscribes in a raw <code>useEffect</code>, so it
+carries the identical hazard and none of this fix. It is dormant today (nothing uses
+<code>&lt;Activity&gt;</code> yet) and routing it through <code>useHandle</code> means restructuring
+its snapshot/query-epoch logic — real work, not a one-liner. A sweep of <code>src/</code> found no
+other live instance of the shape. Flagged rather than fixed so whoever wires up the first
+<code>&lt;Activity&gt;</code> consumer doesn't rediscover it the hard way.</p>
 
 </body>
 </html>

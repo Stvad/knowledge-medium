@@ -205,7 +205,7 @@ describe('useHandle re-acquires a disposed handle', () => {
     // This one terminates on its own — `subscribe`'s deps never change, so
     // useSyncExternalStore never re-invokes it — so it pins the OUTCOME (a
     // quiet, empty render rather than a loop), not the cap. The sibling test
-    // below is the one that exercises the cap.
+    // above is the one that exercises the cap.
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const loader = async () => [1, 2, 3]
