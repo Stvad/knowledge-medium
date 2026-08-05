@@ -526,7 +526,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   peek(): T | undefined { return this.value }
 
-  status(): HandleStatus { return this.status_ }
+  /** Reports `'disposed'` after GC rather than the `'idle'` the reset
+   *  `status_` holds: a holder that can't tell a dead handle from a fresh one
+   *  will happily `load()` it (rejected) and `subscribe()` to it (a no-op),
+   *  and never learn it must re-acquire. See `useHandle`. */
+  status(): HandleStatus { return this.disposed ? 'disposed' : this.status_ }
 
   load(): Promise<T> {
     if (this.disposed) {
@@ -755,6 +759,15 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (this.disposed) {
       // Listening to a disposed handle is a no-op + immediate
       // unsubscribe; callers should re-acquire via the factory.
+      // Warn rather than fail silently: a caller that lands here is wired to
+      // a handle that can never deliver, and the silence is what made this
+      // cost days to find the first time (`useHandle` now detects it via
+      // status() and forces the re-acquiring render).
+      if (import.meta.env?.DEV) {
+        console.warn(
+          `[handleStore] subscribe() on disposed handle ${this.key} — no events will be delivered. Re-acquire it through the factory.`,
+        )
+      }
       return () => {}
     }
     this.listeners.add(listener)

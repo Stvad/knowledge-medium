@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useSyncExternalStore,
 } from 'react'
@@ -172,10 +173,21 @@ export function useHandle<T, S = T | undefined>(
   }, [handle, selector, equality])
   /* eslint-enable react-hooks/immutability */
 
+  // Re-acquisition trigger for the dead-handle case below. A render is the
+  // ONLY way to get a live handle back: the factory (`repo.query.*` /
+  // `repo.block`) is called by our caller during ITS render, so nothing
+  // below this line can re-acquire on its own.
+  const [, forceReacquire] = useReducer((n: number) => n + 1, 0)
+
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready.
+  // prevents an unnecessary roundtrip when the handle is already ready —
+  // and skips a disposed one, whose load() only ever rejects.
   useEffect(() => {
+    if (handle.status() === 'disposed') {
+      forceReacquire()
+      return
+    }
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
     }
@@ -187,8 +199,25 @@ export function useHandle<T, S = T | undefined>(
   // change is bailed out by useSyncExternalStore: it re-checks
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
+  //
+  // The disposed branch is what keeps a subtree recoverable after its
+  // effects have been unmounted for a while — `<Activity mode="hidden">`
+  // being the case that produces it (docs/handle-lifecycle-hidden-subtrees.html).
+  // Nothing retains a handle acquired by a render in that state, so the
+  // store GCs it; subscribing to the corpse is a silent no-op, and React
+  // won't re-render on its own because the snapshot never changes (both
+  // sides are the consumer's "not loaded" sentinel). Asking for a render is
+  // the only exit. React invokes this from a passive effect, so dispatching
+  // here is ordinary usage; it converges because the replacement handle is
+  // retained by the very subscription that follows this one.
   const subscribe = useCallback(
-    (listener: () => void) => handle.subscribe(listener),
+    (listener: () => void) => {
+      if (handle.status() === 'disposed') {
+        forceReacquire()
+        return () => {}
+      }
+      return handle.subscribe(listener)
+    },
     [handle],
   )
 
