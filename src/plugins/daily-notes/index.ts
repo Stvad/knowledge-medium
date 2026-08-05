@@ -208,16 +208,16 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     // Prev/next-day arrows on the zoomed-in note's title (they used to be a
     // pair of header buttons — see DateNavDecorator.tsx for why they moved).
     //
-    // Negative precedence is LOAD-BEARING, not cosmetic. The arrows flank the
-    // title in a single flex row, so whatever ends up INSIDE that row defines
-    // the box they centre against. A decorator that stacks chrome BELOW the
-    // content — readwise's "N highlights to review" hint is one — makes the row
-    // two lines tall, and the arrows sink to the middle of the pair instead of
-    // sitting on the title. At equal precedence the nesting is decided by
-    // registration order, which put a runtime-installed extension inside us and
-    // dropped the arrows 10px. Ordering below every default-precedence
-    // contribution makes that independent of who registers when; -50 keeps us
-    // OUTSIDE supertags (-100) so the type chips stay on the title line.
+    // Negative precedence is about NESTING, not alignment (the arrows stay on
+    // the title line via `items-start` — see DateNavDecorator.tsx). A decorator
+    // that stacks chrome BELOW the content — readwise's "N highlights to
+    // review" hint is one — otherwise lands inside the arrows' row and gets
+    // indented behind the left arrow instead of starting at the block's edge.
+    // At equal precedence the nesting falls to registration order, which put a
+    // runtime-installed extension inside us; ordering below every
+    // default-precedence contribution makes it independent of who registers
+    // when. -50 keeps us OUTSIDE supertags (-100) so the type chips stay on the
+    // title line.
     blockContentDecoratorsFacet.of(dateNavDecoratorContribution, {
       source: 'daily-notes',
       precedence: -50,

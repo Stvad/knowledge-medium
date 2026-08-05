@@ -67,12 +67,12 @@ describe('dailyNotesPlugin', () => {
   })
 
   it('wraps closer to the text than a decorator that stacks chrome below it', () => {
-    // The arrows share a flex row with the title and centre against whatever
-    // that row CONTAINS. A decorator that stacks a second line inside it (the
-    // readwise backlog hint) makes the row two lines tall and drops the arrows
-    // 10px off the title. The stacking decorator is registered FIRST here, so
-    // at equal precedence registration order would make it the innermost one —
-    // only date-nav's explicit negative precedence keeps it inside.
+    // A decorator that stacks chrome below the content (the readwise backlog
+    // hint) must not land inside the arrows' row, where it gets indented behind
+    // the left arrow instead of starting at the block's edge. The stacking
+    // decorator is registered FIRST here, so at equal precedence registration
+    // order would make it the innermost one — only date-nav's explicit negative
+    // precedence keeps it inside.
     const stacking: BlockContentDecoratorContribution = () => inner => {
       const Decorated: BlockRenderer = () => null
       Decorated.displayName = `Stacking(${(inner as {displayName?: string}).displayName ?? 'inner'})`
