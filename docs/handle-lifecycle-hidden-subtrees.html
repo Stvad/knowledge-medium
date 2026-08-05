@@ -34,11 +34,12 @@
 <body>
 
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposal</strong> &middot; a defect report with a proposed fix, not a design exploration.
-Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed by
-reading React 19.2.6's own internals. <strong>Verified against code:</strong>
-<code>src/data/internals/handleStore.ts</code>, <code>src/hooks/block.ts</code>,
-<code>src/data/api/handle.ts</code> at upstream master <code>587136700</code>.
+<strong>Status: implemented</strong> &middot; a defect report whose fix now ships in the same PR
+(#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
+by reading React 19.2.6's own internals. Revised through two adversarial review rounds, which added
+the <code>read()</code>/Suspense fix and the re-acquire attempt cap described below.
+<strong>Last verified against code:</strong> 2026-08-05 (<code>src/data/internals/handleStore.ts</code>,
+<code>src/hooks/block.ts</code>, <code>src/data/api/handle.ts</code> as implemented on this branch).
 </aside>
 
 <h1>Handle lifecycle in hidden subtrees</h1>
@@ -84,7 +85,7 @@ design</a>.)</p>
 
 <div class="step">
 <b>1. A handle schedules its own GC at construction.</b>
-<span class="filepath">src/data/internals/handleStore.ts:505–521</span>
+<span class="filepath">src/data/internals/handleStore.ts:506–522</span>
 <p>A handle is inserted into the store before anything retains it, so the constructor schedules a
 <code>gcTimeMs</code> sweep that "the first <code>retain()</code> (load/subscribe) cancels". The
 comment already names a near-miss of this case: <em>"an abandoned React concurrent-render lookup
@@ -94,7 +95,7 @@ whose subscribe effect never commits"</em>. Ours differs in one decisive way —
 
 <div class="step">
 <b>2. Subscribing to a disposed handle is a silent no-op, and disposal is unobservable.</b>
-<span class="filepath">src/data/internals/handleStore.ts:754–762</span>
+<span class="filepath">src/data/internals/handleStore.ts:759–773</span>
 <pre><code>subscribe(listener: (value: T) =&gt; void): Unsubscribe {
   if (this.disposed) {
     // Listening to a disposed handle is a no-op + immediate
@@ -106,12 +107,12 @@ from where the caller stands: the factory (<code>repo.query.*</code>) runs <stro
 render</strong>, and the only thing that would cause another render is a notification from a
 subscription that no longer exists. The caller cannot even detect the situation:
 <code>dispose()</code> resets <code>status_</code> to <code>'idle'</code>
-(<span class="filepath">handleStore.ts:875–893</span>), <code>disposed</code> is <code>private</code>
-(<span class="filepath">:469</span>), and <code>HandleStatus</code> has no disposed member
+(<span class="filepath">handleStore.ts:899–916</span>), <code>disposed</code> is <code>private</code>
+(<span class="filepath">:470</span>), and <code>HandleStatus</code> has no disposed member
 (<span class="filepath">src/data/api/handle.ts:1</span>). So a dead handle is indistinguishable from
 a fresh one — which is why <code>useHandle</code>'s ensure-load effect cheerfully calls
 <code>load()</code> on it, and that rejection lands in a swallowed catch
-(<span class="filepath">src/hooks/block.ts:175–182</span>).</p>
+(<span class="filepath">src/hooks/block.ts:211–218</span>).</p>
 </div>
 
 <div class="step">
@@ -137,7 +138,7 @@ out of the store when a handle dies — every render below is driven by React, n
 <ol>
   <li>The subtree is hidden. Effects unmount, <code>useHandle</code>'s subscription is released,
   handle <b>H1</b> drops to <code>refCount 0</code> and schedules GC
-  (<span class="filepath">handleStore.ts:861–873</span>).</li>
+  (<span class="filepath">handleStore.ts:885–897</span>).</li>
   <li>Five seconds later H1 disposes and drops its value; the store removes its key
   (<span class="filepath">:891</span>), so the factory will mint a fresh handle next time it is
   called.</li>
@@ -241,18 +242,29 @@ const subscribe = useCallback(
   [handle],
 )</code></pre>
 
-<p>The ensure-load effect needs the same guard so a dead handle is never asked to load; either
-guard-and-return or guard-and-also-dispatch is safe, since React batches the two dispatches into one
-render.</p>
+<p>Recovery gets exactly ONE owner — the subscribe callback. The ensure-load effect guards the same
+condition but only to decline: it neither asks a corpse to load (that only rejects) nor falls through
+to reset the attempt budget described below. Two owners would each spend from that budget for one
+logical recovery.</p>
 
 <p>Re-acquisition converges: the fresh handle is retained by the very subscription that follows,
-which cancels its constructor GC (<span class="filepath">handleStore.ts:852–859</span>), and
+which cancels its constructor GC (<span class="filepath">handleStore.ts:876–883</span>), and
 <code>dispose()</code> removes the key synchronously before any later <code>getOrCreate</code> can
-run. This does rest on one implicit invariant worth stating: call sites must keep calling the factory
-on every render rather than memoizing it (all of them do today — <code>useChildIds</code>,
-<code>useChildren</code>, <code>useSubtree</code>, <code>useParents</code>,
-<code>useBlockQuery</code>). A <code>useMemo(fn, [])</code>-wrapped factory would hand back the same
-dead handle and spin.</p>
+run.</p>
+
+<p>That rests on an invariant the hook cannot enforce: <strong>the caller's factory must run on every
+render and return a live handle.</strong> Two shapes violate it — one that memoizes the handle
+(<code>useMemo(() =&gt; repo.query.subtree(…), [id])</code>), which hands back the same corpse, and one
+that mints a fresh dead handle per render. Every call site in core satisfies it today
+(<code>useChildIds</code>, <code>useChildren</code>, <code>useSubtree</code>, <code>useParents</code>,
+<code>useBlockQuery</code> all call the factory inline; the memoized ones memoize
+<code>repo.block(…)</code>, and a <code>Block</code> never disposes).</p>
+
+<p>So the hook caps re-acquisition at <code>REACQUIRE_ATTEMPT_LIMIT</code> attempts and then stops,
+warning in dev. Be clear about what that means: for a violating caller the outcome is still a
+permanently stale subtree — bounded and diagnosable instead of an unbounded render loop, but not
+recovered. The limit carries headroom for StrictMode, whose dev-only double-invoke of passive effects
+spends two attempts on one logical recovery.</p>
 
 <h3>Alternatives considered</h3>
 
@@ -262,7 +274,7 @@ dead handle and spin.</p>
 <tr>
   <td>Revive on subscribe</td>
   <td>Have a disposed handle re-register itself with the store. <code>getOrCreate</code> is a bare
-  synchronous map lookup (<span class="filepath">handleStore.ts:309–315</span>), so a handle
+  synchronous map lookup (<span class="filepath">handleStore.ts:310–316</span>), so a handle
   re-inserting under its old key <em>after</em> another consumer's render already minted a
   replacement would split ownership — double loads, split notifications. Re-acquiring through the
   factory keeps one owner per key.</td>
@@ -299,9 +311,16 @@ fail.</p>
 
 <h2>Scope</h2>
 
-<p>Deliberately narrow: no change to GC policy, to the store's key model, or to any consumer. It is
-the minimum that makes <code>&lt;Activity&gt;</code> usable with KM's data layer, and it removes a
-silent failure mode from the data layer whether or not core adopts Activity anywhere.</p>
+<p>Deliberately narrow: no change to GC policy or to the store's key model. One behavior on the
+public <code>Handle&lt;T&gt;</code> surface does change: <code>read()</code> on a disposed handle now
+throws a synchronous <code>Error</code> instead of falling through to <code>throw this.load()</code>.
+That path handed a Suspense boundary a freshly rejected promise on every retry — render, throw,
+reject, re-render, forever, with nothing surfacing — so an error boundary is strictly better. No live
+caller reaches it today (only <code>Block</code> is Suspense-read, and it never disposes), but it is
+part of this diff rather than a separate concern.</p>
+
+<p>Otherwise this is the minimum that makes <code>&lt;Activity&gt;</code> usable with KM's data layer,
+and it removes a silent failure mode whether or not core adopts Activity anywhere.</p>
 
 </body>
 </html>

@@ -43,8 +43,10 @@ const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
 /** How many times `useHandle` will force a render to re-acquire a disposed
  *  handle before concluding the caller's factory can't produce a live one.
- *  Small on purpose: a working factory succeeds on the first attempt. */
-const REACQUIRE_ATTEMPT_LIMIT = 3
+ *  A working factory succeeds on the FIRST attempt; the headroom is for
+ *  StrictMode, whose dev-only double-invoke of passive effects spends two
+ *  attempts on one logical recovery (`src/main.tsx` wraps the app in it). */
+const REACQUIRE_ATTEMPT_LIMIT = 5
 
 export interface BlockContentRevision {
   content: string
@@ -211,11 +213,15 @@ export function useHandle<T, S = T | undefined>(
   // prevents an unnecessary roundtrip when the handle is already ready —
   // and skips a disposed one, whose load() only ever rejects.
   useEffect(() => {
-    // Don't ask a corpse to load — it only ever rejects. Recovery is NOT
-    // owned here: the subscribe callback below is the single owner, so this
-    // branch is noise-avoidance, not load-bearing (deleting it costs a
-    // swallowed rejection, nothing more).
+    // Both halves of this early return carry weight. We neither ask a corpse
+    // to load (it only ever rejects) NOR fall through to the budget reset
+    // below — resetting on a dead handle would refill the attempt budget on
+    // every render and defeat the cap entirely. Recovery itself is not owned
+    // here; the subscribe callback below is its single owner.
     if (handle.status() === 'disposed') return
+    // A live handle means any earlier recovery worked, so a LATER disposal on
+    // this same consumer (another hide/reveal cycle) starts from a full
+    // budget rather than inheriting a spent one.
     attempts.current = 0
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})

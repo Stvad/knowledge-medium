@@ -21,7 +21,7 @@
  *      frozen sentinel, React forces nothing, and the reconnected
  *      subscription attaches to a corpse.
  *
- * `expect(created).toBeGreaterThanOrEqual(2)` before the reveal is load-bearing:
+ * The `created` assertion before the reveal is load-bearing:
  * it asserts the second death actually happened. Without it, a React version
  * that declined to render the hidden subtree would quietly reduce this to
  * case 1 and the test would pass while pinning nothing.
@@ -81,6 +81,8 @@ describe('useHandle re-acquires a disposed handle', () => {
     }
 
     // memo + stable element identity so REVEALING the lane bails out instead
+    // (redundant with each other — either bailout alone suffices; both are
+    // kept so an edit removing one doesn't silently make this vacuous)
     // of re-rendering the consumer. That is what makes this faithful: in the
     // live app the reveal is a bailout (nothing about the subtree's props
     // changed), so the consumer never re-runs its factory and never discovers
@@ -133,26 +135,41 @@ describe('useHandle re-acquires a disposed handle', () => {
     await waitFor(() => expect(screen.getByTestId('out').textContent).toBe('3'))
   })
 
-  it('recovers on a fresh mount that is handed an already-disposed handle', async () => {
-    // Pins the ensure-load guard on its own. The reveal case above is
-    // recovered by either guard, so without this test neither one is
-    // individually pinned and one could be deleted unnoticed.
+  it('gives a later disposal a full attempt budget again', async () => {
+    // Pins `attempts.current = 0`. Each hide/reveal cycle spends one attempt,
+    // so without the reset the budget runs out and a consumer that has been
+    // backgrounded a handful of times stops recovering. Six cycles is one
+    // more than REACQUIRE_ATTEMPT_LIMIT.
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const loader = async () => [1, 2, 3]
     const acquire = () => store.getOrCreate(KEY, () => new LoaderHandle({ store, key: KEY, loader }))
 
-    // Create and immediately abandon a handle: never retained, so the
-    // constructor's GC sweep disposes it.
-    acquire()
-    sched.flush(100)
-
-    const Consumer = () => {
+    const Consumer = memo(() => {
+      useContext(TickContext)
       const value = useHandle(acquire(), { selector: v => (v as number[] | undefined) ?? EMPTY })
-      return <div data-testid="fresh">{value.length}</div>
+      return <div data-testid="cycles">{value.length}</div>
+    })
+    const consumerElement = <Consumer/>
+    const Harness = ({ hidden, tick }: { hidden: boolean; tick: number }) => (
+      <TickContext.Provider value={tick}>
+        <Activity mode={hidden ? 'hidden' : 'visible'}>{consumerElement}</Activity>
+      </TickContext.Provider>
+    )
+
+    const { rerender } = render(<Harness hidden={false} tick={0}/>)
+    await waitFor(() => expect(screen.getByTestId('cycles').textContent).toBe('3'))
+
+    for (let cycle = 1; cycle <= 6; cycle++) {
+      rerender(<Harness hidden tick={cycle * 2}/>)
+      await act(async () => {})
+      sched.flush(100)
+      rerender(<Harness hidden tick={cycle * 2 + 1}/>)
+      await act(async () => {})
+      sched.flush(100)
+      rerender(<Harness hidden={false} tick={cycle * 2 + 1}/>)
+      await waitFor(() => expect(screen.getByTestId('cycles').textContent).toBe('3'))
     }
-    render(<Consumer/>)
-    await waitFor(() => expect(screen.getByTestId('fresh').textContent).toBe('3'))
   })
 
   it('gives up instead of spinning when the factory mints a fresh dead handle each render', async () => {
@@ -185,9 +202,10 @@ describe('useHandle re-acquires a disposed handle', () => {
 
   it('gives up instead of spinning when the factory cannot replace a dead handle', async () => {
     // A caller that memoizes its handle hands back the same corpse forever.
-    // Re-acquiring can't help, so useHandle must stop asking rather than
-    // drive an unbounded render loop. The explicit throw keeps a regression
-    // here a fast failure instead of a hung test run.
+    // This one terminates on its own — `subscribe`'s deps never change, so
+    // useSyncExternalStore never re-invokes it — so it pins the OUTCOME (a
+    // quiet, empty render rather than a loop), not the cap. The sibling test
+    // below is the one that exercises the cap.
     const sched = manualScheduler()
     const store = new HandleStore({ gcTimeMs: 100, schedule: sched.schedule })
     const loader = async () => [1, 2, 3]
