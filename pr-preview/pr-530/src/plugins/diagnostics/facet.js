@@ -1,2 +1,0 @@
-import{keyedMapFacet as e}from"../../facets/facet.js";var t={ok:0,info:1,warning:2,error:3},n=e=>e.reduce((e,n)=>t[n]>t[e]?n:e,`ok`),r=e(`diagnostics.sources`,e=>e.id);export{t as SEVERITY_RANK,r as diagnosticsFacet,n as worstSeverity};
-//# sourceMappingURL=facet.js.map
