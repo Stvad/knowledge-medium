@@ -189,8 +189,7 @@ describe('PanelRenderer', () => {
     repoRef.current = undefined
   })
 
-  const renderPanel = (wideScrollSurface: boolean) =>
-    render(
+  const panelTree = (wideScrollSurface: boolean) => (
       <AppRuntimeContextProvider value={env.runtime}>
         <BlockContextProvider
           initialValue={{
@@ -201,8 +200,10 @@ describe('PanelRenderer', () => {
         >
           <PanelRenderer block={env.panel}/>
         </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
+      </AppRuntimeContextProvider>
+  )
+
+  const renderPanel = (wideScrollSurface: boolean) => render(panelTree(wideScrollSurface))
 
   const renderPanelInLayoutSession = async (
     activePanelId: string,
@@ -298,38 +299,29 @@ describe('PanelRenderer', () => {
   })
 
   it('keeps the panel body mounted when the wide-scroll frame toggles', async () => {
-    // Opening a second pane (or collapsing back to one) flips
-    // wideScrollSurface. When the content frame was a conditional wrapper,
-    // that changed the element type at this position and React rebuilt the
-    // whole panel body — losing scroll, editor state and playback, and
-    // reading as a full reload on a large view.
-    const tree = (wide: boolean) => (
-      <AppRuntimeContextProvider value={env.runtime}>
-        <BlockContextProvider
-          initialValue={{
-            layoutBoundary: true,
-            panelId: env.panel.id,
-            wideScrollSurface: wide,
-          }}
-        >
-          <PanelRenderer block={env.panel}/>
-        </BlockContextProvider>
-      </AppRuntimeContextProvider>
-    )
-
-    const view = render(tree(true))
+    // Why this matters: see the content-frame comment in PanelRenderer.tsx.
+    const view = renderPanel(true)
     const body = await screen.findByTestId('panel-top-level-block')
     expect(body.parentElement?.className).toContain('max-w-3xl')
 
-    view.rerender(tree(false))
+    view.rerender(panelTree(false))
 
-    const afterWidening = await screen.findByTestId('panel-top-level-block')
-    expect(afterWidening).toBe(body)
+    expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
     expect(body.isConnected).toBe(true)
 
     // …and back again, which is the collapse-to-one-pane direction.
-    view.rerender(tree(true))
+    view.rerender(panelTree(true))
     expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+  })
+
+  it('leaves the content frame layout-neutral outside a wide scroll surface', async () => {
+    // The frame is always mounted now, so it has to generate no box when it
+    // isn't the wide surface — otherwise the multi-pane layout gains a real
+    // block box it never had. An empty className passes every other test here.
+    renderPanel(false)
+
+    const body = await screen.findByTestId('panel-top-level-block')
+    expect(body.parentElement?.className).toBe('contents')
   })
 
   it('does not add a content-width frame for normal panel columns', async () => {
