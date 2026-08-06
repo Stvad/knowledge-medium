@@ -323,16 +323,28 @@ export function PanelRenderer({block}: BlockRendererProps) {
       )}
       <div
         ref={scrollRef}
+        // Stable handle for the pane's scrollport. Runtime callers find it by
+        // walking ancestors for a scrolling overflow (nearestScrollableAncestor),
+        // which is robust to wrappers; this is for tests, so they don't pin the
+        // chain depth and break when one is added.
+        data-panel-scrollport=""
         className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
         onPointerDownCapture={activatePanel}
         onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}
       >
-        {wideScrollSurface ? (
-          <div className="mx-auto w-full max-w-3xl">
-            {panelBody}
-          </div>
-        ) : panelBody}
+        {/* The content frame is ALWAYS mounted and swaps its class, rather
+            than wrapping conditionally. `wideScrollSurface` flips whenever the
+            layout crosses between one pane and several, and a conditional
+            wrapper changes the element type at this position — so React
+            unmounted and rebuilt the entire panel body on every first split
+            and every collapse back. That threw away scroll position, editor
+            state, and anything mid-playback, and on a big view (an agenda with
+            thousands of rows) it is visible as a full reload. `contents`
+            generates no box, so the non-wide layout is unchanged. */}
+        <div className={wideScrollSurface ? 'mx-auto w-full max-w-3xl' : 'contents'}>
+          {panelBody}
+        </div>
       </div>
       {/* Per-panel mount points — chrome contributed via
           `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted

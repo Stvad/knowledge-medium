@@ -297,6 +297,41 @@ describe('PanelRenderer', () => {
     expect(sessionBlock.peekProperty(activePanelIdProp)).toBe('panel-b')
   })
 
+  it('keeps the panel body mounted when the wide-scroll frame toggles', async () => {
+    // Opening a second pane (or collapsing back to one) flips
+    // wideScrollSurface. When the content frame was a conditional wrapper,
+    // that changed the element type at this position and React rebuilt the
+    // whole panel body — losing scroll, editor state and playback, and
+    // reading as a full reload on a large view.
+    const tree = (wide: boolean) => (
+      <AppRuntimeContextProvider value={env.runtime}>
+        <BlockContextProvider
+          initialValue={{
+            layoutBoundary: true,
+            panelId: env.panel.id,
+            wideScrollSurface: wide,
+          }}
+        >
+          <PanelRenderer block={env.panel}/>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>
+    )
+
+    const view = render(tree(true))
+    const body = await screen.findByTestId('panel-top-level-block')
+    expect(body.parentElement?.className).toContain('max-w-3xl')
+
+    view.rerender(tree(false))
+
+    const afterWidening = await screen.findByTestId('panel-top-level-block')
+    expect(afterWidening).toBe(body)
+    expect(body.isConnected).toBe(true)
+
+    // …and back again, which is the collapse-to-one-pane direction.
+    view.rerender(tree(true))
+    expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+  })
+
   it('does not add a content-width frame for normal panel columns', async () => {
     renderPanel(false)
 
@@ -469,7 +504,7 @@ describe('PanelRenderer', () => {
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()
-    expect(topLevel.parentElement?.scrollTop).toBe(512)
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(512)
   })
 
   // Under `StrictMode` — which `main.tsx` enables — the effect runs setup,
@@ -499,7 +534,7 @@ describe('PanelRenderer', () => {
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()
-    expect(topLevel.parentElement?.scrollTop).toBe(512)
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(512)
   })
 
   // A pane can be scrolled without ever being clicked or navigated in, so it
@@ -513,7 +548,7 @@ describe('PanelRenderer', () => {
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()
-    expect(topLevel.parentElement?.scrollTop).toBe(640)
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(640)
   })
 
   it('captures the panel view mode in history snapshots', async () => {
