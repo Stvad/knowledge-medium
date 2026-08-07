@@ -1,4 +1,11 @@
-export type HandleStatus = 'idle' | 'loading' | 'ready' | 'error'
+/** `'disposed'` is terminal and only ever reported by a store-backed handle
+ *  that has been GC'd: its value is gone, `subscribe` is a no-op and `load`
+ *  rejects, so the holder must re-acquire through the factory rather than
+ *  keep using it. It exists because a disposed handle used to report `'idle'`
+ *  — indistinguishable from a fresh one, which is what let a consumer sit on
+ *  a dead handle forever (docs/handle-lifecycle-hidden-subtrees.html).
+ *  `Block` has no disposal concept and never returns it. */
+export type HandleStatus = 'idle' | 'loading' | 'ready' | 'error' | 'disposed'
 
 export type Unsubscribe = () => void
 
