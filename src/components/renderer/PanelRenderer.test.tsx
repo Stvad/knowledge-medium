@@ -189,8 +189,7 @@ describe('PanelRenderer', () => {
     repoRef.current = undefined
   })
 
-  const renderPanel = (wideScrollSurface: boolean) =>
-    render(
+  const panelTree = (wideScrollSurface: boolean) => (
       <AppRuntimeContextProvider value={env.runtime}>
         <BlockContextProvider
           initialValue={{
@@ -201,8 +200,10 @@ describe('PanelRenderer', () => {
         >
           <PanelRenderer block={env.panel}/>
         </BlockContextProvider>
-      </AppRuntimeContextProvider>,
-    )
+      </AppRuntimeContextProvider>
+  )
+
+  const renderPanel = (wideScrollSurface: boolean) => render(panelTree(wideScrollSurface))
 
   const renderPanelInLayoutSession = async (
     activePanelId: string,
@@ -295,6 +296,32 @@ describe('PanelRenderer', () => {
     fireEvent.focus(await screen.findByLabelText('Close panel'))
 
     expect(sessionBlock.peekProperty(activePanelIdProp)).toBe('panel-b')
+  })
+
+  it('keeps the panel body mounted when the wide-scroll frame toggles', async () => {
+    // Why this matters: see the content-frame comment in PanelRenderer.tsx.
+    const view = renderPanel(true)
+    const body = await screen.findByTestId('panel-top-level-block')
+    expect(body.parentElement?.className).toContain('max-w-3xl')
+
+    view.rerender(panelTree(false))
+
+    expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+    expect(body.isConnected).toBe(true)
+
+    // …and back again, which is the collapse-to-one-pane direction.
+    view.rerender(panelTree(true))
+    expect(await screen.findByTestId('panel-top-level-block')).toBe(body)
+  })
+
+  it('leaves the content frame layout-neutral outside a wide scroll surface', async () => {
+    // The frame is always mounted now, so it has to generate no box when it
+    // isn't the wide surface — otherwise the multi-pane layout gains a real
+    // block box it never had. An empty className passes every other test here.
+    renderPanel(false)
+
+    const body = await screen.findByTestId('panel-top-level-block')
+    expect(body.parentElement?.className).toBe('contents')
   })
 
   it('does not add a content-width frame for normal panel columns', async () => {
@@ -469,7 +496,7 @@ describe('PanelRenderer', () => {
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()
-    expect(topLevel.parentElement?.scrollTop).toBe(512)
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(512)
   })
 
   // Under `StrictMode` — which `main.tsx` enables — the effect runs setup,
@@ -499,7 +526,7 @@ describe('PanelRenderer', () => {
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()
-    expect(topLevel.parentElement?.scrollTop).toBe(512)
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(512)
   })
 
   // A pane can be scrolled without ever being clicked or navigated in, so it
@@ -513,7 +540,7 @@ describe('PanelRenderer', () => {
     const topLevel = await screen.findByTestId('panel-top-level-block')
 
     expect(alignScrollportToRow).not.toHaveBeenCalled()
-    expect(topLevel.parentElement?.scrollTop).toBe(640)
+    expect(topLevel.closest('[data-panel-scrollport]')?.scrollTop).toBe(640)
   })
 
   it('captures the panel view mode in history snapshots', async () => {
