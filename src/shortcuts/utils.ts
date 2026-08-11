@@ -234,8 +234,26 @@ export interface DefineBlocksActionConfig {
    *  least one selected block matching. Omit to mean "always". */
   appliesTo?: (block: Block) => boolean
   /** The actual operation. Both variants forward to this with the
-   *  blocks they respectively hold (one or many). */
-  flow: (blocks: readonly Block[]) => Promise<void> | void
+   *  blocks they respectively hold (one or many), plus the dispatch
+   *  context. Implementations that don't need the context can declare
+   *  a one-parameter function. */
+  flow: (blocks: readonly Block[], context: BlocksActionContext) => Promise<void> | void
+}
+
+/** What a {@link defineBlocksAction} flow learns about its dispatch,
+ *  beyond the blocks themselves. */
+export interface BlocksActionContext {
+  uiStateBlock: Block
+  scopeRootId?: string
+  /** True for the MULTI_SELECT_MODE variant. An operation that
+   *  RELOCATES or removes its blocks needs this: the selection is
+   *  stored in ui-state and `PanelMultiSelectActionContext` keeps
+   *  multi-select mode active off a non-empty `selectedBlockIds`
+   *  alone, with no check that those blocks are still in the panel.
+   *  Move them somewhere off-surface without clearing it and the pane
+   *  shows nothing highlighted while later shortcuts still act on the
+   *  relocated blocks. */
+  isMultiSelect: boolean
 }
 
 export interface BlocksActionPair {
@@ -288,7 +306,8 @@ export const defineBlocksAction = ({
     ...(appliesTo
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
-    handler: ({block}: BlockShortcutDependencies) => flow([block]),
+    handler: ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) =>
+      flow([block], {uiStateBlock, scopeRootId, isMultiSelect: false}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -300,7 +319,7 @@ export const defineBlocksAction = ({
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))
     },
-    handler: ({selectedBlocks}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks),
+    handler: ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks, {uiStateBlock, scopeRootId, isMultiSelect: true}),
   },
 })

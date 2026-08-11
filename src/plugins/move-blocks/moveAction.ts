@@ -5,12 +5,15 @@
  * destination. Paired via `defineBlocksAction` so the dialog opens
  * exactly once regardless of how many blocks are being moved.
  *
- * Palette-reachable only — no default keybinding.
+ * No default keybinding. The bullet's "Move to…" context-menu entry
+ * (`contextMenuItem.ts`) is the dependable single-block entry point;
+ * the palette only lists these when a block context is actually active.
  */
 import { FolderInput } from 'lucide-react'
 import type { Block } from '@/data/block'
-import { defineBlocksAction } from '@/shortcuts/utils.js'
+import { defineBlocksAction, type BlocksActionContext } from '@/shortcuts/utils.js'
 import { showError, showSuccess } from '@/utils/toast.js'
+import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { MoveDestinationPicker } from './MoveDestinationPicker.tsx'
 import { moveBlocksTo } from './moveBlocks.ts'
@@ -26,7 +29,10 @@ export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
  *  without the block-focus step `commandPaletteForBlockAction` does, so
  *  the block context isn't active and only Global commands list), which
  *  leaves the context menu as the dependable entry point. */
-export const runMoveFlow = async (blocks: readonly Block[]): Promise<void> => {
+export const runMoveFlow = async (
+  blocks: readonly Block[],
+  context?: BlocksActionContext,
+): Promise<void> => {
   if (blocks.length === 0) return
   const repo = blocks[0].repo
   const firstData = blocks[0].peek() ?? await blocks[0].load()
@@ -47,6 +53,14 @@ export const runMoveFlow = async (blocks: readonly Block[]): Promise<void> => {
       position: { kind: 'last' },
     })
     if (result.moved > 0) {
+      // Drop the selection once the blocks have relocated. It's stored
+      // in ui-state, and multi-select mode stays active off a non-empty
+      // `selectedBlockIds` alone — no check that those blocks are still
+      // on this surface. Moving them to a destination outside the panel
+      // would otherwise leave the pane with nothing highlighted while
+      // Delete and friends still act on them at their new home. Same
+      // reset `deleteSelectedBlocks` / `paste_*_selection` already do.
+      if (context?.isMultiSelect) await resetBlockSelection(context.uiStateBlock)
       showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
     } else {
       showError('No blocks were moved')

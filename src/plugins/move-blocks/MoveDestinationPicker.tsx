@@ -37,6 +37,8 @@ import {
 import type { DialogContextProps } from '@/utils/dialogs.js'
 
 const SEARCH_LIMIT = 25
+/** Upper bound on the over-fetch below. */
+const SEARCH_FETCH_CEILING = 200
 const DEBOUNCE_MS = 80
 
 interface ActiveSession {
@@ -125,14 +127,27 @@ export function MoveDestinationPicker({
       const results = await searchLinkTargets(repo, {
         workspaceId: session.workspaceId,
         query: trimmedQuery,
-        limit: SEARCH_LIMIT,
+        // Over-fetch by the size of the exclusion set. `searchLinkTargets`
+        // slices its sources to `limit` and only THEN drops
+        // `excludeBlockIds` (`linkTargetAutocomplete.ts:592-604`), which
+        // is harmless when excluding a single block but not here: we
+        // exclude an entire subtree, so a big moved subtree whose blocks
+        // match the query can fill all 25 slots and leave the user
+        // staring at "No results" while real destinations existed just
+        // below the cut. Capped so moving a huge subtree doesn't turn
+        // every keystroke into an enormous query — beyond the cap the
+        // shortfall can still bite, which is why the cap is generous
+        // relative to a 25-row list.
+        limit: Math.min(SEARCH_LIMIT + session.excludeBlockIds.length, SEARCH_FETCH_CEILING),
         excludeBlockIds: session.excludeBlockIds,
       })
       if (cancelled) return
+      // The over-fetch above is headroom for the exclusions, not a
+      // bigger list — trim back to the list size we actually show.
       setSearchResults({
         query: trimmedQuery,
-        aliases: results.aliases,
-        blocks: results.blocks,
+        aliases: results.aliases.slice(0, SEARCH_LIMIT),
+        blocks: results.blocks.slice(0, SEARCH_LIMIT),
       })
     }, DEBOUNCE_MS)
     return () => {
