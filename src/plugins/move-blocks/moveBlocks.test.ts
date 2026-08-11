@@ -149,6 +149,9 @@ describe('moveBlocksTo', () => {
     )
     expect(error).toBeInstanceOf(PartialMoveError)
     expect((error as PartialMoveError).moved).toBe(1)
+    // The ids, not just the count — the action layer needs them to take
+    // the relocated prefix out of the ui-state selection.
+    expect((error as PartialMoveError).movedIds).toEqual(['x'])
     expect((error as PartialMoveError).cause).toBeInstanceOf(CycleError)
 
     // The prefix really did commit — this is the state the bare
@@ -232,6 +235,29 @@ describe('moveBlocksTo', () => {
     expect(await childIds('dest')).toEqual(['a'])
     // The reveal joins the move's undo entry rather than adding its own.
     expect(depths()).toEqual({ undo: 1, redo: 0 })
+  })
+
+  // The reveal sits after the FIRST move, not after the loop: each move
+  // commits its own tx, so an end-of-loop reveal is skipped by a
+  // mid-batch failure and the blocks that DID land stay hidden — while
+  // the error says "Moved 1 block".
+  it('reveals a collapsed destination even when the batch fails part-way', async () => {
+    // Destination 'd' is collapsed AND lives inside 'p'. Moving [x, p]
+    // into it commits x, then throws CycleError on p — so the reveal has
+    // to have happened before that failure, or x sits in 'd' invisibly
+    // while the error claims a block moved.
+    await seed('x', null)
+    await seed('p', null)
+    await seed('d', 'p')
+    await repo.block('d').set(isCollapsedProp, true)
+
+    await expect(
+      moveBlocksTo(repo, ['x', 'p'], {parentId: 'd', position: {kind: 'last'}}),
+    ).rejects.toThrow(PartialMoveError)
+
+    await repo.block('d').load()
+    expect(repo.block('d').peekProperty(isCollapsedProp)).toBe(false)
+    expect(await childIds('d')).toEqual(['x'])
   })
 
   it('leaves an already-expanded destination untouched', async () => {

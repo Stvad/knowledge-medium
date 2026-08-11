@@ -62,14 +62,24 @@ export interface MoveBlocksResult {
  * still reverts all of it — hence the recovery hint in the message.
  */
 export class PartialMoveError extends Error {
-  constructor(readonly moved: number, override readonly cause: unknown) {
+  /** The ids that DID land, so the caller can still do the bookkeeping a
+   *  success would have done — notably taking them out of the ui-state
+   *  selection, which otherwise keeps pointing shortcuts at blocks that
+   *  have already relocated. */
+  readonly movedIds: readonly string[]
+
+  constructor(movedIds: readonly string[], override readonly cause: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause)
+    const moved = movedIds.length
     super(
       `Moved ${moved} block${moved === 1 ? '' : 's'} before failing: ${detail}. `
       + 'Undo (cmd-Z) reverts the blocks that did move.',
     )
     this.name = 'PartialMoveError'
+    this.movedIds = movedIds
   }
+
+  get moved(): number { return this.movedIds.length }
 }
 
 /**
@@ -113,15 +123,22 @@ export const moveBlocksTo = async (
           position,
         })
         moved += 1
+        // Reveal after the FIRST block lands, not after the loop. Each
+        // move commits its own tx, so a failure partway through would
+        // skip an end-of-loop reveal and leave the blocks that DID move
+        // hidden under a collapsed destination — while the error says
+        // "Moved N blocks". Placed after the move rather than before the
+        // loop so a batch that lands nothing doesn't expand anything (or
+        // mint an undo entry holding only the reveal).
+        if (moved === 1) await revealDestination(grouped, target.parentId)
         position = { kind: 'after', siblingId: id }
       }
-      await revealDestination(grouped, target.parentId)
     })
   } catch (error) {
     // Nothing committed yet → the original error is the whole story.
-    // Otherwise the caller needs the count (see `PartialMoveError`).
+    // Otherwise the caller needs the ids (see `PartialMoveError`).
     if (moved === 0) throw error
-    throw new PartialMoveError(moved, error)
+    throw new PartialMoveError(prunedIds.slice(0, moved), error)
   }
   return { moved, movedIds: prunedIds.slice(0, moved) }
 }

@@ -17,7 +17,7 @@ import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { selectionStateProp } from '@/data/properties.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { MoveDestinationPicker } from './MoveDestinationPicker.tsx'
-import { moveBlocksTo } from './moveBlocks.ts'
+import { moveBlocksTo, PartialMoveError } from './moveBlocks.ts'
 
 export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
 
@@ -105,6 +105,12 @@ export const runMoveFlow = async (
       showError('No blocks were moved')
     }
   } catch (error) {
+    // A partial failure still relocated its prefix, so those ids need the
+    // same selection bookkeeping a success does — otherwise Delete and the
+    // other multi-select shortcuts keep reaching them at their new home.
+    if (context && error instanceof PartialMoveError) {
+      await dropMovedFromSelection(context.uiStateBlock, error.movedIds)
+    }
     showError(
       error instanceof Error ? error.message : 'Failed to move blocks',
     )
