@@ -19,8 +19,14 @@ export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
 
 /** Pick a destination (one dialog per invocation) and move every block
  *  in `blocks` there. Used by both context variants — the picker opens
- *  exactly once regardless of how many blocks are being moved. */
-const runMoveFlow = async (blocks: readonly Block[]): Promise<void> => {
+ *  exactly once regardless of how many blocks are being moved.
+ *
+ *  Exported because the bullet context-menu entry needs the same flow:
+ *  the global ⌘K palette does NOT surface NORMAL_MODE actions (it opens
+ *  without the block-focus step `commandPaletteForBlockAction` does, so
+ *  the block context isn't active and only Global commands list), which
+ *  leaves the context menu as the dependable entry point. */
+export const runMoveFlow = async (blocks: readonly Block[]): Promise<void> => {
   if (blocks.length === 0) return
   const repo = blocks[0].repo
   const firstData = blocks[0].peek() ?? await blocks[0].load()

@@ -12,10 +12,12 @@
  *   - `moveAction.ts`             — block/multi-select actions that open the picker
  */
 import { actionsFacet } from '@/extensions/core.js'
+import { blockContextMenuItemsFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { moveBlockAction, moveBlocksAction } from './moveAction.ts'
+import { moveBlocksContextMenuItem } from './contextMenuItem.ts'
 
 export {
   MOVE_BLOCKS_ACTION_ID,
@@ -40,4 +42,9 @@ export const moveBlocksPlugin: AppExtension = systemToggle({
   dialogAppMountExtension,
   actionsFacet.of(moveBlockAction, {source: 'move-blocks'}),
   actionsFacet.of(moveBlocksAction, {source: 'move-blocks'}),
+  // The primary entry point, not a convenience: the global ⌘K palette
+  // lists only Global commands (it doesn't focus the block the way
+  // `commandPaletteForBlockAction` does), so without this the move
+  // command has no dependable way to be invoked.
+  blockContextMenuItemsFacet.of(moveBlocksContextMenuItem, {source: 'move-blocks'}),
 ])
