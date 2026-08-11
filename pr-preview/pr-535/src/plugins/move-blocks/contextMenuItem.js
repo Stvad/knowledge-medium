@@ -1,0 +1,2 @@
+import{FolderInput as e}from"../../../node_modules/.pnpm/lucide-react@1.12.0_react@19.2.6/node_modules/lucide-react/dist/esm/icons/folder-input.js";import{runMoveFlow as t}from"./moveAction.js";var n=`move-blocks.move-to`,r=({block:r})=>({id:n,label:`Move to…`,icon:e,onSelect:()=>{t([r])}});export{n as MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,r as moveBlocksContextMenuItem};
+//# sourceMappingURL=contextMenuItem.js.map
