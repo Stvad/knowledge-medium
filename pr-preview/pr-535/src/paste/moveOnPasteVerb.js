@@ -1,0 +1,2 @@
+import{defineVerbFacet as e}from"../facets/verbFacet.js";var t=e({id:`core.paste-as-move`,defaultImpl:()=>!1,onError:`rethrow`}),n=(e,t)=>({parentId:e.peek()?.parentId??null,position:{kind:t,siblingId:e.id}}),r=async(e,n,r)=>{let i=e.facetRuntime;return!i||!r?!1:t.run(i,{repo:e,target:n,clipboardText:r})};export{t as pasteAsMoveVerb,n as siblingMoveTarget,r as tryPasteAsMove};
+//# sourceMappingURL=moveOnPasteVerb.js.map
