@@ -9,6 +9,7 @@ import type {
   Ref,
   RefObject,
   ReactNode,
+  SVGProps,
 } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
@@ -366,6 +367,55 @@ export const blockBulletHoverFacet = defineFacet<
   },
   empty: () => () => [],
   validate: isFunction<BlockBulletHoverContribution>,
+})
+
+/** One entry in the bullet's context menu, contributed by a plugin. */
+export interface BlockContextMenuItem {
+  /** Stable identity, also the React key. Namespace it per plugin. */
+  id: string
+  label: string
+  icon?: ComponentType<SVGProps<SVGSVGElement>>
+  onSelect: () => void
+  destructive?: boolean
+}
+
+export type BlockContextMenuItemsContribution =
+  (context: BlockResolveContext) => BlockContextMenuItem | readonly BlockContextMenuItem[] | null
+
+export type BlockContextMenuItemsResolver =
+  (context: BlockResolveContext) => readonly BlockContextMenuItem[]
+
+// Slot for items appended to the block bullet's context menu — the plugin
+// side of a menu core otherwise owns outright. Mirrors `blockBulletHoverFacet`:
+// each contribution returns an item, a list of items, or null/undefined/false
+// to opt out for this block; `BlockBullet` renders every returned item, in
+// contribution order, after core's own items and behind a separator that
+// appears only when there is at least one contribution.
+//
+// Core's five existing items (Copy ID / Copy Block Ref / Copy Block Embed /
+// Zoom In / Show-Hide Properties) stay hardcoded rather than becoming
+// contributions through this same facet — they close over hook-local state
+// (`setShowProperties`, `panelId`, `workspaceId`) that isn't on
+// `BlockResolveContext`, and converting them would be a much larger refactor
+// of the shell for no gain today. The asymmetry is deliberate, not
+// unfinished.
+export const blockContextMenuItemsFacet = defineFacet<
+  BlockContextMenuItemsContribution,
+  BlockContextMenuItemsResolver
+>({
+  id: 'core.block-context-menu-items',
+  combine: contributions => context => {
+    const result: BlockContextMenuItem[] = []
+    for (const contribution of contributions) {
+      const items = contribution(context)
+      if (!items) continue
+      if (Array.isArray(items)) result.push(...items)
+      else result.push(items as BlockContextMenuItem)
+    }
+    return result
+  },
+  empty: () => () => [],
+  validate: isFunction<BlockContextMenuItemsContribution>,
 })
 
 export const blockLayoutFacet = defineVariantFacet<BlockResolveContext, BlockLayout>({
