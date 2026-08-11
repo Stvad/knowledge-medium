@@ -243,17 +243,13 @@ export interface DefineBlocksActionConfig {
 /** What a {@link defineBlocksAction} flow learns about its dispatch,
  *  beyond the blocks themselves. */
 export interface BlocksActionContext {
+  /** Carries the ui-state selection. An operation that RELOCATES or
+   *  removes its blocks must take them out of it: multi-select mode
+   *  stays active off a non-empty `selectedBlockIds` alone, with no
+   *  check that those blocks are still in the panel, so a stale id
+   *  leaves later shortcuts acting on a row the pane no longer shows. */
   uiStateBlock: Block
   scopeRootId?: string
-  /** True for the MULTI_SELECT_MODE variant. An operation that
-   *  RELOCATES or removes its blocks needs this: the selection is
-   *  stored in ui-state and `PanelMultiSelectActionContext` keeps
-   *  multi-select mode active off a non-empty `selectedBlockIds`
-   *  alone, with no check that those blocks are still in the panel.
-   *  Move them somewhere off-surface without clearing it and the pane
-   *  shows nothing highlighted while later shortcuts still act on the
-   *  relocated blocks. */
-  isMultiSelect: boolean
 }
 
 export interface BlocksActionPair {
@@ -307,7 +303,7 @@ export const defineBlocksAction = ({
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
     handler: ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) =>
-      flow([block], {uiStateBlock, scopeRootId, isMultiSelect: false}),
+      flow([block], {uiStateBlock, scopeRootId}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -320,6 +316,6 @@ export const defineBlocksAction = ({
       return selectedBlocks.some(block => appliesTo(block))
     },
     handler: ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks, {uiStateBlock, scopeRootId, isMultiSelect: true}),
+      flow(selectedBlocks, {uiStateBlock, scopeRootId}),
   },
 })

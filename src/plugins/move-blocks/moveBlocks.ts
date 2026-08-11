@@ -31,6 +31,7 @@
 import type { Repo } from '@/data/repo.js'
 import type { InsertPosition } from '@/data/mutators.js'
 import { validateSelectionHierarchy } from '@/utils/selection.js'
+import { isCollapsedProp } from '@/data/properties.js'
 
 /** Where a batch should land: a parent (`null` = workspace root) plus
  *  the placement of the FIRST block within that parent's child list.
@@ -43,6 +44,10 @@ export interface MoveTarget {
 export interface MoveBlocksResult {
   /** Count of blocks actually moved, after descendant pruning. */
   moved: number
+  /** The ids that actually moved, in the order they were placed.
+   *  Callers need these (not just the count) to subtract them from the
+   *  ui-state selection — see `moveAction`. */
+  movedIds: readonly string[]
 }
 
 /**
@@ -94,7 +99,7 @@ export const moveBlocksTo = async (
   target: MoveTarget,
 ): Promise<MoveBlocksResult> => {
   const prunedIds = await validateSelectionHierarchy([...blockIds], repo)
-  if (prunedIds.length === 0) return { moved: 0 }
+  if (prunedIds.length === 0) return { moved: 0, movedIds: [] }
 
   let moved = 0
   try {
@@ -110,6 +115,7 @@ export const moveBlocksTo = async (
         moved += 1
         position = { kind: 'after', siblingId: id }
       }
+      await revealDestination(grouped, target.parentId)
     })
   } catch (error) {
     // Nothing committed yet → the original error is the whole story.
@@ -117,5 +123,42 @@ export const moveBlocksTo = async (
     if (moved === 0) throw error
     throw new PartialMoveError(moved, error)
   }
-  return { moved }
+  return { moved, movedIds: prunedIds.slice(0, moved) }
+}
+
+/**
+ * Expand the destination if it was collapsed.
+ *
+ * `core.move` deliberately doesn't do this — it's the explicit,
+ * programmatic placement primitive that materialization, merge and the
+ * agent bridge use, and those must not disturb a user's fold state. But
+ * a USER-initiated move into a collapsed block would otherwise show a
+ * "Moved N blocks" toast while the rows vanish from the source and stay
+ * hidden at the target, which reads as data loss. `core.indent` and
+ * `core.moveVertical` reveal for exactly this reason
+ * (`src/data/mutators.ts:551`); this is the same courtesy at the UI
+ * layer, where it belongs.
+ *
+ * Goes through `grouped.mutate` rather than `grouped.block(id).set(…)`:
+ * the undo-group facade deliberately mints Blocks through the REAL repo
+ * (`src/data/repo.ts:1625-1633`), so a `block.set` here would commit
+ * outside the group and split the batch into two undo entries.
+ */
+const revealDestination = async (
+  grouped: Repo,
+  parentId: string | null,
+): Promise<void> => {
+  if (parentId === null) return
+  const destination = grouped.block(parentId)
+  // Load rather than peek: `core.move` reads the destination's children
+  // inside the tx, which does NOT populate this Block facade's cache, so
+  // a peek here can report `undefined` for a genuinely collapsed row and
+  // silently skip the reveal.
+  await destination.load()
+  if (destination.peekProperty(isCollapsedProp) !== true) return
+  await grouped.mutate.setProperty({
+    id: parentId,
+    schema: isCollapsedProp,
+    value: false,
+  })
 }

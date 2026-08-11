@@ -12,6 +12,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
+import { isCollapsedProp } from '@/data/properties.js'
 import { moveBlocksTo, PartialMoveError } from './moveBlocks.ts'
 
 const WS = 'ws-1'
@@ -82,7 +83,7 @@ describe('moveBlocksTo', () => {
 
     const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
-    expect(result).toEqual({ moved: 3 })
+    expect(result).toEqual({ moved: 3, movedIds: ['c2', 'c1', 'c3'] })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
     expect(await childIds('src')).toEqual([])
   })
@@ -96,7 +97,7 @@ describe('moveBlocksTo', () => {
 
     // Only 'a' actually moves; 'b' rides along as a's child, not as a
     // separate move.
-    expect(result).toEqual({ moved: 1 })
+    expect(result).toEqual({ moved: 1, movedIds: ['a'] })
     expect(await childIds('dest')).toEqual(['a'])
     expect(await parentOf('b')).toBe('a')
   })
@@ -211,9 +212,42 @@ describe('moveBlocksTo', () => {
     expect(await parentOf('a')).toBeNull()
   })
 
+  // A user-initiated move into a folded destination would otherwise
+  // report "Moved 1 block" while the row vanished from the source and
+  // stayed hidden at the target — indistinguishable from data loss.
+  // `core.move` deliberately doesn't reveal (it's the programmatic
+  // primitive); this helper does, like `core.indent` already does.
+  it('expands a collapsed destination so the moved blocks are visible', async () => {
+    await seed('dest', null)
+    await seed('src', null)
+    await seed('a', 'src')
+    await repo.block('dest').set(isCollapsedProp, true)
+    expect(repo.block('dest').peekProperty(isCollapsedProp)).toBe(true)
+    repo.undoManager.clear()
+
+    await moveBlocksTo(repo, ['a'], INTO_DEST)
+
+    await repo.block('dest').load()
+    expect(repo.block('dest').peekProperty(isCollapsedProp)).toBe(false)
+    expect(await childIds('dest')).toEqual(['a'])
+    // The reveal joins the move's undo entry rather than adding its own.
+    expect(depths()).toEqual({ undo: 1, redo: 0 })
+  })
+
+  it('leaves an already-expanded destination untouched', async () => {
+    await seed('dest', null)
+    await seed('src', null)
+    await seed('a', 'src')
+    repo.undoManager.clear()
+
+    await moveBlocksTo(repo, ['a'], INTO_DEST)
+
+    expect(depths()).toEqual({ undo: 1, redo: 0 })
+  })
+
   it('is a no-op for an empty selection', async () => {
     await seed('dest', null)
     const result = await moveBlocksTo(repo, [], INTO_DEST)
-    expect(result).toEqual({ moved: 0 })
+    expect(result).toEqual({ moved: 0, movedIds: [] })
   })
 })

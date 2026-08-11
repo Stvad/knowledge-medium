@@ -29,7 +29,7 @@ describe('defineBlocksAction', () => {
     expect(flow).toHaveBeenCalledTimes(1)
     expect(flow).toHaveBeenCalledWith(
       [block],
-      {uiStateBlock: block, scopeRootId: undefined, isMultiSelect: false},
+      {uiStateBlock: block, scopeRootId: undefined},
     )
   })
 
@@ -58,14 +58,13 @@ describe('defineBlocksAction', () => {
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
-    // `isMultiSelect` is what tells a relocating flow to clear the
-    // ui-state selection afterwards — multi-select mode stays active off
-    // a non-empty `selectedBlockIds` alone, so a flow that moves its
-    // blocks off-surface without clearing leaves shortcuts pointed at
-    // rows the pane no longer shows.
+    // `uiStateBlock` is what lets a relocating flow take its blocks out
+    // of the ui-state selection — multi-select mode stays active off a
+    // non-empty `selectedBlockIds` alone, so leaving a moved id in there
+    // points later shortcuts at rows the pane no longer shows.
     expect(flow).toHaveBeenCalledWith(
       selectedBlocks,
-      {uiStateBlock, scopeRootId: undefined, isMultiSelect: true},
+      {uiStateBlock, scopeRootId: undefined},
     )
   })
 

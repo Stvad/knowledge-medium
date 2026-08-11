@@ -17,7 +17,7 @@ import { runMoveFlow } from './moveAction.ts'
 export const MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID = 'move-blocks.move-to'
 
 export const moveBlocksContextMenuItem: BlockContextMenuItemsContribution =
-  ({block}): BlockContextMenuItem => ({
+  ({block, uiStateBlock}): BlockContextMenuItem => ({
     id: MOVE_BLOCKS_CONTEXT_MENU_ITEM_ID,
     label: 'Move to…',
     icon: FolderInput,
@@ -26,5 +26,10 @@ export const moveBlocksContextMenuItem: BlockContextMenuItemsContribution =
     // a selection the user may not even remember making would move more
     // than they pointed at. Multi-block moves go through the
     // multi-select action instead.
-    onSelect: () => { void runMoveFlow([block]) },
+    //
+    // `uiStateBlock` is still passed so the flow can take this block out
+    // of the selection if it happened to be in one — otherwise a
+    // right-click move on a selected bullet leaves a relocated id in a
+    // selection that later shortcuts still act on.
+    onSelect: () => { void runMoveFlow([block], {uiStateBlock}) },
   })
