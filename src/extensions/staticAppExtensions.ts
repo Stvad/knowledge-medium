@@ -35,6 +35,7 @@ import { videoPlayerPlugin } from '@/plugins/video-player'
 import { attachmentsPlugin } from '@/plugins/attachments'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
+import { moveBlocksPlugin } from '@/plugins/move-blocks'
 import { referencesPlugin } from '@/plugins/references'
 import { geoPlugin } from '@/plugins/geo'
 import { backlinksPlugin } from '@/plugins/backlinks'
@@ -132,6 +133,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   supertagsPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
+  moveBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
