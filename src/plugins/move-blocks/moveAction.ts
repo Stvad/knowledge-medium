@@ -34,7 +34,12 @@ const runMoveFlow = async (blocks: readonly Block[]): Promise<void> => {
   if (!choice) return
 
   try {
-    const result = await moveBlocksTo(repo, blockIds, choice.destinationId)
+    // Picking a destination block means "put them inside it", i.e. at
+    // the end of its children — the picker offers no finer placement.
+    const result = await moveBlocksTo(repo, blockIds, {
+      parentId: choice.destinationId,
+      position: { kind: 'last' },
+    })
     if (result.moved > 0) {
       showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
     } else {

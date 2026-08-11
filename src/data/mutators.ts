@@ -78,7 +78,7 @@ const orderKeyBeforeSibling = (tx: Tx, sibling: BlockData): Promise<string> =>
 
 /** Placement of a block within a parent's child list — an explicit
  *  position used by the insert/move mutators. */
-type InsertPosition =
+export type InsertPosition =
   | { kind: 'first' }
   | { kind: 'last' }
   | { kind: 'after'; siblingId: string }

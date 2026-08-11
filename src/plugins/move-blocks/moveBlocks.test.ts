@@ -11,6 +11,7 @@ import { CycleError, ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { keyBetween } from '@/data/orderKey'
 import { moveBlocksTo, PartialMoveError } from './moveBlocks.ts'
 
 const WS = 'ws-1'
@@ -21,19 +22,28 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
+  lastKeyByParent.clear()
   await resetTestDb(sharedDb.db)
   repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
   repo.setActiveWorkspaceId(WS)
 })
 
 /** Seed a block directly (ungrouped tx) so seeding never lands in the
- *  undo stack the tests assert against. */
+ *  undo stack the tests assert against. Order keys are GENERATED via
+ *  `keyBetween` rather than hand-written: hand-written stand-ins like
+ *  'a0' are rejected by the real base62 format on any path that
+ *  validates them (moving to the workspace root enumerates and
+ *  re-keys its siblings, and blew up on exactly that). */
+const lastKeyByParent = new Map<string, string | null>()
+
 const seed = async (
   id: string,
   parentId: string | null,
-  orderKey: string,
   content = id,
 ): Promise<void> => {
+  const bucket = parentId ?? '\u0000root'
+  const orderKey = keyBetween(lastKeyByParent.get(bucket) ?? null, null)
+  lastKeyByParent.set(bucket, orderKey)
   await repo.tx(async tx => {
     await tx.create({ id, workspaceId: WS, parentId, orderKey, content })
   }, { scope: ChangeScope.BlockDefault, description: `seed ${id}` })
@@ -55,20 +65,22 @@ const parentOf = async (id: string): Promise<string | null> => {
   return row?.parent_id ?? null
 }
 
+const INTO_DEST = {parentId: 'dest', position: {kind: 'last'}} as const
+
 const depths = () => repo.undoManager.depths(ChangeScope.BlockDefault)
 
 describe('moveBlocksTo', () => {
   it('moves N blocks contiguously under the destination, preserving input order', async () => {
-    await seed('dest', null, 'a0')
-    await seed('src', null, 'b0')
-    await seed('c1', 'src', 'a0')
-    await seed('c2', 'src', 'a1')
-    await seed('c3', 'src', 'a2')
+    await seed('dest', null)
+    await seed('src', null)
+    await seed('c1', 'src')
+    await seed('c2', 'src')
+    await seed('c3', 'src')
     // A pre-existing child of dest, so "contiguous" is actually exercised
     // rather than trivially true of an empty destination.
-    await seed('already-there', 'dest', 'a0')
+    await seed('already-there', 'dest')
 
-    const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], 'dest')
+    const result = await moveBlocksTo(repo, ['c2', 'c1', 'c3'], INTO_DEST)
 
     expect(result).toEqual({ moved: 3 })
     expect(await childIds('dest')).toEqual(['already-there', 'c2', 'c1', 'c3'])
@@ -76,11 +88,11 @@ describe('moveBlocksTo', () => {
   })
 
   it('prunes a descendant when both it and its ancestor are in the set', async () => {
-    await seed('dest', null, 'a0')
-    await seed('a', null, 'b0')
-    await seed('b', 'a', 'a0') // child of a
+    await seed('dest', null)
+    await seed('a', null)
+    await seed('b', 'a') // child of a
 
-    const result = await moveBlocksTo(repo, ['a', 'b'], 'dest')
+    const result = await moveBlocksTo(repo, ['a', 'b'], INTO_DEST)
 
     // Only 'a' actually moves; 'b' rides along as a's child, not as a
     // separate move.
@@ -90,13 +102,13 @@ describe('moveBlocksTo', () => {
   })
 
   it('one undo entry reverts the whole batch', async () => {
-    await seed('dest', null, 'a0')
-    await seed('src', null, 'b0')
-    await seed('c1', 'src', 'a0')
-    await seed('c2', 'src', 'a1')
+    await seed('dest', null)
+    await seed('src', null)
+    await seed('c1', 'src')
+    await seed('c2', 'src')
     repo.undoManager.clear()
 
-    await moveBlocksTo(repo, ['c1', 'c2'], 'dest')
+    await moveBlocksTo(repo, ['c1', 'c2'], INTO_DEST)
 
     expect(depths()).toEqual({ undo: 1, redo: 0 })
     expect(await childIds('dest')).toEqual(['c1', 'c2'])
@@ -107,30 +119,30 @@ describe('moveBlocksTo', () => {
   })
 
   it('refuses to move a block into its own descendant', async () => {
-    await seed('a', null, 'a0')
-    await seed('b', 'a', 'a0')
+    await seed('a', null)
+    await seed('b', 'a')
 
-    await expect(moveBlocksTo(repo, ['a'], 'b')).rejects.toThrow(CycleError)
+    await expect(moveBlocksTo(repo, ['a'], {parentId: 'b', position: {kind: 'last'}})).rejects.toThrow(CycleError)
     expect(await parentOf('a')).toBeNull()
     expect(await parentOf('b')).toBe('a')
   })
 
   it('refuses to move a block into itself', async () => {
-    await seed('a', null, 'a0')
+    await seed('a', null)
 
-    await expect(moveBlocksTo(repo, ['a'], 'a')).rejects.toThrow(CycleError)
+    await expect(moveBlocksTo(repo, ['a'], {parentId: 'a', position: {kind: 'last'}})).rejects.toThrow(CycleError)
     expect(await parentOf('a')).toBeNull()
   })
 
   it('reports how many moved when the batch fails part-way, and one undo reverts them', async () => {
     // 'x' moves into 'd' fine; 'p' then can't, because 'd' is its own
     // descendant. So move 1 commits and move 2 throws.
-    await seed('x', null, 'a0')
-    await seed('p', null, 'b0')
-    await seed('d', 'p', 'a0')
+    await seed('x', null)
+    await seed('p', null)
+    await seed('d', 'p')
     repo.undoManager.clear()
 
-    const error = await moveBlocksTo(repo, ['x', 'p'], 'd').then(
+    const error = await moveBlocksTo(repo, ['x', 'p'], {parentId: 'd', position: {kind: 'last'}}).then(
       () => { throw new Error('expected the batch to fail part-way') },
       (e: unknown) => e,
     )
@@ -150,9 +162,58 @@ describe('moveBlocksTo', () => {
     expect(await parentOf('x')).toBeNull()
   })
 
+  // The ordering rule (see the module doc). `last` / `before` survive a
+  // naive same-position-every-iteration loop; `first` / `after` do not —
+  // they stack up backwards. All four are pinned so nobody "simplifies"
+  // the chaining away and only notices on two of them.
+  describe('preserves input order for every position kind', () => {
+    beforeEach(async () => {
+      await seed('dest', null)
+      await seed('x1', 'dest')
+      await seed('x2', 'dest')
+      await seed('src', null)
+      await seed('a', 'src')
+      await seed('b', 'src')
+      await seed('c', 'src')
+    })
+
+    it('last', async () => {
+      await moveBlocksTo(repo, ['a', 'b', 'c'], {parentId: 'dest', position: {kind: 'last'}})
+      expect(await childIds('dest')).toEqual(['x1', 'x2', 'a', 'b', 'c'])
+    })
+
+    it('first', async () => {
+      await moveBlocksTo(repo, ['a', 'b', 'c'], {parentId: 'dest', position: {kind: 'first'}})
+      expect(await childIds('dest')).toEqual(['a', 'b', 'c', 'x1', 'x2'])
+    })
+
+    it('before an anchor', async () => {
+      await moveBlocksTo(repo, ['a', 'b', 'c'], {
+        parentId: 'dest', position: {kind: 'before', siblingId: 'x2'},
+      })
+      expect(await childIds('dest')).toEqual(['x1', 'a', 'b', 'c', 'x2'])
+    })
+
+    it('after an anchor', async () => {
+      await moveBlocksTo(repo, ['a', 'b', 'c'], {
+        parentId: 'dest', position: {kind: 'after', siblingId: 'x1'},
+      })
+      expect(await childIds('dest')).toEqual(['x1', 'a', 'b', 'c', 'x2'])
+    })
+  })
+
+  it('moves to the workspace root when parentId is null', async () => {
+    await seed('src', null)
+    await seed('a', 'src')
+
+    await moveBlocksTo(repo, ['a'], {parentId: null, position: {kind: 'last'}})
+
+    expect(await parentOf('a')).toBeNull()
+  })
+
   it('is a no-op for an empty selection', async () => {
-    await seed('dest', null, 'a0')
-    const result = await moveBlocksTo(repo, [], 'dest')
+    await seed('dest', null)
+    const result = await moveBlocksTo(repo, [], INTO_DEST)
     expect(result).toEqual({ moved: 0 })
   })
 })
