@@ -16,6 +16,13 @@ import { buildFilterPrefixes, rankCandidates } from '@/utils/fuzzyRank.js'
 const ALIAS_CANDIDATE_MULTIPLIER = 4
 const ALIAS_CANDIDATE_CEILING = 200
 
+/** Upper bound on the extra rows fetched to make room for
+ *  `excludeBlockIds` — see `searchLinkTargetsProgressively`. Generous
+ *  relative to any display limit (which is 25 in every caller today), so
+ *  the shortfall it guards against only reappears for exclusion sets in
+ *  the hundreds. */
+const EXCLUSION_HEADROOM_CEILING = 200
+
 /** Minimum trimmed query length before the content substring scan runs.
  *  Shorter prefixes match a huge fraction of any non-trivial workspace
  *  and produce no useful ranking signal, while the underlying LIKE scan
@@ -562,10 +569,28 @@ export const searchLinkTargetsProgressively = async (
   const trimmed = query.trim()
   if (!workspaceId || !trimmed) return {aliases: [], blocks: []}
 
+  const seenBlockIds = stringSet(excludeBlockIds)
+  // Every source slices to its own `limit` BEFORE `excludeBlockIds` is
+  // applied (below, once the rows are back), so the exclusions come out
+  // of the display budget rather than out of the rows behind it. Fine for
+  // the one-id exclusions most callers pass; not fine for a set — the
+  // move picker excludes an entire subtree, and a big subtree whose
+  // blocks match the query can fill all `limit` slots and answer "No
+  // results" while real targets sat just past the cut. Fetch headroom
+  // equal to the exclusion set and slice back to `limit` after filtering,
+  // so the budget always buys `limit` *survivors*.
+  // Floored at `limit` itself so a caller asking for more than the
+  // ceiling still gets its own limit back rather than a silent truncation
+  // (same shape as `coreContentSearchSource`'s fetch limit).
+  const fetchLimit = Math.max(
+    limit,
+    Math.min(limit + seenBlockIds.size, EXCLUSION_HEADROOM_CEILING),
+  )
+
   const aliasRowsPromise = searchAliasMatches(repo, {
     workspaceId,
     query: trimmed,
-    limit,
+    limit: fetchLimit,
     recentBlockIds,
   })
   // Routed through the shared multi-source merge point (not a direct
@@ -582,7 +607,7 @@ export const searchLinkTargetsProgressively = async (
     ? searchBlocksAcrossSources(repo, {
         workspaceId,
         query: trimmed,
-        limit,
+        limit: fetchLimit,
         recentBlockIds,
       }).then(
         rows => ({ok: true as const, rows}),
@@ -590,9 +615,22 @@ export const searchLinkTargetsProgressively = async (
       )
     : null
 
-  const seenBlockIds = stringSet(excludeBlockIds)
-  const aliases = aliasMatchesFromRows(await aliasRowsPromise, seenBlockIds)
+  // `aliasMatchesFromRows` doesn't just READ the set, it RECORDS every
+  // match it keeps — which is how a block that matched by alias avoids
+  // appearing again in the Blocks group. That only works if the set it
+  // records into holds the aliases that actually SURVIVE the slice: the
+  // headroom above means it now sees candidates that are fetched and then
+  // dropped, and recording those would suppress their blocks from the
+  // Blocks group too. A block with the 26th-best alias and the best
+  // content match would then appear in neither. So the alias pass gets a
+  // throwaway copy, and the Blocks pass dedupes against the exclusions
+  // plus the aliases that are really on screen.
+  const aliases = aliasMatchesFromRows(await aliasRowsPromise, new Set(seenBlockIds))
+    .slice(0, limit)
   callbacks.onAliases?.(aliases)
+
+  const blockSeenIds = new Set(seenBlockIds)
+  for (const alias of aliases) blockSeenIds.add(alias.blockId)
 
   if (blockRowsPromise === null) {
     const result = {aliases, blocks: []}
@@ -603,7 +641,7 @@ export const searchLinkTargetsProgressively = async (
   const blockRows = await blockRowsPromise
   if (!blockRows.ok) throw blockRows.error
 
-  const blocks = blockMatchesFromRows(blockRows.rows, seenBlockIds)
+  const blocks = blockMatchesFromRows(blockRows.rows, blockSeenIds).slice(0, limit)
   const result = {aliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result

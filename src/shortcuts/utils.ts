@@ -234,8 +234,22 @@ export interface DefineBlocksActionConfig {
    *  least one selected block matching. Omit to mean "always". */
   appliesTo?: (block: Block) => boolean
   /** The actual operation. Both variants forward to this with the
-   *  blocks they respectively hold (one or many). */
-  flow: (blocks: readonly Block[]) => Promise<void> | void
+   *  blocks they respectively hold (one or many), plus the dispatch
+   *  context. Implementations that don't need the context can declare
+   *  a one-parameter function. */
+  flow: (blocks: readonly Block[], context: BlocksActionContext) => Promise<void> | void
+}
+
+/** What a {@link defineBlocksAction} flow learns about its dispatch,
+ *  beyond the blocks themselves. */
+export interface BlocksActionContext {
+  /** Carries the ui-state selection. An operation that RELOCATES or
+   *  removes its blocks must take them out of it: multi-select mode
+   *  stays active off a non-empty `selectedBlockIds` alone, with no
+   *  check that those blocks are still in the panel, so a stale id
+   *  leaves later shortcuts acting on a row the pane no longer shows. */
+  uiStateBlock: Block
+  scopeRootId?: string
 }
 
 export interface BlocksActionPair {
@@ -288,7 +302,8 @@ export const defineBlocksAction = ({
     ...(appliesTo
       ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
-    handler: ({block}: BlockShortcutDependencies) => flow([block]),
+    handler: ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) =>
+      flow([block], {uiStateBlock, scopeRootId}),
   },
   blocks: {
     id: multiSelectActionId(id),
@@ -300,7 +315,7 @@ export const defineBlocksAction = ({
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))
     },
-    handler: ({selectedBlocks}: MultiSelectModeDependencies) =>
-      flow(selectedBlocks),
+    handler: ({selectedBlocks, uiStateBlock, scopeRootId}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks, {uiStateBlock, scopeRootId}),
   },
 })

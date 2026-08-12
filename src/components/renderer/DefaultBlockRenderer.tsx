@@ -52,6 +52,7 @@ import {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContentSurfacePropsFacet,
+  blockContextMenuItemsFacet,
   blockHeaderFacet,
   blockLayoutFacet,
   blockShellDecoratorsFacet,
@@ -155,6 +156,16 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
   // menu's "Block info" item (which works with a mouse too).
   const hover = useBulletHover(hasHoverSections && !isMobile)
 
+  // Context menu items contributed by plugins (see `blockContextMenuItemsFacet`).
+  // Empty on a stock build — then the separator below is skipped and the menu
+  // is exactly the five hardcoded items, unchanged.
+  const resolveContextMenuItems = runtime.read(blockContextMenuItemsFacet)
+  const contributedItems = useMemo(
+    () => resolveContextMenuItems(resolveContext),
+    [resolveContextMenuItems, resolveContext],
+  )
+  const hasContributedItems = contributedItems.length > 0
+
   const openBlockInfo = () => {
     // Pass the originating panel — see BlockInfoDialogProps.panelId.
     void openDialog(BlockInfoDialog, {block, sections: hoverSections, panelId})
@@ -229,6 +240,30 @@ const BlockBullet = ({block, resolveContext}: { block: Block; resolveContext: Bl
             >
               {showProperties ? 'Hide' : 'Show'} Properties
             </ContextMenuItem>
+            {hasContributedItems && (
+              <>
+                <ContextMenuSeparator className="h-px bg-border my-1"/>
+                {contributedItems.map(item => (
+                  // Extension boundary: a contributed item that throws while
+                  // RENDERING (e.g. a broken `icon`) stays contained to its own
+                  // row instead of taking out the menu. A throwing `onSelect`
+                  // is an event-handler throw and is deliberately NOT covered —
+                  // React error boundaries can't catch those, and it can't
+                  // corrupt the render either way.
+                  <ExtensionRenderBoundary key={item.id}>
+                    <ContextMenuItem
+                      className={`flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm${
+                        item.destructive ? ' text-destructive hover:bg-destructive/10' : ''
+                      }`}
+                      onSelect={item.onSelect}
+                    >
+                      {item.icon && <item.icon className="mr-2 h-4 w-4"/>}
+                      {item.label}
+                    </ContextMenuItem>
+                  </ExtensionRenderBoundary>
+                ))}
+              </>
+            )}
           </ContextMenuContent>
         </ContextMenuPortal>
       </ContextMenu>
