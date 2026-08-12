@@ -48,26 +48,34 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
 }
 
 /**
- * Bumped by EVERY clipboard write below (`writeToClipboard` /
- * `writeTextToClipboard`), alongside the pending-move clear they already
- * do — so it counts "how many times the clipboard has been replaced",
- * cut and copy alike.
+ * A single monotonic counter standing for "the clipboard's claim has
+ * changed hands". Advanced by every clipboard write below
+ * (`writeToClipboard` / `writeTextToClipboard`), alongside the
+ * pending-move clear they already do, AND by each cut at entry — see
+ * `cutBlockIdsToClipboard`, where the difference between claiming a
+ * number and merely reading one decides which of two overlapping cuts
+ * wins.
  *
- * `cutBlockIdsToClipboard` needs it because a cut isn't atomic: it awaits
- * hierarchy validation, subtree serialization, and its own write, and any
- * other cut or copy can land in those gaps. A cut that resumed into a
- * changed clipboard used to publish anyway, leaving the register pointing
- * at one selection while the clipboard held another — worst in the
- * write-refused path, where the cut snapshots the OTHER gesture's text as
- * its sentinel and the next paste therefore moves the wrong blocks while
- * suppressing the content the user actually copied.
+ * A cut needs this because it isn't atomic: it awaits hierarchy
+ * validation, subtree serialization, and its own write, and any other cut
+ * or copy can land in those gaps. A cut that resumed into a clipboard
+ * someone else had claimed used to publish anyway, leaving the register
+ * pointing at one selection while the clipboard held another — worst in
+ * the write-refused path, where it snapshots the OTHER gesture's text as
+ * its own sentinel, so the next paste moves the wrong blocks AND
+ * swallows what the user actually copied.
  *
- * Bumped BEFORE the await (next to the clear, which is likewise
- * unconditional) so a refused write still counts as "the clipboard state
- * moved on" — the cut has to treat that identically, since it can't know
- * what the OS clipboard ended up holding.
+ * Writes advance it BEFORE their await (next to the clear, which is
+ * likewise unconditional) so a REFUSED write still counts as "the
+ * clipboard moved on" — nothing downstream can know what the OS clipboard
+ * ended up holding, so the safe reading is that it is no longer ours.
  */
 let clipboardEpoch = 0
+
+/** Read-only view, for the paste side: `pasteAsMoveImpl` claims the
+ *  register and then awaits, so it has to know whether the clipboard
+ *  changed hands before it hands that claim back. */
+export const clipboardClaim = (): number => clipboardEpoch
 
 const createClipboardItem = (data: ClipboardData): ClipboardItem =>
   new ClipboardItem({
@@ -264,10 +272,14 @@ export const cutBlockIdsToClipboard = async (
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return false
 
-  // See `clipboardEpoch`. This cut owns the clipboard only for as long as
-  // the epoch stays where it was — plus the single bump its OWN write
-  // contributes.
-  const epochAtEntry = clipboardEpoch
+  // CLAIM a slot in the epoch rather than merely snapshotting it. The
+  // difference matters when two cuts are both still serializing: with a
+  // snapshot they'd hold the same number, and whichever finished FIRST
+  // would win — so a slow ⌘X on A followed by a quick ⌘X on B could leave
+  // A cut, silently dropping the user's most recent gesture. Claiming
+  // orders the gestures by when they STARTED, which is the order the user
+  // made them in, so the later cut always supersedes the earlier one.
+  const ticket = ++clipboardEpoch
 
   const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
 
@@ -283,7 +295,7 @@ export const cutBlockIdsToClipboard = async (
   // (`repo.query.subtree`, reached through a dispatch Proxy) can't be
   // stubbed without replacing `repo.query` wholesale, which costs more
   // than the case is worth.
-  if (clipboardEpoch !== epochAtEntry) return false
+  if (clipboardEpoch !== ticket) return false
 
   let clipboardText = data.markdown
   try {
@@ -305,7 +317,7 @@ export const cutBlockIdsToClipboard = async (
   // read-back path it would be armed against the OTHER gesture's text
   // outright, and the next paste would move these blocks while swallowing
   // what the user actually copied.
-  if (clipboardEpoch !== epochAtEntry + 1) return false
+  if (clipboardEpoch !== ticket + 1) return false
   // Arm with `data.serializedIds`, not `normalizedIds` — a root that
   // failed to serialize (see `SerializedSelection`'s doc) is absent from
   // `clipboardText` above yet would still relocate on paste if armed here,

@@ -69,6 +69,7 @@ import { liveBlockIds } from '@/data/blockLiveness.js'
 import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { clearPendingMove, getPendingMove, setPendingMove, type PendingMove } from '@/utils/pendingMove.js'
 import type { PasteAsMoveInput, PasteMoveTarget } from '@/paste/moveOnPasteVerb.js'
+import { clipboardClaim } from '@/utils/copy.js'
 import { moveBlocksTo, PartialMoveError } from './moveBlocks.ts'
 import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 
@@ -92,16 +93,28 @@ const isCycleTarget = async (
   return siblingId !== undefined && isWithinSubtreeOfAny(repo, siblingId, movingIds)
 }
 
-/** Put a claimed register back — but never on top of a NEWER one.
+/** Put a claimed register back — but only while it is still ours to give.
  *
- *  Every restore below happens after at least one `await`, and a cut is
- *  just a keystroke: the user can cut something else while this paste is
- *  still resolving liveness or committing moves. An unconditional
- *  `setPendingMove` would then bury that fresh cut under the stale claim,
- *  and their next paste would copy instead of move. The claim is only
- *  ours to give back while nothing has taken its place. */
-const restoreClaim = (pending: PendingMove): void => {
+ *  Every restore below happens after at least one `await`, and both a cut
+ *  and a copy are one keystroke away. Two different things can have
+ *  happened in that window, and each needs its own check:
+ *
+ *   - a newer CUT armed the register. Restoring over it would bury the
+ *     user's latest cut and make their next paste copy instead of move.
+ *     Caught by the register no longer being empty.
+ *   - a COPY replaced the clipboard. That leaves the register `null` —
+ *     nothing to detect — yet our claim is stale all the same: its
+ *     sentinel describes content the clipboard no longer holds. The
+ *     sentinel check on the next paste usually catches that, but not when
+ *     the copied text happens to equal the cut's, which would move the old
+ *     blocks and swallow the copy. Caught by the clipboard claim moving.
+ *
+ *  `clipboardClaim` also advances at a cut's ENTRY, so the first case is
+ *  strictly covered by the second; both are kept because they fail for
+ *  different reasons and the register check is the cheap, obvious one. */
+const restoreClaim = (pending: PendingMove, claimAtEntry: number): void => {
   if (getPendingMove() !== null) return
+  if (clipboardClaim() !== claimAtEntry) return
   setPendingMove(pending)
 }
 
@@ -111,6 +124,9 @@ export const pasteAsMoveImpl = async ({ repo, target, clipboardText }: PasteAsMo
   const pending = getPendingMove()
   if (!pending) return false
   clearPendingMove()
+  // Snapshotted in the same synchronous prologue as the claim itself, so
+  // it can't miss a write that lands before our first await.
+  const claimAtEntry = clipboardClaim()
 
   // The sentinel first, and before EVERY branch that would preserve the
   // register: it answers "is this cut still valid at all", where the
@@ -125,7 +141,7 @@ export const pasteAsMoveImpl = async ({ repo, target, clipboardText }: PasteAsMo
   }
 
   if (pending.workspaceId !== repo.activeWorkspaceId) {
-    restoreClaim(pending)
+    restoreClaim(pending, claimAtEntry)
     showInfo("Can't move blocks across workspaces — pasted a copy instead")
     return false
   }
@@ -136,7 +152,7 @@ export const pasteAsMoveImpl = async ({ repo, target, clipboardText }: PasteAsMo
 
     const movingIds = new Set(liveIds)
     if (await isCycleTarget(repo, target, movingIds)) {
-      restoreClaim(pending)
+      restoreClaim(pending, claimAtEntry)
       showError("Can't paste here — it's inside the block(s) you cut")
       return true
     }
@@ -152,7 +168,7 @@ export const pasteAsMoveImpl = async ({ repo, target, clipboardText }: PasteAsMo
   } catch (error) {
     if (error instanceof PartialMoveError) {
       const movedIds = new Set(error.movedIds)
-      restoreClaim({ ...pending, blockIds: pending.blockIds.filter(id => !movedIds.has(id)) })
+      restoreClaim({ ...pending, blockIds: pending.blockIds.filter(id => !movedIds.has(id)) }, claimAtEntry)
     } else {
       // Nothing committed — either a pre-move read (`liveBlockIds`, the
       // cycle probe) rejected, or `moveBlocksTo` failed before its first
@@ -160,7 +176,7 @@ export const pasteAsMoveImpl = async ({ repo, target, clipboardText }: PasteAsMo
       // the claim goes back unchanged rather than being swallowed: a
       // dropped register here would send the NEXT paste down the text
       // path, duplicating the still-present originals.
-      restoreClaim(pending)
+      restoreClaim(pending, claimAtEntry)
     }
     showError(error instanceof Error ? error.message : 'Failed to move blocks')
     return true

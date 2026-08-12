@@ -44,6 +44,29 @@ const seed = async (id: string, parentId: string | null, content = id): Promise<
   }, { scope: ChangeScope.BlockDefault, description: `seed ${id}` })
 }
 
+/** A view of `repo` whose subtree loads (i.e. `serializeBlock`'s only
+ *  await) wait on `gate` first — so a cut can be held mid-serialization,
+ *  AFTER its synchronous entry, while another gesture runs to completion.
+ *  Wraps rather than patches: `repo.query` is a name-dispatch Proxy with
+ *  no own properties, so it can't be spied, and a global patch would leak
+ *  across the shared per-file repo. */
+const deferSubtreeLoads = (real: Repo, gate: Promise<void>): Repo =>
+  new Proxy(real, {
+    get(target, prop, receiver) {
+      if (prop !== 'query') return Reflect.get(target, prop, receiver)
+      const query = Reflect.get(target, prop, receiver) as Repo['query']
+      return new Proxy(query, {
+        get(queryTarget, queryProp, queryReceiver) {
+          if (queryProp !== 'subtree') return Reflect.get(queryTarget, queryProp, queryReceiver)
+          return (args: never) => {
+            const handle = queryTarget.subtree(args)
+            return {...handle, load: async () => { await gate; return handle.load() }}
+          }
+        },
+      })
+    },
+  })
+
 beforeEach(async () => {
   lastKeyByParent.clear()
   await resetTestDb(sharedDb.db)
@@ -173,6 +196,37 @@ describe('cutBlockIdsToClipboard', () => {
 
       releaseFirstWrite()
       expect(await older).toBe(false)
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
+    })
+
+    it('the LATER gesture wins even when the older one reaches the clipboard first', async () => {
+      // Both cuts enter before either writes, so neither has moved the
+      // counter by writing — and then the OLDER one is the one that gets
+      // to finish. If entry merely SNAPSHOT the counter both would hold
+      // the same number, the older cut's write would look unopposed, and
+      // the user's most recent ⌘X would be silently dropped. Claiming a
+      // number at entry orders the two by when the user pressed the key.
+      await seed('a', null, 'first cut')
+      await seed('b', null, 'second cut')
+
+      const write = vi.fn(async () => {})
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', { clipboard: { write } })
+
+      // Entry (and therefore the claim) is synchronous, so both gestures
+      // are registered in order before either awaits. The newer one is
+      // then held in serialization while the older runs to completion.
+      let releaseNewer = (): void => {}
+      const newerMaySerialize = new Promise<void>(resolve => { releaseNewer = resolve })
+
+      const older = cutBlockIdsToClipboard(['a'], repo)
+      const newer = cutBlockIdsToClipboard(['b'], deferSubtreeLoads(repo, newerMaySerialize))
+
+      expect(await older).toBe(false)
+      expect(getPendingMove()).toBeNull() // the older cut published nothing
+
+      releaseNewer()
+      expect(await newer).toBe(true)
       expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
     })
 

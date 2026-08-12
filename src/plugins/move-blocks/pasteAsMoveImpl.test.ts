@@ -45,6 +45,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
 import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
 import type { PasteMoveTarget } from '@/paste/moveOnPasteVerb'
+import { writeTextToClipboard } from '@/utils/copy'
 import { pasteAsMoveImpl } from './pasteAsMoveImpl.ts'
 import { PartialMoveError } from './moveBlocks.ts'
 
@@ -345,6 +346,27 @@ describe('pasteAsMoveImpl', () => {
       await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
 
       expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'b' })
+    })
+
+    it('does NOT restore over a newer COPY, which leaves no register to notice', async () => {
+      // The newer-cut case is caught by the register being non-empty. A
+      // copy clears the register and leaves it null, so only the clipboard
+      // claim shows that our cut is stale. It matters when the copied text
+      // equals the cut's: the sentinel would match and the next paste
+      // would move the old blocks while swallowing the copy.
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(async () => {}) } })
+      moveBlocksToMock.mockImplementationOnce(async () => {
+        await writeTextToClipboard('a')
+        throw new Error('move failed')
+      })
+
+      await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(getPendingMove()).toBeNull()
     })
 
     it('still restores the claim when nothing newer arrived (the control for the case above)', async () => {

@@ -25,7 +25,7 @@
 import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { pasteFromClipboard } from '@/paste/operations.js'
-import { siblingMoveTarget, tryPasteAsMove, tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
+import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
 
 export interface PasteOrMoveResult {
   /** A pending cut→move was consumed — completed, or refused as a
@@ -56,9 +56,9 @@ export const pasteOrMove = async (
   // block records an empty sentinel too, and gating on non-empty text
   // would leave that cut marked forever (see `tryPasteAsMove`'s doc).
   // `pasteFromClipboard` keeps its own empty-text bail below.
-  const moved = placement === 'sibling'
-    ? await tryPasteAsMove(repo, siblingMoveTarget(anchor, position), clipboardText)
-    : await tryPasteAsMoveAt(repo, anchor, position, scopeRootId, clipboardText)
+  const moved = await tryPasteAsMoveAt(
+    repo, anchor, position, scopeRootId, clipboardText, placement,
+  )
   if (moved) return {moved: true, pasted: []}
 
   const pasted = await pasteFromClipboard(

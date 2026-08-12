@@ -14,7 +14,7 @@ import {
   resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
 import type { PasteRequest } from '@/paste/decision.js'
-import { siblingMoveTarget, tryPasteAsMove } from '@/paste/moveOnPasteVerb.js'
+import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
 import { getPendingMove } from '@/utils/pendingMove.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -27,12 +27,16 @@ import type { Repo } from '@/data/repo.js'
 
 /**
  * Does an EDITOR-surface paste (this component's `handlePaste`) complete a
- * pending cut→move rather than inserting text? Always relative to `block`'s
- * own position (`siblingMoveTarget(block, 'after')`) — matches
- * `pasteEditModeMultilineText`'s own fallback placement (hardcoded
- * `placement: 'sibling'`, unlike the outline-level pastes' 'visible'
- * default), so a completed move lands exactly where an ordinary paste here
- * would have.
+ * pending cut→move rather than inserting text?
+ *
+ * Resolved through `resolvePasteMoveTarget` with `placement: 'sibling'`,
+ * matching what `pasteEditModeMultilineText` passes to its own
+ * `resolveRootDestination`. 'sibling' does NOT mean "always a sibling":
+ * that placement only suppresses the visible-children rule, and the root
+ * rules still apply. This used to hardcode a sibling target, which moved
+ * the cut blocks out of the rendered surface whenever the edited block WAS
+ * the render-scope root — they left the source and never visibly arrived.
+ * Hence `scopeRootId` is threaded in.
  *
  * Extracted from `handlePaste` so it's directly testable: rendering a live
  * CodeMirror instance to exercise a real `ClipboardEvent` isn't practical
@@ -46,8 +50,9 @@ export const resolveEditorPasteMove = (
   repo: Repo,
   block: Block,
   text: string,
+  scopeRootId: string | undefined,
 ): Promise<boolean> =>
-  tryPasteAsMove(repo, siblingMoveTarget(block, 'after'), text)
+  tryPasteAsMoveAt(repo, block, 'after', scopeRootId, text, 'sibling')
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
@@ -120,7 +125,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // common case a pending move needs to survive. If a move completes (or
     // is refused as a would-be cycle — see `pasteAsMoveImpl`'s doc), the
     // paste is fully handled; nothing below should also run.
-    if (await resolveEditorPasteMove(repo, block, text)) {
+    if (await resolveEditorPasteMove(repo, block, text, blockContext.scopeRootId)) {
       return
     }
     if (!text && fileList.length === 0) return

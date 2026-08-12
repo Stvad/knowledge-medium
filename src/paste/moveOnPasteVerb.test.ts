@@ -20,8 +20,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { pasteAsMoveImpl } from '@/plugins/move-blocks/pasteAsMoveImpl'
 import {
   pasteAsMoveVerb,
-  resolveVisiblePasteMoveTarget,
-  siblingMoveTarget,
+  resolvePasteMoveTarget,
   tryPasteAsMove,
   tryPasteAsMoveAt,
   type PasteAsMoveInput,
@@ -83,34 +82,9 @@ describe('tryPasteAsMove', () => {
   })
 })
 
-describe('siblingMoveTarget', () => {
-  const block = (parentId: string | null) => ({
-    id: 'anchor',
-    peek: () => ({ parentId }),
-  }) as unknown as Parameters<typeof siblingMoveTarget>[0]
-
-  it('targets the anchor\'s own parent, positioned relative to the anchor', () => {
-    expect(siblingMoveTarget(block('parent-1'), 'after')).toEqual({
-      parentId: 'parent-1',
-      position: { kind: 'after', siblingId: 'anchor' },
-    })
-    expect(siblingMoveTarget(block('parent-1'), 'before')).toEqual({
-      parentId: 'parent-1',
-      position: { kind: 'before', siblingId: 'anchor' },
-    })
-  })
-
-  it('falls back to the workspace root when the anchor has no cached parent', () => {
-    expect(siblingMoveTarget(block(null), 'after')).toEqual({
-      parentId: null,
-      position: { kind: 'after', siblingId: 'anchor' },
-    })
-  })
-})
-
 const WS = 'ws-1'
 
-describe('resolveVisiblePasteMoveTarget / tryPasteAsMoveAt', () => {
+describe('resolvePasteMoveTarget / tryPasteAsMoveAt', () => {
   let sharedDb: TestDb
   let repo: RealRepo
   beforeAll(async () => { sharedDb = await createTestDb() })
@@ -140,10 +114,10 @@ describe('resolveVisiblePasteMoveTarget / tryPasteAsMoveAt', () => {
     repo.setActiveWorkspaceId(WS)
   })
 
-  describe('resolveVisiblePasteMoveTarget', () => {
+  describe('resolvePasteMoveTarget', () => {
     it('lands as the target\'s FIRST CHILD when the target is a workspace root (parentId null)', async () => {
       await seed('root', null)
-      const target = await resolveVisiblePasteMoveTarget(repo.block('root'), 'after', undefined)
+      const target = await resolvePasteMoveTarget(repo.block('root'), 'after', undefined)
       expect(target).toEqual({ parentId: 'root', position: { kind: 'first' } })
     })
 
@@ -153,14 +127,14 @@ describe('resolveVisiblePasteMoveTarget / tryPasteAsMoveAt', () => {
       // 'root' so this test actually isolates the scope-root check.
       await seed('root', null)
       await seed('scope', 'root')
-      const target = await resolveVisiblePasteMoveTarget(repo.block('scope'), 'before', 'scope')
+      const target = await resolvePasteMoveTarget(repo.block('scope'), 'before', 'scope')
       expect(target).toEqual({ parentId: 'scope', position: { kind: 'first' } })
     })
 
     it('lands as first child after an EXPANDED block with visible children, positioned "after"', async () => {
       await seed('parent', null)
       await seed('kid', 'parent')
-      const target = await resolveVisiblePasteMoveTarget(repo.block('parent'), 'after', undefined)
+      const target = await resolvePasteMoveTarget(repo.block('parent'), 'after', undefined)
       expect(target).toEqual({ parentId: 'parent', position: { kind: 'first' } })
     })
 
@@ -172,7 +146,7 @@ describe('resolveVisiblePasteMoveTarget / tryPasteAsMoveAt', () => {
       await seed('root', null)
       await seed('parent', 'root', { collapsed: true })
       await seed('kid', 'parent')
-      const target = await resolveVisiblePasteMoveTarget(repo.block('parent'), 'after', undefined)
+      const target = await resolvePasteMoveTarget(repo.block('parent'), 'after', undefined)
       expect(target).toEqual({ parentId: 'root', position: { kind: 'after', siblingId: 'parent' } })
     })
 
@@ -180,15 +154,43 @@ describe('resolveVisiblePasteMoveTarget / tryPasteAsMoveAt', () => {
       await seed('root', null)
       await seed('parent', 'root')
       await seed('kid', 'parent')
-      const target = await resolveVisiblePasteMoveTarget(repo.block('parent'), 'before', undefined)
+      const target = await resolvePasteMoveTarget(repo.block('parent'), 'before', undefined)
       expect(target).toEqual({ parentId: 'root', position: { kind: 'before', siblingId: 'parent' } })
     })
 
     it('lands as a sibling after an ordinary childless block outside any scope', async () => {
       await seed('parent', null)
       await seed('leaf', 'parent')
-      const target = await resolveVisiblePasteMoveTarget(repo.block('leaf'), 'after', undefined)
+      const target = await resolvePasteMoveTarget(repo.block('leaf'), 'after', undefined)
       expect(target).toEqual({ parentId: 'parent', position: { kind: 'after', siblingId: 'leaf' } })
+    })
+
+    // `placement: 'sibling'` switches OFF exactly one of the three clauses
+    // — the visible-children one. Mirrors `resolveRootDestination`, whose
+    // two root clauses are likewise placement-independent. Reading
+    // 'sibling' as "always a sibling" is what moved cut blocks outside the
+    // rendered surface from the editor.
+    describe("placement 'sibling'", () => {
+      it('suppresses the visible-children rule', async () => {
+        await seed('root', null)
+        await seed('parent', 'root')
+        await seed('kid', 'parent')
+        const target = await resolvePasteMoveTarget(repo.block('parent'), 'after', undefined, 'sibling')
+        expect(target).toEqual({ parentId: 'root', position: { kind: 'after', siblingId: 'parent' } })
+      })
+
+      it('still takes first-child placement at the render-scope root', async () => {
+        await seed('root', null)
+        await seed('scope', 'root')
+        const target = await resolvePasteMoveTarget(repo.block('scope'), 'after', 'scope', 'sibling')
+        expect(target).toEqual({ parentId: 'scope', position: { kind: 'first' } })
+      })
+
+      it('still takes first-child placement at a workspace root', async () => {
+        await seed('root', null)
+        const target = await resolvePasteMoveTarget(repo.block('root'), 'after', undefined, 'sibling')
+        expect(target).toEqual({ parentId: 'root', position: { kind: 'first' } })
+      })
     })
   })
 

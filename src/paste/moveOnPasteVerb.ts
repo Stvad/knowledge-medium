@@ -63,11 +63,15 @@ export const pasteAsMoveVerb = defineVerbFacet<PasteAsMoveInput, PasteAsMoveResu
   onError: 'rethrow',
 })
 
-/** Sibling-insert target anchored on `anchor`: land the pasted/moved
- *  content immediately before or after it, under the same parent. Shared by
- *  every call site so "read the anchor's parentId" isn't re-derived three
- *  ways. */
-export const siblingMoveTarget = (
+/** Sibling-insert target anchored on `anchor`: land the moved content
+ *  immediately before or after it, under the same parent.
+ *
+ *  Deliberately NOT exported. It is only ever correct as the FALLBACK
+ *  branch of `resolvePasteMoveTarget` below — reaching for it directly is
+ *  how the editor surface ended up moving blocks out of the rendered
+ *  scope, because a "sibling" of a scope root sits outside the surface
+ *  entirely. */
+const siblingMoveTarget = (
   anchor: Block,
   kind: 'before' | 'after',
 ): PasteMoveTarget => ({
@@ -98,35 +102,42 @@ export const tryPasteAsMove = async (
   return pasteAsMoveVerb.run(runtime, { repo, target, clipboardText })
 }
 
-/** The move-target counterpart of `pasteMultilineText`'s 'visible' root
- *  placement (`resolveRootDestination`, `@/paste/operations.js`): an
- *  ordinary paste positioned AFTER a block that's showing its children (or
- *  that IS the render-scope root, or a workspace root) lands as that
- *  block's FIRST CHILD, not literally after it as a sibling.
- *  `siblingMoveTarget` hardcodes sibling-after regardless — fine for
- *  surfaces whose OWN fallback also hardcodes sibling placement (the
- *  editor's in-place paste, the multi-select outline paste — both pass
- *  `placement: 'sibling'` to their fallback), but wrong for a surface
- *  whose fallback uses the 'visible' default: completing a cut would then
- *  land somewhere different from what an ordinary paste at the same spot
- *  produces, and at a scope root the sibling slot can sit outside the
- *  rendered surface entirely — the moved blocks leave and never visibly
- *  arrive.
+/**
+ * Where a completed move lands, mirroring `resolveRootDestination`
+ * (`@/paste/operations.js`) — the function an ordinary text paste at the
+ * same spot goes through. A move that resolves its target differently
+ * from the paste it replaces puts the blocks somewhere the user didn't
+ * point at, so this is a mirror, not an approximation:
  *
- *  Read-only (no tx) — the caller commits its own transaction
- *  (`moveBlocksTo`, inside `pasteAsMoveImpl`) once it has the resolved
- *  target. */
-export const resolveVisiblePasteMoveTarget = async (
+ *   rootsAsChildren = targetIsScopeRoot
+ *                  || target.parentId === null
+ *                  || (placement === 'visible' && position === 'after'
+ *                      && targetHasVisibleChildren)
+ *
+ * The two ROOT disjuncts hold for BOTH placements, which is the part
+ * that's easy to get wrong: a `placement: 'sibling'` caller still gets
+ * first-child placement at a scope or workspace root. It has to — a
+ * sibling of the render-scope root sits OUTSIDE the rendered surface, so
+ * the moved blocks leave the source and never visibly arrive (they read
+ * as lost), and a "sibling" of a workspace root is just another root
+ * rather than anything the user pointed at. Only the visible-children
+ * rule is placement-sensitive.
+ *
+ * Read-only (no tx) — the caller commits its own transaction
+ * (`moveBlocksTo`, inside `pasteAsMoveImpl`) once it has the target.
+ */
+export const resolvePasteMoveTarget = async (
   target: Block,
   position: 'before' | 'after',
   scopeRootId: string | undefined,
+  placement: 'visible' | 'sibling' = 'visible',
 ): Promise<PasteMoveTarget> => {
   const data = target.peek() ?? await target.load()
   const isWorkspaceRoot = (data?.parentId ?? null) === null
   const targetIsScopeRoot = scopeRootId !== undefined && scopeRootId === target.id
 
   let rootsAsChildren = targetIsScopeRoot || isWorkspaceRoot
-  if (!rootsAsChildren && position === 'after') {
+  if (!rootsAsChildren && placement === 'visible' && position === 'after') {
     const isCollapsed = target.peekProperty(isCollapsedProp) ?? false
     rootsAsChildren = !isCollapsed && (await target.childIds.load()).length > 0
   }
@@ -137,11 +148,11 @@ export const resolveVisiblePasteMoveTarget = async (
 }
 
 /** Try to complete a pending cut→move at `position` relative to `target`,
- *  using the SAME visible-placement policy an ordinary paste there would
- *  use (see `resolveVisiblePasteMoveTarget`). `clipboardText` must be a
- *  SINGLE read already in hand — passed straight through to
- *  `tryPasteAsMove`, never re-read here (two reads of the OS clipboard can
- *  disagree, and each read can cost a system prompt on iOS).
+ *  using the same placement policy an ordinary paste there would use (see
+ *  `resolvePasteMoveTarget`). `clipboardText` must be a SINGLE read
+ *  already in hand — passed straight through to `tryPasteAsMove`, never
+ *  re-read here (two reads of the OS clipboard can disagree, and each read
+ *  can cost a system prompt on iOS).
  *
  *  Skips resolving the placement (an async children query) entirely when
  *  nothing is pending — the overwhelming majority of pastes — so an
@@ -152,8 +163,9 @@ export const tryPasteAsMoveAt = async (
   position: 'before' | 'after',
   scopeRootId: string | undefined,
   clipboardText: string,
+  placement: 'visible' | 'sibling' = 'visible',
 ): Promise<boolean> => {
   if (!getPendingMove()) return false
-  const moveTarget = await resolveVisiblePasteMoveTarget(target, position, scopeRootId)
+  const moveTarget = await resolvePasteMoveTarget(target, position, scopeRootId, placement)
   return tryPasteAsMove(repo, moveTarget, clipboardText)
 }
