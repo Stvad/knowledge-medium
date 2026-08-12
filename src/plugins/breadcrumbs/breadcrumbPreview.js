@@ -1,2 +1,2 @@
-var e=e=>e.match(/^[^\r\n]*/)?.[0]??``;export{e as getBreadcrumbContentPreview};
+import{firstLine as e}from"../../utils/string.js";var t=t=>e(t);export{t as getBreadcrumbContentPreview};
 //# sourceMappingURL=breadcrumbPreview.js.map
