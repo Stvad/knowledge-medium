@@ -29,23 +29,23 @@ import { CallbackSet } from '@/utils/callbackSet.js'
 export interface PendingMove {
   readonly blockIds: readonly string[]
   readonly workspaceId: string
-  /** EXACTLY the markdown written to the OS clipboard at cut time. A paste
-   *  whose clipboard text no longer matches this (the user copied something
-   *  else, in-app or from another app) invalidates the pending move — see
-   *  `pasteAsMoveVerb`. */
-  readonly clipboardText: string
-  /** Whether `clipboardText` actually reached the OS clipboard.
+  /** The invalidation SENTINEL — a paste whose clipboard text no longer
+   *  matches this (the user copied something else, in-app or from another
+   *  app) invalidates the pending move; see `pasteAsMoveVerb`.
    *
-   *  `navigator.clipboard.write` can be refused outright — a
-   *  `NotAllowedError` for a non-secure context, a missing user gesture,
-   *  or a browser with stricter clipboard rules. The cut still marks the
-   *  move in that case (the register, not the clipboard, is what makes
-   *  paste-as-move work), but the clipboard then holds someone else's
-   *  text, so the "does the clipboard still match?" invalidation check
-   *  would compare against something we never wrote and always fail —
-   *  silently downgrading every paste to a duplicating text paste. When
-   *  this is false, that check is skipped. */
-  readonly clipboardSynced: boolean
+   *  Normally EXACTLY the markdown written to the OS clipboard at cut
+   *  time. But `navigator.clipboard.write` can be refused outright — a
+   *  `NotAllowedError` for a non-secure context, a missing user gesture, or
+   *  a browser with stricter clipboard rules — in which case the cut still
+   *  marks the move (the register, not the clipboard, is what makes
+   *  paste-as-move work) but can't put its own markdown on the clipboard to
+   *  compare against later. `cutBlockIdsToClipboard` falls back to
+   *  SNAPSHOTTING whatever text is already on the clipboard at cut time and
+   *  using THAT as the sentinel: "nothing has been copied since the cut" is
+   *  still a sound invalidation signal even though the snapshot isn't our
+   *  own content. Only when even reading the clipboard is refused does the
+   *  cut give up and not mark a pending move at all. */
+  readonly clipboardText: string
 }
 
 let pending: PendingMove | null = null

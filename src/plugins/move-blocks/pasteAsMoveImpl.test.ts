@@ -11,7 +11,24 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const showErrorMock = vi.hoisted(() => vi.fn())
-vi.mock('@/utils/toast.js', () => ({ showError: showErrorMock }))
+const showInfoMock = vi.hoisted(() => vi.fn())
+const showSuccessMock = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/toast.js', () => ({
+  showError: showErrorMock,
+  showInfo: showInfoMock,
+  showSuccess: showSuccessMock,
+}))
+
+// Delegates to the REAL `moveBlocksTo` by default (set once below, after the
+// actual module is available) — individual tests override it with
+// `mockImplementationOnce` to simulate a `PartialMoveError` (or any other
+// failure) without needing a real scenario that produces one.
+const moveBlocksToMock = vi.hoisted(() => vi.fn())
+vi.mock('./moveBlocks.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('./moveBlocks.ts')>()
+  moveBlocksToMock.mockImplementation(actual.moveBlocksTo)
+  return { ...actual, moveBlocksTo: moveBlocksToMock }
+})
 
 import { ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
@@ -21,6 +38,7 @@ import { keyBetween } from '@/data/orderKey'
 import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
 import type { PasteMoveTarget } from '@/paste/moveOnPasteVerb'
 import { pasteAsMoveImpl } from './pasteAsMoveImpl.ts'
+import { PartialMoveError } from './moveBlocks.ts'
 
 const WS = 'ws-1'
 
@@ -32,7 +50,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 const lastKeyByParent = new Map<string, string | null>()
 
 const seed = async (id: string, parentId: string | null, content = id): Promise<void> => {
-  const bucket = parentId ?? '\u0000root'
+  const bucket = parentId ?? '__root__'
   const orderKey = keyBetween(lastKeyByParent.get(bucket) ?? null, null)
   lastKeyByParent.set(bucket, orderKey)
   await repo.tx(async tx => {
@@ -46,6 +64,13 @@ const childIds = async (parentId: string): Promise<string[]> => {
     [parentId],
   )
   return rows.map(r => r.id)
+}
+
+const parentOf = async (id: string): Promise<string | null> => {
+  const row = await repo.db.getOptional<{ parent_id: string | null }>(
+    'SELECT parent_id FROM blocks WHERE id = ?', [id],
+  )
+  return row?.parent_id ?? null
 }
 
 const INTO_DEST: PasteMoveTarget = { parentId: 'dest', position: { kind: 'last' } }
@@ -65,6 +90,8 @@ beforeEach(async () => {
   repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
   repo.setActiveWorkspaceId(WS)
   showErrorMock.mockClear()
+  showInfoMock.mockClear()
+  showSuccessMock.mockClear()
 })
 
 afterEach(() => { clearPendingMove() })
@@ -80,7 +107,7 @@ describe('pasteAsMoveImpl', () => {
     await seed('dest', null)
     await seed('src', null)
     await seed('a', 'src')
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
 
@@ -93,7 +120,7 @@ describe('pasteAsMoveImpl', () => {
   it('is a no-op fallback when the clipboard text no longer matches the register', async () => {
     await seed('dest', null)
     await seed('a', null)
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'something else' })
 
@@ -102,61 +129,30 @@ describe('pasteAsMoveImpl', () => {
     expect(getPendingMove()).toBeNull() // stale register still gets cleared
   })
 
-  // When `navigator.clipboard.write` is refused (non-secure context, no
-  // user gesture, a stricter browser) the cut still marks the move, but
-  // the OS clipboard holds text we never wrote. Comparing against it
-  // would then fail on EVERY paste and quietly downgrade the move to a
-  // duplicating text paste — so the comparison is skipped instead.
-  it('still moves when the clipboard write was refused at cut time, despite mismatched text', async () => {
+  // Cutting a genuinely EMPTY block records an empty `clipboardText` in the
+  // register (see `cutBlockIdsToClipboard`). If `pasteAsMoveImpl` treated an
+  // empty clipboardText as automatically invalid, that cut could never
+  // complete — the block would stay marked forever.
+  it('completes the move when both the register and the paste-time clipboard text are empty', async () => {
     await seed('dest', null)
-    await seed('src', null)
-    await seed('a', 'src')
-    setPendingMove({
-      blockIds: ['a'], workspaceId: WS, clipboardText: 'a', clipboardSynced: false,
-    })
+    await seed('a', null, '')
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: '' })
 
-    const result = await pasteAsMoveImpl({
-      repo, target: INTO_DEST, clipboardText: 'whatever was already on the clipboard',
-    })
+    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: '' })
 
     expect(result).toBe(true)
-    expect(await childIds('dest')).toEqual(['a']) // moved, not duplicated
-    expect(await childIds('src')).toEqual([])
-  })
-
-  it('is a no-op fallback when the pending move belongs to a different workspace', async () => {
-    await seed('dest', null)
-    await seed('a', null)
-    setPendingMove({ blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a' , clipboardSynced: true })
-
-    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
-
-    expect(result).toBe(false)
-    expect(await childIds('dest')).toEqual([])
+    expect(await childIds('dest')).toEqual(['a'])
     expect(getPendingMove()).toBeNull()
   })
 
-  it('is a no-op fallback when one of the pending ids was deleted before the paste', async () => {
-    await seed('dest', null)
-    await seed('a', null)
-    await seed('b', null)
-    await repo.block('b').delete()
-    setPendingMove({ blockIds: ['a', 'b'], workspaceId: WS, clipboardText: 'a\nb' , clipboardSynced: true })
-
-    const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a\nb' })
-
-    expect(result).toBe(false)
-    // Neither moved — all-or-nothing, same as the deletion-guard preflight
-    // elsewhere in this codebase. 'a' (still live) stayed at the workspace root.
-    expect(await childIds('dest')).toEqual([])
-    expect(repo.block('a').peek()?.parentId).toBeNull()
-    expect(getPendingMove()).toBeNull()
-  })
+  // Superseded by "partial tombstone survivors" below: a deleted id among
+  // the pending ones no longer vetoes the whole batch — the survivors
+  // still move. See that describe block for the current behavior.
 
   it('refuses (does not move, does not fall back) when the destination parent IS one of the moving blocks', async () => {
     await seed('a', null)
     await seed('b', 'a')
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     // "Paste inside a" while a itself is being moved.
     const result = await pasteAsMoveImpl({
@@ -176,7 +172,7 @@ describe('pasteAsMoveImpl', () => {
     await seed('a', null)
     await seed('b', 'a')
     await seed('c', 'b') // c is a's grandchild
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     const result = await pasteAsMoveImpl({
       repo, target: { parentId: 'c', position: { kind: 'last' } }, clipboardText: 'a',
@@ -192,7 +188,7 @@ describe('pasteAsMoveImpl', () => {
   it('refuses when the before/after anchor sibling IS one of the moving blocks', async () => {
     await seed('parent', null)
     await seed('a', 'parent')
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     // Paste "after a" — the anchor itself is the block being moved.
     const result = await pasteAsMoveImpl({
@@ -210,7 +206,7 @@ describe('pasteAsMoveImpl', () => {
     await seed('dest', null)
     await seed('a', null)
     await seed('sibling', null)
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     const result = await pasteAsMoveImpl({
       repo, target: { parentId: null, position: { kind: 'after', siblingId: 'sibling' } }, clipboardText: 'a',
@@ -230,7 +226,7 @@ describe('pasteAsMoveImpl', () => {
     await seed('a', null)
     await seed('child', 'a')
     await seed('dest', null)
-    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
 
     const refused = await pasteAsMoveImpl({
       repo, target: { parentId: 'a', position: { kind: 'last' } }, clipboardText: 'a',
@@ -247,5 +243,154 @@ describe('pasteAsMoveImpl', () => {
     // from the root rather than copied.
     expect(await childIds('dest')).toEqual(['a'])
     expect(getPendingMove()).toBeNull()
+  })
+
+  describe('cross-workspace paste (item C)', () => {
+    it('falls back (returns false) but KEEPS the register when the pending move belongs to a different workspace', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a' })
+
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(result).toBe(false)
+      expect(await childIds('dest')).toEqual([])
+      // The cut is still valid back in 'ws-other' — dropping it here would
+      // both fail to paste anything useful AND silently destroy the cut.
+      expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a' })
+      expect(showInfoMock).toHaveBeenCalledTimes(1)
+      expect(showInfoMock).toHaveBeenCalledWith("Can't move blocks across workspaces — pasted a copy instead")
+    })
+
+    it('a cross-workspace paste that keeps the register still lets a LATER same-workspace paste complete the move', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a' })
+
+      await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+      expect(getPendingMove()).not.toBeNull()
+
+      repo.setActiveWorkspaceId('ws-other')
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(result).toBe(true)
+      expect(await childIds('dest')).toEqual(['a'])
+      expect(getPendingMove()).toBeNull()
+    })
+  })
+
+  describe('partial tombstone survivors (item 3)', () => {
+    it('moves the LIVE survivors and shows a toast noting how many were already deleted', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      await seed('b', null)
+      await repo.block('b').delete()
+      setPendingMove({ blockIds: ['a', 'b'], workspaceId: WS, clipboardText: 'a\nb' })
+
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a\nb' })
+
+      expect(result).toBe(true)
+      // 'a' (still live) moved; 'b' (deleted) was skipped, not recreated.
+      expect(await childIds('dest')).toEqual(['a'])
+      expect(getPendingMove()).toBeNull()
+      expect(showSuccessMock).toHaveBeenCalledTimes(1)
+      expect(showSuccessMock).toHaveBeenCalledWith('Moved 1 block — 1 was already deleted and skipped')
+    })
+
+    it('falls back to a text paste (no toast) when EVERY pending id was deleted before the paste', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      await repo.block('a').delete()
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(result).toBe(false)
+      expect(await childIds('dest')).toEqual([])
+      expect(getPendingMove()).toBeNull()
+      expect(showSuccessMock).not.toHaveBeenCalled()
+      expect(showErrorMock).not.toHaveBeenCalled()
+    })
+
+    it('does not show the skip toast when nothing was actually skipped', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(showSuccessMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('moveBlocksTo failures (item 4)', () => {
+    it('keeps the register UNCHANGED when the move fails before anything commits (not a PartialMoveError)', async () => {
+      await seed('dest2', null)
+      await seed('a', null)
+      await repo.block('dest2').delete() // moving into a deleted parent throws, nothing committed
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      const result = await pasteAsMoveImpl({
+        repo, target: { parentId: 'dest2', position: { kind: 'last' } }, clipboardText: 'a',
+      })
+
+      expect(result).toBe(true)
+      expect(showErrorMock).toHaveBeenCalledTimes(1)
+      // Nothing moved — the whole set is exactly where it was, so the
+      // register comes back untouched, not narrowed.
+      expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+      expect(await parentOf('a')).toBeNull()
+    })
+
+    it('narrows the register to the ids that did NOT move on a PartialMoveError', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      await seed('b', null)
+      setPendingMove({ blockIds: ['a', 'b'], workspaceId: WS, clipboardText: 'a\nb' })
+
+      moveBlocksToMock.mockImplementationOnce(async () => {
+        throw new PartialMoveError(['a'], new Error('boom'))
+      })
+
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a\nb' })
+
+      expect(result).toBe(true)
+      expect(showErrorMock).toHaveBeenCalledTimes(1)
+      // 'a' committed (per the simulated PartialMoveError) — it must NOT
+      // stay in the register, or the next paste would re-move (duplicate
+      // work) an id that's already at its destination. 'b' never moved and
+      // must stay.
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'a\nb' })
+    })
+  })
+
+  describe('re-entrancy (item B)', () => {
+    it('claims the register synchronously, so two overlapping pastes cannot both complete the same move', async () => {
+      await seed('dest', null)
+      await seed('dest2', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      // Fired back-to-back with NO await between them — if the claim
+      // weren't synchronous, both would read the same pending move and
+      // both would attempt `moveBlocksTo`, sending 'a' to whichever
+      // resolved last and leaving two undo entries.
+      const p1 = pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+      const p2 = pasteAsMoveImpl({
+        repo, target: { parentId: 'dest2', position: { kind: 'last' } }, clipboardText: 'a',
+      })
+
+      const [r1, r2] = await Promise.all([p1, p2])
+
+      // The first call's synchronous prologue claims the register before
+      // the second call's prologue ever runs (JS has no interleaving
+      // before the first `await`) — so the first always wins.
+      expect(r1).toBe(true)
+      expect(r2).toBe(false)
+      expect(getPendingMove()).toBeNull()
+      // 'a' landed under exactly one destination — not duplicated, not split.
+      expect(await childIds('dest')).toEqual(['a'])
+      expect(await childIds('dest2')).toEqual([])
+    })
   })
 })

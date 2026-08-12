@@ -3,6 +3,7 @@ import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
+import { clearPendingMove } from '@/utils/pendingMove.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { withRowSlide } from '@/utils/flipSlide.js'
@@ -75,10 +76,22 @@ export const bindBlockActionContext = <T extends ActionContextType>(
 })
 
 /** Write to the system clipboard if the platform exposes the async API.
- *  Used by the block-level "copy *" actions; safe to call in non-browser
- *  contexts (jsdom, Node) — the no-clipboard branch silently no-ops so
- *  unit tests can invoke handlers without setting up a clipboard mock. */
+ *  Used by the block-level "copy *" actions (ref/embed/content/link); safe
+ *  to call in non-browser contexts (jsdom, Node) — the no-clipboard branch
+ *  silently no-ops so unit tests can invoke handlers without setting up a
+ *  clipboard mock.
+ *
+ *  Clears any pending cut→move first (`@/utils/pendingMove.js`): these
+ *  actions put DIFFERENT content on the clipboard than whatever was cut,
+ *  which invalidates the move — without this, cutting a block then using
+ *  "copy reference"/"copy link"/etc. on another block would leave the
+ *  register pointing at the cut block, and the next paste would silently
+ *  MOVE it instead of pasting the ref/link/etc. that was just copied.
+ *  Cleared unconditionally, before even checking for a clipboard API, so
+ *  it fires the same way regardless of whether the actual OS write can
+ *  happen. */
 const writeToClipboard = (text: string): void => {
+  clearPendingMove()
   if (typeof navigator === 'undefined' || !navigator.clipboard) return
   void navigator.clipboard.writeText(text)
 }

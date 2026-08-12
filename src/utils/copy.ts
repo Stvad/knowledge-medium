@@ -2,7 +2,9 @@ import { Block } from '../data/block'
 import { ClipboardData } from '../types'
 import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.js'
-import { setPendingMove } from '@/utils/pendingMove.js'
+import { clearPendingMove, setPendingMove } from '@/utils/pendingMove.js'
+import { showError } from '@/utils/toast.js'
+import { validateSelectionHierarchy } from '@/utils/selection.js'
 
 const createIndentedContent = (content: string, depth: number): string => {
   const indentBy = '  '
@@ -55,9 +57,21 @@ const createClipboardItem = (data: ClipboardData): ClipboardItem =>
 /** Exported so `cutBlockIdsToClipboard` (below) can write the SAME
  *  `ClipboardData` it also hands to `setPendingMove` — the register's
  *  `clipboardText` has to be exactly what landed on the OS clipboard, not a
- *  second, separately-serialized copy. */
-export const writeToClipboard = async (data: ClipboardData): Promise<void> =>
-  navigator.clipboard.write([createClipboardItem(data)])
+ *  second, separately-serialized copy.
+ *
+ *  Clears any OTHER pending cut→move first: this write is about to put
+ *  different content on the clipboard, which invalidates whatever move was
+ *  pending (see `@/utils/pendingMove.js`) — without this, cutting block A,
+ *  then copying block B, then pasting would silently MOVE A instead of
+ *  copying B, because nothing ever told the register a different copy
+ *  happened. Cleared unconditionally (before the write, not after) so it
+ *  fires even when the write itself is refused. Harmless for the cut's OWN
+ *  write: `cutBlockIdsToClipboard` calls this first and then calls
+ *  `setPendingMove` right after, re-arming the register it just cleared. */
+export const writeToClipboard = async (data: ClipboardData): Promise<void> => {
+  clearPendingMove()
+  await navigator.clipboard.write([createClipboardItem(data)])
+}
 
 export const copyBlockToClipboard = async (block: Block): Promise<void> =>
   writeToClipboard(await serializeBlock(block))
@@ -127,16 +141,46 @@ export const copyBlockIdsToClipboard = async (
 /** Cut: like `copyBlockIdsToClipboard`, but ALSO marks `blockIds` as a
  *  pending move (`@/utils/pendingMove.js`) instead of deleting them —
  *  nothing here touches the blocks table. A paste that later finds the
- *  register still valid (workspace matches, the OS clipboard is still
- *  exactly this markdown, every id still live, destination outside the
- *  moved subtrees — see `pasteAsMoveImpl` in the move-blocks plugin)
- *  completes the relocation via `moveBlocksTo`, preserving ids so refs into
- *  the cut subtree survive; anything else, including no paste at all,
- *  leaves the blocks exactly where they were.
+ *  register still valid (workspace matches, the clipboard sentinel still
+ *  matches, at least one id still live, destination outside the moved
+ *  subtrees — see `pasteAsMoveImpl` in the move-blocks plugin) completes
+ *  the relocation via `moveBlocksTo`, preserving ids so refs into the cut
+ *  subtree survive; anything else, including no paste at all, leaves the
+ *  blocks exactly where they were.
  *
  *  Returns whether it actually marked anything — false for an empty
- *  `blockIds` or no active workspace, so callers (e.g. to decide whether to
- *  also clear a UI selection) don't have to re-check both. */
+ *  `blockIds`, no active workspace, or a clipboard that's entirely
+ *  unreachable (see below), so callers (e.g. to decide whether to also
+ *  clear a UI selection) don't have to re-check.
+ *
+ *  Normalizes `blockIds` through `validateSelectionHierarchy` BEFORE
+ *  serializing: an ancestor+descendant pair in the selection (the
+ *  invariant is only enforced at write time — cache-only, nothing
+ *  re-validates it after a sync-applied reparent lands under it) would
+ *  otherwise serialize the descendant TWICE — once nested inside the
+ *  ancestor's subtree, once again as its own top-level entry — duplicating
+ *  it in the clipboard markdown. `moveBlocksTo` prunes the same way
+ *  internally when the move eventually runs, so normalizing up front here
+ *  keeps the register, the clipboard text, and the eventual move all
+ *  describing the identical set.
+ *
+ *  Best-effort on the actual OS write, and deliberately NOT
+ *  awaited-then-thrown: the register is what makes cut→paste a move; the
+ *  clipboard write is the secondary courtesy that lets the same cut paste
+ *  into another app. Letting a refused write (`NotAllowedError` —
+ *  non-secure context, no user gesture, a stricter browser) propagate
+ *  would abort before `setPendingMove` and make ⌘X a total no-op: nothing
+ *  marked, nothing deleted, no feedback. Verified reachable — the write is
+ *  refused outright in an automated browser context.
+ *
+ *  When the write is refused, the register still needs SOME invalidation
+ *  sentinel (see `PendingMove.clipboardText`'s doc) — read back whatever is
+ *  currently on the clipboard and use that: "nothing copied since the cut"
+ *  is still a sound signal even though it isn't our own markdown. Only when
+ *  BOTH the write and the read are refused is there no usable sentinel at
+ *  all; the cut can't be marked, so it's abandoned outright (toast, no
+ *  register) rather than armed with no invalidation check — that would let
+ *  ANY next paste, anywhere, complete as a move. */
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
@@ -145,22 +189,22 @@ export const cutBlockIdsToClipboard = async (
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return false
 
-  const data = await serializeSelectedBlocks([...blockIds], repo)
-  // Best-effort, and deliberately NOT awaited-then-thrown. The register is
-  // what makes cut→paste a move; the clipboard write is the secondary
-  // courtesy that lets the same cut paste into another app. Letting a
-  // refused write (`NotAllowedError` — non-secure context, no user
-  // gesture, a stricter browser) propagate would abort before
-  // `setPendingMove` and make ⌘X a total no-op: nothing marked, nothing
-  // deleted, no feedback. Verified reachable — the write is refused
-  // outright in an automated browser context.
-  let clipboardSynced = true
+  const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
+
+  const data = await serializeSelectedBlocks(normalizedIds, repo)
+  let clipboardText = data.markdown
   try {
     await writeToClipboard(data)
   } catch (error) {
-    clipboardSynced = false
-    console.warn('[cut] clipboard write refused; marking the move anyway', error)
+    console.warn('[cut] clipboard write refused; reading back the existing clipboard as the invalidation sentinel', error)
+    try {
+      clipboardText = await navigator.clipboard.readText()
+    } catch (readError) {
+      console.warn('[cut] clipboard read also refused; cut cannot be marked as a pending move', readError)
+      showError("Couldn't access the clipboard — cut was cancelled")
+      return false
+    }
   }
-  setPendingMove({blockIds, workspaceId, clipboardText: data.markdown, clipboardSynced})
+  setPendingMove({blockIds: normalizedIds, workspaceId, clipboardText})
   return true
 }

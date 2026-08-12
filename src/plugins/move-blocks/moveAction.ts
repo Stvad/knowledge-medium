@@ -18,6 +18,7 @@ import { selectionStateProp } from '@/data/properties.js'
 import { openDialog } from '@/utils/dialogs.js'
 import { MoveDestinationPicker } from './MoveDestinationPicker.tsx'
 import { moveBlocksTo, PartialMoveError } from './moveBlocks.ts'
+import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 
 export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
 
@@ -118,8 +119,20 @@ export const runMoveFlow = async (
     // A partial failure still relocated its prefix, so those ids need the
     // same selection bookkeeping a success does — otherwise Delete and the
     // other multi-select shortcuts keep reaching them at their new home.
+    // Mirrors the success path above: subtract every ORIGINALLY requested
+    // id covered (self, or a descendant riding along) by one of the roots
+    // that actually committed — not just `error.movedIds` itself, which,
+    // like `moveBlocksTo`'s success report, omits descendants pruned out
+    // of the committed root list even though they relocated too.
     if (context && error instanceof PartialMoveError) {
-      await dropMovedFromSelection(context.uiStateBlock, error.movedIds)
+      const movedRoots = new Set(error.movedIds)
+      const covered = await Promise.all(
+        blockIds.map(async id => (await isWithinSubtreeOfAny(repo, id, movedRoots)) ? id : null),
+      )
+      await dropMovedFromSelection(
+        context.uiStateBlock,
+        covered.filter((id): id is string => id !== null),
+      )
     }
     showError(
       error instanceof Error ? error.message : 'Failed to move blocks',

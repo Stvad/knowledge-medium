@@ -55,7 +55,7 @@ afterEach(() => {
 
 describe('PendingMoveShellDecorator', () => {
   it('marks a block that is part of the pending move', () => {
-    setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a', clipboardSynced: true})
+    setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a'})
     const {getByTestId} = renderDecorator('a')
 
     expect(getByTestId('shell').dataset.pendingMove).toBe('true')
@@ -63,7 +63,7 @@ describe('PendingMoveShellDecorator', () => {
   })
 
   it('leaves other blocks alone', () => {
-    setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a', clipboardSynced: true})
+    setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a'})
     const {getByTestId} = renderDecorator('b')
 
     expect(getByTestId('shell').dataset.pendingMove).toBeUndefined()
@@ -79,14 +79,14 @@ describe('PendingMoveShellDecorator', () => {
     expect(getByTestId('shell').dataset.pendingMove).toBeUndefined()
 
     act(() => {
-      setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a', clipboardSynced: true})
+      setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a'})
     })
 
     expect(getByTestId('shell').dataset.pendingMove).toBe('true')
   })
 
   it('clears as soon as the register is cleared', () => {
-    setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a', clipboardSynced: true})
+    setPendingMove({blockIds: ['a'], workspaceId: WS, clipboardText: 'a'})
     const {getByTestId} = renderDecorator('a')
     expect(getByTestId('shell').dataset.pendingMove).toBe('true')
 
@@ -96,7 +96,7 @@ describe('PendingMoveShellDecorator', () => {
   })
 
   it('does not mark a same-id block in a different workspace', () => {
-    setPendingMove({blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a', clipboardSynced: true})
+    setPendingMove({blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a'})
     const {getByTestId} = renderDecorator('a')
 
     expect(getByTestId('shell').dataset.pendingMove).toBeUndefined()

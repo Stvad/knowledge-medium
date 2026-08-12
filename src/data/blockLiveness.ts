@@ -42,3 +42,26 @@ export const anyBlockTombstoned = async (
   )
   return rows.some(row => row.deleted === 1)
 }
+
+/** Batch form — of `blockIds`, the ones NOT known to be tombstoned: either
+ *  genuinely live, or simply missing locally (see the module doc's
+ *  "missing ≠ deleted" default — the conservative side keeps a possibly-
+ *  unsynced id in the survivors list rather than dropping it). Preserves
+ *  the input order.
+ *
+ *  Used by `pasteAsMoveImpl` to move the SURVIVORS of a pending cut→move
+ *  instead of refusing the whole batch — and re-creating every block,
+ *  including the untouched ones — just because one of the cut ids was
+ *  deleted before the paste. */
+export const liveBlockIds = async (
+  repo: Repo,
+  blockIds: readonly string[],
+): Promise<string[]> => {
+  if (blockIds.length === 0) return []
+  const placeholders = blockIds.map(() => '?').join(', ')
+  const rows = await repo.db.getAll<{id: string; deleted: number}>(
+    `SELECT id, deleted FROM blocks WHERE id IN (${placeholders})`, [...blockIds],
+  )
+  const tombstoned = new Set(rows.filter(row => row.deleted === 1).map(row => row.id))
+  return blockIds.filter(id => !tombstoned.has(id))
+}

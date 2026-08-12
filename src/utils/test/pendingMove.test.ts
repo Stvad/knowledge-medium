@@ -19,24 +19,24 @@ describe('pendingMove', () => {
   })
 
   it('set/get/clear round-trip', () => {
-    setPendingMove({ blockIds: ['a', 'b'], workspaceId: 'ws-1', clipboardText: '- a\n- b' , clipboardSynced: true })
-    expect(getPendingMove()).toEqual({ blockIds: ['a', 'b'], workspaceId: 'ws-1', clipboardText: '- a\n- b' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a', 'b'], workspaceId: 'ws-1', clipboardText: '- a\n- b' })
+    expect(getPendingMove()).toEqual({ blockIds: ['a', 'b'], workspaceId: 'ws-1', clipboardText: '- a\n- b' })
 
     clearPendingMove()
     expect(getPendingMove()).toBeNull()
   })
 
   it('setPendingMove replaces a prior pending move outright (no merge)', () => {
-    setPendingMove({ blockIds: ['a'], workspaceId: 'ws-1', clipboardText: '- a' , clipboardSynced: true })
-    setPendingMove({ blockIds: ['c'], workspaceId: 'ws-2', clipboardText: '- c' , clipboardSynced: true })
-    expect(getPendingMove()).toEqual({ blockIds: ['c'], workspaceId: 'ws-2', clipboardText: '- c' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: 'ws-1', clipboardText: '- a' })
+    setPendingMove({ blockIds: ['c'], workspaceId: 'ws-2', clipboardText: '- c' })
+    expect(getPendingMove()).toEqual({ blockIds: ['c'], workspaceId: 'ws-2', clipboardText: '- c' })
   })
 
   it('notifies subscribers on set and on clear, but clearing an already-empty register is a no-op notify', () => {
     const calls: number[] = []
     const off = subscribePendingMove(() => calls.push(calls.length))
 
-    setPendingMove({ blockIds: ['a'], workspaceId: 'ws-1', clipboardText: '- a' , clipboardSynced: true })
+    setPendingMove({ blockIds: ['a'], workspaceId: 'ws-1', clipboardText: '- a' })
     expect(calls).toHaveLength(1)
 
     clearPendingMove()
@@ -55,7 +55,7 @@ describe('pendingMove', () => {
       expect(result.current).toBeNull()
 
       act(() => {
-        setPendingMove({ blockIds: ['x', 'y'], workspaceId: 'ws-1', clipboardText: '- x\n- y' , clipboardSynced: true })
+        setPendingMove({ blockIds: ['x', 'y'], workspaceId: 'ws-1', clipboardText: '- x\n- y' })
       })
       expect(result.current).toEqual(new Set(['x', 'y']))
       expect(result.current?.has('x')).toBe(true)
@@ -66,7 +66,7 @@ describe('pendingMove', () => {
     })
 
     it('returns a snapshot that stays reference-stable across renders with no change', () => {
-      setPendingMove({ blockIds: ['x'], workspaceId: 'ws-1', clipboardText: '- x' , clipboardSynced: true })
+      setPendingMove({ blockIds: ['x'], workspaceId: 'ws-1', clipboardText: '- x' })
       const { result, rerender } = renderHook(() => usePendingMoveIds())
       const first = result.current
       rerender()

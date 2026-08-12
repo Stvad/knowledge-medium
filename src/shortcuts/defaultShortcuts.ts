@@ -1338,7 +1338,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               position: 'after',
               placement: 'sibling',
               scopeRootId: deps.scopeRootId,
-            })
+            }, clipboardText)
           }
         })
         if (moved) {
@@ -1371,7 +1371,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               position: 'before',
               placement: 'sibling',
               scopeRootId: deps.scopeRootId,
-            })
+            }, clipboardText)
           }
         })
         if (moved) {
