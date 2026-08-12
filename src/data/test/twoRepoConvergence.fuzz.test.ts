@@ -58,14 +58,15 @@
  *  suite: both devices converging to the same (possibly cyclic/orphaned)
  *  graph IS the property here.
  *
- * KNOWN RED (deep tier): this suite's first deep run found issue #381 —
- * a content-changing patch merged onto a drifted base can produce a
- * server stamp EQUAL to the patch author's local stamp (the +1 bump only
- * clears the old server stamp, not the author's proposed stamp), so the
- * author's echo equal-stamp-skips and that device permanently misses the
- * other device's merged-under edit. The convergence property is left
- * strict per the oracle discipline; deep runs stay red on that seed
- * until the protocol fix lands. Repro in the issue.
+ * FIRST FIND (fixed, no longer red): this suite's first deep run found
+ * issue #381 — a content-changing patch merged onto a drifted base could
+ * produce a server stamp EQUAL to the patch author's local stamp (the +1
+ * bump only cleared the old server stamp, not the author's proposed
+ * stamp), so the author's echo equal-stamp-skipped and that device
+ * permanently missed the other device's merged-under edit. Keeping the
+ * convergence property strict rather than relaxing it to green is what
+ * held the bug visible until the base-version protocol fix landed (PR
+ * #525); the deep tier passes now, so a red run here is new.
  *
  * Known blind spot, deliberately unreachable: the reconcile gate's I1
  * assumption (equal nonzero stamps ⟺ same write — reconcile.ts:108-121)

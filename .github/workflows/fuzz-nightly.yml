@@ -13,8 +13,8 @@
 # the existing open one). The issue body is built ONLY from the log(s) of
 # the pass(es) that actually failed — a pass 2 pass after a pass 1
 # failure must not bury the seed under green output — and leads with the
-# list of failing test files, then a static triage note (convergence
-# deep-tier red is expected while #381 is open), then a best-effort
+# list of failing test files, then a static triage note (no suite is
+# known-red — the deep tier is expected green), then a best-effort
 # seed/repro excerpt; the full logs are always in the artifact. Report
 # building lives in `node scripts/fuzz.mjs --report`.
 name: Nightly Fuzz
@@ -111,7 +111,7 @@ jobs:
           STATEFUL_OUTCOME: ${{ steps.stateful.outcome }}
         run: |
           # Failing-file extraction, the seed/repro excerpt, and the
-          # standing-#381 triage note are all built by
+          # static triage note are all built by
           # `node scripts/fuzz.mjs --report` (kept in JS, not shell, so
           # the vitest-output parsing is testable — see that file). Only
           # pass logs for steps that actually failed — a passing pass 2
