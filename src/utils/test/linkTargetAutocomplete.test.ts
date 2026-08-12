@@ -327,7 +327,12 @@ describe('link target autocomplete helpers', () => {
 
     await expect(search).resolves.toEqual({
       aliases: [{alias: 'Dating', blockId: 'page', content: 'Dating notes'}],
-      blocks: [{blockId: 'block', content: 'My Dating notes', label: 'My Dating notes'}],
+      blocks: [{
+        blockId: 'block',
+        content: 'My Dating notes',
+        label: 'My Dating notes',
+        parentId: null,
+      }],
     })
     expect(phases).toEqual(['aliases:page', 'blocks:block'])
   })

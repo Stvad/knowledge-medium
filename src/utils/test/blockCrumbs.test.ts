@@ -33,7 +33,11 @@ const ancestor = (
   deleted: false,
 } as unknown as BlockData)
 
-const crumbsOf = (ancestors: BlockData[]) => crumbsFromAncestors(ancestors, WS)
+/** The common case: a nested block whose chain we're rendering. `parentId`
+ *  is what tells a genuine root from a block whose parent was excluded
+ *  from the walk, so it has to be explicit at every call site. */
+const crumbsOf = (ancestors: BlockData[], parentId: string | null = 'parent') =>
+  crumbsFromAncestors(ancestors, {workspaceId: WS, parentId})
 
 describe('crumbsFromAncestors', () => {
   it('reads root-first, reversing the leaf-to-root chain the query returns', () => {
@@ -81,7 +85,32 @@ describe('crumbsFromAncestors', () => {
     const [crumb] = crumbsOf([ancestor('parent', long)])
 
     expect(crumb).toHaveLength(CRUMB_MAX_CHARS)
-    expect(crumb.endsWith('…')).toBe(true)
+    expect(crumb).toContain('…')
+  })
+
+  it('keeps sibling PAGE TITLES apart when they share a long prefix', () => {
+    // The failure this whole feature exists to prevent, one level down:
+    // end-truncation renders both of these as "Quarterly Planning Meet…",
+    // so two different rows become byte-identical again.
+    const titled = (id: string, alias: string) =>
+      ancestor(id, 'body text', {properties: {[aliasesProp.name]: [alias]}})
+    const [y2026] = crumbsOf([titled('a', 'Quarterly Planning Meeting Notes 2026')])
+    const [y2027] = crumbsOf([titled('b', 'Quarterly Planning Meeting Notes 2027')])
+
+    expect(y2026).not.toEqual(y2027)
+    expect(y2026).toContain('2026')
+    expect(y2027).toContain('2027')
+  })
+
+  it('cuts a PROSE ancestor at the end, where there is no meaningful tail', () => {
+    // Splicing the last characters of a sentence onto its opening reads as
+    // damage ("Fold a block…llet below.") and distinguishes nothing.
+    const [crumb] = crumbsOf([
+      ancestor('parent', 'Fold a block\u2019s children: press z, then try the bullet below.'),
+    ])
+
+    expect(crumb.endsWith('\u2026')).toBe(true)
+    expect(crumb.startsWith('Fold a block')).toBe(true)
   })
 })
 
@@ -99,13 +128,25 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     expect(crumbs).toEqual(['…', 'Meeting notes'])
   })
 
-  it('shows only the marker when the whole chain is unreachable', () => {
-    // Immediate parent deleted: without the marker this renders an empty
-    // line, indistinguishable from a genuine top-level block.
-    expect(crumbsOf([])).toEqual([])
+  it('marks a block whose IMMEDIATE parent is gone', () => {
+    // The likeliest cut of all — `core.restore` brings back one block and
+    // leaves a live child under a tombstone — and the one an empty
+    // ancestors array cannot express on its own: a genuine top-level
+    // block returns exactly the same `[]`. Only the block's own parent
+    // edge separates them, so it is the thing that must decide.
+    expect(crumbsOf([], 'deleted-parent')).toEqual(['…'])
+  })
+
+  it('leaves a genuine top-level block with no crumbs at all', () => {
+    // The contrast case for the one above: same empty chain, no marker,
+    // because this block really has nothing above it.
+    expect(crumbsOf([], null)).toEqual([])
+  })
+
+  it('shows only the marker when the chain leaves the workspace at once', () => {
     expect(crumbsFromAncestors(
       [ancestor('foreign', 'Other workspace page', {workspaceId: 'ws-2'})],
-      WS,
+      {workspaceId: WS, parentId: 'foreign'},
     )).toEqual(['…'])
   })
 
@@ -116,7 +157,7 @@ describe('crumbsFromAncestors: chains that do not reach a root', () => {
     const crumbs = crumbsFromAncestors([
       ancestor('parent', 'My section', {parentId: 'foreign-root'}),
       ancestor('foreign-root', 'Someone else private page', {workspaceId: 'ws-2'}),
-    ], WS)
+    ], {workspaceId: WS, parentId: 'parent'})
 
     expect(crumbs).toEqual(['…', 'My section'])
   })

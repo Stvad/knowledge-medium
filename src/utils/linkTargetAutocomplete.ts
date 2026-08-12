@@ -51,6 +51,11 @@ export interface LinkTargetBlockMatch {
   blockId: string
   content: string
   label: string
+  /** The block's own parent edge. Carried so a consumer showing the
+   *  block's ancestry can tell "this block has no parent" from "its
+   *  parent was excluded from the ancestor walk" — an empty ancestor
+   *  chain looks identical either way (see `crumbsFromAncestors`). */
+  parentId: string | null
 }
 
 export interface LinkTargetSearchResult {
@@ -169,6 +174,7 @@ const blockMatchesFromRows = (
       blockId: block.id,
       content: block.content,
       label: labelForBlockData(block, block.id),
+      parentId: block.parentId,
     })
   }
   return blocks

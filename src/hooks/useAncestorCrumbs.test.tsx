@@ -55,6 +55,11 @@ const chainFor = (id: string): AncestorEntry => ({
 
 const idsOf = (call: [{ids: readonly string[]}]) => [...call[0].ids]
 
+/** Blocks that genuinely have a parent — matching `chainFor`, which gives
+ *  each one a parent row. The hook needs the parent edge to tell a root
+ *  from an orphan when the ancestor walk comes back empty. */
+const targets = (...ids: string[]) => ids.map(id => ({id, parentId: `${id}-parent`}))
+
 beforeEach(() => {
   manyAncestors.mockReset()
   manyAncestors.mockImplementation(async ({ids}) => ids.map(chainFor))
@@ -66,7 +71,7 @@ describe('useAncestorCrumbs', () => {
   it('fetches a whole page of results in ONE batched query', async () => {
     const ids = Array.from({length: 25}, (_, i) => `block-${i}`)
 
-    const {result} = renderHook(() => useAncestorCrumbs(ids))
+    const {result} = renderHook(() => useAncestorCrumbs(targets(...ids)))
 
     await waitFor(() => expect(result.current.size).toBe(25))
     expect(manyAncestors).toHaveBeenCalledOnce()
@@ -74,7 +79,7 @@ describe('useAncestorCrumbs', () => {
   })
 
   it('maps each chain onto the block it belongs to', async () => {
-    const {result} = renderHook(() => useAncestorCrumbs(['a', 'b']))
+    const {result} = renderHook(() => useAncestorCrumbs(targets('a', 'b')))
 
     await waitFor(() => expect(result.current.size).toBe(2))
     expect(result.current.get('a')).toEqual(['a parent'])
@@ -90,7 +95,7 @@ describe('useAncestorCrumbs', () => {
     let release: (entries: AncestorEntry[]) => void = () => {}
     manyAncestors.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
 
-    const {result} = renderHook(() => useAncestorCrumbs(['a']))
+    const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
 
     expect(result.current.size).toBe(0)
 
@@ -100,7 +105,7 @@ describe('useAncestorCrumbs', () => {
 
   it('only queries the ids it has not already loaded as the query changes', async () => {
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
       {initialProps: {ids: ['a', 'b']}},
     )
     await waitFor(() => expect(result.current.size).toBe(2))
@@ -125,7 +130,7 @@ describe('useAncestorCrumbs', () => {
     )
 
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
       {initialProps: {ids: ['a']}},
     )
     await waitFor(() => expect(manyAncestors).toHaveBeenCalledOnce())
@@ -153,7 +158,7 @@ describe('useAncestorCrumbs', () => {
     )
 
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
       {initialProps: {ids: ['a', 'b']}},
     )
     await waitFor(() => expect(manyAncestors).toHaveBeenCalledOnce())
@@ -176,7 +181,7 @@ describe('useAncestorCrumbs', () => {
     // this test notices.
     const ids = Array.from({length: 51}, (_, i) => `block-${i}`)
 
-    const {result} = renderHook(() => useAncestorCrumbs(ids))
+    const {result} = renderHook(() => useAncestorCrumbs(targets(...ids)))
 
     await waitFor(() => expect(result.current.size).toBe(51))
     expect(manyAncestors).toHaveBeenCalledTimes(2)
@@ -189,7 +194,7 @@ describe('useAncestorCrumbs', () => {
     const ids = Array.from({length: 51}, (_, i) => `block-${i}`)
     manyAncestors.mockRejectedValueOnce(new Error('first batch exploded'))
 
-    const {result} = renderHook(() => useAncestorCrumbs(ids))
+    const {result} = renderHook(() => useAncestorCrumbs(targets(...ids)))
 
     // The surviving batch still lands rather than being abandoned with it.
     await waitFor(() => expect(result.current.get('block-50')).toEqual(['block-50 parent']))
@@ -209,7 +214,7 @@ describe('useAncestorCrumbs', () => {
       {startId: 'a', ancestors: null as unknown as BlockData[]},
     ])
 
-    const {result} = renderHook(() => useAncestorCrumbs(['a']))
+    const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
 
     await waitFor(() => expect(consoleError).toHaveBeenCalled())
     // Reported through the hook's own channel and contained: no crumbs,
@@ -224,7 +229,7 @@ describe('useAncestorCrumbs', () => {
     // than fetching rows it could not safely render.
     repo.activeWorkspaceId = null
     try {
-      const {result} = renderHook(() => useAncestorCrumbs(['a']))
+      const {result} = renderHook(() => useAncestorCrumbs(targets('a')))
 
       // Fence on a real fetch happening once the workspace IS known, so
       // this can't pass just because nothing had resolved yet.
@@ -234,7 +239,7 @@ describe('useAncestorCrumbs', () => {
       repo.activeWorkspaceId = 'ws-1'
     }
 
-    const {result: withWorkspace} = renderHook(() => useAncestorCrumbs(['a']))
+    const {result: withWorkspace} = renderHook(() => useAncestorCrumbs(targets('a')))
     await waitFor(() => expect(withWorkspace.current.get('a')).toEqual(['a parent']))
   })
 
@@ -243,7 +248,7 @@ describe('useAncestorCrumbs', () => {
     manyAncestors.mockRejectedValueOnce(new Error('ancestors exploded'))
 
     const {result, rerender} = renderHook(
-      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(targets(...ids)),
       {initialProps: {ids: ['a']}},
     )
 

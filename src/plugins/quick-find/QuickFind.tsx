@@ -434,7 +434,9 @@ function QuickFindDialog({
   // every render, and gating it on the live query means it transiently
   // empties on each keystroke — the hook keys on the ids' CONTENT and
   // holds its claims across both, so an inline map is fine here.
-  const blockCrumbs = useAncestorCrumbs(blocks.map(match => match.blockId))
+  const blockCrumbs = useAncestorCrumbs(
+    blocks.map(match => ({id: match.blockId, parentId: match.parentId})),
+  )
 
   useEffect(() => {
     if (!open) return

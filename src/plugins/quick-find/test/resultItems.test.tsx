@@ -10,7 +10,7 @@ import { quickFindSelectionAction } from '../selection.ts'
 afterEach(() => cleanup())
 
 const match = (blockId: string, content: string): LinkTargetBlockMatch =>
-  ({blockId, content, label: content})
+  ({blockId, content, label: content, parentId: `${blockId}-parent`})
 
 const renderBlocks = (
   blocks: LinkTargetBlockMatch[],

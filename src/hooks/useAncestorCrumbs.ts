@@ -10,6 +10,14 @@ const ANCESTOR_BATCH_SIZE = 50
 
 const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
 
+export interface AncestorCrumbTarget {
+  id: string
+  /** The block's own parent edge — see `crumbsFromAncestors`, which needs
+   *  it to tell a root from an orphan when the ancestor walk comes back
+   *  empty. */
+  parentId: string | null
+}
+
 /** Ancestor crumbs for a set of blocks, loaded AFTER the rows they
  *  annotate are already on screen.
  *
@@ -55,7 +63,7 @@ const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
  *  must never take the search down with them. Those ids stay eligible, so
  *  the next query that includes them retries. */
 export const useAncestorCrumbs = (
-  blockIds: readonly string[],
+  blocks: readonly AncestorCrumbTarget[],
 ): ReadonlyMap<string, readonly string[]> => {
   const repo = useRepo()
   const [crumbs, setCrumbs] = useState(EMPTY_CRUMBS)
@@ -66,10 +74,15 @@ export const useAncestorCrumbs = (
   // refuses to render an ancestor from another one, and with no workspace
   // there is nothing to scope against, so we don't ask at all.
   const workspaceId = repo.activeWorkspaceId
-  // Keyed on the id list's CONTENT, not the array's identity, so a
-  // caller can build it inline. Comma join, same as
-  // `BlockSearchPicker`'s exclusion set: block ids are uuids.
-  const idsKey = blockIds.join(',')
+  // Keyed on the targets' CONTENT, not the array's identity, so a caller
+  // can build it inline. Comma-joined like `BlockSearchPicker`'s exclusion
+  // set (block ids are uuids); each entry carries the block's parent edge
+  // after a `>` so the effect can reconstruct both halves without reading
+  // a ref written during render, which the React Compiler is entitled to
+  // treat as a Rules-of-React violation.
+  const targetsKey = blocks
+    .map(block => `${block.id}>${block.parentId ?? ''}`)
+    .join(',')
 
   // No cancellation, and no cleanup — deliberately, because a superseded
   // run's result is not stale data, it is data. `manyAncestors(ids)`
@@ -95,7 +108,12 @@ export const useAncestorCrumbs = (
   useEffect(() => {
     if (!workspaceId) return
     const requested = requestedRef.current
-    const ids = idsKey ? idsKey.split(',') : []
+    const targets = targetsKey ? targetsKey.split(',') : []
+    const parentIds = new Map(targets.map(target => {
+      const [id, parentId] = target.split('>')
+      return [id, parentId || null] as const
+    }))
+    const ids = [...parentIds.keys()]
     const missing = ids.filter(id => !requested.has(id))
     if (missing.length === 0) return
 
@@ -119,7 +137,10 @@ export const useAncestorCrumbs = (
           // don't clobber each other.
           const formatted = entries.map(entry => [
             entry.startId,
-            crumbsFromAncestors(entry.ancestors, workspaceId),
+            crumbsFromAncestors(entry.ancestors, {
+              workspaceId,
+              parentId: parentIds.get(entry.startId) ?? null,
+            }),
           ] as const)
           setCrumbs(previous => {
             const next = new Map(previous)
@@ -132,7 +153,7 @@ export const useAncestorCrumbs = (
         }
       }
     })()
-  }, [idsKey, repo, workspaceId])
+  }, [targetsKey, repo, workspaceId])
 
   return crumbs
 }

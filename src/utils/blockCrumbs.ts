@@ -15,12 +15,21 @@
  * show, so a crumb never disagrees with the row it labels.
  */
 import type { BlockData } from '@/data/api'
+import { aliasesProp } from '@/data/properties.js'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.js'
-import { firstLine, truncate } from '@/utils/string.js'
+import { firstLine, truncate, truncateMiddle } from '@/utils/string.js'
 
 /** Longest a single crumb renders before it is ellipsised. Small on
  *  purpose: the whole chain shares one line, and a page title long enough
- *  to fill it would push every crumb after it out of view. */
+ *  to fill it would push every crumb after it out of view.
+ *
+ *  Named blocks are ellipsised from the MIDDLE at this width, because
+ *  sibling titles collide constantly at the head — "Quarterly Planning
+ *  Meeting Notes 2026" and its 2027 sibling both end-truncate to
+ *  "Quarterly Planning Meet…", making two different rows read
+ *  identically. That is the exact ambiguity the crumb was added to
+ *  resolve, so the year has to survive. See `crumbLabel` for why prose
+ *  ancestors are cut at the end instead. */
 export const CRUMB_MAX_CHARS = 24
 
 /** Most crumbs shown before the middle collapses to `…`.
@@ -44,12 +53,35 @@ export const CRUMB_MAX_SEGMENTS = 4
 
 const CRUMB_ELLIPSIS = '…'
 
+/** Whether this block has a real alias, i.e. whether `labelForBlockData`
+ *  below will return a NAME rather than a line of body text. Mirrors that
+ *  function's own filter (a raw properties-bag write can leave a
+ *  non-array, or an array with blanks and non-strings in it) rather than
+ *  going through `getAliases`, which throws on exactly those shapes. */
+const hasAlias = (data: BlockData): boolean => {
+  const aliases = data.properties[aliasesProp.name]
+  return Array.isArray(aliases) &&
+    aliases.some(alias => typeof alias === 'string' && alias.trim() !== '')
+}
+
 /** One crumb's text, or `''` for a block with nothing to say (a blank
  *  structural parent). Prefers the alias — a page's crumb should read
- *  "Project Alpha", not its first line of body text. */
+ *  "Project Alpha", not its first line of body text.
+ *
+ *  Where the ellipsis goes depends on which of those two it got, because
+ *  the ends carry different weight in each. A NAME is distinguished by
+ *  its tail far more often than its head — "…Meeting Notes 2026" vs the
+ *  2027 sibling — so cutting the middle is what keeps two rows apart, and
+ *  keeping two rows apart is the entire point of the crumb. PROSE has no
+ *  such tail; its last few characters are wherever the sentence happened
+ *  to be, so splicing them on reads as damage ("Fold a block…llet below.")
+ *  and cutting the end is both honest and easier to read. */
 const crumbLabel = (data: BlockData): string => {
   const label = firstLine(labelForBlockData(data, '')).replace(/\s+/g, ' ').trim()
-  return label ? truncate(label, CRUMB_MAX_CHARS) : ''
+  if (!label) return ''
+  return hasAlias(data)
+    ? truncateMiddle(label, CRUMB_MAX_CHARS)
+    : truncate(label, CRUMB_MAX_CHARS)
 }
 
 /** Root→immediate-parent crumbs for one `core.manyAncestors` chain,
@@ -85,7 +117,7 @@ const crumbLabel = (data: BlockData): string => {
  *  another workspace's content rather than trusting that invariant. */
 export const crumbsFromAncestors = (
   ancestors: readonly BlockData[],
-  workspaceId: string,
+  {workspaceId, parentId}: {workspaceId: string; parentId: string | null},
 ): string[] => {
   const chain: BlockData[] = []
   for (const ancestor of ancestors) {
@@ -101,8 +133,13 @@ export const crumbsFromAncestors = (
   }
 
   const highest = chain[chain.length - 1]
+  // With no ancestors at all the array cannot answer whether the block is
+  // a root or an orphan — both arrive as `[]` — so the block's OWN parent
+  // edge decides. That case is not exotic: it is what a cut at the very
+  // first hop looks like, i.e. exactly the `core.restore` scenario this
+  // marker exists for, and the most likely one in practice.
   const reachesRoot = chain.length === ancestors.length &&
-    (highest === undefined || highest.parentId === null)
+    (highest ? highest.parentId === null : parentId === null)
   // A cut chain has no root worth preserving, so the collapse that keeps
   // both ends doesn't apply — keep the nearest ancestors and let the
   // marker stand in for everything above them.
