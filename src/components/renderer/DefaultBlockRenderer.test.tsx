@@ -695,11 +695,11 @@ describe('title typography', () => {
 // match the register's invalidation sentinel, the next paste would MOVE the
 // cut block instead of pasting the id/ref/embed just copied.
 describe('bullet context-menu copy actions clear an unrelated pending cut→move', () => {
-  let sharedDb: TestDb
+  // Reuses the file-level `sharedDb` rather than opening its own — one DB
+  // per test file (AGENTS.md); a third instance per worker adds exactly
+  // the setup cost and timeout pressure this file already warns about.
   let repo: Repo
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
