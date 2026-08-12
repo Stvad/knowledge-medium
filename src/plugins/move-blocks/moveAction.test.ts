@@ -113,6 +113,24 @@ describe('runMoveFlow selection handling', () => {
     expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['p'])
   })
 
+  it('also unselects a selected descendant that rode along inside a moved subtree', async () => {
+    // `moveBlocksTo` prunes descendants, so only the ancestor is reported
+    // as moved — but the descendant relocated too. Subtracting the
+    // reported ids alone would leave it selected at its new home.
+    await seed('kid', 'a')
+    const uiStateBlock = repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      selectedBlockIds: ['a', 'kid'],
+      anchorBlockId: 'a',
+    })
+
+    await runMoveFlow([repo.block('a'), repo.block('kid')], {uiStateBlock})
+
+    expect(await parentOf('a')).toBe('dest')
+    expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
+    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual([])
+  })
+
   it('leaves an unrelated selection alone on a single-block move', async () => {
     // Focus can sit on an unselected block (and a right-click can land
     // on one) while a selection is live elsewhere. Nothing in that

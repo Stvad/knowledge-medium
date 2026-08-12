@@ -40,9 +40,13 @@ export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
  * untouched, which is the behaviour a normal-mode move on an unrelated
  * block needs.
  *
- * No ancestor/descendant subtlety to handle: `validateSelectionHierarchy`
- * guarantees a stored selection never holds both a block and its own
- * descendant, so a moved id can't leave a selected descendant behind.
+ * `validateSelectionHierarchy` keeps a stored selection free of
+ * ancestor/descendant pairs, but only as a WRITE-TIME invariant — it's a
+ * cache-only check and nothing re-validates after the tree changes under
+ * it (a sync-applied reparent from another device, a local structural op
+ * that doesn't touch the selection). So callers pass the ids they asked
+ * to move rather than the pruned `movedIds`, and this stays a plain set
+ * subtraction that doesn't depend on the invariant holding.
  */
 const dropMovedFromSelection = async (
   uiStateBlock: Block,
@@ -99,7 +103,13 @@ export const runMoveFlow = async (
       position: { kind: 'last' },
     })
     if (result.moved > 0) {
-      if (context) await dropMovedFromSelection(context.uiStateBlock, result.movedIds)
+      // Subtract everything we ASKED to move, not just `movedIds`.
+      // `moveBlocksTo` prunes descendants, so a set holding both a block
+      // and its own descendant reports only the ancestor as moved — but
+      // the descendant relocated too, riding along inside the subtree.
+      // Subtracting `movedIds` would leave it selected at its new home,
+      // which is the exact bug this subtraction exists to prevent.
+      if (context) await dropMovedFromSelection(context.uiStateBlock, blockIds)
       showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
     } else {
       showError('No blocks were moved')

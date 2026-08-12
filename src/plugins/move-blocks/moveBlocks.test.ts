@@ -260,6 +260,28 @@ describe('moveBlocksTo', () => {
     expect(await childIds('d')).toEqual(['x'])
   })
 
+  // The `load()` inside `revealDestination` is load-bearing and the test
+  // above does NOT pin it: writing the collapse through `block().set()`
+  // populates the facade cache, so `peekProperty` answers correctly even
+  // with the load removed. Evicting the snapshot reproduces the real
+  // path — a destination this session never rendered, which is exactly
+  // what the picker's search hands back — where a cold `peek()` reports
+  // `undefined` for a genuinely collapsed row and silently skips the
+  // reveal. Without this test the line can be deleted with a green suite.
+  it('reveals a collapsed destination that is not in the block cache', async () => {
+    await seed('dest', null)
+    await seed('src', null)
+    await seed('a', 'src')
+    await repo.block('dest').set(isCollapsedProp, true)
+    repo.cache.deleteSnapshot('dest')
+    expect(repo.block('dest').peek()).toBeUndefined() // precondition, proven
+
+    await moveBlocksTo(repo, ['a'], INTO_DEST)
+
+    await repo.block('dest').load()
+    expect(repo.block('dest').peekProperty(isCollapsedProp)).toBe(false)
+  })
+
   it('leaves an already-expanded destination untouched', async () => {
     await seed('dest', null)
     await seed('src', null)
