@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Handle lifecycle in hidden subtrees — why &lt;Activity&gt; permanently blanks a KM tree</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  ul.tight { margin: .4rem 0; }
+  ol li, ul li { margin: .25rem 0; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: .45rem .6rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  .tblwrap { overflow-x: auto; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+  .step { border-left: 3px solid #d0d7de; padding-left: .9rem; margin: .9rem 0; }
+  .step b { display: block; }
+</style>
+</head>
+<body>
+
+<aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: implemented</strong> &middot; a defect report whose fix now ships in the same PR
+(#532). Reproduced end-to-end on the hosted build (2026-08-04) against a live workspace, then narrowed
+by reading React 19.2.6's own internals. Revised through two adversarial review rounds, which added
+the <code>read()</code>/Suspense fix and the re-acquire attempt cap described below.
+<strong>Last verified against code:</strong> 2026-08-05 (<code>src/data/internals/handleStore.ts</code>,
+<code>src/hooks/block.ts</code>, <code>src/data/api/handle.ts</code> as implemented on this branch).
+</aside>
+
+<h1>Handle lifecycle in hidden subtrees</h1>
+<p><small>Why <code>&lt;Activity mode="hidden"&gt;</code> permanently blanks a KM subtree, and the
+smallest fix that closes it.</small></p>
+
+<div class="verdict">
+<strong>The ask.</strong> A KM subtree hidden with React's <code>&lt;Activity&gt;</code> can come back
+permanently blank — no error, no pending work, no recovery short of remounting it. The cause is a
+lifecycle gap between <code>HandleStore</code>'s ref-counted GC and the fact that a hidden subtree
+<em>can still render while its effects are unmounted</em>. Two small changes close it: make handle
+disposal <strong>observable</strong> (a <code>'disposed'</code> status), and have
+<code>useHandle</code> <strong>re-acquire</strong> when the handle it holds is dead.
+</div>
+
+<h2>Why this matters</h2>
+
+<p><code>&lt;Activity&gt;</code> is React's sanctioned primitive for "keep this mounted but inactive"
+— how you preserve state, scroll position and media playback across a hide/show without paying a
+remount. It is stable in the React version this repo ships (19.2.6) and is currently used nowhere in
+the codebase; this report is the first attempt to use it. Today that attempt fails, and the failure
+is worse than an obvious crash because it is:</p>
+
+<ul class="tight">
+  <li><strong>Silent.</strong> No throw, no console error, no pending React work. The subtree simply
+  renders nothing, forever.</li>
+  <li><strong>Time-dependent.</strong> Hide for three seconds and all is well; hide past
+  <code>gcTimeMs</code> (5&nbsp;s) and it can die. Quick manual testing passes.</li>
+  <li><strong>Not specific to Activity in principle.</strong> Anything that lets a committed subtree
+  render while its effects are unmounted lands in the same hole. Activity is simply the first thing
+  to do it.</li>
+</ul>
+
+<p>The motivating consumer is a fork-side session host that keeps several layout sessions warm so
+switching perspectives stops remounting the world; it is on a CSS-hiding workaround until this lands,
+which costs it the input isolation Activity's effect cleanup would have given for free. (Optional
+background, fork-internal: <a href="perspective-keep-alive-design.html">perspective keep-alive
+design</a>.)</p>
+
+<h2>The defect</h2>
+
+<p>Three separately-reasonable behaviors compose into a trap. Line references in this section are to
+the code <em>as it stood before this PR</em> (upstream master <code>587136700</code>) — several of
+them are what the fix below changes, so they will not resolve to the same thing on the merged
+branch.</p>
+
+<div class="step">
+<b>1. A handle schedules its own GC at construction.</b>
+<span class="filepath">src/data/internals/handleStore.ts:506–522</span>
+<p>A handle is inserted into the store before anything retains it, so the constructor schedules a
+<code>gcTimeMs</code> sweep that "the first <code>retain()</code> (load/subscribe) cancels". The
+comment already names a near-miss of this case: <em>"an abandoned React concurrent-render lookup
+whose subscribe effect never commits"</em>. Ours differs in one decisive way — the render
+<em>commits</em>; only its effects never run.</p>
+</div>
+
+<div class="step">
+<b>2. Subscribing to a disposed handle is a silent no-op, and disposal is unobservable.</b>
+<span class="filepath">src/data/internals/handleStore.ts:759–773</span>
+<pre><code>subscribe(listener: (value: T) =&gt; void): Unsubscribe {
+  if (this.disposed) {
+    // Listening to a disposed handle is a no-op + immediate
+    // unsubscribe; callers should re-acquire via the factory.
+    return () =&gt; {}
+  }</code></pre>
+<p>The contract — <em>"callers should re-acquire via the factory"</em> — is sound but unsatisfiable
+from where the caller stands: the factory (<code>repo.query.*</code>) runs <strong>during
+render</strong>, and the only thing that would cause another render is a notification from a
+subscription that no longer exists. The caller cannot even detect the situation:
+<code>dispose()</code> resets <code>status_</code> to <code>'idle'</code>
+(<span class="filepath">handleStore.ts:899–916</span>), <code>disposed</code> is <code>private</code>
+(<span class="filepath">:470</span>), and <code>HandleStatus</code> has no disposed member
+(<span class="filepath">src/data/api/handle.ts:1</span>). So a dead handle is indistinguishable from
+a fresh one — which is why <code>useHandle</code>'s ensure-load effect cheerfully calls
+<code>load()</code> on it, and that rejection lands in a swallowed catch
+(<span class="filepath">src/hooks/block.ts:175–182, pre-fix</span>).</p>
+</div>
+
+<div class="step">
+<b>3. A hidden Activity subtree renders, but does not run effects.</b>
+<p>That is Activity's defining behavior, not an accident: components stay mounted, effects unmount
+(<code>disappearLayoutEffects</code> / the Offscreen case of
+<code>commitPassiveUnmountOnFiber</code>). React also re-renders hidden Offscreen content in the
+background — notably when a context value an ancestor provides changes, which marks hidden
+descendants dirty. Crucially, when such a render mounts new hook state inside a hidden tree, its
+passive effects are <em>skipped, not deferred</em>
+(<code>recursivelyTraverseAtomicPassiveEffects</code> never calls
+<code>commitHookPassiveMountEffects</code> for function components). Since <code>useHandle</code>'s
+subscription <em>and</em> its ensure-load both live in effects, a hidden subtree can acquire a handle
+that nothing ever retains.</p>
+</div>
+
+<h3>How they compose</h3>
+
+<p>Note first what does <em>not</em> happen: <code>dispose()</code> never notifies. It clears
+<code>listeners</code> and returns, and by then the listener set is empty anyway. Nothing is pushed
+out of the store when a handle dies — every render below is driven by React, not by us.</p>
+
+<ol>
+  <li>The subtree is hidden. Effects unmount, <code>useHandle</code>'s subscription is released,
+  handle <b>H1</b> drops to <code>refCount 0</code> and schedules GC
+  (<span class="filepath">handleStore.ts:885–897</span>).</li>
+  <li>Five seconds later H1 disposes and drops its value; the store removes its key
+  (<span class="filepath">:915</span>), so the factory will mint a fresh handle next time it is
+  called.</li>
+  <li>React re-renders the <strong>still-hidden</strong> subtree — e.g. because an ancestor's context
+  value changed. The consumer reads <code>peek()</code> on the dead H1, gets <code>undefined</code>,
+  renders its empty state (and unmounts its children — real DOM removal, inside a hidden container),
+  and that render calls the factory, minting <b>H2</b>.</li>
+  <li>Effects still do not run, so <b>H2 is never retained</b> — and by (1) it disposes on its own
+  constructor GC timer.</li>
+  <li>On reveal, effects reconnect and subscribe to the already-dead H2: <code>subscribe()</code>
+  no-ops (2), and ensure-load calls <code>H2.load()</code>, which rejects with
+  <code>Handle … has been disposed</code> into the swallowed catch.</li>
+  <li>No subscription, no pending render, no error. Permanently blank.</li>
+</ol>
+
+<div class="note">
+<strong>Why React's own recovery doesn't save you — and why a small test case will mislead.</strong>
+<code>useSyncExternalStore</code> installs a second effect (<code>updateStoreInstance</code>) that on
+reconnect re-reads the snapshot and calls <code>forceStoreRerender</code> if it changed. With
+<em>one</em> death that fires: the snapshot goes from real data to empty, React forces a render, the
+factory is re-invoked, and the subtree heals by itself. That is why a shallow one-component repro
+recovers and looks fine. The permanent failure needs the <em>second</em> death at step 3–4: by
+reveal, the pre- and post-snapshots are <strong>both</strong> the consumer's empty sentinel — e.g.
+<code>LayoutRenderer</code>'s frozen <code>EMPTY_ROWS</code>, returned by its selector for any
+unloaded value — so the comparison sees no change, no render is forced, and the reconnected
+subscription attaches to a corpse.
+</div>
+
+<h2>Evidence</h2>
+
+<div class="tblwrap">
+<table>
+<tr><th>What was measured</th><th>Result</th></tr>
+<tr>
+  <td>Handle GC after last unsubscribe</td>
+  <td>6.5&nbsp;s after its last subscriber left, the factory returns a <em>different</em> handle; the
+  old one is back to <code>status: 'idle'</code> with its value dropped. Re-subscribing to it yields
+  <strong>zero</strong> events across a real write.</td>
+</tr>
+<tr>
+  <td>Isolated one-component repro under <code>&lt;Activity&gt;</code>, hidden 8&nbsp;s</td>
+  <td>Recovers (the single-death self-heal above).</td>
+</tr>
+<tr>
+  <td>Real tree (a layout session holding a large view) hidden 9&nbsp;s under <code>&lt;Activity&gt;</code></td>
+  <td><strong>Does not recover.</strong> Content DOM destroyed while hidden (a tagged node came back
+  <code>isConnected: false</code>), zero content on reveal, still zero 6&nbsp;s later.</td>
+</tr>
+<tr>
+  <td>The stuck consumer's own handle, read off its fiber</td>
+  <td><code>status: 'idle'</code>, empty, and <strong>not</strong> the handle the factory returns —
+  while the factory's handle is <code>ready</code> with data. The data is there; the consumer holds a
+  corpse.</td>
+</tr>
+<tr>
+  <td>Same tree and duration, hidden with CSS instead of Activity</td>
+  <td><strong>Unaffected.</strong> 541 DOM nodes before and after, same node identities. Effects stay
+  mounted, so nothing is released — which isolates the cause to the effect-unmount boundary rather
+  than to hiding as such.</td>
+</tr>
+</table>
+</div>
+
+<h2>Proposed fix</h2>
+
+<h3>1. Make disposal observable</h3>
+
+<p>Extend <code>HandleStatus</code> (<span class="filepath">src/data/api/handle.ts:1</span>) with
+<code>'disposed'</code> and have <code>status()</code> report it. This is deliberately preferred over
+exposing a <code>disposed</code> getter: <code>status()</code> is already on the
+<code>Handle&lt;T&gt;</code> interface, so nothing new is added to the contract, and the other
+implementer — <code>Block</code> (<span class="filepath">src/data/block.ts:43</span>), which has no
+disposal concept — simply never returns it. A getter would have to be added to the interface and
+stubbed on <code>Block</code>.</p>
+
+<p>Separately, <code>subscribe()</code> on a disposed handle should warn in development rather than
+silently returning a no-op. The silence is the single biggest reason this took as long to find as it
+did.</p>
+
+<h3>2. <code>useHandle</code> re-acquires when its handle is dead</h3>
+
+<p><code>useHandle</code> is the one funnel every consumer goes through, so the repair belongs there
+rather than at each call site. In the subscribe callback — which React invokes from a passive effect,
+so dispatching state there is ordinary usage — ask for the render that re-acquires:</p>
+
+<pre><code>const [, forceReacquire] = useReducer(n =&gt; n + 1, 0)
+const attempts = useRef(0)
+
+// Capped: re-acquiring only helps if the caller then yields a LIVE handle,
+// and the two shapes above never will. Past the cap, say so instead of
+// looping — only the caller can fix it.
+const requestReacquire = useCallback(() =&gt; {
+  if (attempts.current &gt;= REACQUIRE_ATTEMPT_LIMIT) {
+    if (import.meta.env.DEV) console.warn(/* … still disposed after N attempts … */)
+    return
+  }
+  attempts.current++
+  forceReacquire()
+}, [handle])
+
+const subscribe = useCallback(
+  (listener: () =&gt; void) =&gt; {
+    // A handle can die while this subtree is committed but its effects are
+    // unmounted (&lt;Activity mode="hidden"&gt;): nothing retains it, so it hits
+    // the store's GC. Subscribing to a disposed handle is a no-op, and only
+    // a RENDER re-acquires from the factory — so ask for one.
+    if (handle.status() === 'disposed') {
+      requestReacquire()
+      return () =&gt; {}
+    }
+    return handle.subscribe(listener)
+  },
+  [handle],
+)</code></pre>
+
+<p>Recovery gets exactly ONE owner — the subscribe callback. The ensure-load effect guards the same
+condition but only to decline: it neither asks a corpse to load (that only rejects) nor falls through
+to reset the attempt budget described below. Two owners would each spend from that budget for one
+logical recovery.</p>
+
+<p>Re-acquisition converges: the fresh handle is retained by the very subscription that follows,
+which cancels its constructor GC (<span class="filepath">handleStore.ts:876–883</span>), and
+<code>dispose()</code> removes the key synchronously before any later <code>getOrCreate</code> can
+run.</p>
+
+<p>That rests on an invariant the hook cannot enforce: <strong>the caller's factory must run on every
+render and return a live handle.</strong> Two shapes violate it — one that memoizes the handle
+(<code>useMemo(() =&gt; repo.query.subtree(…), [id])</code>), which hands back the same corpse, and one
+that mints a fresh dead handle per render. Every call site in core satisfies it today
+(<code>useChildIds</code>, <code>useChildren</code>, <code>useSubtree</code>, <code>useParents</code>,
+<code>useBlockQuery</code> all call the factory inline; the memoized ones memoize
+<code>repo.block(…)</code>, and a <code>Block</code> never disposes).</p>
+
+<p>So the hook caps re-acquisition at <code>REACQUIRE_ATTEMPT_LIMIT</code> attempts and then stops,
+warning in dev. Be clear about what that means: for a violating caller the outcome is still a
+permanently stale subtree — bounded and diagnosable instead of an unbounded render loop, but not
+recovered. The limit carries headroom for StrictMode, whose dev-only double-invoke of passive effects
+spends two attempts on one logical recovery.</p>
+
+<h3>Alternatives considered</h3>
+
+<div class="tblwrap">
+<table>
+<tr><th>Option</th><th>Why not</th></tr>
+<tr>
+  <td>Revive on subscribe</td>
+  <td>Have a disposed handle re-register itself with the store. <code>getOrCreate</code> is a bare
+  synchronous map lookup (<span class="filepath">handleStore.ts:310–316</span>), so a handle
+  re-inserting under its old key <em>after</em> another consumer's render already minted a
+  replacement would split ownership — double loads, split notifications. Re-acquiring through the
+  factory keeps one owner per key.</td>
+</tr>
+<tr>
+  <td>Raise <code>gcTimeMs</code></td>
+  <td>Only widens the window. A subtree left alone for a minute still dies, and the failure stays
+  silent and time-dependent — the worst property of the bug is untouched.</td>
+</tr>
+<tr>
+  <td>Don't GC never-retained handles</td>
+  <td>Reintroduces exactly the leak the constructor sweep exists to prevent (abandoned
+  concurrent-render lookups; handles orphaned at an old key by a registry-epoch bump).</td>
+</tr>
+<tr>
+  <td>Leave it; hide with CSS instead</td>
+  <td>The fork's current workaround, and it does work. But it forfeits Activity's effect cleanup, so
+  every hidden subtree keeps its action contexts registered and input isolation must be rebuilt by
+  hand — and it leaves a silent trap in the data layer for the next consumer.</td>
+</tr>
+</table>
+</div>
+
+<h2>Pinning it</h2>
+
+<p>One caveat is worth stating for whoever writes the regression test, because the obvious test passes
+either way: a single hide/GC/reveal cycle self-heals through React's own
+<code>updateStoreInstance</code> check, with or without the fix. The test has to reproduce the
+<em>second</em> death — a real <code>&lt;Activity mode="hidden"&gt;</code> tree (not a conditional
+unmount, which discards the hook state that carries the bug), with at least one additional render of
+the still-hidden subtree between the first handle's disposal and reveal — and then assert on the
+recovered value, since the broken path throws nothing. Reverting the fix should make that named test
+fail.</p>
+
+<h2>Scope</h2>
+
+<p>Deliberately narrow: no change to GC policy or to the store's key model. One behavior on the
+public <code>Handle&lt;T&gt;</code> surface does change: <code>read()</code> on a disposed handle now
+throws a synchronous <code>Error</code> instead of falling through to <code>throw this.load()</code>.
+That path handed a Suspense boundary a freshly rejected promise on every retry — render, throw,
+reject, re-render, forever, with nothing surfacing — so an error boundary is strictly better. No live
+caller reaches it today (only <code>Block</code> is Suspense-read, and it never disposes), but it is
+part of this diff rather than a separate concern.</p>
+
+<p>Otherwise this is the minimum that makes <code>&lt;Activity&gt;</code> usable with KM's data layer,
+and it removes a silent failure mode whether or not core adopts Activity anywhere.</p>
+
+<p>One known gap is left deliberately unfixed. <code>useHandle</code> is not the only way a component
+subscribes to a store-backed handle: <code>GroupedBacklinksLiveBridge</code>
+(<span class="filepath">src/plugins/grouped-backlinks/GroupedLinkedReferences.tsx:642–660</span>)
+acquires its handle during its parent's render and subscribes in a raw <code>useEffect</code>, so it
+carries the identical hazard and none of this fix. It is dormant today (nothing uses
+<code>&lt;Activity&gt;</code> yet) and routing it through <code>useHandle</code> means restructuring
+its snapshot/query-epoch logic — real work, not a one-liner. A sweep of <code>src/</code> found no
+other live instance of the shape. Flagged rather than fixed so whoever wires up the first
+<code>&lt;Activity&gt;</code> consumer doesn't rediscover it the hard way.</p>
+
+</body>
+</html>

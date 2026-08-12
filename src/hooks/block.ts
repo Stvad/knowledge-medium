@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useSyncExternalStore,
 } from 'react'
@@ -39,6 +40,13 @@ import { Block } from '../data/block'
 import { useRepo } from '@/context/repo.js'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
+
+/** How many times `useHandle` will force a render to re-acquire a disposed
+ *  handle before concluding the caller's factory can't produce a live one.
+ *  A working factory succeeds on the FIRST attempt; the headroom is for
+ *  StrictMode, whose dev-only double-invoke of passive effects spends two
+ *  attempts on one logical recovery (`src/main.tsx` wraps the app in it). */
+const REACQUIRE_ATTEMPT_LIMIT = 5
 
 export interface BlockContentRevision {
   content: string
@@ -172,10 +180,49 @@ export function useHandle<T, S = T | undefined>(
   }, [handle, selector, equality])
   /* eslint-enable react-hooks/immutability */
 
+  // Re-acquisition for the dead-handle case (see the subscribe callback
+  // below). A render is the ONLY way to get a live handle back: the factory
+  // (`repo.query.*` / `repo.block`) is called by our CALLER during its own
+  // render, so nothing here can re-acquire on its own.
+  //
+  // `attempts` is the circuit breaker: re-acquiring only helps if the caller
+  // then produces a LIVE handle, and two caller shapes never will — one that
+  // memoizes it (`useMemo(() => repo.query.subtree(...), [id])`, handing back
+  // the same corpse) and one that mints a fresh dead handle per render. The
+  // first goes quiet on its own (our deps don't change, so neither guard
+  // re-fires) but stays empty; the second would spin. Cap the attempts and
+  // say what's wrong — only the caller can fix either.
+  const [, forceReacquire] = useReducer((n: number) => n + 1, 0)
+  const attempts = useRef(0)
+  const requestReacquire = useCallback(() => {
+    if (attempts.current >= REACQUIRE_ATTEMPT_LIMIT) {
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[useHandle] handle ${handle.key} is still disposed after ${attempts.current} re-acquire attempts. `
+          + 'Its factory must run on every render and return a live handle — a memoized handle can never be replaced.',
+        )
+      }
+      return
+    }
+    attempts.current++
+    forceReacquire()
+  }, [handle])
+
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
-  // prevents an unnecessary roundtrip when the handle is already ready.
+  // prevents an unnecessary roundtrip when the handle is already ready —
+  // and skips a disposed one, whose load() only ever rejects.
   useEffect(() => {
+    // Both halves of this early return carry weight. We neither ask a corpse
+    // to load (it only ever rejects) NOR fall through to the budget reset
+    // below — resetting on a dead handle would refill the attempt budget on
+    // every render and defeat the cap entirely. Recovery itself is not owned
+    // here; the subscribe callback below is its single owner.
+    if (handle.status() === 'disposed') return
+    // A live handle means any earlier recovery worked, so a LATER disposal on
+    // this same consumer (another hide/reveal cycle) starts from a full
+    // budget rather than inheriting a spent one.
+    attempts.current = 0
     if (handle.status() === 'idle') {
       void handle.load().catch(() => {/* error stored on the handle */})
     }
@@ -187,8 +234,22 @@ export function useHandle<T, S = T | undefined>(
   // change is bailed out by useSyncExternalStore: it re-checks
   // getSelection, finds the stable reference held by committedRef, and
   // skips the re-render.
+  //
+  // The disposed branch keeps a subtree recoverable after its effects have
+  // been unmounted long enough for the store to GC its handle —
+  // `<Activity mode="hidden">` is the case that produces it, and subscribing
+  // to the corpse is a silent no-op with no snapshot change left to trigger a
+  // re-render. Full mechanism: docs/handle-lifecycle-hidden-subtrees.html.
+  // This is the single owner of recovery (the effect above only declines to
+  // load a corpse).
   const subscribe = useCallback(
-    (listener: () => void) => handle.subscribe(listener),
+    (listener: () => void) => {
+      if (handle.status() === 'disposed') {
+        requestReacquire()
+        return () => {}
+      }
+      return handle.subscribe(listener)
+    },
     [handle],
   )
 
