@@ -318,19 +318,40 @@ export type BlockLayoutContribution =
 export type BlockLayoutResolver =
   VariantResolver<BlockResolveContext, BlockLayout>
 
+/**
+ * The `combine` shared by every "each plugin offers zero or more <things>
+ * for this block" facet below — header, children-footer, bullet-hover,
+ * context-menu items, shell decorators. Runs each contribution against
+ * the context and keeps what it returns, in registration order; a
+ * contribution opts out for this block by returning null/undefined/false.
+ *
+ * A contribution may return one value or a list of them. Distinguishing
+ * the two by `Array.isArray` is safe for all five: their payloads are
+ * components, decorators and plain item objects, never arrays themselves.
+ *
+ * Named rather than inlined five times because the loop is where these
+ * facets drifted before — same reason `mergeBlockContentSurfaceProps` and
+ * `resolveShortcutActivations` below are their own functions.
+ */
+const collectPerContext = <Context, Value>(
+  contributions: readonly ((context: Context) => Value | readonly Value[] | null | undefined | false)[],
+) => (context: Context): Value[] => {
+  const result: Value[] = []
+  for (const contribution of contributions) {
+    const value = contribution(context)
+    if (!value) continue
+    if (Array.isArray(value)) result.push(...value as readonly Value[])
+    else result.push(value as Value)
+  }
+  return result
+}
+
 export const blockHeaderFacet = defineFacet<
   BlockHeaderContribution,
   BlockHeaderResolver
 >({
   id: 'core.block-header',
-  combine: contributions => context => {
-    const result: BlockRenderer[] = []
-    for (const contribution of contributions) {
-      const renderer = contribution(context)
-      if (renderer) result.push(renderer)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockHeaderContribution>,
 })
@@ -340,14 +361,7 @@ export const blockChildrenFooterFacet = defineFacet<
   BlockChildrenFooterResolver
 >({
   id: 'core.block-children-footer',
-  combine: contributions => context => {
-    const result: BlockRenderer[] = []
-    for (const contribution of contributions) {
-      const renderer = contribution(context)
-      if (renderer) result.push(renderer)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockChildrenFooterContribution>,
 })
@@ -357,14 +371,7 @@ export const blockBulletHoverFacet = defineFacet<
   BlockBulletHoverResolver
 >({
   id: 'core.block-bullet-hover',
-  combine: contributions => context => {
-    const result: BlockRenderer[] = []
-    for (const contribution of contributions) {
-      const renderer = contribution(context)
-      if (renderer) result.push(renderer)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockBulletHoverContribution>,
 })
@@ -404,16 +411,7 @@ export const blockContextMenuItemsFacet = defineFacet<
   BlockContextMenuItemsResolver
 >({
   id: 'core.block-context-menu-items',
-  combine: contributions => context => {
-    const result: BlockContextMenuItem[] = []
-    for (const contribution of contributions) {
-      const items = contribution(context)
-      if (!items) continue
-      if (Array.isArray(items)) result.push(...items)
-      else result.push(items as BlockContextMenuItem)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockContextMenuItemsContribution>,
 })
@@ -427,14 +425,7 @@ export const blockShellDecoratorsFacet = defineFacet<
   BlockShellDecoratorResolver
 >({
   id: 'core.block-shell-decorators',
-  combine: contributions => context => {
-    const result: BlockShellDecorator[] = []
-    for (const contribution of contributions) {
-      const decorator = contribution(context)
-      if (decorator) result.push(decorator)
-    }
-    return result
-  },
+  combine: collectPerContext,
   empty: () => () => [],
   validate: isFunction<BlockShellDecoratorContribution>,
 })
