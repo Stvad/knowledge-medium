@@ -68,6 +68,17 @@ describe('gfm markdown extension', () => {
     expect([...blockquote!.childNodes].map(node => node.nodeName)).toEqual(['P'])
   })
 
+  // The separator BETWEEN two quoted paragraphs is what draws the blank line
+  // between them (preflight zeroes paragraph margins), exactly as it does for a
+  // block's own top-level paragraphs. Only the edges are padding.
+  it('keeps the separator between two quoted paragraphs', () => {
+    const {container} = renderMarkdown('> first\n>\n> second')
+
+    const blockquote = container.querySelector('blockquote')
+    expect([...blockquote!.childNodes].map(node => node.nodeName))
+      .toEqual(['P', '#text', 'P'])
+  })
+
   it('keeps a soft line break inside the quoted paragraph', () => {
     const {container} = renderMarkdown('> quote\n> more')
 
