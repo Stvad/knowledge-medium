@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { LinkTargetBlockMatch } from '@/utils/linkTargetAutocomplete.js'
 import { QuickFindList } from '../QuickFind.tsx'
-import { blockResultItems } from '../resultItems.tsx'
+import { blockResultItems, recentResultItems } from '../resultItems.tsx'
 import { quickFindSelectionAction } from '../selection.ts'
 
 afterEach(() => cleanup())
@@ -72,5 +72,31 @@ describe('blockResultItems', () => {
 
     expect(quickFindSelectionAction(item.value, 'jump'))
       .toEqual({kind: 'open-block', blockId: 'block-1', target: 'jump'})
+  })
+
+  it('gives Recent rows the same reserved crumb line', () => {
+    // Recents record whatever was navigated to, which is often a block
+    // partway down a page — the bare label alone is as unplaceable as a
+    // content match was before crumbs.
+    render(
+      <QuickFindList
+        emptyMessage="Type to search."
+        groups={[{
+          heading: 'Recent',
+          items: recentResultItems(
+            [{blockId: 'block-1', label: 'Sync notes'}],
+            new Map([['block-1', ['Project Alpha', 'Meetings']]]),
+          ),
+        }]}
+        onQueryChange={() => undefined}
+        onSelect={() => undefined}
+        onValueChange={() => undefined}
+        query=""
+        value=""
+      />,
+    )
+
+    expect(crumbLineOf(screen.getByRole('option', {name: /Sync notes/})))
+      .toHaveTextContent('Project Alpha › Meetings')
   })
 })

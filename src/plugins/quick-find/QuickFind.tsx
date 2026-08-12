@@ -46,7 +46,7 @@ import {
 } from '@/data/stateBlocks.js'
 import { useAncestorCrumbs } from '@/hooks/useAncestorCrumbs.js'
 import { quickFindToggle } from './toggleStore.ts'
-import { blockResultItems } from './resultItems.tsx'
+import { blockResultItems, recentResultItems } from './resultItems.tsx'
 import { pushRecentBlockId, quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 import {
   nextQuickFindSelection,
@@ -66,6 +66,9 @@ const DEBOUNCE_MS = 80
 interface RecentItem {
   blockId: string
   label: string
+  /** Needed to tell a top-level block from one whose parent is gone when
+   *  the ancestor walk comes back empty — see `crumbsFromAncestors`. */
+  parentId: string | null
 }
 
 interface SearchResultState {
@@ -434,9 +437,13 @@ function QuickFindDialog({
   // every render, and gating it on the live query means it transiently
   // empties on each keystroke — the hook keys on the ids' CONTENT and
   // holds its claims across both, so an inline map is fine here.
-  const blockCrumbs = useAncestorCrumbs(
-    blocks.map(match => ({id: match.blockId, parentId: match.parentId})),
-  )
+  // Blocks and Recents in one call: the hook caches per id, and the two
+  // groups are never on screen together (Recents render only for an empty
+  // query), so this is one batched load covering whichever is showing.
+  const blockCrumbs = useAncestorCrumbs([
+    ...blocks.map(match => ({id: match.blockId, parentId: match.parentId})),
+    ...recents.map(item => ({id: item.blockId, parentId: item.parentId})),
+  ])
 
   useEffect(() => {
     if (!open) return
@@ -504,7 +511,11 @@ function QuickFindDialog({
         const data = await repo.load(id)
         if (!data) continue
         const blockAliases = (data.properties[aliasesProp.name] as string[] | undefined) ?? []
-        items.push({blockId: id, label: blockAliases[0] ?? data.content ?? id})
+        items.push({
+          blockId: id,
+          label: blockAliases[0] ?? data.content ?? id,
+          parentId: data.parentId,
+        })
       }
       if (!cancelled) setRecents(items)
     }
@@ -609,17 +620,7 @@ function QuickFindDialog({
   const groups: QuickFindListGroup[] = []
 
   if (showRecents) {
-    groups.push({
-      heading: 'Recent',
-      items: recents.map(item => ({
-        key: `recent:${item.blockId}`,
-        value: `recent:${item.blockId}`,
-        className: 'flex justify-between items-center',
-        children: (
-          <span className="truncate">{truncate(item.label, 80)}</span>
-        ),
-      })),
-    })
+    groups.push({heading: 'Recent', items: recentResultItems(recents, blockCrumbs)})
   }
 
   if (dateCandidates.length > 0) {

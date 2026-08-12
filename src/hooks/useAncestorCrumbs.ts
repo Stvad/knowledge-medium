@@ -48,7 +48,12 @@ export interface AncestorCrumbTarget {
  *  Snapshot semantics, not live: crumbs are read once and not resubscribed
  *  to. A search dropdown is open for seconds and a re-parent mid-typing
  *  would only shuffle a decoration — not worth N row subscriptions per
- *  keystroke.
+ *  keystroke. That covers the narrower `load()`-vs-`loadFresh()` case as
+ *  well: `load` can resolve a snapshot invalidated while its loader ran,
+ *  and since these ids stay claimed nothing re-asks — but a reparent one
+ *  millisecond LATER produces the same stale crumb by design, so the
+ *  window is not a distinct defect, and `loadFresh` is not on the public
+ *  `Handle` contract (only `LoaderHandle`) to reach for anyway.
  *
  *  Deliberately NOT built on `useManyParents`, which wraps the same query
  *  in a live `useHandle`: its handle is keyed by the whole id list, and
@@ -75,14 +80,15 @@ export const useAncestorCrumbs = (
   // there is nothing to scope against, so we don't ask at all.
   const workspaceId = repo.activeWorkspaceId
   // Keyed on the targets' CONTENT, not the array's identity, so a caller
-  // can build it inline. Comma-joined like `BlockSearchPicker`'s exclusion
-  // set (block ids are uuids); each entry carries the block's parent edge
-  // after a `>` so the effect can reconstruct both halves without reading
-  // a ref written during render, which the React Compiler is entitled to
-  // treat as a Rules-of-React violation.
-  const targetsKey = blocks
-    .map(block => `${block.id}>${block.parentId ?? ''}`)
-    .join(',')
+  // can build it inline — and serialized as JSON rather than joined on a
+  // delimiter. `blockId.ts` enforces canonical uuids only on the tx INSERT
+  // path and deliberately exempts sync-applied and `applyRaw` rows, so an
+  // id containing the delimiter is not impossible; encoding it away costs
+  // nothing and removes the assumption. Carrying the parent edge in the
+  // key (rather than a ref) keeps the effect from reading state written
+  // during render, which the React Compiler may treat as a Rules-of-React
+  // violation.
+  const targetsKey = JSON.stringify(blocks.map(block => [block.id, block.parentId]))
 
   // No cancellation, and no cleanup — deliberately, because a superseded
   // run's result is not stale data, it is data. `manyAncestors(ids)`
@@ -108,16 +114,27 @@ export const useAncestorCrumbs = (
   useEffect(() => {
     if (!workspaceId) return
     const requested = requestedRef.current
-    const targets = targetsKey ? targetsKey.split(',') : []
-    const parentIds = new Map(targets.map(target => {
-      const [id, parentId] = target.split('>')
-      return [id, parentId || null] as const
-    }))
-    const ids = [...parentIds.keys()]
+    const targets = JSON.parse(targetsKey) as [string, string | null][]
+    const searchParentIds = new Map(targets)
+    const ids = targets.map(([id]) => id)
     const missing = ids.filter(id => !requested.has(id))
     if (missing.length === 0) return
 
     for (const id of missing) requested.add(id)
+
+    // The search row's own `parentId` is the fallback, not the source of
+    // truth: `core.searchByContent` deliberately declares no row deps, so a
+    // parent move on a result row does NOT invalidate it
+    // (`kernelQueries.test.ts`, "parent move on a result row does NOT
+    // invalidate"). A block moved to the workspace root while the dialog is
+    // open would keep a stale non-null parent there, and the freshly
+    // invalidated ancestor walk would return `[]` — reading as an orphan
+    // and marking a genuine root as truncated. The BlockCache row is
+    // updated by the move itself, so prefer it whenever it's loaded.
+    const seedParentId = (id: string): string | null => {
+      const cached = repo.block(id).peek()
+      return cached ? cached.parentId : searchParentIds.get(id) ?? null
+    }
 
     void (async () => {
       for (let start = 0; start < missing.length; start += ANCESTOR_BATCH_SIZE) {
@@ -139,7 +156,7 @@ export const useAncestorCrumbs = (
             entry.startId,
             crumbsFromAncestors(entry.ancestors, {
               workspaceId,
-              parentId: parentIds.get(entry.startId) ?? null,
+              parentId: seedParentId(entry.startId),
             }),
           ] as const)
           setCrumbs(previous => {

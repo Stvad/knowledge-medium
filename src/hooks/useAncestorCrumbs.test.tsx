@@ -20,8 +20,13 @@ const manyAncestors = vi.fn<(args: {ids: readonly string[]}) => Promise<Ancestor
 // would re-fire the effect on every render, which quietly turns "the hook
 // re-requested this" into "the harness did" and would let a released id
 // get picked back up by an effect run no real session performs.
+/** Stands in for the BlockCache the `repo.block(id)` facade reads. Empty
+ *  entries mean "not loaded", which is what `peek()` reports as undefined. */
+const blockCache = new Map<string, {parentId: string | null}>()
+
 const repo = {
   activeWorkspaceId: 'ws-1' as string | null,
+  block: (id: string) => ({peek: () => blockCache.get(id)}),
   query: {
     manyAncestors: (args: {ids: readonly string[]}) => ({
       load: () => manyAncestors(args),
@@ -61,6 +66,7 @@ const idsOf = (call: [{ids: readonly string[]}]) => [...call[0].ids]
 const targets = (...ids: string[]) => ids.map(id => ({id, parentId: `${id}-parent`}))
 
 beforeEach(() => {
+  blockCache.clear()
   manyAncestors.mockReset()
   manyAncestors.mockImplementation(async ({ids}) => ids.map(chainFor))
 })
@@ -221,6 +227,43 @@ describe('useAncestorCrumbs', () => {
     // no render crash, and the id is released so a later query retries.
     expect(result.current.size).toBe(0)
     expect(consoleError.mock.calls[0][0]).toContain('[ancestor-crumbs]')
+  })
+
+  it('prefers the live row over the search payload for the seed parent', async () => {
+    // `core.searchByContent` declares no row deps, so a parent move on a
+    // result row does NOT invalidate it — the payload can still claim a
+    // parent for a block that has since moved to the workspace root, while
+    // the ancestor walk (which IS row-dep'd) correctly returns nothing.
+    // Trusting the payload there would mark a genuine root as truncated.
+    blockCache.set('a', {parentId: null})
+    manyAncestors.mockResolvedValueOnce([{startId: 'a', ancestors: []}])
+
+    const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'stale-parent'}]))
+
+    await waitFor(() => expect(result.current.get('a')).toEqual([]))
+  })
+
+  it('falls back to the search payload when the row is not cached', async () => {
+    manyAncestors.mockResolvedValueOnce([{startId: 'a', ancestors: []}])
+
+    const {result} = renderHook(() => useAncestorCrumbs([{id: 'a', parentId: 'gone-parent'}]))
+
+    await waitFor(() => expect(result.current.get('a')).toEqual(['…']))
+  })
+
+  it('round-trips ids that contain the serialization delimiters', async () => {
+    // `blockId.ts` enforces canonical uuids on the tx INSERT path only, and
+    // exempts sync-applied and applyRaw rows — so an id carrying a comma
+    // cannot be ruled out, and splitting on one would query the wrong ids.
+    const awkward = 'weird,id>with:delimiters'
+    manyAncestors.mockResolvedValueOnce([chainFor(awkward)])
+
+    const {result} = renderHook(() => useAncestorCrumbs([{id: awkward, parentId: null}]))
+
+    // The id reaches the query intact and its crumbs come back keyed by it
+    // (the label itself is truncated, which is beside the point here).
+    await waitFor(() => expect(result.current.has(awkward)).toBe(true))
+    expect(idsOf(manyAncestors.mock.calls[0])).toEqual([awkward])
   })
 
   it('asks for nothing when there is no active workspace', async () => {
