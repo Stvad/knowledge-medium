@@ -1,0 +1,2 @@
+import{pasteFromClipboard as e}from"./operations.js";import{siblingMoveTarget as t,tryPasteAsMove as n,tryPasteAsMoveAt as r}from"./moveOnPasteVerb.js";var i=async(i,a,o,{placement:s=`visible`,scopeRootId:c}={})=>{let l=await navigator.clipboard.readText();return(s===`sibling`?await n(i,t(a,o),l):await r(i,a,o,c,l))?{moved:!0,pasted:[]}:{moved:!1,pasted:await e(a,i,{position:o,placement:s,scopeRootId:c},l)}};export{i as pasteOrMove};
+//# sourceMappingURL=pasteOrMove.js.map
