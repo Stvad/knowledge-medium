@@ -54,6 +54,35 @@ export const parseBlockRefTarget = (target: string): string | null => {
   return match ? match[1].toLowerCase() : null
 }
 
+/** Longest alias a `[[…]]` span may carry and still count as a wikilink.
+ *  A longer span is scanned past and emits no reference — the text stays
+ *  literal, and no page is minted for it.
+ *
+ *  A runaway guard, not a style rule. Nothing in this grammar bounds how
+ *  far a `[[` may reach for its `]]`, and any text carrying CODE supplies
+ *  unbalanced openers for free: a regex character class whose first member
+ *  is a literal `[` (`/[[\]{}()*+?.\\^$|\s]/`) is a `[[`, and so is a
+ *  nested array literal (`[[1,2],[3,4]]`). One such opener inside a
+ *  bundled extension's source paired with a `]]` 205 KB downstream — the
+ *  scanner is indifferent to the distance — and minted a page whose NAME
+ *  was 205 KB of JavaScript, carried from there into the alias index,
+ *  backlink panes, search and sync.
+ *
+ *  1024 comes from live data rather than taste: across ~31k aliases in
+ *  the author's workspace the longest human-authored one is 322 chars
+ *  (a multi-line quoted question used as a page title), and everything
+ *  above 512 was machine junk of exactly the shape above. That leaves
+ *  3x headroom over the longest real name while bounding a runaway's
+ *  blast radius.
+ *
+ *  Deliberately here in the parser and not in the reference processor:
+ *  the renderer scans through this same function (`remark-wikilinks`
+ *  third/fourth passes call `parseOutermostReferences`), so one rule
+ *  keeps "what displays as a link" and "what is recorded as a reference"
+ *  from disagreeing. A processor-only cap would render a live-looking
+ *  link the reference index knows nothing about. */
+export const MAX_ALIAS_LENGTH = 1024
+
 const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
   const stack: number[] = [] // Stack to track opening bracket positions
@@ -67,7 +96,12 @@ const parseWikilinkReferences = (content: string): ParsedReference[] => {
       if (stack.length > 0) {
         const startPos = stack.pop()!
         const alias = content.slice(startPos + 2, i)
-        if (alias) {
+        // Gate EMISSION only — the pop above still happened, so a
+        // rejected span consumes its delimiters exactly as an accepted
+        // one does. Leaving the opener on the stack instead would let it
+        // pair with a `]]` even further downstream, which is the failure
+        // mode this cap exists to end rather than relocate.
+        if (alias && alias.length <= MAX_ALIAS_LENGTH) {
           references.push({
             alias,
             startIndex: startPos,

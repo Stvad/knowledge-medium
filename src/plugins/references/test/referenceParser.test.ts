@@ -15,6 +15,7 @@ import {
   rewriteBlockRefs,
   faithfulWikilinkReplacement,
   pinnedSpanReplacement,
+  MAX_ALIAS_LENGTH,
 } from '../referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
@@ -535,6 +536,54 @@ Another [[normal-ref]]
         lossyLabel: false,
       })
     })
+  })
+})
+
+describe('runaway wikilink spans (MAX_ALIAS_LENGTH)', () => {
+  const alias = (n: number) => 'a'.repeat(n)
+
+  it('parses an alias at the cap and rejects one past it', () => {
+    expect(parseReferences(`[[${alias(MAX_ALIAS_LENGTH)}]]`))
+      .toHaveLength(1)
+    expect(parseReferences(`[[${alias(MAX_ALIAS_LENGTH + 1)}]]`))
+      .toEqual([])
+  })
+
+  // The regression this cap exists for. A regex character class whose
+  // first member is a literal `[` supplies a `[[` opener; the scanner
+  // paired it with a `]]` from an unrelated `x[i]]` far downstream and
+  // minted a page whose name was the whole span. Both halves are real
+  // text from the bundle that produced the 205 KB page.
+  it('does not treat a regex char class + a distant `]]` as a wikilink', () => {
+    const content = [
+      'ESCAPE: /[[\\]{}()*+?.\\\\^$|\\s]/g,',
+      'x'.repeat(MAX_ALIAS_LENGTH),
+      'while (i--) delete createDict[PROTOTYPE][enumBugKeys[i]];',
+    ].join('\n')
+    expect(parseReferences(content)).toEqual([])
+    expect(hasReferences(content)).toBe(false)
+    expect(extractAliases(content)).toEqual([])
+  })
+
+  it('nested JSON arrays produce no reference', () => {
+    const points = Array.from({length: 300}, (_, i) => `[${i},${i}]`).join(',')
+    expect(parseReferences(`[${points}]`)).toEqual([])
+  })
+
+  // The cap gates EMISSION only — the `]]` still closes its opener, so a
+  // rejected span cannot leak an opener that swallows later text.
+  it('an over-long span still consumes its delimiters', () => {
+    const content = `[[${alias(MAX_ALIAS_LENGTH + 1)}]] and [[real]]`
+    expect(parseReferences(content).map(r => r.alias)).toEqual(['real'])
+    expect(parseOutermostReferences(content).map(r => r.alias)).toEqual(['real'])
+  })
+
+  // An over-long OUTER span no longer hides a legitimate inner one from
+  // `parseOutermostReferences` (whose cursor previously skipped anything
+  // inside the emitted outer span).
+  it('emits a short alias nested inside an over-long span', () => {
+    const content = `[[${alias(MAX_ALIAS_LENGTH)} [[inner]] tail]]`
+    expect(parseOutermostReferences(content).map(r => r.alias)).toEqual(['inner'])
   })
 })
 
