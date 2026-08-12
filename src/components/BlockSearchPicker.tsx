@@ -37,6 +37,10 @@ interface SearchResultState {
   query: string
   aliases: LinkTargetAliasMatch[]
   blocks: LinkTargetBlockMatch[]
+  /** The search for `query` rejected. Distinct from "no matches" — the
+   *  empty-state copy has to tell those apart or a broken search reads as
+   *  an empty workspace. */
+  failed: boolean
 }
 
 export interface BlockSearchPickerProps {
@@ -76,6 +80,7 @@ export function BlockSearchPicker({
     query: '',
     aliases: [],
     blocks: [],
+    failed: false,
   })
 
   const trimmedQuery = query.trim()
@@ -91,19 +96,34 @@ export function BlockSearchPicker({
   useEffect(() => {
     if (!trimmedQuery) return
     let cancelled = false
-    const timer = setTimeout(async () => {
-      const results = await searchLinkTargets(repo, {
+    const timer = setTimeout(() => {
+      void searchLinkTargets(repo, {
         workspaceId,
         query: trimmedQuery,
         limit: SEARCH_LIMIT,
         excludeBlockIds: excludeKey ? excludeKey.split(',') : [],
-      })
-      if (cancelled) return
-      setSearchResults({
-        query: trimmedQuery,
-        aliases: results.aliases,
-        blocks: results.blocks,
-      })
+      }).then(
+        results => {
+          if (cancelled) return
+          setSearchResults({
+            query: trimmedQuery,
+            aliases: results.aliases,
+            blocks: results.blocks,
+            failed: false,
+          })
+        },
+        // `searchLinkTargets` rejects when the alias query fails or when
+        // EVERY registered content source does. Unhandled, that left the
+        // dialog sitting on "No results." — the same thing it says for a
+        // genuinely empty search, so the user retypes forever against a
+        // search that isn't running. Reported in place rather than
+        // cancelling the dialog: the query is theirs to edit and retry.
+        error => {
+          console.error('[block-search-picker] search failed', error)
+          if (cancelled) return
+          setSearchResults({query: trimmedQuery, aliases: [], blocks: [], failed: true})
+        },
+      )
     }, DEBOUNCE_MS)
     return () => {
       cancelled = true
@@ -111,12 +131,10 @@ export function BlockSearchPicker({
     }
   }, [trimmedQuery, repo, workspaceId, excludeKey])
 
-  const aliases = trimmedQuery && searchResults.query === trimmedQuery
-    ? searchResults.aliases
-    : []
-  const blocks = showBlocks && trimmedQuery && searchResults.query === trimmedQuery
-    ? searchResults.blocks
-    : []
+  const resultsAreForThisQuery = Boolean(trimmedQuery) && searchResults.query === trimmedQuery
+  const searchFailed = resultsAreForThisQuery && searchResults.failed
+  const aliases = resultsAreForThisQuery ? searchResults.aliases : []
+  const blocks = showBlocks && resultsAreForThisQuery ? searchResults.blocks : []
 
   return (
     <CommandDialog
@@ -142,7 +160,9 @@ export function BlockSearchPicker({
       />
       <CommandList>
         <CommandEmpty>
-          {trimmedQuery ? 'No results.' : 'Type to search.'}
+          {searchFailed
+            ? "Search failed — check the console, then edit the query to retry."
+            : trimmedQuery ? 'No results.' : 'Type to search.'}
         </CommandEmpty>
 
         {aliases.length > 0 && (

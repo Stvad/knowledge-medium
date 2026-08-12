@@ -47,6 +47,28 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   }
 }
 
+/**
+ * Bumped by EVERY clipboard write below (`writeToClipboard` /
+ * `writeTextToClipboard`), alongside the pending-move clear they already
+ * do — so it counts "how many times the clipboard has been replaced",
+ * cut and copy alike.
+ *
+ * `cutBlockIdsToClipboard` needs it because a cut isn't atomic: it awaits
+ * hierarchy validation, subtree serialization, and its own write, and any
+ * other cut or copy can land in those gaps. A cut that resumed into a
+ * changed clipboard used to publish anyway, leaving the register pointing
+ * at one selection while the clipboard held another — worst in the
+ * write-refused path, where the cut snapshots the OTHER gesture's text as
+ * its sentinel and the next paste therefore moves the wrong blocks while
+ * suppressing the content the user actually copied.
+ *
+ * Bumped BEFORE the await (next to the clear, which is likewise
+ * unconditional) so a refused write still counts as "the clipboard state
+ * moved on" — the cut has to treat that identically, since it can't know
+ * what the OS clipboard ended up holding.
+ */
+let clipboardEpoch = 0
+
 const createClipboardItem = (data: ClipboardData): ClipboardItem =>
   new ClipboardItem({
     'text/plain': new Blob([data.markdown], {type: 'text/plain'}),
@@ -69,6 +91,7 @@ const createClipboardItem = (data: ClipboardData): ClipboardItem =>
  *  write: `cutBlockIdsToClipboard` calls this first and then calls
  *  `setPendingMove` right after, re-arming the register it just cleared. */
 export const writeToClipboard = async (data: ClipboardData): Promise<void> => {
+  clipboardEpoch += 1
   clearPendingMove()
   await navigator.clipboard.write([createClipboardItem(data)])
 }
@@ -95,6 +118,7 @@ export const copyBlockToClipboard = async (block: Block): Promise<void> =>
  *  awaits/catches a raw `navigator.clipboard.writeText(text)` call can
  *  swap this in unchanged. */
 export const writeTextToClipboard = async (text: string): Promise<void> => {
+  clipboardEpoch += 1
   clearPendingMove()
   await navigator.clipboard.writeText(text)
 }
@@ -232,17 +256,6 @@ export const copyBlockIdsToClipboard = async (
  *  all; the cut can't be marked, so it's abandoned outright (toast, no
  *  register) rather than armed with no invalidation check — that would let
  *  ANY next paste, anywhere, complete as a move. */
-/** Monotonic id for in-flight cuts. A cut awaits (hierarchy validation,
- *  subtree serialization, the clipboard write), so two gestures can
- *  overlap and finish out of order — and the loser would otherwise publish
- *  its register on top of the winner's, leaving the clipboard showing one
- *  cut while the register points at another. Worse in the write-refused
- *  path below, where the late cut's read-back sentinel is the EARLIER
- *  cut's text: the sentinel then matches on the next paste and moves the
- *  wrong blocks. Each call takes a ticket and publishes only if it's still
- *  the newest. */
-let cutGeneration = 0
-
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
@@ -251,23 +264,26 @@ export const cutBlockIdsToClipboard = async (
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return false
 
-  const generation = ++cutGeneration
-  const superseded = (): boolean => generation !== cutGeneration
+  // See `clipboardEpoch`. This cut owns the clipboard only for as long as
+  // the epoch stays where it was — plus the single bump its OWN write
+  // contributes.
+  const epochAtEntry = clipboardEpoch
 
   const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
 
   const data = await serializeSelectedBlocks(normalizedIds, repo)
   // Defence in depth, NOT the load-bearing check — the one after the
   // write is (it's what stops a stale register from replacing the live
-  // one, and what stops the read-back path arming these ids against a
-  // newer cut's text). This earlier bail only keeps a superseded cut's
-  // markdown off the clipboard; without it the post-write check still
-  // holds the register correct and the worst outcome is a text paste of
-  // the older cut's content. Unpinned by tests for that reason: the
-  // suspension point it needs (`repo.query.subtree`, reached through a
-  // dispatch Proxy) can't be stubbed without replacing `repo.query`
-  // wholesale, which costs more than the case is worth.
-  if (superseded()) return false
+  // one, and what stops the read-back path arming these ids against
+  // another gesture's text). This earlier bail only keeps a superseded
+  // cut's markdown off a clipboard someone else has already claimed;
+  // without it the post-write check still holds the register correct and
+  // the worst outcome is a text paste of the older cut's content.
+  // Unpinned by tests for that reason: the suspension point it needs
+  // (`repo.query.subtree`, reached through a dispatch Proxy) can't be
+  // stubbed without replacing `repo.query` wholesale, which costs more
+  // than the case is worth.
+  if (clipboardEpoch !== epochAtEntry) return false
 
   let clipboardText = data.markdown
   try {
@@ -282,10 +298,14 @@ export const cutBlockIdsToClipboard = async (
       return false
     }
   }
-  // Re-checked after the awaits above: the read-back sentinel in
-  // particular could be a NEWER cut's text, which would arm these ids
-  // against that cut's clipboard content.
-  if (superseded()) return false
+  // Exactly one bump — our own `writeToClipboard` above, which bumps even
+  // when the underlying write is refused. Anything else means another cut
+  // or copy replaced the clipboard while we were awaiting, so this
+  // register would describe content the clipboard no longer holds; in the
+  // read-back path it would be armed against the OTHER gesture's text
+  // outright, and the next paste would move these blocks while swallowing
+  // what the user actually copied.
+  if (clipboardEpoch !== epochAtEntry + 1) return false
   // Arm with `data.serializedIds`, not `normalizedIds` — a root that
   // failed to serialize (see `SerializedSelection`'s doc) is absent from
   // `clipboardText` above yet would still relocate on paste if armed here,

@@ -234,6 +234,34 @@ describe('link target autocomplete helpers', () => {
     expect(out.aliases.map(match => match.blockId)).toEqual(['survivor'])
   })
 
+  it('does not let an over-fetched alias suppress its block from the Blocks group', async () => {
+    // The headroom fetch pulls alias candidates that then get sliced away.
+    // If those still counted as "already shown as a page", a block whose
+    // alias just missed the cut but whose CONTENT is the best match would
+    // be filtered out of the Blocks group too and appear nowhere.
+    // The exclusions exist only to buy headroom (fetchLimit = 1 + 3), so
+    // the alias pass fetches BOTH aliases below and then slices to one.
+    const excluded = ['e1', 'e2', 'e3']
+    for (const id of excluded) await create({id, content: `Ledger ${id}`})
+
+    // Exact alias match — takes the single Pages slot.
+    await create({id: 'top-alias', aliases: ['Ledger']})
+    // Substring alias, so it ranks second and gets sliced out of Pages —
+    // but its CONTENT is the only surviving content match, so it has to
+    // come back under Blocks.
+    await create({id: 'hidden-alias', aliases: ['Q3 Ledger'], content: 'Ledger notes'})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'Ledger',
+      limit: 1,
+      excludeBlockIds: excluded,
+    })
+
+    expect(out.aliases.map(m => m.blockId)).toEqual(['top-alias'])
+    expect(out.blocks.map(m => m.blockId)).toEqual(['hidden-alias'])
+  })
+
   it('never returns more than `limit`, headroom notwithstanding', async () => {
     for (const id of ['b1', 'b2', 'b3', 'b4', 'b5']) await create({id, content: 'backlog'})
 

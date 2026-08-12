@@ -615,9 +615,22 @@ export const searchLinkTargetsProgressively = async (
       )
     : null
 
-  const aliases = aliasMatchesFromRows(await aliasRowsPromise, seenBlockIds)
+  // `aliasMatchesFromRows` doesn't just READ the set, it RECORDS every
+  // match it keeps — which is how a block that matched by alias avoids
+  // appearing again in the Blocks group. That only works if the set it
+  // records into holds the aliases that actually SURVIVE the slice: the
+  // headroom above means it now sees candidates that are fetched and then
+  // dropped, and recording those would suppress their blocks from the
+  // Blocks group too. A block with the 26th-best alias and the best
+  // content match would then appear in neither. So the alias pass gets a
+  // throwaway copy, and the Blocks pass dedupes against the exclusions
+  // plus the aliases that are really on screen.
+  const aliases = aliasMatchesFromRows(await aliasRowsPromise, new Set(seenBlockIds))
     .slice(0, limit)
   callbacks.onAliases?.(aliases)
+
+  const blockSeenIds = new Set(seenBlockIds)
+  for (const alias of aliases) blockSeenIds.add(alias.blockId)
 
   if (blockRowsPromise === null) {
     const result = {aliases, blocks: []}
@@ -628,7 +641,7 @@ export const searchLinkTargetsProgressively = async (
   const blockRows = await blockRowsPromise
   if (!blockRows.ok) throw blockRows.error
 
-  const blocks = blockMatchesFromRows(blockRows.rows, seenBlockIds).slice(0, limit)
+  const blocks = blockMatchesFromRows(blockRows.rows, blockSeenIds).slice(0, limit)
   const result = {aliases, blocks}
   callbacks.onBlocks?.(blocks, result)
   return result

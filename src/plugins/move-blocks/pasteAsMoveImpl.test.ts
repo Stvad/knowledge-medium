@@ -30,6 +30,14 @@ vi.mock('./moveBlocks.ts', async importOriginal => {
   return { ...actual, moveBlocksTo: moveBlocksToMock }
 })
 
+// Same shape, for driving a PRE-move read into a transient failure.
+const liveBlockIdsMock = vi.hoisted(() => vi.fn())
+vi.mock('@/data/blockLiveness.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/data/blockLiveness.js')>()
+  liveBlockIdsMock.mockImplementation(actual.liveBlockIds)
+  return { ...actual, liveBlockIds: liveBlockIdsMock }
+})
+
 import { ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -297,6 +305,58 @@ describe('pasteAsMoveImpl', () => {
       expect(result).toBe(true)
       expect(await childIds('dest')).toEqual(['a'])
       expect(getPendingMove()).toBeNull()
+    })
+  })
+
+  describe('the claimed register is only ever given back to nobody else', () => {
+    it('keeps the claim when a PRE-move read rejects, rather than letting it escape past the claim', async () => {
+      // `liveBlockIds` and the cycle probe run after the register has been
+      // claimed and cleared. A transient DB failure there used to reject
+      // straight out of the verb: register gone, blocks still in place, so
+      // the next paste took the text path and duplicated them.
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      liveBlockIdsMock.mockRejectedValueOnce(new Error('database is closed'))
+
+      const result = await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      // Handled (no duplicating text paste), register intact, user told.
+      expect(result).toBe(true)
+      expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+      expect(await childIds('dest')).toEqual([])
+      expect(showErrorMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('does NOT bury a newer cut that arrived while the move was in flight', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      await seed('b', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      // The user cuts 'b' while this paste is still committing, then the
+      // paste fails. Restoring 'a' unconditionally would lose 'b''s cut.
+      moveBlocksToMock.mockImplementationOnce(async () => {
+        setPendingMove({ blockIds: ['b'], workspaceId: WS, clipboardText: 'b' })
+        throw new Error('move failed')
+      })
+
+      await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'b' })
+    })
+
+    it('still restores the claim when nothing newer arrived (the control for the case above)', async () => {
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+
+      moveBlocksToMock.mockImplementationOnce(async () => { throw new Error('move failed') })
+
+      await pasteAsMoveImpl({ repo, target: INTO_DEST, clipboardText: 'a' })
+
+      expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
     })
   })
 

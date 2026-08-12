@@ -78,6 +78,38 @@ describe('BlockSearchPicker', () => {
     expect(screen.queryByRole('option', {name: 'Sync notes'})).not.toBeInTheDocument()
   })
 
+  it('says the search FAILED rather than showing the same empty-state as no matches', async () => {
+    // `searchLinkTargets` rejects when the alias query fails or when every
+    // registered content source does. Left unhandled it was both an
+    // unhandled rejection and a lie: "No results." is what the user sees
+    // for an empty workspace, so a broken search reads as an empty one.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.searchLinkTargets.mockRejectedValue(new Error('every source failed'))
+    renderPicker()
+
+    await search('proj')
+
+    expect(screen.getByText(/Search failed/)).toBeInTheDocument()
+    expect(screen.queryByText('No results.')).not.toBeInTheDocument()
+    expect(consoleError).toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('recovers on the next query after a failed search', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mocks.searchLinkTargets.mockRejectedValueOnce(new Error('transient'))
+    renderPicker()
+
+    await search('proj')
+    expect(screen.getByText(/Search failed/)).toBeInTheDocument()
+
+    await search('project')
+
+    expect(screen.queryByText(/Search failed/)).not.toBeInTheDocument()
+    expect(screen.getByRole('option', {name: 'Project Alpha'})).toBeInTheDocument()
+    consoleError.mockRestore()
+  })
+
   it('calls onSelect with the picked block id', async () => {
     const {onSelect} = renderPicker()
 

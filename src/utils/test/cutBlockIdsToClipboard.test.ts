@@ -24,7 +24,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { keyBetween } from '@/data/orderKey'
 import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
-import { cutBlockIdsToClipboard } from '@/utils/copy'
+import { cutBlockIdsToClipboard, writeTextToClipboard } from '@/utils/copy'
 
 const WS = 'ws-1'
 
@@ -176,6 +176,37 @@ describe('cutBlockIdsToClipboard', () => {
       expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
     })
 
+    it('a plain COPY landing mid-cut also supersedes it', async () => {
+      // The copy arms nothing, so there's no newer register to notice —
+      // only the clipboard moved on. The read-back path is the dangerous
+      // one: it would snapshot the COPY's text as this cut's sentinel, so
+      // the next paste matches, moves 'a', and swallows what was copied.
+      await seed('a', null, 'cut me')
+
+      let releaseCutWrite = (): void => {}
+      const cutWriteLanded = new Promise<void>(resolve => { releaseCutWrite = resolve })
+      let writeCalls = 0
+      const write = vi.fn(async () => {
+        writeCalls += 1
+        if (writeCalls === 1) {
+          await cutWriteLanded
+          throw new DOMException('refused', 'NotAllowedError')
+        }
+      })
+      const readText = vi.fn(async () => 'text the copy put there')
+      const writeText = vi.fn(async () => {})
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', { clipboard: { write, readText, writeText } })
+
+      const cut = cutBlockIdsToClipboard(['a'], repo)
+      await vi.waitFor(() => { expect(writeCalls).toBe(1) })
+
+      await writeTextToClipboard('text the copy put there')
+
+      releaseCutWrite()
+      expect(await cut).toBe(false)
+      expect(getPendingMove()).toBeNull()
+    })
   })
 
   it('replaces (not merges with) an unrelated pending move, via the same clear-then-rearm ordering the write itself uses', async () => {
