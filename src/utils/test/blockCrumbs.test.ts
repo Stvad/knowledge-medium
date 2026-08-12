@@ -3,6 +3,7 @@ import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import {
   CRUMB_MAX_CHARS,
+  CRUMB_MAX_SEGMENTS,
   collapseCrumbs,
   crumbsFromAncestors,
 } from '@/utils/blockCrumbs.js'
@@ -75,6 +76,13 @@ describe('crumbsFromAncestors', () => {
 describe('collapseCrumbs', () => {
   it('leaves a chain that fits alone', () => {
     expect(collapseCrumbs(['a', 'b', 'c'])).toEqual(['a', 'b', 'c'])
+  })
+
+  it('leaves a chain sitting exactly on the cap alone', () => {
+    // The `<=` boundary: flipping it to `<` elides a chain that fits.
+    const exact = ['root', 'x', 'y', 'parent']
+    expect(exact).toHaveLength(CRUMB_MAX_SEGMENTS)
+    expect(collapseCrumbs(exact)).toEqual(exact)
   })
 
   it('keeps the root and the nearest ancestors, eliding the middle', () => {

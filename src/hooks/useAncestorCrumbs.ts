@@ -8,13 +8,6 @@ import { collapseCrumbs, crumbsFromAncestors } from '@/utils/blockCrumbs.js'
  *  25, i.e. a single chunk). */
 const ANCESTOR_BATCH_SIZE = 50
 
-/** Separator for the effect's id key. `\u001f` (unit separator) can't
- *  appear in a block id, so a join is unambiguous — and keying the effect
- *  on the CONTENT of the id list rather than the array's identity keeps a
- *  caller free to build it inline (the same reason `BlockSearchPicker`
- *  joins its exclusion set). */
-const ID_KEY_SEPARATOR = '\u001f'
-
 const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
 
 /** Ancestor crumbs for a set of blocks, loaded AFTER the rows they
@@ -36,9 +29,18 @@ const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
  *  index planner trap `SUBTREE_SQL` needs an `INDEXED BY` hint for.
  *  Measured on a live client, 25 ids resolve in 1.4–2.3 ms against
  *  0.9–3.0 ms for the content search it would queue in front of — well
- *  inside the caller's 80 ms debounce. If a future caller batches
- *  hundreds of ids, or the walk stops being index-backed, that margin is
- *  the thing to re-measure.
+ *  inside the caller's 80 ms debounce.
+ *
+ *  Read that comparison narrowly: it came off a small dev workspace, and
+ *  the two sides do NOT scale together. Content search is an unindexed
+ *  LIKE scan, "O(total content bytes) regardless of result count" in
+ *  `linkTargetAutocomplete`'s own words, so the 0.9–3.0 ms half grows
+ *  with the workspace; the ancestor walk is PK lookups bounded by chain
+ *  DEPTH, so it does not. The number that actually carries the argument
+ *  is the ancestor read's own absolute cost, and the things that would
+ *  move it are a caller batching hundreds of ids, the walk ceasing to be
+ *  index-backed, or pathologically deep chains (a synthetic 100-deep
+ *  tree measured ~14–16 ms against real outlines' 5–15 levels).
  *
  *  Ids are requested once per hook instance (typically one dialog
  *  session) — per id, not per query. Typing a character re-runs the
@@ -73,7 +75,10 @@ export const useAncestorCrumbs = (
   // Ids already loaded or in flight. A ref, not state: it gates whether
   // the effect issues a query and must never itself trigger a render.
   const requestedRef = useRef<Set<string>>(new Set())
-  const idsKey = blockIds.join(ID_KEY_SEPARATOR)
+  // Keyed on the id list's CONTENT, not the array's identity, so a
+  // caller can build it inline. Comma join, same as
+  // `BlockSearchPicker`'s exclusion set: block ids are uuids.
+  const idsKey = blockIds.join(',')
 
   // No cancellation, and no cleanup — deliberately, because a superseded
   // run's result is not stale data, it is data. `manyAncestors(ids)`
@@ -98,7 +103,7 @@ export const useAncestorCrumbs = (
   // retry is wanted.
   useEffect(() => {
     const requested = requestedRef.current
-    const ids = idsKey ? idsKey.split(ID_KEY_SEPARATOR) : []
+    const ids = idsKey ? idsKey.split(',') : []
     const missing = ids.filter(id => !requested.has(id))
     if (missing.length === 0) return
 
@@ -109,11 +114,24 @@ export const useAncestorCrumbs = (
         const chunk = missing.slice(start, start + ANCESTOR_BATCH_SIZE)
         try {
           const entries = await repo.query.manyAncestors({ids: chunk}).load()
+          // Formatted HERE, not inside the updater below. A function-form
+          // `setCrumbs` updater does not run in this stack frame — React
+          // calls it during a later render — so anything that throws
+          // inside it escapes this try entirely: the catch never runs, the
+          // ids stay claimed with no retry, and the throw lands on the
+          // app-root ErrorBoundary, taking the whole app down. Which is
+          // the precise opposite of what this file promises about
+          // breadcrumbs being decoration. The updater is left holding only
+          // Map insertion of already-computed values, which cannot throw,
+          // while still merging onto the LATEST state so concurrent chunks
+          // don't clobber each other.
+          const formatted = entries.map(entry => [
+            entry.startId,
+            collapseCrumbs(crumbsFromAncestors(entry.ancestors)),
+          ] as const)
           setCrumbs(previous => {
             const next = new Map(previous)
-            for (const entry of entries) {
-              next.set(entry.startId, collapseCrumbs(crumbsFromAncestors(entry.ancestors)))
-            }
+            for (const [blockId, crumbsForBlock] of formatted) next.set(blockId, crumbsForBlock)
             return next
           })
         } catch (error) {

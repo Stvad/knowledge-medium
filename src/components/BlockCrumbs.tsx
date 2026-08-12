@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils.js'
 
-export const CRUMB_SEPARATOR = ' › '
+const CRUMB_SEPARATOR = ' › '
 
 /** The ancestor-path line above a search result's content.
  *

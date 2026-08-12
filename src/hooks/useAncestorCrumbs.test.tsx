@@ -14,15 +14,21 @@ interface AncestorEntry { startId: string; ancestors: BlockData[] }
 
 const manyAncestors = vi.fn<(args: {ids: readonly string[]}) => Promise<AncestorEntry[]>>()
 
-vi.mock('@/context/repo.js', () => ({
-  useRepo: () => ({
-    query: {
-      manyAncestors: (args: {ids: readonly string[]}) => ({
-        load: () => manyAncestors(args),
-      }),
-    },
-  }),
-}))
+// One stable repo object, deliberately — `useRepo` is memoized for the
+// app's lifetime in production (`src/context/repo.tsx`), and `repo` is an
+// effect dependency here. A mock returning a fresh literal per render
+// would re-fire the effect on every render, which quietly turns "the hook
+// re-requested this" into "the harness did" and would let a released id
+// get picked back up by an effect run no real session performs.
+const repo = {
+  query: {
+    manyAncestors: (args: {ids: readonly string[]}) => ({
+      load: () => manyAncestors(args),
+    }),
+  },
+}
+
+vi.mock('@/context/repo.js', () => ({useRepo: () => repo}))
 
 const { useAncestorCrumbs } = await import('./useAncestorCrumbs.js')
 
@@ -159,6 +165,56 @@ describe('useAncestorCrumbs', () => {
     release([chainFor('a'), chainFor('b')])
     await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
     expect(result.current.get('b')).toEqual(['b parent'])
+  })
+
+  it('splits an oversized id set into batched statements', async () => {
+    // One SQL bind per id, so the batch size is what keeps a caller from
+    // walking into SQLite's parameter ceiling. Every caller today sits at
+    // 25 (one chunk), which means nothing else in this suite exercises the
+    // split — collapse the loop to a single unbounded request and only
+    // this test notices.
+    const ids = Array.from({length: 51}, (_, i) => `block-${i}`)
+
+    const {result} = renderHook(() => useAncestorCrumbs(ids))
+
+    await waitFor(() => expect(result.current.size).toBe(51))
+    expect(manyAncestors).toHaveBeenCalledTimes(2)
+    expect(idsOf(manyAncestors.mock.calls[0])).toHaveLength(50)
+    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['block-50'])
+  })
+
+  it('finishes the remaining batches when one of them fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ids = Array.from({length: 51}, (_, i) => `block-${i}`)
+    manyAncestors.mockRejectedValueOnce(new Error('first batch exploded'))
+
+    const {result} = renderHook(() => useAncestorCrumbs(ids))
+
+    // The surviving batch still lands rather than being abandoned with it.
+    await waitFor(() => expect(result.current.get('block-50')).toEqual(['block-50 parent']))
+    expect(result.current.size).toBe(1)
+    expect(consoleError).toHaveBeenCalled()
+  })
+
+  it('formats crumbs inside the guarded frame, not in the state updater', async () => {
+    // A function-form setState updater runs during a LATER render, so a
+    // throw from crumb formatting placed inside it would bypass this
+    // hook's catch entirely and land on the app-root ErrorBoundary —
+    // decoration taking down the whole app. Malformed rows are the shape
+    // that would trip it: the query's resultSchema is a no-op cast, so
+    // nothing enforces this at runtime.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    manyAncestors.mockResolvedValueOnce([
+      {startId: 'a', ancestors: null as unknown as BlockData[]},
+    ])
+
+    const {result} = renderHook(() => useAncestorCrumbs(['a']))
+
+    await waitFor(() => expect(consoleError).toHaveBeenCalled())
+    // Reported through the hook's own channel and contained: no crumbs,
+    // no render crash, and the id is released so a later query retries.
+    expect(result.current.size).toBe(0)
+    expect(consoleError.mock.calls[0][0]).toContain('[ancestor-crumbs]')
   })
 
   it('logs and drops a failed load instead of surfacing it', async () => {

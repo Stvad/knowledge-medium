@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { LinkTargetBlockMatch } from '@/utils/linkTargetAutocomplete.js'
 import { QuickFindList } from '../QuickFind.tsx'
 import { blockResultItems } from '../resultItems.tsx'
+import { quickFindSelectionAction } from '../selection.ts'
 
 afterEach(() => cleanup())
 
@@ -64,8 +65,12 @@ describe('blockResultItems', () => {
   })
 
   it('still selects the block it was built for', () => {
+    // Through the real parser, not a substring check: the row's value has
+    // to survive `quickFindSelectionAction`'s `kind:payload` split, which
+    // a bare block id would not (it would parse as no kind at all).
     const [item] = blockResultItems([match('block-1', 'Sync notes')], new Map())
 
-    expect(item.value).toContain('block-1')
+    expect(quickFindSelectionAction(item.value, 'jump'))
+      .toEqual({kind: 'open-block', blockId: 'block-1', target: 'jump'})
   })
 })
