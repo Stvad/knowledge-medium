@@ -1,2 +1,2 @@
-var e=(e,t)=>e.length>t?`${e.slice(0,t-1)}…`:e,t=e=>e.match(/^[^\r\n]*/)?.[0]??``,n=(e,t)=>{if(e.length<=t)return e;if(t<=1)return`…`;let n=t-1,r=Math.ceil(n/2);return`${e.slice(0,r)}…${e.slice(e.length-(n-r))}`};export{t as firstLine,e as truncate,n as truncateMiddle};
+var e=(e,t)=>{if(e.length<=t)return e;let n=[...e];return n.length<=t?e:`${n.slice(0,t-1).join(``)}…`},t=e=>e.match(/^[^\r\n]*/)?.[0]??``,n=(e,t)=>{if(e.length<=t)return e;let n=[...e];if(n.length<=t)return e;if(t<=1)return`…`;let r=t-1,i=Math.ceil(r/2);return`${n.slice(0,i).join(``)}…${n.slice(n.length-(r-i)).join(``)}`};export{t as firstLine,e as truncate,n as truncateMiddle};
 //# sourceMappingURL=string.js.map
