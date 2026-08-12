@@ -232,6 +232,17 @@ export const copyBlockIdsToClipboard = async (
  *  all; the cut can't be marked, so it's abandoned outright (toast, no
  *  register) rather than armed with no invalidation check — that would let
  *  ANY next paste, anywhere, complete as a move. */
+/** Monotonic id for in-flight cuts. A cut awaits (hierarchy validation,
+ *  subtree serialization, the clipboard write), so two gestures can
+ *  overlap and finish out of order — and the loser would otherwise publish
+ *  its register on top of the winner's, leaving the clipboard showing one
+ *  cut while the register points at another. Worse in the write-refused
+ *  path below, where the late cut's read-back sentinel is the EARLIER
+ *  cut's text: the sentinel then matches on the next paste and moves the
+ *  wrong blocks. Each call takes a ticket and publishes only if it's still
+ *  the newest. */
+let cutGeneration = 0
+
 export const cutBlockIdsToClipboard = async (
   blockIds: readonly string[],
   repo: Repo,
@@ -240,9 +251,24 @@ export const cutBlockIdsToClipboard = async (
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId) return false
 
+  const generation = ++cutGeneration
+  const superseded = (): boolean => generation !== cutGeneration
+
   const normalizedIds = await validateSelectionHierarchy([...blockIds], repo)
 
   const data = await serializeSelectedBlocks(normalizedIds, repo)
+  // Defence in depth, NOT the load-bearing check — the one after the
+  // write is (it's what stops a stale register from replacing the live
+  // one, and what stops the read-back path arming these ids against a
+  // newer cut's text). This earlier bail only keeps a superseded cut's
+  // markdown off the clipboard; without it the post-write check still
+  // holds the register correct and the worst outcome is a text paste of
+  // the older cut's content. Unpinned by tests for that reason: the
+  // suspension point it needs (`repo.query.subtree`, reached through a
+  // dispatch Proxy) can't be stubbed without replacing `repo.query`
+  // wholesale, which costs more than the case is worth.
+  if (superseded()) return false
+
   let clipboardText = data.markdown
   try {
     await writeToClipboard(data)
@@ -256,6 +282,10 @@ export const cutBlockIdsToClipboard = async (
       return false
     }
   }
+  // Re-checked after the awaits above: the read-back sentinel in
+  // particular could be a NEWER cut's text, which would arm these ids
+  // against that cut's clipboard content.
+  if (superseded()) return false
   // Arm with `data.serializedIds`, not `normalizedIds` — a root that
   // failed to serialize (see `SerializedSelection`'s doc) is absent from
   // `clipboardText` above yet would still relocate on paste if armed here,

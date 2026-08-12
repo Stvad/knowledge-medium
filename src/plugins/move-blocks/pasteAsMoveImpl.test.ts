@@ -262,6 +262,27 @@ describe('pasteAsMoveImpl', () => {
       expect(showInfoMock).toHaveBeenCalledWith("Can't move blocks across workspaces — pasted a copy instead")
     })
 
+    it('DROPS a cross-workspace register whose sentinel no longer matches, instead of preserving it', async () => {
+      // Cut in 'ws-other', then something else gets copied (in-app or from
+      // another app), then a paste lands over here. The copy already killed
+      // the cut — the workspace mismatch must not resurrect it, and the
+      // "pasted a copy instead" toast would be a lie about content the
+      // clipboard no longer holds.
+      await seed('dest', null)
+      await seed('a', null)
+      setPendingMove({ blockIds: ['a'], workspaceId: 'ws-other', clipboardText: 'a' })
+
+      const result = await pasteAsMoveImpl({
+        repo,
+        target: INTO_DEST,
+        clipboardText: 'something else entirely',
+      })
+
+      expect(result).toBe(false)
+      expect(getPendingMove()).toBeNull()
+      expect(showInfoMock).not.toHaveBeenCalled()
+    })
+
     it('a cross-workspace paste that keeps the register still lets a LATER same-workspace paste complete the move', async () => {
       await seed('dest', null)
       await seed('a', null)

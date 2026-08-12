@@ -77,7 +77,13 @@ export function MergePicker({
         workspaceId,
         sourceIsPage: hasBlockType(data, PAGE_TYPE),
       })
-    })()
+    })().catch(error => {
+      // Cancel rather than swallow: nothing renders until `session`
+      // lands, so a rejected load would leave an invisible dialog whose
+      // `openDialog` promise never settles.
+      console.error(`[merge-blocks] failed to load source ${sourceBlockId}`, error)
+      if (!cancelled) cancelRef.current()
+    })
     return () => { cancelled = true }
   }, [repo, sourceBlockId, workspaceId])
 

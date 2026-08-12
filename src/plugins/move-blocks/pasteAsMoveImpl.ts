@@ -15,6 +15,12 @@
  * as "nothing pending" — falls back to an ordinary paste rather than racing
  * a second move against the first's chained `after` anchors.
  *
+ * The `clipboardText` sentinel is checked FIRST, ahead of every branch
+ * that would preserve the register — it's the validity question ("is this
+ * cut still a thing at all"), where the rest are applicability questions
+ * ("does it apply to THIS paste"). An invalidated register must never be
+ * restored by a later branch.
+ *
  * Every branch below that decides the register should SURVIVE (rather than
  * stay dropped, as the claim above already left it) explicitly restores it
  * with `setPendingMove`:
@@ -86,13 +92,21 @@ export const pasteAsMoveImpl = async ({ repo, target, clipboardText }: PasteAsMo
   if (!pending) return false
   clearPendingMove()
 
-  if (pending.workspaceId !== repo.activeWorkspaceId) {
-    setPendingMove(pending)
-    showInfo("Can't move blocks across workspaces — pasted a copy instead")
+  // The sentinel first, and before EVERY branch that would preserve the
+  // register: it answers "is this cut still valid at all", where the
+  // workspace check below only answers "does it apply to THIS paste". A
+  // register the sentinel has invalidated must never be restored — with
+  // the checks the other way round, cutting in A, copying something else,
+  // then pasting in B restored a cut the copy had already killed, and
+  // claimed "pasted a copy instead" about content the clipboard no longer
+  // held.
+  if (clipboardText !== pending.clipboardText) {
     return false
   }
 
-  if (clipboardText !== pending.clipboardText) {
+  if (pending.workspaceId !== repo.activeWorkspaceId) {
+    setPendingMove(pending)
+    showInfo("Can't move blocks across workspaces — pasted a copy instead")
     return false
   }
 

@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BlockSearchPicker } from '@/components/BlockSearchPicker.tsx'
 import { useRepo } from '@/context/repo.js'
+import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 
 interface ActiveSession {
@@ -59,6 +60,11 @@ export function MoveDestinationPicker({
 
   // Resolve the movers' combined subtree once on mount so the exclude
   // set is stable for the life of the dialog.
+  //
+  // Any failure here CANCELS rather than being swallowed: nothing renders
+  // until `session` lands, so a rejected subtree load would otherwise
+  // leave an invisible dialog whose `openDialog` promise never settles —
+  // no UI, no cancel control, and a queue entry per retry.
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -82,7 +88,13 @@ export function MoveDestinationPicker({
         workspaceId,
         excludeBlockIds: Array.from(excludeBlockIds),
       })
-    })()
+    })().catch(error => {
+      console.error('[move-blocks] failed to resolve move destinations', error)
+      if (!cancelled) {
+        showError("Couldn't open the move picker")
+        cancelRef.current()
+      }
+    })
     return () => { cancelled = true }
   }, [repo, blockIds, workspaceId])
 

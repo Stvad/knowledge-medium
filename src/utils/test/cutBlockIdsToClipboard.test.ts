@@ -143,6 +143,41 @@ describe('cutBlockIdsToClipboard', () => {
     expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'hello' })
   })
 
+  // Two cuts can overlap: a cut awaits hierarchy validation, subtree
+  // serialization and the clipboard write, so a second gesture can start
+  // (and finish) while the first is still in flight. The loser must not
+  // publish over the winner — in either direction.
+  describe('overlapping cuts', () => {
+    it('the older cut does not overwrite the newer cut\'s register when it finishes second', async () => {
+      await seed('a', null, 'first cut')
+      await seed('b', null, 'second cut')
+
+      let releaseFirstWrite = (): void => {}
+      const firstWriteLanded = new Promise<void>(resolve => { releaseFirstWrite = resolve })
+      let writeCalls = 0
+      const write = vi.fn(async () => {
+        writeCalls += 1
+        if (writeCalls === 1) await firstWriteLanded
+      })
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', { clipboard: { write } })
+
+      const older = cutBlockIdsToClipboard(['a'], repo)
+      // Fence on the older cut actually being inside its write, so the
+      // newer one is genuinely overlapping rather than merely sequenced
+      // after it by the event loop.
+      await vi.waitFor(() => { expect(writeCalls).toBe(1) })
+
+      expect(await cutBlockIdsToClipboard(['b'], repo)).toBe(true)
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
+
+      releaseFirstWrite()
+      expect(await older).toBe(false)
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
+    })
+
+  })
+
   it('replaces (not merges with) an unrelated pending move, via the same clear-then-rearm ordering the write itself uses', async () => {
     setPendingMove({ blockIds: ['stale'], workspaceId: WS, clipboardText: 'stale' })
     await seed('a', null, 'a')
