@@ -86,6 +86,20 @@ const deliverAndDrain = async (
   return outcome
 }
 
+/** Download into staging WITHOUT materializing. Splitting the two halves of
+ *  `deliverAndDrain` is what lets a test place a foreign row in staging and
+ *  then drain it at a chosen moment — e.g. after the local edit that raced it
+ *  has already been acked. */
+const deliverOnly = async (device: Device, server: FakeSyncServer): Promise<void> => {
+  device.cursor = await server.deliverTo(device.db, device.cursor)
+}
+
+const drainOnly = async (device: Device): Promise<MaterializeOutcome | null> => {
+  const outcome = await drainStagingWindowOnce(device.db, materializeDeps)
+  if (outcome) applySyncInvalidation(device.cache, device.repo.handleStore, outcome.snapshots, [])
+  return outcome
+}
+
 interface RowShape {
   content: string
   properties_json: string
@@ -297,39 +311,119 @@ describe('concurrent edits on one row converge (issue #381)', () => {
     expect(await readRow(a, TARGET)).toEqual(await readRow(b, TARGET))
   })
 
-  // Characterization, not a guarantee: this asserts a KNOWN-WRONG cache state
-  // on purpose (issue #526). The test above proves DISK converges for the
-  // far-ahead author; the in-memory cache does not, and this pins where that
-  // line currently sits so a fix flips a named test rather than passing
-  // silently.
+  // The constraint any #526 fix has to satisfy, driven end to end rather than
+  // through hand-built snapshots. `invalidate.test.ts` covers the unit shape,
+  // but at a 6-second stamp gap — small enough that a rule keyed on stamp
+  // DISTANCE sails past it while still being wrong (see #526).
   //
-  // Why it is not fixed here: `applySyncInvalidation` writes each materialized
-  // row through `cache.applyIfNewer(after, 'sync')`, whose LWW reject is
-  // load-bearing — it masks the transient disk revert a rescan causes inside
-  // the ack→echo window (invariant cd8f87a9). A skewed client's local stamp is
-  // above anything the server can ever issue for the row, so no later delivery
-  // out-stamps it and the reject becomes permanent. The two situations are
-  // indistinguishable at this seam: both show "incoming stamp < cached stamp"
-  // over a cache that matched disk beforehand. Separating them needs to know
-  // whether OUR CLOCK is ahead of the server's, which no layer tracks today —
-  // so the fix is a clock-offset estimate or a stamp clamp, not a predicate
-  // here. #526 has both candidate shapes and the refutations of the two cheap
-  // ones.
-  it('the far-ahead author\'s cache keeps the pre-merge row even though disk converged (#526)', async () => {
+  // Shape: a foreign row lands in staging, A edits and gets ACKED before that
+  // row is drained, so by drain time `ps_crud` is empty and the disk gate —
+  // deliberately indiscriminate — writes the older foreign row over A's newer
+  // local one. Disk reverts transiently and the echo converges it. The cache
+  // must NOT follow disk down, or A watches its own edit vanish and come back.
+  it('does not surface the transient disk revert when a foreign row drains after a local ack', async () => {
+    const { a, b, server } = await setup()
+
+    // B's edit reaches A's STAGING but is not materialized yet.
+    await b.repo.tx(async tx => {
+      await tx.update(TARGET, { content: 'B-content' })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(b, server)
+    await deliverOnly(a, server)
+
+    // A edits against its pre-B base and gets acked. `ps_crud` is now empty,
+    // so the staged row from B no longer looks like it is racing a local edit.
+    await a.repo.tx(async tx => {
+      await tx.update(TARGET, { content: 'A-content' })
+    }, { scope: ChangeScope.BlockDefault })
+    await upload(a, server)
+
+    await drainOnly(a)
+
+    // Precondition — without this the test would pass vacuously if the staged
+    // row never reached the disk gate at all. This IS the transient revert.
+    expect((await readRow(a, TARGET))?.content,
+      'precondition: the disk gate applied the older foreign row').toBe('B-content')
+
+    // The claim: the UI does not follow it down.
+    expect(a.cache.getSnapshot(TARGET)?.content,
+      'A keeps rendering its own edit while disk is transiently reverted').toBe('A-content')
+
+    // ...and the echo converges both, so the transient really was transient.
+    await quiesce([a, b], server)
+    expect(a.cache.getSnapshot(TARGET)?.content).toBe((await readRow(a, TARGET))?.content)
+  })
+
+  // The #526 fix, from the far-ahead author's side. Disk convergence is the
+  // test above; this is the same scenario asserted on the in-memory cache,
+  // which used to keep the pre-merge row for the rest of the session because
+  // A's local stamp sits above anything the server can ever issue for the row,
+  // so every delivery lost the LWW comparison permanently.
+  //
+  // What makes it land now is the advanced-server-line escape in
+  // `applyIfNewer`: the merged echo is a server version A has NEVER observed,
+  // so it clears `serverBase` and is taken despite losing on stamps. The
+  // ack→echo transient does not qualify — a rescan re-delivers a version A has
+  // already seen — which is what the test above pins.
+  it('the far-ahead author\'s cache converges too, not just its disk (#526)', async () => {
     const { a, b, server } = await setupFarAheadClock()
     await contendOnTarget(a, b, server)
 
     const disk = await readRow(a, TARGET)
     const cached = a.cache.getSnapshot(TARGET)
 
-    expect(disk, 'precondition: disk converged (the guarantee this PR adds)')
-      .toMatchObject({ content: 'B-content' })
-    expect(cached?.content, 'the gap: A renders its pre-merge content until reload')
-      .toBe('original')
-    // The mechanism, asserted rather than described: A's local stamp sits above
-    // the capped server stamp, so every delivery for this row loses the LWW.
-    expect(cached!.updatedAt).toBeGreaterThan(disk!.updated_at)
-    expect(a.cache.metrics.snapshot().applyIfNewerSyncRejected).toBeGreaterThan(0)
+    expect(disk, 'precondition: disk converged').toMatchObject({ content: 'B-content' })
+    expect(cached?.content, 'and the cache no longer lags it until reload')
+      .toBe('B-content')
+    // Assert the ROUTE, not just the outcome: this converged by escaping a
+    // stamp-losing delivery, not because the stamps happened to line up. The
+    // cache now holds the same row as disk, so their stamps are equal — it is
+    // the escape counter that says HOW it got there.
+    expect(cached!.updatedAt).toBe(disk!.updated_at)
+    expect(a.cache.metrics.snapshot().applyIfNewerServerLineEscapes).toBeGreaterThan(0)
+  })
+
+  // Same convergence claim, but reached the way a real install reaches it: the
+  // app RESTARTS between the last sync and the contended edit. Found by review
+  // on PR #527 — the test above seeds the cache through a sync drain during
+  // setup, so it can only exercise the warm path. A cold cache hydrates the row
+  // from disk instead, and if hydration does not establish the observed version
+  // the far-ahead author's first merged echo has nothing to compare against,
+  // cannot escape, and the row is stale for the whole new session — the very
+  // bug this file claims to have fixed, one restart later.
+  it('converges after a RESTART, when the row entered a cold cache by hydration (#527 review)', async () => {
+    const { a, b, server } = await setupFarAheadClock()
+
+    // Restart device A: a fresh repo + cache over the SAME database, with its
+    // clock continuing forward (still past the cap).
+    let time = 1_700_000_000_000 + 5_400_000 + 1_000
+    let idCursor = 100
+    const { repo: restartedRepo, cache: restartedCache } = createTestRepo({
+      db: dbA.db,
+      user: { id: 'user-a' },
+      now: () => ++time,
+      newId: () => `a-gen-${++idCursor}`,
+    })
+    restartedRepo.setActiveWorkspaceId(WS)
+    const restarted: Device = {
+      db: dbA.db, repo: restartedRepo, cache: restartedCache, cursor: a.cursor,
+    }
+
+    // Hydrate TARGET into the cold cache the way a query would — through the
+    // hydrate path, from disk. This is the state the bug needs.
+    const diskRow = await readRow(restarted, TARGET)
+    expect(diskRow, 'precondition: the row is on disk from the pre-restart session').not.toBeNull()
+    await restarted.repo.load(TARGET)
+    expect(restarted.cache.getSnapshot(TARGET)?.content,
+      'precondition: the cold cache hydrated the row from disk').toBe(diskRow!.content)
+
+    await contendOnTarget(restarted, b, server)
+
+    const disk = await readRow(restarted, TARGET)
+    expect(disk, 'precondition: disk converged').toMatchObject({ content: 'B-content' })
+    expect(restarted.cache.getSnapshot(TARGET)?.content,
+      'the restarted session converges too, rather than lagging until the NEXT reload')
+      .toBe('B-content')
   })
 
   // The exact cap-boundary collision below can't be steered through the real
