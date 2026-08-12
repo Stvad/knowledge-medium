@@ -193,6 +193,88 @@ describe('link target autocomplete helpers', () => {
     expect(out.blocks.map(match => match.blockId)).toEqual(['keep'])
   })
 
+  // The sources slice to `limit` before exclusions are applied, so
+  // without headroom the exclusion set is paid for out of the display
+  // budget: exclude enough top-ranked matches and the caller gets "No
+  // results" while real targets sat just past the cut. That bit the
+  // move picker, which excludes a whole subtree; the fix belongs here
+  // rather than in each caller's over-fetch.
+  it('still returns `limit` survivors when the exclusion set outranks them', async () => {
+    // Exact matches outrank the substring one (SCORE_BLOCK_FULL_EXACT vs
+    // SCORE_BLOCK_FULL_SUBSTRING), so the excluded ids deterministically
+    // occupy the whole `limit: 2` budget.
+    const excluded = ['x1', 'x2', 'x3', 'x4', 'x5']
+    for (const id of excluded) await create({id, content: 'refactor'})
+    await create({id: 'survivor', content: 'a refactor plan'})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'refactor',
+      limit: 2,
+      excludeBlockIds: excluded,
+    })
+
+    expect(out.blocks.map(match => match.blockId)).toEqual(['survivor'])
+  })
+
+  it('still returns `limit` alias survivors when the exclusion set outranks them', async () => {
+    // Prefix matches outrank the substring one, so — as with the block
+    // case above — the excluded ids deterministically fill `limit`.
+    const excluded = ['a1', 'a2', 'a3', 'a4', 'a5']
+    for (const id of excluded) await create({id, aliases: [`Roadmap ${id}`]})
+    await create({id: 'survivor', aliases: ['Q3 Roadmap']})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'Roadmap',
+      limit: 2,
+      excludeBlockIds: excluded,
+    })
+
+    expect(out.aliases.map(match => match.blockId)).toEqual(['survivor'])
+  })
+
+  it('does not let an over-fetched alias suppress its block from the Blocks group', async () => {
+    // The headroom fetch pulls alias candidates that then get sliced away.
+    // If those still counted as "already shown as a page", a block whose
+    // alias just missed the cut but whose CONTENT is the best match would
+    // be filtered out of the Blocks group too and appear nowhere.
+    // The exclusions exist only to buy headroom (fetchLimit = 1 + 3), so
+    // the alias pass fetches BOTH aliases below and then slices to one.
+    const excluded = ['e1', 'e2', 'e3']
+    for (const id of excluded) await create({id, content: `Ledger ${id}`})
+
+    // Exact alias match — takes the single Pages slot.
+    await create({id: 'top-alias', aliases: ['Ledger']})
+    // Substring alias, so it ranks second and gets sliced out of Pages —
+    // but its CONTENT is the only surviving content match, so it has to
+    // come back under Blocks.
+    await create({id: 'hidden-alias', aliases: ['Q3 Ledger'], content: 'Ledger notes'})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'Ledger',
+      limit: 1,
+      excludeBlockIds: excluded,
+    })
+
+    expect(out.aliases.map(m => m.blockId)).toEqual(['top-alias'])
+    expect(out.blocks.map(m => m.blockId)).toEqual(['hidden-alias'])
+  })
+
+  it('never returns more than `limit`, headroom notwithstanding', async () => {
+    for (const id of ['b1', 'b2', 'b3', 'b4', 'b5']) await create({id, content: 'backlog'})
+
+    const out = await searchLinkTargets(env.repo, {
+      workspaceId: WS,
+      query: 'backlog',
+      limit: 2,
+      excludeBlockIds: ['b1'],
+    })
+
+    expect(out.blocks).toHaveLength(2)
+  })
+
   it('boosts recent block content matches without filtering FTS rows through fuzzy rank', async () => {
     await create({id: 'older', content: 'sync alpha'})
     await create({id: 'newer', content: 'sync beta'})
