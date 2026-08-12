@@ -75,7 +75,8 @@ import {
   matchesAliasSeatSeed,
   resolveAliasSeatId,
 } from '@/data/targets'
-import { aliasesProp } from '@/data/properties'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { aliasesProp, hasBlockType } from '@/data/properties'
 import { deleteSubtreeInTx } from '@/data/subtreeDelete'
 import {
   dailyNoteBlockId,
@@ -173,8 +174,32 @@ const buildSourcePlan = async (
   source: BlockData,
   before: BlockData | null,
 ): Promise<SourcePlan> => {
-  const aliasMarks = parseAliasMarks(source.content)
-  const blockRefMarks = parseBlockRefs(source.content)
+  // An installed extension's SOURCE is stored in `blocks.content`, and
+  // running the wikilink / blockref grammars over code is a category
+  // error: a regex character class whose first member is a literal `[`
+  // (`/[[\]{}()*+?.\\^$|\s]/`) is a `[[` opener, and so is a nested array
+  // literal. The scanner pairs one with whatever `]]` comes next — in a
+  // 1.7 MB bundle that was 205 KB downstream — and this processor then
+  // mints a page NAMED after the span. One installed extension produced
+  // three such pages before this gate.
+  //
+  // Nothing displayed is lost by skipping. An extension-typed block never
+  // reaches the markdown pipeline: `CodeMirrorExtensionBlockRenderer`
+  // claims every one of them (`canRender` → `hasBlockType(data,
+  // EXTENSION_TYPE)`) and shows the source in a code editor, so there is
+  // no rendered wikilink here whose reference we would be dropping.
+  //
+  // Content grammars ONLY. Property refs still project below — an
+  // extension block carries typed properties like any other block, and
+  // dropping those would be a quieter version of the same bug.
+  //
+  // Existing extension blocks converge lazily rather than by a sweep:
+  // `properties` and `content` are both watched, so the next write to one
+  // re-parses under this gate, drops the stale refs, and lets
+  // `reapOrphanAliasSeats` collect the seats they were holding open.
+  const scanContent = !hasBlockType(source, EXTENSION_TYPE)
+  const aliasMarks = scanContent ? parseAliasMarks(source.content) : []
+  const blockRefMarks = scanContent ? parseBlockRefs(source.content) : []
 
   const aliasRefs: BlockReference[] = []
   const dateRefs: BlockReference[] = []

@@ -26,6 +26,7 @@ import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { aliasesProp } from '@/data/properties'
 import { seedProperty } from '@/data/propertySeeds'
 import { Repo } from '@/data/repo'
@@ -268,6 +269,93 @@ describe('parseReferences — ref-typed properties', () => {
       {id: aliasId('content-target'), alias: 'content-target'},
       {id: 'target-c', alias: 'target-c', sourceField: 'reviewer'},
     ])
+  })
+})
+
+// An installed extension's SOURCE lives in `blocks.content` on a block
+// typed `extension`, and code hands the wikilink grammar unbalanced `[[`
+// openers for free (regex character classes, nested array literals).
+// Three pages — one named after 205 KB of bundled JavaScript — were
+// minted from a single extension's source before this gate existed.
+describe('parseReferences — extension source is not scanned for content refs', () => {
+  const SOME_UUID = '550e8400-e29b-41d4-a716-446655440000'
+
+  it('mints no alias target and records no content refs', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: `const RE = /[[\\]]/g\nsee [[foo]] and ((${SOME_UUID}))`,
+        properties: {types: [EXTENSION_TYPE]},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
+    expect(await env.read(aliasId('foo'))).toBeNull()
+  })
+
+  // The convergence path for source blocks that ALREADY minted seats:
+  // nothing rewrites their content, so the drop has to come from the
+  // re-parse that the type write itself triggers (`properties` is
+  // watched). Priming the positive case first is what makes the
+  // `toEqual([])` below evidence rather than a first-render artifact.
+  it('drops content refs already recorded when the type arrives', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[foo]]',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('ext'))!.references_json))
+      .toEqual([{id: aliasId('foo'), alias: 'foo'}])
+
+    await env.repo.tx(
+      tx => tx.update('ext', {properties: {types: [EXTENSION_TYPE]}}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
+  })
+
+  // Scope check: the gate is on the CONTENT grammars only. An extension
+  // block carries ref-typed properties like any other block (its own
+  // `extension:name` today, anything a schema declares tomorrow), and
+  // silently dropping those would be a second, quieter version of the
+  // bug this fixes.
+  describe('ref-typed properties still project', () => {
+    const reviewerProp = refTestSeed('reviewer', 'ref')
+
+    beforeEach(async () => {
+      await env.h.cleanup()
+      env = await setup([definitionSeedsFacet.of(reviewerProp, {source: 'test'})])
+    })
+
+    it('projects a ref property on an extension-typed block', async () => {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'ext',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'see [[foo]]',
+          properties: {types: [EXTENSION_TYPE], reviewer: 'target-a'},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+
+      expect(JSON.parse((await env.read('ext'))!.references_json))
+        .toEqual([{id: 'target-a', alias: 'target-a', sourceField: 'reviewer'}])
+    })
   })
 })
 
