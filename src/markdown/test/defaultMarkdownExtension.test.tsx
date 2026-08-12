@@ -15,7 +15,7 @@ const markdownConfig = gfmMarkdownExtension({
 const renderMarkdown = (content: string) => {
   if (!markdownConfig) throw new Error('Expected markdown config')
 
-  render(
+  return render(
     <Markdown
       remarkPlugins={markdownConfig.remarkPlugins}
       components={markdownConfig.components}
@@ -54,6 +54,24 @@ describe('gfm markdown extension', () => {
     expect(isExternalHref('https://app.example/other', baseHref)).toBe(false)
     expect(isExternalHref('/other', baseHref)).toBe(false)
     expect(isExternalHref('mailto:user@example.com', baseHref)).toBe(false)
+  })
+
+  // The block container renders with `white-space: pre-wrap`, so the "\n" text
+  // nodes mdast-to-hast puts between a blockquote and its children would each
+  // draw a blank line. Asserting on the DOM text nodes rather than on the
+  // rendered text, which collapses them either way.
+  it('drops the newline separators mdast-to-hast puts inside a blockquote', () => {
+    const {container} = renderMarkdown('> quote')
+
+    const blockquote = container.querySelector('blockquote')
+    expect(blockquote).not.toBeNull()
+    expect([...blockquote!.childNodes].map(node => node.nodeName)).toEqual(['P'])
+  })
+
+  it('keeps a soft line break inside the quoted paragraph', () => {
+    const {container} = renderMarkdown('> quote\n> more')
+
+    expect(container.querySelector('blockquote > p')?.textContent).toBe('quote\nmore')
   })
 
   it('opens a fullscreen preview when an embedded image is clicked', async () => {

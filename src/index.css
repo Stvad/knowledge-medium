@@ -241,6 +241,18 @@
     overflow-x: auto;
   }
 
+  /* A quote is marked by the rule down its left edge, not by space around it:
+     these sit inline in an outline where every bullet is already its own row,
+     so vertical padding would break the list's rhythm. Preflight zeroes the
+     UA margin; the stray newlines that used to add a blank line above and
+     below are dropped in `defaultMarkdownExtension`. Sized in `em` so the rule
+     and its gutter scale with the surrounding text (a title block renders at
+     1.5rem). */
+  blockquote {
+    border-left: 0.1875em solid hsl(var(--muted-foreground) / 0.4);
+    padding-left: 0.65em;
+  }
+
   a {
     @apply text-link underline;
     /* A long URL is a single unbreakable token; let it wrap to fit
