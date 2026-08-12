@@ -44,12 +44,13 @@ import {
   getUIStateBlock,
   requireWorkspaceId,
 } from '@/data/stateBlocks.js'
+import { useAncestorCrumbs } from '@/hooks/useAncestorCrumbs.js'
 import { quickFindToggle } from './toggleStore.ts'
+import { blockResultItems } from './resultItems.tsx'
 import { pushRecentBlockId, quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 import {
   nextQuickFindSelection,
   quickFindAliasValue,
-  quickFindBlockValue,
   quickFindCreateValue,
   quickFindDateValue,
   quickFindOpenTargetFromClickModifiers,
@@ -427,6 +428,12 @@ function QuickFindDialog({
   const aliases = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.aliases : []
   const blocks = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.blocks : []
   const [recents, setRecents] = useState<RecentItem[]>([])
+  // Ancestor crumbs load on their own batched pass AFTER these rows
+  // render, so the search path keeps its current latency and the
+  // progressive aliases→blocks paint is unchanged. `blocks` is rebuilt on
+  // every render; the hook keys on the ids' content, not the array's
+  // identity, so an inline map is fine here.
+  const blockCrumbs = useAncestorCrumbs(blocks.map(match => match.blockId))
 
   useEffect(() => {
     if (!open) return
@@ -657,16 +664,7 @@ function QuickFindDialog({
   }
 
   if (blocks.length > 0) {
-    groups.push({
-      heading: 'Blocks',
-      items: blocks.map(match => ({
-        key: `block:${match.blockId}`,
-        value: quickFindBlockValue(match),
-        children: (
-          <span className="truncate">{truncate(match.content, 80)}</span>
-        ),
-      })),
-    })
+    groups.push({heading: 'Blocks', items: blockResultItems(blocks, blockCrumbs)})
   }
 
   if (showCreate) {
