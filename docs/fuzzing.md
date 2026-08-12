@@ -314,9 +314,10 @@ binding oracle + an 11-suite discovery sweep) found six more:
   a merge onto a drifted base can land server-content ≠ author-content
   at the author's own stamp — the author's echo equal-stamp-skips
   (reconcile I1) and that device permanently misses the merged-under
-  edit. The property is left strict, so the convergence deep tier is
-  KNOWN RED until the server fix ships (the nightly report calls this
-  out; a different failing file or fingerprint is a new bug).
+  edit. The property was left strict rather than relaxed to green, so
+  the convergence deep tier stayed KNOWN RED until the fix shipped
+  (base row-version on PATCH, PR #525) — the standing-red exemption is
+  retired and the deep tier is expected green again.
 - The binding-oracle sweep found that a long-form date literal bound to
   its resolved target was never CLAIMED by it — any later block could
   legitimately claim the spelling and existing bindings stayed silently

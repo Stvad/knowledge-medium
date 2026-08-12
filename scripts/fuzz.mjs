@@ -103,9 +103,17 @@ export function parseSeedAndPath(log) {
   return { seed, path, runIndex: Number.isInteger(firstSegment) ? firstSegment : undefined }
 }
 
-const ISSUE_381_NOTE = `**Known standing red:** the convergence deep tier (\`twoRepoConvergence.fuzz.test.ts\`) is expected to fail nightly while #381 (server-side fix) is open — do not treat that alone as new. Triage:
-1. Does the failing-file list above contain anything BESIDES \`twoRepoConvergence.fuzz.test.ts\`? If so, that's new — investigate it.
-2. If only convergence failed, compare the seed/path/shrunk counterexample below against #381's. A different fingerprint is a second, distinct bug in the same property, not the known one.`
+// Static triage note that leads every nightly failure issue. There is
+// currently NO known standing red — the deep tier is expected to pass, so a
+// ticket existing at all means something regressed. (Through 2026-07 the
+// convergence suite WAS a standing red pending issue #381; that fix shipped
+// in PR #525 and the exemption is gone. If a suite ever becomes known-red
+// again, name it here rather than making every triager rediscover it.)
+const TRIAGE_NOTE = `**Triage:** the deep tier runs green by default — there is no known standing red, so every file listed above is a real signal until shown otherwise. It is one of two things:
+1. **A product bug** — the property caught something real. Reproduce with the commands at the bottom, then fix the code.
+2. **An unsound oracle** — the property asserts something the code never promised, or the counterexample doesn't survive replay (see the shrink-unsoundness note below). Fix the property.
+
+Never weaken a property just to get green — diagnose which of the two it is first. \`docs/fuzzing.md\` has the conventions and the oracle discipline.`
 
 /**
  * @param {{runUrl: string, sections: {name: string, log: string | null}[]}} args
@@ -167,7 +175,7 @@ export function buildFailureReport({ runUrl, sections }) {
 
   const repro = `${pathReplay}${regen}\n\n(see docs/fuzzing.md).`
 
-  return [headline, '', failingFiles, ISSUE_381_NOTE, excerpt, repro].join('\n')
+  return [headline, '', failingFiles, TRIAGE_NOTE, excerpt, repro].join('\n')
 }
 
 // `node scripts/fuzz.mjs --report "<step name>|<log file>" […]` — used by
