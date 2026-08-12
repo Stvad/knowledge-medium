@@ -141,6 +141,7 @@ describe('serializeSelectedBlocks', () => {
     const result = await serializeSelectedBlocks(['a', 'b'], env.repo)
     expect(result.markdown).toBe('- a\n  - a1\nb')
     expect(result.blocks.map(x => x.id)).toEqual(['a', 'a1', 'b'])
+    expect(result.serializedIds).toEqual(['a', 'b'])
   })
 
   it('skips ids that fail to serialize and returns the rest', async () => {
@@ -148,6 +149,12 @@ describe('serializeSelectedBlocks', () => {
     const result = await serializeSelectedBlocks(['real', 'missing'], env.repo)
     expect(result.markdown).toBe('real')
     expect(result.blocks.map(x => x.id)).toEqual(['real'])
+    // `serializedIds` is what a caller (`cutBlockIdsToClipboard`) must arm a
+    // pending move with — NOT the original `blockIds` — precisely because
+    // 'missing' is silently absent from `markdown`/`blocks` above. Arming
+    // with the original input would let something act on 'missing' as
+    // though the clipboard represented it, when it never did.
+    expect(result.serializedIds).toEqual(['real'])
   })
 
   it('throws when no ids could be serialized', async () => {

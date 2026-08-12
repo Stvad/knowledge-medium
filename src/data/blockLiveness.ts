@@ -42,3 +42,42 @@ export const anyBlockTombstoned = async (
   )
   return rows.some(row => row.deleted === 1)
 }
+
+/** Batch form — of `blockIds`, the ones NOT known to be tombstoned: either
+ *  genuinely live, or simply missing locally (see the module doc's
+ *  "missing ≠ deleted" default — the conservative side keeps a possibly-
+ *  unsynced id in the survivors list rather than dropping it). Preserves
+ *  the input order.
+ *
+ *  Used by `pasteAsMoveImpl` to move the SURVIVORS of a pending cut→move
+ *  instead of refusing the whole batch — and re-creating every block,
+ *  including the untouched ones — just because one of the cut ids was
+ *  deleted before the paste.
+ *
+ *  Reads in chunks of `LIVENESS_CHUNK`, mirroring `FIELD_PROBE_CHUNK` in
+ *  `repo.ts`: one bound parameter per id would otherwise blow SQLite's
+ *  bound-parameter cap on a large multi-select cut. That failure would be
+ *  worse than a slow query — `pasteAsMoveImpl` deliberately RESTORES the
+ *  pending-move register on any thrown error, so a paste that hits an
+ *  oversized query here would retry the exact same oversized query on
+ *  every subsequent paste attempt, and the cut could never complete. */
+const LIVENESS_CHUNK = 500
+
+export const liveBlockIds = async (
+  repo: Repo,
+  blockIds: readonly string[],
+): Promise<string[]> => {
+  if (blockIds.length === 0) return []
+  const tombstoned = new Set<string>()
+  for (let i = 0; i < blockIds.length; i += LIVENESS_CHUNK) {
+    const chunk = blockIds.slice(i, i + LIVENESS_CHUNK)
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = await repo.db.getAll<{id: string; deleted: number}>(
+      `SELECT id, deleted FROM blocks WHERE id IN (${placeholders})`, [...chunk],
+    )
+    for (const row of rows) {
+      if (row.deleted === 1) tombstoned.add(row.id)
+    }
+  }
+  return blockIds.filter(id => !tombstoned.has(id))
+}

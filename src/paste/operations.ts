@@ -476,13 +476,22 @@ export async function resolvePasteWithMediaCapture(
  *
  *  The clipboard API read is text-only, so `PasteRequest.html` is undefined
  *  on this surface — a format-aware override keyed on `text/html` (e.g.
- *  CSV→table from a spreadsheet copy) fires for DOM paste but not here. */
+ *  CSV→table from a spreadsheet copy) fires for DOM paste but not here.
+ *
+ *  `clipboardText`, when passed, is used AS-IS instead of re-reading the
+ *  clipboard — callers that already read it once (to check whether the
+ *  paste completes a pending cut→move via `tryPasteAsMove` /
+ *  `tryPasteAsMoveAt`) must thread that same read through here rather than
+ *  reading again: two reads can disagree (something else got copied in
+ *  between), a second read can be refused where the first wasn't, and each
+ *  read can cost a system paste prompt on iOS. */
 export async function pasteFromClipboard(
   pasteTarget: Block,
   repo: Repo,
   options: PasteOptions = {},
+  clipboardText?: string,
 ): Promise<Block[]> {
-  const text = await navigator.clipboard.readText()
+  const text = clipboardText ?? await navigator.clipboard.readText()
   if (!text) return []
 
   const runtime = repo.facetRuntime

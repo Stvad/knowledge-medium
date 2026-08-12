@@ -1,0 +1,277 @@
+// @vitest-environment happy-dom
+/**
+ * `cutBlockIdsToClipboard`'s clipboard/register plumbing — the parts
+ * `copy.test.ts` (node env) explicitly excludes because they need a DOM
+ * `navigator.clipboard`. Covers:
+ *   - the happy path (write succeeds, register armed with the written
+ *     markdown as the invalidation sentinel)
+ *   - the write-refused fallback: read back whatever's ALREADY on the
+ *     clipboard and use THAT as the sentinel, rather than skipping the
+ *     invalidation check entirely
+ *   - the total-failure case (write AND read both refused): no register,
+ *     no silent "anything pastes as a move" landmine
+ *   - normalizing an ancestor+descendant selection before serializing, so
+ *     the clipboard markdown doesn't contain the descendant twice
+ */
+import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const showErrorMock = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/toast.js', () => ({ showError: showErrorMock }))
+
+import { ChangeScope } from '@/data/api'
+import { Repo } from '@/data/repo'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { keyBetween } from '@/data/orderKey'
+import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
+import { cutBlockIdsToClipboard, writeTextToClipboard } from '@/utils/copy'
+
+const WS = 'ws-1'
+
+let sharedDb: TestDb
+let repo: Repo
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
+const lastKeyByParent = new Map<string, string | null>()
+
+const seed = async (id: string, parentId: string | null, content = id): Promise<void> => {
+  const bucket = parentId ?? '__root__'
+  const orderKey = keyBetween(lastKeyByParent.get(bucket) ?? null, null)
+  lastKeyByParent.set(bucket, orderKey)
+  await repo.tx(async tx => {
+    await tx.create({ id, workspaceId: WS, parentId, orderKey, content })
+  }, { scope: ChangeScope.BlockDefault, description: `seed ${id}` })
+}
+
+/** A view of `repo` whose subtree loads (i.e. `serializeBlock`'s only
+ *  await) wait on `gate` first — so a cut can be held mid-serialization,
+ *  AFTER its synchronous entry, while another gesture runs to completion.
+ *  Wraps rather than patches: `repo.query` is a name-dispatch Proxy with
+ *  no own properties, so it can't be spied, and a global patch would leak
+ *  across the shared per-file repo. */
+const deferSubtreeLoads = (real: Repo, gate: Promise<void>): Repo =>
+  new Proxy(real, {
+    get(target, prop, receiver) {
+      if (prop !== 'query') return Reflect.get(target, prop, receiver)
+      const query = Reflect.get(target, prop, receiver) as Repo['query']
+      return new Proxy(query, {
+        get(queryTarget, queryProp, queryReceiver) {
+          if (queryProp !== 'subtree') return Reflect.get(queryTarget, queryProp, queryReceiver)
+          return (args: never) => {
+            const handle = queryTarget.subtree(args)
+            return {...handle, load: async () => { await gate; return handle.load() }}
+          }
+        },
+      })
+    },
+  })
+
+beforeEach(async () => {
+  lastKeyByParent.clear()
+  await resetTestDb(sharedDb.db)
+  repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
+  repo.setActiveWorkspaceId(WS)
+  showErrorMock.mockClear()
+})
+
+afterEach(() => {
+  clearPendingMove()
+  vi.unstubAllGlobals()
+})
+
+describe('cutBlockIdsToClipboard', () => {
+  it('writes the serialized markdown and arms the register with it as the sentinel', async () => {
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write } })
+
+    const marked = await cutBlockIdsToClipboard(['a'], repo)
+
+    expect(marked).toBe(true)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'hello' })
+  })
+
+  it('falls back to reading back the existing clipboard as the sentinel when the write is refused', async () => {
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => { throw new DOMException('refused', 'NotAllowedError') })
+    const readText = vi.fn(async () => 'whatever was already on the clipboard')
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write, readText } })
+
+    const marked = await cutBlockIdsToClipboard(['a'], repo)
+
+    expect(marked).toBe(true)
+    // The register is still armed — with the READ-BACK text, not our own
+    // markdown (which never reached the clipboard).
+    expect(getPendingMove()).toEqual({
+      blockIds: ['a'],
+      workspaceId: WS,
+      clipboardText: 'whatever was already on the clipboard',
+    })
+  })
+
+  it('abandons the cut — no register, a toast — when BOTH the write and the read are refused', async () => {
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => { throw new DOMException('refused', 'NotAllowedError') })
+    const readText = vi.fn(async () => { throw new DOMException('refused', 'NotAllowedError') })
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write, readText } })
+
+    const marked = await cutBlockIdsToClipboard(['a'], repo)
+
+    expect(marked).toBe(false)
+    // No usable invalidation sentinel — arming the register anyway would
+    // let literally ANY next paste, anywhere, complete as a move.
+    expect(getPendingMove()).toBeNull()
+    expect(showErrorMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('normalizes an ancestor+descendant selection before serializing, so the descendant is not duplicated in the clipboard markdown', async () => {
+    await seed('a', null, 'a')
+    await seed('kid', 'a', 'kid')
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write } })
+
+    // Selection holds BOTH the ancestor and its own descendant — possible
+    // once `validateSelectionHierarchy`'s write-time invariant goes stale
+    // (a sync-applied reparent after the selection was captured).
+    const marked = await cutBlockIdsToClipboard(['a', 'kid'], repo)
+
+    expect(marked).toBe(true)
+    const pending = getPendingMove()
+    // 'kid' must NOT appear twice: once nested under 'a', once again as
+    // its own top-level entry.
+    expect(pending?.clipboardText).toBe('- a\n  - kid')
+    expect(pending?.blockIds).toEqual(['a']) // 'kid' pruned — it rides along under 'a'
+  })
+
+  it('arms the register only with roots that actually serialized, not every requested id', async () => {
+    // 'a' serializes fine; 'ghost' doesn't exist and fails to serialize
+    // (`serializeSelectedBlocks` catches per-root failures and silently
+    // omits them from the clipboard text). Arming the register with BOTH
+    // requested ids would relocate 'ghost' on the next paste even though
+    // the clipboard never represented it.
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write } })
+
+    const marked = await cutBlockIdsToClipboard(['a', 'ghost'], repo)
+
+    expect(marked).toBe(true)
+    expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'hello' })
+  })
+
+  // Two cuts can overlap: a cut awaits hierarchy validation, subtree
+  // serialization and the clipboard write, so a second gesture can start
+  // (and finish) while the first is still in flight. The loser must not
+  // publish over the winner — in either direction.
+  describe('overlapping cuts', () => {
+    it('the older cut does not overwrite the newer cut\'s register when it finishes second', async () => {
+      await seed('a', null, 'first cut')
+      await seed('b', null, 'second cut')
+
+      let releaseFirstWrite = (): void => {}
+      const firstWriteLanded = new Promise<void>(resolve => { releaseFirstWrite = resolve })
+      let writeCalls = 0
+      const write = vi.fn(async () => {
+        writeCalls += 1
+        if (writeCalls === 1) await firstWriteLanded
+      })
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', { clipboard: { write } })
+
+      const older = cutBlockIdsToClipboard(['a'], repo)
+      // Fence on the older cut actually being inside its write, so the
+      // newer one is genuinely overlapping rather than merely sequenced
+      // after it by the event loop.
+      await vi.waitFor(() => { expect(writeCalls).toBe(1) })
+
+      expect(await cutBlockIdsToClipboard(['b'], repo)).toBe(true)
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
+
+      releaseFirstWrite()
+      expect(await older).toBe(false)
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
+    })
+
+    it('the LATER gesture wins even when the older one reaches the clipboard first', async () => {
+      // Both cuts enter before either writes, so neither has moved the
+      // counter by writing — and then the OLDER one is the one that gets
+      // to finish. If entry merely SNAPSHOT the counter both would hold
+      // the same number, the older cut's write would look unopposed, and
+      // the user's most recent ⌘X would be silently dropped. Claiming a
+      // number at entry orders the two by when the user pressed the key.
+      await seed('a', null, 'first cut')
+      await seed('b', null, 'second cut')
+
+      const write = vi.fn(async () => {})
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', { clipboard: { write } })
+
+      // Entry (and therefore the claim) is synchronous, so both gestures
+      // are registered in order before either awaits. The newer one is
+      // then held in serialization while the older runs to completion.
+      let releaseNewer = (): void => {}
+      const newerMaySerialize = new Promise<void>(resolve => { releaseNewer = resolve })
+
+      const older = cutBlockIdsToClipboard(['a'], repo)
+      const newer = cutBlockIdsToClipboard(['b'], deferSubtreeLoads(repo, newerMaySerialize))
+
+      expect(await older).toBe(false)
+      expect(getPendingMove()).toBeNull() // the older cut published nothing
+
+      releaseNewer()
+      expect(await newer).toBe(true)
+      expect(getPendingMove()).toEqual({ blockIds: ['b'], workspaceId: WS, clipboardText: 'second cut' })
+    })
+
+    it('a plain COPY landing mid-cut also supersedes it', async () => {
+      // The copy arms nothing, so there's no newer register to notice —
+      // only the clipboard moved on. The read-back path is the dangerous
+      // one: it would snapshot the COPY's text as this cut's sentinel, so
+      // the next paste matches, moves 'a', and swallows what was copied.
+      await seed('a', null, 'cut me')
+
+      let releaseCutWrite = (): void => {}
+      const cutWriteLanded = new Promise<void>(resolve => { releaseCutWrite = resolve })
+      let writeCalls = 0
+      const write = vi.fn(async () => {
+        writeCalls += 1
+        if (writeCalls === 1) {
+          await cutWriteLanded
+          throw new DOMException('refused', 'NotAllowedError')
+        }
+      })
+      const readText = vi.fn(async () => 'text the copy put there')
+      const writeText = vi.fn(async () => {})
+      vi.stubGlobal('ClipboardItem', class {})
+      vi.stubGlobal('navigator', { clipboard: { write, readText, writeText } })
+
+      const cut = cutBlockIdsToClipboard(['a'], repo)
+      await vi.waitFor(() => { expect(writeCalls).toBe(1) })
+
+      await writeTextToClipboard('text the copy put there')
+
+      releaseCutWrite()
+      expect(await cut).toBe(false)
+      expect(getPendingMove()).toBeNull()
+    })
+  })
+
+  it('replaces (not merges with) an unrelated pending move, via the same clear-then-rearm ordering the write itself uses', async () => {
+    setPendingMove({ blockIds: ['stale'], workspaceId: WS, clipboardText: 'stale' })
+    await seed('a', null, 'a')
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write } })
+
+    await cutBlockIdsToClipboard(['a'], repo)
+
+    expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'a' })
+  })
+})

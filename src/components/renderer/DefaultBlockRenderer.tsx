@@ -16,6 +16,7 @@ import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorConte
 import { BulletHoverCard, useBulletHover } from '@/components/renderer/BulletHoverCard.js'
 import { BlockInfoDialog } from '@/components/renderer/BlockInfoDialog.js'
 import { openDialog } from '@/utils/dialogs.js'
+import { writeTextToClipboardBestEffort } from '@/utils/copy.js'
 import { useRef, useMemo } from 'react'
 import { Block } from '../../data/block'
 import {
@@ -86,16 +87,24 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
  *
  */
 
-const copyBlockId = (block: Block) => {
-  navigator.clipboard.writeText(block.id)
+// Routed through `writeTextToClipboardBestEffort` (block-move-ui review item
+// 1), not a raw `navigator.clipboard.writeText` — these three bypassed the
+// pending-move choke point entirely: cut a block, then use one of these
+// bullet-menu items, and if the just-copied text happened to still match the
+// register's invalidation sentinel, the next paste would MOVE the cut block
+// instead of pasting the id/ref/embed just copied. Exported so they're
+// directly unit-testable (`DefaultBlockRenderer.test.tsx`) without having to
+// drive the Radix context menu.
+export const copyBlockId = (block: Block) => {
+  writeTextToClipboardBestEffort(block.id)
 }
 
-const copyBlockRef = (block: Block) => {
-  navigator.clipboard.writeText(`((${block.id}))`)
+export const copyBlockRef = (block: Block) => {
+  writeTextToClipboardBestEffort(`((${block.id}))`)
 }
 
-const copyBlockEmbed = (block: Block) => {
-  navigator.clipboard.writeText(`!((${block.id}))`)
+export const copyBlockEmbed = (block: Block) => {
+  writeTextToClipboardBestEffort(`!((${block.id}))`)
 }
 
 const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {
