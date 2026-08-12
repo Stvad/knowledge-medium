@@ -3,10 +3,9 @@
  * `openDialog(MoveDestinationPicker, {blockIds, workspaceId})` from
  * `move-blocks.move-to` / `multi_select.move-blocks.move-to`.
  *
- * Structurally a clone of `MergePicker` (search box + Pages/Blocks
- * result groups over `searchLinkTargets`) — the direction of the
- * relationship is the only real difference: this picker never touches
- * the repo itself, it just resolves `{destinationId}` back to the
+ * The search UI itself is `BlockSearchPicker` (shared with `MergePicker`);
+ * this picker owns only the destination-resolution semantics. It never
+ * touches the repo, it just resolves `{destinationId}` back to the
  * action, which runs `moveBlocksTo`. That keeps the mutation (and its
  * undo-group + error handling) in one place instead of split between
  * dialog and action.
@@ -19,27 +18,9 @@
  * `repo.query.subtree`.
  */
 import { useEffect, useRef, useState } from 'react'
-import { truncate } from '@/utils/string'
-import {
-  CommandDialog,
-  CommandInput,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-} from '@/components/ui/command'
+import { BlockSearchPicker } from '@/components/BlockSearchPicker.tsx'
 import { useRepo } from '@/context/repo.js'
-import {
-  searchLinkTargets,
-  type LinkTargetAliasMatch,
-  type LinkTargetBlockMatch,
-} from '@/utils/linkTargetAutocomplete.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
-
-const SEARCH_LIMIT = 25
-/** Upper bound on the over-fetch below. */
-const SEARCH_FETCH_CEILING = 200
-const DEBOUNCE_MS = 80
 
 interface ActiveSession {
   workspaceId: string
@@ -47,12 +28,6 @@ interface ActiveSession {
    *  open time so search never offers a destination that `core.move`
    *  would refuse as a cycle. */
   excludeBlockIds: string[]
-}
-
-interface SearchResultState {
-  query: string
-  aliases: LinkTargetAliasMatch[]
-  blocks: LinkTargetBlockMatch[]
 }
 
 export interface MoveDestinationPickerResult {
@@ -73,13 +48,6 @@ export function MoveDestinationPicker({
   const repo = useRepo()
 
   const [session, setSession] = useState<ActiveSession | null>(null)
-  const [query, setQuery] = useState('')
-  const [value, setValue] = useState('')
-  const [searchResults, setSearchResults] = useState<SearchResultState>({
-    query: '',
-    aliases: [],
-    blocks: [],
-  })
 
   // The finalize callbacks are fresh closures from the DialogHost on
   // each of its renders; read them through a ref so the load effect can
@@ -118,125 +86,29 @@ export function MoveDestinationPicker({
     return () => { cancelled = true }
   }, [repo, blockIds, workspaceId])
 
-  const trimmedQuery = query.trim()
-
-  useEffect(() => {
-    if (!session || !trimmedQuery) return
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      const results = await searchLinkTargets(repo, {
-        workspaceId: session.workspaceId,
-        query: trimmedQuery,
-        // Over-fetch by the size of the exclusion set. `searchLinkTargets`
-        // slices its sources to `limit` and only THEN drops
-        // `excludeBlockIds` (`linkTargetAutocomplete.ts:592-604`), which
-        // is harmless when excluding a single block but not here: we
-        // exclude an entire subtree, so a big moved subtree whose blocks
-        // match the query can fill all 25 slots and leave the user
-        // staring at "No results" while real destinations existed just
-        // below the cut. Capped so moving a huge subtree doesn't turn
-        // every keystroke into an enormous query — beyond the cap the
-        // shortfall can still bite, which is why the cap is generous
-        // relative to a 25-row list.
-        limit: Math.min(SEARCH_LIMIT + session.excludeBlockIds.length, SEARCH_FETCH_CEILING),
-        excludeBlockIds: session.excludeBlockIds,
-      })
-      if (cancelled) return
-      // The over-fetch above is headroom for the exclusions, not a
-      // bigger list — trim back to the list size we actually show.
-      setSearchResults({
-        query: trimmedQuery,
-        aliases: results.aliases.slice(0, SEARCH_LIMIT),
-        blocks: results.blocks.slice(0, SEARCH_LIMIT),
-      })
-    }, DEBOUNCE_MS)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [session, trimmedQuery, repo])
-
   const commit = (destinationId: string): void => {
     if (!session) return
     resolve({destinationId})
   }
 
+  // Unlike the other openDialog dialogs (which render with a bare
+  // `open`), this one gates its very rendering on `session` — the async
+  // subtree resolution that decides the exclude set — so the picker
+  // doesn't flash before it's known.
   if (!session) return null
-
-  const aliases = trimmedQuery && searchResults.query === trimmedQuery
-    ? searchResults.aliases
-    : []
-  const blocks = trimmedQuery && searchResults.query === trimmedQuery
-    ? searchResults.blocks
-    : []
 
   const count = blockIds.length
   const title = count > 1 ? `Move ${count} blocks to…` : 'Move this block to…'
 
   return (
-    // Unlike the other openDialog dialogs (which render with a bare
-    // `open`), this one gates visibility on `session` — the async
-    // subtree resolution that decides the exclude set — so the
-    // CommandDialog doesn't flash before it's known.
-    <CommandDialog
-      open={session !== null}
-      onOpenChange={isOpen => { if (!isOpen) cancel() }}
+    <BlockSearchPicker
       title={title}
       description="The moved block(s) land as the last children of whatever you pick here."
-      contentClassName="top-[12vh] translate-y-0"
-      commandProps={{
-        shouldFilter: false,
-        value,
-        onValueChange: setValue,
-      }}
-    >
-      <CommandInput
-        placeholder="Find destination…"
-        value={query}
-        onValueChange={nextQuery => {
-          setQuery(nextQuery)
-          setValue('')
-        }}
-      />
-      <CommandList>
-        <CommandEmpty>
-          {trimmedQuery ? 'No results.' : 'Type to search.'}
-        </CommandEmpty>
-
-        {aliases.length > 0 && (
-          <CommandGroup heading="Pages">
-            {aliases.map(match => (
-              <CommandItem
-                key={`page:${match.blockId}:${match.alias}`}
-                value={`page:${match.blockId}:${match.alias}`}
-                onSelect={() => commit(match.blockId)}
-                className="flex justify-between items-center gap-2"
-              >
-                <span className="truncate">{match.alias}</span>
-                {match.content && match.content !== match.alias && (
-                  <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                    {truncate(match.content, 50)}
-                  </span>
-                )}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-
-        {blocks.length > 0 && (
-          <CommandGroup heading="Blocks">
-            {blocks.map(match => (
-              <CommandItem
-                key={`block:${match.blockId}`}
-                value={`block:${match.blockId}`}
-                onSelect={() => commit(match.blockId)}
-              >
-                <span className="truncate">{truncate(match.content, 80)}</span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-      </CommandList>
-    </CommandDialog>
+      placeholder="Find destination…"
+      workspaceId={session.workspaceId}
+      excludeBlockIds={session.excludeBlockIds}
+      onSelect={commit}
+      onCancel={cancel}
+    />
   )
 }
