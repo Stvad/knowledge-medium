@@ -1,0 +1,2 @@
+import{truncate as e}from"../../utils/string.js";import{BlockCrumbs as t}from"../../components/BlockCrumbs.js";import{quickFindBlockValue as n}from"./selection.js";import{Fragment as r,jsx as i,jsxs as a}from"react/jsx-runtime";var o=80,s=(s,c)=>s.map(s=>({key:`block:${s.blockId}`,value:n(s),className:`flex-col items-stretch gap-0.5 py-2`,children:a(r,{children:[i(t,{crumbs:c.get(s.blockId)}),i(`span`,{className:`w-full truncate`,children:e(s.content,o)})]})}));export{s as blockResultItems};
+//# sourceMappingURL=resultItems.js.map
