@@ -108,28 +108,57 @@ describe('useAncestorCrumbs', () => {
     expect(result.current.get('b')).toEqual(['b parent'])
   })
 
-  it('re-requests ids whose load was superseded before it delivered', async () => {
-    // Otherwise the "already requested" bookkeeping strands them: marked
-    // as fetched by a run that was torn down, so no later render could
-    // ever ask for them again and those rows stay blank forever.
+  it('keeps a superseded run\u2019s result instead of throwing it away', async () => {
+    // The ancestors of a block do not depend on the search query that
+    // prompted the lookup, so a result that arrives "late" is still the
+    // right answer. Dropping it would only mean asking again.
     let releaseFirst: (entries: AncestorEntry[]) => void = () => {}
     manyAncestors.mockImplementationOnce(
       () => new Promise<AncestorEntry[]>(resolve => { releaseFirst = resolve }),
     )
 
-    const {result, rerender, unmount} = renderHook(
+    const {result, rerender} = renderHook(
       ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
       {initialProps: {ids: ['a']}},
     )
     await waitFor(() => expect(manyAncestors).toHaveBeenCalledOnce())
 
-    // Supersede while in flight, then let the abandoned load resolve.
     rerender({ids: ['a', 'b']})
-    releaseFirst([chainFor('a')])
+    await waitFor(() => expect(manyAncestors).toHaveBeenCalledTimes(2))
+    // 'a' was already in flight, so the second run asked only for what
+    // nobody was fetching yet.
+    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['b'])
 
+    releaseFirst([chainFor('a')])
     await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
     expect(result.current.get('b')).toEqual(['b parent'])
-    unmount()
+  })
+
+  it('survives the id list transiently emptying between queries', async () => {
+    // This is the caller's real shape: the rows are gated on the search
+    // result matching the LIVE query, so the id list drops to [] the
+    // instant a key is pressed and refills once the search resolves. If
+    // that teardown cancelled work, every keystroke would re-fetch what
+    // was already on its way.
+    let release: (entries: AncestorEntry[]) => void = () => {}
+    manyAncestors.mockImplementationOnce(
+      () => new Promise<AncestorEntry[]>(resolve => { release = resolve }),
+    )
+
+    const {result, rerender} = renderHook(
+      ({ids}: {ids: string[]}) => useAncestorCrumbs(ids),
+      {initialProps: {ids: ['a', 'b']}},
+    )
+    await waitFor(() => expect(manyAncestors).toHaveBeenCalledOnce())
+
+    rerender({ids: []})
+    rerender({ids: ['a', 'b', 'c']})
+    await waitFor(() => expect(manyAncestors).toHaveBeenCalledTimes(2))
+    expect(idsOf(manyAncestors.mock.calls[1])).toEqual(['c'])
+
+    release([chainFor('a'), chainFor('b')])
+    await waitFor(() => expect(result.current.get('a')).toEqual(['a parent']))
+    expect(result.current.get('b')).toEqual(['b parent'])
   })
 
   it('logs and drops a failed load instead of surfacing it', async () => {

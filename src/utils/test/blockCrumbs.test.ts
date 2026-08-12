@@ -74,17 +74,13 @@ describe('crumbsFromAncestors', () => {
 
 describe('collapseCrumbs', () => {
   it('leaves a chain that fits alone', () => {
-    expect(collapseCrumbs(['a', 'b', 'c'], 4)).toEqual(['a', 'b', 'c'])
+    expect(collapseCrumbs(['a', 'b', 'c'])).toEqual(['a', 'b', 'c'])
   })
 
   it('keeps the root and the nearest ancestors, eliding the middle', () => {
     // The root says which page, the tail says which section — the middle
     // is the part that locates nothing.
-    expect(collapseCrumbs(['root', 'x', 'y', 'z', 'parent'], 4))
+    expect(collapseCrumbs(['root', 'x', 'y', 'z', 'parent']))
       .toEqual(['root', '…', 'z', 'parent'])
-  })
-
-  it('never collapses below first + … + one tail crumb', () => {
-    expect(collapseCrumbs(['root', 'x', 'y', 'parent'], 1)).toEqual(['root', '…', 'parent'])
   })
 })

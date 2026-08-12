@@ -431,8 +431,9 @@ function QuickFindDialog({
   // Ancestor crumbs load on their own batched pass AFTER these rows
   // render, so the search path keeps its current latency and the
   // progressive aliases→blocks paint is unchanged. `blocks` is rebuilt on
-  // every render; the hook keys on the ids' content, not the array's
-  // identity, so an inline map is fine here.
+  // every render, and gating it on the live query means it transiently
+  // empties on each keystroke — the hook keys on the ids' CONTENT and
+  // holds its claims across both, so an inline map is fine here.
   const blockCrumbs = useAncestorCrumbs(blocks.map(match => match.blockId))
 
   useEffect(() => {
