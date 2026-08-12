@@ -52,21 +52,63 @@ const crumbLabel = (data: BlockData): string => {
   return label ? truncate(label, CRUMB_MAX_CHARS) : ''
 }
 
-/** Root→immediate-parent crumbs for one `core.manyAncestors` chain.
+/** Root→immediate-parent crumbs for one `core.manyAncestors` chain,
+ *  ready to render.
  *
  *  The chain arrives leaf-to-root (depth ascending, self excluded), which
  *  is the reverse of reading order, hence the backwards walk.
  *
- *  Blank ancestors are DROPPED rather than rendered as an empty segment:
- *  the crumb line is a locator hint, and `Project Alpha › › Notes` locates
- *  nothing that `Project Alpha › Notes` doesn't. */
-export const crumbsFromAncestors = (ancestors: readonly BlockData[]): string[] => {
+ *  Two kinds of ancestor are DROPPED rather than rendered:
+ *   - blank ones. The crumb line is a locator hint, and
+ *     `Project Alpha › › Notes` locates nothing `Project Alpha › Notes`
+ *     doesn't.
+ *   - property field rows (`isFieldForm`). Their content is literally
+ *     `::((fieldId))`, and the rest of the app treats them as invisible
+ *     machinery (see `VISIBLE_CHILD_PREDICATE_SQL`) — a crumb reading
+ *     `Task Board › ::((field-def-status-00…` names no place a person
+ *     could go. Their owner is further up the same chain and still shows.
+ *
+ *  A chain that does NOT reach a root is marked with a leading `…`
+ *  instead of being presented as if its topmost surviving ancestor were
+ *  the page. Two things cut a chain short, and both are silent in the
+ *  data: the SQL filters `deleted = 0`, so a soft-deleted ancestor STOPS
+ *  the upward walk (reachable via `core.restore`, which restores a single
+ *  block and can leave a live child under a tombstoned parent, or via a
+ *  child row arriving from sync while its parent is deleted locally); and
+ *  the walk caps at `depth < 100`. Without the marker the user reads a
+ *  confident, wrong location — the true page silently absent — which is
+ *  worse than an obviously partial one. Leaving the workspace counts as a
+ *  cut too: `manyAncestorsSql` carries no workspace predicate, and while
+ *  `requireParentInWorkspace` blocks a cross-workspace parent edge on the
+ *  write path, sync arrival applies `parent_id` verbatim with no
+ *  re-validation — so this display-time consumer declines to render
+ *  another workspace's content rather than trusting that invariant. */
+export const crumbsFromAncestors = (
+  ancestors: readonly BlockData[],
+  workspaceId: string,
+): string[] => {
+  const chain: BlockData[] = []
+  for (const ancestor of ancestors) {
+    if (ancestor.workspaceId !== workspaceId) break
+    chain.push(ancestor)
+  }
+
   const crumbs: string[] = []
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    const label = crumbLabel(ancestors[i])
+  for (let i = chain.length - 1; i >= 0; i--) {
+    if (chain[i].isFieldForm) continue
+    const label = crumbLabel(chain[i])
     if (label) crumbs.push(label)
   }
-  return crumbs
+
+  const highest = chain[chain.length - 1]
+  const reachesRoot = chain.length === ancestors.length &&
+    (highest === undefined || highest.parentId === null)
+  // A cut chain has no root worth preserving, so the collapse that keeps
+  // both ends doesn't apply — keep the nearest ancestors and let the
+  // marker stand in for everything above them.
+  return reachesRoot
+    ? collapseCrumbs(crumbs)
+    : [CRUMB_ELLIPSIS, ...crumbs.slice(-(CRUMB_MAX_SEGMENTS - 1))]
 }
 
 /** Collapse a long chain to `first › … › <tail>`, keeping the ends. */

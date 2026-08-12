@@ -21,6 +21,7 @@ const manyAncestors = vi.fn<(args: {ids: readonly string[]}) => Promise<Ancestor
 // re-requested this" into "the harness did" and would let a released id
 // get picked back up by an effect run no real session performs.
 const repo = {
+  activeWorkspaceId: 'ws-1' as string | null,
   query: {
     manyAncestors: (args: {ids: readonly string[]}) => ({
       load: () => manyAncestors(args),
@@ -215,6 +216,26 @@ describe('useAncestorCrumbs', () => {
     // no render crash, and the id is released so a later query retries.
     expect(result.current.size).toBe(0)
     expect(consoleError.mock.calls[0][0]).toContain('[ancestor-crumbs]')
+  })
+
+  it('asks for nothing when there is no active workspace', async () => {
+    // Crumbs are workspace-scoped, and with no workspace there is nothing
+    // to scope an ancestor against — so the hook declines to look rather
+    // than fetching rows it could not safely render.
+    repo.activeWorkspaceId = null
+    try {
+      const {result} = renderHook(() => useAncestorCrumbs(['a']))
+
+      // Fence on a real fetch happening once the workspace IS known, so
+      // this can't pass just because nothing had resolved yet.
+      await waitFor(() => expect(result.current.size).toBe(0))
+      expect(manyAncestors).not.toHaveBeenCalled()
+    } finally {
+      repo.activeWorkspaceId = 'ws-1'
+    }
+
+    const {result: withWorkspace} = renderHook(() => useAncestorCrumbs(['a']))
+    await waitFor(() => expect(withWorkspace.current.get('a')).toEqual(['a parent']))
   })
 
   it('logs and drops a failed load instead of surfacing it', async () => {

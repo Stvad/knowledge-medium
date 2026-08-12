@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRepo } from '@/context/repo.js'
-import { collapseCrumbs, crumbsFromAncestors } from '@/utils/blockCrumbs.js'
+import { crumbsFromAncestors } from '@/utils/blockCrumbs.js'
 
 /** How many ids go into one `core.manyAncestors` statement. One SQL bind
  *  per id, so this bounds the parameter count for a caller that hands us
@@ -19,36 +19,23 @@ const EMPTY_CRUMBS: ReadonlyMap<string, readonly string[]> = new Map()
  *  the crumbs have arrived, so the fill-in cannot move the rows under the
  *  user's cursor.
  *
- *  That is a scheduling guarantee, not an isolation one, and the
- *  difference is worth stating precisely. This repo's PowerSync setup
- *  runs `OPFSCoopSyncVFS` — ONE connection behind a single-slot mutex, no
- *  read/read concurrency — so an ancestor read in flight when the next
- *  keystroke's search dispatches does delay it. What makes that a
- *  non-issue is the size of the read, not the plumbing: `manyAncestors`
- *  joins on `blocks.id` (the primary key), so it dodges the automatic-
- *  index planner trap `SUBTREE_SQL` needs an `INDEXED BY` hint for.
- *  Measured on a live client, 25 ids resolve in 1.4–2.3 ms against
- *  0.9–3.0 ms for the content search it would queue in front of — well
- *  inside the caller's 80 ms debounce.
+ *  That is a scheduling guarantee, not an isolation one. This repo's
+ *  PowerSync setup runs `OPFSCoopSyncVFS` — ONE connection behind a
+ *  single-slot mutex, no read/read concurrency — so an ancestor read in
+ *  flight when the next keystroke's search dispatches does delay it. What
+ *  makes that a non-issue is the size of the read: `manyAncestors` joins
+ *  on `blocks.id` (the primary key), so it costs PK lookups bounded by
+ *  chain DEPTH and dodges the automatic-index planner trap `SUBTREE_SQL`
+ *  needs an `INDEXED BY` hint for. It therefore does NOT grow with the
+ *  workspace the way content search does (an unindexed LIKE scan,
+ *  "O(total content bytes)" in `linkTargetAutocomplete`'s own words) — so
+ *  the margin holds as data grows. What would move it: a caller batching
+ *  hundreds of ids, the walk ceasing to be index-backed, or chains far
+ *  deeper than an outline's usual 5–15 levels.
  *
- *  Read that comparison narrowly: it came off a small dev workspace, and
- *  the two sides do NOT scale together. Content search is an unindexed
- *  LIKE scan, "O(total content bytes) regardless of result count" in
- *  `linkTargetAutocomplete`'s own words, so the 0.9–3.0 ms half grows
- *  with the workspace; the ancestor walk is PK lookups bounded by chain
- *  DEPTH, so it does not. The number that actually carries the argument
- *  is the ancestor read's own absolute cost, and the things that would
- *  move it are a caller batching hundreds of ids, the walk ceasing to be
- *  index-backed, or pathologically deep chains (a synthetic 100-deep
- *  tree measured ~14–16 ms against real outlines' 5–15 levels).
- *
- *  Ids are requested once per hook instance (typically one dialog
- *  session) — per id, not per query. Typing a character re-runs the
- *  search and usually returns overlapping ids; only the genuinely new
- *  ones cost a query, and rows that survived keep their crumbs rather
- *  than blanking and re-filling. Each distinct missing-id set is its own
- *  handle (`HandleStore` keys on the args), so a typing burst leaves a
- *  few short-lived handles to GC rather than reusing one.
+ *  Each distinct missing-id set is its own handle (`HandleStore` keys on
+ *  the args), so a typing burst leaves a few short-lived handles to GC
+ *  rather than reusing one.
  *
  *  Snapshot semantics, not live: crumbs are read once and not resubscribed
  *  to. A search dropdown is open for seconds and a re-parent mid-typing
@@ -75,6 +62,10 @@ export const useAncestorCrumbs = (
   // Ids already loaded or in flight. A ref, not state: it gates whether
   // the effect issues a query and must never itself trigger a render.
   const requestedRef = useRef<Set<string>>(new Set())
+  // Crumbs are scoped to the active workspace: `crumbsFromAncestors`
+  // refuses to render an ancestor from another one, and with no workspace
+  // there is nothing to scope against, so we don't ask at all.
+  const workspaceId = repo.activeWorkspaceId
   // Keyed on the id list's CONTENT, not the array's identity, so a
   // caller can build it inline. Comma join, same as
   // `BlockSearchPicker`'s exclusion set: block ids are uuids.
@@ -102,6 +93,7 @@ export const useAncestorCrumbs = (
   // path that un-claims is a genuine failure, which is exactly when a
   // retry is wanted.
   useEffect(() => {
+    if (!workspaceId) return
     const requested = requestedRef.current
     const ids = idsKey ? idsKey.split(',') : []
     const missing = ids.filter(id => !requested.has(id))
@@ -127,7 +119,7 @@ export const useAncestorCrumbs = (
           // don't clobber each other.
           const formatted = entries.map(entry => [
             entry.startId,
-            collapseCrumbs(crumbsFromAncestors(entry.ancestors)),
+            crumbsFromAncestors(entry.ancestors, workspaceId),
           ] as const)
           setCrumbs(previous => {
             const next = new Map(previous)
@@ -140,7 +132,7 @@ export const useAncestorCrumbs = (
         }
       }
     })()
-  }, [idsKey, repo])
+  }, [idsKey, repo, workspaceId])
 
   return crumbs
 }
