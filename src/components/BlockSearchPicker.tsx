@@ -79,6 +79,14 @@ export function BlockSearchPicker({
   })
 
   const trimmedQuery = query.trim()
+  // The search effect keys on the exclusion set's CONTENT, not on the
+  // array's identity: a caller passing a literal
+  // (`excludeBlockIds={[sourceBlockId]}`, as MergePicker does) hands us a
+  // fresh array on each of ITS renders, and depending on that identity
+  // would restart the debounce and re-issue the search for state changes
+  // that have nothing to do with the query. Block ids are uuids, so a
+  // comma join is unambiguous.
+  const excludeKey = excludeBlockIds.join(',')
 
   useEffect(() => {
     if (!trimmedQuery) return
@@ -88,7 +96,7 @@ export function BlockSearchPicker({
         workspaceId,
         query: trimmedQuery,
         limit: SEARCH_LIMIT,
-        excludeBlockIds,
+        excludeBlockIds: excludeKey ? excludeKey.split(',') : [],
       })
       if (cancelled) return
       setSearchResults({
@@ -101,7 +109,7 @@ export function BlockSearchPicker({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [trimmedQuery, repo, workspaceId, excludeBlockIds])
+  }, [trimmedQuery, repo, workspaceId, excludeKey])
 
   const aliases = trimmedQuery && searchResults.query === trimmedQuery
     ? searchResults.aliases
