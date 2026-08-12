@@ -29,7 +29,8 @@ import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/paste/operations'
-import { DefaultBlockRenderer } from './DefaultBlockRenderer'
+import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove'
+import { copyBlockEmbed, copyBlockId, copyBlockRef, DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { MarkdownContentRenderer } from './MarkdownContentRenderer'
 import { BLOCK_TITLE_TEXT_CLASS } from './blockTitleText'
 
@@ -681,5 +682,83 @@ describe('title typography', () => {
     expect(title?.textContent).toBe('Page title')
     // …and stops there: the list beside it is body text.
     expect(title?.contains(document.querySelector('.composed-surface'))).toBe(false)
+  })
+})
+
+// Block-move-ui review item 1: `copyBlockId` / `copyBlockRef` /
+// `copyBlockEmbed` back the bullet context menu's "Copy ID" / "Copy Block
+// Ref" / "Copy Block Embed" items. They used to call
+// `navigator.clipboard.writeText` directly, bypassing the pending-move
+// choke point every other clipboard write goes through
+// (`writeTextToClipboardBestEffort`, `@/utils/copy.js`) — cut a block, use
+// one of these on another block, and if the copied text happened to still
+// match the register's invalidation sentinel, the next paste would MOVE the
+// cut block instead of pasting the id/ref/embed just copied.
+describe('bullet context-menu copy actions clear an unrelated pending cut→move', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({ db: sharedDb.db, user: { id: 'user-1' } }).repo
+    repo.setActiveWorkspaceId('ws-1')
+    await repo.tx(async tx => {
+      await tx.create({ id: 'a', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'a' })
+      await tx.create({ id: 'b', workspaceId: 'ws-1', parentId: null, orderKey: 'a1', content: 'b' })
+    }, { scope: ChangeScope.BlockDefault, description: 'bullet-menu copy fixture' })
+  })
+
+  afterEach(() => {
+    clearPendingMove()
+    vi.unstubAllGlobals()
+  })
+
+  const armPendingMove = (): void => {
+    setPendingMove({ blockIds: ['a'], workspaceId: 'ws-1', clipboardText: 'a' })
+  }
+
+  it('copyBlockId clears it', () => {
+    armPendingMove()
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    copyBlockId(repo.block('b'))
+
+    expect(getPendingMove()).toBeNull()
+    expect(writeText).toHaveBeenCalledWith('b')
+  })
+
+  it('copyBlockRef clears it', () => {
+    armPendingMove()
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    copyBlockRef(repo.block('b'))
+
+    expect(getPendingMove()).toBeNull()
+    expect(writeText).toHaveBeenCalledWith('((b))')
+  })
+
+  it('copyBlockEmbed clears it', () => {
+    armPendingMove()
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    copyBlockEmbed(repo.block('b'))
+
+    expect(getPendingMove()).toBeNull()
+    expect(writeText).toHaveBeenCalledWith('!((b))')
+  })
+
+  // Same non-negotiable as the block-action copies (blockActions.test.ts):
+  // the clear must fire even with no clipboard API to write to at all.
+  it('clears even when there is no clipboard API to write to at all', () => {
+    armPendingMove()
+    vi.stubGlobal('navigator', {})
+
+    expect(() => copyBlockRef(repo.block('b'))).not.toThrow()
+    expect(getPendingMove()).toBeNull()
   })
 })

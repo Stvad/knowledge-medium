@@ -173,6 +173,49 @@ describe('runMoveFlow selection handling', () => {
     expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['b'])
   })
 
+  it('unselects a selected descendant when only its ancestor was requested (single-block/context-menu move)', async () => {
+    // Mirrors "also unselects a selected descendant that rode along" above,
+    // but that test requests BOTH 'a' and 'kid' — the case the old
+    // `dropMovedFromSelection(uiStateBlock, blockIds)` already covered. A
+    // single-block or context-menu move passes only the ancestor, so 'kid'
+    // here is independently selected but never itself part of the move
+    // request — the exact gap subtracting only the REQUESTED ids misses.
+    await seed('kid', 'a')
+    const uiStateBlock = repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      selectedBlockIds: ['a', 'kid'],
+      anchorBlockId: 'a',
+    })
+
+    await runMoveFlow([repo.block('a')], {uiStateBlock})
+
+    expect(await parentOf('a')).toBe('dest')
+    expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
+    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual([])
+  })
+
+  it('on a partial failure, unselects a selected descendant of the moved prefix even when only the ancestor was requested', async () => {
+    // Same gap as above, through the PartialMoveError catch: only 'a' and
+    // 'p' are requested (context-menu-style), 'kid' is independently
+    // selected under 'a'.
+    await seed('p', null)
+    await seed('d', 'p')
+    await seed('kid', 'a')
+    const uiStateBlock = repo.block('ui')
+    await uiStateBlock.set(selectionStateProp, {
+      selectedBlockIds: ['a', 'kid', 'p'],
+      anchorBlockId: 'a',
+    })
+
+    pickDestination('d')
+    await runMoveFlow([repo.block('a'), repo.block('p')], {uiStateBlock})
+
+    expect(await parentOf('a')).toBe('d')
+    expect(await parentOf('kid')).toBe('a') // rode along, still under 'a'
+    expect(await parentOf('p')).toBeNull() // never moved
+    expect(getSelectionStateSnapshot(uiStateBlock).selectedBlockIds).toEqual(['p'])
+  })
+
   it('removes just the moved block when a context-menu move targets one of several selected blocks', async () => {
     // The bullet menu acts on the right-clicked block alone, so a
     // selection of [a, b] must come back as [b] — not cleared (b never

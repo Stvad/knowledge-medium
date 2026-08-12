@@ -17,6 +17,7 @@ import {
   publishConsistencyAudit,
   resetConsistencyAuditStore,
 } from '@/plugins/data-integrity/store'
+import { clearPendingMove, getPendingMove, setPendingMove } from '@/utils/pendingMove.js'
 import { ConsistencyAuditDialog } from '../ConsistencyAuditDialog.tsx'
 
 const navigate = vi.fn()
@@ -80,6 +81,7 @@ afterEach(() => {
   setActiveWorkspaceId.mockClear()
   setHash.mockClear()
   repoState.activeWorkspaceId = 'ws-1'
+  clearPendingMove()
 })
 
 describe('ConsistencyAuditDialog', () => {
@@ -97,6 +99,17 @@ describe('ConsistencyAuditDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy id' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(FULL_ID))
+  })
+
+  it('clears an unrelated pending cut→move when copying the id', async () => {
+    setPendingMove({ blockIds: ['some-other-block'], workspaceId: 'ws-1', clipboardText: 'some-other-block' })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    publishConsistencyAudit(withSamples())
+    renderDialog()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy id' }))
+    await waitFor(() => expect(getPendingMove()).toBeNull())
   })
 
   it('opens a clicked id in the side panel WITHOUT closing the dialog', () => {

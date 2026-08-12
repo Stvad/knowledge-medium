@@ -11,6 +11,7 @@
  */
 import { FolderInput } from 'lucide-react'
 import type { Block } from '@/data/block'
+import type { Repo } from '@/data/repo.js'
 import { defineBlocksAction, type BlocksActionContext } from '@/shortcuts/utils.js'
 import { showError, showSuccess } from '@/utils/toast.js'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
@@ -23,7 +24,7 @@ import { isWithinSubtreeOfAny } from './blockSubtreeMembership.ts'
 export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
 
 /**
- * Take the just-moved ids out of the ui-state selection.
+ * Take `idsToRemove` out of the ui-state selection.
  *
  * The selection is ui-state, and `PanelMultiSelectActionContext`
  * activates multi-select from a non-empty `selectedBlockIds` ALONE — it
@@ -41,23 +42,19 @@ export const MOVE_BLOCKS_ACTION_ID = 'move-blocks.move-to'
  * untouched, which is the behaviour a normal-mode move on an unrelated
  * block needs.
  *
- * `validateSelectionHierarchy` keeps a stored selection free of
- * ancestor/descendant pairs, but only as a WRITE-TIME invariant — it's a
- * cache-only check and nothing re-validates after the tree changes under
- * it (a sync-applied reparent from another device, a local structural op
- * that doesn't touch the selection). So callers pass the ids they asked
- * to move rather than the pruned `movedIds`, and this stays a plain set
- * subtraction that doesn't depend on the invariant holding.
+ * Callers pass whatever set of ids actually needs to come out — see
+ * `selectedIdsCoveredByMove` below for how that set is computed — so this
+ * stays a plain, self-contained subtraction.
  */
 const dropMovedFromSelection = async (
   uiStateBlock: Block,
-  movedIds: readonly string[],
+  idsToRemove: readonly string[],
 ): Promise<void> => {
   const current = getSelectionStateSnapshot(uiStateBlock)
   if (!current.selectedBlockIds.length) return
 
-  const moved = new Set(movedIds)
-  const remaining = current.selectedBlockIds.filter(id => !moved.has(id))
+  const toRemove = new Set(idsToRemove)
+  const remaining = current.selectedBlockIds.filter(id => !toRemove.has(id))
   if (remaining.length === current.selectedBlockIds.length) return
 
   await uiStateBlock.set(selectionStateProp, {
@@ -69,6 +66,38 @@ const dropMovedFromSelection = async (
         ? current.anchorBlockId
         : remaining[0] ?? null,
   })
+}
+
+/**
+ * Every currently-selected id that ended up covered by one of `movedRoots`
+ * (the root itself, or a descendant riding along inside its subtree) — the
+ * ids that need to come OUT of the ui-state selection after a move.
+ *
+ * Subtracting only the ORIGINALLY REQUESTED ids (the old behaviour here)
+ * misses a selected descendant that was never itself requested: a
+ * single-block or context-menu move passes just the ancestor, so a block
+ * that happens to be independently selected inside the moved subtree stays
+ * selected at its new, possibly off-panel home, where `Delete` and the
+ * other multi-select shortcuts still reach it. Checking every selected id
+ * against the roots that actually committed catches that case, while still
+ * covering every requested id that moved: whether it committed as a root
+ * itself or was pruned as one root's descendant, it is by construction
+ * within one of `movedRoots`' subtrees (`isWithinSubtreeOfAny` treats a
+ * root as covering itself).
+ */
+const selectedIdsCoveredByMove = async (
+  repo: Repo,
+  uiStateBlock: Block,
+  movedRoots: ReadonlySet<string>,
+): Promise<string[]> => {
+  const current = getSelectionStateSnapshot(uiStateBlock)
+  if (!current.selectedBlockIds.length) return []
+
+  const covered = await Promise.all(
+    current.selectedBlockIds.map(async id =>
+      (await isWithinSubtreeOfAny(repo, id, movedRoots)) ? id : null),
+  )
+  return covered.filter((id): id is string => id !== null)
 }
 
 /** Pick a destination (one dialog per invocation) and move every block
@@ -104,13 +133,19 @@ export const runMoveFlow = async (
       position: { kind: 'last' },
     })
     if (result.moved > 0) {
-      // Subtract everything we ASKED to move, not just `movedIds`.
-      // `moveBlocksTo` prunes descendants, so a set holding both a block
-      // and its own descendant reports only the ancestor as moved — but
-      // the descendant relocated too, riding along inside the subtree.
-      // Subtracting `movedIds` would leave it selected at its new home,
-      // which is the exact bug this subtraction exists to prevent.
-      if (context) await dropMovedFromSelection(context.uiStateBlock, blockIds)
+      // Every SELECTED id covered by a committed root — not just the ones
+      // we asked to move. `moveBlocksTo` prunes descendants, so a set
+      // holding both a block and its own descendant reports only the
+      // ancestor as moved, but the descendant relocated too, riding along
+      // inside the subtree; the same is true of a selected descendant that
+      // was never itself requested (a context-menu move on the ancestor
+      // alone). See `selectedIdsCoveredByMove`'s doc.
+      if (context) {
+        await dropMovedFromSelection(
+          context.uiStateBlock,
+          await selectedIdsCoveredByMove(repo, context.uiStateBlock, new Set(result.movedIds)),
+        )
+      }
       showSuccess(`Moved ${result.moved} block${result.moved === 1 ? '' : 's'}`)
     } else {
       showError('No blocks were moved')
@@ -119,19 +154,12 @@ export const runMoveFlow = async (
     // A partial failure still relocated its prefix, so those ids need the
     // same selection bookkeeping a success does — otherwise Delete and the
     // other multi-select shortcuts keep reaching them at their new home.
-    // Mirrors the success path above: subtract every ORIGINALLY requested
-    // id covered (self, or a descendant riding along) by one of the roots
-    // that actually committed — not just `error.movedIds` itself, which,
-    // like `moveBlocksTo`'s success report, omits descendants pruned out
-    // of the committed root list even though they relocated too.
+    // Mirrors the success path above, keyed off the roots that actually
+    // committed (`error.movedIds`) rather than everything requested.
     if (context && error instanceof PartialMoveError) {
-      const movedRoots = new Set(error.movedIds)
-      const covered = await Promise.all(
-        blockIds.map(async id => (await isWithinSubtreeOfAny(repo, id, movedRoots)) ? id : null),
-      )
       await dropMovedFromSelection(
         context.uiStateBlock,
-        covered.filter((id): id is string => id !== null),
+        await selectedIdsCoveredByMove(repo, context.uiStateBlock, new Set(error.movedIds)),
       )
     }
     showError(

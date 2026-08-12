@@ -76,35 +76,86 @@ export const writeToClipboard = async (data: ClipboardData): Promise<void> => {
 export const copyBlockToClipboard = async (block: Block): Promise<void> =>
   writeToClipboard(await serializeBlock(block))
 
+/** Plain-text counterpart to `writeToClipboard` above — same "clear any
+ *  pending cut→move first" choke point, for the many call sites that write
+ *  a bare string rather than the rich subtree `ClipboardItem` (a block id,
+ *  a `((ref))`/`!((embed))`, a link, an audit sample, a resume command, an
+ *  agent token, a workspace key, …). Every direct
+ *  `navigator.clipboard.writeText` call site in the app should route
+ *  through this (or `writeTextToClipboardBestEffort` below, for a caller
+ *  that doesn't await/catch) instead of calling the browser API itself —
+ *  see `writeToClipboard`'s doc for why bypassing the choke point is
+ *  dangerous: a write that doesn't clear the register can leave it
+ *  pointing at content the clipboard no longer holds, and the next paste
+ *  silently MOVES whatever was cut instead of pasting what was just
+ *  copied.
+ *
+ *  Delegates straight to `navigator.clipboard.writeText` — same
+ *  synchronous-throw/rejection behaviour — so a caller that already
+ *  awaits/catches a raw `navigator.clipboard.writeText(text)` call can
+ *  swap this in unchanged. */
+export const writeTextToClipboard = async (text: string): Promise<void> => {
+  clearPendingMove()
+  await navigator.clipboard.writeText(text)
+}
+
+/** Fire-and-forget wrapper around `writeTextToClipboard`, for handlers
+ *  that don't await/catch it — the block-level "copy *" actions
+ *  (ref/embed/content/link in `@/shortcuts/blockActions.js`, id/ref/embed
+ *  in the bullet context menu). Swallows the write's own failure
+ *  (including a missing `navigator.clipboard` entirely — non-secure
+ *  context, or a test environment that never mocked it) so it doesn't
+ *  surface as an unhandled-rejection warning; these copies are
+ *  informational; unlike cut, nothing depends on the OS write actually
+ *  landing (`cutBlockIdsToClipboard` handles ITS write failure
+ *  explicitly). The pending-move clear itself is unconditional and
+ *  synchronous either way. */
+export const writeTextToClipboardBestEffort = (text: string): void => {
+  void writeTextToClipboard(text).catch(() => {})
+}
+
 const getSelectionState = (uiStateBlock: Block) =>
   uiStateBlock.peekProperty(selectionStateProp)
+
+export interface SerializedSelection extends ClipboardData {
+  /** The subset of `blockIds`, in the same order, that ACTUALLY
+   *  serialized. A root that failed (deleted since selection, unreadable
+   *  subtree, …) is silently absent from `markdown`/`blocks` above — a
+   *  caller that arms something keyed by block id (a pending cut→move
+   *  register: `cutBlockIdsToClipboard`) MUST use this, not the original
+   *  `blockIds`. Arming a failed root too would let it be acted on later
+   *  (e.g. moved on paste) as though the clipboard represented it, when it
+   *  never did. */
+  serializedIds: string[]
+}
 
 export const serializeSelectedBlocks = async (
   blockIds: string[],
   repo: Repo,
-): Promise<ClipboardData> => {
+): Promise<SerializedSelection> => {
   const blockResults = await Promise.all(
-    blockIds
-      .map(id => repo.block(id))
-      .map(async block => {
-        try {
-          return await serializeBlock(block)
-        } catch (error) {
-          console.error(`Failed to serialize block ${block.id}:`, error)
-          return null
-        }
-      }),
+    blockIds.map(async id => {
+      try {
+        return {id, data: await serializeBlock(repo.block(id))}
+      } catch (error) {
+        console.error(`Failed to serialize block ${id}:`, error)
+        return null
+      }
+    }),
   )
 
-  const validResults = blockResults.filter((result): result is ClipboardData => result !== null)
+  const validResults = blockResults.filter(
+    (result): result is {id: string; data: ClipboardData} => result !== null,
+  )
 
   if (validResults.length === 0) {
     throw new Error('No block data could be serialized for copying')
   }
 
   return {
-    markdown: validResults.map(r => r.markdown).join('\n'),
-    blocks: validResults.flatMap(r => r.blocks),
+    markdown: validResults.map(r => r.data.markdown).join('\n'),
+    blocks: validResults.flatMap(r => r.data.blocks),
+    serializedIds: validResults.map(r => r.id),
   }
 }
 
@@ -205,6 +256,10 @@ export const cutBlockIdsToClipboard = async (
       return false
     }
   }
-  setPendingMove({blockIds: normalizedIds, workspaceId, clipboardText})
+  // Arm with `data.serializedIds`, not `normalizedIds` — a root that
+  // failed to serialize (see `SerializedSelection`'s doc) is absent from
+  // `clipboardText` above yet would still relocate on paste if armed here,
+  // moving content the clipboard never represented.
+  setPendingMove({blockIds: data.serializedIds, workspaceId, clipboardText})
   return true
 }

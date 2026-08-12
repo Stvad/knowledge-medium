@@ -15,6 +15,7 @@ import { createEncryptedWorkspace } from '@/sync/keys/flows/createEncryptedWorks
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore'
 import { setModePin } from '@/sync/keys/modePin'
 import { useRepo } from '@/context/repo'
+import { writeTextToClipboard } from '@/utils/copy'
 import type { Workspace } from '@/types'
 
 interface Props {
@@ -176,7 +177,10 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
   )
 }
 
-function RevealWorkspaceKey({
+// Exported so the "Copy" button's clipboard-clearing behaviour is directly
+// unit-testable without driving the full encrypted-workspace-creation flow
+// (`createEncryptedWorkspace` et al.) that reaches this reveal step.
+export function RevealWorkspaceKey({
   workspaceKey,
   onConfirm,
 }: {
@@ -192,7 +196,11 @@ function RevealWorkspaceKey({
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(workspaceKey)
+      // `writeTextToClipboard` (not a raw `navigator.clipboard.writeText`)
+      // clears any pending cut→move first — this copy puts DIFFERENT
+      // content on the clipboard than whatever was cut, which must
+      // invalidate the move the same way every other clipboard write does.
+      await writeTextToClipboard(workspaceKey)
       setCopyState('copied')
       window.setTimeout(() => setCopyState('idle'), 1500)
     } catch (err) {

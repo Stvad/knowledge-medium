@@ -126,6 +126,23 @@ describe('cutBlockIdsToClipboard', () => {
     expect(pending?.blockIds).toEqual(['a']) // 'kid' pruned — it rides along under 'a'
   })
 
+  it('arms the register only with roots that actually serialized, not every requested id', async () => {
+    // 'a' serializes fine; 'ghost' doesn't exist and fails to serialize
+    // (`serializeSelectedBlocks` catches per-root failures and silently
+    // omits them from the clipboard text). Arming the register with BOTH
+    // requested ids would relocate 'ghost' on the next paste even though
+    // the clipboard never represented it.
+    await seed('a', null, 'hello')
+    const write = vi.fn(async () => {})
+    vi.stubGlobal('ClipboardItem', class {})
+    vi.stubGlobal('navigator', { clipboard: { write } })
+
+    const marked = await cutBlockIdsToClipboard(['a', 'ghost'], repo)
+
+    expect(marked).toBe(true)
+    expect(getPendingMove()).toEqual({ blockIds: ['a'], workspaceId: WS, clipboardText: 'hello' })
+  })
+
   it('replaces (not merges with) an unrelated pending move, via the same clear-then-rearm ordering the write itself uses', async () => {
     setPendingMove({ blockIds: ['stale'], workspaceId: WS, clipboardText: 'stale' })
     await seed('a', null, 'a')
