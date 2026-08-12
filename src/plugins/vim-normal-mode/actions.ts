@@ -15,8 +15,7 @@ import {
 import { structuralEditPolicyForBlock } from '@/data/structuralEditPolicy.js'
 import { actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
-import { pasteFromClipboard } from '@/paste/operations.js'
-import { tryPasteAsMoveAt } from '@/paste/moveOnPasteVerb.js'
+import { pasteOrMove } from '@/paste/pasteOrMove.js'
 import {
   bindBlockActionContext,
   createSharedBlockActions,
@@ -292,18 +291,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'paste_after',
       description: 'Paste from clipboard after current block',
       handler: async ({block, uiStateBlock, renderScopeId, scopeRootId}: BlockShortcutDependencies) => {
-        // Single up-front read: `tryPasteAsMoveAt` and (on fallback)
-        // `pasteFromClipboard` both need the clipboard text, and re-reading
-        // for the fallback could disagree with what was just checked for a
-        // move (something else copied in between) or cost a second iOS
-        // system-paste prompt.
-        const clipboardText = await navigator.clipboard.readText()
-        if (await tryPasteAsMoveAt(repo, block, 'after', scopeRootId, clipboardText)) return
-
-        const pasted = await pasteFromClipboard(block, repo, {
-          position: 'after',
-          scopeRootId,
-        }, clipboardText)
+        const {pasted} = await pasteOrMove(repo, block, 'after', {scopeRootId})
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {
@@ -314,13 +302,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'paste_before',
       description: 'Paste from clipboard before current block',
       handler: async ({block, uiStateBlock, renderScopeId, scopeRootId}: BlockShortcutDependencies) => {
-        const clipboardText = await navigator.clipboard.readText()
-        if (await tryPasteAsMoveAt(repo, block, 'before', scopeRootId, clipboardText)) return
-
-        const pasted = await pasteFromClipboard(block, repo, {
-          position: 'before',
-          scopeRootId,
-        }, clipboardText)
+        const {pasted} = await pasteOrMove(repo, block, 'before', {scopeRootId})
         if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       },
       defaultBinding: {

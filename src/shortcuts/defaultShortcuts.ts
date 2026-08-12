@@ -60,8 +60,7 @@ import {
   deleteBlocksThroughUi,
   ensureDeletableThroughUi,
 } from '@/utils/deleteBlockThroughUi.js'
-import { pasteFromClipboard } from '@/paste/operations.js'
-import { siblingMoveTarget, tryPasteAsMove } from '@/paste/moveOnPasteVerb.js'
+import { pasteOrMove, type PasteOrMoveResult } from '@/paste/pasteOrMove.js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -1251,7 +1250,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
    * (unchanged from before), and marks the ids as a pending move
    * (`cutBlockIdsToClipboard`, `@/utils/pendingMove.js`) — nothing is
    * deleted or reparsed. The blocks stay exactly where they are until a
-   * paste completes the move (`tryPasteAsMove`, wired into
+   * paste completes the move (`pasteOrMove`, wired into
    * `paste_after_selection` / `paste_before_selection` below), so an
    * un-pasted cut loses nothing: no delete means no deletion guard to
    * consult here either, unlike the old delete-based cut.
@@ -1267,6 +1266,44 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
     const marked = await cutBlockIdsToClipboard(selectedBlocks.map(block => block.id), repo)
     if (marked) await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+  }
+
+  /**
+   * The body of BOTH multi-select paste gestures. `p` and `Shift+p` differ
+   * only in which end of the selection anchors the paste, so they share
+   * this rather than each re-deriving the placement and selection rules —
+   * the shape that let `d` and `Delete` diverge until one destroyed a
+   * daily note the other refused.
+   *
+   * `placement: 'sibling'` rather than the 'visible' default: a paste
+   * around a multi-block range belongs beside the range, never inside the
+   * last selected block. `pasteOrMove` applies that to the move target as
+   * well, so completing a pending cut lands exactly where an ordinary
+   * paste here would.
+   *
+   * The selection clears on either outcome — those blocks are no longer
+   * what the user is acting on — but only a text paste mints something
+   * new to focus.
+   */
+  const pasteAroundSelection = async (
+    deps: MultiSelectModeDependencies,
+    position: 'before' | 'after',
+  ): Promise<void> => {
+    const {uiStateBlock, selectedBlocks} = deps
+    const target = position === 'after' ? selectedBlocks.at(-1) : selectedBlocks[0]
+    if (!target) return
+
+    let result: PasteOrMoveResult = {moved: false, pasted: []}
+    await withMoveTransition(async () => {
+      result = await pasteOrMove(repo, target, position, {
+        placement: 'sibling',
+        scopeRootId: deps.scopeRootId,
+      })
+    })
+
+    if (!result.moved && !result.pasted[0]) return
+    await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
+    if (result.pasted[0]) void focusBlock(uiStateBlock, result.pasted[0].id)
   }
 
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
@@ -1320,34 +1357,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'paste_after_selection',
       description: 'Paste from clipboard after selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        const target = selectedBlocks.at(-1)
-        if (!target) return
-
-        // Read once, up front: `tryPasteAsMove` and (on fallback)
-        // `pasteFromClipboard` each need the clipboard text, and it can't
-        // change between the two reads within one handler invocation.
-        const clipboardText = await navigator.clipboard.readText()
-        let pasted: Block[] = []
-        let moved = false
-        await withMoveTransition(async () => {
-          moved = await tryPasteAsMove(repo, siblingMoveTarget(target, 'after'), clipboardText)
-          if (!moved) {
-            pasted = await pasteFromClipboard(target, repo, {
-              position: 'after',
-              placement: 'sibling',
-              scopeRootId: deps.scopeRootId,
-            }, clipboardText)
-          }
-        })
-        if (moved) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-        } else if (pasted[0]) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          void focusBlock(uiStateBlock, pasted[0].id)
-        }
-      },
+      handler: (deps: MultiSelectModeDependencies) => pasteAroundSelection(deps, 'after'),
       defaultBinding: {
         keys: 'p',
       },
@@ -1356,31 +1366,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'paste_before_selection',
       description: 'Paste from clipboard before selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => {
-        const {uiStateBlock, selectedBlocks} = deps
-        const target = selectedBlocks[0]
-        if (!target) return
-
-        const clipboardText = await navigator.clipboard.readText()
-        let pasted: Block[] = []
-        let moved = false
-        await withMoveTransition(async () => {
-          moved = await tryPasteAsMove(repo, siblingMoveTarget(target, 'before'), clipboardText)
-          if (!moved) {
-            pasted = await pasteFromClipboard(target, repo, {
-              position: 'before',
-              placement: 'sibling',
-              scopeRootId: deps.scopeRootId,
-            }, clipboardText)
-          }
-        })
-        if (moved) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-        } else if (pasted[0]) {
-          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          void focusBlock(uiStateBlock, pasted[0].id)
-        }
-      },
+      handler: (deps: MultiSelectModeDependencies) => pasteAroundSelection(deps, 'before'),
       defaultBinding: {
         keys: 'Shift+p',
       },
