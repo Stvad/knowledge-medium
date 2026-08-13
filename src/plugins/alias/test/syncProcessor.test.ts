@@ -20,6 +20,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { aliasDataExtension } from '../dataExtension.ts'
@@ -235,6 +236,66 @@ describe('alias.sync — rapid title edits', () => {
 
     expect((await env.read('t'))!.content).toBe('Brand new')
     expect(await readAliases('t')).toEqual(['Brand new'])
+  })
+})
+
+// Content↔alias parity assumes the content IS a name. For a block whose
+// content is not prose the mirror is wrong in both directions, and both
+// directions produced real damage — see the guard's comment in
+// `planSync`. These drive the REAL processor through `repo.tx`, and the
+// fixtures are the live shape: an extension block whose alias list is
+// `[slug, <its own source>]`.
+describe('alias.sync — opaque-content blocks have no content↔alias parity', () => {
+  const SOURCE = 'import {actionsFacet} from "@/extensions/core.js"\nexport default 1'
+
+  const createExtensionBlock = async (aliases: string[]): Promise<void> => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'ext',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: SOURCE,
+        properties: {types: [EXTENSION_TYPE]},
+      })
+      await tx.setProperty('ext', aliasesProp, aliases)
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+  }
+
+  // content → alias: the #541 shape. A reinstall rewrites `content`, and
+  // the drift-heal used to append the whole new bundle as an alias entry.
+  it('does not mirror a source bundle into the alias list on a content change', async () => {
+    await createExtensionBlock(['readwise'])
+    await env.repo.mutate.setContent({id: 'ext', content: `${SOURCE}\n// v2`})
+    await flush()
+
+    expect(await readAliases('ext')).toEqual(['readwise'])
+  })
+
+  // alias → content: the data-loss shape. Renaming the oversized entry —
+  // exactly what cleaning up #541 by hand looks like — matched
+  // `after.content === removed[0]` and wrote the new alias text into
+  // `content`, destroying the extension's source.
+  it('does not overwrite content when an alias equal to it is renamed', async () => {
+    await createExtensionBlock(['readwise', SOURCE])
+    await env.repo.tx(
+      tx => tx.setProperty('ext', aliasesProp, ['readwise', 'cleaned up']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('ext'))!.content).toBe(SOURCE)
+  })
+
+  // The gate is about the block, not the operation: an ordinary page
+  // still mirrors both ways, so this can't be read as "parity is off".
+  it('still syncs an ordinary block', async () => {
+    await createTarget('page', 'Old name', ['Old name'])
+    await env.repo.mutate.setContent({id: 'page', content: 'New name'})
+    await flush()
+
+    expect(await readAliases('page')).toEqual(['New name'])
   })
 })
 

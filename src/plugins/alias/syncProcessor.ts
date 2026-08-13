@@ -56,7 +56,7 @@ import {
   deriveReferenceColumns,
   sameTxReferenceTargetLookups,
 } from '@/data/internals/referenceTargetProcessor'
-import { aliasesProp, getAliases } from '@/data/properties'
+import { aliasesProp, getAliases, hasOpaqueContent } from '@/data/properties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -97,9 +97,33 @@ const dedupe = (values: readonly string[]): string[] => {
  *  rule would propagate a blank value. Storage triggers remain the
  *  final uniqueness invariant; content-rename plans also carry intent
  *  metadata so a rejected merge can drop only the replaced alias. */
-export const planSync = (row: ChangedRow): SyncPlan | null => {
+export const planSync = (
+  row: ChangedRow,
+  opaqueContentTypes: ReadonlySet<string>,
+): SyncPlan | null => {
   if (row.before === null || row.after === null) return null
   if (row.after.deleted) return null
+
+  // Content and alias are two views of ONE name only when the content is
+  // a name. For a block whose content is not prose — an installed
+  // extension's source, a drawing's JSON — the mirror is wrong in BOTH
+  // directions, and both have bitten:
+  //
+  //  content → alias (Rules 1/2 below): three legacy extension blocks
+  //    carry 18–91 KB of their own bundled source as an alias entry,
+  //    because the drift-heal appended `after.content` verbatim. That is
+  //    issue #541, and it is the same family as the 205 KB page name.
+  //
+  //  alias → content (the reverse branch): a rename of such an entry
+  //    matches `after.content === removed[0]` and writes the NEW ALIAS
+  //    TEXT into `content` — overwriting the extension's source with a
+  //    short string. Editing the bad alias is exactly what someone
+  //    cleaning up #541 would do, so the repair path was the data-loss
+  //    path.
+  //
+  // One guard for both: an opaque-content block simply has no
+  // content↔alias parity to maintain.
+  if (hasOpaqueContent(row.after, opaqueContentTypes)) return null
 
   const before = row.before
   const after = row.after
@@ -237,7 +261,7 @@ export const aliasSyncProcessor = defineSameTxProcessor({
   watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties']},
   apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     for (const row of event.changedRows) {
-      const plan = planSync(row)
+      const plan = planSync(row, ctx.opaqueContentTypes)
       if (plan === null) continue
       await applyPlan(ctx, plan)
     }

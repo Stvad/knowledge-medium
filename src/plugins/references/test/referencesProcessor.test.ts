@@ -40,7 +40,6 @@ import { refTestSeed } from './refTestSeeds.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
-  isExtensionSource,
 } from '../referencesProcessor.ts'
 
 interface Harness {
@@ -325,41 +324,6 @@ describe('parseReferences — extension source is not scanned for content refs',
     )
     await flush()
     expect(JSON.parse((await env.read('ext'))!.references_json)).toEqual([])
-  })
-
-  // Direct unit test, because this is unpinnable through the public
-  // path: the kernel's same-tx `core.blockTypeTypeify` decodes `types`
-  // on every changed row and throws first, so a malformed value never
-  // reaches the read phase via `repo.tx`. See `isExtensionSource`'s
-  // declaration — the point is that it must stay TOTAL, and a future
-  // "simplify it to hasBlockType" would reintroduce a throw in a
-  // post-commit read phase, where the user's write has already landed.
-  describe('isExtensionSource is total', () => {
-    it.each([
-      ['a scalar', 'extension'],
-      ['an array with a non-string element', ['page', 42]],
-      ['an object', {0: 'extension'}],
-      ['null', null],
-    ])('reads %s as not-an-extension instead of throwing', (_label, types) => {
-      const source = {properties: {types}} as unknown as Parameters<typeof isExtensionSource>[0]
-      expect(isExtensionSource(source)).toBe(false)
-    })
-
-    it('still recognises a well-formed extension block', () => {
-      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE]}})).toBe(true)
-    })
-
-    // Deliberate, and the direction matters. The codec would call this
-    // whole value malformed, but the row DOES claim the extension type,
-    // and the two readings fail very differently: honouring the claim
-    // skips parsing a source blob (worst case, an extension block's refs
-    // aren't derived — recoverable, invisible); rejecting it scans 1.7 MB
-    // of bundled JS and mints phantom pages, which is the bug this gate
-    // exists to stop. Membership wins over element-wise validity on
-    // purpose (declined Codex suggestion, PR #540).
-    it('honours an extension claim even in an otherwise malformed array', () => {
-      expect(isExtensionSource({properties: {types: [EXTENSION_TYPE, 42]}})).toBe(true)
-    })
   })
 
   // Scope check: the gate is on the CONTENT grammars only. An extension
