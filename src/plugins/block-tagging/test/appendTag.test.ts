@@ -6,6 +6,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
+import { MAX_ALIAS_LENGTH, parseReferences } from '@/plugins/references/referenceParser'
 
 describe('appendTagToContent', () => {
   it('appends [[name]] with a separating space when content is non-empty', () => {
@@ -49,6 +50,23 @@ describe('appendTagToContent', () => {
     const once = appendTagToContent('hello', 'srs')
     expect(once).toBe('hello [[srs]]')
     expect(appendTagToContent(once, 'srs')).toBe(once)
+  })
+
+  // Both tag entry points take free text, so nothing upstream bounds
+  // this. Over the cap the parser refuses to read the emitted `[[…]]`
+  // as a wikilink, so appending would write literal markup that never
+  // links and never gains a backlink — while `appendTagToBlocks` still
+  // counted the block as tagged, since it decides that on string
+  // inequality alone. Assert on the ROUND TRIP, not just the length:
+  // the reason to reject is that the output stops parsing back.
+  it('rejects a name longer than the parser will read back', () => {
+    const tooLong = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+    expect(appendTagToContent('hello', tooLong)).toBe('hello')
+
+    const atCap = 'a'.repeat(MAX_ALIAS_LENGTH)
+    const tagged = appendTagToContent('hello', atCap)
+    expect(tagged).toBe(`hello [[${atCap}]]`)
+    expect(parseReferences(tagged).map(r => r.alias)).toEqual([atCap])
   })
 })
 

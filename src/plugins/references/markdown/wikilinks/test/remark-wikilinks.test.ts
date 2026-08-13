@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
 import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
+import { MAX_ALIAS_LENGTH } from '../../../referenceParser.ts'
 import { remarkBlockrefs } from '../../blockrefs/remark-blockrefs.ts'
 
 interface WikilinkNode {
@@ -435,6 +436,59 @@ describe('rewriting a [display]([[alias]]) wikilink, end to end', () => {
     expect(links).toHaveLength(1)
     expect(links[0].data.hProperties.alias).toBe('New')
     expect(wikilinkChildText(links[0])).toBe('label')
+  })
+})
+
+// The cap must hold for EVERY shape this plugin recognises, not just the
+// bare scan. Passes 1 and 2 match the `[display]([[alias]])` wrapper with
+// their own regexes and never call `parseOutermostReferences`, so without
+// an explicit re-check they would render a live link for a span the
+// reference index treats as literal text (Codex on PR #540).
+describe('MAX_ALIAS_LENGTH holds across all four passes', () => {
+  // Bracket- and newline-free, so it can reach every pass. Kept just over
+  // and just under the cap so each pair isolates the length rule alone —
+  // the under-cap half is what distinguishes "capped" from "broken".
+  const over = 'a'.repeat(MAX_ALIAS_LENGTH + 1)
+  const under = 'a'.repeat(MAX_ALIAS_LENGTH)
+  // Spaces force remark to leave the wrapper as raw text, which is what
+  // routes it to pass 2 (LINK_FORM_RE) instead of pass 1 (LINK_URL_RE).
+  const spaced = (n: number) => 'ab '.repeat(Math.ceil(n / 3)).slice(0, n).trim()
+
+  it('pass 3 (bare span) drops an over-cap alias and keeps the text literal', () => {
+    const tree = transform(`see [[${over}]] here`)
+    expect(collectWikilinks(tree)).toEqual([])
+    expect(collectText(tree).join('')).toBe(`see [[${over}]] here`)
+  })
+
+  it('pass 1 (link destination) drops an over-cap alias', () => {
+    expect(collectWikilinks(transform(`[display]([[${over}]])`))).toEqual([])
+    const kept = collectWikilinks(transform(`[display]([[${under}]])`))
+    expect(kept).toHaveLength(1)
+    expect(kept[0].data.hProperties.alias).toBe(under)
+    expect(wikilinkChildText(kept[0])).toBe('display')
+  })
+
+  it('pass 2 (text-form wrapper) drops an over-cap alias', () => {
+    const overSpaced = spaced(MAX_ALIAS_LENGTH + 30)
+    const underSpaced = spaced(MAX_ALIAS_LENGTH - 30)
+    expect(overSpaced.length).toBeGreaterThan(MAX_ALIAS_LENGTH)
+    expect(underSpaced.length).toBeLessThanOrEqual(MAX_ALIAS_LENGTH)
+
+    expect(collectWikilinks(transform(`[display]([[${overSpaced}]])`))).toEqual([])
+    const kept = collectWikilinks(transform(`[display]([[${underSpaced}]])`))
+    expect(kept).toHaveLength(1)
+    expect(kept[0].data.hProperties.alias).toBe(underSpaced)
+    expect(wikilinkChildText(kept[0])).toBe('display')
+  })
+
+  it('pass 4 (cross-node reassembly) drops an over-cap alias', () => {
+    // GFM splits the email into its own link node mid-span, so the bare
+    // scan can't see it and the reassembly pass owns this text.
+    const filler = 'a'.repeat(MAX_ALIAS_LENGTH)
+    expect(collectWikilinks(transformWithGfm(`[[${filler} user@example.com]]`))).toEqual([])
+    const short = collectWikilinks(transformWithGfm('[[note user@example.com]]'))
+    expect(short).toHaveLength(1)
+    expect(short[0].data.hProperties.alias).toBe('note user@example.com')
   })
 })
 

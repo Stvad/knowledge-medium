@@ -6,6 +6,7 @@ import {
   type Codec,
 } from '@/data/api'
 import { uniqueStrings } from '@/utils/array'
+import { MAX_ALIAS_LENGTH } from '@/plugins/references/referenceParser'
 
 /** Tag names are interpolated into a wikilink (`[[name]]`). The
  *  reference parser balances `[[ … ]]` pairs, so a name containing
@@ -14,10 +15,20 @@ import { uniqueStrings } from '@/utils/array'
  *  space-split), so the rendered link stays structurally sound but no
  *  longer carries the name the user typed. Rather than silently
  *  altering input, reject names containing either delimiter at the
- *  entry points (dialog, config editor, append helpers). */
+ *  entry points (dialog, config editor, append helpers).
+ *
+ *  Length is rejected here for the same reason and at the same seam. The
+ *  parser refuses to read an over-`MAX_ALIAS_LENGTH` span as a wikilink,
+ *  so emitting one produces literal `[[…]]` markup that never becomes a
+ *  link and never gains a backlink — and `appendTagToBlocks` would still
+ *  count the block as tagged, because it decides that on string
+ *  inequality alone. Both tag entry points take FREE TEXT (the add-tag
+ *  dialog's input and the config editor's draft field), so nothing
+ *  upstream bounds this. Refusing beats silently writing dead markup. */
 export const isValidTagName = (name: string): boolean => {
   const trimmed = name.trim()
   if (!trimmed) return false
+  if (trimmed.length > MAX_ALIAS_LENGTH) return false
   if (trimmed.includes('[[')) return false
   if (trimmed.includes(']]')) return false
   return true
