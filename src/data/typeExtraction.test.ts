@@ -321,6 +321,31 @@ describe('block-type typeify processor', () => {
     await expect(tagBlockType(env, content)).rejects.toThrow(errorType)
   })
 
+  // An EXPLICIT label short-circuits `name`, so the checks above never see
+  // the content — which then stays exactly as it was. Grammar-shaped
+  // content is the dangerous residue: `core.deriveReferenceTarget` stamps
+  // the row as a field form, and on a child-backed page the finished type
+  // projects as property machinery instead of appearing in the outline.
+  // Only the grammar-shape check applies here; the content is not claimed
+  // as an alias when a label is supplied, so round-tripping is moot.
+  it('refuses when an explicit label hides grammar-shaped content', async () => {
+    env = await setup()
+    await expect(tagBlockType(env, '::((11111111-1111-4111-8111-111111111111))', {
+      [blockTypeLabelProp.name]: 'Book',
+    })).rejects.toThrow(GrammarShapedLabelError)
+  })
+
+  it('accepts an explicit label over ordinary prose content', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'notes about books', {
+      [blockTypeLabelProp.name]: 'Book',
+    })
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    // Content is left alone — only the adopted-name path rewrites it.
+    expect(row!.content).toBe('notes about books')
+  })
+
   // The refusal is atomic: the tag doesn't half-apply. Same-tx, so the
   // PAGE_TYPE / label writes above the assert roll back with it.
   it('leaves the block untouched when the name is refused', async () => {
