@@ -27,7 +27,12 @@ const stubSyncForensics = () =>
     recordSyncSample: vi.fn().mockResolvedValue(undefined),
     recordStallEpisode: vi.fn().mockImplementation(async () => `stall:stub-${++stallEpisodeKeySeq}`),
     closeStallEpisode: vi.fn().mockResolvedValue(undefined),
+    recordStallReconnectAttempt: vi.fn().mockResolvedValue(undefined),
   }) as unknown as DbForensics
+
+// `watchSyncHealth`'s new required `reconnect` parameter — a fresh
+// `vi.fn()` per test, matching the `stub*` factories' style above.
+const stubReconnect = () => vi.fn().mockResolvedValue(undefined)
 
 const zeroCounts = (): Map<string, number> => new Map([
   [uploadQueuePreviewCountSql, 0],
@@ -179,7 +184,7 @@ describe('watchSyncHealth', () => {
     const forensics = stubSyncForensics()
     const { db, emit } = makeSyncDb()
 
-    watchSyncHealth(db, 'user-arm-1', forensics)
+    watchSyncHealth(db, 'user-arm-1', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
 
     emit({ ...defaultSyncStatus(), connected: false, connecting: true })
@@ -197,7 +202,7 @@ describe('watchSyncHealth', () => {
       counts,
     )
 
-    watchSyncHealth(db, 'user-stall-true', forensics)
+    watchSyncHealth(db, 'user-stall-true', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
 
     const sample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[0][0]
@@ -213,7 +218,7 @@ describe('watchSyncHealth', () => {
       zeroCounts(),
     )
 
-    watchSyncHealth(db, 'user-stall-empty-queue', forensics)
+    watchSyncHealth(db, 'user-stall-empty-queue', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
 
     const sample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[0][0]
@@ -230,7 +235,7 @@ describe('watchSyncHealth', () => {
       counts,
     )
 
-    watchSyncHealth(db, 'user-stall-recent-sync', forensics)
+    watchSyncHealth(db, 'user-stall-recent-sync', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
 
     const sample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[0][0]
@@ -244,7 +249,7 @@ describe('watchSyncHealth', () => {
       getAll: async () => { throw new Error('boom') },
     }
 
-    watchSyncHealth(db, 'user-getall-throws', forensics)
+    watchSyncHealth(db, 'user-getall-throws', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
 
     const sample = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls[0][0]
@@ -261,11 +266,11 @@ describe('watchSyncHealth', () => {
       const a = makeSyncDb()
       const b = makeSyncDb()
 
-      watchSyncHealth(a.db, 'user-rearm-A', forensics)
+      watchSyncHealth(a.db, 'user-rearm-A', stubReconnect(), forensics)
       await vi.advanceTimersByTimeAsync(0) // flush a's immediate sample
       expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1)
 
-      watchSyncHealth(b.db, 'user-rearm-B', forensics)
+      watchSyncHealth(b.db, 'user-rearm-B', stubReconnect(), forensics)
       await vi.advanceTimersByTimeAsync(0) // flush b's immediate sample
       expect(forensics.recordSyncSample).toHaveBeenCalledTimes(2)
 
@@ -302,7 +307,7 @@ describe('watchSyncHealth', () => {
 
     vi.useFakeTimers()
     try {
-      watchSyncHealth(db, 'user-queue-old-fresh-sync', forensics)
+      watchSyncHealth(db, 'user-queue-old-fresh-sync', stubReconnect(), forensics)
       await vi.advanceTimersByTimeAsync(0) // flush the immediate sample
       const first = (forensics.recordSyncSample as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]
       expect(first.stall).toBe(false) // queue just became non-empty — not old yet
@@ -324,7 +329,7 @@ describe('watchSyncHealth', () => {
     const staleLastSyncedAt = Date.now() - SYNC_STALL_THRESHOLD_MS - 60_000
     const { db, emit } = makeSyncDb({ ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt }, counts)
 
-    watchSyncHealth(db, 'user-episode-open', forensics)
+    watchSyncHealth(db, 'user-episode-open', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
     expect(forensics.recordStallEpisode).toHaveBeenCalledTimes(1)
 
@@ -341,7 +346,7 @@ describe('watchSyncHealth', () => {
     const staleLastSyncedAt = Date.now() - SYNC_STALL_THRESHOLD_MS - 60_000
     const { db, emit } = makeSyncDb({ ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt }, counts)
 
-    watchSyncHealth(db, 'user-episode-close', forensics)
+    watchSyncHealth(db, 'user-episode-close', stubReconnect(), forensics)
     await vi.waitFor(() => expect(forensics.recordStallEpisode).toHaveBeenCalledTimes(1))
     const openedKey = await (forensics.recordStallEpisode as ReturnType<typeof vi.fn>).mock.results[0].value
 
@@ -356,5 +361,176 @@ describe('watchSyncHealth', () => {
     expect(clearing.clearedAt).toEqual(expect.any(Number))
     expect(clearing.connected).toBe(true)
     expect(clearing.pendingBlocks).toBe(0)
+  })
+})
+
+// A db whose `currentStatus` stays fixed (queue non-empty, lastSyncedAt
+// pinned to a stale past timestamp) for as long as the test advances fake
+// time — the watchdog tests need the stall condition to hold indefinitely,
+// not just for one sample.
+const makeAlwaysStalledDb = () => {
+  const counts = zeroCounts()
+  counts.set(uploadQueuePreviewCountSql, 22)
+  counts.set(uploadQueueRowCountSql, 22)
+  const staleLastSyncedAt = Date.now() - SYNC_STALL_THRESHOLD_MS - 60_000
+  return makeSyncDb({ ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt }, counts)
+}
+
+describe('reconnect watchdog', () => {
+  it('does not fire when the connection is healthy (no stall)', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeSyncDb() // defaults: connected, hasSynced, lastSyncedAt=now, empty queue
+
+    watchSyncHealth(db, 'user-watchdog-healthy', reconnect, forensics)
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
+
+    expect(reconnect).not.toHaveBeenCalled()
+  })
+
+  it('fires reconnect once on a sustained stall', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeAlwaysStalledDb()
+
+    watchSyncHealth(db, 'user-watchdog-fire', reconnect, forensics)
+    await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1))
+
+    expect(reconnect).toHaveBeenCalledTimes(1)
+    expect(reconnect).toHaveBeenCalledWith('user-watchdog-fire')
+  })
+
+  it('does not re-fire within the backoff window — a second stall sample inside it is a no-op', async () => {
+    vi.useFakeTimers()
+    try {
+      const forensics = stubSyncForensics()
+      const reconnect = stubReconnect()
+      const { db } = makeAlwaysStalledDb()
+
+      watchSyncHealth(db, 'user-watchdog-backoff', reconnect, forensics)
+      await vi.advanceTimersByTimeAsync(0) // immediate sample fires the first attempt
+      expect(reconnect).toHaveBeenCalledTimes(1)
+
+      // Another sample well inside the 10min backoff window.
+      await vi.advanceTimersByTimeAsync(SYNC_SAMPLE_INTERVAL_MS)
+      expect(reconnect).toHaveBeenCalledTimes(1) // still just once
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('escalates the backoff 10 → 20 → 40min, then caps at 60min', async () => {
+    vi.useFakeTimers()
+    try {
+      const forensics = stubSyncForensics()
+      const reconnect = stubReconnect()
+      const { db } = makeAlwaysStalledDb()
+
+      watchSyncHealth(db, 'user-watchdog-escalate', reconnect, forensics)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reconnect).toHaveBeenCalledTimes(1) // t=0
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      expect(reconnect).toHaveBeenCalledTimes(2) // t=10min: the 10min gap elapsed
+
+      await vi.advanceTimersByTimeAsync(20 * 60_000)
+      expect(reconnect).toHaveBeenCalledTimes(3) // t=30min: the 20min gap elapsed
+
+      await vi.advanceTimersByTimeAsync(40 * 60_000)
+      expect(reconnect).toHaveBeenCalledTimes(4) // t=70min: the 40min gap elapsed
+
+      // From here the gap is capped at 60min — the PREVIOUS 40min step must
+      // NOT be enough to re-fire.
+      await vi.advanceTimersByTimeAsync(40 * 60_000)
+      expect(reconnect).toHaveBeenCalledTimes(4) // t=110min: only 40min since the last attempt
+
+      await vi.advanceTimersByTimeAsync(20 * 60_000) // completes the 60min cap gap
+      expect(reconnect).toHaveBeenCalledTimes(5) // t=130min: 60min since the last attempt
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resets the backoff once the queue drains, so a NEW episode fires immediately again', async () => {
+    vi.useFakeTimers()
+    try {
+      const forensics = stubSyncForensics()
+      const reconnect = stubReconnect()
+      const counts = zeroCounts()
+      counts.set(uploadQueuePreviewCountSql, 22)
+      counts.set(uploadQueueRowCountSql, 22)
+      const staleLastSyncedAt = Date.now() - SYNC_STALL_THRESHOLD_MS - 60_000
+      const { db, emit } = makeSyncDb({ ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt }, counts)
+
+      watchSyncHealth(db, 'user-watchdog-reset', reconnect, forensics)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reconnect).toHaveBeenCalledTimes(1)
+
+      // Queue drains — stall clears.
+      counts.set(uploadQueuePreviewCountSql, 0)
+      counts.set(uploadQueueRowCountSql, 0)
+      emit({ ...defaultSyncStatus(), lastSyncedAt: Date.now() })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reconnect).toHaveBeenCalledTimes(1) // no reconnect on a healthy sample
+
+      // Stall returns, well inside what would have been the old 10min backoff
+      // window — but this is a NEW episode, so it must fire immediately
+      // rather than waiting out the previous episode's schedule.
+      counts.set(uploadQueuePreviewCountSql, 22)
+      counts.set(uploadQueueRowCountSql, 22)
+      emit({ ...defaultSyncStatus(), lastSyncedAt: staleLastSyncedAt })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(reconnect).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a throwing reconnect does not break sampling', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = vi.fn().mockRejectedValue(new Error('reconnect boom'))
+    const { db, emit } = makeAlwaysStalledDb()
+
+    // `sample()` in `watchSyncHealth` fires `sampleSyncHealth` as `void
+    // sampleSyncHealth(...)` — best-effort discipline means nothing ever
+    // attaches a `.catch()` to that promise, so if `runReconnectWatchdog`
+    // let a rejection escape, it would surface as a genuine Node
+    // `unhandledRejection`, not merely "the next sample didn't record" (the
+    // sampler's setInterval/registerListener ticks keep firing regardless of
+    // a rejected promise — that's not what "breaks the sampler" would even
+    // look like from outside). Capture the event directly so a regression
+    // fails this test by name instead of only showing up as vitest's
+    // separate "Errors: N" run-level report.
+    const unhandledReasons: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => unhandledReasons.push(reason)
+    process.on('unhandledRejection', onUnhandledRejection)
+
+    try {
+      watchSyncHealth(db, 'user-watchdog-throws', reconnect, forensics)
+      await vi.waitFor(() => expect(reconnect).toHaveBeenCalledTimes(1))
+      // The sample that triggered the (rejected) attempt was still recorded.
+      expect(forensics.recordSyncSample).toHaveBeenCalledTimes(1)
+
+      // Sampling keeps going on the next tick despite the throw.
+      emit()
+      await vi.waitFor(() => expect(forensics.recordSyncSample).toHaveBeenCalledTimes(2))
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+
+    expect(unhandledReasons).toEqual([])
+  })
+
+  it('records each attempt (count + timestamp) onto the open stall episode', async () => {
+    const forensics = stubSyncForensics()
+    const reconnect = stubReconnect()
+    const { db } = makeAlwaysStalledDb()
+
+    watchSyncHealth(db, 'user-watchdog-record', reconnect, forensics)
+    await vi.waitFor(() => expect(forensics.recordStallEpisode).toHaveBeenCalledTimes(1))
+    const openedKey = await (forensics.recordStallEpisode as ReturnType<typeof vi.fn>).mock.results[0].value
+
+    await vi.waitFor(() => expect(forensics.recordStallReconnectAttempt).toHaveBeenCalledTimes(1))
+    expect(forensics.recordStallReconnectAttempt).toHaveBeenCalledWith(openedKey, expect.any(Number))
   })
 })

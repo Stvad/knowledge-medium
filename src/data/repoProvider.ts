@@ -123,6 +123,72 @@ const resolverForUser = (userId: string): SyncResolver => {
   return resolver
 }
 
+/** Queue `fn` after every previously-chained connect/disconnect step,
+ *  regardless of whether that step succeeded — same reasoning as
+ *  `DbForensics`'s `enqueue`/`enqueueSync` helpers (dbForensics.ts): a
+ *  failed prior step must not permanently wedge `connectChain` for whoever
+ *  queues next (a later `ensurePowerSyncReady` call, or another
+ *  `reconnectPowerSync`). Unlike the inline `connectChain = connectChain
+ *  .then(...).catch(...)` pattern in `ensurePowerSyncReady` below — which is
+ *  fire-and-forget from that caller's perspective — this hands the CALLER a
+ *  promise (`attempt`) that reflects `fn`'s own outcome, so `reconnectPowerSync`
+ *  can report failure back to the command-palette / agent-bridge caller, and
+ *  the sync-stall watchdog can catch it, without either needing to special-case
+ *  the shared chain. */
+const enqueueOnConnectChain = <T,>(fn: () => Promise<T>): Promise<T> => {
+  const attempt = connectChain.then(fn, fn)
+  connectChain = attempt.then(() => undefined, () => undefined)
+  return attempt
+}
+
+/**
+ * Force a fresh PowerSync connection for `userId` — `disconnect()` then
+ * `connect(connector)`. This is the `sync.reconnect` primitive (see
+ * `src/plugins/sync-recovery`) and the supported way to re-trigger
+ * `uploadData` on demand: PowerSync has no public "drain the crud queue now"
+ * API, but a fresh `connect()` starts a new `uploadData()` call, which is
+ * exactly what a wedged upload loop needs. It also forces a fresh
+ * `fetchCredentials`, so the same lever covers a stale-token stall.
+ *
+ * Reuses the EXACT connector-construction call the `connectChain` step in
+ * `ensurePowerSyncReady` below makes (same per-user resolver, same e2ee
+ * mode/key binding) — a second construction site would silently drift from
+ * it. Serialized through the SAME `connectChain` module state
+ * `ensurePowerSyncReady` uses (via `enqueueOnConnectChain`), so this can
+ * never race a concurrent connect/disconnect (an account switch, boot, or
+ * another reconnect).
+ *
+ * `disconnect()` only tears down the sync stream (PowerSync's
+ * `ConnectionManager` → `AbstractStreamingSyncImplementation.disconnect`);
+ * unlike `disconnectAndClear()` (which runs `powersync_clear` and is used
+ * only on sign-out) it never touches `ps_crud` or any other local table, so
+ * this cannot drop or reorder queued writes — confirmed by reading
+ * `AbstractPowerSyncDatabase.disconnect`/`disconnectAndClear` and
+ * `ConnectionManager.disconnect` in `@powersync/common`.
+ *
+ * No-ops (after taking its turn on the chain) when `userId` isn't the
+ * active, remote-syncing session — e.g. called for a local-only session,
+ * where issuing `connect()` would make the FIRST Supabase/PowerSync request
+ * of that session, violating the "local-only makes no remote request"
+ * invariant this module upholds elsewhere (`isRemoteSyncActive`).
+ */
+export const reconnectPowerSync = (userId: string): Promise<void> =>
+  enqueueOnConnectChain(async () => {
+    if (activeUserId !== userId || !activeRemoteSync) {
+      console.warn(`[sync] reconnect skipped for ${userId}: not the active remote-sync session`)
+      return
+    }
+    const db = dbsByUser.get(userId)
+    if (!db) return // defensive: activeUserId===userId is only ever set right after the db is created
+
+    await db.disconnect()
+    const resolver = resolverForUser(userId)
+    await db.connect(createPowerSyncConnector({
+      getWorkspaceMode: resolver.getMode,
+      getCek: resolver.getCek,
+    }))
+  })
+
 /** The active user id (whose per-user PowerSync DB is mounted), or null when
  *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
  *  this — re-read at call time so an account switch is reflected.
@@ -289,12 +355,15 @@ export const ensurePowerSyncReady = async (
     return
   }
 
-  // Sync-health breadcrumbs (2026-08-13 iPad incident: 22 blocks stuck in
-  // `ps_crud` for 16.3 hours with no record of sync state over time). POSITION
-  // IS LOAD-BEARING: this must stay AFTER both early returns above — a
-  // local-only session never uploads, so sampling it would record every
-  // sample as a false stall (queue always local, never draining to a server).
-  watchSyncHealth(db, userId)
+  // Sync-health breadcrumbs + the reconnect watchdog they arm (2026-08-13
+  // iPad incident: 22 blocks stuck in `ps_crud` for 16.3 hours with no
+  // record of sync state over time AND no lever, automatic or manual, to
+  // recover). POSITION IS LOAD-BEARING: this must stay AFTER both early
+  // returns above — a local-only session never uploads, so sampling it
+  // would record every sample as a false stall (queue always local, never
+  // draining to a server), and the watchdog would try to `connect()` a
+  // session that has deliberately never made a remote request.
+  watchSyncHealth(db, userId, reconnectPowerSync)
 
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and

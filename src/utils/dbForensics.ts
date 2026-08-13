@@ -178,6 +178,18 @@ export interface StallEpisode extends Omit<SyncHealthSample, 'lastT' | 'count'> 
   clearedConnected?: boolean
   clearedLastSyncedAt?: number | null
   clearedPendingBlocks?: number | null
+  /** How many times the reconnect watchdog (dbForensicsHooks.ts
+   *  `runReconnectWatchdog`) has fired `sync.reconnect` against THIS
+   *  episode. Absent means the watchdog never attempted — e.g. it wasn't
+   *  armed (local-only session) or the episode closed before the first
+   *  backoff-eligible sample. Set via {@link DbForensics.recordStallReconnectAttempt}. */
+  reconnectAttempts?: number
+  /** Epoch ms of the watchdog's most recent attempt against this episode.
+   *  Paired with `reconnectAttempts` and `clearedAt` this is what answers
+   *  "did the watchdog fire, and did it help" from the dump alone — the
+   *  2026-08-13 incident had no lever at all, automatic or manual, so
+   *  there was nothing to even ask this question about. */
+  lastReconnectAttemptAt?: number
 }
 
 const VISIBILITY_PREFIX = 'visibility:'
@@ -391,6 +403,39 @@ export class DbForensics {
         await this.put(key, episode)
       } catch (err) {
         warn('closeStallEpisode failed', err)
+      }
+    })
+  }
+
+  /**
+   * Record one reconnect-watchdog attempt (dbForensicsHooks.ts
+   * `runReconnectWatchdog`) against the CURRENTLY OPEN stall episode —
+   * increments `reconnectAttempts` and stamps `lastReconnectAttemptAt`. Same
+   * shape as {@link closeStallEpisode}: a no-op if `key` is null (nothing
+   * open) or the episode was already trimmed out; best-effort, never throws.
+   * Called once per watchdog attempt, independent of whether the reconnect
+   * itself succeeds — the attempt happened either way, and whether it helped
+   * shows up in whether/when the episode later closes.
+   *
+   * The `if (!key) return` is defence in depth, not the only thing standing
+   * between a null key and a write: `this.get(null)` also fails (IndexedDB
+   * rejects a null key) and is caught by the `try`/`catch` below, so removing
+   * the early return alone doesn't change observable behavior — it's kept for
+   * the same reason {@link closeStallEpisode}'s does: skip the doomed
+   * get/catch round-trip and make "nothing open" an explicit, cheap case
+   * rather than an incidental error path.
+   */
+  recordStallReconnectAttempt(key: string | null, attemptedAt: number): Promise<void> {
+    return this.enqueueSync(async () => {
+      if (!key) return
+      try {
+        const episode = await this.get<StallEpisode>(key)
+        if (!episode) return
+        episode.reconnectAttempts = (episode.reconnectAttempts ?? 0) + 1
+        episode.lastReconnectAttemptAt = attemptedAt
+        await this.put(key, episode)
+      } catch (err) {
+        warn('recordStallReconnectAttempt failed', err)
       }
     })
   }

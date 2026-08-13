@@ -113,6 +113,8 @@ describe('ensurePowerSyncReady — sync-health watcher wiring', () => {
     await ensurePowerSyncReady('user-remote-sync', true)
 
     expect(hooks.watchSyncHealth).toHaveBeenCalledOnce()
-    expect(hooks.watchSyncHealth).toHaveBeenCalledWith(expect.anything(), 'user-remote-sync')
+    expect(hooks.watchSyncHealth).toHaveBeenCalledWith(
+      expect.anything(), 'user-remote-sync', expect.any(Function),
+    )
   })
 })

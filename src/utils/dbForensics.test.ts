@@ -393,4 +393,46 @@ describe('DbForensics — stall episodes', () => {
       f.closeStallEpisode('stall:1', { clearedAt: 1, connected: true, lastSyncedAt: null, pendingBlocks: 0 }),
     ).resolves.toBeUndefined()
   })
+
+  describe('recordStallReconnectAttempt', () => {
+    it('increments the attempt count and stamps the timestamp, leaving the opening fields untouched', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22, connected: false }))
+
+      await f.recordStallReconnectAttempt(key, 2000)
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({
+        t: 1000, pendingBlocks: 22, connected: false, // opening state, unchanged
+        reconnectAttempts: 1, lastReconnectAttemptAt: 2000,
+      })
+    })
+
+    it('accumulates across repeated attempts, always stamping the LATEST attempt time', async () => {
+      const f = freshForensics()
+      const key = await f.recordStallEpisode(baseSyncSample({ t: 1000, pendingBlocks: 22 }))
+
+      await f.recordStallReconnectAttempt(key, 2000)
+      await f.recordStallReconnectAttempt(key, 3000)
+      await f.recordStallReconnectAttempt(key, 4000)
+
+      const all = await f.exportAll()
+      expect(all[key as string]).toMatchObject({ reconnectAttempts: 3, lastReconnectAttemptAt: 4000 })
+    })
+
+    it('is a no-op when key is null', async () => {
+      const f = freshForensics()
+      await expect(f.recordStallReconnectAttempt(null, 1)).resolves.toBeUndefined()
+      expect(await f.exportAll()).toEqual({})
+    })
+
+    it('a store that throws does not reject it', async () => {
+      const throwingStore = {
+        tx: async () => { throw new Error('boom') },
+        scanByPrefix: async () => { throw new Error('boom') },
+      } as unknown as IdbKeyedStore
+      const f = new DbForensics(throwingStore)
+      await expect(f.recordStallReconnectAttempt('stall:1', 1)).resolves.toBeUndefined()
+    })
+  })
 })
