@@ -19,7 +19,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
@@ -286,6 +286,38 @@ describe('alias.sync — opaque-content blocks have no content↔alias parity', 
     await flush()
 
     expect((await env.read('ext'))!.content).toBe(SOURCE)
+  })
+
+  // `before`/`after` are whole-TX snapshots, so a single tx that both
+  // detags the opaque type and edits the aliases lands with
+  // `after` no longer opaque — and a gate reading only `after` falls
+  // straight through to the logic it exists to prevent. That is the
+  // data-loss path again, reached by the most plausible cleanup gesture
+  // there is: "this isn't an extension any more, and fix its name".
+  it('holds when the opaque type is removed in the SAME tx as an alias edit', async () => {
+    await createExtensionBlock(['readwise', SOURCE])
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty('ext', typesProp, [])
+      await tx.setProperty('ext', aliasesProp, ['readwise', 'cleaned up'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect((await env.read('ext'))!.content).toBe(SOURCE)
+  })
+
+  // Same transition, forward direction: detag + content edit must not
+  // re-trigger the drift-heal append that created #541.
+  it('holds when the opaque type is removed in the SAME tx as a content edit', async () => {
+    await createExtensionBlock(['readwise'])
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty('ext', typesProp, [])
+      await tx.update('ext', {content: `${SOURCE}\n// v2`})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    expect(await readAliases('ext')).toEqual(['readwise'])
   })
 
   // The gate is about the block, not the operation: an ordinary page

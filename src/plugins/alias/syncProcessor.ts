@@ -123,7 +123,21 @@ export const planSync = (
   //
   // One guard for both: an opaque-content block simply has no
   // content↔alias parity to maintain.
-  if (hasOpaqueContent(row.after, opaqueContentTypes)) return null
+  //
+  // EITHER SIDE, not just `after`. `before`/`after` are whole-TX
+  // snapshots, so one tx that both detags the opaque type and edits the
+  // aliases arrives with `after` no longer opaque — and an `after`-only
+  // gate falls straight through to the branch it exists to block, with
+  // `before`'s 91 KB content still sitting there to be overwritten. That
+  // is not a contrived shape: "this isn't an extension any more, and fix
+  // its name" is the most natural cleanup gesture for the bad rows.
+  //
+  // Skipping the whole tx is the safe miss on a boundary crossing. The
+  // block converges on its next edit, by which point it is unambiguously
+  // one kind of thing and the diff is computed over content that was the
+  // same kind on both sides.
+  if (hasOpaqueContent(row.before, opaqueContentTypes)
+    || hasOpaqueContent(row.after, opaqueContentTypes)) return null
 
   const before = row.before
   const after = row.after
