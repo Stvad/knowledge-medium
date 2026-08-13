@@ -4,7 +4,6 @@ import { TypeChip } from '@/components/typeChip/TypeChip.js'
 import type { TypeContribution } from '@/data/api'
 import {
   displayableTypes,
-  type DisplayableType,
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.js'
 import { quickFindBlockValue } from './selection.ts'
@@ -13,11 +12,11 @@ import type { QuickFindListItem } from './QuickFind.tsx'
 
 const ROW_TEXT_MAX_CHARS = 80
 
-/** Chips shown before the rest are dropped. Two is what the line can
- *  carry without the path — the other half of the same context — losing
- *  its share of the width. No `+N` marker: it would cost a slot to say
- *  something the row can't act on anyway, and the sibling `[[` dropdown
- *  already shows only the first type. */
+/** Chips shown before the rest are dropped. Two is what the text line
+ *  can carry without the content — the thing the row is actually about —
+ *  losing its share of the width. No `+N` marker: it would cost a slot
+ *  to say something the row can't act on anyway, and the sibling `[[`
+ *  dropdown already shows only the first type. */
 const MAX_ROW_TYPE_CHIPS = 2
 
 /** What every result row needs beyond its own match: where the block
@@ -27,13 +26,9 @@ const MAX_ROW_TYPE_CHIPS = 2
 export interface ResultRowContext {
   crumbsByBlockId: ReadonlyMap<string, readonly string[]>
   typeRegistry: ReadonlyMap<string, TypeContribution>
-  /** Whether this type id's DISPLAYABILITY is fixed for the dialog's
-   *  lifetime — see {@link hasContextLine}, which reserves space for
-   *  anything that isn't. */
-  isSettledType: (typeId: string) => boolean
 }
 
-/** Whether this row gets a context line at all.
+/** Whether this row gets a crumb line.
  *
  *  The line is RESERVED rather than conditional because crumbs land on a
  *  later batched query, and a line that appears when they do would shove
@@ -44,91 +39,45 @@ export interface ResultRowContext {
  *  holding a blank line forever, which reads as a failed load rather
  *  than as "this block has no path".
  *
- *  Every input here has to be settled at first paint, or the gate itself
- *  becomes the thing that moves the row:
+ *  Both inputs are settled at first paint, which is the property that
+ *  matters: `parentId` rides on the match and never changes for a given
+ *  row, and `crumbs?.length` only ever goes from absent to present.
+ *  TYPES deliberately do not appear here — they render on the text line
+ *  instead (see {@link resultRow}), because their visibility depends on
+ *  a live registry and anything live in this gate can move the row after
+ *  paint. Two review rounds found exactly that, by two different doors.
  *
- *  - `parentId` is on the match and never changes for a given row. A cut
- *    chain still yields the `…` marker, so a parented row is never blank
- *    for want of ancestors.
- *  - `crumbs?.length` is the stale-payload fallback: `searchByContent`
- *    declares no row dependency, so a block re-parented since the query
- *    can arrive claiming `parentId: null` and then produce a real path.
- *    Costs one row growing rather than a dropped path.
- *  - `chipCount` alone would NOT be settled, which is the trap. `typeIds`
- *    is fixed per row, but the REGISTRY that turns ids into chips is
- *    live: `useTypes` re-renders on every `onTypesChange`, cold start
- *    installs the facet runtime twice (kernel+static, then dynamic —
- *    see `repo.ts`), and `UserTypesService` projects user-defined types
- *    later still as their definition blocks load or sync in. Gating on
- *    resolved chips alone therefore grew the row on the second render
- *    for any not-yet-nameable type, and shrank it — worse, since content
- *    jumps up under the pointer — when a type definition was deleted.
- *    Recents are the likeliest victim: they render on the EMPTY query,
- *    i.e. the instant ⌘P opens, which is exactly the startup window.
- *
- *  `unsettledTypes` closes that, and "settled" has to mean more than
- *  "the registry knows this id". Being in the registry only fixes
- *  WHETHER the id resolves; `displayableTypes` also reads `label` and
- *  `hideFromBlockDisplay` off the same contribution, and for a
- *  BLOCK-BACKED type those are ordinary properties of its definition
- *  block — an editable checkbox in that type's own property panel.
- *  Toggling one republishes through `UserTypesService` without the id
- *  ever leaving the registry, so a row whose only chip was that type
- *  would collapse mid-dialog. A CODE-declared type has no such surface:
- *  its metadata is compiled in, and the declaration wins over any
- *  block that claims its id. So settled = registered AND carrying a
- *  seed key (`repo.typeDefinitions.seedKeyById`), which is what keeps a
- *  plain page's line collapsed — `page` is a kernel seed — while any
- *  user-defined type holds the line whether or not it currently shows.
- *
- *  Note `getTypeBlockId` is NOT the test for this: it is total for
- *  materialized code seeds too (`definitionSeeds.ts`), so it would call
- *  `page` block-backed and bring every blank page line back. */
-const hasContextLine = ({crumbs, chipCount, unsettledTypes, parentId}: {
-  crumbs: readonly string[] | undefined
-  chipCount: number
-  unsettledTypes: boolean
-  parentId: string | null
-}): boolean =>
-  chipCount > 0
-  || unsettledTypes
-  || parentId !== null
-  || (crumbs?.length ?? 0) > 0
-
-/** The row's context line: what the block is, then where it lives.
- *
- *  One line for both, left-packed. Not a second line — that would double
- *  the reserved height of every row to serve the subset that has types —
- *  and not right-aligned, which would fling a lone chip to the far edge,
- *  away from the content it describes.
- *
- *  Chips lead, and the ORDER is load-bearing rather than a reading
- *  preference. The chips are on the match itself and paint immediately;
- *  the path arrives later on a batched query. Crumbs-first therefore ties
- *  the chips' position to something that isn't there yet — they start one
- *  flex `gap` in from the line (an empty box still spaces its sibling, so
- *  a page with no path had its chip 6px adrift of the content beneath it)
- *  and then slide right by the path's width the moment it resolves.
- *  Chips-first pins them to the line's edge in every combination, and
- *  the late-arriving part is the part with nothing after it to disturb.
- *
- *  `BlockCrumbs` still renders unconditionally, and now sits last, where
- *  its reserved-but-empty box costs nothing visually.
- *
- *  Chips are `shrink-0` and the crumbs are not: when the line runs out of
- *  width the path truncates and the chips survive whole. `max-w-[30%]`
- *  is the ceiling on that priority — type labels are user-authored and
- *  unbounded, and one 55-character label measured 348px of a 478px line,
- *  leaving the path 124px. The cap binds only on long labels (an
- *  ordinary "Person" is ~12% of the line), and `TypeChip`'s own
- *  `truncate` ellipsises what it clips. */
-const contextLine = (
+ *  `crumbs?.length` is also the stale-payload fallback: `searchByContent`
+ *  declares no row dependency, so a block re-parented since the query can
+ *  arrive claiming `parentId: null` and then produce a real path. Costs
+ *  one row growing rather than a dropped path. */
+const hasCrumbLine = (
   crumbs: readonly string[] | undefined,
-  chips: readonly DisplayableType[],
-) => (
-  <div className="flex w-full items-center gap-1.5">
+  parentId: string | null,
+): boolean => parentId !== null || (crumbs?.length ?? 0) > 0
+
+/** The row's text, with the block's types trailing it.
+ *
+ *  Types live HERE rather than on the crumb line for one structural
+ *  reason: this line always exists, and its height comes from the text
+ *  (20px), which already clears a chip (16px). So chips can appear when
+ *  the registry learns their names, or vanish when a definition is
+ *  edited, without changing the row's height — no reservation to get
+ *  right, and the registry stops being a layout input at all. It also
+ *  matches how a block renders its own types (`TypeChipsDecorator`
+ *  hangs them off the end of the content) and how this dialog's other
+ *  rows carry secondary detail, right-aligned (Pages, Date).
+ *
+ *  The text takes the slack and the chips do not, so a long line
+ *  truncates and the chips stay whole and column-aligned down the list.
+ *  `max-w-[30%]` caps that priority — type labels are user-authored and
+ *  unbounded, and one 55-character label measured 348px of a 478px line.
+ *  `TypeChip`'s own `truncate` ellipsises what the cap clips. */
+const textLine = (text: string, chips: readonly {typeId: string; type: TypeContribution}[]) => (
+  <div className="flex w-full items-center gap-2">
+    <span className="min-w-0 flex-1 truncate">{truncate(text, ROW_TEXT_MAX_CHARS)}</span>
     {chips.map(({typeId, type}) => (
-      // No link and no remove ✕: a click anywhere in a result row has to
+      // No link and no remove x: a click anywhere in a result row has to
       // select that row. Both affordances belong to the block's own chip
       // row, where a click means what it says.
       <TypeChip
@@ -139,26 +88,17 @@ const contextLine = (
         className="max-w-[30%] shrink-0 py-0 leading-4"
       />
     ))}
-    <BlockCrumbs crumbs={crumbs}/>
   </div>
 )
 
-/** A result row: the context line, then what the block says — or just
- *  what it says, for a block that has no context and never will (see
- *  {@link hasContextLine}).
+/** A result row: the crumb line, then the text — or just the text, for a
+ *  block whose path can never arrive (see {@link hasCrumbLine}).
  *
- *  The crumbs arrive from a separate batched load keyed by block id, so
+ *  The crumbs come from a separate batched load keyed by block id, so
  *  `crumbs` is routinely `undefined` — `BlockCrumbs` renders its reserved
  *  line either way, so the fill-in is a repaint rather than a reflow.
- *  Types ride along with the match itself and are there on the first
- *  paint, but the registry that NAMES them is not (see
- *  {@link hasContextLine}).
  *
- *  Height is stable in every case the row can decide for itself; the one
- *  disclosed exception is a `parentId` snapshot that was already stale
- *  when it arrived, which {@link hasContextLine} documents.
- *
- *  Context-less rows drop the two-line styling entirely rather than
+ *  Rows with no crumb line drop the two-line styling entirely rather than
  *  keeping it with an empty slot, so they render at the same height as
  *  every other single-line row in the dialog (a Pages or Create row)
  *  instead of at a third height of their own.
@@ -166,29 +106,25 @@ const contextLine = (
  *  `items-stretch` (over the base row's `items-center`) is what gives the
  *  two children full width, which is what makes `truncate` truncate
  *  rather than overflow. */
-const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry, isSettledType}: {
+const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry}: {
   key: string
   value: string
   text: string
   crumbs: readonly string[] | undefined
   typeIds: readonly string[]
   parentId: string | null
-} & Pick<ResultRowContext, 'typeRegistry' | 'isSettledType'>): QuickFindListItem => {
+} & Pick<ResultRowContext, 'typeRegistry'>): QuickFindListItem => {
   const chips = displayableTypes(typeIds, typeRegistry).slice(0, MAX_ROW_TYPE_CHIPS)
-  // Ids whose displayability can still change hold the line — see hasContextLine.
-  const unsettledTypes = typeIds.some(typeId => !isSettledType(typeId))
-  const content = <span className="w-full truncate">{truncate(text, ROW_TEXT_MAX_CHARS)}</span>
-  if (!hasContextLine({crumbs, chipCount: chips.length, unsettledTypes, parentId})) {
-    return {key, value, children: content}
-  }
+  const line = textLine(text, chips)
+  if (!hasCrumbLine(crumbs, parentId)) return {key, value, children: line}
   return {
     key,
     value,
     className: 'flex-col items-stretch gap-0.5 py-2',
     children: (
       <>
-        {contextLine(crumbs, chips)}
-        {content}
+        <BlockCrumbs crumbs={crumbs}/>
+        {line}
       </>
     ),
   }
@@ -197,7 +133,7 @@ const resultRow = ({key, value, text, crumbs, typeIds, parentId, typeRegistry, i
 /** Rows of the "Blocks" (content-match) group. */
 export const blockResultItems = (
   blocks: readonly LinkTargetBlockMatch[],
-  {crumbsByBlockId, typeRegistry, isSettledType}: ResultRowContext,
+  {crumbsByBlockId, typeRegistry}: ResultRowContext,
 ): QuickFindListItem[] =>
   blocks.map(match => resultRow({
     key: `block:${match.blockId}`,
@@ -207,7 +143,6 @@ export const blockResultItems = (
     typeIds: match.typeIds,
     parentId: match.parentId,
     typeRegistry,
-    isSettledType,
   }))
 
 /** Rows of the "Recent" group.
@@ -221,7 +156,7 @@ export const blockResultItems = (
  *  the two can't disagree about a block's path on screen at once. */
 export const recentResultItems = (
   recents: readonly RecentItem[],
-  {crumbsByBlockId, typeRegistry, isSettledType}: ResultRowContext,
+  {crumbsByBlockId, typeRegistry}: ResultRowContext,
 ): QuickFindListItem[] =>
   recents.map(item => resultRow({
     key: `recent:${item.blockId}`,
@@ -231,5 +166,4 @@ export const recentResultItems = (
     typeIds: item.typeIds,
     parentId: item.parentId,
     typeRegistry,
-    isSettledType,
   }))

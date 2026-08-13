@@ -21,19 +21,10 @@ const typeRegistry = (
   ...types: {id: string; label?: string; hideFromBlockDisplay?: boolean}[]
 ): ReadonlyMap<string, TypeContribution> => new Map(types.map(type => [type.id, type]))
 
-/** `settled` names the CODE-declared type ids — the ones whose label and
- *  `hideFromBlockDisplay` are compiled in and so cannot move under a
- *  rendered row. Anything else (a user-defined type, an id the registry
- *  has not resolved) is unsettled and holds the line. */
 const rowContext = (
   crumbsByBlockId: ReadonlyMap<string, readonly string[]> = new Map(),
   types: ReadonlyMap<string, TypeContribution> = typeRegistry(),
-  settled: readonly string[] = [...types.keys()],
-): ResultRowContext => ({
-  crumbsByBlockId,
-  typeRegistry: types,
-  isSettledType: (typeId: string) => types.has(typeId) && settled.includes(typeId),
-})
+): ResultRowContext => ({crumbsByBlockId, typeRegistry: types})
 
 const blocksList = (
   blocks: LinkTargetBlockMatch[],
@@ -109,29 +100,29 @@ describe('blockResultItems', () => {
       .not.toBeInTheDocument()
   })
 
-  it('holds the line for a type the registry cannot name YET', () => {
-    // The row's `typeIds` are fixed, but the registry that turns them into
-    // chips is live: cold start installs the facet runtime twice, and
-    // UserTypesService projects user-defined types later still. Gating the
-    // reservation on RESOLVED chips meant this row painted with no line and
-    // then grew one on the next render — the reflow the reserved line
-    // exists to prevent, and Recents hit it hardest since they render the
-    // instant the dialog opens.
+  it('adds only a chip, not a line, when the registry learns a type late', () => {
+    // The row's `typeIds` are fixed, but the registry that names them is
+    // live: cold start installs the facet runtime twice, and
+    // UserTypesService projects user-defined types later still. Chips
+    // therefore have to land somewhere whose presence they do not decide —
+    // the text line, which always exists. A row that gains a chip must
+    // gain nothing else.
     const blocks = [{...match('block-1', 'Ada Lovelace', ['person']), parentId: null}]
     const {rerender} = render(blocksList(blocks, rowContext(new Map(), typeRegistry())))
 
-    const before = crumbLineOf(screen.getByRole('option', {name: /Ada Lovelace/}))
-    expect(before).toBeInTheDocument()
-    expect(before).toBeEmptyDOMElement()
+    const before = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(crumbLineOf(before)).not.toBeInTheDocument()
+    expect(chipLabelsOf(before)).toEqual([])
 
     rerender(blocksList(
       blocks,
       rowContext(new Map(), typeRegistry({id: 'person', label: 'Person'})),
     ))
 
-    const option = screen.getByRole('option', {name: /Ada Lovelace/})
-    expect(crumbLineOf(option)).toBeInTheDocument()
-    expect(chipLabelsOf(option)).toEqual(['#Person'])
+    const after = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(chipLabelsOf(after)).toEqual(['#Person'])
+    // Same structure as before: no line appeared underneath the chip.
+    expect(crumbLineOf(after)).not.toBeInTheDocument()
   })
 
   it('keeps a plain page collapsed across a registry change', () => {
@@ -155,24 +146,25 @@ describe('blockResultItems', () => {
   })
 
   it('holds the line when a user-defined type hides itself mid-dialog', () => {
-    // `hideFromBlockDisplay` is an ordinary checkbox on a user-defined
-    // type's own definition block, so a REGISTERED id's displayability can
-    // change under a rendered row — the id never leaves the registry, so
-    // "is it registered" cannot detect it. Settled means code-declared;
-    // `person` here is block-backed, so the line is held either way.
+    // The reverse, and the harder one: `hideFromBlockDisplay` is an
+    // ordinary checkbox on a user-defined type's own definition block, so
+    // a REGISTERED id's displayability changes under a rendered row and
+    // the id never leaves the registry. Losing the chip must not cost the
+    // row a line either.
     const blocks = [{...match('block-1', 'Ada Lovelace', ['person']), parentId: null}]
     const visible = typeRegistry({id: 'person', label: 'Person'})
     const hidden = typeRegistry({id: 'person', label: 'Person', hideFromBlockDisplay: true})
-    const {rerender} = render(blocksList(blocks, rowContext(new Map(), visible, [])))
+    const {rerender} = render(blocksList(blocks, rowContext(new Map(), visible)))
 
-    expect(chipLabelsOf(screen.getByRole('option', {name: /Ada Lovelace/}))).toEqual(['#Person'])
+    const before = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(chipLabelsOf(before)).toEqual(['#Person'])
+    expect(crumbLineOf(before)).not.toBeInTheDocument()
 
-    rerender(blocksList(blocks, rowContext(new Map(), hidden, [])))
+    rerender(blocksList(blocks, rowContext(new Map(), hidden)))
 
-    const option = screen.getByRole('option', {name: /Ada Lovelace/})
-    expect(chipLabelsOf(option)).toEqual([])
-    // The chip went, but the row kept its shape.
-    expect(crumbLineOf(option)).toBeInTheDocument()
+    const after = screen.getByRole('option', {name: /Ada Lovelace/})
+    expect(chipLabelsOf(after)).toEqual([])
+    expect(crumbLineOf(after)).not.toBeInTheDocument()
   })
 
   it('still gives a root block a line when it has types to put there', () => {
@@ -221,23 +213,28 @@ describe('blockResultItems', () => {
     expect(crumbLineOf(option)).toHaveTextContent('People')
   })
 
-  it('puts the chips BEFORE the crumb box, so their position never depends on it', () => {
-    // The crumb box renders even when empty, and an empty flex item still
-    // spaces its siblings — so crumbs-first put the chip a `gap` in from
-    // the line on a block with no path, then slid it right by the whole
-    // path width when the batched ancestor load landed. Last, the box
-    // costs nothing.
+  it('puts the chips on the TEXT line, after the text, not on the crumb line', () => {
+    // Where the chips live is the whole reason the row's height no longer
+    // depends on the type registry: the text line always exists and is
+    // taller than a chip, so a chip arriving or leaving cannot reflow it.
+    // On the crumb line — whose presence IS conditional — it could.
     renderBlocks(
       [match('block-1', 'Ada Lovelace', ['person'])],
-      rowContext(new Map(), typeRegistry({id: 'person', label: 'Person'})),
+      rowContext(
+        new Map([['block-1', ['People']]]),
+        typeRegistry({id: 'person', label: 'Person'}),
+      ),
     )
 
     const option = screen.getByRole('option', {name: /Ada Lovelace/})
-    const chip = option.querySelector('[title]')!
     const crumbs = option.querySelector('[data-block-crumbs]')!
+    const chip = option.querySelector('[title]')!
 
-    expect(chip.compareDocumentPosition(crumbs))
-      .toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(crumbs.contains(chip)).toBe(false)
+    // Trailing the text it describes, on that text's own line.
+    const text = [...option.querySelectorAll('span')].find(el => el.textContent === 'Ada Lovelace')!
+    expect(text.compareDocumentPosition(chip)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(text.parentElement).toBe(chip.parentElement)
   })
 
   it('shows nothing for a type whose chip is hidden on the block itself', () => {

@@ -15,22 +15,18 @@ const CRUMB_SEPARATOR = ' › '
  *
  *  `h-4` / `leading-4` / `text-xs` are one 16px line exactly; keep them in
  *  step if the type scale changes, or the reserved box stops matching what
- *  lands in it. That height is also what the whole context line measures,
- *  since this is its tallest child — anything sharing the row (type chips)
- *  has to fit 16px rather than the row growing to fit it.
+ *  lands in it.
  *
- *  `min-w-0` and NOT `flex-1`: the path is the part that GIVES when the
- *  line runs out of width — it is unbounded and already degrades by
- *  design (see `CRUMB_MAX_SEGMENTS`), whereas a companion chip is short,
- *  bounded and cheap to keep whole. `min-w-0` is what permits that
- *  shrink; `flex-1` would additionally make this box CLAIM the leftover
- *  width, which pins anything beside it to the far edge of the row — a
- *  lone type chip stranded away from the content it describes.
+ *  The line is the PATH and nothing else. It briefly also carried the
+ *  row's type chips, which was a mistake worth recording: the chips come
+ *  from a live registry, so anything sharing a conditionally-rendered
+ *  line with them makes that line's presence — and the row's height —
+ *  depend on the registry. Chips now ride the text line, which always
+ *  exists and is taller than they are. Keep this box single-purpose.
  *
- *  Callers put this LAST on a shared line. An always-rendered box that is
- *  usually empty still spaces its siblings under flex `gap`, so anything
- *  placed after it starts one gap in from the line even when there is no
- *  path at all. Last, that costs nothing. */
+ *  `min-w-0` permits the shrink that lets `truncate` fire when the path
+ *  outgrows its width; the path is unbounded and already degrades by
+ *  design (see `CRUMB_MAX_SEGMENTS`). */
 export const BlockCrumbs = ({
   crumbs,
   className,
