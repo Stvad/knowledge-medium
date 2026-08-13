@@ -6,7 +6,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  GrammarShapedLabelError,
+  LossyLabelError,
   MAX_ALIAS_LENGTH,
+  UnwritableLabelError,
+  assertRoundTrippableReferenceLabel,
   isGrammarShapedLabel,
   parseExactReferenceBlockContent,
   referenceBlockContentForId,
@@ -176,6 +180,37 @@ describe('parseExactReferenceBlockContent — marked field forms', () => {
   it('excludes embeds — a transclusion directive, not a marker', () => {
     expect(parseExactReferenceBlockContent(`::!((${UUID}))`)).toBeNull()
     expect(parseExactReferenceBlockContent(`!((${UUID}))`)).toBeNull()
+  })
+})
+
+// A type label and a property name DOUBLE as the block's `[[label]]`
+// page, so unlike an arbitrary alias they must be expressible as a
+// wikilink. Property names always ran both halves of this hygiene; type
+// labels ran only the grammar-shaped half, so a `]]`-bearing label
+// claimed an alias nothing could link to — a gap that predates the length
+// cap and that the cap widened (Codex on PR #540).
+describe('assertRoundTrippableReferenceLabel', () => {
+  it('accepts an ordinary name', () => {
+    expect(() => assertRoundTrippableReferenceLabel('Book', 'ctx')).not.toThrow()
+  })
+
+  it('refuses a `]]`-lossy name — the pre-existing half of the gap', () => {
+    expect(() => assertRoundTrippableReferenceLabel('foo]]bar', 'ctx'))
+      .toThrow(LossyLabelError)
+  })
+
+  it('refuses a name past the alias cap', () => {
+    expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH + 1), 'ctx'))
+      .toThrow(LossyLabelError)
+    expect(() => assertRoundTrippableReferenceLabel('a'.repeat(MAX_ALIAS_LENGTH), 'ctx'))
+      .not.toThrow()
+  })
+
+  // The UI reverts the draft field by catching the BASE class, so both
+  // refusal reasons have to reach it — the reason a base exists at all.
+  it('both refusal reasons are UnwritableLabelError', () => {
+    expect(new LossyLabelError('x', 'ctx')).toBeInstanceOf(UnwritableLabelError)
+    expect(new GrammarShapedLabelError('x', 'ctx')).toBeInstanceOf(UnwritableLabelError)
   })
 })
 
