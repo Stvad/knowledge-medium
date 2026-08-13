@@ -8,6 +8,7 @@ import {
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.js'
 import { quickFindBlockValue } from './selection.ts'
+import type { RecentItem } from './recents.ts'
 import type { QuickFindListItem } from './QuickFind.tsx'
 
 const ROW_TEXT_MAX_CHARS = 80
@@ -198,13 +199,6 @@ export const blockResultItems = (
     typeRegistry,
   }))
 
-export interface RecentResultItem {
-  blockId: string
-  label: string
-  typeIds: readonly string[]
-  parentId: string | null
-}
-
 /** Rows of the "Recent" group.
  *
  *  Crumbed for the same reason the Blocks group is, and arguably a
@@ -215,7 +209,7 @@ export interface RecentResultItem {
  *  empty query, so these rows never share the list with Blocks rows and
  *  the two can't disagree about a block's path on screen at once. */
 export const recentResultItems = (
-  recents: readonly RecentResultItem[],
+  recents: readonly RecentItem[],
   {crumbsByBlockId, typeRegistry}: ResultRowContext,
 ): QuickFindListItem[] =>
   recents.map(item => resultRow({

@@ -53,19 +53,28 @@ const chipLabelsOf = (option: HTMLElement) =>
   [...option.querySelectorAll('[title]')].map(chip => chip.textContent)
 
 describe('blockResultItems', () => {
-  it('labels each row with ITS OWN ancestor path', () => {
+  it('labels each row with ITS OWN ancestor path and ITS OWN types', () => {
+    // Both mappings are per-row, and both are worth proving with more than
+    // one row on screen: an index-based mix-up would read as plausible
+    // context on every row while belonging to the block next to it.
     renderBlocks(
-      [match('block-1', 'Sync notes'), match('block-2', 'Sync design')],
-      rowContext(new Map([
-        ['block-1', ['Project Alpha', 'Meetings']],
-        ['block-2', ['Reading', 'Papers']],
-      ])),
+      [match('block-1', 'Sync notes', ['person']), match('block-2', 'Sync design', ['author'])],
+      rowContext(
+        new Map([
+          ['block-1', ['Project Alpha', 'Meetings']],
+          ['block-2', ['Reading', 'Papers']],
+        ]),
+        typeRegistry({id: 'person', label: 'Person'}, {id: 'author', label: 'Author'}),
+      ),
     )
 
-    expect(crumbLineOf(screen.getByRole('option', {name: /Sync notes/})))
-      .toHaveTextContent('Project Alpha › Meetings')
-    expect(crumbLineOf(screen.getByRole('option', {name: /Sync design/})))
-      .toHaveTextContent('Reading › Papers')
+    const notes = screen.getByRole('option', {name: /Sync notes/})
+    const design = screen.getByRole('option', {name: /Sync design/})
+
+    expect(crumbLineOf(notes)).toHaveTextContent('Project Alpha › Meetings')
+    expect(chipLabelsOf(notes)).toEqual(['#Person'])
+    expect(crumbLineOf(design)).toHaveTextContent('Reading › Papers')
+    expect(chipLabelsOf(design)).toEqual(['#Author'])
   })
 
   it('keeps the crumb line present while a PARENTED block\'s crumbs load', () => {
@@ -227,20 +236,27 @@ describe('blockResultItems', () => {
       .toEqual(['#Person', '#Author'])
   })
 
-  it('gives Recent rows the same reserved crumb line, and the same types', () => {
+  it('gives Recent rows the same reserved crumb line, and their own types', () => {
     // Recents record whatever was navigated to, which is often a block
     // partway down a page — the bare label alone is as unplaceable as a
-    // content match was before crumbs.
+    // content match was before crumbs. Two rows, because one row cannot
+    // tell a per-item mapping from an index-based mix-up.
     render(
       <QuickFindList
         emptyMessage="Type to search."
         groups={[{
           heading: 'Recent',
           items: recentResultItems(
-            [{blockId: 'block-1', label: 'Sync notes', typeIds: ['person'], parentId: 'page-1'}],
+            [
+              {blockId: 'block-1', label: 'Sync notes', typeIds: ['person'], parentId: 'page-1'},
+              {blockId: 'block-2', label: 'Sync design', typeIds: ['author'], parentId: 'page-2'},
+            ],
             rowContext(
-              new Map([['block-1', ['Project Alpha', 'Meetings']]]),
-              typeRegistry({id: 'person', label: 'Person'}),
+              new Map([
+                ['block-1', ['Project Alpha', 'Meetings']],
+                ['block-2', ['Reading', 'Papers']],
+              ]),
+              typeRegistry({id: 'person', label: 'Person'}, {id: 'author', label: 'Author'}),
             ),
           ),
         }]}
@@ -252,8 +268,11 @@ describe('blockResultItems', () => {
       />,
     )
 
-    const option = screen.getByRole('option', {name: /Sync notes/})
-    expect(crumbLineOf(option)).toHaveTextContent('Project Alpha › Meetings')
-    expect(chipLabelsOf(option)).toEqual(['#Person'])
+    const notes = screen.getByRole('option', {name: /Sync notes/})
+    const design = screen.getByRole('option', {name: /Sync design/})
+    expect(crumbLineOf(notes)).toHaveTextContent('Project Alpha › Meetings')
+    expect(chipLabelsOf(notes)).toEqual(['#Person'])
+    expect(crumbLineOf(design)).toHaveTextContent('Reading › Papers')
+    expect(chipLabelsOf(design)).toEqual(['#Author'])
   })
 })
